@@ -1,0 +1,140 @@
+# Pre-commit hooks for backpropagate
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# 2026 Security Best Practices:
+# - Security hooks run before commits to catch issues early
+# - Use --severity-level high for faster commits (CI catches medium)
+# - Secret detection prevents credential leaks
+# See: https://github.com/PyCQA/bandit
+
+repos:
+  # ==========================================================================
+  # CODE QUALITY
+  # ==========================================================================
+
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.2
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ==========================================================================
+  # SECURITY SCANNING
+  # ==========================================================================
+
+  # Bandit - Python SAST (Static Application Security Testing)
+  # Only high severity for speed; medium+ caught in CI
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        name: bandit (security scan)
+        args:
+          - "-c"
+          - "pyproject.toml"
+          - "-r"
+          - "backpropagate/"
+          - "--severity-level"
+          - "high"  # Only high severity for fast commits
+          - "-ll"   # Only high confidence
+        additional_dependencies: ["bandit[toml]"]
+
+  # Detect hardcoded secrets
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: detect-secrets (credential scan)
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  # pip-audit - Check for vulnerable dependencies (fast check)
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.10.0
+    hooks:
+      - id: pip-audit
+        name: pip-audit (dependency vulnerabilities)
+        args:
+          - "--require-hashes=false"
+          - "--progress-spinner=off"
+        stages: [pre-push]  # Only on push (slower check)
+
+  # ==========================================================================
+  # FILE HYGIENE & SAFETY
+  # ==========================================================================
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Whitespace and formatting
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+      # Syntax validation
+      - id: check-yaml
+        args: ['--unsafe']  # Allow custom tags
+      - id: check-toml
+      - id: check-json
+      - id: check-xml
+
+      # Safety checks
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+
+      # Security - detect credentials
+      - id: detect-private-key
+      - id: detect-aws-credentials
+        args: ['--allow-missing-credentials']
+
+      # Python specific
+      - id: check-ast
+      - id: debug-statements
+      - id: check-docstring-first
+
+  # ==========================================================================
+  # TYPE CHECKING (Optional - slower)
+  # ==========================================================================
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        name: mypy (type check)
+        additional_dependencies:
+          - types-all
+          - pydantic
+        args: [--ignore-missing-imports, --no-error-summary]
+        pass_filenames: true
+        stages: [pre-push]  # Only on push (slower)
+
+  # ==========================================================================
+  # COMMIT MESSAGE VALIDATION
+  # ==========================================================================
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.2.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+# ==========================================================================
+# CI CONFIGURATION
+# ==========================================================================
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from hooks
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [pip-audit]  # Skip slow checks in CI (handled by security.yml)
+  submodules: false

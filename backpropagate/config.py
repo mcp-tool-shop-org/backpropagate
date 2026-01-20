@@ -84,7 +84,8 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         )
 
         # Model identifier (HuggingFace path or local path)
-        name: str = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        # Using official Qwen model - Unsloth handles 4-bit quantization
+        name: str = "Qwen/Qwen2.5-7B-Instruct"
         # Whether to use 4-bit quantization
         load_in_4bit: bool = True
         # Maximum sequence length
@@ -208,8 +209,8 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         tokenizers_parallelism: bool = False
         # Disable xformers (incompatible with SM 12.0+)
         xformers_disabled: bool = True
-        # CUDA launch blocking for debugging
-        cuda_launch_blocking: bool = False
+        # CUDA launch blocking for debugging (slows training, only enable for debugging)
+        cuda_launch_blocking: bool = False  # Disabled by default for performance
         # Pre-tokenize to avoid multiprocessing issues
         pre_tokenize: bool = True
 
@@ -399,7 +400,7 @@ else:
 
     @dataclass
     class ModelConfig:
-        name: str = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        name: str = "Qwen/Qwen2.5-7B-Instruct"  # Official model, Unsloth handles 4-bit
         load_in_4bit: bool = True
         max_seq_length: int = 2048
         dtype: Optional[str] = None
@@ -640,9 +641,22 @@ class TrainingPreset:
 
 # Research-backed presets based on SLAO paper, Unsloth docs, and Databricks guide
 TRAINING_PRESETS = {
+    "fast-3b": TrainingPreset(
+        name="fast-3b",
+        description="Ultra-fast with Qwen2.5-3B (~6GB VRAM) for rapid iteration",
+        lora_r=8,
+        lora_alpha=16,
+        batch_size=4,  # 3B model fits larger batches
+        gradient_accumulation=2,  # effective=8
+        learning_rate=5e-4,
+        warmup_steps=5,
+        steps_per_run=50,
+        num_runs=3,
+        samples_per_run=500,
+    ),
     "fast": TrainingPreset(
         name="fast",
-        description="Quick iterations for testing and debugging",
+        description="Quick iterations for testing and debugging (7B model)",
         lora_r=8,
         lora_alpha=16,
         batch_size=2,

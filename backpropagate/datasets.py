@@ -1858,6 +1858,36 @@ class DatasetLoader:
         return new_loader, stats
 
     @classmethod
+    def from_local(
+        cls,
+        path: Union[str, Path],
+        format_type: Optional[DatasetFormat] = None,
+        validate: bool = True,
+    ) -> "DatasetLoader":
+        """
+        Load dataset from a local file (JSONL, JSON, CSV, Parquet).
+
+        Convenience method for loading local datasets with clear semantics.
+
+        Args:
+            path: Path to local file
+            format_type: Optional format override (auto-detected if not provided)
+            validate: Whether to validate on load
+
+        Returns:
+            DatasetLoader instance
+
+        Example:
+            >>> loader = DatasetLoader.from_local("F:/AI/data/perfect_pairs_chat.jsonl")
+            >>> print(f"Loaded {len(loader)} samples")
+            >>> dataset = loader.to_hf_dataset()
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Local file not found: {path}")
+        return cls(path, format_type=format_type, validate=validate)
+
+    @classmethod
     def from_streaming(
         cls,
         source: str,

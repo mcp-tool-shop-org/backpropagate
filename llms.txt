@@ -1,0 +1,99 @@
+# Backpropagate
+
+> Headless LLM Fine-Tuning - Making fine-tuning accessible without the complexity
+
+## Overview
+
+Backpropagate lets you fine-tune LLMs in 3 lines of code and export to Ollama in one more. Features include Windows-first support, automatic VRAM management, multi-run SLAO training to prevent forgetting, and one-click GGUF export.
+
+## Quick Start
+
+```bash
+pip install backpropagate[standard]  # Recommended: unsloth + ui
+```
+
+```python
+from backpropagate import Trainer
+
+trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer.train("my_data.jsonl", steps=100)
+trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
+```
+
+## Installation Options
+
+| Extra | Description |
+|-------|-------------|
+| `[unsloth]` | 2x faster training, 50% less VRAM |
+| `[ui]` | Gradio web interface |
+| `[validation]` | Pydantic config validation |
+| `[export]` | GGUF export for Ollama |
+| `[monitoring]` | WandB + system monitoring |
+| `[standard]` | unsloth + ui (recommended) |
+| `[full]` | Everything |
+
+## Core API
+
+### Trainer(model, **kwargs)
+Main trainer class.
+- `model`: HuggingFace model ID or path
+- `lora_r`: LoRA rank (default: 16)
+- `lora_alpha`: LoRA alpha (default: 32)
+- `learning_rate`: Learning rate (default: 2e-4)
+
+### trainer.train(data, steps=100, **kwargs)
+Train the model.
+- `data`: Path to JSONL training data
+- `steps`: Number of training steps
+- `batch_size`: Batch size (auto-sized if not specified)
+- `gradient_accumulation`: Gradient accumulation steps
+
+### trainer.export(format, quantization=None)
+Export the trained model.
+- `format`: "gguf", "hf", or "merged"
+- `quantization`: GGUF quantization level (e.g., "q4_k_m", "q8_0")
+
+### trainer.push_to_ollama(model_name)
+Register exported GGUF with Ollama.
+
+## Multi-Run SLAO Training
+
+Prevent catastrophic forgetting with staged training:
+
+```python
+trainer.multi_run_train(
+    data="my_data.jsonl",
+    runs=3,
+    steps_per_run=50,
+    replay_ratio=0.2
+)
+```
+
+## Data Format
+
+JSONL with instruction/input/output or messages format:
+
+```json
+{"instruction": "Summarize this", "input": "Long text...", "output": "Summary"}
+{"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]}
+```
+
+## Key Features
+
+- Windows-first (no WSL required for training)
+- Automatic batch sizing based on available VRAM
+- GPU monitoring and OOM prevention
+- Checkpoint saving and resumption
+- WandB integration for experiment tracking
+- Gradio UI for no-code training
+
+## Links
+
+- Repository: https://github.com/mcp-tool-shop/backpropagate
+- PyPI: https://pypi.org/project/backpropagate/
+- Documentation: https://github.com/mcp-tool-shop/backpropagate#readme
+- Issues: https://github.com/mcp-tool-shop/backpropagate/issues
+
+## License
+
+MIT License

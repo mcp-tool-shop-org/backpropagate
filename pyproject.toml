@@ -113,10 +113,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mikeyfrilot/backpropagate"
-Documentation = "https://github.com/mikeyfrilot/backpropagate#readme"
-Repository = "https://github.com/mikeyfrilot/backpropagate"
-Issues = "https://github.com/mikeyfrilot/backpropagate/issues"
+Homepage = "https://github.com/mcp-tool-shop/backpropagate"
+Documentation = "https://github.com/mcp-tool-shop/backpropagate#readme"
+Repository = "https://github.com/mcp-tool-shop/backpropagate.git"
+Issues = "https://github.com/mcp-tool-shop/backpropagate/issues"
+Changelog = "https://github.com/mcp-tool-shop/backpropagate/blob/main/CHANGELOG.md"
 
 [project.scripts]
 backpropagate = "backpropagate.cli:main"

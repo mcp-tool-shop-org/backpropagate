@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "0.1.0"
+version = "0.1.1"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
@@ -113,11 +113,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mcp-tool-shop/backpropagate"
-Documentation = "https://github.com/mcp-tool-shop/backpropagate#readme"
-Repository = "https://github.com/mcp-tool-shop/backpropagate.git"
-Issues = "https://github.com/mcp-tool-shop/backpropagate/issues"
-Changelog = "https://github.com/mcp-tool-shop/backpropagate/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mcp-tool-shop-org/backpropagate"
+Documentation = "https://github.com/mcp-tool-shop-org/backpropagate#readme"
+Repository = "https://github.com/mcp-tool-shop-org/backpropagate.git"
+Issues = "https://github.com/mcp-tool-shop-org/backpropagate/issues"
+Changelog = "https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md"
 
 [project.scripts]
 backpropagate = "backpropagate.cli:main"

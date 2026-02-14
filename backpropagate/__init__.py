@@ -246,7 +246,9 @@ from .datasets import (
     analyze_curriculum,
 )
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _pkg_version
+
+__version__ = _pkg_version("backpropagate")
 
 
 # =============================================================================

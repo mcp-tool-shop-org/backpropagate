@@ -4,13 +4,11 @@
 
 **Headless LLM Fine-Tuning** - Making fine-tuning accessible without the complexity
 
-[![PyPI version](https://img.shields.io/pypi/v/backpropagate?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/backpropagate/)
-[![Downloads](https://img.shields.io/pypi/dm/backpropagate?color=green&logo=pypi&logoColor=white)](https://pypi.org/project/backpropagate/)
-[![CI](https://github.com/mcp-tool-shop/backpropagate/actions/workflows/ci.yml/badge.svg)](https://github.com/mcp-tool-shop/backpropagate/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/mcp-tool-shop/backpropagate/graph/badge.svg)](https://codecov.io/gh/mcp-tool-shop/backpropagate)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/mcp-tool-shop/backpropagate?style=social)](https://github.com/mcp-tool-shop/backpropagate)
+<a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mcp-tool-shop-org/backpropagate/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+<a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate?style=flat-square" alt="Codecov"></a>
+<a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate?style=flat-square&logo=pypi&logoColor=white" alt="PyPI"></a>
+<img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+<a href="LICENSE"><img src="https://img.shields.io/github/license/mcp-tool-shop-org/backpropagate?style=flat-square" alt="License"></a>
 
 *Train LLMs in 3 lines of code. Export to Ollama in one more.*
 
@@ -401,7 +399,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ```bash
 # Development setup
-git clone https://github.com/mcp-tool-shop/backpropagate
+git clone https://github.com/mcp-tool-shop-org/backpropagate
 cd backpropagate
 pip install -e ".[dev]"
 
@@ -419,10 +417,10 @@ ruff check backpropagate
 
 Part of the **Compass Suite** for AI-powered development:
 
-- [Tool Compass](https://github.com/mcp-tool-shop/tool-compass) - Semantic MCP tool discovery
-- [File Compass](https://github.com/mcp-tool-shop/file-compass) - Semantic file search
-- [Integradio](https://github.com/mcp-tool-shop/integradio) - Vector-embedded Gradio components
-- [Comfy Headless](https://github.com/mcp-tool-shop/comfy-headless) - ComfyUI without the complexity
+- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) - Semantic MCP tool discovery
+- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) - Semantic file search
+- [Integradio](https://github.com/mcp-tool-shop-org/integradio) - Vector-embedded Gradio components
+- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) - ComfyUI without the complexity
 
 ## Support
 
@@ -443,6 +441,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**[Documentation](https://github.com/mcp-tool-shop/backpropagate#readme)** • **[Issues](https://github.com/mcp-tool-shop/backpropagate/issues)** • **[Discussions](https://github.com/mcp-tool-shop/backpropagate/discussions)**
+**[Documentation](https://github.com/mcp-tool-shop-org/backpropagate#readme)** • **[Issues](https://github.com/mcp-tool-shop-org/backpropagate/issues)** • **[Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions)**
 
 </div>

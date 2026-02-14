@@ -424,6 +424,11 @@ Part of the **Compass Suite** for AI-powered development:
 - [Integradio](https://github.com/mcp-tool-shop/integradio) - Vector-embedded Gradio components
 - [Comfy Headless](https://github.com/mcp-tool-shop/comfy-headless) - ComfyUI without the complexity
 
+## Support
+
+- **Questions / help:** [Issues](https://github.com/mcp-tool-shop-org/backpropagate/issues)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

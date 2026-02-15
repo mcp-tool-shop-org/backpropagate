@@ -3,11 +3,13 @@ name: Security Scan
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
-  schedule:
-    # Weekly security scan on Monday at 9am UTC
-    - cron: '0 9 * * 1'
   workflow_dispatch:  # Allow manual trigger
 
 permissions:

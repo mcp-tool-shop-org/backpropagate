@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "0.1.1"
+version = "0.1.2"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Mikey Frilot" }
+    { name = "mcp-tool-shop", email = "64996768+mcp-tool-shop@users.noreply.github.com" }
 ]
 keywords = [
     "llm",
@@ -132,6 +132,7 @@ include = [
     "/tests",
     "/README.md",
     "/LICENSE",
+    "/logo.png",
 ]
 
 [tool.ruff]

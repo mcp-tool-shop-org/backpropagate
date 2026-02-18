@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.png" alt="Backpropagate Logo" width="120">
+
 # Backpropagate
 
 **Headless LLM Fine-Tuning** - Making fine-tuning accessible without the complexity
@@ -9,6 +11,8 @@
 <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate?style=flat-square&logo=pypi&logoColor=white" alt="PyPI"></a>
 <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
 <a href="LICENSE"><img src="https://img.shields.io/github/license/mcp-tool-shop-org/backpropagate?style=flat-square" alt="License"></a>
+
+Part of [MCP Tool Shop](https://mcp-tool-shop.github.io/)
 
 *Train LLMs in 3 lines of code. Export to Ollama in one more.*
 
@@ -415,7 +419,7 @@ ruff check backpropagate
 
 ## Related Projects
 
-Part of the **Compass Suite** for AI-powered development:
+Part of [**MCP Tool Shop**](https://mcp-tool-shop.github.io/) — AI-powered development tools:
 
 - [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) - Semantic MCP tool discovery
 - [File Compass](https://github.com/mcp-tool-shop-org/file-compass) - Semantic file search

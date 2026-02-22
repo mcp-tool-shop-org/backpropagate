@@ -1,8 +1,9 @@
 """Tests for export functions."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, Mock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestExportEnums:
@@ -33,7 +34,7 @@ class TestExportResult:
 
     def test_export_result_creation(self, temp_dir):
         """Test ExportResult can be created."""
-        from backpropagate.export import ExportResult, ExportFormat
+        from backpropagate.export import ExportFormat, ExportResult
 
         result = ExportResult(
             format=ExportFormat.LORA,
@@ -48,7 +49,7 @@ class TestExportResult:
 
     def test_export_result_summary_lora(self, temp_dir):
         """Test ExportResult summary for LoRA format."""
-        from backpropagate.export import ExportResult, ExportFormat
+        from backpropagate.export import ExportFormat, ExportResult
 
         result = ExportResult(
             format=ExportFormat.LORA,
@@ -64,7 +65,7 @@ class TestExportResult:
 
     def test_export_result_summary_gguf(self, temp_dir):
         """Test ExportResult summary for GGUF format."""
-        from backpropagate.export import ExportResult, ExportFormat
+        from backpropagate.export import ExportFormat, ExportResult
 
         result = ExportResult(
             format=ExportFormat.GGUF,
@@ -85,7 +86,7 @@ class TestExportLora:
 
     def test_export_lora_from_path(self, temp_dir):
         """Test exporting LoRA from a path."""
-        from backpropagate.export import export_lora, ExportFormat
+        from backpropagate.export import ExportFormat, export_lora
 
         # Create source adapter files
         src_dir = temp_dir / "source"
@@ -103,7 +104,7 @@ class TestExportLora:
 
     def test_export_lora_from_peft_model(self, temp_dir, mock_peft_model):
         """Test exporting LoRA from a PeftModel."""
-        from backpropagate.export import export_lora, ExportFormat
+        from backpropagate.export import ExportFormat, export_lora
 
         # Patch the peft check to recognize our mock
         with patch("backpropagate.export._is_peft_model", return_value=True):
@@ -116,10 +117,9 @@ class TestExportLora:
 
     def test_export_lora_invalid_type(self, temp_dir):
         """Test export_lora raises error for invalid model type."""
-        from backpropagate.export import export_lora
-
         # String paths that don't exist should raise ExportError
         from backpropagate.exceptions import ExportError
+        from backpropagate.export import export_lora
         with patch("backpropagate.export._is_peft_model", return_value=False):
             with pytest.raises(ExportError, match="Cannot export LoRA"):
                 export_lora(model=12345, output_dir=temp_dir)  # Non-path, non-model type
@@ -130,7 +130,7 @@ class TestExportMerged:
 
     def test_export_merged_basic(self, temp_dir, mock_peft_model, mock_tokenizer):
         """Test basic merged export."""
-        from backpropagate.export import export_merged, ExportFormat
+        from backpropagate.export import ExportFormat, export_merged
 
         merged_model = MagicMock()
         merged_model.save_pretrained = MagicMock()
@@ -171,8 +171,8 @@ class TestExportMerged:
 
     def test_export_merged_requires_repo_id(self, temp_dir, mock_peft_model, mock_tokenizer):
         """Test export_merged raises error when push_to_hub=True but no repo_id."""
-        from backpropagate.export import export_merged
         from backpropagate.exceptions import MergeExportError
+        from backpropagate.export import export_merged
 
         with patch("backpropagate.export._is_peft_model", return_value=True):
             with pytest.raises(MergeExportError, match="repo_id required"):
@@ -185,8 +185,8 @@ class TestExportMerged:
 
     def test_export_merged_invalid_model(self, temp_dir, mock_tokenizer):
         """Test export_merged raises error for non-PeftModel."""
-        from backpropagate.export import export_merged
         from backpropagate.exceptions import MergeExportError
+        from backpropagate.export import export_merged
 
         with pytest.raises(MergeExportError, match="Cannot merge"):
             export_merged(
@@ -201,7 +201,7 @@ class TestExportGguf:
 
     def test_export_gguf_with_unsloth(self, temp_dir, mock_peft_model, mock_tokenizer):
         """Test GGUF export using Unsloth."""
-        from backpropagate.export import export_gguf, ExportFormat
+        from backpropagate.export import ExportFormat, export_gguf
 
         # Create a mock GGUF file that Unsloth would create
         def mock_save_gguf(path, tokenizer, quantization_method):
@@ -223,8 +223,8 @@ class TestExportGguf:
 
     def test_export_gguf_invalid_quantization(self, temp_dir, mock_peft_model, mock_tokenizer):
         """Test export_gguf raises error for invalid quantization."""
-        from backpropagate.export import export_gguf
         from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.export import export_gguf
 
         with pytest.raises(InvalidSettingError, match="quantization"):
             export_gguf(
@@ -236,7 +236,7 @@ class TestExportGguf:
 
     def test_export_gguf_quantization_enum(self, temp_dir, mock_peft_model, mock_tokenizer):
         """Test export_gguf accepts GGUFQuantization enum."""
-        from backpropagate.export import export_gguf, GGUFQuantization
+        from backpropagate.export import GGUFQuantization, export_gguf
 
         def mock_save_gguf(path, tokenizer, quantization_method):
             Path(path).mkdir(parents=True, exist_ok=True)
@@ -315,16 +315,16 @@ class TestOllamaIntegration:
 
     def test_register_with_ollama_file_not_found(self, temp_dir):
         """Test register_with_ollama raises error for missing file."""
-        from backpropagate.export import register_with_ollama
         from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import register_with_ollama
 
         with pytest.raises(OllamaRegistrationError, match="GGUF file not found"):
             register_with_ollama(temp_dir / "nonexistent.gguf", "test-model")
 
     def test_register_with_ollama_no_ollama(self, sample_gguf_path):
         """Test register_with_ollama raises error when Ollama not found."""
-        from backpropagate.export import register_with_ollama
         from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import register_with_ollama
 
         with patch("shutil.which", return_value=None):
             with pytest.raises(OllamaRegistrationError, match="Ollama CLI not found"):
@@ -346,9 +346,10 @@ class TestOllamaIntegration:
 
     def test_register_with_ollama_failure(self, sample_gguf_path):
         """Test Ollama registration failure raises OllamaRegistrationError."""
-        from backpropagate.export import register_with_ollama
-        from backpropagate.exceptions import OllamaRegistrationError
         import subprocess
+
+        from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import register_with_ollama
 
         with patch("shutil.which", return_value="/usr/bin/ollama"), \
              patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "ollama")):
@@ -381,8 +382,9 @@ class TestOllamaIntegration:
 
     def test_list_ollama_models_error(self):
         """Test list_ollama_models returns empty on error."""
-        from backpropagate.export import list_ollama_models
         import subprocess
+
+        from backpropagate.export import list_ollama_models
 
         with patch("shutil.which", return_value="/usr/bin/ollama"), \
              patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "ollama")):
@@ -435,7 +437,6 @@ class TestHelperFunctions:
         """Test _has_unsloth detection."""
         # Test with unsloth not available
         with patch.dict("sys.modules", {"unsloth": None}):
-            from backpropagate import export
             # Force reimport check
             with patch("builtins.__import__", side_effect=ImportError("No unsloth")):
                 # The function should return False when import fails
@@ -463,9 +464,9 @@ class TestExportGgufWithoutUnsloth:
 
     def test_export_gguf_no_unsloth_no_llama_cpp_raises(self, temp_dir, mock_peft_model, mock_tokenizer):
         """export_gguf should raise GGUFExportError when no Unsloth and no llama.cpp."""
-        from backpropagate.export import export_gguf
+
         from backpropagate.exceptions import GGUFExportError
-        import shutil
+        from backpropagate.export import export_gguf
 
         # Create merged model mock
         merged_model = MagicMock()
@@ -485,8 +486,8 @@ class TestExportGgufWithoutUnsloth:
 
     def test_export_gguf_fallback_non_peft_model(self, temp_dir, mock_tokenizer):
         """export_gguf fallback should handle non-PEFT models."""
-        from backpropagate.export import export_gguf
         from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
 
         # Non-PEFT model (base model)
         base_model = MagicMock()
@@ -505,8 +506,8 @@ class TestExportGgufWithoutUnsloth:
 
     def test_export_gguf_unsloth_fails_falls_back(self, temp_dir, mock_peft_model, mock_tokenizer):
         """export_gguf should fall back when Unsloth export fails."""
-        from backpropagate.export import export_gguf
         from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
 
         # Unsloth save fails
         mock_peft_model.save_pretrained_gguf = MagicMock(
@@ -534,7 +535,7 @@ class TestExportLoraFromPath:
 
     def test_export_lora_from_string_path(self, temp_dir):
         """export_lora should accept string path to existing adapter."""
-        from backpropagate.export import export_lora, ExportFormat
+        from backpropagate.export import ExportFormat, export_lora
 
         # Create source adapter files
         src_dir = temp_dir / "source_adapter"
@@ -590,7 +591,7 @@ class TestFindGgufFile:
 
     def test_export_gguf_finds_generated_file(self, temp_dir, mock_peft_model, mock_tokenizer):
         """export_gguf should find the generated GGUF file."""
-        from backpropagate.export import export_gguf, ExportFormat
+        from backpropagate.export import ExportFormat, export_gguf
 
         # Create multiple GGUF files that might be generated
         def mock_save_gguf(path, tokenizer, quantization_method):
@@ -615,8 +616,8 @@ class TestFindGgufFile:
 
     def test_export_gguf_uses_model_name_when_no_gguf_found(self, temp_dir, mock_peft_model, mock_tokenizer):
         """export_gguf should raise GGUFExportError when no GGUF file is created."""
-        from backpropagate.export import export_gguf
         from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
 
         # Save doesn't create any GGUF file
         def mock_save_gguf(path, tokenizer, quantization_method):
@@ -666,7 +667,7 @@ class TestExportResultSummary:
 
     def test_summary_without_time(self, temp_dir):
         """summary() should handle zero export time gracefully."""
-        from backpropagate.export import ExportResult, ExportFormat
+        from backpropagate.export import ExportFormat, ExportResult
 
         result = ExportResult(
             format=ExportFormat.LORA,
@@ -681,7 +682,7 @@ class TestExportResultSummary:
 
     def test_summary_without_quantization(self, temp_dir):
         """summary() should handle missing quantization."""
-        from backpropagate.export import ExportResult, ExportFormat
+        from backpropagate.export import ExportFormat, ExportResult
 
         result = ExportResult(
             format=ExportFormat.MERGED,

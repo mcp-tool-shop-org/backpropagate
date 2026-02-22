@@ -27,14 +27,14 @@ References:
     - K-Merge: https://arxiv.org/abs/2510.13537
 """
 
-import math
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
-from dataclasses import dataclass, field
 import json
+import logging
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from .exceptions import SLAOError, SLAOMergeError, SLAOCheckpointError, InvalidSettingError
+from .exceptions import InvalidSettingError, SLAOCheckpointError, SLAOMergeError
 from .security import check_torch_security
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class SLAOConfig:
 
     # Phase 4.1: Adaptive scaling based on task similarity
     use_adaptive_scaling: bool = False
-    adaptive_scale_range: Tuple[float, float] = (0.5, 1.5)  # Scale multiplier range
+    adaptive_scale_range: tuple[float, float] = (0.5, 1.5)  # Scale multiplier range
 
     # Phase 4.2: Selective layer merging
     use_layer_scaling: bool = False
@@ -97,10 +97,10 @@ class MergeResult:
     merge_time_seconds: float
 
     # Optional diagnostics
-    a_norm_before: Optional[float] = None
-    a_norm_after: Optional[float] = None
-    b_norm_before: Optional[float] = None
-    b_norm_after: Optional[float] = ""
+    a_norm_before: float | None = None
+    a_norm_after: float | None = None
+    b_norm_before: float | None = None
+    b_norm_after: float | None = ""
 
 
 # =============================================================================
@@ -257,8 +257,8 @@ def merge_A_matrices(A_new: "torch.Tensor") -> "torch.Tensor":
 # =============================================================================
 
 def compute_task_similarity(
-    lora_state_1: Dict[str, "torch.Tensor"],
-    lora_state_2: Dict[str, "torch.Tensor"],
+    lora_state_1: dict[str, "torch.Tensor"],
+    lora_state_2: dict[str, "torch.Tensor"],
 ) -> float:
     """
     Compute similarity between two LoRA adapters using cosine similarity.
@@ -311,7 +311,7 @@ def compute_task_similarity(
 def adaptive_scale(
     base_scale: float,
     similarity: float,
-    scale_range: Tuple[float, float] = (0.5, 1.5),
+    scale_range: tuple[float, float] = (0.5, 1.5),
 ) -> float:
     """
     Adjust scaling factor based on task similarity.
@@ -386,7 +386,7 @@ def get_layer_scale(
         return late_scale
 
 
-def estimate_total_layers(lora_state: Dict[str, "torch.Tensor"]) -> int:
+def estimate_total_layers(lora_state: dict[str, "torch.Tensor"]) -> int:
     """
     Estimate total layers from LoRA state dict.
 
@@ -436,7 +436,7 @@ class SLAOMerger:
         final_lora = merger.get_merged_lora()
     """
 
-    def __init__(self, config: Optional[SLAOConfig] = None):
+    def __init__(self, config: SLAOConfig | None = None):
         """
         Initialize the SLAO merger.
 
@@ -444,13 +444,13 @@ class SLAOMerger:
             config: Optional SLAOConfig, uses defaults if not provided
         """
         self.config = config or SLAOConfig()
-        self._merged_state: Optional[Dict[str, Any]] = None
+        self._merged_state: dict[str, Any] | None = None
         self._run_index: int = 0
-        self._merge_history: List[MergeResult] = []
+        self._merge_history: list[MergeResult] = []
 
         logger.info(f"SLAOMerger initialized with config: scaling={self.config.scaling_type}")
 
-    def initialize(self, lora_state_dict: Dict[str, "torch.Tensor"]) -> None:
+    def initialize(self, lora_state_dict: dict[str, "torch.Tensor"]) -> None:
         """
         Initialize the merger with the first LoRA.
 
@@ -468,7 +468,7 @@ class SLAOMerger:
 
         logger.info(f"SLAO initialized with {len(lora_state_dict)} parameters")
 
-    def get_init_weights(self) -> Optional[Dict[str, "torch.Tensor"]]:
+    def get_init_weights(self) -> dict[str, "torch.Tensor"] | None:
         """
         Get initialization weights for the next training run.
 
@@ -503,8 +503,8 @@ class SLAOMerger:
 
     def merge(
         self,
-        new_lora_state: Dict[str, "torch.Tensor"],
-        run_index: Optional[int] = None,
+        new_lora_state: dict[str, "torch.Tensor"],
+        run_index: int | None = None,
     ) -> MergeResult:
         """
         Merge a newly trained LoRA into the accumulated merged LoRA.
@@ -516,8 +516,9 @@ class SLAOMerger:
         Returns:
             MergeResult with merge statistics
         """
-        import torch
         import time
+
+        import torch
 
         if self._merged_state is None:
             # First run - initialize
@@ -632,7 +633,7 @@ class SLAOMerger:
 
         return result
 
-    def get_merged_lora(self) -> Optional[Dict[str, "torch.Tensor"]]:
+    def get_merged_lora(self) -> dict[str, "torch.Tensor"] | None:
         """Get the current merged LoRA state dict."""
         return self._merged_state
 
@@ -722,7 +723,7 @@ class SLAOMerger:
         if not load_dir.exists():
             raise SLAOCheckpointError(
                 "load", str(load_dir),
-                f"Checkpoint directory not found"
+                "Checkpoint directory not found"
             )
 
         # Load merged weights
@@ -730,7 +731,7 @@ class SLAOMerger:
         if not weights_path.exists():
             raise SLAOCheckpointError(
                 "load", str(weights_path),
-                f"No merged_lora.pt found in checkpoint"
+                "No merged_lora.pt found in checkpoint"
             )
 
         try:
@@ -770,7 +771,7 @@ class SLAOMerger:
         return self._run_index
 
     @property
-    def merge_history(self) -> List[MergeResult]:
+    def merge_history(self) -> list[MergeResult]:
         """List of all merge operations performed."""
         return self._merge_history
 
@@ -780,11 +781,11 @@ class SLAOMerger:
 # =============================================================================
 
 def merge_lora_weights(
-    base_lora: Dict[str, "torch.Tensor"],
-    new_lora: Dict[str, "torch.Tensor"],
+    base_lora: dict[str, "torch.Tensor"],
+    new_lora: dict[str, "torch.Tensor"],
     run_index: int = 2,
     method: str = "slao",
-) -> Dict[str, "torch.Tensor"]:
+) -> dict[str, "torch.Tensor"]:
     """
     Convenience function to merge two LoRA state dicts.
 

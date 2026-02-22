@@ -28,26 +28,26 @@ Features:
 - Multiple export formats (LoRA, merged, GGUF)
 """
 
-import os
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Union, Callable
+import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
-from .config import settings, get_training_args
-from .feature_flags import FEATURES, check_feature
-from .gpu_safety import check_gpu_safe, get_gpu_status, format_gpu_status
+from .config import settings
 from .exceptions import (
-    TrainingError,
-    ModelLoadError,
-    TrainingAbortedError,
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
-    InvalidSettingError,
-    GPUError,
     GPUNotAvailableError,
+    InvalidSettingError,
+    ModelLoadError,
+    TrainingAbortedError,
+    TrainingError,
 )
+from .feature_flags import check_feature
+from .gpu_safety import check_gpu_safe
 
 logger = logging.getLogger(__name__)
 
@@ -68,21 +68,21 @@ class TrainingRun:
     run_id: str
     steps: int
     final_loss: float
-    loss_history: List[float] = field(default_factory=list)
-    output_path: Optional[str] = None
+    loss_history: list[float] = field(default_factory=list)
+    output_path: str | None = None
     duration_seconds: float = 0.0
     samples_seen: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class TrainingCallback:
     """Callback hooks for training events."""
-    on_step: Optional[Callable[[int, float], None]] = None
-    on_epoch: Optional[Callable[[int], None]] = None
-    on_save: Optional[Callable[[str], None]] = None
-    on_complete: Optional[Callable[[TrainingRun], None]] = None
-    on_error: Optional[Callable[[Exception], None]] = None
+    on_step: Callable[[int, float], None] | None = None
+    on_epoch: Callable[[int], None] | None = None
+    on_save: Callable[[str], None] | None = None
+    on_complete: Callable[[TrainingRun], None] | None = None
+    on_error: Callable[[Exception], None] | None = None
 
 
 class Trainer:
@@ -110,7 +110,7 @@ class Trainer:
         lora_alpha: int = None,
         lora_dropout: float = None,
         learning_rate: float = None,
-        batch_size: Union[int, str] = "auto",
+        batch_size: int | str = "auto",
         gradient_accumulation: int = None,
         max_seq_length: int = None,
         output_dir: str = None,
@@ -142,7 +142,7 @@ class Trainer:
         self._tokenizer = None
         self._trainer = None
         self._is_loaded = False
-        self._training_runs: List[TrainingRun] = []
+        self._training_runs: list[TrainingRun] = []
 
         # Apply Windows fixes
         self._apply_windows_fixes()
@@ -267,8 +267,8 @@ class Trainer:
     def _load_with_transformers(self) -> None:
         """Load model using standard transformers + PEFT."""
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         # Quantization config
         bnb_config = BitsAndBytesConfig(
@@ -310,7 +310,7 @@ class Trainer:
 
     def train(
         self,
-        dataset: Union[str, Any] = None,
+        dataset: str | Any = None,
         steps: int = None,
         samples: int = None,
         callback: TrainingCallback = None,
@@ -333,7 +333,8 @@ class Trainer:
             TrainingError: If training fails
         """
         import time
-        from trl import SFTTrainer, SFTConfig
+
+        from trl import SFTConfig, SFTTrainer
 
         # Validate inputs
         if steps is not None:
@@ -484,7 +485,7 @@ class Trainer:
 
     def _load_dataset(
         self,
-        dataset: Union[str, Any],
+        dataset: str | Any,
         samples: int = None,
     ) -> Any:
         """
@@ -495,7 +496,7 @@ class Trainer:
             DatasetParseError: If dataset cannot be parsed
             DatasetError: For other dataset-related errors
         """
-        from datasets import load_dataset, Dataset
+        from datasets import Dataset, load_dataset
 
         max_samples = samples or settings.data.max_samples
 
@@ -513,7 +514,7 @@ class Trainer:
                     if not dataset_path.exists():
                         raise DatasetNotFoundError(
                             dataset,
-                            suggestion=f"Create the file or use a HuggingFace dataset name"
+                            suggestion="Create the file or use a HuggingFace dataset name"
                         )
                     try:
                         ds = load_dataset('json', data_files=dataset, split='train')
@@ -635,7 +636,6 @@ class Trainer:
 
         try:
             if save_merged and self.use_unsloth:
-                from unsloth import FastLanguageModel
                 self._model.save_pretrained_merged(
                     str(output_path),
                     self._tokenizer,
@@ -656,10 +656,10 @@ class Trainer:
     def export(
         self,
         format: str = "lora",
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
         quantization: str = "q4_k_m",
         push_to_hub: bool = False,
-        repo_id: Optional[str] = None,
+        repo_id: str | None = None,
         **kwargs,
     ) -> "ExportResult":
         """
@@ -683,11 +683,9 @@ class Trainer:
             >>> print(result.summary())
         """
         from .export import (
-            ExportFormat,
-            ExportResult,
+            export_gguf,
             export_lora,
             export_merged,
-            export_gguf,
         )
 
         if not self._is_loaded:
@@ -751,13 +749,13 @@ class Trainer:
         return self._tokenizer
 
     @property
-    def runs(self) -> List[TrainingRun]:
+    def runs(self) -> list[TrainingRun]:
         """Get all training runs."""
         return self._training_runs
 
     def multi_run(
         self,
-        dataset: Union[str, Any] = None,
+        dataset: str | Any = None,
         num_runs: int = 5,
         steps_per_run: int = 100,
         samples_per_run: int = 1000,
@@ -795,7 +793,7 @@ class Trainer:
             ... )
             >>> print(f"Final loss: {result.final_loss}")
         """
-        from .multi_run import MultiRunTrainer, MultiRunConfig, MergeMode
+        from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
         # Pre-flight GPU check
         if not check_gpu_safe():
@@ -848,7 +846,7 @@ def load_model(
 
 
 def load_dataset(
-    dataset: Union[str, Any],
+    dataset: str | Any,
     max_samples: int = None,
     split: str = None,
 ) -> Any:

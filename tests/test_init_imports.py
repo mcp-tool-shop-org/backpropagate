@@ -25,7 +25,7 @@ class TestPackageImports:
         import backpropagate
         assert hasattr(backpropagate, "__version__")
         assert isinstance(backpropagate.__version__, str)
-        assert backpropagate.__version__ == "0.1.0"
+        assert backpropagate.__version__ == "0.1.2"
 
 
 class TestExceptionImports:
@@ -58,10 +58,10 @@ class TestExceptionImports:
     def test_training_errors(self):
         """Training error classes can be imported."""
         from backpropagate import (
-            TrainingError,
+            CheckpointError,
             ModelLoadError,
             TrainingAbortedError,
-            CheckpointError,
+            TrainingError,
         )
         assert issubclass(TrainingError, Exception)
         assert issubclass(ModelLoadError, TrainingError)
@@ -72,9 +72,9 @@ class TestExceptionImports:
         """Export error classes can be imported."""
         from backpropagate import (
             ExportError,
+            GGUFExportError,
             LoRAExportError,
             MergeExportError,
-            GGUFExportError,
             OllamaRegistrationError,
         )
         assert issubclass(ExportError, Exception)
@@ -92,7 +92,7 @@ class TestExceptionImports:
 
     def test_slao_errors(self):
         """SLAO error classes can be imported."""
-        from backpropagate import SLAOError, SLAOMergeError, SLAOCheckpointError
+        from backpropagate import SLAOCheckpointError, SLAOError, SLAOMergeError
         assert issubclass(SLAOError, Exception)
         assert issubclass(SLAOMergeError, SLAOError)
         assert issubclass(SLAOCheckpointError, SLAOError)
@@ -108,13 +108,13 @@ class TestSecurityImports:
 
     def test_security_functions(self):
         """Security functions can be imported."""
-        from backpropagate import safe_path, check_torch_security
+        from backpropagate import check_torch_security, safe_path
         assert callable(safe_path)
         assert callable(check_torch_security)
 
     def test_security_exceptions(self):
         """Security exceptions can be imported."""
-        from backpropagate import SecurityWarning, PathTraversalError
+        from backpropagate import PathTraversalError, SecurityWarning
         assert issubclass(SecurityWarning, Warning)
         assert issubclass(PathTraversalError, Exception)
 
@@ -124,7 +124,7 @@ class TestUISecurityImports:
 
     def test_security_config(self):
         """SecurityConfig can be imported."""
-        from backpropagate import SecurityConfig, DEFAULT_SECURITY_CONFIG
+        from backpropagate import DEFAULT_SECURITY_CONFIG, SecurityConfig
         assert SecurityConfig is not None
         assert DEFAULT_SECURITY_CONFIG is not None
 
@@ -146,7 +146,7 @@ class TestUISecurityImports:
 
     def test_security_utilities(self):
         """Security utility functions can be imported."""
-        from backpropagate import safe_gradio_handler, log_security_event
+        from backpropagate import log_security_event, safe_gradio_handler
         assert callable(safe_gradio_handler)
         assert callable(log_security_event)
 
@@ -163,10 +163,10 @@ class TestFeatureFlagImports:
         """Feature flag functions can be imported."""
         from backpropagate import (
             check_feature,
-            require_feature,
             get_install_hint,
             list_available_features,
             list_missing_features,
+            require_feature,
         )
         assert callable(check_feature)
         assert callable(require_feature)
@@ -198,11 +198,11 @@ class TestConfigImports:
     def test_settings_functions(self):
         """Settings functions can be imported."""
         from backpropagate import (
-            get_settings,
-            reload_settings,
-            get_output_dir,
             get_cache_dir,
+            get_output_dir,
+            get_settings,
             get_training_args,
+            reload_settings,
         )
         assert callable(get_settings)
         assert callable(reload_settings)
@@ -212,7 +212,7 @@ class TestConfigImports:
 
     def test_config_classes(self):
         """Config classes can be imported."""
-        from backpropagate import ModelConfig, TrainingConfig, LoRAConfig, DataConfig
+        from backpropagate import DataConfig, LoRAConfig, ModelConfig, TrainingConfig
         assert ModelConfig is not None
         assert TrainingConfig is not None
         assert LoRAConfig is not None
@@ -234,13 +234,13 @@ class TestTrainerImports:
 
     def test_training_dataclasses(self):
         """Training dataclasses can be imported."""
-        from backpropagate import TrainingRun, TrainingCallback
+        from backpropagate import TrainingCallback, TrainingRun
         assert TrainingRun is not None
         assert TrainingCallback is not None
 
     def test_trainer_functions(self):
         """Trainer functions can be imported."""
-        from backpropagate import load_model, load_dataset
+        from backpropagate import load_dataset, load_model
         assert callable(load_model)
         assert callable(load_dataset)
 
@@ -251,11 +251,11 @@ class TestMultiRunImports:
     def test_multi_run_classes(self):
         """Multi-run classes can be imported."""
         from backpropagate import (
-            MultiRunTrainer,
+            MergeMode,
             MultiRunConfig,
             MultiRunResult,
+            MultiRunTrainer,
             RunResult,
-            MergeMode,
         )
         assert MultiRunTrainer is not None
         assert MultiRunConfig is not None
@@ -265,7 +265,7 @@ class TestMultiRunImports:
 
     def test_backwards_compatibility_aliases(self):
         """Backwards compatibility aliases can be imported."""
-        from backpropagate import SpeedrunTrainer, SpeedrunConfig, SpeedrunResult
+        from backpropagate import SpeedrunConfig, SpeedrunResult, SpeedrunTrainer
         assert SpeedrunTrainer is not None
         assert SpeedrunConfig is not None
         assert SpeedrunResult is not None
@@ -276,7 +276,7 @@ class TestSLAOImports:
 
     def test_slao_classes(self):
         """SLAO classes can be imported."""
-        from backpropagate import SLAOMerger, SLAOConfig, MergeResult
+        from backpropagate import MergeResult, SLAOConfig, SLAOMerger
         assert SLAOMerger is not None
         assert SLAOConfig is not None
         assert MergeResult is not None
@@ -284,9 +284,9 @@ class TestSLAOImports:
     def test_slao_functions(self):
         """SLAO functions can be imported."""
         from backpropagate import (
-            time_aware_scale,
-            orthogonal_init_A,
             merge_lora_weights,
+            orthogonal_init_A,
+            time_aware_scale,
         )
         assert callable(time_aware_scale)
         assert callable(orthogonal_init_A)
@@ -295,8 +295,8 @@ class TestSLAOImports:
     def test_advanced_slao_functions(self):
         """Advanced SLAO functions can be imported."""
         from backpropagate import (
-            compute_task_similarity,
             adaptive_scale,
+            compute_task_similarity,
             get_layer_scale,
         )
         assert callable(compute_task_similarity)
@@ -310,9 +310,9 @@ class TestCheckpointImports:
     def test_checkpoint_classes(self):
         """Checkpoint classes can be imported."""
         from backpropagate import (
+            CheckpointInfo,
             CheckpointManager,
             CheckpointPolicy,
-            CheckpointInfo,
             CheckpointStats,
         )
         assert CheckpointManager is not None
@@ -331,7 +331,7 @@ class TestGPUSafetyImports:
 
     def test_gpu_status_classes(self):
         """GPU status classes can be imported."""
-        from backpropagate import GPUStatus, GPUSafetyConfig, GPUCondition
+        from backpropagate import GPUCondition, GPUSafetyConfig, GPUStatus
         assert GPUStatus is not None
         assert GPUSafetyConfig is not None
         assert GPUCondition is not None
@@ -340,9 +340,9 @@ class TestGPUSafetyImports:
         """GPU functions can be imported."""
         from backpropagate import (
             check_gpu_safe,
+            format_gpu_status,
             get_gpu_status,
             wait_for_safe_gpu,
-            format_gpu_status,
         )
         assert callable(check_gpu_safe)
         assert callable(get_gpu_status)
@@ -355,7 +355,7 @@ class TestExportImports:
 
     def test_export_enums(self):
         """Export enums can be imported."""
-        from backpropagate import GGUFQuantization, ExportFormat
+        from backpropagate import ExportFormat, GGUFQuantization
         assert GGUFQuantization is not None
         assert ExportFormat is not None
 
@@ -367,9 +367,9 @@ class TestExportImports:
     def test_export_functions(self):
         """Export functions can be imported."""
         from backpropagate import (
+            export_gguf,
             export_lora,
             export_merged,
-            export_gguf,
         )
         assert callable(export_lora)
         assert callable(export_merged)
@@ -379,8 +379,8 @@ class TestExportImports:
         """Ollama functions can be imported."""
         from backpropagate import (
             create_modelfile,
-            register_with_ollama,
             list_ollama_models,
+            register_with_ollama,
         )
         assert callable(create_modelfile)
         assert callable(register_with_ollama)
@@ -393,12 +393,12 @@ class TestDatasetImports:
     def test_dataset_core_classes(self):
         """Dataset core classes can be imported."""
         from backpropagate import (
-            DatasetLoader,
             DatasetFormat,
-            ValidationResult,
-            ValidationError,
+            DatasetLoader,
             DatasetStats,
             FormatConverter,
+            ValidationError,
+            ValidationResult,
         )
         assert DatasetLoader is not None
         assert DatasetFormat is not None
@@ -410,11 +410,11 @@ class TestDatasetImports:
     def test_dataset_core_functions(self):
         """Dataset core functions can be imported."""
         from backpropagate import (
-            detect_format,
-            validate_dataset,
             convert_to_chatml,
-            preview_samples,
+            detect_format,
             get_dataset_stats,
+            preview_samples,
+            validate_dataset,
         )
         assert callable(detect_format)
         assert callable(validate_dataset)
@@ -459,10 +459,10 @@ class TestDatasetImports:
     def test_curriculum_functions(self):
         """Curriculum learning functions can be imported."""
         from backpropagate import (
-            compute_difficulty_score,
-            order_by_difficulty,
-            get_curriculum_chunks,
             analyze_curriculum,
+            compute_difficulty_score,
+            get_curriculum_chunks,
+            order_by_difficulty,
         )
         assert callable(compute_difficulty_score)
         assert callable(order_by_difficulty)
@@ -581,7 +581,7 @@ class TestImportFromPattern:
 
     def test_import_multiple(self):
         """Multiple imports in one statement work."""
-        from backpropagate import Trainer, settings, TrainingRun, TrainingCallback
+        from backpropagate import Trainer, TrainingCallback, TrainingRun, settings
         assert Trainer is not None
         assert settings is not None
         assert TrainingRun is not None

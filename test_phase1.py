@@ -18,7 +18,7 @@ print('=== Testing Phase 1 Improvements ===\n')
 
 # Test 1: Training Presets
 print('--- Test 1: Training Presets ---')
-from backpropagate.config import get_preset, TRAINING_PRESETS, TrainingPreset
+from backpropagate.config import TRAINING_PRESETS, get_preset
 
 for name, preset in TRAINING_PRESETS.items():
     print(f'\n{name.upper()} preset:')

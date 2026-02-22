@@ -9,13 +9,10 @@ Covers:
 - UI command
 """
 
-import pytest
 import argparse
 import os
 import sys
-from unittest.mock import MagicMock, patch, PropertyMock
-from io import StringIO
-
+from unittest.mock import MagicMock, patch
 
 # =============================================================================
 # COLOR SUPPORT DETECTION TESTS
@@ -29,7 +26,6 @@ class TestSupportsColorExtended:
         """NO_COLOR environment variable should disable colors."""
         with patch.dict(os.environ, {"NO_COLOR": "1"}):
             # Need to reimport to get fresh evaluation
-            import importlib
             from backpropagate import cli
 
             result = cli._supports_color()
@@ -753,8 +749,9 @@ class TestCmdUI:
 
     def test_ui_import_error(self, capsys):
         """Missing gradio shows helpful error."""
-        from backpropagate import cli as cli_module
         import builtins
+
+        from backpropagate import cli as cli_module
 
         args = argparse.Namespace(
             port=7860,

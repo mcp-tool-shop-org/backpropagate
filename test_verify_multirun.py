@@ -11,9 +11,10 @@ if sys.platform == "win32":
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['XFORMERS_DISABLED'] = '1'
 
-from backpropagate import MultiRunTrainer
-from datasets import Dataset
 import torch
+from datasets import Dataset
+
+from backpropagate import MultiRunTrainer
 
 print('=== Verify Multi-Run Training Actually Works ===\n')
 
@@ -40,6 +41,7 @@ runner = MultiRunTrainer(
 # We need to manually load the model to test before/after
 print('Loading model...')
 from backpropagate import Trainer
+
 temp_trainer = Trainer(
     model='unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit',
     output_dir='./test_output/temp',

@@ -8,10 +8,9 @@ Tests cover:
 - Help Tab (rendering, CLI reference)
 """
 
-import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
-import gradio as gr
+from unittest.mock import MagicMock, patch
 
+import gradio as gr
 
 # =============================================================================
 # TRAIN TAB TESTS
@@ -83,8 +82,8 @@ class TestTrainSidebarRefresh:
 
     def test_sidebar_refresh_during_training(self):
         """Refresh during training should show live metrics."""
+
         from backpropagate.ui import refresh_train_sidebar
-        import time as time_module
 
         # Use a real UIState-like object to avoid MagicMock comparison issues
         with patch("backpropagate.ui.state") as mock_state:
@@ -110,8 +109,9 @@ class TestTrainSidebarRefresh:
 
     def test_sidebar_refresh_with_elapsed_time(self):
         """Refresh with elapsed time calculation should work."""
-        from backpropagate.ui import refresh_train_sidebar
         import time
+
+        from backpropagate.ui import refresh_train_sidebar
 
         with patch("backpropagate.ui.state") as mock_state:
             mock_state.is_training = True
@@ -147,8 +147,9 @@ class TestTrainStartButton:
 
     def test_start_training_has_correct_signature(self):
         """Start training should have the expected signature."""
-        from backpropagate.ui import start_training
         import inspect
+
+        from backpropagate.ui import start_training
 
         sig = inspect.signature(start_training)
         params = list(sig.parameters.keys())
@@ -382,8 +383,9 @@ class TestMultiRunStartMultipleRuns:
 
     def test_start_multi_run_has_correct_signature(self):
         """start_multi_run should have expected signature."""
-        from backpropagate.ui import start_multi_run
         import inspect
+
+        from backpropagate.ui import start_multi_run
 
         sig = inspect.signature(start_multi_run)
         params = list(sig.parameters.keys())

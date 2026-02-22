@@ -9,21 +9,20 @@ Tests cover:
 - All exported symbols
 """
 
-import pytest
 
 # Import module under test
 from backpropagate import theme
 from backpropagate.theme import (
+    ACCENT,
+    CUSTOM_CSS,
+    DARK_COLORS,
+    LIGHT_COLORS,
+    RADIUS,
+    SEMANTIC,
+    SPACING,
     create_backpropagate_theme,
     get_css,
     get_theme_info,
-    LIGHT_COLORS,
-    DARK_COLORS,
-    ACCENT,
-    SEMANTIC,
-    SPACING,
-    RADIUS,
-    CUSTOM_CSS,
 )
 
 

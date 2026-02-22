@@ -1,9 +1,10 @@
 """Tests for Trainer class (mocked GPU)."""
 
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
-from pathlib import Path
 import os
+import sys
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pytest
 
 
 class TestTrainerInit:
@@ -93,12 +94,12 @@ class TestTrainerInit:
 class TestTrainerWindowsFixes:
     """Tests for Windows-specific fixes."""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
     def test_windows_env_vars_set(self):
         """Test Windows environment variables are set."""
         from backpropagate.trainer import Trainer
 
-        with patch("os.name", "nt"), \
-             patch("torch.cuda.is_available", return_value=False):
+        with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
         # These should be set on Windows
@@ -145,9 +146,8 @@ class TestTrainerSave:
 
     def test_save_raises_without_model(self, temp_dir):
         """Test save raises error when model not loaded."""
-        from backpropagate.trainer import Trainer
-
         from backpropagate.exceptions import TrainingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
@@ -201,8 +201,8 @@ class TestTrainerExport:
 
     def test_export_lora(self, temp_dir):
         """Test export to LoRA format."""
-        from backpropagate.trainer import Trainer
         from backpropagate.export import ExportFormat
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
@@ -217,8 +217,8 @@ class TestTrainerExport:
 
     def test_export_merged(self, temp_dir):
         """Test export to merged format."""
-        from backpropagate.trainer import Trainer
         from backpropagate.export import ExportFormat
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
@@ -359,8 +359,9 @@ class TestConvenienceFunctions:
 
     def test_load_dataset_function_jsonl(self, temp_dir):
         """Test load_dataset with JSONL file."""
-        from backpropagate.trainer import load_dataset
         import json
+
+        from backpropagate.trainer import load_dataset
 
         # Create test JSONL
         jsonl_path = temp_dir / "test.jsonl"
@@ -384,8 +385,9 @@ class TestConvenienceFunctions:
 
     def test_load_dataset_with_max_samples(self, temp_dir):
         """Test load_dataset with max_samples limit."""
-        from backpropagate.trainer import load_dataset
         import json
+
+        from backpropagate.trainer import load_dataset
 
         # Create test JSONL with many samples
         jsonl_path = temp_dir / "test.jsonl"
@@ -485,8 +487,8 @@ class TestTrainerLoadModel:
 
     def test_load_model_with_unsloth(self):
         """load_model should use Unsloth when use_unsloth=True and available."""
-        from backpropagate.trainer import Trainer
         from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -501,8 +503,8 @@ class TestTrainerLoadModel:
 
     def test_load_model_without_unsloth(self):
         """load_model should use transformers when use_unsloth=False."""
-        from backpropagate.trainer import Trainer
         from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False), \
              patch.dict(feature_flags.FEATURES, {"unsloth": False}):
@@ -701,7 +703,7 @@ class TestLoadModelFunction:
 
     def test_load_model_creates_trainer_and_loads(self):
         """load_model() should create Trainer and call load_model."""
-        from backpropagate.trainer import load_model, Trainer
+        from backpropagate.trainer import Trainer, load_model
 
         with patch("torch.cuda.is_available", return_value=False), \
              patch.object(Trainer, "load_model") as mock_load:
@@ -719,7 +721,7 @@ class TestLoadModelFunction:
 
     def test_load_model_passes_parameters(self):
         """load_model() should pass max_seq_length to Trainer."""
-        from backpropagate.trainer import load_model, Trainer
+        from backpropagate.trainer import Trainer, load_model
 
         with patch("torch.cuda.is_available", return_value=False), \
              patch.object(Trainer, "__init__", return_value=None) as mock_init, \
@@ -770,8 +772,9 @@ class TestTrainerLoadDataset:
 
     def test_load_dataset_limits_samples(self, temp_dir):
         """_load_dataset should limit samples when max_samples specified."""
-        from backpropagate.trainer import Trainer
         import json
+
+        from backpropagate.trainer import Trainer
 
         # Create test dataset with many samples
         jsonl_path = temp_dir / "data.jsonl"
@@ -787,8 +790,8 @@ class TestTrainerLoadDataset:
 
     def test_load_dataset_invalid_type_raises(self):
         """_load_dataset should raise for unsupported types."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import DatasetError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -845,8 +848,8 @@ class TestLoRAAdapterApplied:
 
     def test_lora_adapter_applied_with_unsloth(self):
         """Verify LoRA layers added to model with Unsloth."""
-        from backpropagate.trainer import Trainer
         from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer
 
         mock_fast_lm = MagicMock()
         mock_model = MagicMock()
@@ -936,8 +939,8 @@ class TestLoRARankConfiguration:
 
     def test_lora_dropout_default(self):
         """Default LoRA dropout should be applied from settings."""
-        from backpropagate.trainer import Trainer
         from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1011,8 +1014,8 @@ class TestTrainingValidation:
 
     def test_train_invalid_steps_raises(self):
         """Invalid steps parameter should raise error."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1025,8 +1028,8 @@ class TestTrainingValidation:
 
     def test_train_invalid_samples_raises(self):
         """Invalid samples parameter should raise error."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1039,8 +1042,8 @@ class TestTrainingValidation:
 
     def test_train_zero_steps_raises(self):
         """Zero steps should raise error."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1087,8 +1090,8 @@ class TestTrainerErrorHandling:
 
     def test_load_model_import_error(self):
         """ImportError during load should raise ModelLoadError."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import ModelLoadError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(use_unsloth=False)
@@ -1099,8 +1102,8 @@ class TestTrainerErrorHandling:
 
     def test_load_model_cuda_error(self):
         """CUDA error during load should raise GPUNotAvailableError."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import GPUNotAvailableError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(use_unsloth=False)
@@ -1111,8 +1114,8 @@ class TestTrainerErrorHandling:
 
     def test_train_oom_error(self, temp_dir):
         """OOM during training should raise TrainingError with helpful message."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import TrainingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
@@ -1137,8 +1140,8 @@ class TestTrainerErrorHandling:
 
     def test_save_permission_error(self, temp_dir):
         """Permission error during save should raise CheckpointError."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import CheckpointError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1161,8 +1164,8 @@ class TestDatasetLoadingErrors:
 
     def test_load_dataset_file_not_found(self, temp_dir):
         """Non-existent file should raise DatasetNotFoundError."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import DatasetNotFoundError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1172,8 +1175,8 @@ class TestDatasetLoadingErrors:
 
     def test_load_dataset_invalid_json(self, temp_dir):
         """Invalid JSON file should raise DatasetParseError."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import DatasetParseError
+        from backpropagate.trainer import Trainer
 
         # Create invalid JSON file
         invalid_file = temp_dir / "invalid.jsonl"

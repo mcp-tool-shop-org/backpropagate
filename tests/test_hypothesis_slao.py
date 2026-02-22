@@ -4,16 +4,16 @@ Uses Hypothesis to generate random inputs and verify invariants.
 """
 
 import pytest
-from hypothesis import given, strategies as st, settings, assume
 import torch
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from backpropagate.slao import (
-    time_aware_scale,
-    compute_task_similarity,
     adaptive_scale,
+    compute_task_similarity,
     get_layer_scale,
+    time_aware_scale,
 )
-
 
 # =============================================================================
 # STRATEGIES
@@ -258,7 +258,7 @@ class TestLayerScaleProperties:
     )
     def test_custom_scales_respected(self, early, middle, late, total_layers):
         """Custom scale parameters should be used."""
-        layer_name = f"model.layers.0.self_attn.q_proj"  # First layer
+        layer_name = "model.layers.0.self_attn.q_proj"  # First layer
         scale = get_layer_scale(
             layer_name,
             total_layers,
@@ -281,7 +281,8 @@ class TestLayerScaleProperties:
 # =============================================================================
 
 import math
-from backpropagate.slao import SLAOMerger, merge_lora_weights, orthogonal_init_A, SLAOConfig
+
+from backpropagate.slao import SLAOConfig, SLAOMerger, merge_lora_weights, orthogonal_init_A
 
 
 @pytest.mark.hypothesis

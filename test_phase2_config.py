@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """Test Phase 2 SLAO improvements (config only, no heavy imports)."""
-import os
-import sys
 import math
+import sys
 
 if __name__ != "__main__":
     sys.exit(0)
@@ -37,7 +36,7 @@ print('\n[PASS] Time-aware scaling curves work correctly')
 
 # Test 2: MultiRunConfig with replay
 print('\n--- Test 2: MultiRunConfig with Replay ---')
-from backpropagate.multi_run import MultiRunConfig, MergeMode
+from backpropagate.multi_run import MergeMode, MultiRunConfig
 
 config = MultiRunConfig(
     num_runs=5,

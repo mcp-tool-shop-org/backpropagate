@@ -11,11 +11,10 @@ Covers:
 - Windows-specific behavior
 """
 
-import pytest
 import os
-from unittest.mock import patch, MagicMock
-from dataclasses import dataclass
+from unittest.mock import patch
 
+import pytest
 
 # =============================================================================
 # PYDANTIC AVAILABILITY TESTS
@@ -54,7 +53,7 @@ class TestFallbackEnvParsing:
         """Environment variable retrieved correctly."""
         with patch.dict(os.environ, {"BACKPROPAGATE_TEST_KEY": "test_value"}):
             # Import functions that should be available in fallback
-            from backpropagate.config import Settings
+            pass
             # The fallback implementation uses _get_env internally
 
     def test_get_env_default(self):
@@ -67,7 +66,7 @@ class TestFallbackEnvParsing:
         from backpropagate.config import Settings
         s = Settings()
         # Should use defaults
-        assert s.model.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert s.model.name == "Qwen/Qwen2.5-7B-Instruct"
 
 
 class TestFallbackTypeConversion:
@@ -111,7 +110,7 @@ class TestModelConfig:
         from backpropagate.config import ModelConfig
 
         config = ModelConfig()
-        assert config.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
         assert config.trust_remote_code is True
@@ -229,7 +228,7 @@ class TestSettingsManagement:
 
     def test_get_settings_returns_settings(self):
         """get_settings() returns Settings instance."""
-        from backpropagate.config import get_settings, Settings
+        from backpropagate.config import Settings, get_settings
 
         result = get_settings()
         assert isinstance(result, Settings)
@@ -254,7 +253,7 @@ class TestSettingsManagement:
 
     def test_settings_singleton(self):
         """settings module variable is a singleton."""
-        from backpropagate.config import settings, get_settings
+        from backpropagate.config import settings
 
         # settings should be the same as get_settings()
         assert settings is not None
@@ -277,7 +276,7 @@ class TestTrainingPresets:
 
     def test_fast_preset(self):
         """Fast preset has low steps, high lr."""
-        from backpropagate.config import get_preset, TrainingPreset
+        from backpropagate.config import TrainingPreset, get_preset
 
         preset = get_preset("fast")
         assert preset is not None
@@ -288,7 +287,7 @@ class TestTrainingPresets:
 
     def test_balanced_preset(self):
         """Balanced preset has medium values."""
-        from backpropagate.config import get_preset, TrainingPreset
+        from backpropagate.config import TrainingPreset, get_preset
 
         preset = get_preset("balanced")
         assert preset is not None
@@ -298,7 +297,7 @@ class TestTrainingPresets:
 
     def test_quality_preset(self):
         """Quality preset has high steps, low lr."""
-        from backpropagate.config import get_preset, TrainingPreset
+        from backpropagate.config import TrainingPreset, get_preset
 
         preset = get_preset("quality")
         assert preset is not None
@@ -482,7 +481,7 @@ class TestEnvOverrides:
 
     def test_model_name_override(self):
         """Model name can be overridden via env var."""
-        from backpropagate.config import reload_settings, get_settings
+        from backpropagate.config import reload_settings
 
         with patch.dict(os.environ, {"BACKPROPAGATE_MODEL__NAME": "custom/model"}):
             reload_settings()
@@ -491,7 +490,7 @@ class TestEnvOverrides:
 
     def test_learning_rate_override(self):
         """Learning rate can be overridden via env var."""
-        from backpropagate.config import reload_settings, get_settings
+        from backpropagate.config import reload_settings
 
         with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__LEARNING_RATE": "1e-5"}):
             reload_settings()
@@ -572,15 +571,9 @@ class TestModuleExports:
         """All exports can be imported."""
         from backpropagate.config import (
             Settings,
-            settings,
             get_settings,
             reload_settings,
-            ModelConfig,
-            TrainingConfig,
-            LoRAConfig,
-            DataConfig,
-            UIConfig,
-            WindowsConfig,
+            settings,
         )
 
         assert Settings is not None

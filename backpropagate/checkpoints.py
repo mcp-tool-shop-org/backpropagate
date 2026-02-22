@@ -27,12 +27,12 @@ Usage:
 """
 
 import json
-import shutil
 import logging
-from pathlib import Path
-from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Dict, Any
+import shutil
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -87,19 +87,19 @@ class CheckpointInfo:
     """
     run_index: int
     path: str
-    validation_loss: Optional[float] = None
-    training_loss: Optional[float] = None
+    validation_loss: float | None = None
+    training_loss: float | None = None
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     is_run_boundary: bool = False
     is_final: bool = False
     size_bytes: int = 0
     protected: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CheckpointInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "CheckpointInfo":
         return cls(**data)
 
 
@@ -121,9 +121,9 @@ class CheckpointStats:
     total_count: int = 0
     total_size_bytes: int = 0
     total_size_gb: float = 0.0
-    best_checkpoint: Optional[CheckpointInfo] = None
-    oldest_checkpoint: Optional[CheckpointInfo] = None
-    newest_checkpoint: Optional[CheckpointInfo] = None
+    best_checkpoint: CheckpointInfo | None = None
+    oldest_checkpoint: CheckpointInfo | None = None
+    newest_checkpoint: CheckpointInfo | None = None
     protected_count: int = 0
     prunable_count: int = 0
 
@@ -155,7 +155,7 @@ class CheckpointManager:
     def __init__(
         self,
         checkpoint_dir: str,
-        policy: Optional[CheckpointPolicy] = None,
+        policy: CheckpointPolicy | None = None,
     ):
         """
         Initialize the checkpoint manager.
@@ -166,7 +166,7 @@ class CheckpointManager:
         """
         self.checkpoint_dir = Path(checkpoint_dir)
         self.policy = policy or CheckpointPolicy()
-        self._checkpoints: List[CheckpointInfo] = []
+        self._checkpoints: list[CheckpointInfo] = []
         self._manifest_path = self.checkpoint_dir / self.MANIFEST_FILE
 
         # Create directory if needed
@@ -179,7 +179,7 @@ class CheckpointManager:
         """Load checkpoint manifest from disk."""
         if self._manifest_path.exists():
             try:
-                with open(self._manifest_path, "r") as f:
+                with open(self._manifest_path) as f:
                     data = json.load(f)
                 self._checkpoints = [
                     CheckpointInfo.from_dict(c) for c in data.get("checkpoints", [])
@@ -226,8 +226,8 @@ class CheckpointManager:
         self,
         run_index: int,
         checkpoint_path: str,
-        validation_loss: Optional[float] = None,
-        training_loss: Optional[float] = None,
+        validation_loss: float | None = None,
+        training_loss: float | None = None,
         is_run_boundary: bool = False,
         protected: bool = False,
     ) -> CheckpointInfo:
@@ -315,7 +315,7 @@ class CheckpointManager:
 
         return score
 
-    def _get_prunable_checkpoints(self) -> List[CheckpointInfo]:
+    def _get_prunable_checkpoints(self) -> list[CheckpointInfo]:
         """Get list of checkpoints that can be pruned."""
         prunable = []
         for cp in self._checkpoints:
@@ -343,7 +343,7 @@ class CheckpointManager:
 
         return prunable
 
-    def prune(self, dry_run: bool = False) -> List[CheckpointInfo]:
+    def prune(self, dry_run: bool = False) -> list[CheckpointInfo]:
         """
         Prune checkpoints according to policy.
 
@@ -416,14 +416,14 @@ class CheckpointManager:
 
         return pruned
 
-    def get_best_checkpoint(self) -> Optional[CheckpointInfo]:
+    def get_best_checkpoint(self) -> CheckpointInfo | None:
         """Get the checkpoint with lowest validation loss."""
         valid = [cp for cp in self._checkpoints if cp.validation_loss is not None]
         if not valid:
             return None
         return min(valid, key=lambda x: x.validation_loss)
 
-    def get_final_checkpoint(self) -> Optional[CheckpointInfo]:
+    def get_final_checkpoint(self) -> CheckpointInfo | None:
         """Get the most recent checkpoint."""
         final = [cp for cp in self._checkpoints if cp.is_final]
         return final[0] if final else None
@@ -451,7 +451,7 @@ class CheckpointManager:
             prunable_count=len(prunable),
         )
 
-    def list_checkpoints(self) -> List[CheckpointInfo]:
+    def list_checkpoints(self) -> list[CheckpointInfo]:
         """Get list of all registered checkpoints."""
         return list(self._checkpoints)
 
@@ -512,7 +512,7 @@ class CheckpointManager:
 
         return len(orphaned)
 
-    def force_prune_to_size(self, max_size_gb: float) -> List[CheckpointInfo]:
+    def force_prune_to_size(self, max_size_gb: float) -> list[CheckpointInfo]:
         """
         Force prune checkpoints until total size is under limit.
 

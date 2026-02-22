@@ -9,21 +9,21 @@ Tests cover:
 - Wait/cooldown functions
 """
 
-import pytest
 import time
-import threading
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from backpropagate.gpu_safety import (
-    GPUMonitor,
-    GPUStatus,
-    GPUSafetyConfig,
     GPUCondition,
-    get_gpu_status,
-    check_gpu_safe,
-    wait_for_safe_gpu,
-    format_gpu_status,
+    GPUMonitor,
+    GPUSafetyConfig,
+    GPUStatus,
     _evaluate_condition,
+    check_gpu_safe,
+    format_gpu_status,
+    get_gpu_status,
+    wait_for_safe_gpu,
 )
 
 

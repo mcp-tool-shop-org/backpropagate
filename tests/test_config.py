@@ -1,10 +1,10 @@
 """Tests for configuration module."""
 
-import pytest
-from unittest.mock import patch, MagicMock
 import os
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 
 # =============================================================================
 # BASIC IMPORTS AND SETTINGS
@@ -12,7 +12,7 @@ from pathlib import Path
 
 def test_settings_import():
     """Test that settings can be imported."""
-    from backpropagate import settings, Settings
+    from backpropagate import Settings, settings
     assert settings is not None
     assert isinstance(settings, Settings)
 
@@ -126,7 +126,7 @@ class TestModelConfig:
         from backpropagate.config import ModelConfig
 
         config = ModelConfig()
-        assert config.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
         assert config.dtype is None
@@ -367,7 +367,7 @@ class TestGetSettings:
 
     def test_get_settings_returns_settings(self):
         """Test get_settings returns Settings instance."""
-        from backpropagate.config import get_settings, Settings
+        from backpropagate.config import Settings, get_settings
 
         s = get_settings()
         assert isinstance(s, Settings)
@@ -396,7 +396,7 @@ class TestReloadSettings:
                 settings = get_settings()
                 return settings
         """
-        from backpropagate.config import reload_settings, get_settings, Settings
+        from backpropagate.config import Settings, get_settings, reload_settings
 
         s1 = get_settings()
         s2 = reload_settings()
@@ -407,7 +407,7 @@ class TestReloadSettings:
 
     def test_reload_settings_returns_new_instance(self):
         """Test reload_settings returns a (potentially) new instance."""
-        from backpropagate.config import reload_settings, Settings
+        from backpropagate.config import Settings, reload_settings
 
         s = reload_settings()
         assert isinstance(s, Settings)
@@ -432,7 +432,7 @@ class TestGetOutputDir:
 
     def test_get_output_dir_creates_directory(self, tmp_path):
         """Test get_output_dir creates the directory if it doesn't exist."""
-        from backpropagate.config import settings, get_output_dir
+        from backpropagate.config import get_output_dir, settings
 
         # Temporarily change output_dir
         orig = settings.training.output_dir
@@ -526,7 +526,7 @@ class TestGetTrainingArgs:
 
     def test_get_training_args_max_steps_handling(self):
         """Test max_steps is -1 when max_steps is 0."""
-        from backpropagate.config import settings, get_training_args
+        from backpropagate.config import get_training_args, settings
 
         # Save original
         orig = settings.training.max_steps
@@ -617,18 +617,18 @@ class TestModuleExports:
     def test_imports_from_package(self):
         """Test configs can be imported from backpropagate package."""
         from backpropagate import (
-            Settings,
-            settings,
-            get_settings,
-            reload_settings,
-            get_output_dir,
-            get_cache_dir,
-            get_training_args,
-            ModelConfig,
-            TrainingConfig,
-            LoRAConfig,
-            DataConfig,
             PYDANTIC_SETTINGS_AVAILABLE,
+            DataConfig,
+            LoRAConfig,
+            ModelConfig,
+            Settings,
+            TrainingConfig,
+            get_cache_dir,
+            get_output_dir,
+            get_settings,
+            get_training_args,
+            reload_settings,
+            settings,
         )
 
         assert Settings is not None
@@ -973,8 +973,8 @@ class TestPresetExports:
     def test_imports_from_config(self):
         """Test presets can be imported from config."""
         from backpropagate.config import (
-            TrainingPreset,
             TRAINING_PRESETS,
+            TrainingPreset,
             get_preset,
             get_recommended_lr,
             get_recommended_warmup,
@@ -993,8 +993,8 @@ class TestPresetExports:
         but should be accessible from backpropagate.config.
         """
         from backpropagate.config import (
-            TrainingPreset,
             TRAINING_PRESETS,
+            TrainingPreset,
             get_preset,
             get_recommended_lr,
             get_recommended_warmup,

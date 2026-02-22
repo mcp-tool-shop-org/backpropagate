@@ -38,7 +38,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TextIO, Union
+from typing import Any
 
 __all__ = [
     "configure_logging",
@@ -80,7 +80,7 @@ def _should_use_json() -> bool:
     return not sys.stderr.isatty()
 
 
-def _get_log_file() -> Optional[str]:
+def _get_log_file() -> str | None:
     """Get log file path from environment."""
     return os.environ.get("BACKPROPAGATE_LOG_FILE")
 
@@ -92,7 +92,7 @@ def _get_log_file() -> Optional[str]:
 def _configure_structlog(
     level: str = "INFO",
     json_logs: bool = False,
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
 ) -> None:
     """
     Configure structlog for production use.
@@ -106,7 +106,7 @@ def _configure_structlog(
         return
 
     # Shared processors for all logging
-    shared_processors: List[Processor] = [
+    shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,  # Add context vars
         structlog.processors.add_log_level,  # Add level
         structlog.processors.StackInfoRenderer(),  # Add stack info
@@ -196,7 +196,7 @@ class StructuredFormatter(logging.Formatter):
 def _configure_standard_logging(
     level: str = "INFO",
     json_logs: bool = False,
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
 ) -> None:
     """
     Configure standard library logging (fallback when structlog unavailable).
@@ -244,9 +244,9 @@ _configured = False
 
 
 def configure_logging(
-    level: Optional[str] = None,
-    json_logs: Optional[bool] = None,
-    log_file: Optional[str] = None,
+    level: str | None = None,
+    json_logs: bool | None = None,
+    log_file: str | None = None,
     force: bool = False,
 ) -> None:
     """
@@ -283,7 +283,7 @@ def configure_logging(
     _configured = True
 
 
-def get_logger(name: Optional[str] = None) -> Any:
+def get_logger(name: str | None = None) -> Any:
     """
     Get a logger instance.
 
@@ -341,7 +341,7 @@ class LogContext:
 
     def __init__(self, **context: Any):
         self.context = context
-        self._token: Optional[Any] = None
+        self._token: Any | None = None
 
     def __enter__(self) -> "LogContext":
         if STRUCTLOG_AVAILABLE:
@@ -413,8 +413,8 @@ class TrainingLogger:
         self,
         step: int,
         loss: float,
-        lr: Optional[float] = None,
-        grad_norm: Optional[float] = None,
+        lr: float | None = None,
+        grad_norm: float | None = None,
         **extras: Any,
     ) -> None:
         """Log a training step."""
@@ -435,7 +435,7 @@ class TrainingLogger:
         self,
         epoch: int,
         train_loss: float,
-        val_loss: Optional[float] = None,
+        val_loss: float | None = None,
         **extras: Any,
     ) -> None:
         """Log epoch completion."""
@@ -454,7 +454,7 @@ class TrainingLogger:
         self,
         model: str,
         dataset: str,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         """Log training run start."""
         self._log(

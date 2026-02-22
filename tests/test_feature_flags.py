@@ -9,10 +9,10 @@ Tests cover:
 - FeatureNotAvailable exception
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import sys
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # FEATURE DETECTION TESTS
@@ -117,7 +117,7 @@ class TestRequireFeature:
 
     def test_require_feature_with_available_feature(self):
         """require_feature should allow execution when feature is available."""
-        from backpropagate.feature_flags import require_feature, FEATURES
+        from backpropagate.feature_flags import FEATURES, require_feature
 
         # Find an available feature
         available_feature = None
@@ -138,7 +138,7 @@ class TestRequireFeature:
 
     def test_require_feature_with_missing_feature(self):
         """require_feature should raise ImportError when feature is missing."""
-        from backpropagate.feature_flags import require_feature, FEATURES
+        from backpropagate.feature_flags import FEATURES, require_feature
 
         # Find a missing feature
         missing_feature = None
@@ -214,7 +214,7 @@ class TestEnsureFeature:
 
     def test_ensure_feature_raises_for_missing(self):
         """ensure_feature should raise FeatureNotAvailable for missing feature."""
-        from backpropagate.feature_flags import ensure_feature, FeatureNotAvailable, FEATURES
+        from backpropagate.feature_flags import FEATURES, FeatureNotAvailable, ensure_feature
 
         # Find a missing feature
         missing_feature = None
@@ -233,7 +233,7 @@ class TestEnsureFeature:
 
     def test_ensure_feature_passes_for_available(self):
         """ensure_feature should not raise for available feature."""
-        from backpropagate.feature_flags import ensure_feature, FEATURES
+        from backpropagate.feature_flags import FEATURES, ensure_feature
 
         # Find an available feature
         available_feature = None
@@ -294,9 +294,10 @@ class TestGetGpuInfo:
         mock_torch.cuda.get_device_capability.return_value = (8, 0)
 
         with patch.dict(sys.modules, {"torch": mock_torch}):
-            from backpropagate import feature_flags
             # Call directly to use mocked module
             import importlib
+
+            from backpropagate import feature_flags
             importlib.reload(feature_flags)
             result = feature_flags.get_gpu_info()
 
@@ -376,7 +377,7 @@ class TestGetSystemInfo:
 
     def test_get_system_info_memory_when_monitoring(self):
         """get_system_info should include memory when monitoring available."""
-        from backpropagate.feature_flags import get_system_info, FEATURES
+        from backpropagate.feature_flags import FEATURES, get_system_info
 
         result = get_system_info()
 
@@ -396,7 +397,7 @@ class TestFeatureDetection:
 
     def test_detect_features_unsloth_import_error(self):
         """_detect_features should handle unsloth ImportError."""
-        from backpropagate.feature_flags import _detect_features, FEATURES
+        from backpropagate.feature_flags import FEATURES, _detect_features
 
         # Just verify it doesn't crash
         _detect_features()
@@ -405,7 +406,7 @@ class TestFeatureDetection:
     def test_detect_features_runtime_error(self):
         """_detect_features should handle RuntimeError (Python 3.14+)."""
         # RuntimeError is caught for torch.compile issues
-        from backpropagate.feature_flags import _detect_features, FEATURES
+        from backpropagate.feature_flags import FEATURES, _detect_features
 
         # Just verify it runs without crashing
         _detect_features()
@@ -440,14 +441,14 @@ class TestModuleExports:
         """Should be importable from backpropagate package."""
         from backpropagate import (
             FEATURES,
+            FeatureNotAvailable,
             check_feature,
-            require_feature,
+            get_gpu_info,
             get_install_hint,
+            get_system_info,
             list_available_features,
             list_missing_features,
-            FeatureNotAvailable,
-            get_gpu_info,
-            get_system_info,
+            require_feature,
         )
 
         assert FEATURES is not None
@@ -476,7 +477,7 @@ class TestFeatureDescriptions:
 
     def test_feature_descriptions_all_features_have_description(self):
         """All features should have descriptions."""
-        from backpropagate.feature_flags import FEATURES, FEATURE_DESCRIPTIONS
+        from backpropagate.feature_flags import FEATURE_DESCRIPTIONS, FEATURES
 
         for feature in FEATURES:
             assert feature in FEATURE_DESCRIPTIONS
@@ -500,7 +501,7 @@ class TestGetSystemInfoWithMonitoring:
 
         This tests lines 339-348.
         """
-        from backpropagate.feature_flags import get_system_info, FEATURES
+        from backpropagate.feature_flags import FEATURES, get_system_info
 
         # Mock psutil memory info
         mock_mem = MagicMock()
@@ -526,7 +527,7 @@ class TestGetSystemInfoWithMonitoring:
 
         This tests lines 347-348.
         """
-        from backpropagate.feature_flags import get_system_info, FEATURES
+        from backpropagate.feature_flags import FEATURES, get_system_info
 
         mock_psutil = MagicMock()
         mock_psutil.virtual_memory.side_effect = RuntimeError("psutil error")
@@ -593,7 +594,7 @@ class TestRequireFeatureEdgeCases:
 
     def test_require_feature_with_args_and_kwargs(self):
         """require_feature should pass args and kwargs correctly."""
-        from backpropagate.feature_flags import require_feature, FEATURES
+        from backpropagate.feature_flags import FEATURES, require_feature
 
         # Find an available feature
         available_feature = None
@@ -614,7 +615,7 @@ class TestRequireFeatureEdgeCases:
 
     def test_require_feature_error_message_format(self):
         """require_feature should have properly formatted error message."""
-        from backpropagate.feature_flags import require_feature, FEATURES
+        from backpropagate.feature_flags import FEATURES, require_feature
 
         # Find a missing feature
         missing_feature = None

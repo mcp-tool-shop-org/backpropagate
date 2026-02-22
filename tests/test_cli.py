@@ -1,9 +1,8 @@
 """Tests for CLI commands."""
 
-import pytest
 from unittest.mock import MagicMock, patch
-from io import StringIO
-import sys
+
+import pytest
 
 
 class TestParser:
@@ -224,8 +223,9 @@ class TestCmdInfo:
 
     def test_cmd_info_outputs_system_info(self, capsys):
         """Test cmd_info outputs system information."""
-        from backpropagate.cli import cmd_info
         import argparse
+
+        from backpropagate.cli import cmd_info
 
         args = argparse.Namespace(verbose=False)
         result = cmd_info(args)
@@ -238,8 +238,9 @@ class TestCmdInfo:
 
     def test_cmd_info_outputs_features(self, capsys):
         """Test cmd_info outputs feature availability."""
-        from backpropagate.cli import cmd_info
         import argparse
+
+        from backpropagate.cli import cmd_info
 
         args = argparse.Namespace(verbose=False)
         cmd_info(args)
@@ -249,8 +250,9 @@ class TestCmdInfo:
 
     def test_cmd_info_outputs_configuration(self, capsys):
         """Test cmd_info outputs configuration."""
-        from backpropagate.cli import cmd_info
         import argparse
+
+        from backpropagate.cli import cmd_info
 
         args = argparse.Namespace(verbose=False)
         cmd_info(args)
@@ -265,8 +267,9 @@ class TestCmdConfig:
 
     def test_cmd_config_shows_config(self, capsys):
         """Test cmd_config shows configuration."""
-        from backpropagate.cli import cmd_config
         import argparse
+
+        from backpropagate.cli import cmd_config
 
         args = argparse.Namespace(show=False, set=None, reset=False, verbose=False)
         result = cmd_config(args)
@@ -280,8 +283,9 @@ class TestCmdConfig:
 
     def test_cmd_config_reset_message(self, capsys):
         """Test cmd_config reset shows message."""
-        from backpropagate.cli import cmd_config
         import argparse
+
+        from backpropagate.cli import cmd_config
 
         args = argparse.Namespace(show=False, set=None, reset=True, verbose=False)
         result = cmd_config(args)
@@ -297,8 +301,9 @@ class TestCmdTrain:
 
     def test_cmd_train_requires_data(self, capsys):
         """Test cmd_train requires data argument."""
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         args = argparse.Namespace(
             data=None,
@@ -325,8 +330,9 @@ class TestCmdExport:
 
     def test_cmd_export_model_not_found(self, capsys, temp_dir):
         """Test cmd_export returns error for missing model."""
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         args = argparse.Namespace(
             model_path=str(temp_dir / "nonexistent"),
@@ -494,8 +500,9 @@ class TestCmdTrainExecution:
 
         This tests lines 149-206 in cli.py (cmd_train function).
         """
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         # Create mock trainer and result
         mock_result = MagicMock()
@@ -533,8 +540,9 @@ class TestCmdTrainExecution:
 
     def test_cmd_train_with_samples_display(self, capsys, temp_dir):
         """Test train command displays sample count."""
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         mock_result = MagicMock()
         mock_result.final_loss = 0.5
@@ -572,8 +580,9 @@ class TestCmdTrainExecution:
                 _print_warning("Training interrupted by user")
                 return 130
         """
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         mock_trainer = MagicMock()
         mock_trainer.train.side_effect = KeyboardInterrupt()
@@ -609,8 +618,9 @@ class TestCmdTrainExecution:
                     traceback.print_exc()
                 return 1
         """
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         mock_trainer = MagicMock()
         mock_trainer.train.side_effect = RuntimeError("Test error")
@@ -639,8 +649,9 @@ class TestCmdTrainExecution:
 
     def test_cmd_train_verbose_traceback(self, capsys, temp_dir):
         """Test train command prints traceback when verbose."""
-        from backpropagate.cli import cmd_train
         import argparse
+
+        from backpropagate.cli import cmd_train
 
         mock_trainer = MagicMock()
         mock_trainer.train.side_effect = ValueError("Verbose error")
@@ -679,8 +690,9 @@ class TestCmdMultiRunExecution:
                 _print_error("--data is required")
                 return 1
         """
-        from backpropagate.cli import cmd_multi_run
         import argparse
+
+        from backpropagate.cli import cmd_multi_run
 
         args = argparse.Namespace(
             data=None,
@@ -704,8 +716,9 @@ class TestCmdMultiRunExecution:
 
         This tests lines 213-270 (cmd_multi_run function).
         """
-        from backpropagate.cli import cmd_multi_run
         import argparse
+
+        from backpropagate.cli import cmd_multi_run
 
         mock_result = MagicMock()
         mock_result.total_runs = 5
@@ -743,8 +756,9 @@ class TestCmdMultiRunExecution:
 
         This tests lines 261-264.
         """
-        from backpropagate.cli import cmd_multi_run
         import argparse
+
+        from backpropagate.cli import cmd_multi_run
 
         mock_trainer = MagicMock()
         mock_trainer.run.side_effect = KeyboardInterrupt()
@@ -774,8 +788,9 @@ class TestCmdMultiRunExecution:
 
         This tests lines 265-270.
         """
-        from backpropagate.cli import cmd_multi_run
         import argparse
+
+        from backpropagate.cli import cmd_multi_run
 
         mock_trainer = MagicMock()
         mock_trainer.run.side_effect = RuntimeError("Multi-run error")
@@ -810,8 +825,9 @@ class TestCmdExportExecution:
 
         This tests lines 305-309.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         # Create model path
         model_path = temp_dir / "model"
@@ -844,8 +860,9 @@ class TestCmdExportExecution:
 
         This tests lines 310-318.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         model_path = temp_dir / "model"
         model_path.mkdir()
@@ -881,8 +898,9 @@ class TestCmdExportExecution:
 
         This tests lines 319-327.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         model_path = temp_dir / "model"
         model_path.mkdir()
@@ -919,8 +937,9 @@ class TestCmdExportExecution:
 
         This tests lines 337-348.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         model_path = temp_dir / "model"
         model_path.mkdir()
@@ -958,8 +977,9 @@ class TestCmdExportExecution:
 
         This tests lines 346-348.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         model_path = temp_dir / "model"
         model_path.mkdir()
@@ -996,8 +1016,9 @@ class TestCmdExportExecution:
 
         This tests lines 352-357.
         """
-        from backpropagate.cli import cmd_export
         import argparse
+
+        from backpropagate.cli import cmd_export
 
         model_path = temp_dir / "model"
         model_path.mkdir()
@@ -1029,8 +1050,9 @@ class TestCmdInfoGPU:
 
         This tests lines 381-396.
         """
-        from backpropagate.cli import cmd_info
         import argparse
+
+        from backpropagate.cli import cmd_info
 
         mock_gpu_info = {
             "name": "Test RTX 5080",
@@ -1057,8 +1079,9 @@ class TestCmdInfoGPU:
 
         This tests lines 397-399.
         """
-        from backpropagate.cli import cmd_info
         import argparse
+
+        from backpropagate.cli import cmd_info
 
         with patch("backpropagate.feature_flags.get_gpu_info", return_value=None):
             args = argparse.Namespace(verbose=False)
@@ -1078,8 +1101,9 @@ class TestCmdConfigSet:
 
         This tests lines 435-439.
         """
-        from backpropagate.cli import cmd_config
         import argparse
+
+        from backpropagate.cli import cmd_config
 
         args = argparse.Namespace(show=False, set="key=value", reset=False, verbose=False)
         result = cmd_config(args)
@@ -1093,8 +1117,9 @@ class TestCmdConfigSet:
 
         This tests lines 467-471.
         """
-        from backpropagate.cli import cmd_config
         import argparse
+
+        from backpropagate.cli import cmd_config
 
         with patch("os.name", "nt"):
             args = argparse.Namespace(show=False, set=None, reset=False, verbose=False)
@@ -1113,8 +1138,9 @@ class TestSupportsColor:
 
         This tests lines 36-37.
         """
-        from backpropagate.cli import _supports_color
         import os
+
+        from backpropagate.cli import _supports_color
 
         orig = os.environ.get("NO_COLOR")
         try:
@@ -1132,8 +1158,9 @@ class TestSupportsColor:
 
         This tests lines 38-39.
         """
-        from backpropagate.cli import _supports_color
         import os
+
+        from backpropagate.cli import _supports_color
 
         orig_no = os.environ.get("NO_COLOR")
         orig_force = os.environ.get("FORCE_COLOR")

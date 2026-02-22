@@ -57,7 +57,7 @@ def main():
     output_path = Path("F:/AI/checkpoints/validated/perfect_pairs_chat.jsonl")
 
     items = []
-    with open(input_path, "r", encoding="utf-8") as f:
+    with open(input_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 items.append(json.loads(line))

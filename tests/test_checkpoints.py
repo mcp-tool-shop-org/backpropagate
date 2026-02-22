@@ -1,20 +1,19 @@
 """Tests for Checkpoint Management module (backpropagate/checkpoints.py)."""
 
-import pytest
 import json
-import time
 import shutil
+import time
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+
+import pytest
 
 from backpropagate.checkpoints import (
-    CheckpointPolicy,
     CheckpointInfo,
-    CheckpointStats,
     CheckpointManager,
+    CheckpointPolicy,
+    CheckpointStats,
 )
-
 
 # =============================================================================
 # FIXTURES
@@ -1069,7 +1068,6 @@ class TestConcurrentSaveOperations:
     def test_concurrent_register_operations(self, temp_checkpoint_dir):
         """Thread safety for concurrent register operations."""
         import threading
-        import time
 
         policy = CheckpointPolicy(auto_prune=False)
         manager = CheckpointManager(str(temp_checkpoint_dir), policy)

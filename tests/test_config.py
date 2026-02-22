@@ -126,7 +126,7 @@ class TestModelConfig:
         from backpropagate.config import ModelConfig
 
         config = ModelConfig()
-        assert config.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
         assert config.dtype is None

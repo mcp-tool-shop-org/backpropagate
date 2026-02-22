@@ -525,6 +525,8 @@ else:
                 os.environ["TOKENIZERS_PARALLELISM"] = str(self.windows.tokenizers_parallelism).lower()
                 if self.windows.xformers_disabled:
                     os.environ["XFORMERS_DISABLED"] = "1"
+                if self.windows.cuda_launch_blocking:
+                    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 
 # =============================================================================

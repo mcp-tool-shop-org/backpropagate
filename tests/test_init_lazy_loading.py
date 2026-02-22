@@ -306,4 +306,4 @@ class TestVersion:
     def test_version_matches_expected(self):
         """Test that __version__ is the expected value."""
         from backpropagate import __version__
-        assert __version__ == "0.1.0"
+        assert __version__ == "0.1.2"

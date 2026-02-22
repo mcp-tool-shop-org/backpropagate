@@ -378,7 +378,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_kv("Time", f"{result.export_time_seconds:.1f}s")
 
         # Register with Ollama if requested
-        if args.ollama and args.format != "gguf":
+        if args.ollama and args.format == "gguf":
             print()
             ollama_name = args.ollama_name or model_path.name
             _print_info(f"Registering with Ollama as '{ollama_name}'...")

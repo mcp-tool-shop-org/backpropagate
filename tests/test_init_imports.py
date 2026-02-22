@@ -25,7 +25,7 @@ class TestPackageImports:
         import backpropagate
         assert hasattr(backpropagate, "__version__")
         assert isinstance(backpropagate.__version__, str)
-        assert backpropagate.__version__ == "0.1.0"
+        assert backpropagate.__version__ == "0.1.2"
 
 
 class TestExceptionImports:

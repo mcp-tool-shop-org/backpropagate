@@ -1,6 +1,7 @@
 """Tests for Trainer class (mocked GPU)."""
 
 import os
+import sys
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -93,12 +94,12 @@ class TestTrainerInit:
 class TestTrainerWindowsFixes:
     """Tests for Windows-specific fixes."""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
     def test_windows_env_vars_set(self):
         """Test Windows environment variables are set."""
         from backpropagate.trainer import Trainer
 
-        with patch("os.name", "nt"), \
-             patch("torch.cuda.is_available", return_value=False):
+        with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
         # These should be set on Windows

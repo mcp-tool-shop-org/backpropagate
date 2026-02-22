@@ -9,10 +9,8 @@ Tests cover:
 - UI training and monitoring
 """
 
-import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
 import json
-
+from unittest.mock import MagicMock, patch
 
 # =============================================================================
 # END-TO-END TRAINING TESTS
@@ -123,7 +121,7 @@ class TestE2EMultiRunWithCheckpoints:
 
     def test_e2e_multi_run_creates_checkpoints(self, temp_dir):
         """Multi-run should create checkpoints between runs."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -180,7 +178,7 @@ class TestE2EMultiRunWithCheckpoints:
 
     def test_e2e_multi_run_loss_tracking(self, temp_dir):
         """Multi-run should track loss across all runs."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         config = MultiRunConfig(
             num_runs=5,
@@ -397,8 +395,8 @@ class TestTrainExportWorkflow:
 
     def test_train_then_export_lora(self, temp_dir):
         """Complete workflow: train then export LoRA."""
-        from backpropagate.trainer import Trainer
         from backpropagate.export import export_lora
+        from backpropagate.trainer import Trainer
 
         # Training phase (mocked)
         with patch("torch.cuda.is_available", return_value=False):
@@ -428,8 +426,8 @@ class TestTrainExportWorkflow:
 
     def test_multi_run_then_export_merged(self, temp_dir):
         """Complete workflow: multi-run then export merged."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
         from backpropagate.export import export_merged
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         config = MultiRunConfig(
             num_runs=2,
@@ -484,7 +482,8 @@ class TestSLAOMergeIntegration:
     def test_slao_accumulates_across_runs(self, sample_lora_state):
         """SLAO should accumulate changes across multiple runs."""
         import torch
-        from backpropagate.slao import SLAOMerger, SLAOConfig
+
+        from backpropagate.slao import SLAOConfig, SLAOMerger
 
         config = SLAOConfig(scaling_type="sqrt")
         merger = SLAOMerger(config=config)
@@ -595,7 +594,12 @@ class TestGPUSafetyIntegration:
 
     def test_training_respects_gpu_limits(self):
         """Training should respect GPU safety limits."""
-        from backpropagate.gpu_safety import GPUSafetyConfig, GPUCondition, _evaluate_condition, GPUStatus
+        from backpropagate.gpu_safety import (
+            GPUCondition,
+            GPUSafetyConfig,
+            GPUStatus,
+            _evaluate_condition,
+        )
 
         config = GPUSafetyConfig(
             temp_warning=80.0,

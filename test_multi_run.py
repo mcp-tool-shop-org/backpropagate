@@ -11,8 +11,9 @@ if sys.platform == "win32":
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['XFORMERS_DISABLED'] = '1'  # RTX 5080 SM 12.0 too new for xformers
 
-from backpropagate import MultiRunTrainer
 from datasets import Dataset
+
+from backpropagate import MultiRunTrainer
 
 print('=== Multi-Run Test ===')
 
@@ -40,7 +41,7 @@ runner = MultiRunTrainer(
 print('Starting multi-run training...')
 result = runner.run(dataset=test_dataset)
 
-print(f'\n=== Multi-Run Complete ===')
+print('\n=== Multi-Run Complete ===')
 print(f'Total runs: {result.total_runs}')
 print(f'Total steps: {result.total_steps}')
 print(f'Total samples: {result.total_samples}')

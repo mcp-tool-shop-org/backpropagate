@@ -5,9 +5,8 @@ This tests the CLI entry point that allows:
     python -m backpropagate
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import sys
+from unittest.mock import patch
 
 
 class TestMainModule:

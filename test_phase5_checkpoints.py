@@ -10,7 +10,7 @@ print('=== Testing Phase 5.3 Checkpoint Management ===\n')
 
 # Test 1: CheckpointPolicy
 print('--- Test 1: CheckpointPolicy ---')
-from backpropagate.checkpoints import CheckpointPolicy, CheckpointManager, CheckpointInfo, CheckpointStats
+from backpropagate.checkpoints import CheckpointManager, CheckpointPolicy
 
 policy = CheckpointPolicy(
     keep_best_n=3,
@@ -37,7 +37,7 @@ config = MultiRunConfig(
     checkpoint_max_total=15,
     checkpoint_auto_prune=False,  # Disable for those who want all runs saved
 )
-print(f'Config checkpoint options:')
+print('Config checkpoint options:')
 print(f'  keep_best_n: {config.checkpoint_keep_best_n}')
 print(f'  keep_final: {config.checkpoint_keep_final}')
 print(f'  keep_run_boundaries: {config.checkpoint_keep_run_boundaries}')
@@ -50,8 +50,8 @@ print('[PASS] MultiRunConfig checkpoint options work')
 
 # Test 3: CheckpointManager creation
 print('\n--- Test 3: CheckpointManager ---')
-import tempfile
 import shutil
+import tempfile
 
 # Create temp directory
 temp_dir = tempfile.mkdtemp(prefix="backprop_ckpt_test_")
@@ -120,7 +120,8 @@ finally:
 
 # Test 5: UI function imports
 print('\n--- Test 5: UI function imports ---')
-from backpropagate.ui import get_dashboard_metrics, refresh_dashboard
+from backpropagate.ui import get_dashboard_metrics
+
 print('get_dashboard_metrics imported')
 print('refresh_dashboard imported')
 

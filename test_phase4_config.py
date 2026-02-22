@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 """Test Phase 4 Advanced SLAO improvements (config only, no heavy imports)."""
-import os
 import sys
 
 if __name__ != "__main__":
@@ -11,6 +10,7 @@ print('=== Testing Phase 4 Advanced SLAO Features ===\n')
 # Test 1: Task Similarity Computation
 print('--- Test 1: Task Similarity ---')
 import torch
+
 from backpropagate.slao import compute_task_similarity
 
 # Create mock LoRA states

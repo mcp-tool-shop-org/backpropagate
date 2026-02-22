@@ -18,10 +18,9 @@ Features:
 - Windows-safe defaults baked in
 """
 
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, List
-import os
 
 __all__ = [
     "Settings",
@@ -91,7 +90,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Maximum sequence length
         max_seq_length: int = 2048
         # Data type for training
-        dtype: Optional[str] = None  # Auto-detect (bf16 on Ampere+)
+        dtype: str | None = None  # Auto-detect (bf16 on Ampere+)
         # Trust remote code from HuggingFace
         trust_remote_code: bool = True
 
@@ -109,7 +108,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Dropout rate
         lora_dropout: float = 0.05
         # Target modules for LoRA
-        target_modules: List[str] = Field(default_factory=lambda: [
+        target_modules: list[str] = Field(default_factory=lambda: [
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj"
         ])
@@ -255,16 +254,16 @@ if PYDANTIC_SETTINGS_AVAILABLE:
 
         # Authentication
         require_auth: bool = False  # Set True in production
-        auth_username: Optional[str] = None
-        auth_password: Optional[str] = Field(default=None, json_schema_extra={"secret": True})
+        auth_username: str | None = None
+        auth_password: str | None = Field(default=None, json_schema_extra={"secret": True})
 
         # Path restrictions
-        allowed_paths: Optional[List[str]] = None  # None = no restriction
+        allowed_paths: list[str] | None = None  # None = no restriction
         block_path_traversal: bool = True
 
         # Session management
         session_timeout_minutes: int = 30
-        jwt_secret: Optional[str] = Field(default=None, json_schema_extra={"secret": True})
+        jwt_secret: str | None = Field(default=None, json_schema_extra={"secret": True})
         jwt_algorithm: str = "HS256"
 
         # CSRF protection
@@ -277,19 +276,19 @@ if PYDANTIC_SETTINGS_AVAILABLE:
 
         # Logging
         audit_log_enabled: bool = True
-        audit_log_file: Optional[str] = None  # None = stdout only
+        audit_log_file: str | None = None  # None = stdout only
 
         # Content Security Policy
         enable_csp: bool = True
         csp_report_only: bool = False  # Set False to enforce
 
-        def get_auth_tuple(self) -> Optional[tuple]:
+        def get_auth_tuple(self) -> tuple | None:
             """Get auth tuple for Gradio if credentials are set."""
             if self.auth_username and self.auth_password:
                 return (self.auth_username, self.auth_password)
             return None
 
-        def validate_production_config(self) -> List[str]:
+        def validate_production_config(self) -> list[str]:
             """Check for security misconfigurations. Returns list of warnings."""
             warnings = []
             if not self.require_auth:
@@ -383,7 +382,7 @@ else:
     # Fallback implementation using dataclasses
     from dataclasses import dataclass, field
 
-    def _get_env(key: str, default: str = None) -> Optional[str]:
+    def _get_env(key: str, default: str = None) -> str | None:
         return os.environ.get(f"BACKPROPAGATE_{key}", default)
 
     def _get_env_int(key: str, default: int) -> int:
@@ -403,7 +402,7 @@ else:
         name: str = "Qwen/Qwen2.5-7B-Instruct"  # Official model, Unsloth handles 4-bit
         load_in_4bit: bool = True
         max_seq_length: int = 2048
-        dtype: Optional[str] = None
+        dtype: str | None = None
         trust_remote_code: bool = True
 
     @dataclass
@@ -411,7 +410,7 @@ else:
         r: int = 16
         lora_alpha: int = 32
         lora_dropout: float = 0.05
-        target_modules: List[str] = field(default_factory=lambda: [
+        target_modules: list[str] = field(default_factory=lambda: [
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj"
         ])
@@ -476,28 +475,28 @@ else:
     class SecurityConfig:
         """Security configuration (fallback without pydantic-settings)."""
         require_auth: bool = False
-        auth_username: Optional[str] = None
-        auth_password: Optional[str] = None
-        allowed_paths: Optional[List[str]] = None
+        auth_username: str | None = None
+        auth_password: str | None = None
+        allowed_paths: list[str] | None = None
         block_path_traversal: bool = True
         session_timeout_minutes: int = 30
-        jwt_secret: Optional[str] = None
+        jwt_secret: str | None = None
         jwt_algorithm: str = "HS256"
         enable_csrf: bool = True
         csrf_token_expiry_minutes: int = 60
         rate_limit_training: int = 3
         rate_limit_export: int = 5
         audit_log_enabled: bool = True
-        audit_log_file: Optional[str] = None
+        audit_log_file: str | None = None
         enable_csp: bool = True
         csp_report_only: bool = False
 
-        def get_auth_tuple(self) -> Optional[tuple]:
+        def get_auth_tuple(self) -> tuple | None:
             if self.auth_username and self.auth_password:
                 return (self.auth_username, self.auth_password)
             return None
 
-        def validate_production_config(self) -> List[str]:
+        def validate_production_config(self) -> list[str]:
             warnings = []
             if not self.require_auth:
                 warnings.append("SECURITY: require_auth is False")
@@ -532,7 +531,7 @@ else:
 # CACHED SETTINGS INSTANCE
 # =============================================================================
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """
     Get cached settings instance.
@@ -610,6 +609,7 @@ def get_training_args() -> dict:
 # See: https://arxiv.org/abs/2512.23017, Unsloth hyperparameters guide
 
 from dataclasses import dataclass as dc_dataclass
+
 
 @dc_dataclass
 class TrainingPreset:

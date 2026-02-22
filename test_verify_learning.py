@@ -11,9 +11,11 @@ if sys.platform == "win32":
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['XFORMERS_DISABLED'] = '1'
 
-from backpropagate import Trainer
-from datasets import Dataset
 import torch
+from datasets import Dataset
+
+from backpropagate import Trainer
+
 
 def generate_response(model, tokenizer, prompt: str, max_new_tokens: int = 50) -> str:
     """Generate a response from the model."""

@@ -10,10 +10,8 @@ Covers:
 - Callback registration
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import is_dataclass
-
+from unittest.mock import MagicMock
 
 # =============================================================================
 # MERGE MODE ENUM TESTS
@@ -54,7 +52,7 @@ class TestMultiRunConfig:
 
     def test_default_values(self):
         """MultiRunConfig has sensible defaults."""
-        from backpropagate.multi_run import MultiRunConfig, MergeMode
+        from backpropagate.multi_run import MergeMode, MultiRunConfig
 
         config = MultiRunConfig()
 
@@ -68,7 +66,7 @@ class TestMultiRunConfig:
 
     def test_custom_values(self):
         """MultiRunConfig accepts custom values."""
-        from backpropagate.multi_run import MultiRunConfig, MergeMode
+        from backpropagate.multi_run import MergeMode, MultiRunConfig
 
         config = MultiRunConfig(
             num_runs=10,
@@ -279,7 +277,7 @@ class TestMultiRunTrainerInit:
 
     def test_trainer_with_config(self):
         """MultiRunTrainer accepts config object."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         config = MultiRunConfig(num_runs=10, steps_per_run=50)
         trainer = MultiRunTrainer(config=config)
@@ -303,7 +301,7 @@ class TestMultiRunTrainerInit:
 
     def test_trainer_with_merge_mode_string(self):
         """MultiRunTrainer accepts merge_mode as string."""
-        from backpropagate.multi_run import MultiRunTrainer, MergeMode
+        from backpropagate.multi_run import MergeMode, MultiRunTrainer
 
         trainer = MultiRunTrainer(merge_mode="simple")
 
@@ -311,7 +309,7 @@ class TestMultiRunTrainerInit:
 
     def test_trainer_with_merge_mode_enum(self):
         """MultiRunTrainer accepts merge_mode as enum."""
-        from backpropagate.multi_run import MultiRunTrainer, MergeMode
+        from backpropagate.multi_run import MergeMode, MultiRunTrainer
 
         trainer = MultiRunTrainer(merge_mode=MergeMode.SLAO)
 
@@ -371,13 +369,13 @@ class TestSpeedrunAliases:
 
     def test_speedrun_config_alias(self):
         """SpeedrunConfig is alias for MultiRunConfig."""
-        from backpropagate.multi_run import SpeedrunConfig, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, SpeedrunConfig
 
         assert SpeedrunConfig is MultiRunConfig
 
     def test_speedrun_result_alias(self):
         """SpeedrunResult is alias for MultiRunResult."""
-        from backpropagate.multi_run import SpeedrunResult, MultiRunResult
+        from backpropagate.multi_run import MultiRunResult, SpeedrunResult
 
         assert SpeedrunResult is MultiRunResult
 
@@ -450,9 +448,9 @@ class TestModuleExports:
         from backpropagate.multi_run import (
             MergeMode,
             MultiRunConfig,
-            RunResult,
             MultiRunResult,
             MultiRunTrainer,
+            RunResult,
         )
 
         assert MergeMode is not None
@@ -464,9 +462,9 @@ class TestModuleExports:
     def test_slao_classes_exported(self):
         """SLAO classes are exported."""
         from backpropagate.multi_run import (
+            MergeResult,
             SLAOConfig,
             SLAOMerger,
-            MergeResult,
         )
 
         assert SLAOConfig is not None
@@ -476,10 +474,10 @@ class TestModuleExports:
     def test_gpu_classes_exported(self):
         """GPU monitoring classes are exported."""
         from backpropagate.multi_run import (
-            GPUMonitor,
-            GPUStatus,
-            GPUSafetyConfig,
             GPUCondition,
+            GPUMonitor,
+            GPUSafetyConfig,
+            GPUStatus,
         )
 
         assert GPUMonitor is not None
@@ -490,8 +488,8 @@ class TestModuleExports:
     def test_checkpoint_classes_exported(self):
         """Checkpoint classes are exported."""
         from backpropagate.multi_run import (
-            CheckpointManager,
             CheckpointInfo,
+            CheckpointManager,
             CheckpointPolicy,
             CheckpointStats,
         )
@@ -504,10 +502,10 @@ class TestModuleExports:
     def test_helper_functions_exported(self):
         """Helper functions are exported."""
         from backpropagate.multi_run import (
-            get_gpu_status,
             check_gpu_safe,
-            wait_for_safe_gpu,
             format_gpu_status,
+            get_gpu_status,
+            wait_for_safe_gpu,
         )
 
         assert callable(get_gpu_status)

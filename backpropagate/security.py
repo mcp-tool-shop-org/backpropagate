@@ -17,7 +17,6 @@ Usage:
 import logging
 import warnings
 from pathlib import Path
-from typing import Optional, Union
 
 __all__ = [
     "safe_path",
@@ -40,7 +39,7 @@ class SecurityWarning(UserWarning):
 class PathTraversalError(ValueError):
     """Error raised when path traversal is detected."""
 
-    def __init__(self, path: str, allowed_base: Optional[str] = None):
+    def __init__(self, path: str, allowed_base: str | None = None):
         self.path = path
         self.allowed_base = allowed_base
 
@@ -53,9 +52,9 @@ class PathTraversalError(ValueError):
 
 
 def safe_path(
-    user_path: Union[str, Path],
+    user_path: str | Path,
     must_exist: bool = False,
-    allowed_base: Optional[Union[str, Path]] = None,
+    allowed_base: str | Path | None = None,
     allow_relative: bool = True,
 ) -> Path:
     """
@@ -161,7 +160,7 @@ def check_torch_security() -> bool:
 
 
 def safe_torch_load(
-    path: Union[str, Path],
+    path: str | Path,
     weights_only: bool = True,
     **kwargs
 ) -> dict:
@@ -211,10 +210,10 @@ def safe_torch_load(
 
 def audit_log(
     operation: str,
-    path: Optional[str] = None,
-    user: Optional[str] = None,
+    path: str | None = None,
+    user: str | None = None,
     success: bool = True,
-    details: Optional[dict] = None,
+    details: dict | None = None,
 ) -> None:
     """
     Log security-sensitive operations for audit trail.

@@ -10,12 +10,12 @@ Tests cover critical Windows-specific issues:
 - Environment variable settings
 """
 
-import pytest
 import os
 import sys
-from unittest.mock import patch, MagicMock
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # MULTIPROCESSING TESTS
@@ -95,7 +95,6 @@ class TestTokenizerParallelismDisabled:
         # Check if the environment variable is set correctly
         # This prevents warnings and potential issues on Windows
 
-        from backpropagate import trainer  # Import triggers env setup
 
         # After import, check env var
         parallelism = os.environ.get("TOKENIZERS_PARALLELISM", "")
@@ -111,7 +110,6 @@ class TestTokenizerParallelismDisabled:
             warnings.simplefilter("always")
 
             # Import the trainer module
-            import backpropagate.trainer
 
             # Check no parallelism warnings
             parallelism_warnings = [
@@ -132,8 +130,9 @@ class TestPathsWithSpaces:
 
     def test_dataset_path_with_spaces(self, tmp_path):
         """Should handle dataset paths containing spaces."""
-        from backpropagate.datasets import DatasetLoader
         import json
+
+        from backpropagate.datasets import DatasetLoader
 
         # Create directory with space in name
         spaced_dir = tmp_path / "My Documents"
@@ -171,8 +170,9 @@ class TestPathsWithSpaces:
 
     def test_checkpoint_path_with_spaces(self, tmp_path):
         """Should handle checkpoint paths with spaces."""
-        from backpropagate.checkpoints import CheckpointManager
         import json
+
+        from backpropagate.checkpoints import CheckpointManager
 
         # Create directory with spaces
         checkpoint_dir = tmp_path / "My Checkpoints"
@@ -234,8 +234,8 @@ class TestCUDALaunchBlocking:
 
     def test_cuda_errors_surface_correctly(self):
         """CUDA errors should be raised, not silently ignored."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import GPUNotAvailableError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(use_unsloth=False)
@@ -249,8 +249,8 @@ class TestCUDALaunchBlocking:
 
     def test_oom_error_message_helpful(self):
         """OOM errors should provide helpful guidance."""
-        from backpropagate.trainer import Trainer
         from backpropagate.exceptions import TrainingError
+        from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(use_unsloth=False)
@@ -356,7 +356,7 @@ class TestWindowsSpecificBehavior:
             json.dump({"key": "value"}, f)
 
         # Read it back
-        with open(test_file, "r") as f:
+        with open(test_file) as f:
             data = json.load(f)
 
         assert data["key"] == "value"
@@ -369,7 +369,6 @@ class TestWindowsSpecificBehavior:
         """Console should handle unicode output."""
         # Windows console encoding can be tricky
         import io
-        import sys
 
         # Test that we can write unicode to stdout
         test_string = "Training progress: 测试 완료"
@@ -464,8 +463,9 @@ class TestWindowsFileCleanup:
 
     def test_checkpoint_cleanup_handles_locked_files(self, tmp_path):
         """Checkpoint cleanup should handle locked files gracefully."""
-        from backpropagate.checkpoints import CheckpointManager
         import json
+
+        from backpropagate.checkpoints import CheckpointManager
 
         manager = CheckpointManager(str(tmp_path))
 
@@ -512,8 +512,8 @@ class TestSignalHandling:
 
     def test_keyboard_interrupt_handled(self):
         """KeyboardInterrupt should stop training gracefully."""
+        from backpropagate.exceptions import TrainingAbortedError, TrainingError
         from backpropagate.trainer import Trainer
-        from backpropagate.exceptions import TrainingError, TrainingAbortedError
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(use_unsloth=False)
@@ -541,7 +541,7 @@ class TestSignalHandling:
 
     def test_multi_run_abort_works(self):
         """Multi-run abort should work on Windows."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         config = MultiRunConfig(num_runs=5)
 

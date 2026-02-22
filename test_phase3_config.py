@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 """Test Phase 3 Data Quality improvements (config only, no heavy imports)."""
-import os
 import sys
 
 if __name__ != "__main__":
@@ -10,7 +9,7 @@ print('=== Testing Phase 3 Data Quality Improvements ===\n')
 
 # Test 1: Format Detection
 print('--- Test 1: Format Detection ---')
-from backpropagate.datasets import detect_format, DatasetFormat
+from backpropagate.datasets import DatasetFormat, detect_format
 
 # ShareGPT format
 sharegpt_sample = {"conversations": [{"from": "human", "value": "Hello"}, {"from": "gpt", "value": "Hi!"}]}
@@ -34,7 +33,7 @@ print('[PASS] ChatML format detected')
 
 # Test 2: Validation
 print('\n--- Test 2: Dataset Validation ---')
-from backpropagate.datasets import validate_dataset, ValidationResult
+from backpropagate.datasets import validate_dataset
 
 samples = [
     {"conversations": [{"from": "human", "value": "Hello"}, {"from": "gpt", "value": "Hi!"}]},
@@ -65,10 +64,10 @@ print(f'[PASS] Deduplication: {removed} duplicates removed')
 # Test 4: Curriculum Learning
 print('\n--- Test 4: Curriculum Learning ---')
 from backpropagate.datasets import (
-    compute_difficulty_score,
-    order_by_difficulty,
-    get_curriculum_chunks,
     analyze_curriculum,
+    compute_difficulty_score,
+    get_curriculum_chunks,
+    order_by_difficulty,
 )
 
 samples = [
@@ -97,7 +96,7 @@ print(f'[PASS] get_curriculum_chunks: {[len(c) for c in chunks]} samples per chu
 
 # Test analysis
 stats = analyze_curriculum(samples_extended, num_chunks=3)
-print(f'[PASS] analyze_curriculum:')
+print('[PASS] analyze_curriculum:')
 for i, (size, (d_min, d_max)) in enumerate(zip(stats.chunk_sizes, stats.difficulty_ranges)):
     print(f'       Chunk {i+1}: {size} samples, difficulty [{d_min:.3f} - {d_max:.3f}]')
 

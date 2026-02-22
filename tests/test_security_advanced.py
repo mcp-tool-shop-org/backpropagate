@@ -9,28 +9,28 @@ Tests the security modules added based on 2026 best practices:
 """
 
 import time
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from backpropagate.ui_security import (
+    DEFAULT_GRADIO_CSP,
+    JWT_AVAILABLE,
+    ContentSecurityPolicy,
+    # CSP
+    CSPConfig,
+    CSRFProtection,
+    # CSRF
+    CSRFToken,
     # JWT
     JWTConfig,
     JWTManager,
-    JWT_AVAILABLE,
-    # CSRF
-    CSRFToken,
-    CSRFProtection,
     # Combined Session
     SecureSessionHandler,
-    get_secure_session_handler,
-    # CSP
-    CSPConfig,
-    ContentSecurityPolicy,
-    DEFAULT_GRADIO_CSP,
-    get_gradio_csp,
     apply_security_headers,
+    get_gradio_csp,
+    get_secure_session_handler,
 )
-
 
 # =============================================================================
 # JWT TESTS

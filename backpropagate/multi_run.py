@@ -34,28 +34,26 @@ Usage:
     results = runner.run()
 """
 
-import os
-import json
-import time
 import logging
-from pathlib import Path
+import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Callable, Union, Tuple
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
+from .checkpoints import CheckpointManager, CheckpointPolicy, CheckpointStats
 from .config import settings
-from .slao import SLAOMerger, SLAOConfig, MergeResult
-from .checkpoints import CheckpointManager, CheckpointPolicy, CheckpointInfo, CheckpointStats
 from .gpu_safety import (
+    GPUCondition,
     GPUMonitor,
     GPUSafetyConfig,
     GPUStatus,
-    GPUCondition,
-    check_gpu_safe,
-    wait_for_safe_gpu,
     get_gpu_status,
-    format_gpu_status,
+    wait_for_safe_gpu,
 )
+from .slao import MergeResult, SLAOConfig, SLAOMerger
 
 logger = logging.getLogger(__name__)
 
@@ -141,14 +139,14 @@ class RunResult:
     steps: int
     samples: int
     final_loss: float
-    loss_history: List[float] = field(default_factory=list)
+    loss_history: list[float] = field(default_factory=list)
     learning_rate: float = 0.0
     duration_seconds: float = 0.0
-    checkpoint_path: Optional[str] = None
-    merge_result: Optional[MergeResult] = None
-    validation_loss: Optional[float] = None
-    gpu_max_temp: Optional[float] = None
-    gpu_max_vram_percent: Optional[float] = None
+    checkpoint_path: str | None = None
+    merge_result: MergeResult | None = None
+    validation_loss: float | None = None
+    gpu_max_temp: float | None = None
+    gpu_max_vram_percent: float | None = None
 
 
 @dataclass
@@ -159,15 +157,15 @@ class MultiRunResult:
     total_samples: int
     total_duration_seconds: float
     final_loss: float
-    runs: List[RunResult] = field(default_factory=list)
-    aggregate_loss_history: List[float] = field(default_factory=list)
-    run_boundaries: List[int] = field(default_factory=list)  # Step indices where runs start
-    final_checkpoint_path: Optional[str] = None
+    runs: list[RunResult] = field(default_factory=list)
+    aggregate_loss_history: list[float] = field(default_factory=list)
+    run_boundaries: list[int] = field(default_factory=list)  # Step indices where runs start
+    final_checkpoint_path: str | None = None
     merge_mode: str = "slao"
     aborted: bool = False
-    abort_reason: Optional[str] = None
+    abort_reason: str | None = None
     # Phase 5.3: Checkpoint stats
-    checkpoint_stats: Optional[CheckpointStats] = None
+    checkpoint_stats: CheckpointStats | None = None
 
 
 # Backwards compatibility alias
@@ -185,18 +183,18 @@ class MultiRunTrainer:
     def __init__(
         self,
         model: str = None,
-        config: Optional[MultiRunConfig] = None,
+        config: MultiRunConfig | None = None,
         # Convenience overrides
         num_runs: int = None,
         steps_per_run: int = None,
         samples_per_run: int = None,
-        merge_mode: Union[str, MergeMode] = None,
+        merge_mode: str | MergeMode = None,
         checkpoint_dir: str = None,
         # Callbacks
-        on_run_start: Optional[Callable[[int], None]] = None,
-        on_run_complete: Optional[Callable[[RunResult], None]] = None,
-        on_step: Optional[Callable[[int, int, float], None]] = None,
-        on_gpu_status: Optional[Callable[[GPUStatus], None]] = None,
+        on_run_start: Callable[[int], None] | None = None,
+        on_run_complete: Callable[[RunResult], None] | None = None,
+        on_step: Callable[[int, int, float], None] | None = None,
+        on_gpu_status: Callable[[GPUStatus], None] | None = None,
     ):
         """
         Initialize multi-run trainer.
@@ -241,34 +239,34 @@ class MultiRunTrainer:
 
         # Internal state
         self._trainer = None
-        self._slao_merger: Optional[SLAOMerger] = None
-        self._gpu_monitor: Optional[GPUMonitor] = None
+        self._slao_merger: SLAOMerger | None = None
+        self._gpu_monitor: GPUMonitor | None = None
         self._is_running = False
         self._should_abort = False
-        self._abort_reason: Optional[str] = None
+        self._abort_reason: str | None = None
 
         # Results
-        self._runs: List[RunResult] = []
-        self._aggregate_loss: List[float] = []
-        self._run_boundaries: List[int] = []
+        self._runs: list[RunResult] = []
+        self._aggregate_loss: list[float] = []
+        self._run_boundaries: list[int] = []
 
         # GPU tracking
         self._gpu_max_temp = 0.0
         self._gpu_max_vram = 0.0
 
         # Phase 4.3: Early stopping tracking
-        self._validation_losses: List[float] = []
+        self._validation_losses: list[float] = []
         self._early_stop_counter = 0
         self._best_val_loss = float('inf')
 
         # Phase 5.3: Checkpoint manager
-        self._checkpoint_manager: Optional[CheckpointManager] = None
+        self._checkpoint_manager: CheckpointManager | None = None
 
         logger.info(f"SpeedrunTrainer initialized: {self.config.num_runs} runs x "
                     f"{self.config.steps_per_run} steps x {self.config.samples_per_run} samples")
         logger.info(f"Merge mode: {self.config.merge_mode.value}")
 
-    def run(self, dataset: Union[str, Any] = None) -> SpeedrunResult:
+    def run(self, dataset: str | Any = None) -> SpeedrunResult:
         """
         Execute all speedrun training runs.
 
@@ -320,7 +318,7 @@ class MultiRunTrainer:
             self._start_gpu_monitor()
 
         # Load dataset
-        logger.info(f"Loading dataset...")
+        logger.info("Loading dataset...")
         full_dataset = self._load_full_dataset(dataset)
         total_samples = len(full_dataset)
         logger.info(f"Dataset loaded: {total_samples} total samples")
@@ -397,11 +395,11 @@ class MultiRunTrainer:
         self._abort_reason = reason
         logger.warning(f"Speedrun abort requested: {reason}")
 
-    def get_checkpoint_manager(self) -> Optional[CheckpointManager]:
+    def get_checkpoint_manager(self) -> CheckpointManager | None:
         """Get the checkpoint manager for external access (e.g., UI)."""
         return self._checkpoint_manager
 
-    def get_checkpoint_stats(self) -> Optional[CheckpointStats]:
+    def get_checkpoint_stats(self) -> CheckpointStats | None:
         """Get current checkpoint statistics."""
         if self._checkpoint_manager:
             return self._checkpoint_manager.get_stats()
@@ -414,8 +412,7 @@ class MultiRunTrainer:
         checkpoint_dir: Path,
     ) -> RunResult:
         """Execute a single training run."""
-        import torch
-        from trl import SFTTrainer, SFTConfig
+        from trl import SFTConfig, SFTTrainer
 
         run_start = time.time()
 
@@ -553,7 +550,7 @@ class MultiRunTrainer:
         run_idx: int,
         full_dataset: Any,
         checkpoint_dir: Path,
-    ) -> Tuple[RunResult, Optional[float]]:
+    ) -> tuple[RunResult, float | None]:
         """
         Execute a single training run with optional validation.
 
@@ -725,9 +722,8 @@ class MultiRunTrainer:
                 logger.info(f"Loaded SLAO-initialized weights for run {run_idx}")
         # For SIMPLE mode, just continue with current weights
 
-    def _get_lora_state_dict(self) -> Dict[str, Any]:
+    def _get_lora_state_dict(self) -> dict[str, Any]:
         """Extract LoRA adapter state dict from model."""
-        import torch
 
         model = self._trainer._model
 
@@ -743,9 +739,8 @@ class MultiRunTrainer:
 
         return lora_state
 
-    def _load_lora_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def _load_lora_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load LoRA state dict into model."""
-        import torch
 
         model = self._trainer._model
 
@@ -760,9 +755,9 @@ class MultiRunTrainer:
             if name in model_state:
                 model_state[name].copy_(param)
 
-    def _load_full_dataset(self, dataset: Union[str, Any]) -> Any:
+    def _load_full_dataset(self, dataset: str | Any) -> Any:
         """Load the full dataset for chunking."""
-        from datasets import load_dataset, Dataset
+        from datasets import Dataset, load_dataset
 
         if dataset is None:
             dataset = settings.data.dataset_name

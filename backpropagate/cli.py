@@ -26,16 +26,14 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 from .exceptions import (
     BackpropagateError,
-    TrainingError,
     DatasetError,
     ExportError,
-    ConfigurationError,
+    TrainingError,
 )
-from .security import safe_path, PathTraversalError
+from .security import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +200,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         save_path = trainer.save(args.output)
 
         print()
-        _print_success(f"Training complete!")
+        _print_success("Training complete!")
         _print_kv("Final loss", f"{result.final_loss:.4f}")
         _print_kv("Duration", f"{result.duration_seconds:.1f}s")
         _print_kv("Saved to", save_path)
@@ -248,8 +246,7 @@ def cmd_train(args: argparse.Namespace) -> int:
 
 def cmd_multi_run(args: argparse.Namespace) -> int:
     """Execute the multi-run command."""
-    from .trainer import Trainer
-    from .multi_run import MultiRunTrainer, MultiRunConfig, MergeMode, RunResult
+    from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer, RunResult
 
     _print_header("Backpropagate Multi-Run Training")
 
@@ -320,11 +317,10 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
 def cmd_export(args: argparse.Namespace) -> int:
     """Execute the export command."""
     from .export import (
+        export_gguf,
         export_lora,
         export_merged,
-        export_gguf,
         register_with_ollama,
-        GGUFQuantization,
     )
 
     _print_header("Backpropagate Export")
@@ -422,10 +418,10 @@ def cmd_export(args: argparse.Namespace) -> int:
 # COMMAND: info
 # =============================================================================
 
-def cmd_info(args: argparse.Namespace) -> int:
+def cmd_info(_args: argparse.Namespace) -> int:
     """Execute the info command."""
-    from .feature_flags import FEATURES, get_gpu_info, get_system_info
     from .config import settings
+    from .feature_flags import FEATURES, get_gpu_info, get_system_info
     from .gpu_safety import get_gpu_status
 
     _print_header("Backpropagate System Info")
@@ -486,7 +482,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     """Execute the ui command to launch Gradio interface."""
     try:
         from .ui import launch
-    except ImportError as e:
+    except ImportError:
         _print_error("UI dependencies not installed")
         _print_info("Install with: pip install backpropagate[ui]")
         if args.verbose:
@@ -528,8 +524,8 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 def cmd_config(args: argparse.Namespace) -> int:
     """Execute the config command."""
-    from .config import settings, reload_settings
-    import json
+
+    from .config import settings
 
     _print_header("Backpropagate Configuration")
 
@@ -819,7 +815,7 @@ Examples:
 # MAIN
 # =============================================================================
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     """Main entry point for the CLI."""
     parser = create_parser()
     args = parser.parse_args(argv)

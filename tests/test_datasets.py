@@ -9,25 +9,24 @@ Tests cover:
 - Statistics computation
 """
 
-import pytest
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from backpropagate.datasets import (
     DatasetFormat,
     DatasetLoader,
-    ValidationResult,
-    ValidationError,
     FormatConverter,
-    detect_format,
-    validate_dataset,
+    ValidationResult,
     convert_to_chatml,
-    preview_samples,
+    detect_format,
     get_dataset_stats,
+    preview_samples,
+    validate_dataset,
 )
-
 
 # =============================================================================
 # FORMAT DETECTION TESTS
@@ -1307,7 +1306,7 @@ class TestDatasetLoaderPerplexityFilter:
         from backpropagate.datasets import DatasetLoader
 
         assert hasattr(DatasetLoader, "filter_perplexity")
-        assert callable(getattr(DatasetLoader, "filter_perplexity"))
+        assert callable(DatasetLoader.filter_perplexity)
 
 
 class TestPerplexityExports:
@@ -1409,7 +1408,7 @@ class TestConvertToChatmlRawText:
 
     def test_convert_raw_text_string(self):
         """convert_to_chatml should handle raw text strings."""
-        from backpropagate.datasets import convert_to_chatml, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, convert_to_chatml
 
         samples = ["Hello world", "This is plain text"]
         result = convert_to_chatml(samples, DatasetFormat.RAW_TEXT)
@@ -1434,7 +1433,7 @@ class TestValidateDatasetMaxErrors:
 
     def test_validate_dataset_stops_at_max_errors(self):
         """validate_dataset should stop collecting errors at max_errors."""
-        from backpropagate.datasets import validate_dataset, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, validate_dataset
 
         # Create many invalid samples
         invalid_samples = [
@@ -1449,7 +1448,7 @@ class TestValidateDatasetMaxErrors:
 
     def test_validate_dataset_default_max_errors(self):
         """validate_dataset should use default max_errors of 100."""
-        from backpropagate.datasets import validate_dataset, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, validate_dataset
 
         # Create many invalid samples
         invalid_samples = [
@@ -1468,7 +1467,7 @@ class TestFormatConverterUnknown:
 
     def test_to_chatml_unknown_format_raises(self):
         """FormatConverter.to_chatml should raise for UNKNOWN format."""
-        from backpropagate.datasets import FormatConverter, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, FormatConverter
 
         sample = {"random": "data"}
 
@@ -1668,7 +1667,7 @@ class TestTokenization:
     def test_tokenize_conversations(self):
         """Should tokenize chat format correctly."""
         # Note: This tests the ChatML conversion which is the pre-tokenization step
-        from backpropagate.datasets import FormatConverter, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, FormatConverter
 
         # ShareGPT format
         sample = {
@@ -1717,7 +1716,7 @@ class TestTokenization:
 
     def test_tokenize_padding(self):
         """Should handle padding considerations (preparation for training)."""
-        from backpropagate.datasets import get_dataset_stats, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, get_dataset_stats
 
         # Create samples of different lengths
         samples = [
@@ -1733,7 +1732,7 @@ class TestTokenization:
 
     def test_chat_template_applied(self):
         """Should apply model's chat template (ChatML format)."""
-        from backpropagate.datasets import FormatConverter, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, FormatConverter
 
         # OpenAI format input
         sample = {
@@ -1919,7 +1918,7 @@ class TestStreamingLoaderOperations:
 
     def test_streaming_detected_format(self, tmp_path):
         """StreamingDatasetLoader should detect format."""
-        from backpropagate.datasets import StreamingDatasetLoader, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, StreamingDatasetLoader
 
         file_path = tmp_path / "test.jsonl"
         samples = [{"text": "<|im_start|>user\nTest<|im_end|>"}]

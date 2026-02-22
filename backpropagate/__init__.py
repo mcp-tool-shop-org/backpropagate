@@ -47,59 +47,59 @@ Usage:
 from .exceptions import (
     # Base
     BackpropagateError,
+    # Batch operations
+    BatchOperationError,
+    CheckpointError,
     # Configuration
     ConfigurationError,
-    InvalidSettingError,
     # Dataset
     DatasetError,
+    DatasetFormatError,
     DatasetNotFoundError,
     DatasetParseError,
     DatasetValidationError,
-    DatasetFormatError,
-    # Training
-    TrainingError,
-    ModelLoadError,
-    TrainingAbortedError,
-    CheckpointError,
     # Export
     ExportError,
-    LoRAExportError,
-    MergeExportError,
     GGUFExportError,
-    OllamaRegistrationError,
     # GPU
     GPUError,
-    GPUNotAvailableError,
     GPUMemoryError,
-    GPUTemperatureError,
     GPUMonitoringError,
+    GPUNotAvailableError,
+    GPUTemperatureError,
+    InvalidSettingError,
+    LoRAExportError,
+    MergeExportError,
+    ModelLoadError,
+    OllamaRegistrationError,
+    SLAOCheckpointError,
     # SLAO
     SLAOError,
     SLAOMergeError,
-    SLAOCheckpointError,
-    # Batch operations
-    BatchOperationError,
+    TrainingAbortedError,
+    # Training
+    TrainingError,
 )
 
 # Security utilities
 from .security import (
-    safe_path,
-    check_torch_security,
-    SecurityWarning,
     PathTraversalError,
+    SecurityWarning,
+    check_torch_security,
+    safe_path,
 )
 
 # UI Security utilities (production-hardened) - requires gradio
 try:
     from .ui_security import (
-        SecurityConfig,
+        ALLOWED_DATASET_EXTENSIONS,
+        DANGEROUS_EXTENSIONS,
         DEFAULT_SECURITY_CONFIG,
         EnhancedRateLimiter,
         FileValidator,
-        ALLOWED_DATASET_EXTENSIONS,
-        DANGEROUS_EXTENSIONS,
-        safe_gradio_handler,
+        SecurityConfig,
         log_security_event,
+        safe_gradio_handler,
     )
 except ImportError:
     # Gradio not installed - UI security features unavailable
@@ -113,140 +113,139 @@ except ImportError:
     log_security_event = None  # type: ignore
 
 # Feature flags (detect available optional features)
-from .feature_flags import (
-    FEATURES,
-    check_feature,
-    require_feature,
-    get_install_hint,
-    list_available_features,
-    list_missing_features,
-    FeatureNotAvailable,
-    get_gpu_info,
-    get_system_info,
+from importlib.metadata import version as _pkg_version
+
+# Checkpoint management (Phase 5.3)
+from .checkpoints import (
+    CheckpointInfo,
+    CheckpointManager,
+    CheckpointPolicy,
+    CheckpointStats,
 )
 
 # Configuration
 from .config import (
-    Settings,
-    settings,
-    get_settings,
-    reload_settings,
-    get_output_dir,
-    get_cache_dir,
-    get_training_args,
-    ModelConfig,
-    TrainingConfig,
-    LoRAConfig,
-    DataConfig,
     PYDANTIC_SETTINGS_AVAILABLE,
+    DataConfig,
+    LoRAConfig,
+    ModelConfig,
+    Settings,
+    TrainingConfig,
+    get_cache_dir,
+    get_output_dir,
+    get_settings,
+    get_training_args,
+    reload_settings,
+    settings,
+)
+
+# Datasets
+from .datasets import (
+    # Curriculum learning (Phase 3.3)
+    CurriculumStats,
+    DatasetFormat,
+    # Core classes
+    DatasetLoader,
+    DatasetStats,
+    # Filtering
+    FilterStats,
+    FormatConverter,
+    # Perplexity filtering
+    PerplexityFilter,
+    PerplexityStats,
+    # Streaming
+    StreamingDatasetLoader,
+    ValidationError,
+    ValidationResult,
+    analyze_curriculum,
+    compute_difficulty_score,
+    compute_perplexity,
+    convert_to_chatml,
+    # Deduplication
+    deduplicate_exact,
+    deduplicate_minhash,
+    # Core functions
+    detect_format,
+    filter_by_perplexity,
+    filter_by_quality,
+    get_curriculum_chunks,
+    get_dataset_stats,
+    order_by_difficulty,
+    preview_samples,
+    validate_dataset,
+)
+
+# Export
+from .export import (
+    ExportFormat,
+    ExportResult,
+    GGUFQuantization,
+    create_modelfile,
+    export_gguf,
+    export_lora,
+    export_merged,
+    list_ollama_models,
+    register_with_ollama,
+)
+from .feature_flags import (
+    FEATURES,
+    FeatureNotAvailable,
+    check_feature,
+    get_gpu_info,
+    get_install_hint,
+    get_system_info,
+    list_available_features,
+    list_missing_features,
+    require_feature,
+)
+
+# GPU safety
+from .gpu_safety import (
+    GPUCondition,
+    GPUMonitor,
+    GPUSafetyConfig,
+    GPUStatus,
+    check_gpu_safe,
+    format_gpu_status,
+    get_gpu_status,
+    wait_for_safe_gpu,
+)
+
+# Multi-Run (SLAO training)
+from .multi_run import (
+    MergeMode,
+    MultiRunConfig,
+    MultiRunResult,
+    MultiRunTrainer,
+    RunResult,
+    SpeedrunConfig,
+    SpeedrunResult,
+    # Backwards compatibility aliases
+    SpeedrunTrainer,
+)
+
+# SLAO merging
+from .slao import (
+    MergeResult,
+    SLAOConfig,
+    SLAOMerger,
+    adaptive_scale,
+    # Phase 4: Advanced SLAO
+    compute_task_similarity,
+    get_layer_scale,
+    merge_lora_weights,
+    orthogonal_init_A,
+    time_aware_scale,
 )
 
 # Core trainer
 from .trainer import (
     Trainer,
-    TrainingRun,
     TrainingCallback,
-    load_model,
+    TrainingRun,
     load_dataset,
+    load_model,
 )
-
-# Multi-Run (SLAO training)
-from .multi_run import (
-    MultiRunTrainer,
-    MultiRunConfig,
-    MultiRunResult,
-    RunResult,
-    MergeMode,
-    # Backwards compatibility aliases
-    SpeedrunTrainer,
-    SpeedrunConfig,
-    SpeedrunResult,
-)
-
-# SLAO merging
-from .slao import (
-    SLAOMerger,
-    SLAOConfig,
-    MergeResult,
-    time_aware_scale,
-    orthogonal_init_A,
-    merge_lora_weights,
-    # Phase 4: Advanced SLAO
-    compute_task_similarity,
-    adaptive_scale,
-    get_layer_scale,
-)
-
-# Checkpoint management (Phase 5.3)
-from .checkpoints import (
-    CheckpointManager,
-    CheckpointPolicy,
-    CheckpointInfo,
-    CheckpointStats,
-)
-
-# GPU safety
-from .gpu_safety import (
-    GPUMonitor,
-    GPUStatus,
-    GPUSafetyConfig,
-    GPUCondition,
-    check_gpu_safe,
-    get_gpu_status,
-    wait_for_safe_gpu,
-    format_gpu_status,
-)
-
-# Export
-from .export import (
-    GGUFQuantization,
-    ExportFormat,
-    ExportResult,
-    export_lora,
-    export_merged,
-    export_gguf,
-    create_modelfile,
-    register_with_ollama,
-    list_ollama_models,
-)
-
-# Datasets
-from .datasets import (
-    # Core classes
-    DatasetLoader,
-    DatasetFormat,
-    ValidationResult,
-    ValidationError,
-    DatasetStats,
-    FormatConverter,
-    # Core functions
-    detect_format,
-    validate_dataset,
-    convert_to_chatml,
-    preview_samples,
-    get_dataset_stats,
-    # Streaming
-    StreamingDatasetLoader,
-    # Filtering
-    FilterStats,
-    filter_by_quality,
-    # Deduplication
-    deduplicate_exact,
-    deduplicate_minhash,
-    # Perplexity filtering
-    PerplexityFilter,
-    PerplexityStats,
-    compute_perplexity,
-    filter_by_perplexity,
-    # Curriculum learning (Phase 3.3)
-    CurriculumStats,
-    compute_difficulty_score,
-    order_by_difficulty,
-    get_curriculum_chunks,
-    analyze_curriculum,
-)
-
-from importlib.metadata import version as _pkg_version
 
 __version__ = _pkg_version("backpropagate")
 

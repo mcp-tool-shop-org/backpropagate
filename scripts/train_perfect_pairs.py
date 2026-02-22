@@ -25,8 +25,8 @@ from multiprocessing import freeze_support
 
 def main():
     """Run multi-run training on perfect pairs."""
-    from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig, MergeMode
-    from backpropagate.gpu_safety import get_gpu_status, wait_for_safe_gpu, GPUCondition
+    from backpropagate.gpu_safety import GPUCondition, get_gpu_status, wait_for_safe_gpu
+    from backpropagate.multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
     # Check GPU status first
     status = get_gpu_status()
@@ -50,7 +50,7 @@ def main():
         return
 
     # Count samples
-    with open(dataset_path, "r", encoding="utf-8") as f:
+    with open(dataset_path, encoding="utf-8") as f:
         num_samples = sum(1 for _ in f)
     print(f"Dataset: {dataset_path}")
     print(f"Total samples: {num_samples}")
@@ -82,7 +82,7 @@ def main():
     print("\n" + "="*50)
     print("Training Configuration")
     print("="*50)
-    print(f"Model: unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+    print("Model: unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
     print(f"Runs: {config.num_runs}")
     print(f"Steps per run: {config.steps_per_run}")
     print(f"Samples per run: {config.samples_per_run}")

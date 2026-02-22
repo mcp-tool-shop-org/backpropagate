@@ -37,11 +37,9 @@ Usage:
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Optional, Callable, List, Dict, Any
 from enum import Enum
-
-from .exceptions import GPUError, GPUMonitoringError, GPUTemperatureError
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +102,8 @@ class GPUStatus:
     device_index: int = 0
 
     # Temperature
-    temperature_c: Optional[float] = None
-    temperature_max_c: Optional[float] = None
+    temperature_c: float | None = None
+    temperature_max_c: float | None = None
 
     # Memory
     vram_total_gb: float = 0.0
@@ -114,13 +112,13 @@ class GPUStatus:
     vram_percent: float = 0.0
 
     # Power
-    power_draw_w: Optional[float] = None
-    power_limit_w: Optional[float] = None
-    power_percent: Optional[float] = None
+    power_draw_w: float | None = None
+    power_limit_w: float | None = None
+    power_percent: float | None = None
 
     # Utilization
-    gpu_utilization: Optional[int] = None
-    memory_utilization: Optional[int] = None
+    gpu_utilization: int | None = None
+    memory_utilization: int | None = None
 
     # Computed condition
     condition: GPUCondition = GPUCondition.UNKNOWN
@@ -134,7 +132,7 @@ class GPUStatus:
 # CORE FUNCTIONS
 # =============================================================================
 
-def get_gpu_status(device_index: int = 0, config: Optional[GPUSafetyConfig] = None) -> GPUStatus:
+def get_gpu_status(device_index: int = 0, config: GPUSafetyConfig | None = None) -> GPUStatus:
     """
     Get current GPU status with safety evaluation.
 
@@ -277,7 +275,7 @@ def _evaluate_condition(status: GPUStatus, config: GPUSafetyConfig) -> tuple:
 
 def check_gpu_safe(
     device_index: int = 0,
-    config: Optional[GPUSafetyConfig] = None,
+    config: GPUSafetyConfig | None = None,
 ) -> bool:
     """
     Quick check if GPU is safe for training.
@@ -305,7 +303,7 @@ def check_gpu_safe(
 
 def wait_for_safe_gpu(
     device_index: int = 0,
-    config: Optional[GPUSafetyConfig] = None,
+    config: GPUSafetyConfig | None = None,
     max_wait_seconds: float = 300.0,
     check_interval: float = 10.0,
 ) -> bool:
@@ -379,12 +377,12 @@ class GPUMonitor:
 
     def __init__(
         self,
-        config: Optional[GPUSafetyConfig] = None,
+        config: GPUSafetyConfig | None = None,
         device_index: int = 0,
-        on_warning: Optional[Callable[[GPUStatus], None]] = None,
-        on_critical: Optional[Callable[[GPUStatus], None]] = None,
-        on_emergency: Optional[Callable[[GPUStatus], None]] = None,
-        on_status: Optional[Callable[[GPUStatus], None]] = None,
+        on_warning: Callable[[GPUStatus], None] | None = None,
+        on_critical: Callable[[GPUStatus], None] | None = None,
+        on_emergency: Callable[[GPUStatus], None] | None = None,
+        on_status: Callable[[GPUStatus], None] | None = None,
     ):
         """
         Initialize GPU monitor.
@@ -405,12 +403,12 @@ class GPUMonitor:
         self.on_emergency = on_emergency
         self.on_status = on_status
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # Not paused initially
 
-        self._status_history: List[GPUStatus] = []
+        self._status_history: list[GPUStatus] = []
         self._max_history: int = 100
 
         self._emergency_triggered = False
@@ -451,13 +449,13 @@ class GPUMonitor:
         """Resume monitoring after pause."""
         self._pause_event.set()
 
-    def get_latest_status(self) -> Optional[GPUStatus]:
+    def get_latest_status(self) -> GPUStatus | None:
         """Get most recent GPU status."""
         if self._status_history:
             return self._status_history[-1]
         return None
 
-    def get_status_history(self) -> List[GPUStatus]:
+    def get_status_history(self) -> list[GPUStatus]:
         """Get status history."""
         return list(self._status_history)
 

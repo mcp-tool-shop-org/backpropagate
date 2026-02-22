@@ -12,8 +12,8 @@ print('--- Test 1: UI Module Import ---')
 try:
     from backpropagate.ui import (
         create_ui,
-        launch,
         get_dashboard_metrics,
+        launch,
         refresh_dashboard,
     )
     print('[PASS] UI module imports work')

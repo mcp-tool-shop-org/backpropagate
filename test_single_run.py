@@ -11,8 +11,9 @@ if sys.platform == "win32":
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['XFORMERS_DISABLED'] = '1'  # RTX 5080 SM 12.0 too new for xformers
 
-from backpropagate import Trainer
 from datasets import Dataset
+
+from backpropagate import Trainer
 
 print('=== Single Run Test ===')
 trainer = Trainer(
@@ -41,6 +42,6 @@ result = trainer.train(
     steps=10,
 )
 
-print(f'Training complete!')
+print('Training complete!')
 print(f'Final loss: {result.final_loss:.4f}')
 print(f'Duration: {result.duration_seconds:.1f}s')

@@ -34,49 +34,36 @@ Usage:
     launch(port=7862, share=True, auth=("admin", "password"))
 """
 
-import gradio as gr
-from typing import Optional, Dict, Any, List, Tuple, Union
 import logging
-import time
 import secrets
+import time
 from pathlib import Path
+from typing import Any
 
-from .theme import create_backpropagate_theme, get_css
-from .config import settings, get_settings
+import gradio as gr
+
+from .config import settings
+from .datasets import (
+    DatasetLoader,
+    ValidationResult,
+)
 from .feature_flags import (
-    FEATURES,
     get_gpu_info,
     get_system_info,
     list_available_features,
-    list_missing_features,
 )
-from .gpu_safety import get_gpu_status, GPUCondition, format_gpu_status
-from .datasets import (
-    DatasetLoader,
-    DatasetFormat,
-    ValidationResult,
-    get_dataset_stats,
-    preview_samples,
-)
-from .security import safe_path, PathTraversalError, SecurityWarning
+from .gpu_safety import GPUCondition, get_gpu_status
+from .security import PathTraversalError, SecurityWarning, safe_path
+from .theme import create_backpropagate_theme, get_css
 
 # Import production security utilities
 from .ui_security import (
-    SecurityConfig,
+    ALLOWED_DATASET_EXTENSIONS,
     DEFAULT_SECURITY_CONFIG,
     EnhancedRateLimiter,
     FileValidator,
-    ALLOWED_DATASET_EXTENSIONS,
-    DANGEROUS_EXTENSIONS,
-    raise_gradio_error,
-    raise_gradio_warning,
-    raise_gradio_info,
-    safe_gradio_handler,
-    validate_numeric_input,
-    validate_string_input,
-    validate_and_log_request,
     log_security_event,
-    sanitize_filename,
+    validate_numeric_input,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,9 +99,9 @@ _file_validator = FileValidator(
 
 def validate_path_input(
     path_str: str,
-    allowed_base: Optional[Path] = None,
+    allowed_base: Path | None = None,
     must_exist: bool = False,
-) -> Tuple[bool, str, Optional[Path]]:
+) -> tuple[bool, str, Path | None]:
     """
     Validate a user-provided path input.
 
@@ -208,8 +195,8 @@ class UIState:
     multi_run_loss_history = []
     multi_run_run_boundaries = []
     # Dataset state
-    dataset_loader: Optional[DatasetLoader] = None
-    dataset_validation: Optional[ValidationResult] = None
+    dataset_loader: DatasetLoader | None = None
+    dataset_validation: ValidationResult | None = None
 
 
 state = UIState()
@@ -241,13 +228,13 @@ def get_system_status() -> str:
         "",
         "**Features:**",
     ]
-    for name, desc in features.items():
+    for name, _desc in features.items():
         lines.append(f"- {name}")
 
     return "\n".join(lines)
 
 
-def format_loss_plot(losses: List[float]) -> Dict[str, Any]:
+def format_loss_plot(losses: list[float]) -> dict[str, Any]:
     """Format loss history for plotting."""
     if not losses:
         return {"data": [], "layout": {"title": "Training Loss"}}
@@ -276,7 +263,7 @@ def format_loss_plot(losses: List[float]) -> Dict[str, Any]:
     }
 
 
-def format_multi_run_plot(losses: List[float], run_boundaries: List[int]) -> Dict[str, Any]:
+def format_multi_run_plot(losses: list[float], run_boundaries: list[int]) -> dict[str, Any]:
     """Format multi-run loss history with run boundaries marked."""
     if not losses:
         return {"data": [], "layout": {"title": "Multi-Run Loss"}}
@@ -294,7 +281,7 @@ def format_multi_run_plot(losses: List[float], run_boundaries: List[int]) -> Dic
 
     # Add vertical lines for run boundaries
     shapes = []
-    for i, boundary in enumerate(run_boundaries):
+    for _i, boundary in enumerate(run_boundaries):
         if boundary > 0:  # Skip first boundary at 0
             shapes.append({
                 "type": "line",
@@ -795,7 +782,7 @@ def export_model(
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
     """Register a GGUF model with Ollama."""
-    from .export import register_with_ollama, list_ollama_models
+    from .export import register_with_ollama
 
     # Validate GGUF path
     is_valid, error_msg, validated_path = validate_path_input(gguf_path, must_exist=True)
@@ -875,7 +862,7 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
         return f"Failed to create Modelfile: {str(e)}"
 
 
-def get_runs_table() -> List[List[Any]]:
+def get_runs_table() -> list[list[Any]]:
     """Get training runs as table data."""
     rows = []
     for run in state.runs_history:
@@ -920,7 +907,7 @@ def start_multi_run(
     progress=gr.Progress(),
 ) -> tuple:
     """Start SLAO Multi-Run training."""
-    from .multi_run import MultiRunTrainer, MultiRunConfig, MergeMode
+    from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
     # Resolve model
     if model_preset in MODEL_PRESETS:
@@ -1036,7 +1023,7 @@ def stop_multi_run() -> str:
     return "Multi-run stop requested..."
 
 
-def get_multi_run_progress_table() -> List[List[Any]]:
+def get_multi_run_progress_table() -> list[list[Any]]:
     """Get multi-run progress as table data."""
     if state.multi_run_results is None:
         return []
@@ -1063,7 +1050,7 @@ def get_multi_run_progress_table() -> List[List[Any]]:
 # PHASE 5: TRAINING DASHBOARD FUNCTIONS
 # =============================================================================
 
-def get_dashboard_metrics() -> Dict[str, str]:
+def get_dashboard_metrics() -> dict[str, str]:
     """
     Get all dashboard metrics for the training sidebar.
 
@@ -2059,27 +2046,26 @@ def create_ui() -> gr.Blocks:
             with gr.Tab("Settings", id="settings"):
                 with gr.Row():
                     # Left column - System Info
-                    with gr.Column(scale=1):
-                        with gr.Group():
-                            gr.Markdown("#### System")
-                            gpu_info = get_gpu_info()
-                            sys_info = get_system_info()
+                    with gr.Column(scale=1), gr.Group():
+                        gr.Markdown("#### System")
+                        gpu_info = get_gpu_info()
+                        sys_info = get_system_info()
 
-                            if gpu_info.get("available"):
-                                gpu_name = gpu_info.get("device_name", "Unknown GPU")
-                                vram_total = gpu_info.get("memory_total", 0) / (1024**3)
-                                vram_used = gpu_info.get("memory_allocated", 0) / (1024**3)
+                        if gpu_info.get("available"):
+                            gpu_name = gpu_info.get("device_name", "Unknown GPU")
+                            vram_total = gpu_info.get("memory_total", 0) / (1024**3)
+                            vram_used = gpu_info.get("memory_allocated", 0) / (1024**3)
 
-                                gr.Markdown(f"**{gpu_name}**")
-                                gr.Slider(
-                                    minimum=0, maximum=vram_total, value=vram_used,
-                                    label=f"VRAM: {vram_used:.1f} / {vram_total:.1f} GB",
-                                    interactive=False
-                                )
-                            else:
-                                gr.Markdown("**No GPU detected**")
+                            gr.Markdown(f"**{gpu_name}**")
+                            gr.Slider(
+                                minimum=0, maximum=vram_total, value=vram_used,
+                                label=f"VRAM: {vram_used:.1f} / {vram_total:.1f} GB",
+                                interactive=False
+                            )
+                        else:
+                            gr.Markdown("**No GPU detected**")
 
-                            gr.Markdown(f"""
+                        gr.Markdown(f"""
 **Python:** {sys_info.get('python_version', 'Unknown').split()[0]}
 
 **Platform:** {sys_info.get('platform', 'Unknown')[:40]}
@@ -2088,42 +2074,39 @@ def create_ui() -> gr.Blocks:
                             """)
 
                     # Right column - Features
-                    with gr.Column(scale=1):
-                        with gr.Group():
-                            gr.Markdown("#### Features")
-                            features = list_available_features()
-                            feature_md = "\n".join([f"- {name}" for name in features.keys()])
-                            gr.Markdown(feature_md if feature_md else "No optional features detected")
+                    with gr.Column(scale=1), gr.Group():
+                        gr.Markdown("#### Features")
+                        features = list_available_features()
+                        feature_md = "\n".join([f"- {name}" for name in features.keys()])
+                        gr.Markdown(feature_md if feature_md else "No optional features detected")
 
                 # Model Defaults
-                with gr.Accordion("Model Defaults", open=False):
-                    with gr.Row():
-                        settings_model = gr.Textbox(
-                            value=settings.model.name,
-                            label="Default Model",
-                            info="HuggingFace model path"
-                        )
-                        settings_max_seq = gr.Number(
-                            value=settings.model.max_seq_length,
-                            label="Max Sequence Length",
-                            precision=0
-                        )
+                with gr.Accordion("Model Defaults", open=False), gr.Row():
+                    settings_model = gr.Textbox(
+                        value=settings.model.name,
+                        label="Default Model",
+                        info="HuggingFace model path"
+                    )
+                    settings_max_seq = gr.Number(
+                        value=settings.model.max_seq_length,
+                        label="Max Sequence Length",
+                        precision=0
+                    )
 
                 # LoRA Defaults
-                with gr.Accordion("LoRA Defaults", open=False):
-                    with gr.Row():
-                        settings_lora_r = gr.Slider(
-                            minimum=4, maximum=128, value=settings.lora.r,
-                            step=4, label="LoRA Rank (r)"
-                        )
-                        settings_lora_alpha = gr.Slider(
-                            minimum=8, maximum=256, value=settings.lora.lora_alpha,
-                            step=8, label="LoRA Alpha"
-                        )
-                        settings_lora_dropout = gr.Slider(
-                            minimum=0, maximum=0.5, value=settings.lora.lora_dropout,
-                            step=0.01, label="Dropout"
-                        )
+                with gr.Accordion("LoRA Defaults", open=False), gr.Row():
+                    settings_lora_r = gr.Slider(
+                        minimum=4, maximum=128, value=settings.lora.r,
+                        step=4, label="LoRA Rank (r)"
+                    )
+                    settings_lora_alpha = gr.Slider(
+                        minimum=8, maximum=256, value=settings.lora.lora_alpha,
+                        step=8, label="LoRA Alpha"
+                    )
+                    settings_lora_dropout = gr.Slider(
+                        minimum=0, maximum=0.5, value=settings.lora.lora_dropout,
+                        step=0.01, label="Dropout"
+                    )
 
                 # Training Defaults
                 with gr.Accordion("Training Defaults", open=False):
@@ -2344,7 +2327,7 @@ backprop config""",
 def launch(
     port: int = 7862,
     share: bool = False,
-    auth: Optional[Union[Tuple[str, str], List[Tuple[str, str]]]] = None,
+    auth: tuple[str, str] | list[tuple[str, str]] | None = None,
 ) -> None:
     """
     Launch the Gradio UI.

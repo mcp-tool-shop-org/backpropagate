@@ -422,6 +422,10 @@ class FormatConverter:
                 return str(sample.get("text", ""))
             return str(sample)
 
+        if format_type == DatasetFormat.RAW_TEXT:
+            text = sample if isinstance(sample, str) else sample.get("text", "")
+            return cls.raw_to_chatml(text)
+
         if not isinstance(sample, dict):
             raise ValueError(f"Expected dict for format {format_type}, got {type(sample)}")
 
@@ -433,10 +437,6 @@ class FormatConverter:
 
         if format_type == DatasetFormat.OPENAI:
             return cls.openai_to_chatml(sample)
-
-        if format_type == DatasetFormat.RAW_TEXT:
-            text = sample if isinstance(sample, str) else sample.get("text", "")
-            return cls.raw_to_chatml(text)
 
         raise ValueError(f"Cannot convert format: {format_type}")
 

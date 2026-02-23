@@ -523,7 +523,7 @@ input[type="range"] {
 # THEME BUILDER FUNCTIONS
 # =============================================================================
 
-def create_backpropagate_theme() -> gr.themes.Base:
+def create_backpropagate_theme() -> gr.themes.Soft:
     """
     Create Ocean Mist theme for Backpropagate - pastel Apple-inspired palette.
 
@@ -534,7 +534,7 @@ def create_backpropagate_theme() -> gr.themes.Base:
     - Apple-style spacing and radius
 
     Returns:
-        gr.themes.Base: Configured Gradio theme
+        gr.themes.Soft: Configured Gradio theme
     """
     theme = gr.themes.Soft(
         # Core hues - Teal/Cyan primary

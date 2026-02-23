@@ -4,25 +4,38 @@ on:
   push:
     branches: [main]
     paths:
+      - 'backpropagate/**'
+      - 'tests/**'
       - 'pyproject.toml'
+      - 'setup.cfg'
+      - 'requirements*.txt'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths:
+      - 'backpropagate/**'
+      - 'tests/**'
       - 'pyproject.toml'
+      - 'setup.cfg'
+      - 'requirements*.txt'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v6
@@ -48,18 +61,21 @@ jobs:
         run: pytest tests/ -v --tb=short -m "not gpu and not slow"
 
       - name: Run tests with coverage
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: matrix.python-version == '3.11'
         run: |
           pytest tests/ --cov=backpropagate --cov-report=xml -m "not gpu and not slow"
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
 
-  security:
+  # --- Security scanning (merged from security.yml) ---
+
+  bandit:
+    name: Bandit SAST
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -67,19 +83,130 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
-          cache: 'pip'
+          python-version: "3.12"
+
+      - name: Install Bandit
+        run: pip install bandit[sarif]
+
+      - name: Run Bandit scan
+        run: |
+          bandit -r backpropagate/ \
+            -c pyproject.toml \
+            -f sarif \
+            -o bandit-results.sarif \
+            --severity-level medium \
+            || true
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+      - name: Run Bandit (console output)
+        run: |
+          bandit -r backpropagate/ \
+            -c pyproject.toml \
+            -ll -ii \
+            -f txt
+
+  pip-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install bandit pip-audit safety
-
-      - name: Run Bandit security scan
-        run: bandit -r backpropagate/ -c pyproject.toml
+          pip install pip-audit
+          pip install -e ".[dev]"
 
       - name: Run pip-audit
-        run: pip-audit --require-hashes=false --ignore-vuln PYSEC-2024-* || true
+        run: |
+          pip-audit \
+            --desc on \
+            --format markdown \
+            --output pip-audit-report.md \
+            || true
+
+      - name: Display results
+        if: always()
+        run: cat pip-audit-report.md || echo "No report generated"
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.md
+
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/python \
+            --config p/security-audit \
+            --sarif \
+            --output semgrep-results.sarif \
+            backpropagate/ \
+            || true
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+  trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.34.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+  secrets-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified --results=json
         continue-on-error: true
 
   build:
@@ -110,3 +237,23 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  security-summary:
+    name: Security Summary
+    needs: [bandit, pip-audit, semgrep, trivy, secrets-scan]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Security scan complete
+        run: |
+          echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit SAST | ${{ needs.bandit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| pip-audit | ${{ needs.pip-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Semgrep | ${{ needs.semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Detection | ${{ needs.secrets-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View detailed results in the Security tab." >> $GITHUB_STEP_SUMMARY

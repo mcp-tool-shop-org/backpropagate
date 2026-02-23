@@ -733,7 +733,7 @@ def export_model(
     export_format: str,
     quantization: str,
     output_path: str,
-    request: gr.Request = None,
+    request: gr.Request | None = None,
 ) -> str:
     """
     Export the trained model with security checks.
@@ -1632,7 +1632,7 @@ def create_ui() -> gr.Blocks:
                             _mr_adaptive_range = gr.Slider(
                                 minimum=0.2,
                                 maximum=2.0,
-                                value=[0.5, 1.5],
+                                value=[0.5, 1.5],  # type: ignore[arg-type]
                                 label="Scale Range (min, max)",
                                 visible=False,
                             )
@@ -2316,7 +2316,7 @@ backprop config""",
                         size="sm"
                     )
 
-    return app
+    return app  # type: ignore[no-any-return]
 
 
 def launch(
@@ -2378,4 +2378,4 @@ def launch(
     if auth is not None:
         launch_kwargs["auth"] = auth
 
-    app.launch(**launch_kwargs)
+    app.launch(**launch_kwargs)  # type: ignore[arg-type]

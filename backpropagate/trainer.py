@@ -364,7 +364,7 @@ class Trainer:
             train_dataset = self._pre_tokenize(train_dataset)
 
         # Training arguments (TRL 0.27+ uses SFTConfig)
-        training_args = SFTConfig(
+        training_args = SFTConfig(  # type: ignore[call-arg]
             output_dir=str(self.output_dir),
             per_device_train_batch_size=self.batch_size,
             gradient_accumulation_steps=self.gradient_accumulation,

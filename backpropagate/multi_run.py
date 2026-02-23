@@ -443,7 +443,7 @@ class MultiRunTrainer:
             chunk_dataset = self._trainer._pre_tokenize(chunk_dataset)
 
         # Training arguments (TRL 0.24+ uses SFTConfig)
-        training_args = SFTConfig(
+        training_args = SFTConfig(  # type: ignore[call-arg]
             output_dir=str(checkpoint_dir / f"run_{run_idx:03d}"),
             per_device_train_batch_size=self._trainer.batch_size,
             gradient_accumulation_steps=self._trainer.gradient_accumulation,

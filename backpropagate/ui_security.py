@@ -1027,7 +1027,7 @@ def get_health_status(
                 if gpu_status.temperature_c and gpu_status.temperature_c > 85:
                     status.status = "degraded"
         except Exception:
-            pass  # GPU check failed, continue without
+            pass  # nosec B110 - GPU check failed, continue without
 
     return status
 

@@ -93,6 +93,7 @@ class TestTrainerInit:
 class TestTrainerWindowsFixes:
     """Tests for Windows-specific fixes."""
 
+    @pytest.mark.skipif(os.name != "nt", reason="WindowsPath only on Windows")
     def test_windows_env_vars_set(self):
         """Test Windows environment variables are set."""
         from backpropagate.trainer import Trainer

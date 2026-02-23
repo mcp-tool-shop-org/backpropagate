@@ -6,7 +6,7 @@ Command-line interface for LLM fine-tuning.
 
 Usage:
     # Train a model
-    backprop train --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --data my_data.jsonl --steps 100
+    backprop train --model Qwen/Qwen2.5-7B-Instruct --data my_data.jsonl --steps 100
 
     # Export to GGUF
     backprop export ./output/lora --format gguf --quantization q4_k_m
@@ -378,7 +378,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_kv("Time", f"{result.export_time_seconds:.1f}s")
 
         # Register with Ollama if requested
-        if args.ollama and args.format != "gguf":
+        if args.ollama and args.format == "gguf":
             print()
             ollama_name = args.ollama_name or model_path.name
             _print_info(f"Registering with Ollama as '{ollama_name}'...")
@@ -618,8 +618,8 @@ Examples:
     )
     train_parser.add_argument(
         "--model", "-m",
-        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
-        help="Model name or path (default: unsloth/Qwen2.5-7B-Instruct-bnb-4bit)",
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="Model name or path (default: Qwen/Qwen2.5-7B-Instruct)",
     )
     train_parser.add_argument(
         "--data", "-d",
@@ -675,7 +675,7 @@ Examples:
     )
     multi_parser.add_argument(
         "--model", "-m",
-        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+        default="Qwen/Qwen2.5-7B-Instruct",
         help="Model name or path",
     )
     multi_parser.add_argument(

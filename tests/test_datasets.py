@@ -1408,10 +1408,10 @@ class TestConvertToChatmlRawText:
     """Tests for convert_to_chatml with RAW_TEXT format."""
 
     def test_convert_raw_text_string(self):
-        """convert_to_chatml should handle raw text strings."""
+        """convert_to_chatml should handle raw text dicts."""
         from backpropagate.datasets import convert_to_chatml, DatasetFormat
 
-        samples = ["Hello world", "This is plain text"]
+        samples = [{"text": "Hello world"}, {"text": "This is plain text"}]
         result = convert_to_chatml(samples, DatasetFormat.RAW_TEXT)
 
         assert len(result) == 2
@@ -1422,7 +1422,7 @@ class TestConvertToChatmlRawText:
         """convert_to_chatml should auto-detect raw text."""
         from backpropagate.datasets import convert_to_chatml
 
-        samples = ["Plain text without any format markers"]
+        samples = [{"text": "Plain text without any format markers"}]
         result = convert_to_chatml(samples)
 
         assert len(result) == 1

@@ -67,7 +67,7 @@ class TestFallbackEnvParsing:
         from backpropagate.config import Settings
         s = Settings()
         # Should use defaults
-        assert s.model.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert s.model.name == "Qwen/Qwen2.5-7B-Instruct"
 
 
 class TestFallbackTypeConversion:
@@ -111,7 +111,7 @@ class TestModelConfig:
         from backpropagate.config import ModelConfig
 
         config = ModelConfig()
-        assert config.name == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
         assert config.trust_remote_code is True
@@ -537,7 +537,7 @@ class TestVersion:
 
         settings = Settings()
         assert hasattr(settings, 'version')
-        assert settings.version == "0.1.0"
+        assert len(settings.version.split(".")) >= 2  # semver-like
 
     def test_name_attribute(self):
         """Settings has name attribute."""

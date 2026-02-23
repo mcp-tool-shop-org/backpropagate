@@ -117,9 +117,7 @@ class TestMergeResultDefaults:
         assert result.a_norm_before is None, "a_norm_before must default to None"
         assert result.a_norm_after is None, "a_norm_after must default to None"
         assert result.b_norm_before is None, "b_norm_before must default to None"
-        # Note: b_norm_after has a bug - defaults to "" instead of None
-        # This test documents actual behavior
-        assert result.b_norm_after == "", "b_norm_after defaults to empty string (likely a bug)"
+        assert result.b_norm_after is None, "b_norm_after must default to None"
 
 
 class TestTimeAwareScale:

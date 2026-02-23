@@ -563,7 +563,7 @@ def create_backpropagate_theme() -> gr.themes.Base:
     )
 
     # Apply Ocean Mist color overrides
-    theme = theme.set(
+    theme = theme.set(  # type: ignore[assignment]
         # =================================================================
         # BACKGROUNDS (Ocean Mist Dark Mode)
         # =================================================================

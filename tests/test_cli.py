@@ -49,7 +49,7 @@ class TestParser:
         """Test train command has correct defaults."""
         args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
 
-        assert args.model == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        assert args.model == "Qwen/Qwen2.5-7B-Instruct"
         assert args.steps == 100
         assert args.samples is None
         assert args.batch_size == "auto"

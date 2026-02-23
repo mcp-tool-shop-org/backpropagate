@@ -9,7 +9,7 @@
 <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mcp-tool-shop-org/backpropagate/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
 <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate?style=flat-square" alt="Codecov"></a>
 <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate?style=flat-square&logo=pypi&logoColor=white" alt="PyPI"></a>
-<img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+<img src="https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+">
 <a href="LICENSE"><img src="https://img.shields.io/github/license/mcp-tool-shop-org/backpropagate?style=flat-square" alt="License"></a>
 <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/docs-github_pages-blue?style=flat-square&logo=github" alt="Docs"></a>
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-02-22
+
 ### Added
 - **Qwen2.5-3B model preset** - Smaller model for faster iteration and testing on 16GB VRAM
 - **Official Qwen model fallback** - When pre-quantized models have corrupted cache, fall back to official models with `load_in_4bit=True`
@@ -15,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **CUDA_LAUNCH_BLOCKING now optional** - Disabled by default to improve training speed (was slowing down RTX 5080)
 - **Default model updated** - Changed default from `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to `Qwen/Qwen2.5-7B-Instruct` for better reliability
+- **Documentation** - Beefed up README with more badges, features, and GitHub Pages integration
 
 ### Fixed
 - **BitsAndBytes JSON decode error** - Added fallback handling when pre-quantized model cache is corrupted

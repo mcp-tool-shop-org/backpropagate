@@ -11,6 +11,7 @@
 <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate?style=flat-square&logo=pypi&logoColor=white" alt="PyPI"></a>
 <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
 <a href="LICENSE"><img src="https://img.shields.io/github/license/mcp-tool-shop-org/backpropagate?style=flat-square" alt="License"></a>
+<a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/docs-github_pages-blue?style=flat-square&logo=github" alt="Docs"></a>
 
 Part of [MCP Tool Shop](https://mcp-tool-shop.github.io/)
 
@@ -31,6 +32,15 @@ Part of [MCP Tool Shop](https://mcp-tool-shop.github.io/)
 | VRAM management is hard | Auto batch sizing, GPU monitoring |
 | Model export is confusing | One-click GGUF + Ollama registration |
 | Long runs cause forgetting | Multi-run SLAO training |
+
+## Key Features
+
+- **Headless by Design**: Built for CI/CD pipelines, automated workflows, and programmatic execution.
+- **Smart Defaults**: Automatically configures optimal hyperparameters based on your hardware and dataset.
+- **Multi-Run SLAO Training**: Advanced training strategies to prevent catastrophic forgetting during long runs.
+- **First-Class Windows Support**: Tested and optimized for Windows environments, avoiding common PyTorch/CUDA pitfalls.
+- **Seamless Export**: One-click export to GGUF format and automatic registration with Ollama.
+- **Modular Architecture**: Install only the dependencies you need (e.g., `[unsloth]`, `[ui]`, `[export]`).
 
 <!--
 ## Demo

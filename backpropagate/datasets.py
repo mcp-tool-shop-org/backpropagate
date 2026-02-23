@@ -266,11 +266,13 @@ def detect_format(data: dict | list[dict] | str) -> DatasetFormat:
     if "instruction" in data and "output" in data:
         return DatasetFormat.ALPACA
 
-    # Check for ChatML format (pre-formatted text)
+    # Check for text field (ChatML or raw text)
     if "text" in data:
         text = data["text"]
-        if isinstance(text, str) and "<|im_start|>" in text:
-            return DatasetFormat.CHATML
+        if isinstance(text, str):
+            if "<|im_start|>" in text:
+                return DatasetFormat.CHATML
+            return DatasetFormat.RAW_TEXT
 
     return DatasetFormat.UNKNOWN
 

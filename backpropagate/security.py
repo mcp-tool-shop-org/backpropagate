@@ -17,7 +17,7 @@ Usage:
 import logging
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any
 
 __all__ = [
     "safe_path",
@@ -40,7 +40,7 @@ class SecurityWarning(UserWarning):
 class PathTraversalError(ValueError):
     """Error raised when path traversal is detected."""
 
-    def __init__(self, path: str, allowed_base: Optional[str] = None):
+    def __init__(self, path: str, allowed_base: str | None = None):
         self.path = path
         self.allowed_base = allowed_base
 
@@ -53,9 +53,9 @@ class PathTraversalError(ValueError):
 
 
 def safe_path(
-    user_path: Union[str, Path],
+    user_path: str | Path,
     must_exist: bool = False,
-    allowed_base: Optional[Union[str, Path]] = None,
+    allowed_base: str | Path | None = None,
     allow_relative: bool = True,
 ) -> Path:
     """
@@ -102,7 +102,7 @@ def safe_path(
             # This will raise ValueError if resolved is not relative to base_resolved
             resolved.relative_to(base_resolved)
         except ValueError:
-            raise PathTraversalError(str(user_path), str(allowed_base))
+            raise PathTraversalError(str(user_path), str(allowed_base)) from None
 
     # Check for suspicious path components even without base restriction
     # This catches obvious traversal attempts like "../../"
@@ -161,10 +161,10 @@ def check_torch_security() -> bool:
 
 
 def safe_torch_load(
-    path: Union[str, Path],
+    path: str | Path,
     weights_only: bool = True,
-    **kwargs
-) -> dict:
+    **kwargs: Any
+) -> dict[str, Any]:
     """
     Safely load PyTorch weights with security checks.
 
@@ -206,15 +206,16 @@ def safe_torch_load(
 
     # Fall back to torch.load with security enabled
     logger.debug(f"Loading PyTorch file with weights_only={weights_only}: {path}")
-    return torch.load(path, weights_only=weights_only, **kwargs)  # nosec B614 - weights_only=True by default
+    import typing
+    return typing.cast(dict[str, Any], torch.load(path, weights_only=weights_only, **kwargs))  # nosec B614 - weights_only=True by default
 
 
 def audit_log(
     operation: str,
-    path: Optional[str] = None,
-    user: Optional[str] = None,
+    path: str | None = None,
+    user: str | None = None,
     success: bool = True,
-    details: Optional[dict] = None,
+    details: dict | None = None,
 ) -> None:
     """
     Log security-sensitive operations for audit trail.

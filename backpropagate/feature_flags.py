@@ -31,7 +31,8 @@ Installation commands for each feature:
 import functools
 import logging
 import warnings
-from typing import Dict, Callable, TypeVar, Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 # Use standard logging to avoid circular import with logging_config
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ __all__ = [
 ]
 
 # Feature detection results
-FEATURES: Dict[str, bool] = {
+FEATURES: dict[str, bool] = {
     "unsloth": False,
     "ui": False,
     "validation": False,
@@ -59,7 +60,7 @@ FEATURES: Dict[str, bool] = {
 }
 
 # Installation hints for each feature
-INSTALL_HINTS: Dict[str, str] = {
+INSTALL_HINTS: dict[str, str] = {
     "unsloth": "pip install backpropagate[unsloth]",
     "ui": "pip install backpropagate[ui]",
     "validation": "pip install backpropagate[validation]",
@@ -71,7 +72,7 @@ INSTALL_HINTS: Dict[str, str] = {
 }
 
 # Feature descriptions
-FEATURE_DESCRIPTIONS: Dict[str, str] = {
+FEATURE_DESCRIPTIONS: dict[str, str] = {
     "unsloth": "Unsloth for 2x faster training with 50% less VRAM",
     "ui": "Gradio web interface for training management",
     "validation": "Pydantic configuration validation",
@@ -135,8 +136,8 @@ def _detect_features() -> None:
 
     # Monitoring feature (WandB + psutil)
     try:
-        import wandb  # noqa: F401
         import psutil  # noqa: F401
+        import wandb  # noqa: F401
         FEATURES["monitoring"] = True
         logger.debug("Feature 'monitoring' available: wandb and psutil installed")
     except ImportError:
@@ -206,7 +207,7 @@ def get_install_hint(feature: str) -> str:
     return INSTALL_HINTS.get(feature, f"pip install backpropagate[{feature}]")
 
 
-def list_available_features() -> Dict[str, str]:
+def list_available_features() -> dict[str, str]:
     """
     List all installed features with descriptions.
 
@@ -220,7 +221,7 @@ def list_available_features() -> Dict[str, str]:
     }
 
 
-def list_missing_features() -> Dict[str, str]:
+def list_missing_features() -> dict[str, str]:
     """
     List all missing features with install hints.
 
@@ -295,7 +296,7 @@ def ensure_feature(feature: str) -> None:
         raise FeatureNotAvailable(feature)
 
 
-def get_gpu_info() -> Dict[str, Any]:
+def get_gpu_info() -> dict[str, Any]:
     """
     Get GPU information if available.
 
@@ -320,7 +321,7 @@ def get_gpu_info() -> Dict[str, Any]:
     return {"available": False}
 
 
-def get_system_info() -> Dict[str, Any]:
+def get_system_info() -> dict[str, Any]:
     """
     Get system information for debugging.
 
@@ -334,7 +335,7 @@ def get_system_info() -> Dict[str, Any]:
         "python_version": sys.version,
         "platform": platform.platform(),
         "processor": platform.processor(),
-        "features": {k: v for k, v in FEATURES.items()},
+        "features": dict(FEATURES),
         "gpu": get_gpu_info(),
     }
 

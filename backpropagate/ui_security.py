@@ -35,20 +35,22 @@ Usage:
     )
 """
 
-import gradio as gr
-import hashlib
+import hmac
 import json
 import logging
 import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
-from functools import wraps
+from typing import Any, Optional, TypeVar
+
+import gradio as gr
 
 __all__ = [
     # Configuration
@@ -140,10 +142,10 @@ class SecurityConfig:
 
     # File upload
     max_upload_size_mb: int = 500  # Max file size for uploads
-    allowed_dataset_extensions: Set[str] = field(default_factory=lambda: {
+    allowed_dataset_extensions: set[str] = field(default_factory=lambda: {
         ".jsonl", ".json", ".csv", ".txt", ".parquet"
     })
-    blocked_extensions: Set[str] = field(default_factory=lambda: {
+    blocked_extensions: set[str] = field(default_factory=lambda: {
         ".exe", ".bat", ".cmd", ".ps1", ".sh", ".py", ".js", ".html", ".htm",
         ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl", ".rb", ".svg"
     })
@@ -174,7 +176,7 @@ class SecurityConfig:
     health_check_include_gpu: bool = True
 
 
-def load_config_from_env(base_config: Optional[SecurityConfig] = None) -> SecurityConfig:
+def load_config_from_env(base_config: SecurityConfig | None = None) -> SecurityConfig:
     """
     Load security configuration from environment variables.
 
@@ -300,17 +302,17 @@ class EnhancedRateLimiter:
         self.operation_name = operation_name
 
         # Track requests per IP
-        self._requests: Dict[str, List[float]] = {}
+        self._requests: dict[str, list[float]] = {}
         self._last_cleanup = time.time()
         self._cleanup_interval = 300  # Cleanup every 5 minutes
 
-    def _get_client_id(self, request: Optional[gr.Request] = None) -> str:
+    def _get_client_id(self, request: gr.Request | None = None) -> str:
         """Get client identifier (IP or fallback to 'anonymous')."""
         if request is not None:
             # Try to get IP from request
             client_ip = getattr(request, "client", {})
             if isinstance(client_ip, dict):
-                return client_ip.get("host", "anonymous")
+                return str(client_ip.get("host", "anonymous"))
             return str(client_ip) if client_ip else "anonymous"
         return "anonymous"
 
@@ -332,7 +334,7 @@ class EnhancedRateLimiter:
             if not self._requests[client_id]:
                 del self._requests[client_id]
 
-    def check(self, request: Optional[gr.Request] = None) -> Tuple[bool, float]:
+    def check(self, request: gr.Request | None = None) -> tuple[bool, float]:
         """
         Check if request is allowed.
 
@@ -376,12 +378,12 @@ class EnhancedRateLimiter:
         self._requests[client_id].append(now)
         return True, 0.0
 
-    def is_allowed(self, request: Optional[gr.Request] = None) -> bool:
+    def is_allowed(self, request: gr.Request | None = None) -> bool:
         """Simple check returning just bool."""
         allowed, _ = self.check(request)
         return allowed
 
-    def require(self, request: Optional[gr.Request] = None) -> None:
+    def require(self, request: gr.Request | None = None) -> None:
         """Raise exception if rate limited."""
         allowed, wait_time = self.check(request)
         if not allowed:
@@ -405,9 +407,9 @@ class FileValidator:
 
     def __init__(
         self,
-        allowed_extensions: Optional[Set[str]] = None,
+        allowed_extensions: set[str] | None = None,
         max_size_mb: int = 500,
-        config: Optional[SecurityConfig] = None,
+        config: SecurityConfig | None = None,
     ):
         self.config = config or DEFAULT_SECURITY_CONFIG
         self.allowed_extensions = allowed_extensions or self.config.allowed_dataset_extensions
@@ -417,7 +419,7 @@ class FileValidator:
         self,
         file_obj: Any,
         purpose: str = "upload",
-    ) -> Tuple[bool, str, Optional[Path]]:
+    ) -> tuple[bool, str, Path | None]:
         """
         Validate an uploaded file.
 
@@ -514,7 +516,7 @@ def sanitize_filename(filename: str) -> str:
 
 def raise_gradio_error(
     message: str,
-    duration: Optional[int] = 10,
+    duration: int | None = 10,
     title: str = "Error",
     log: bool = True,
 ) -> None:
@@ -540,7 +542,7 @@ def raise_gradio_error(
 
 def raise_gradio_warning(
     message: str,
-    duration: Optional[int] = 5,
+    duration: int | None = 5,
     title: str = "Warning",
     log: bool = True,
 ) -> None:
@@ -563,7 +565,7 @@ def raise_gradio_warning(
 
 def raise_gradio_info(
     message: str,
-    duration: Optional[int] = 3,
+    duration: int | None = 3,
     title: str = "Info",
 ) -> None:
     """
@@ -582,7 +584,7 @@ F = TypeVar('F', bound=Callable[..., Any])
 
 def safe_gradio_handler(
     operation_name: str = "operation",
-    rate_limiter: Optional[EnhancedRateLimiter] = None,
+    rate_limiter: EnhancedRateLimiter | None = None,
     log_errors: bool = True,
 ) -> Callable[[F], F]:
     """
@@ -601,7 +603,7 @@ def safe_gradio_handler(
     """
     def decorator(func: F) -> F:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Check rate limit
             if rate_limiter is not None:
                 request = kwargs.get("request")
@@ -621,12 +623,12 @@ def safe_gradio_handler(
                 raise
 
             except RateLimitExceeded as e:
-                raise gr.Error(str(e), duration=10, title="Rate Limited")
+                raise gr.Error(str(e), duration=10, title="Rate Limited") from None
 
             except FileNotFoundError as e:
                 if log_errors:
                     logger.error(f"{operation_name} failed - file not found: {e}")
-                raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
+                raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found") from None
 
             except PermissionError as e:
                 if log_errors:
@@ -635,12 +637,12 @@ def safe_gradio_handler(
                     "Permission denied. Check file/folder permissions.",
                     duration=10,
                     title="Permission Denied",
-                )
+                ) from None
 
             except ValueError as e:
                 if log_errors:
                     logger.warning(f"{operation_name} validation error: {e}")
-                raise gr.Error(f"Invalid input: {e}", duration=10, title="Validation Error")
+                raise gr.Error(f"Invalid input: {e}", duration=10, title="Validation Error") from None
 
             except Exception as e:
                 if log_errors:
@@ -658,7 +660,7 @@ def safe_gradio_handler(
                     f"An error occurred during {operation_name}. Check logs for details.",
                     duration=10,
                     title="Error",
-                )
+                ) from None
 
         return wrapper  # type: ignore
     return decorator
@@ -671,10 +673,10 @@ def safe_gradio_handler(
 def validate_numeric_input(
     value: Any,
     name: str,
-    min_value: Optional[float] = None,
-    max_value: Optional[float] = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
     allow_none: bool = False,
-) -> Optional[float]:
+) -> float | None:
     """
     Validate and sanitize numeric input.
 
@@ -699,7 +701,7 @@ def validate_numeric_input(
     try:
         num = float(value)
     except (ValueError, TypeError):
-        raise gr.Error(f"{name} must be a number, got: {type(value).__name__}", duration=5)
+        raise gr.Error(f"{name} must be a number, got: {type(value).__name__}", duration=5) from None
 
     if min_value is not None and num < min_value:
         raise gr.Error(f"{name} must be at least {min_value}, got {num}", duration=5)
@@ -715,10 +717,10 @@ def validate_string_input(
     name: str,
     max_length: int = 1000,
     min_length: int = 0,
-    pattern: Optional[str] = None,
+    pattern: str | None = None,
     allow_none: bool = False,
     allow_empty: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """
     Validate and sanitize string input.
 
@@ -764,16 +766,15 @@ def validate_string_input(
         )
 
     # Check pattern
-    if pattern is not None:
-        if not re.match(pattern, text):
-            raise gr.Error(f"{name} has invalid format", duration=5)
+    if pattern is not None and not re.match(pattern, text):
+        raise gr.Error(f"{name} has invalid format", duration=5)
 
     return text
 
 
 def validate_and_log_request(
     operation: str,
-    request: Optional[gr.Request] = None,
+    request: gr.Request | None = None,
     **params: Any,
 ) -> None:
     """
@@ -794,7 +795,7 @@ def validate_and_log_request(
             client_id = client.get("host", "anonymous")
 
     # Sanitize params for logging (truncate long values)
-    safe_params = {}
+    safe_params: dict[str, Any] = {}
     for key, value in params.items():
         if isinstance(value, str) and len(value) > 100:
             safe_params[key] = value[:100] + "..."
@@ -825,6 +826,7 @@ class SecurityLogger:
     """
 
     _instance: Optional["SecurityLogger"] = None
+    _logger: logging.Logger
 
     def __new__(cls) -> "SecurityLogger":
         if cls._instance is None:
@@ -877,8 +879,8 @@ def log_security_event(event_type: str, **details: Any) -> None:
 # =============================================================================
 
 def check_csrf_protection(
-    request: Optional[gr.Request] = None,
-    config: Optional[SecurityConfig] = None,
+    request: gr.Request | None = None,
+    config: SecurityConfig | None = None,
 ) -> bool:
     """
     Check if request passes CSRF protection.
@@ -938,20 +940,20 @@ class HealthStatus:
     version: str
     uptime_seconds: float
     gpu_available: bool = False
-    gpu_name: Optional[str] = None
-    gpu_memory_used_gb: Optional[float] = None
-    gpu_memory_total_gb: Optional[float] = None
-    gpu_temperature_c: Optional[float] = None
+    gpu_name: str | None = None
+    gpu_memory_used_gb: float | None = None
+    gpu_memory_total_gb: float | None = None
+    gpu_temperature_c: float | None = None
     active_trainings: int = 0
     active_sessions: int = 0
     rate_limit_status: str = "ok"
     timestamp: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON response."""
         result = {
             "status": self.status,
@@ -979,8 +981,8 @@ _app_start_time = time.time()
 
 
 def get_health_status(
-    config: Optional[SecurityConfig] = None,
-    include_gpu: Optional[bool] = None,
+    config: SecurityConfig | None = None,
+    include_gpu: bool | None = None,
 ) -> HealthStatus:
     """
     Get current health status of the application.
@@ -1016,7 +1018,7 @@ def get_health_status(
             gpu_status = get_gpu_status()
             status.gpu_available = gpu_status.available
             if gpu_status.available:
-                status.gpu_name = gpu_status.gpu_name
+                status.gpu_name = gpu_status.device_name
                 status.gpu_memory_used_gb = gpu_status.vram_used_gb
                 status.gpu_memory_total_gb = gpu_status.vram_total_gb
                 status.gpu_temperature_c = gpu_status.temperature_c
@@ -1044,14 +1046,14 @@ class RequestContext:
     request_id: str
     client_ip: str
     timestamp: float
-    operation: Optional[str] = None
-    user_id: Optional[str] = None
+    operation: str | None = None
+    user_id: str | None = None
 
     @classmethod
     def from_gradio_request(
         cls,
-        request: Optional[gr.Request] = None,
-        operation: Optional[str] = None,
+        request: gr.Request | None = None,
+        operation: str | None = None,
     ) -> "RequestContext":
         """Create context from a Gradio request."""
         request_id = str(uuid.uuid4())[:8]
@@ -1069,7 +1071,7 @@ class RequestContext:
             operation=operation,
         )
 
-    def to_log_dict(self) -> Dict[str, Any]:
+    def to_log_dict(self) -> dict[str, Any]:
         """Get dictionary for logging extra fields."""
         return {
             "request_id": self.request_id,
@@ -1080,7 +1082,7 @@ class RequestContext:
         }
 
 
-def get_request_id(request: Optional[gr.Request] = None) -> str:
+def get_request_id(request: gr.Request | None = None) -> str:
     """
     Generate or extract a unique request ID.
 
@@ -1138,7 +1140,7 @@ class JSONSecurityFormatter(logging.Formatter):
 
 
 def configure_json_logging(
-    logger_names: Optional[List[str]] = None,
+    logger_names: list[str] | None = None,
     level: int = logging.INFO,
 ) -> None:
     """
@@ -1181,7 +1183,7 @@ class SessionInfo:
     client_ip: str
     created_at: float
     last_activity: float
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 class SessionManager:
@@ -1193,22 +1195,24 @@ class SessionManager:
 
     _instance: Optional["SessionManager"] = None
     _lock: Lock = Lock()
+    _sessions: dict[str, SessionInfo]
+    _sessions_by_ip: dict[str, list[str]]
 
     def __new__(cls) -> "SessionManager":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._sessions: Dict[str, SessionInfo] = {}
-                    cls._instance._sessions_by_ip: Dict[str, List[str]] = {}
+                    cls._instance._sessions = {}
+                    cls._instance._sessions_by_ip = {}
         return cls._instance
 
     def create_session(
         self,
         client_ip: str,
-        user_id: Optional[str] = None,
-        config: Optional[SecurityConfig] = None,
-    ) -> Tuple[bool, Optional[str], str]:
+        user_id: str | None = None,
+        config: SecurityConfig | None = None,
+    ) -> tuple[bool, str | None, str]:
         """
         Create a new session.
 
@@ -1259,8 +1263,8 @@ class SessionManager:
     def validate_session(
         self,
         session_id: str,
-        config: Optional[SecurityConfig] = None,
-    ) -> Tuple[bool, str]:
+        config: SecurityConfig | None = None,
+    ) -> tuple[bool, str]:
         """
         Validate and refresh a session.
 
@@ -1351,18 +1355,18 @@ class ConcurrencyLimiter:
     ):
         self.max_concurrent = max_concurrent
         self.operation_name = operation_name
-        self._active: Dict[str, int] = {}
+        self._active: dict[str, int] = {}
         self._lock = Lock()
 
-    def _get_client_id(self, request: Optional[gr.Request] = None) -> str:
+    def _get_client_id(self, request: gr.Request | None = None) -> str:
         """Get client identifier from request."""
         if request is not None:
             client = getattr(request, "client", {})
             if isinstance(client, dict):
-                return client.get("host", "anonymous")
+                return str(client.get("host", "anonymous"))
         return "anonymous"
 
-    def acquire(self, request: Optional[gr.Request] = None) -> Tuple[bool, str]:
+    def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:
         """
         Try to acquire a slot for an operation.
 
@@ -1390,7 +1394,7 @@ class ConcurrencyLimiter:
             self._active[client_id] = current + 1
             return True, "Acquired"
 
-    def release(self, request: Optional[gr.Request] = None) -> None:
+    def release(self, request: gr.Request | None = None) -> None:
         """Release a slot after operation completes."""
         client_id = self._get_client_id(request)
 
@@ -1401,7 +1405,7 @@ class ConcurrencyLimiter:
                 if self._active[client_id] == 0:
                     del self._active[client_id]
 
-    def get_active_count(self, request: Optional[gr.Request] = None) -> int:
+    def get_active_count(self, request: gr.Request | None = None) -> int:
         """Get count of active operations for a client."""
         client_id = self._get_client_id(request)
         with self._lock:
@@ -1427,9 +1431,9 @@ class RateLimitInfo:
     limit: int
     remaining: int
     reset_timestamp: float
-    retry_after: Optional[float] = None
+    retry_after: float | None = None
 
-    def to_headers(self) -> Dict[str, str]:
+    def to_headers(self) -> dict[str, str]:
         """
         Get rate limit headers.
 
@@ -1452,7 +1456,7 @@ class RateLimitInfo:
 # =============================================================================
 
 # Common file signatures (magic bytes)
-FILE_SIGNATURES: Dict[str, List[bytes]] = {
+FILE_SIGNATURES: dict[str, list[bytes]] = {
     ".json": [b"{", b"["],  # JSON starts with { or [
     ".jsonl": [b"{"],  # JSONL lines start with {
     ".csv": [],  # CSV has no standard signature
@@ -1465,8 +1469,8 @@ FILE_SIGNATURES: Dict[str, List[bytes]] = {
 
 def validate_file_magic(
     file_path: Path,
-    expected_extension: Optional[str] = None,
-) -> Tuple[bool, str]:
+    expected_extension: str | None = None,
+) -> tuple[bool, str]:
     """
     Validate file content matches expected type using magic bytes.
 
@@ -1568,7 +1572,7 @@ class JWTManager:
         payload = manager.verify_token(token)
     """
 
-    def __init__(self, config: Optional[JWTConfig] = None):
+    def __init__(self, config: JWTConfig | None = None):
         self.config = config or JWTConfig()
         if not self.config.secret:
             # Generate random secret if not provided (not persistent across restarts)
@@ -1583,7 +1587,7 @@ class JWTManager:
     def create_token(
         self,
         user_id: str,
-        additional_claims: Optional[Dict[str, Any]] = None,
+        additional_claims: dict[str, Any] | None = None,
         is_refresh: bool = False,
     ) -> str:
         """
@@ -1619,11 +1623,11 @@ class JWTManager:
         if additional_claims:
             payload.update(additional_claims)
 
-        token = pyjwt.encode(
+        token = str(pyjwt.encode(
             payload,
             self.config.secret,
             algorithm=self.config.algorithm,
-        )
+        ))
 
         log_security_event(
             "jwt_token_created",
@@ -1638,7 +1642,7 @@ class JWTManager:
         self,
         token: str,
         expected_type: str = "access",
-    ) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    ) -> tuple[bool, dict[str, Any] | None, str]:
         """
         Verify and decode a JWT token.
 
@@ -1678,7 +1682,7 @@ class JWTManager:
     def refresh_access_token(
         self,
         refresh_token: str,
-    ) -> Tuple[bool, Optional[str], str]:
+    ) -> tuple[bool, str | None, str]:
         """
         Generate new access token using refresh token.
 
@@ -1731,7 +1735,7 @@ class CSRFProtection:
 
     def __init__(self, expiry_minutes: int = 60):
         self.expiry_minutes = expiry_minutes
-        self._tokens: Dict[str, CSRFToken] = {}
+        self._tokens: dict[str, CSRFToken] = {}
         self._lock = Lock()
 
     def generate_token(self, session_id: str) -> str:
@@ -1764,7 +1768,7 @@ class CSRFProtection:
         session_id: str,
         token: str,
         consume: bool = True,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Validate a CSRF token.
 
@@ -1826,10 +1830,6 @@ class CSRFProtection:
             del self._tokens[sid]
 
 
-# Need hmac for constant-time comparison
-import hmac
-
-
 # =============================================================================
 # COMBINED SESSION + CSRF HANDLER
 # =============================================================================
@@ -1857,19 +1857,19 @@ class SecureSessionHandler:
 
     def __init__(
         self,
-        jwt_config: Optional[JWTConfig] = None,
+        jwt_config: JWTConfig | None = None,
         csrf_expiry_minutes: int = 60,
     ):
         self.jwt = JWTManager(jwt_config)
         self.csrf = CSRFProtection(csrf_expiry_minutes)
-        self._active_sessions: Dict[str, str] = {}  # token -> user_id
+        self._active_sessions: dict[str, str] = {}  # token -> user_id
         self._lock = Lock()
 
     def login(
         self,
         user_id: str,
-        additional_claims: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, str]:
+        additional_claims: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
         """
         Create a new authenticated session.
 
@@ -1902,7 +1902,7 @@ class SecureSessionHandler:
         access_token: str,
         csrf_token: str,
         require_csrf: bool = True,
-    ) -> Tuple[bool, Optional[str], str]:
+    ) -> tuple[bool, str | None, str]:
         """
         Validate an authenticated request.
 
@@ -1949,7 +1949,7 @@ class SecureSessionHandler:
     def refresh_session(
         self,
         refresh_token: str,
-    ) -> Tuple[bool, Optional[Dict[str, str]], str]:
+    ) -> tuple[bool, dict[str, str] | None, str]:
         """
         Refresh an expired session.
 
@@ -1974,7 +1974,7 @@ class SecureSessionHandler:
 
 
 # Global instance for convenience
-_secure_session_handler: Optional[SecureSessionHandler] = None
+_secure_session_handler: SecureSessionHandler | None = None
 
 
 def get_secure_session_handler() -> SecureSessionHandler:
@@ -2003,27 +2003,27 @@ class CSPConfig:
     Adjust as needed for your deployment.
     """
     # Script sources
-    script_src: List[str] = field(default_factory=lambda: ["'self'"])
+    script_src: list[str] = field(default_factory=lambda: ["'self'"])
     # Style sources
-    style_src: List[str] = field(default_factory=lambda: ["'self'", "'unsafe-inline'"])  # Gradio needs inline styles
+    style_src: list[str] = field(default_factory=lambda: ["'self'", "'unsafe-inline'"])  # Gradio needs inline styles
     # Image sources
-    img_src: List[str] = field(default_factory=lambda: ["'self'", "data:", "blob:"])
+    img_src: list[str] = field(default_factory=lambda: ["'self'", "data:", "blob:"])
     # Font sources
-    font_src: List[str] = field(default_factory=lambda: ["'self'", "data:"])
+    font_src: list[str] = field(default_factory=lambda: ["'self'", "data:"])
     # Connect sources (for API calls, WebSocket)
-    connect_src: List[str] = field(default_factory=lambda: ["'self'", "ws:", "wss:"])
+    connect_src: list[str] = field(default_factory=lambda: ["'self'", "ws:", "wss:"])
     # Frame ancestors (who can embed this page)
-    frame_ancestors: List[str] = field(default_factory=lambda: ["'self'"])
+    frame_ancestors: list[str] = field(default_factory=lambda: ["'self'"])
     # Base URI
-    base_uri: List[str] = field(default_factory=lambda: ["'self'"])
+    base_uri: list[str] = field(default_factory=lambda: ["'self'"])
     # Form action
-    form_action: List[str] = field(default_factory=lambda: ["'self'"])
+    form_action: list[str] = field(default_factory=lambda: ["'self'"])
     # Object sources (plugins)
-    object_src: List[str] = field(default_factory=lambda: ["'none'"])
+    object_src: list[str] = field(default_factory=lambda: ["'none'"])
     # Default fallback
-    default_src: List[str] = field(default_factory=lambda: ["'self'"])
+    default_src: list[str] = field(default_factory=lambda: ["'self'"])
     # Report URI for violations (optional)
-    report_uri: Optional[str] = None
+    report_uri: str | None = None
     # Report-only mode (log violations but don't enforce)
     report_only: bool = False
 
@@ -2045,9 +2045,9 @@ class ContentSecurityPolicy:
     """
 
     # Nonce for inline scripts (regenerated per request)
-    _nonce: Optional[str] = None
+    _nonce: str | None = None
 
-    def __init__(self, config: Optional[CSPConfig] = None):
+    def __init__(self, config: CSPConfig | None = None):
         self.config = config or CSPConfig()
 
     def generate_nonce(self) -> str:
@@ -2066,7 +2066,7 @@ class ContentSecurityPolicy:
         self._nonce = base64.b64encode(nonce_bytes).decode("utf-8")
         return self._nonce
 
-    def get_nonce(self) -> Optional[str]:
+    def get_nonce(self) -> str | None:
         """Get the current nonce (if generated)."""
         return self._nonce
 
@@ -2131,7 +2131,7 @@ class ContentSecurityPolicy:
 
         return "; ".join(directives)
 
-    def get_header(self, include_nonce: bool = False) -> Tuple[str, str]:
+    def get_header(self, include_nonce: bool = False) -> tuple[str, str]:
         """
         Get the CSP header name and value.
 
@@ -2148,7 +2148,7 @@ class ContentSecurityPolicy:
         else:
             return "Content-Security-Policy", policy
 
-    def get_all_security_headers(self) -> Dict[str, str]:
+    def get_all_security_headers(self) -> dict[str, str]:
         """
         Get all recommended security headers.
 
@@ -2217,7 +2217,7 @@ def get_gradio_csp(report_only: bool = False) -> ContentSecurityPolicy:
 
 def apply_security_headers(
     response: Any,
-    csp: Optional[ContentSecurityPolicy] = None,
+    csp: ContentSecurityPolicy | None = None,
 ) -> None:
     """
     Apply security headers to a response object.

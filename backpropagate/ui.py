@@ -733,7 +733,7 @@ def export_model(
     export_format: str,
     quantization: str,
     output_path: str,
-    request: gr.Request = None,
+    request: gr.Request | None = None,
 ) -> str:
     """
     Export the trained model with security checks.
@@ -1295,7 +1295,7 @@ def refresh_train_sidebar() -> tuple:
 # UI BUILDER
 # =============================================================================
 
-def create_ui() -> gr.Blocks:
+def create_ui() -> Any:
     """Create the Gradio UI."""
     # Note: In Gradio 6.x, theme and css are passed to launch() not Blocks()
     with gr.Blocks(
@@ -1632,7 +1632,7 @@ def create_ui() -> gr.Blocks:
                             _mr_adaptive_range = gr.Slider(
                                 minimum=0.2,
                                 maximum=2.0,
-                                value=[0.5, 1.5],
+                                value=0.5,
                                 label="Scale Range (min, max)",
                                 visible=False,
                             )
@@ -2366,7 +2366,7 @@ def launch(
     theme = create_backpropagate_theme()
     css = get_css()
 
-    launch_kwargs = {
+    launch_kwargs: dict[str, Any] = {
         "server_name": "0.0.0.0",
         "server_port": port,
         "share": share,

@@ -686,8 +686,7 @@ class MultiRunTrainer:
             return None
 
         random.seed(settings.training.seed + run_idx + 1000)  # Different seed for replay
-        replay_indices = random.sample(available_indices, min(count, len(available_indices)))
-
+        replay_indices = random.sample(available_indices, min(count, len(available_indices)))  # nosec B311
         return full_dataset.select(replay_indices)
 
     def _get_learning_rate(self, run_idx: int) -> float:

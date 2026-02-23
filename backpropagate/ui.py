@@ -34,49 +34,36 @@ Usage:
     launch(port=7862, share=True, auth=("admin", "password"))
 """
 
-import gradio as gr
-from typing import Optional, Dict, Any, List, Tuple, Union
 import logging
-import time
 import secrets
+import time
 from pathlib import Path
+from typing import Any
 
-from .theme import create_backpropagate_theme, get_css
-from .config import settings, get_settings
+import gradio as gr
+
+from .config import settings
+from .datasets import (
+    DatasetLoader,
+    ValidationResult,
+)
 from .feature_flags import (
-    FEATURES,
     get_gpu_info,
     get_system_info,
     list_available_features,
-    list_missing_features,
 )
-from .gpu_safety import get_gpu_status, GPUCondition, format_gpu_status
-from .datasets import (
-    DatasetLoader,
-    DatasetFormat,
-    ValidationResult,
-    get_dataset_stats,
-    preview_samples,
-)
-from .security import safe_path, PathTraversalError, SecurityWarning
+from .gpu_safety import GPUCondition, get_gpu_status
+from .security import PathTraversalError, SecurityWarning, safe_path
+from .theme import create_backpropagate_theme, get_css
 
 # Import production security utilities
 from .ui_security import (
-    SecurityConfig,
+    ALLOWED_DATASET_EXTENSIONS,
     DEFAULT_SECURITY_CONFIG,
     EnhancedRateLimiter,
     FileValidator,
-    ALLOWED_DATASET_EXTENSIONS,
-    DANGEROUS_EXTENSIONS,
-    raise_gradio_error,
-    raise_gradio_warning,
-    raise_gradio_info,
-    safe_gradio_handler,
-    validate_numeric_input,
-    validate_string_input,
-    validate_and_log_request,
     log_security_event,
-    sanitize_filename,
+    validate_numeric_input,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,9 +99,9 @@ _file_validator = FileValidator(
 
 def validate_path_input(
     path_str: str,
-    allowed_base: Optional[Path] = None,
+    allowed_base: Path | None = None,
     must_exist: bool = False,
-) -> Tuple[bool, str, Optional[Path]]:
+) -> tuple[bool, str, Path | None]:
     """
     Validate a user-provided path input.
 
@@ -195,21 +182,22 @@ DATASET_PRESETS = {
 
 class UIState:
     """Global UI state container."""
-    trainer = None
-    is_training = False
-    current_run = None
-    loss_history = []
-    runs_history = []
+    trainer: Any = None
+    is_training: bool = False
+    current_run: Any = None
+    loss_history: list[float] = []
+    runs_history: list[Any] = []
     # Multi-run state
-    multi_run_trainer = None
-    multi_run_is_running = False
-    multi_run_results = None
-    multi_run_current_run = 0
-    multi_run_loss_history = []
-    multi_run_run_boundaries = []
+    multi_run_trainer: Any = None
+    multi_run_is_running: bool = False
+    multi_run_results: Any = None
+    multi_run_current_run: int = 0
+    multi_run_loss_history: list[float] = []
+    multi_run_run_boundaries: list[int] = []
     # Dataset state
-    dataset_loader: Optional[DatasetLoader] = None
-    dataset_validation: Optional[ValidationResult] = None
+    dataset_loader: DatasetLoader | None = None
+    dataset_validation: ValidationResult | None = None
+    train_start_time: float = 0.0
 
 
 state = UIState()
@@ -241,13 +229,13 @@ def get_system_status() -> str:
         "",
         "**Features:**",
     ]
-    for name, desc in features.items():
+    for name, _desc in features.items():
         lines.append(f"- {name}")
 
     return "\n".join(lines)
 
 
-def format_loss_plot(losses: List[float]) -> Dict[str, Any]:
+def format_loss_plot(losses: list[float]) -> dict[str, Any]:
     """Format loss history for plotting."""
     if not losses:
         return {"data": [], "layout": {"title": "Training Loss"}}
@@ -276,7 +264,7 @@ def format_loss_plot(losses: List[float]) -> Dict[str, Any]:
     }
 
 
-def format_multi_run_plot(losses: List[float], run_boundaries: List[int]) -> Dict[str, Any]:
+def format_multi_run_plot(losses: list[float], run_boundaries: list[int]) -> dict[str, Any]:
     """Format multi-run loss history with run boundaries marked."""
     if not losses:
         return {"data": [], "layout": {"title": "Multi-Run Loss"}}
@@ -294,7 +282,7 @@ def format_multi_run_plot(losses: List[float], run_boundaries: List[int]) -> Dic
 
     # Add vertical lines for run boundaries
     shapes = []
-    for i, boundary in enumerate(run_boundaries):
+    for _i, boundary in enumerate(run_boundaries):
         if boundary > 0:  # Skip first boundary at 0
             shapes.append({
                 "type": "line",
@@ -332,11 +320,6 @@ def get_gpu_safety_status() -> str:
     lines = [f"**{status.device_name}**"]
 
     if status.temperature_c is not None:
-        temp_color = "green"
-        if status.temperature_c >= 80:
-            temp_color = "orange"
-        if status.temperature_c >= 90:
-            temp_color = "red"
         lines.append(f"Temp: {status.temperature_c}C")
 
     lines.append(f"VRAM: {status.vram_used_gb:.1f} / {status.vram_total_gb:.1f} GB ({status.vram_percent:.0f}%)")
@@ -362,7 +345,7 @@ def get_gpu_safety_status() -> str:
 # DATASET FUNCTIONS
 # =============================================================================
 
-def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
+def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple[Any, ...]:
     """
     Load and validate a dataset file with security checks.
 
@@ -403,7 +386,7 @@ def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
         # Log successful upload
         log_security_event(
             "file_upload_success",
-            filename=validated_path.name,
+            filename=validated_path.name if validated_path else "unknown",
             format=loader.detected_format.value,
             samples=len(loader),
         )
@@ -472,7 +455,7 @@ def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
         raise
     except FileNotFoundError as e:
         logger.error(f"Dataset file not found: {e}")
-        raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
+        raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found") from None
     except Exception as e:
         logger.exception("Failed to load dataset")
         log_security_event(
@@ -484,7 +467,7 @@ def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
             f"Failed to load dataset: {str(e)}",
             duration=10,
             title="Load Error",
-        )
+        ) from None
 
 
 def convert_dataset_format(target_format: str) -> tuple:
@@ -516,7 +499,7 @@ def export_converted_dataset(output_path: str) -> str:
 
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
-    if not is_valid:
+    if not is_valid or validated_path is None:
         return f"Invalid output path: {error_msg}"
 
     try:
@@ -576,9 +559,9 @@ def start_training(
     batch_size: int,
     lora_r: int,
     lora_alpha: int,
-    progress=gr.Progress(),
-    request: gr.Request = None,
-) -> tuple:
+    _progress: Any = gr.Progress(),
+    request: gr.Request | None = None,
+) -> Any:
     """
     Start a training run with security checks.
 
@@ -606,16 +589,16 @@ def start_training(
 
     # Validate numeric inputs
     try:
-        max_samples = int(validate_numeric_input(max_samples, "Max samples", min_value=1, max_value=1000000))
-        max_steps = int(validate_numeric_input(max_steps, "Max steps", min_value=1, max_value=100000))
-        learning_rate = validate_numeric_input(learning_rate, "Learning rate", min_value=1e-8, max_value=1.0)
-        batch_size = int(validate_numeric_input(batch_size, "Batch size", min_value=1, max_value=64))
-        lora_r = int(validate_numeric_input(lora_r, "LoRA rank", min_value=1, max_value=256))
-        lora_alpha = int(validate_numeric_input(lora_alpha, "LoRA alpha", min_value=1, max_value=512))
+        max_samples = int(validate_numeric_input(max_samples, "Max samples", min_value=1, max_value=1000000) or 0)
+        max_steps = int(validate_numeric_input(max_steps, "Max steps", min_value=1, max_value=100000) or 0)
+        learning_rate = float(validate_numeric_input(learning_rate, "Learning rate", min_value=1e-8, max_value=1.0) or 0.0)
+        batch_size = int(validate_numeric_input(batch_size, "Batch size", min_value=1, max_value=64) or 0)
+        lora_r = int(validate_numeric_input(lora_r, "LoRA rank", min_value=1, max_value=256) or 0)
+        lora_alpha = int(validate_numeric_input(lora_alpha, "LoRA alpha", min_value=1, max_value=512) or 0)
     except gr.Error:
         raise
     except Exception as e:
-        raise gr.Error(f"Invalid parameter: {e}", duration=10)
+        raise gr.Error(f"Invalid parameter: {e}", duration=10) from None
 
     # Resolve and sanitize model name
     if model_preset in MODEL_PRESETS:
@@ -788,14 +771,14 @@ def export_model(
             output_dir=str(validated_path),
             quantization=quantization,
         )
-        return result.summary()
+        return str(result.summary())
     except Exception as e:
         return f"Export failed: {str(e)}"
 
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
     """Register a GGUF model with Ollama."""
-    from .export import register_with_ollama, list_ollama_models
+    from .export import register_with_ollama
 
     # Validate GGUF path
     is_valid, error_msg, validated_path = validate_path_input(gguf_path, must_exist=True)
@@ -811,6 +794,8 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
     safe_system_prompt = sanitize_text_input(system_prompt, max_length=2000) if system_prompt else None
 
     try:
+        if validated_path is None:
+            return "Invalid GGUF path"
         success = register_with_ollama(
             gguf_path=validated_path,
             model_name=safe_model_name,
@@ -861,6 +846,8 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
     safe_system_prompt = sanitize_text_input(system_prompt, max_length=2000) if system_prompt else None
 
     try:
+        if validated_gguf is None:
+            return "Invalid GGUF path"
         modelfile = create_modelfile(
             gguf_path=validated_gguf,
             output_path=validated_output,
@@ -875,7 +862,7 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
         return f"Failed to create Modelfile: {str(e)}"
 
 
-def get_runs_table() -> List[List[Any]]:
+def get_runs_table() -> list[list[Any]]:
     """Get training runs as table data."""
     rows = []
     for run in state.runs_history:
@@ -906,8 +893,8 @@ def start_multi_run(
     final_lr: float,
     max_temp: float,
     # Phase 4 advanced options
-    adaptive_scaling: bool = False,
-    layer_scaling: bool = False,
+    _adaptive_scaling: bool = False,
+    _layer_scaling: bool = False,
     early_stopping: bool = False,
     early_patience: int = 2,
     val_samples: int = 100,
@@ -917,16 +904,14 @@ def start_multi_run(
     ckpt_max_total: int = 10,
     ckpt_keep_final: bool = True,
     ckpt_keep_boundaries: bool = False,
-    progress=gr.Progress(),
-) -> tuple:
+    _progress: Any = gr.Progress(),
+    _request: gr.Request | None = None,
+) -> Any:
     """Start SLAO Multi-Run training."""
-    from .multi_run import MultiRunTrainer, MultiRunConfig, MergeMode
+    from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
     # Resolve model
-    if model_preset in MODEL_PRESETS:
-        model_name = MODEL_PRESETS[model_preset]
-    else:
-        model_name = custom_model
+    model_name = MODEL_PRESETS.get(model_preset, custom_model)
 
     # Resolve dataset
     if dataset_preset == "Custom JSONL":
@@ -972,7 +957,7 @@ def start_multi_run(
             checkpoint_auto_prune=ckpt_auto_prune,
         )
 
-        def on_run_complete(run_result):
+        def on_run_complete(run_result: Any) -> None:
             state.multi_run_current_run = run_result.run_index
             state.multi_run_loss_history.extend(run_result.loss_history)
             state.multi_run_run_boundaries.append(len(state.multi_run_loss_history))
@@ -1036,7 +1021,7 @@ def stop_multi_run() -> str:
     return "Multi-run stop requested..."
 
 
-def get_multi_run_progress_table() -> List[List[Any]]:
+def get_multi_run_progress_table() -> list[list[Any]]:
     """Get multi-run progress as table data."""
     if state.multi_run_results is None:
         return []
@@ -1063,7 +1048,7 @@ def get_multi_run_progress_table() -> List[List[Any]]:
 # PHASE 5: TRAINING DASHBOARD FUNCTIONS
 # =============================================================================
 
-def get_dashboard_metrics() -> Dict[str, str]:
+def get_dashboard_metrics() -> dict[str, str]:
     """
     Get all dashboard metrics for the training sidebar.
 
@@ -1315,10 +1300,8 @@ def create_ui() -> gr.Blocks:
     # Note: In Gradio 6.x, theme and css are passed to launch() not Blocks()
     with gr.Blocks(
         title="Backpropagate - LLM Fine-Tuning",
-    ) as app:
-
-        with gr.Tabs():
-            # =================================================================
+    ) as app, gr.Tabs():
+        # =================================================================
             # TRAIN TAB
             # =================================================================
             with gr.Tab("Train", id="train"):
@@ -1513,7 +1496,7 @@ def create_ui() -> gr.Blocks:
                 )
 
                 # Phase 5.1: Training Dashboard Sidebar
-                with gr.Sidebar(position="right", open=False, elem_id="training-dashboard") as training_sidebar:
+                with gr.Sidebar(position="right", open=False, elem_id="training-dashboard"):
                     gr.Markdown("## 📊 Training Dashboard")
 
                     # Live Metrics Section
@@ -1646,7 +1629,7 @@ def create_ui() -> gr.Blocks:
                                 value=False,
                                 info="Compute task similarity between runs",
                             )
-                            mr_adaptive_range = gr.Slider(
+                            _mr_adaptive_range = gr.Slider(
                                 minimum=0.2,
                                 maximum=2.0,
                                 value=[0.5, 1.5],
@@ -2059,27 +2042,26 @@ def create_ui() -> gr.Blocks:
             with gr.Tab("Settings", id="settings"):
                 with gr.Row():
                     # Left column - System Info
-                    with gr.Column(scale=1):
-                        with gr.Group():
-                            gr.Markdown("#### System")
-                            gpu_info = get_gpu_info()
-                            sys_info = get_system_info()
+                    with gr.Column(scale=1), gr.Group():
+                        gr.Markdown("#### System")
+                        gpu_info = get_gpu_info()
+                        sys_info = get_system_info()
 
-                            if gpu_info.get("available"):
-                                gpu_name = gpu_info.get("device_name", "Unknown GPU")
-                                vram_total = gpu_info.get("memory_total", 0) / (1024**3)
-                                vram_used = gpu_info.get("memory_allocated", 0) / (1024**3)
+                        if gpu_info.get("available"):
+                            gpu_name = gpu_info.get("device_name", "Unknown GPU")
+                            vram_total = gpu_info.get("memory_total", 0) / (1024**3)
+                            vram_used = gpu_info.get("memory_allocated", 0) / (1024**3)
 
-                                gr.Markdown(f"**{gpu_name}**")
-                                gr.Slider(
-                                    minimum=0, maximum=vram_total, value=vram_used,
-                                    label=f"VRAM: {vram_used:.1f} / {vram_total:.1f} GB",
-                                    interactive=False
-                                )
-                            else:
-                                gr.Markdown("**No GPU detected**")
+                            gr.Markdown(f"**{gpu_name}**")
+                            gr.Slider(
+                                minimum=0, maximum=vram_total, value=vram_used,
+                                label=f"VRAM: {vram_used:.1f} / {vram_total:.1f} GB",
+                                interactive=False
+                            )
+                        else:
+                            gr.Markdown("**No GPU detected**")
 
-                            gr.Markdown(f"""
+                        gr.Markdown(f"""
 **Python:** {sys_info.get('python_version', 'Unknown').split()[0]}
 
 **Platform:** {sys_info.get('platform', 'Unknown')[:40]}
@@ -2088,78 +2070,75 @@ def create_ui() -> gr.Blocks:
                             """)
 
                     # Right column - Features
-                    with gr.Column(scale=1):
-                        with gr.Group():
-                            gr.Markdown("#### Features")
-                            features = list_available_features()
-                            feature_md = "\n".join([f"- {name}" for name in features.keys()])
-                            gr.Markdown(feature_md if feature_md else "No optional features detected")
+                    with gr.Column(scale=1), gr.Group():
+                        gr.Markdown("#### Features")
+                        features = list_available_features()
+                        feature_md = "\n".join([f"- {name}" for name in features])
+                        gr.Markdown(feature_md if feature_md else "No optional features detected")
 
                 # Model Defaults
-                with gr.Accordion("Model Defaults", open=False):
-                    with gr.Row():
-                        settings_model = gr.Textbox(
-                            value=settings.model.name,
-                            label="Default Model",
-                            info="HuggingFace model path"
-                        )
-                        settings_max_seq = gr.Number(
-                            value=settings.model.max_seq_length,
-                            label="Max Sequence Length",
-                            precision=0
-                        )
+                with gr.Accordion("Model Defaults", open=False), gr.Row():
+                    _settings_model = gr.Textbox(
+                        value=settings.model.name,
+                        label="Default Model",
+                        info="HuggingFace model path"
+                    )
+                    _settings_max_seq = gr.Number(
+                        value=settings.model.max_seq_length,
+                        label="Max Sequence Length",
+                        precision=0
+                    )
 
                 # LoRA Defaults
-                with gr.Accordion("LoRA Defaults", open=False):
-                    with gr.Row():
-                        settings_lora_r = gr.Slider(
-                            minimum=4, maximum=128, value=settings.lora.r,
-                            step=4, label="LoRA Rank (r)"
-                        )
-                        settings_lora_alpha = gr.Slider(
-                            minimum=8, maximum=256, value=settings.lora.lora_alpha,
-                            step=8, label="LoRA Alpha"
-                        )
-                        settings_lora_dropout = gr.Slider(
-                            minimum=0, maximum=0.5, value=settings.lora.lora_dropout,
-                            step=0.01, label="Dropout"
-                        )
+                with gr.Accordion("LoRA Defaults", open=False), gr.Row():
+                    _settings_lora_r = gr.Slider(
+                        minimum=4, maximum=128, value=settings.lora.r,
+                        step=4, label="LoRA Rank (r)"
+                    )
+                    _settings_lora_alpha = gr.Slider(
+                        minimum=8, maximum=256, value=settings.lora.lora_alpha,
+                        step=8, label="LoRA Alpha"
+                    )
+                    _settings_lora_dropout = gr.Slider(
+                        minimum=0, maximum=0.5, value=settings.lora.lora_dropout,
+                        step=0.01, label="Dropout"
+                    )
 
                 # Training Defaults
                 with gr.Accordion("Training Defaults", open=False):
                     with gr.Row():
-                        settings_lr = gr.Number(
+                        _settings_lr = gr.Number(
                             value=settings.training.learning_rate,
                             label="Learning Rate"
                         )
-                        settings_batch = gr.Number(
+                        _settings_batch = gr.Number(
                             value=settings.training.per_device_train_batch_size,
                             label="Batch Size",
                             precision=0
                         )
-                        settings_grad_accum = gr.Number(
+                        _settings_grad_accum = gr.Number(
                             value=settings.training.gradient_accumulation_steps,
                             label="Gradient Accumulation",
                             precision=0
                         )
                     with gr.Row():
-                        settings_warmup = gr.Number(
+                        _settings_warmup = gr.Number(
                             value=settings.training.warmup_steps,
                             label="Warmup Steps",
                             precision=0
                         )
-                        settings_output = gr.Textbox(
+                        _settings_output = gr.Textbox(
                             value=settings.training.output_dir,
                             label="Output Directory"
                         )
 
                 # Actions
                 with gr.Row():
-                    save_settings_btn = gr.Button("Save Settings", variant="primary")
-                    reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
-                    export_settings_btn = gr.Button("Export JSON", variant="secondary")
+                    _save_settings_btn = gr.Button("Save Settings", variant="primary")
+                    _reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
+                    _export_settings_btn = gr.Button("Export JSON", variant="secondary")
 
-                settings_status = gr.Markdown("")
+                _settings_status = gr.Markdown("")
 
                 with gr.Accordion("Raw Configuration", open=False):
                     gr.Code(
@@ -2218,31 +2197,30 @@ Convert to GGUF for Ollama
                     """)
 
                 # Dataset Formats
-                with gr.Accordion("Dataset Formats", open=False):
-                    with gr.Tabs():
-                        with gr.Tab("ChatML"):
-                            gr.Code(
-                                value='{"text": "<|im_start|>user\\nHello!<|im_end|>\\n<|im_start|>assistant\\nHi there!<|im_end|>"}',
-                                language="json",
-                                label="ChatML Format (Recommended)"
-                            )
-                            gr.Markdown("Best for Qwen, Yi, and most modern models.")
+                with gr.Accordion("Dataset Formats", open=False), gr.Tabs():
+                    with gr.Tab("ChatML"):
+                        gr.Code(
+                            value='{"text": "<|im_start|>user\\nHello!<|im_end|>\\n<|im_start|>assistant\\nHi there!<|im_end|>"}',
+                            language="json",
+                            label="ChatML Format (Recommended)"
+                        )
+                        gr.Markdown("Best for Qwen, Yi, and most modern models.")
 
-                        with gr.Tab("ShareGPT"):
-                            gr.Code(
-                                value='{"conversations": [{"from": "human", "value": "Hello!"}, {"from": "gpt", "value": "Hi there!"}]}',
-                                language="json",
-                                label="ShareGPT Format"
-                            )
-                            gr.Markdown("Common format, auto-converted to ChatML.")
+                    with gr.Tab("ShareGPT"):
+                        gr.Code(
+                            value='{"conversations": [{"from": "human", "value": "Hello!"}, {"from": "gpt", "value": "Hi there!"}]}',
+                            language="json",
+                            label="ShareGPT Format"
+                        )
+                        gr.Markdown("Common format, auto-converted to ChatML.")
 
-                        with gr.Tab("Alpaca"):
-                            gr.Code(
-                                value='{"instruction": "Say hello", "input": "", "output": "Hello! How can I help?"}',
-                                language="json",
-                                label="Alpaca Format"
-                            )
-                            gr.Markdown("Simple instruction-following format.")
+                    with gr.Tab("Alpaca"):
+                        gr.Code(
+                            value='{"instruction": "Say hello", "input": "", "output": "Hello! How can I help?"}',
+                            language="json",
+                            label="Alpaca Format"
+                        )
+                        gr.Markdown("Simple instruction-following format.")
 
                 # Training Tips
                 with gr.Accordion("Training Tips", open=False):
@@ -2344,7 +2322,7 @@ backprop config""",
 def launch(
     port: int = 7862,
     share: bool = False,
-    auth: Optional[Union[Tuple[str, str], List[Tuple[str, str]]]] = None,
+    auth: tuple[str, str] | list[tuple[str, str]] | None = None,
 ) -> None:
     """
     Launch the Gradio UI.

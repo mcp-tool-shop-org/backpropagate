@@ -28,14 +28,16 @@ Usage:
     dataset = loader.to_chatml()
 """
 
+import contextlib
 import json
 import logging
+import random
 import re
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Union, Tuple, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-import random
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ class ValidationError:
     field: str
     error_type: str
     message: str
-    value: Optional[Any] = None
+    value: Any | None = None
 
     def __str__(self) -> str:
         return f"Row {self.row_index}: [{self.error_type}] {self.field} - {self.message}"
@@ -108,8 +110,8 @@ class ValidationResult:
     is_valid: bool
     total_rows: int
     valid_rows: int
-    errors: List[ValidationError] = field(default_factory=list)
-    warnings: List[ValidationError] = field(default_factory=list)
+    errors: list[ValidationError] = field(default_factory=list)
+    warnings: list[ValidationError] = field(default_factory=list)
     format_detected: DatasetFormat = DatasetFormat.UNKNOWN
 
     @property
@@ -129,8 +131,8 @@ class ValidationResult:
     def summary(self) -> str:
         """Get a human-readable summary."""
         lines = [
-            f"Dataset Validation Report",
-            f"=" * 40,
+            "Dataset Validation Report",
+            "=" * 40,
             f"Format: {self.format_detected.value}",
             f"Total rows: {self.total_rows}",
             f"Valid rows: {self.valid_rows} ({100 * self.valid_rows / max(1, self.total_rows):.1f}%)",
@@ -191,8 +193,8 @@ class FilterStats:
     def summary(self) -> str:
         """Get human-readable summary."""
         lines = [
-            f"Filter Results",
-            f"=" * 40,
+            "Filter Results",
+            "=" * 40,
             f"Before: {self.total_before}",
             f"After:  {self.total_after} ({100 * self.retention_rate:.1f}% retained)",
             f"Removed: {self.total_removed}",
@@ -218,7 +220,7 @@ class FilterStats:
 # FORMAT DETECTION
 # =============================================================================
 
-def detect_format(data: Union[Dict, List[Dict], str]) -> DatasetFormat:
+def detect_format(data: dict | list[dict] | str) -> DatasetFormat:
     """
     Auto-detect the format of a dataset sample.
 
@@ -280,7 +282,7 @@ def _detect_format_from_file(file_path: Path, sample_size: int = 5) -> DatasetFo
 
     try:
         if suffix == ".jsonl":
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 for i, line in enumerate(f):
                     if i >= sample_size:
                         break
@@ -289,21 +291,18 @@ def _detect_format_from_file(file_path: Path, sample_size: int = 5) -> DatasetFo
                         samples.append(json.loads(line))
 
         elif suffix == ".json":
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    samples = data[:sample_size]
-                else:
-                    samples = [data]
+                samples = data[:sample_size] if isinstance(data, list) else [data]
 
         elif suffix in (".txt", ".md"):
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
                 return detect_format(content)
 
         else:
             # Try JSONL first
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 for i, line in enumerate(f):
                     if i >= sample_size:
                         break
@@ -355,7 +354,7 @@ class FormatConverter:
     }
 
     @staticmethod
-    def sharegpt_to_chatml(sample: Dict) -> str:
+    def sharegpt_to_chatml(sample: dict) -> str:
         """Convert ShareGPT format to ChatML."""
         conversations = sample.get("conversations", [])
         parts = []
@@ -370,7 +369,7 @@ class FormatConverter:
         return "\n".join(parts)
 
     @staticmethod
-    def alpaca_to_chatml(sample: Dict) -> str:
+    def alpaca_to_chatml(sample: dict) -> str:
         """Convert Alpaca format to ChatML."""
         instruction = sample.get("instruction", "")
         input_text = sample.get("input", "")
@@ -384,10 +383,7 @@ class FormatConverter:
             parts.append(f"<|im_start|>system\n{system}<|im_end|>")
 
         # Combine instruction and input for user message
-        if input_text:
-            user_content = f"{instruction}\n\n{input_text}"
-        else:
-            user_content = instruction
+        user_content = f"{instruction}\n\n{input_text}" if input_text else instruction
 
         parts.append(f"<|im_start|>user\n{user_content}<|im_end|>")
         parts.append(f"<|im_start|>assistant\n{output}<|im_end|>")
@@ -395,7 +391,7 @@ class FormatConverter:
         return "\n".join(parts)
 
     @staticmethod
-    def openai_to_chatml(sample: Dict) -> str:
+    def openai_to_chatml(sample: dict) -> str:
         """Convert OpenAI chat format to ChatML."""
         messages = sample.get("messages", [])
         parts = []
@@ -419,12 +415,15 @@ class FormatConverter:
         return f"<|im_start|>{default_role}\n{text}<|im_end|>"
 
     @classmethod
-    def to_chatml(cls, sample: Union[Dict, str], format_type: DatasetFormat) -> str:
+    def to_chatml(cls, sample: dict[Any, Any] | str, format_type: DatasetFormat) -> str:
         """Convert any format to ChatML."""
         if format_type == DatasetFormat.CHATML:
             if isinstance(sample, dict):
-                return sample.get("text", "")
-            return sample
+                return str(sample.get("text", ""))
+            return str(sample)
+
+        if not isinstance(sample, dict):
+            raise ValueError(f"Expected dict for format {format_type}, got {type(sample)}")
 
         if format_type == DatasetFormat.SHAREGPT:
             return cls.sharegpt_to_chatml(sample)
@@ -443,9 +442,9 @@ class FormatConverter:
 
 
 def convert_to_chatml(
-    samples: List[Union[Dict, str]],
-    source_format: Optional[DatasetFormat] = None,
-) -> List[Dict[str, str]]:
+    samples: list[dict | str],
+    source_format: DatasetFormat | None = None,
+) -> list[dict[str, str]]:
     """
     Convert a list of samples to ChatML format.
 
@@ -478,7 +477,7 @@ def convert_to_chatml(
 # VALIDATION
 # =============================================================================
 
-def _validate_chatml(text: str, row_index: int) -> List[ValidationError]:
+def _validate_chatml(text: str, row_index: int) -> list[ValidationError]:
     """Validate a ChatML formatted string."""
     errors = []
 
@@ -521,7 +520,7 @@ def _validate_chatml(text: str, row_index: int) -> List[ValidationError]:
     return errors
 
 
-def _validate_sharegpt(sample: Dict, row_index: int) -> List[ValidationError]:
+def _validate_sharegpt(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate a ShareGPT formatted sample."""
     errors = []
 
@@ -582,7 +581,7 @@ def _validate_sharegpt(sample: Dict, row_index: int) -> List[ValidationError]:
     return errors
 
 
-def _validate_alpaca(sample: Dict, row_index: int) -> List[ValidationError]:
+def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate an Alpaca formatted sample."""
     errors = []
 
@@ -622,7 +621,7 @@ def _validate_alpaca(sample: Dict, row_index: int) -> List[ValidationError]:
     return errors
 
 
-def _validate_openai(sample: Dict, row_index: int) -> List[ValidationError]:
+def _validate_openai(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate an OpenAI chat formatted sample."""
     errors = []
 
@@ -694,14 +693,17 @@ def _validate_openai(sample: Dict, row_index: int) -> List[ValidationError]:
 
 
 def validate_sample(
-    sample: Union[Dict, str],
+    sample: dict[Any, Any] | str,
     row_index: int,
     format_type: DatasetFormat,
-) -> List[ValidationError]:
+) -> list[ValidationError]:
     """Validate a single sample."""
     if format_type == DatasetFormat.CHATML:
-        text = sample if isinstance(sample, str) else sample.get("text", "")
+        text = sample if isinstance(sample, str) else str(sample.get("text", ""))
         return _validate_chatml(text, row_index)
+
+    if not isinstance(sample, dict):
+        return [ValidationError(row_index, "sample", "type_error", f"Expected dict for format {format_type}, got {type(sample)}")]
 
     if format_type == DatasetFormat.SHAREGPT:
         return _validate_sharegpt(sample, row_index)
@@ -732,8 +734,8 @@ def validate_sample(
 
 
 def validate_dataset(
-    samples: List[Union[Dict, str]],
-    format_type: Optional[DatasetFormat] = None,
+    samples: list[dict | str],
+    format_type: DatasetFormat | None = None,
     max_errors: int = 100,
 ) -> ValidationResult:
     """
@@ -817,15 +819,15 @@ def _has_assistant_response(text: str) -> bool:
 
 
 def filter_by_quality(
-    samples: List[Dict],
+    samples: list[dict],
     min_tokens: int = 50,
     max_tokens: int = 4096,
     min_turns: int = 2,
-    max_turns: Optional[int] = None,
+    max_turns: int | None = None,
     remove_empty: bool = True,
     require_assistant: bool = True,
-    custom_filter: Optional[Callable[[Dict], bool]] = None,
-) -> Tuple[List[Dict], FilterStats]:
+    custom_filter: Callable[[dict], bool] | None = None,
+) -> tuple[list[dict], FilterStats]:
     """
     Filter samples by quality criteria.
 
@@ -895,17 +897,17 @@ def filter_by_quality(
 # DEDUPLICATION
 # =============================================================================
 
-def _get_text_content(sample: Union[Dict, str], key: str = "text") -> str:
+def _get_text_content(sample: dict[Any, Any] | str, key: str = "text") -> str:
     """Extract text content from sample."""
     if isinstance(sample, str):
         return sample
-    return sample.get(key, "")
+    return str(sample.get(key, ""))
 
 
 def deduplicate_exact(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     key: str = "text",
-) -> Tuple[List[Union[Dict, str]], int]:
+) -> tuple[list[dict | str], int]:
     """
     Remove exact duplicates from samples.
 
@@ -932,11 +934,11 @@ def deduplicate_exact(
 
 
 def deduplicate_minhash(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     key: str = "text",
     threshold: float = 0.9,
     num_perm: int = 128,
-) -> Tuple[List[Union[Dict, str]], int]:
+) -> tuple[list[dict | str], int]:
     """
     Remove near-duplicates using MinHash LSH.
 
@@ -956,7 +958,7 @@ def deduplicate_minhash(
     except ImportError:
         raise ImportError(
             "datasketch required for minhash deduplication: pip install datasketch"
-        )
+        ) from None
 
     # Create LSH index
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
@@ -974,15 +976,12 @@ def deduplicate_minhash(
         minhashes.append(mh)
 
         # Try to insert - if similar document exists, skip
-        try:
+        with contextlib.suppress(ValueError):
             lsh.insert(str(i), mh)
-        except ValueError:
-            # Duplicate detected by LSH
-            pass
 
     # Get unique indices
     unique_indices = set()
-    for i, mh in enumerate(minhashes):
+    for _i, mh in enumerate(minhashes):
         result = lsh.query(mh)
         if result:
             # Keep the first (lowest index) among similar documents
@@ -995,7 +994,7 @@ def deduplicate_minhash(
     return unique, num_removed
 
 
-def _get_ngrams(text: str, n: int = 3) -> List[str]:
+def _get_ngrams(text: str, n: int = 3) -> list[str]:
     """Generate character n-grams from text."""
     text = text.lower()
     return [text[i:i+n] for i in range(max(1, len(text) - n + 1))]
@@ -1018,8 +1017,8 @@ class PerplexityStats:
     max_perplexity: float
     filtered_count: int
     retained_count: int
-    threshold_low: Optional[float] = None
-    threshold_high: Optional[float] = None
+    threshold_low: float | None = None
+    threshold_high: float | None = None
 
     @property
     def retention_rate(self) -> float:
@@ -1030,19 +1029,19 @@ class PerplexityStats:
     def summary(self) -> str:
         """Get human-readable summary."""
         lines = [
-            f"Perplexity Filter Results",
-            f"=" * 40,
+            "Perplexity Filter Results",
+            "=" * 40,
             f"Total samples: {self.total_samples}",
             f"Scored: {self.samples_scored}",
             f"Failed to score: {self.samples_failed}",
-            f"",
-            f"Perplexity Statistics:",
+            "",
+            "Perplexity Statistics:",
             f"  Mean: {self.mean_perplexity:.2f}",
             f"  Median: {self.median_perplexity:.2f}",
             f"  Std: {self.std_perplexity:.2f}",
             f"  Range: [{self.min_perplexity:.2f}, {self.max_perplexity:.2f}]",
-            f"",
-            f"Filtering:",
+            "",
+            "Filtering:",
         ]
         if self.threshold_low is not None:
             lines.append(f"  Low threshold: {self.threshold_low:.2f}")
@@ -1077,7 +1076,7 @@ class PerplexityFilter:
     def __init__(
         self,
         model_name: str = "gpt2",
-        device: Optional[str] = None,
+        device: str | None = None,
         batch_size: int = 8,
         max_length: int = 512,
     ):
@@ -1093,8 +1092,8 @@ class PerplexityFilter:
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
-        self._model = None
-        self._tokenizer = None
+        self._model: Any = None
+        self._tokenizer: Any = None
 
         # Determine device
         if device is None:
@@ -1118,20 +1117,21 @@ class PerplexityFilter:
             raise ImportError(
                 "transformers and torch required for perplexity filtering: "
                 "pip install transformers torch"
-            )
+            ) from None
 
         logger.info(f"Loading perplexity model: {self.model_name}")
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        if self._tokenizer.pad_token is None:
+        if self._tokenizer is not None and self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
         )
-        self._model.to(self._device)
-        self._model.eval()
+        if self._model is not None:
+            self._model.to(self._device)
+            self._model.eval()
 
         logger.info(f"Model loaded on {self._device}")
 
@@ -1148,6 +1148,9 @@ class PerplexityFilter:
         self._load_model()
 
         import torch
+
+        if self._tokenizer is None or self._model is None:
+            raise RuntimeError("Model or tokenizer not loaded")
 
         # Tokenize
         encodings = self._tokenizer(
@@ -1176,10 +1179,10 @@ class PerplexityFilter:
 
     def score(
         self,
-        samples: List[Union[Dict, str]],
+        samples: list[dict | str],
         key: str = "text",
         show_progress: bool = True,
-    ) -> List[Optional[float]]:
+    ) -> list[float | None]:
         """
         Compute perplexity scores for all samples.
 
@@ -1193,7 +1196,6 @@ class PerplexityFilter:
         """
         self._load_model()
 
-        import torch
 
         scores = []
         total = len(samples)
@@ -1218,11 +1220,10 @@ class PerplexityFilter:
 
         return scores
 
-    def _score_batch(self, texts: List[str]) -> List[Optional[float]]:
+    def _score_batch(self, texts: list[str]) -> list[float | None]:
         """Score a batch of texts."""
-        import torch
 
-        scores = []
+        scores: list[float | None] = []
 
         for text in texts:
             try:
@@ -1240,15 +1241,15 @@ class PerplexityFilter:
 
     def filter(
         self,
-        samples: List[Union[Dict, str]],
+        samples: list[dict | str],
         key: str = "text",
-        min_percentile: Optional[float] = 5.0,
-        max_percentile: Optional[float] = 95.0,
-        min_perplexity: Optional[float] = None,
-        max_perplexity: Optional[float] = None,
+        min_percentile: float | None = 5.0,
+        max_percentile: float | None = 95.0,
+        min_perplexity: float | None = None,
+        max_perplexity: float | None = None,
         remove_failed: bool = True,
         show_progress: bool = True,
-    ) -> Tuple[List[Union[Dict, str]], PerplexityStats]:
+    ) -> tuple[list[dict | str], PerplexityStats]:
         """
         Filter samples by perplexity.
 
@@ -1356,12 +1357,12 @@ class PerplexityFilter:
 
     def filter_by_threshold(
         self,
-        samples: List[Union[Dict, str]],
-        scores: List[Optional[float]],
-        min_perplexity: Optional[float] = None,
-        max_perplexity: Optional[float] = None,
+        samples: list[dict | str],
+        scores: list[float | None],
+        min_perplexity: float | None = None,
+        max_perplexity: float | None = None,
         remove_failed: bool = True,
-    ) -> List[Union[Dict, str]]:
+    ) -> list[dict | str]:
         """
         Filter samples using pre-computed scores and absolute thresholds.
 
@@ -1397,7 +1398,7 @@ class PerplexityFilter:
 def compute_perplexity(
     text: str,
     model_name: str = "gpt2",
-    device: Optional[str] = None,
+    device: str | None = None,
 ) -> float:
     """
     Compute perplexity for a single text.
@@ -1418,17 +1419,17 @@ def compute_perplexity(
 
 
 def filter_by_perplexity(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     model_name: str = "gpt2",
-    min_percentile: Optional[float] = 5.0,
-    max_percentile: Optional[float] = 95.0,
-    min_perplexity: Optional[float] = None,
-    max_perplexity: Optional[float] = None,
+    min_percentile: float | None = 5.0,
+    max_percentile: float | None = 95.0,
+    min_perplexity: float | None = None,
+    max_perplexity: float | None = None,
     key: str = "text",
-    device: Optional[str] = None,
+    device: str | None = None,
     batch_size: int = 8,
     show_progress: bool = True,
-) -> Tuple[List[Union[Dict, str]], PerplexityStats]:
+) -> tuple[list[dict | str], PerplexityStats]:
     """
     Filter samples by perplexity score.
 
@@ -1507,8 +1508,8 @@ class DatasetLoader:
 
     def __init__(
         self,
-        source: Union[str, Path, List[Dict]],
-        format_type: Optional[DatasetFormat] = None,
+        source: str | Path | list[Any],
+        format_type: DatasetFormat | None = None,
         validate: bool = True,
     ):
         """
@@ -1520,9 +1521,9 @@ class DatasetLoader:
             validate: Whether to validate on load
         """
         self.source = source
-        self._samples: List[Union[Dict, str]] = []
+        self._samples: list[Any] = []
         self._format: DatasetFormat = format_type or DatasetFormat.UNKNOWN
-        self._validation: Optional[ValidationResult] = None
+        self._validation: ValidationResult | None = None
         self._loaded = False
 
         self._load()
@@ -1531,10 +1532,11 @@ class DatasetLoader:
 
     def _load(self) -> None:
         """Load samples from source."""
+        import typing
         if isinstance(self.source, list):
             self._samples = self.source
             if self._format == DatasetFormat.UNKNOWN:
-                self._format = detect_format(self._samples)
+                self._format = detect_format(typing.cast(list[dict[Any, Any]], self._samples))
             self._loaded = True
             return
 
@@ -1560,17 +1562,17 @@ class DatasetLoader:
                 self._samples = self._load_jsonl(path)
 
             if self._format == DatasetFormat.UNKNOWN:
-                self._format = detect_format(self._samples)
+                self._format = detect_format(typing.cast(list[dict[Any, Any]], self._samples))
 
             self._loaded = True
 
         except Exception as e:
             raise ValueError(f"Failed to load dataset: {e}") from e
 
-    def _load_jsonl(self, path: Path) -> List[Dict]:
+    def _load_jsonl(self, path: Path) -> list[dict]:
         """Load JSONL file."""
         samples = []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -1581,40 +1583,40 @@ class DatasetLoader:
                     logger.warning(f"Invalid JSON on line {line_num}: {e}")
         return samples
 
-    def _load_json(self, path: Path) -> List[Dict]:
+    def _load_json(self, path: Path) -> list[dict]:
         """Load JSON file."""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
                 return data
             return [data]
 
-    def _load_text(self, path: Path) -> List[str]:
+    def _load_text(self, path: Path) -> list[str]:
         """Load text file."""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
             # Split on double newlines for separate samples
             if "\n\n" in content:
                 return [s.strip() for s in content.split("\n\n") if s.strip()]
             return [content]
 
-    def _load_parquet(self, path: Path) -> List[Dict]:
+    def _load_parquet(self, path: Path) -> list[dict]:
         """Load Parquet file."""
         try:
             import pandas as pd
             df = pd.read_parquet(path)
-            return df.to_dict("records")
+            return list(df.to_dict("records"))
         except ImportError:
-            raise ImportError("pandas and pyarrow required for parquet: pip install pandas pyarrow")
+            raise ImportError("pandas and pyarrow required for parquet: pip install pandas pyarrow") from None
 
-    def _load_csv(self, path: Path) -> List[Dict]:
+    def _load_csv(self, path: Path) -> list[dict]:
         """Load CSV file."""
         try:
             import pandas as pd
             df = pd.read_csv(path)
-            return df.to_dict("records")
+            return list(df.to_dict("records"))
         except ImportError:
-            raise ImportError("pandas required for CSV: pip install pandas")
+            raise ImportError("pandas required for CSV: pip install pandas") from None
 
     def _validate(self) -> None:
         """Run validation."""
@@ -1626,7 +1628,7 @@ class DatasetLoader:
         return self._format
 
     @property
-    def samples(self) -> List[Union[Dict, str]]:
+    def samples(self) -> list[dict | str]:
         """Get raw samples."""
         return self._samples
 
@@ -1635,24 +1637,26 @@ class DatasetLoader:
         """Check if dataset is valid."""
         if self._validation is None:
             self._validate()
-        return self._validation.is_valid
+        return self._validation.is_valid if self._validation else False
 
     @property
     def validation_result(self) -> ValidationResult:
         """Get validation result."""
         if self._validation is None:
             self._validate()
+        if self._validation is None:
+            raise RuntimeError("Validation failed to produce a result")
         return self._validation
 
     def validation_report(self) -> str:
         """Get human-readable validation report."""
         return self.validation_result.summary()
 
-    def to_chatml(self) -> List[Dict[str, str]]:
+    def to_chatml(self) -> list[dict[str, str]]:
         """Convert all samples to ChatML format."""
         return convert_to_chatml(self._samples, self._format)
 
-    def to_hf_dataset(self, split: Optional[str] = None):
+    def to_hf_dataset(self, split: str | None = None) -> Any:
         """
         Convert to HuggingFace Dataset.
 
@@ -1665,7 +1669,7 @@ class DatasetLoader:
         try:
             from datasets import Dataset
         except ImportError:
-            raise ImportError("datasets required: pip install datasets")
+            raise ImportError("datasets required: pip install datasets") from None
 
         chatml_samples = self.to_chatml()
         dataset = Dataset.from_list(chatml_samples)
@@ -1674,7 +1678,7 @@ class DatasetLoader:
             return {split: dataset}
         return dataset
 
-    def preview(self, n: int = 3, as_chatml: bool = True) -> List[str]:
+    def preview(self, n: int = 3, as_chatml: bool = True) -> list[str]:
         """
         Preview samples.
 
@@ -1696,19 +1700,19 @@ class DatasetLoader:
         """Get dataset statistics."""
         return get_dataset_stats(self._samples, self._format)
 
-    def shuffle(self, seed: Optional[int] = None) -> "DatasetLoader":
+    def shuffle(self, seed: int | None = None) -> "DatasetLoader":
         """Return a new loader with shuffled samples."""
         shuffled = self._samples.copy()
         if seed is not None:
             random.seed(seed)
         random.shuffle(shuffled)
-        return DatasetLoader(shuffled, self._format, validate=False)
+        return DatasetLoader(list(shuffled), self._format, validate=False)
 
     def split(
         self,
         train_ratio: float = 0.9,
-        seed: Optional[int] = None,
-    ) -> Tuple["DatasetLoader", "DatasetLoader"]:
+        seed: int | None = None,
+    ) -> tuple["DatasetLoader", "DatasetLoader"]:
         """Split into train/test loaders."""
         shuffled = self.shuffle(seed)
         n_train = int(len(shuffled._samples) * train_ratio)
@@ -1720,12 +1724,12 @@ class DatasetLoader:
 
     def filter(
         self,
-        min_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        min_turns: Optional[int] = None,
-        max_turns: Optional[int] = None,
+        min_tokens: int | None = None,
+        max_tokens: int | None = None,
+        min_turns: int | None = None,
+        max_turns: int | None = None,
         require_assistant: bool = True,
-        custom_filter: Optional[Callable[[Dict], bool]] = None,
+        custom_filter: Callable[[dict], bool] | None = None,
     ) -> "DatasetLoader":
         """
         Return new loader with filtered samples.
@@ -1750,7 +1754,7 @@ class DatasetLoader:
         filtered, stats = filter_by_quality(
             chatml_samples,
             min_tokens=min_tokens if min_tokens is not None else 0,
-            max_tokens=max_tokens if max_tokens is not None else float("inf"),
+            max_tokens=max_tokens if max_tokens is not None else 999999999,
             min_turns=min_turns if min_turns is not None else 0,
             max_turns=max_turns,
             remove_empty=True,
@@ -1783,10 +1787,10 @@ class DatasetLoader:
         chatml_samples = self.to_chatml()
 
         if method == "exact":
-            deduped, num_removed = deduplicate_exact(chatml_samples, key=key)
+            deduped, num_removed = deduplicate_exact(list(chatml_samples), key=key)
         elif method == "minhash":
             deduped, num_removed = deduplicate_minhash(
-                chatml_samples, key=key, threshold=threshold
+                list(chatml_samples), key=key, threshold=threshold
             )
         else:
             raise ValueError(f"Unknown deduplication method: {method}")
@@ -1798,14 +1802,14 @@ class DatasetLoader:
     def filter_perplexity(
         self,
         model_name: str = "gpt2",
-        min_percentile: Optional[float] = 5.0,
-        max_percentile: Optional[float] = 95.0,
-        min_perplexity: Optional[float] = None,
-        max_perplexity: Optional[float] = None,
-        device: Optional[str] = None,
+        min_percentile: float | None = 5.0,
+        max_percentile: float | None = 95.0,
+        min_perplexity: float | None = None,
+        max_perplexity: float | None = None,
+        device: str | None = None,
         batch_size: int = 8,
         show_progress: bool = True,
-    ) -> Tuple["DatasetLoader", "PerplexityStats"]:
+    ) -> tuple["DatasetLoader", "PerplexityStats"]:
         """
         Return new loader with samples filtered by perplexity.
 
@@ -1841,7 +1845,7 @@ class DatasetLoader:
 
         # Filter by perplexity
         filtered, stats = filter_by_perplexity(
-            chatml_samples,
+            list(chatml_samples),
             model_name=model_name,
             min_percentile=min_percentile,
             max_percentile=max_percentile,
@@ -1860,8 +1864,8 @@ class DatasetLoader:
     @classmethod
     def from_local(
         cls,
-        path: Union[str, Path],
-        format_type: Optional[DatasetFormat] = None,
+        path: str | Path,
+        format_type: DatasetFormat | None = None,
         validate: bool = True,
     ) -> "DatasetLoader":
         """
@@ -1892,7 +1896,7 @@ class DatasetLoader:
         cls,
         source: str,
         buffer_size: int = 1000,
-        split: Optional[str] = None,
+        split: str | None = None,
     ) -> "StreamingDatasetLoader":
         """
         Load dataset in streaming mode for large files.
@@ -1910,10 +1914,11 @@ class DatasetLoader:
     def __len__(self) -> int:
         return len(self._samples)
 
-    def __getitem__(self, idx: int) -> Union[Dict, str]:
-        return self._samples[idx]
+    def __getitem__(self, idx: int) -> dict[Any, Any] | str:
+        import typing
+        return typing.cast(dict[Any, Any] | str, self._samples[idx])
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return iter(self._samples)
 
 
@@ -1944,8 +1949,8 @@ class StreamingDatasetLoader:
         self,
         source: str,
         buffer_size: int = 1000,
-        split: Optional[str] = None,
-        format_type: Optional[DatasetFormat] = None,
+        split: str | None = None,
+        format_type: DatasetFormat | None = None,
     ):
         """
         Initialize streaming loader.
@@ -1967,26 +1972,24 @@ class StreamingDatasetLoader:
         path = Path(source)
         self._is_hf_dataset = not path.exists()
 
-    def _create_iterator(self):
+    def _create_iterator(self) -> Any:
         """Create the underlying iterator."""
         if self._is_hf_dataset:
             return self._stream_hf_dataset()
         else:
             return self._stream_local_file()
 
-    def _stream_hf_dataset(self):
+    def _stream_hf_dataset(self) -> Any:
         """Stream from HuggingFace dataset."""
         try:
             from datasets import load_dataset
         except ImportError:
-            raise ImportError("datasets required: pip install datasets")
+            raise ImportError("datasets required: pip install datasets") from None
 
         dataset = load_dataset(self.source, split=self.split, streaming=True)
 
         # Detect format from first sample
-        first_sample = None
         for sample in dataset:
-            first_sample = sample
             if self._format == DatasetFormat.UNKNOWN:
                 self._format = detect_format(sample)
             yield sample
@@ -1996,7 +1999,7 @@ class StreamingDatasetLoader:
         for sample in dataset:
             yield sample
 
-    def _stream_local_file(self):
+    def _stream_local_file(self) -> Any:
         """Stream from local file."""
         path = Path(self.source)
         suffix = path.suffix.lower()
@@ -2011,9 +2014,9 @@ class StreamingDatasetLoader:
             # Try JSONL
             yield from self._stream_jsonl(path)
 
-    def _stream_jsonl(self, path: Path):
+    def _stream_jsonl(self, path: Path) -> Any:
         """Stream JSONL file."""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -2026,9 +2029,9 @@ class StreamingDatasetLoader:
                 except json.JSONDecodeError:
                     continue
 
-    def _stream_json(self, path: Path):
+    def _stream_json(self, path: Path) -> Any:
         """Stream JSON array file."""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
                 for sample in data:
@@ -2038,9 +2041,9 @@ class StreamingDatasetLoader:
             else:
                 yield data
 
-    def _stream_text(self, path: Path):
+    def _stream_text(self, path: Path) -> Any:
         """Stream text file."""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
             if self._format == DatasetFormat.UNKNOWN:
                 self._format = detect_format(content)
@@ -2051,11 +2054,11 @@ class StreamingDatasetLoader:
             else:
                 yield content
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         """Iterate over all samples."""
         return self._create_iterator()
 
-    def take(self, n: int) -> List[Union[Dict, str]]:
+    def take(self, n: int) -> list[dict | str]:
         """
         Take first n samples.
 
@@ -2072,7 +2075,7 @@ class StreamingDatasetLoader:
             samples.append(sample)
         return samples
 
-    def skip(self, n: int):
+    def skip(self, n: int) -> Any:
         """
         Skip first n samples and return iterator for rest.
 
@@ -2086,7 +2089,7 @@ class StreamingDatasetLoader:
             if i >= n:
                 yield sample
 
-    def batches(self, batch_size: int):
+    def batches(self, batch_size: int) -> Any:
         """
         Yield samples in batches.
 
@@ -2105,7 +2108,7 @@ class StreamingDatasetLoader:
         if batch:
             yield batch
 
-    def to_chatml(self, n: Optional[int] = None) -> List[Dict[str, str]]:
+    def to_chatml(self, n: int | None = None) -> list[dict[str, str]]:
         """
         Convert samples to ChatML format.
 
@@ -2120,13 +2123,13 @@ class StreamingDatasetLoader:
 
     def filter(
         self,
-        min_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        min_turns: Optional[int] = None,
-        max_turns: Optional[int] = None,
+        min_tokens: int | None = None,
+        max_tokens: int | None = None,
+        min_turns: int | None = None,
+        max_turns: int | None = None,
         require_assistant: bool = True,
-        custom_filter: Optional[Callable[[Dict], bool]] = None,
-    ):
+        custom_filter: Callable[[dict[Any, Any]], bool] | None = None,
+    ) -> Any:
         """
         Yield filtered samples.
 
@@ -2185,10 +2188,10 @@ class StreamingDatasetLoader:
 # =============================================================================
 
 def preview_samples(
-    source: Union[str, Path, List[Dict]],
+    source: str | Path | list[dict],
     n: int = 3,
     as_chatml: bool = True,
-) -> List[str]:
+) -> list[str]:
     """
     Quick preview of dataset samples.
 
@@ -2205,8 +2208,8 @@ def preview_samples(
 
 
 def get_dataset_stats(
-    samples: List[Union[Dict, str]],
-    format_type: Optional[DatasetFormat] = None,
+    samples: list[dict | str],
+    format_type: DatasetFormat | None = None,
 ) -> DatasetStats:
     """
     Compute statistics for a dataset.
@@ -2232,7 +2235,8 @@ def get_dataset_stats(
         )
 
     if format_type is None:
-        format_type = detect_format(samples)
+        import typing
+        format_type = detect_format(typing.cast(list[dict[Any, Any]], samples))
 
     # Convert to ChatML for consistent analysis
     chatml_samples = convert_to_chatml(samples, format_type)
@@ -2274,7 +2278,7 @@ def get_dataset_stats(
 # =============================================================================
 
 def compute_difficulty_score(
-    sample: Union[Dict, str],
+    sample: dict | str,
     key: str = "text",
 ) -> float:
     """
@@ -2304,7 +2308,7 @@ def compute_difficulty_score(
     if not words:
         return length_score
 
-    unique_words = set(w.lower() for w in words)
+    unique_words = {w.lower() for w in words}
     vocab_ratio = len(unique_words) / len(words)
 
     # Average word length (proxy for vocabulary complexity)
@@ -2318,10 +2322,10 @@ def compute_difficulty_score(
 
 
 def order_by_difficulty(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     key: str = "text",
     ascending: bool = True,
-) -> List[Union[Dict, str]]:
+) -> list[dict | str]:
     """
     Order samples by difficulty for curriculum learning.
 
@@ -2350,10 +2354,10 @@ def order_by_difficulty(
 
 
 def get_curriculum_chunks(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     num_chunks: int = 5,
     key: str = "text",
-) -> List[List[Union[Dict, str]]]:
+) -> list[list[dict | str]]:
     """
     Split samples into curriculum chunks (easy to hard).
 
@@ -2386,11 +2390,7 @@ def get_curriculum_chunks(
 
     for i in range(num_chunks):
         start = i * chunk_size
-        if i == num_chunks - 1:
-            # Last chunk gets remaining samples
-            end = len(ordered)
-        else:
-            end = start + chunk_size
+        end = len(ordered) if i == num_chunks - 1 else start + chunk_size
         chunks.append(ordered[start:end])
 
     return chunks
@@ -2401,14 +2401,14 @@ class CurriculumStats:
     """Statistics from curriculum ordering."""
     total_samples: int
     num_chunks: int
-    chunk_sizes: List[int]
-    difficulty_ranges: List[Tuple[float, float]]  # (min, max) per chunk
+    chunk_sizes: list[int]
+    difficulty_ranges: list[tuple[float, float]]  # (min, max) per chunk
 
     def summary(self) -> str:
         """Get human-readable summary."""
         lines = [
-            f"Curriculum Learning Stats",
-            f"=" * 40,
+            "Curriculum Learning Stats",
+            "=" * 40,
             f"Total samples: {self.total_samples}",
             f"Chunks: {self.num_chunks}",
             "",
@@ -2420,7 +2420,7 @@ class CurriculumStats:
 
 
 def analyze_curriculum(
-    samples: List[Union[Dict, str]],
+    samples: list[dict | str],
     num_chunks: int = 5,
     key: str = "text",
 ) -> CurriculumStats:
@@ -2448,10 +2448,7 @@ def analyze_curriculum(
 
     for i in range(num_chunks):
         start = i * chunk_size
-        if i == num_chunks - 1:
-            end = len(sorted_indices)
-        else:
-            end = start + chunk_size
+        end = len(sorted_indices) if i == num_chunks - 1 else start + chunk_size
 
         chunk_indices = sorted_indices[start:end]
         chunk_scores = [scores[j] for j in chunk_indices]

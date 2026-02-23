@@ -21,17 +21,17 @@ import shutil
 import subprocess
 import time
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from .exceptions import (
     ExportError,
     GGUFExportError,
+    InvalidSettingError,
     MergeExportError,
     OllamaRegistrationError,
-    InvalidSettingError,
 )
 
 if TYPE_CHECKING:
@@ -79,13 +79,13 @@ class ExportResult:
     format: ExportFormat
     path: Path
     size_mb: float
-    quantization: Optional[str] = None  # For GGUF
+    quantization: str | None = None  # For GGUF
     export_time_seconds: float = 0.0
 
     def summary(self) -> str:
         """Human-readable summary of the export."""
         lines = [
-            f"Export Complete",
+            "Export Complete",
             f"  Format: {self.format.value}",
             f"  Path: {self.path}",
             f"  Size: {self.size_mb:.1f} MB",
@@ -132,7 +132,7 @@ def _has_unsloth() -> bool:
 
 def export_lora(
     model: Any,
-    output_dir: Union[str, Path],
+    output_dir: str | Path,
     adapter_name: str = "default",
 ) -> ExportResult:
     """
@@ -212,9 +212,9 @@ def export_lora(
 def export_merged(
     model: Any,
     tokenizer: "PreTrainedTokenizer",
-    output_dir: Union[str, Path],
+    output_dir: str | Path,
     push_to_hub: bool = False,
-    repo_id: Optional[str] = None,
+    repo_id: str | None = None,
 ) -> ExportResult:
     """
     Merge adapter into base model and save.
@@ -297,9 +297,9 @@ def export_merged(
 def export_gguf(
     model: Any,
     tokenizer: "PreTrainedTokenizer",
-    output_dir: Union[str, Path],
-    quantization: Union[str, GGUFQuantization] = "q4_k_m",
-    model_name: Optional[str] = None,
+    output_dir: str | Path,
+    quantization: str | GGUFQuantization = "q4_k_m",
+    model_name: str | None = None,
 ) -> ExportResult:
     """
     Export to GGUF format.
@@ -419,10 +419,7 @@ def export_gguf(
 
     try:
         # Merge if needed
-        if _is_peft_model(model):
-            merged_model = model.merge_and_unload()
-        else:
-            merged_model = model
+        merged_model = model.merge_and_unload() if _is_peft_model(model) else model
 
         # Save in HF format
         merged_model.save_pretrained(merged_path)
@@ -463,7 +460,7 @@ def export_gguf(
             quant_str,
         ]
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 check=True,
                 capture_output=True,
@@ -520,9 +517,9 @@ def export_gguf(
 
 
 def create_modelfile(
-    gguf_path: Union[str, Path],
-    output_path: Optional[Union[str, Path]] = None,
-    system_prompt: Optional[str] = None,
+    gguf_path: str | Path,
+    output_path: str | Path | None = None,
+    system_prompt: str | None = None,
     temperature: float = 0.7,
     context_length: int = 4096,
 ) -> Path:
@@ -541,10 +538,7 @@ def create_modelfile(
     """
     gguf_path = Path(gguf_path).resolve()
 
-    if output_path:
-        modelfile_path = Path(output_path)
-    else:
-        modelfile_path = gguf_path.parent / "Modelfile"
+    modelfile_path = Path(output_path) if output_path else gguf_path.parent / "Modelfile"
 
     lines = [
         f'FROM "{gguf_path}"',
@@ -568,9 +562,9 @@ def create_modelfile(
 
 
 def register_with_ollama(
-    gguf_path: Union[str, Path],
+    gguf_path: str | Path,
     model_name: str,
-    system_prompt: Optional[str] = None,
+    system_prompt: str | None = None,
 ) -> bool:
     """
     Register GGUF with Ollama.
@@ -616,7 +610,7 @@ def register_with_ollama(
 
     try:
         # Run ollama create
-        result = subprocess.run(
+        subprocess.run(
             ["ollama", "create", model_name, "-f", str(modelfile_path)],
             capture_output=True,
             text=True,
@@ -640,7 +634,7 @@ def register_with_ollama(
             logger.warning(f"Failed to clean up Modelfile: {e}")
 
 
-def list_ollama_models() -> List[str]:
+def list_ollama_models() -> list[str]:
     """
     List models registered with Ollama.
 

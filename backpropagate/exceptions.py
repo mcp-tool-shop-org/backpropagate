@@ -41,9 +41,7 @@ Usage:
         print(f"Training failed: {e}")
 """
 
-from typing import Optional, Any, List
-from pathlib import Path
-
+from typing import Any
 
 __all__ = [
     # Base
@@ -103,8 +101,8 @@ class BackpropagateError(Exception):
     def __init__(
         self,
         message: str,
-        details: Optional[dict] = None,
-        suggestion: Optional[str] = None,
+        details: dict | None = None,
+        suggestion: str | None = None,
     ):
         self.message = message
         self.details = details or {}
@@ -141,7 +139,7 @@ class InvalidSettingError(ConfigurationError):
         setting_name: str,
         value: Any,
         expected: str,
-        suggestion: Optional[str] = None,
+        suggestion: str | None = None,
     ):
         self.setting_name = setting_name
         self.value = value
@@ -167,7 +165,7 @@ class DatasetError(BackpropagateError):
 class DatasetNotFoundError(DatasetError):
     """Dataset file or resource not found."""
 
-    def __init__(self, path: str, suggestion: Optional[str] = None):
+    def __init__(self, path: str, suggestion: str | None = None):
         self.path = path
         super().__init__(
             f"Dataset not found: {path}",
@@ -182,14 +180,14 @@ class DatasetParseError(DatasetError):
     def __init__(
         self,
         message: str,
-        path: Optional[str] = None,
-        line_number: Optional[int] = None,
-        suggestion: Optional[str] = None,
+        path: str | None = None,
+        line_number: int | None = None,
+        suggestion: str | None = None,
     ):
         self.path = path
         self.line_number = line_number
 
-        details = {}
+        details: dict[str, Any] = {}
         if path:
             details["path"] = str(path)
         if line_number is not None:
@@ -209,8 +207,8 @@ class DatasetValidationError(DatasetError):
     def __init__(
         self,
         message: str,
-        errors: Optional[List[str]] = None,
-        suggestion: Optional[str] = None,
+        errors: list[str] | None = None,
+        suggestion: str | None = None,
     ):
         self.errors = errors or []
 
@@ -222,7 +220,7 @@ class DatasetValidationError(DatasetError):
 
         super().__init__(
             full_message,
-            details={"error_count": len(self.errors), "errors": errors[:20]},
+            details={"error_count": len(self.errors), "errors": self.errors[:20]},
             suggestion=suggestion,
         )
 
@@ -233,8 +231,8 @@ class DatasetFormatError(DatasetError):
     def __init__(
         self,
         message: str,
-        detected_format: Optional[str] = None,
-        supported_formats: Optional[List[str]] = None,
+        detected_format: str | None = None,
+        supported_formats: list[str] | None = None,
     ):
         self.detected_format = detected_format
         self.supported_formats = supported_formats or []
@@ -269,7 +267,7 @@ class ModelLoadError(TrainingError):
         self,
         model_name: str,
         reason: str,
-        suggestion: Optional[str] = None,
+        suggestion: str | None = None,
     ):
         self.model_name = model_name
         self.reason = reason
@@ -288,7 +286,7 @@ class TrainingAbortedError(TrainingError):
         self,
         reason: str,
         steps_completed: int = 0,
-        checkpoint_path: Optional[str] = None,
+        checkpoint_path: str | None = None,
     ):
         self.reason = reason
         self.steps_completed = steps_completed
@@ -344,8 +342,8 @@ class LoRAExportError(ExportError):
     def __init__(
         self,
         reason: str,
-        output_path: Optional[str] = None,
-        suggestion: Optional[str] = None,
+        output_path: str | None = None,
+        suggestion: str | None = None,
     ):
         self.reason = reason
         self.output_path = output_path
@@ -365,9 +363,9 @@ class GGUFExportError(ExportError):
     def __init__(
         self,
         reason: str,
-        output_path: Optional[str] = None,
-        quantization: Optional[str] = None,
-        suggestion: Optional[str] = None,
+        output_path: str | None = None,
+        quantization: str | None = None,
+        suggestion: str | None = None,
     ):
         self.reason = reason
         self.output_path = output_path
@@ -388,7 +386,7 @@ class GGUFExportError(ExportError):
 class MergeExportError(ExportError):
     """Failed to merge and export model."""
 
-    def __init__(self, reason: str, suggestion: Optional[str] = None):
+    def __init__(self, reason: str, suggestion: str | None = None):
         super().__init__(
             f"Merge export failed: {reason}",
             suggestion=suggestion,
@@ -402,7 +400,7 @@ class OllamaRegistrationError(ExportError):
         self,
         model_name: str,
         reason: str,
-        suggestion: Optional[str] = None,
+        suggestion: str | None = None,
     ):
         self.model_name = model_name
 
@@ -425,7 +423,7 @@ class GPUError(BackpropagateError):
 class GPUNotAvailableError(GPUError):
     """No GPU available or CUDA not configured."""
 
-    def __init__(self, suggestion: Optional[str] = None):
+    def __init__(self, suggestion: str | None = None):
         super().__init__(
             "No CUDA GPU available",
             suggestion=suggestion or "Ensure CUDA is installed and a compatible GPU is present",
@@ -437,9 +435,9 @@ class GPUMemoryError(GPUError):
 
     def __init__(
         self,
-        required_gb: Optional[float] = None,
-        available_gb: Optional[float] = None,
-        suggestion: Optional[str] = None,
+        required_gb: float | None = None,
+        available_gb: float | None = None,
+        suggestion: str | None = None,
     ):
         self.required_gb = required_gb
         self.available_gb = available_gb
@@ -462,7 +460,7 @@ class GPUTemperatureError(GPUError):
         self,
         temperature: float,
         threshold: float,
-        suggestion: Optional[str] = None,
+        suggestion: str | None = None,
     ):
         self.temperature = temperature
         self.threshold = threshold
@@ -477,7 +475,7 @@ class GPUTemperatureError(GPUError):
 class GPUMonitoringError(GPUError):
     """Failed to monitor GPU status."""
 
-    def __init__(self, reason: str, suggestion: Optional[str] = None):
+    def __init__(self, reason: str, suggestion: str | None = None):
         super().__init__(
             f"GPU monitoring failed: {reason}",
             suggestion=suggestion or "Install pynvml for GPU monitoring: pip install pynvml",
@@ -499,8 +497,8 @@ class SLAOMergeError(SLAOError):
     def __init__(
         self,
         reason: str,
-        run_index: Optional[int] = None,
-        suggestion: Optional[str] = None,
+        run_index: int | None = None,
+        suggestion: str | None = None,
     ):
         self.run_index = run_index
 
@@ -550,8 +548,8 @@ class BatchOperationError(BackpropagateError):
         operation: str,
         total_items: int,
         failed_items: int,
-        errors: List[tuple],  # List of (index, exception) tuples
-        suggestion: Optional[str] = None,
+        errors: list[tuple],  # List of (index, exception) tuples
+        suggestion: str | None = None,
     ):
         self.operation = operation
         self.total_items = total_items

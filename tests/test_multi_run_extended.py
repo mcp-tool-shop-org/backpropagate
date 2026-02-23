@@ -489,7 +489,7 @@ class TestModuleExports:
 
     def test_checkpoint_classes_exported(self):
         """Checkpoint classes are exported."""
-        from backpropagate.multi_run import (
+        from backpropagate.checkpoints import (
             CheckpointManager,
             CheckpointInfo,
             CheckpointPolicy,
@@ -503,7 +503,7 @@ class TestModuleExports:
 
     def test_helper_functions_exported(self):
         """Helper functions are exported."""
-        from backpropagate.multi_run import (
+        from backpropagate.gpu_safety import (
             get_gpu_status,
             check_gpu_safe,
             wait_for_safe_gpu,

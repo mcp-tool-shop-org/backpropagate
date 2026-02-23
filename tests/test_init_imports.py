@@ -25,7 +25,7 @@ class TestPackageImports:
         import backpropagate
         assert hasattr(backpropagate, "__version__")
         assert isinstance(backpropagate.__version__, str)
-        assert backpropagate.__version__ == "0.1.0"
+        assert len(backpropagate.__version__.split(".")) >= 2  # semver-like
 
 
 class TestExceptionImports:

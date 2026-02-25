@@ -13,11 +13,11 @@
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**Headless LLM fine-tuning in 3 lines. Smart defaults, VRAM-aware batch sizing, multi-run SLAO, and one-click GGUF export for Ollama.**
+**仅需 3 行代码即可进行无头 LLM 的微调。 智能默认设置、感知显存的批处理大小、多轮 SLAO 训练，以及一键导出为 Ollama 兼容的 GGUF 格式。**
 
-*Train LLMs in 3 lines of code. Export to Ollama in one more.*
+*只需 3 行代码即可训练 LLM。 额外一行代码即可导出到 Ollama。*
 
-## Quick Start
+## 快速入门
 
 ```bash
 pip install backpropagate[standard]
@@ -31,26 +31,26 @@ trainer.train("my_data.jsonl", steps=100)
 trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 ```
 
-## Why Backpropagate?
+## 为什么需要反向传播？
 
-| Problem | Solution |
-|---------|----------|
-| Fine-tuning is complex | 3 lines: load, train, save |
-| Windows is a nightmare | First-class Windows support |
-| VRAM management is hard | Auto batch sizing, GPU monitoring |
-| Model export is confusing | One-click GGUF + Ollama registration |
-| Long runs cause forgetting | Multi-run SLAO training |
+| 问题 | 解决方案 |
+| --------- | ---------- |
+| 微调过程复杂 | 3 行代码：加载、训练、保存 |
+| Windows 系统是个噩梦 | 提供一流的 Windows 支持 |
+| 显存管理很困难 | 自动批处理大小调整、GPU 监控 |
+| 模型导出很麻烦 | 一键导出为 GGUF 格式，并自动注册到 Ollama |
+| 长时间运行会导致遗忘 | 多轮 SLAO 训练 |
 
-## Key Features
+## 主要特性
 
-- **Headless by Design**: Built for CI/CD pipelines, automated workflows, and programmatic execution.
-- **Smart Defaults**: Automatically configures optimal hyperparameters based on your hardware and dataset.
-- **Multi-Run SLAO Training**: Advanced training strategies to prevent catastrophic forgetting during long runs.
-- **First-Class Windows Support**: Tested and optimized for Windows environments, avoiding common PyTorch/CUDA pitfalls.
-- **Seamless Export**: One-click export to GGUF format and automatic registration with Ollama.
-- **Modular Architecture**: Install only the dependencies you need (e.g., `[unsloth]`, `[ui]`, `[export]`).
+- **无头设计**: 专为 CI/CD 流水线、自动化工作流程和程序化执行而设计。
+- **智能默认设置**: 根据您的硬件和数据集自动配置最佳超参数。
+- **多轮 SLAO 训练**: 采用高级训练策略，以防止在长时间运行过程中出现灾难性遗忘。
+- **一流的 Windows 支持**: 针对 Windows 环境进行了测试和优化，避免常见的 PyTorch/CUDA 问题。
+- **无缝导出**: 一键导出为 GGUF 格式，并自动注册到 Ollama。
+- **模块化架构**: 仅安装您需要的依赖项（例如，`[unsloth]`、`[ui]`、`[export]`）。
 
-## Installation
+## 安装
 
 ```bash
 pip install backpropagate              # Core only (minimal)
@@ -60,19 +60,19 @@ pip install backpropagate[standard]    # unsloth + ui (recommended)
 pip install backpropagate[full]        # Everything
 ```
 
-| Extra | Description | Dependencies |
-|-------|-------------|--------------|
-| `unsloth` | 2x faster training, 50% less VRAM | unsloth |
-| `ui` | Gradio web interface | gradio>=5.6.0 |
-| `validation` | Pydantic config validation | pydantic, pydantic-settings |
-| `export` | GGUF export for Ollama | llama-cpp-python |
-| `monitoring` | WandB + system monitoring | wandb, psutil |
+| Extra | 描述 | 依赖项 |
+| ------- | ------------- | -------------- |
+| `unsloth` | 训练速度提升 2 倍，显存占用减少 50% | unsloth |
+| `ui` | Gradio Web 界面 | gradio>=5.6.0 |
+| `validation` | Pydantic 配置验证 | pydantic, pydantic-settings |
+| `export` | GGUF 导出，用于 Ollama | llama-cpp-python |
+| `monitoring` | WandB + 系统监控 | wandb, psutil |
 
-**Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
+**要求：** Python 3.10+ · CUDA GPU (8GB+ 显存) · PyTorch 2.0+
 
-## Usage
+## 使用方法
 
-### Basic Training
+### 基本训练
 
 ```python
 from backpropagate import Trainer
@@ -83,7 +83,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-### Multi-Run SLAO Training
+### 多轮 SLAO 训练
 
 ```python
 from backpropagate import Trainer
@@ -99,7 +99,7 @@ result = trainer.multi_run(
 )
 ```
 
-### Export to Ollama
+### 导出到 Ollama
 
 ```python
 trainer.export(
@@ -111,7 +111,7 @@ trainer.export(
 # ollama run my-finetuned-model
 ```
 
-### CLI
+### 命令行界面
 
 ```bash
 backprop train --data my_data.jsonl --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --steps 100
@@ -120,26 +120,26 @@ backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --oll
 backpropagate --ui --port 7862
 ```
 
-## Windows Support
+## Windows 支持
 
-Backpropagate is designed to work on Windows out of the box:
+Backpropagate 旨在在 Windows 系统上开箱即用：
 
-- Pre-tokenization to avoid multiprocessing crashes
-- Automatic xformers disable for RTX 40/50 series
-- Safe dataloader settings
-- Tested on RTX 5080 (16GB VRAM)
+- 预处理分词，以避免多进程崩溃
+- 自动禁用 RTX 40/50 系列的 xformers
+- 安全的数据加载器设置
+- 已在 RTX 5080 (16GB 显存) 上进行测试
 
-## Model Presets
+## 模型预设
 
-| Preset | VRAM | Speed | Quality |
-|--------|------|-------|---------|
-| Qwen 2.5 7B | ~12GB | Medium | Best |
+| 预设 | VRAM | Speed | 质量 |
+| -------- | ------ | ------- | --------- |
+| Qwen 2.5 7B | ~12GB | 中等 | Best |
 | Qwen 2.5 3B | ~8GB | Fast | Good |
 | Llama 3.2 3B | ~8GB | Fast | Good |
-| Llama 3.2 1B | ~6GB | Fastest | Basic |
-| Mistral 7B | ~12GB | Medium | Good |
+| Llama 3.2 1B | ~6GB | 最快 | Basic |
+| Mistral 7B | ~12GB | 中等 | Good |
 
-## Architecture
+## 架构
 
 ```
 backpropagate/
@@ -153,14 +153,14 @@ backpropagate/
 └── ui.py                # Gradio interface
 ```
 
-## Related Projects
+## 相关项目
 
-Part of [**MCP Tool Shop**](https://mcp-tool-shop.github.io/):
+是 [**MCP Tool Shop**](https://mcp-tool-shop.github.io/) 的一部分：
 
-- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) — Semantic MCP tool discovery
-- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) — Semantic file search
-- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) — ComfyUI without the complexity
+- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) — 语义化的 MCP 工具发现
+- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) — 语义化的文件搜索
+- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) — 简化版的 ComfyUI
 
-## License
+## 许可证
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — 详情请参阅 [LICENSE](LICENSE)。

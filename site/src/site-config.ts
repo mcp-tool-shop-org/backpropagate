@@ -6,7 +6,7 @@ export const config: SiteConfig = {
   logoBadge: 'BP',
   brandName: 'Backpropagate',
   repoUrl: 'https://github.com/mcp-tool-shop-org/backpropagate',
-  footerText: 'MIT Licensed — built by <a href="https://github.com/mcp-tool-shop-org" style="color:var(--color-muted);text-decoration:underline">mcp-tool-shop-org</a>',
+  footerText: 'MIT Licensed — built by <a href="https://mcp-tool-shop.github.io/" style="color:var(--color-muted);text-decoration:underline">MCP Tool Shop</a>',
 
   hero: {
     badge: 'Python · PyPI',
@@ -110,6 +110,20 @@ export const config: SiteConfig = {
           title: 'LoRA + QLoRA + Unsloth',
           desc: 'Supports LoRA, QLoRA (4-bit), and Unsloth-accelerated training. Mix quantization levels per layer. Export to GGUF at any quantization: q2_k, q4_k_m, q8_0, or f16.',
         },
+      ],
+    },
+    {
+      kind: 'data-table',
+      id: 'scorecard',
+      title: 'Quality scorecard',
+      subtitle: 'Ship Gate audit — 46/50.',
+      columns: ['Category', 'Score', 'Notes'],
+      rows: [
+        ['A. Security', '10/10', 'SECURITY.md, Bandit+Semgrep+Trivy+TruffleHog in CI'],
+        ['B. Error Handling', '8/10', 'Structured errors, GPU safety thresholds, checkpoint recovery'],
+        ['C. Operator Docs', '9/10', 'README, CHANGELOG, modular install guide, CLI help'],
+        ['D. Shipping Hygiene', '9/10', 'CI + tests (33 files), PyPI published, Codecov coverage'],
+        ['E. Identity', '10/10', 'Logo, translations, landing page, PyPI listing'],
       ],
     },
   ],

@@ -1,21 +1,22 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.md">English</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center">
-  <img src="assets/logo.png" alt="Backpropagate" width="400">
+  <img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/backpropagate/readme.png" alt="Backpropagate" width="400">
 </p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
+  <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**Ajuste fino de LLM sin interfaz gráfica en 3 líneas. Configuraciones predeterminadas inteligentes, ajuste de tamaño de lote que considera la VRAM, entrenamiento SLAO con múltiples ejecuciones y exportación a GGUF con un solo clic para Ollama.**
+**Ajuste fino de LLM sin interfaz gráfica en 3 líneas. Configuraciones predeterminadas inteligentes, ajuste de tamaño de lote consciente de la VRAM, entrenamiento SLAO en múltiples ejecuciones y exportación a GGUF con un solo clic para Ollama.**
 
-*Entrene LLM con 3 líneas de código. Exporte a Ollama con una línea más.*
+*Entrena LLM con 3 líneas de código. Exporta a Ollama con una línea más.*
 
 ## Cómo empezar
 
@@ -31,24 +32,24 @@ trainer.train("my_data.jsonl", steps=100)
 trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 ```
 
-## ¿Por qué usar la retropropagación?
+## ¿Por qué retropropagación?
 
 | Problema | Solución |
-| --------- | ---------- |
+|---------|----------|
 | El ajuste fino es complejo | 3 líneas: cargar, entrenar, guardar |
-| Windows es un problema | Soporte completo para Windows |
+| Windows es una pesadilla | Soporte completo para Windows |
 | La gestión de la VRAM es difícil | Ajuste automático del tamaño del lote, monitoreo de la GPU |
 | La exportación de modelos es confusa | Exportación a GGUF con un solo clic + registro automático en Ollama |
-| Las ejecuciones largas provocan olvido | Entrenamiento SLAO con múltiples ejecuciones |
+| Las ejecuciones largas causan olvido | Entrenamiento SLAO en múltiples ejecuciones |
 
 ## Características principales
 
 - **Diseñado para funcionar sin interfaz gráfica:** Ideal para pipelines de CI/CD, flujos de trabajo automatizados y ejecución programática.
-- **Configuraciones predeterminadas inteligentes:** Configura automáticamente los hiperparámetros óptimos según su hardware y conjunto de datos.
-- **Entrenamiento SLAO con múltiples ejecuciones:** Estrategias de entrenamiento avanzadas para evitar el olvido catastrófico durante las ejecuciones largas.
+- **Configuraciones predeterminadas inteligentes:** Configura automáticamente los hiperparámetros óptimos según tu hardware y conjunto de datos.
+- **Entrenamiento SLAO en múltiples ejecuciones:** Estrategias de entrenamiento avanzadas para evitar el olvido catastrófico durante las ejecuciones largas.
 - **Soporte completo para Windows:** Probado y optimizado para entornos Windows, evitando problemas comunes de PyTorch/CUDA.
 - **Exportación sencilla:** Exportación a formato GGUF con un solo clic y registro automático en Ollama.
-- **Arquitectura modular:** Instale solo las dependencias que necesita (por ejemplo, `[unsloth]`, `[ui]`, `[export]`).
+- **Arquitectura modular:** Instala solo las dependencias que necesitas (por ejemplo, `[unsloth]`, `[ui]`, `[export]`).
 
 ## Instalación
 
@@ -60,8 +61,8 @@ pip install backpropagate[standard]    # unsloth + ui (recommended)
 pip install backpropagate[full]        # Everything
 ```
 
-| Extra | Descripción | Dependencias |
-| ------- | ------------- | -------------- |
+| Información adicional | Descripción | Dependencias |
+|-------|-------------|--------------|
 | `unsloth` | Entrenamiento 2 veces más rápido, 50% menos de VRAM | unsloth |
 | `ui` | Interfaz web de Gradio | gradio>=5.6.0 |
 | `validation` | Validación de configuración de Pydantic | pydantic, pydantic-settings |
@@ -83,7 +84,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-### Entrenamiento SLAO con múltiples ejecuciones
+### Entrenamiento SLAO en múltiples ejecuciones
 
 ```python
 from backpropagate import Trainer
@@ -122,22 +123,22 @@ backpropagate --ui --port 7862
 
 ## Soporte para Windows
 
-Backpropagate está diseñado para funcionar en Windows de forma predeterminada:
+Backpropagate está diseñado para funcionar en Windows de forma nativa:
 
 - Pre-tokenización para evitar fallos de multiproceso
 - Desactivación automática de xformers para series RTX 40/50
 - Configuraciones de cargador de datos seguras
 - Probado en RTX 5080 (16GB de VRAM)
 
-## Modelos preconfigurados
+## Configuraciones predefinidas
 
-| Preconfiguración | VRAM | Speed | Calidad |
-| -------- | ------ | ------- | --------- |
-| Qwen 2.5 7B | ~12GB | Media | Best |
-| Qwen 2.5 3B | ~8GB | Fast | Good |
-| Llama 3.2 3B | ~8GB | Fast | Good |
-| Llama 3.2 1B | ~6GB | La más rápida | Basic |
-| Mistral 7B | ~12GB | Media | Good |
+| Configuración | VRAM | Velocidad | Calidad |
+|--------|------|-------|---------|
+| Qwen 2.5 7B | ~12GB | Media | Óptima |
+| Qwen 2.5 3B | ~8GB | Rápida | Buena |
+| Llama 3.2 3B | ~8GB | Rápida | Buena |
+| Llama 3.2 1B | ~6GB | La más rápida | Básica |
+| Mistral 7B | ~12GB | Media | Buena |
 
 ## Arquitectura
 
@@ -153,14 +154,27 @@ backpropagate/
 └── ui.py                # Gradio interface
 ```
 
-## Proyectos relacionados
+## Privacidad
 
-Parte de [**MCP Tool Shop**](https://mcp-tool-shop.github.io/):
+Todo el entrenamiento se realiza localmente en tu GPU. Backpropagate no realiza solicitudes de red excepto para descargar modelos de HuggingFace (que tú inicias). No hay telemetría, ni dependencia de la nube.
 
-- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) — Descubrimiento semántico de herramientas MCP
-- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) — Búsqueda semántica de archivos
-- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) — ComfyUI sin la complejidad
+## Informe de rendimiento
+
+| Categoría | Puntuación | Notas |
+|----------|-------|-------|
+| A. Seguridad | 10/10 | SECURITY.md, Bandit+Semgrep+Trivy+TruffleHog en CI, protección contra recorrido de rutas |
+| B. Manejo de errores | 8/10 | Errores estructurados, umbrales de seguridad de la GPU, recuperación de puntos de control |
+| C. Documentación para operadores | 9/10 | README, CHANGELOG, guía de instalación modular, ayuda de la interfaz de línea de comandos |
+| D. Higiene de envío | 9/10 | CI + pruebas (33 archivos), publicado en PyPI, cobertura de Codecov |
+| E. Identidad | 10/10 | Logotipo, traducciones, página de inicio, listado en PyPI. |
+| **Total** | **46/50** | |
 
 ## Licencia
 
-MIT — consulte [LICENSE](LICENSE) para obtener más detalles.
+MIT: Consulte el archivo [LICENSE](LICENSE) para obtener más detalles.
+
+---
+
+<p align="center">
+  Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+</p>

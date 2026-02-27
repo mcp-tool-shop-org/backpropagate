@@ -162,12 +162,12 @@ All training happens locally on your GPU. Backpropagate makes no network request
 
 | Category | Score | Notes |
 |----------|-------|-------|
-| A. Security | 10/10 | SECURITY.md, Bandit+Semgrep+Trivy+TruffleHog in CI, path traversal protection |
-| B. Error Handling | 8/10 | Structured errors, GPU safety thresholds, checkpoint recovery |
-| C. Operator Docs | 9/10 | README, CHANGELOG, modular install guide, CLI help |
-| D. Shipping Hygiene | 9/10 | CI + tests (33 files), PyPI published, Codecov coverage |
-| E. Identity | 10/10 | Logo, translations, landing page, PyPI listing |
-| **Total** | **46/50** | |
+| A. Security | 6/8 | SECURITY.md, trust model, no secrets/telemetry, safe_path(). MCP items skipped |
+| B. Error Handling | 3/7 | Structured exceptions + exit codes + no raw stacks. MCP/desktop/vscode skipped |
+| C. Operator Docs | 4/7 | README, CHANGELOG, LICENSE, --help. Logging/MCP/complex skipped |
+| D. Shipping Hygiene | 6/9 | verify.sh, version=tag, 5 scanners in CI, dependabot, python_requires, clean build |
+| E. Identity | 4/4 | Logo, translations, landing page, metadata |
+| **Total** | **23/31** | 14 items skipped with justification · `shipcheck audit` passes 100% |
 
 ## License
 

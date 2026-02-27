@@ -29,13 +29,36 @@ from pathlib import Path
 
 from .exceptions import (
     BackpropagateError,
+    BatchOperationError,
+    ConfigurationError,
     DatasetError,
     ExportError,
+    GPUError,
     TrainingError,
 )
 from .security import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
+
+
+# Exit codes per Ship Gate B2
+EXIT_OK = 0
+EXIT_USER = 1       # Bad input, missing args, invalid config
+EXIT_RUNTIME = 2    # Crash, IO failure, GPU error, dependency missing
+EXIT_PARTIAL = 3    # Some items ok, some failed
+
+
+def _exit_code_for(err: Exception) -> int:
+    """Map exception type to exit code."""
+    if isinstance(err, (ConfigurationError, DatasetError)):
+        return EXIT_USER
+    if isinstance(err, BatchOperationError):
+        return EXIT_PARTIAL
+    if isinstance(err, (TrainingError, GPUError, ExportError)):
+        return EXIT_RUNTIME
+    if isinstance(err, BackpropagateError):
+        return EXIT_RUNTIME
+    return EXIT_RUNTIME
 
 __all__ = ["main", "create_parser"]
 
@@ -217,27 +240,27 @@ def cmd_train(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Dataset error details")
-        return 1
+        return _exit_code_for(e)
     except TrainingError as e:
         _print_error(f"Training error: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Training error details")
-        return 1
+        return _exit_code_for(e)
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return _exit_code_for(e)
     except Exception as e:
         _print_error(f"Training failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return 1
+        return EXIT_RUNTIME
 
 
 # =============================================================================
@@ -301,13 +324,13 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return _exit_code_for(e)
     except Exception as e:
         _print_error(f"Multi-run failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return 1
+        return EXIT_RUNTIME
 
 
 # =============================================================================
@@ -398,20 +421,20 @@ def cmd_export(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Export error details")
-        return 1
+        return _exit_code_for(e)
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return _exit_code_for(e)
     except Exception as e:
         _print_error(f"Export failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return 1
+        return EXIT_RUNTIME
 
 
 # =============================================================================

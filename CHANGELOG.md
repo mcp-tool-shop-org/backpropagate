@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-02-27
+
+### Added
+- Ship Gate audit — all hard gates pass (23/31 checked, 14 skipped, 100%)
+- verify.sh — single-command verification script (Ship Gate D1)
+- Proper CLI exit codes: 1 user error, 2 runtime error, 3 partial success (Ship Gate B2)
+- SHIP_GATE.md + SCORECARD.md
+
+### Changed
+- Scorecard in README and landing page reflects actual `shipcheck audit` results
+
 ## [1.0.0] - 2026-02-27
 
 ### Changed

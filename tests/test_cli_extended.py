@@ -184,7 +184,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for TrainingError
             captured = capsys.readouterr()
             assert "Out of memory" in captured.err
             assert "reducing batch size" in captured.out
@@ -217,7 +217,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for BackpropagateError
             captured = capsys.readouterr()
             assert "Generic error" in captured.err
 
@@ -271,7 +271,7 @@ class TestCmdTrainErrorHandling:
             )
 
             result = cmd_train(args)
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for TrainingError
 
 
 # =============================================================================
@@ -309,7 +309,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for BackpropagateError
             captured = capsys.readouterr()
             assert "Config invalid" in captured.err
             assert "num_runs" in captured.out
@@ -337,7 +337,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             assert "Unexpected error" in captured.err
 
@@ -363,7 +363,7 @@ class TestCmdMultiRunErrorHandling:
             )
 
             result = cmd_multi_run(args)
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
 
     def test_keyboard_interrupt(self, capsys, tmp_path):
         """KeyboardInterrupt in multi-run returns 130."""
@@ -517,7 +517,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for ExportError
             captured = capsys.readouterr()
             assert "Export failed" in captured.err or "Export error" in captured.err
 
@@ -548,7 +548,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for BackpropagateError
 
     def test_generic_exception_in_export(self, capsys, tmp_path):
         """Generic exception in export."""
@@ -573,7 +573,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             assert "Disk full" in captured.err
 
@@ -599,7 +599,7 @@ class TestCmdExportErrorHandling:
             )
 
             result = cmd_export(args)
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
 
     def test_ollama_registration_failure(self, capsys, tmp_path):
         """Ollama registration failure handled."""

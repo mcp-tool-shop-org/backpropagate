@@ -632,7 +632,7 @@ class TestCmdTrainExecution:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Test error" in captured.err
@@ -662,7 +662,7 @@ class TestCmdTrainExecution:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             # Verbose mode should print traceback
             assert "ValueError" in captured.err or "Verbose error" in captured.err
@@ -796,7 +796,7 @@ class TestCmdMultiRunExecution:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Multi-run error" in captured.err
@@ -1015,7 +1015,7 @@ class TestCmdExportExecution:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2  # EXIT_RUNTIME for generic Exception
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Export failed" in captured.err

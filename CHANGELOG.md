@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7] - 2026-02-27
+
+### Added
+- Codecov badge in README
+- Quality scorecard in README and landing page (46/50)
+- Privacy section in README
+
+### Changed
+- Logo URL updated to brand repo (centralized)
+- Landing page footer standardized to MCP Tool Shop link
+- Landing page scorecard section added
+- Updated translations (7 languages)
 
 ## [0.1.4] - 2026-02-22
 

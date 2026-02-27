@@ -1,21 +1,22 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.md">English</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center">
-  <img src="assets/logo.png" alt="Backpropagate" width="400">
+  <img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/backpropagate/readme.png" alt="Backpropagate" width="400">
 </p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
+  <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**仅需 3 行代码即可进行无头 LLM 的微调。 智能默认设置、感知显存的批处理大小、多轮 SLAO 训练，以及一键导出为 Ollama 兼容的 GGUF 格式。**
+**仅需 3 行代码即可进行无头 LLM 的微调。 具有智能默认设置、考虑显存的批处理大小、多轮 SLAO 训练，以及一键导出为 Ollama 兼容的 GGUF 格式。**
 
-*只需 3 行代码即可训练 LLM。 额外一行代码即可导出到 Ollama。*
+*使用 3 行代码训练 LLM。 额外一行代码即可导出到 Ollama。*
 
 ## 快速入门
 
@@ -31,10 +32,10 @@ trainer.train("my_data.jsonl", steps=100)
 trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 ```
 
-## 为什么需要反向传播？
+## 为什么进行反向传播？
 
 | 问题 | 解决方案 |
-| --------- | ---------- |
+|---------|----------|
 | 微调过程复杂 | 3 行代码：加载、训练、保存 |
 | Windows 系统是个噩梦 | 提供一流的 Windows 支持 |
 | 显存管理很困难 | 自动批处理大小调整、GPU 监控 |
@@ -48,7 +49,7 @@ trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 - **多轮 SLAO 训练**: 采用高级训练策略，以防止在长时间运行过程中出现灾难性遗忘。
 - **一流的 Windows 支持**: 针对 Windows 环境进行了测试和优化，避免常见的 PyTorch/CUDA 问题。
 - **无缝导出**: 一键导出为 GGUF 格式，并自动注册到 Ollama。
-- **模块化架构**: 仅安装您需要的依赖项（例如，`[unsloth]`、`[ui]`、`[export]`）。
+- **模块化架构**: 仅安装您需要的依赖项（例如：`[unsloth]`、`[ui]`、`[export]`）。
 
 ## 安装
 
@@ -60,8 +61,8 @@ pip install backpropagate[standard]    # unsloth + ui (recommended)
 pip install backpropagate[full]        # Everything
 ```
 
-| Extra | 描述 | 依赖项 |
-| ------- | ------------- | -------------- |
+| 其他 | 描述 | 依赖项 |
+|-------|-------------|--------------|
 | `unsloth` | 训练速度提升 2 倍，显存占用减少 50% | unsloth |
 | `ui` | Gradio Web 界面 | gradio>=5.6.0 |
 | `validation` | Pydantic 配置验证 | pydantic, pydantic-settings |
@@ -111,7 +112,7 @@ trainer.export(
 # ollama run my-finetuned-model
 ```
 
-### 命令行界面
+### 命令行界面 (CLI)
 
 ```bash
 backprop train --data my_data.jsonl --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --steps 100
@@ -131,13 +132,13 @@ Backpropagate 旨在在 Windows 系统上开箱即用：
 
 ## 模型预设
 
-| 预设 | VRAM | Speed | 质量 |
-| -------- | ------ | ------- | --------- |
-| Qwen 2.5 7B | ~12GB | 中等 | Best |
-| Qwen 2.5 3B | ~8GB | Fast | Good |
-| Llama 3.2 3B | ~8GB | Fast | Good |
-| Llama 3.2 1B | ~6GB | 最快 | Basic |
-| Mistral 7B | ~12GB | 中等 | Good |
+| 预设 | 显存 | 速度 | 质量 |
+|--------|------|-------|---------|
+| Qwen 2.5 7B | ~12GB | 中等 | 最佳 |
+| Qwen 2.5 3B | ~8GB | 快速 | 良好 |
+| Llama 3.2 3B | ~8GB | 快速 | 良好 |
+| Llama 3.2 1B | ~6GB | 最快 | 基本 |
+| Mistral 7B | ~12GB | 中等 | 良好 |
 
 ## 架构
 
@@ -153,14 +154,27 @@ backpropagate/
 └── ui.py                # Gradio interface
 ```
 
-## 相关项目
+## 隐私
 
-是 [**MCP Tool Shop**](https://mcp-tool-shop.github.io/) 的一部分：
+所有训练都在您的 GPU 上本地进行。 Backpropagate 仅在下载模型时才进行网络请求（由您发起）。 没有遥测，没有云依赖。
 
-- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) — 语义化的 MCP 工具发现
-- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) — 语义化的文件搜索
-- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) — 简化版的 ComfyUI
+## 评分卡
+
+| 类别 | 评分 | 备注 |
+|----------|-------|-------|
+| A. 安全性 | 10/10 | SECURITY.md，CI 中使用 Bandit+Semgrep+Trivy+TruffleHog，防止路径遍历 |
+| B. 错误处理 | 8/10 | 结构化错误、GPU 安全阈值、检查点恢复 |
+| C. 操作文档 | 9/10 | README、CHANGELOG、模块化安装指南、CLI 帮助 |
+| D. 发布质量 | 9/10 | CI + 测试 (33 个文件)、已发布到 PyPI、Codecov 覆盖率 |
+| E. 身份 | 10/10 | Logo、翻译、着陆页、PyPI 列表 |
+| **Total** | **46/50** | |
 
 ## 许可证
 
-MIT — 详情请参阅 [LICENSE](LICENSE)。
+MIT 协议 — 详情请参见 [LICENSE](LICENSE) 文件。
+
+---
+
+<p align="center">
+  Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+</p>

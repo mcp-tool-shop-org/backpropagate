@@ -3,12 +3,13 @@
 </p>
 
 <p align="center">
-  <img src="assets/logo.png" alt="Backpropagate" width="400">
+  <img src="https://raw.githubusercontent.com/mcp-tool-shop-org/brand/main/logos/backpropagate/readme.png" alt="Backpropagate" width="400">
 </p>
 
 <p align="center">
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
+  <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
@@ -153,14 +154,27 @@ backpropagate/
 └── ui.py                # Gradio interface
 ```
 
-## Related Projects
+## Privacy
 
-Part of [**MCP Tool Shop**](https://mcp-tool-shop.github.io/):
+All training happens locally on your GPU. Backpropagate makes no network requests except to download models from HuggingFace (which you initiate). No telemetry, no cloud dependency.
 
-- [Tool Compass](https://github.com/mcp-tool-shop-org/tool-compass) — Semantic MCP tool discovery
-- [File Compass](https://github.com/mcp-tool-shop-org/file-compass) — Semantic file search
-- [Comfy Headless](https://github.com/mcp-tool-shop-org/comfy-headless) — ComfyUI without the complexity
+## Scorecard
+
+| Category | Score | Notes |
+|----------|-------|-------|
+| A. Security | 10/10 | SECURITY.md, Bandit+Semgrep+Trivy+TruffleHog in CI, path traversal protection |
+| B. Error Handling | 8/10 | Structured errors, GPU safety thresholds, checkpoint recovery |
+| C. Operator Docs | 9/10 | README, CHANGELOG, modular install guide, CLI help |
+| D. Shipping Hygiene | 9/10 | CI + tests (33 files), PyPI published, Codecov coverage |
+| E. Identity | 10/10 | Logo, translations, landing page, PyPI listing |
+| **Total** | **46/50** | |
 
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+</p>

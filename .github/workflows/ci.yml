@@ -141,7 +141,7 @@ jobs:
         run: cat pip-audit-report.md || echo "No report generated"
 
       - name: Upload audit report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: pip-audit-report
@@ -180,7 +180,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.34.0
+        uses: aquasecurity/trivy-action@0.34.1
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -233,7 +233,7 @@ jobs:
         run: twine check dist/*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/

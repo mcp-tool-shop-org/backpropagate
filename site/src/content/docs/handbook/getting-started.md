@@ -27,6 +27,11 @@ Other install options:
 | `[validation]` | Pydantic config validation |
 | `[export]` | GGUF export for Ollama |
 | `[monitoring]` | WandB + system monitoring |
+| `[observability]` | OpenTelemetry tracing |
+| `[logging]` | Structured logging via structlog |
+| `[security]` | JWT auth + token generation |
+| `[standard]` | unsloth + ui (recommended) |
+| `[production]` | unsloth + ui + validation + logging + security |
 | `[full]` | Everything |
 
 ## Train in 3 lines
@@ -46,8 +51,16 @@ backprop train --data my_data.jsonl --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 ```
 
+## Verify your setup
+
+```bash
+backprop info
+```
+
+This prints your Python version, PyTorch version, CUDA status, GPU name and VRAM, which optional features are installed, and current configuration defaults. Run it before your first training to confirm everything is working.
+
 ## Web UI
 
 ```bash
-backpropagate --ui --port 7862
+backprop ui --port 7862
 ```

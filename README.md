@@ -68,6 +68,10 @@ pip install backpropagate[full]        # Everything
 | `validation` | Pydantic config validation | pydantic, pydantic-settings |
 | `export` | GGUF export for Ollama | llama-cpp-python |
 | `monitoring` | WandB + system monitoring | wandb, psutil |
+| `observability` | OpenTelemetry tracing | opentelemetry-api, opentelemetry-sdk |
+| `logging` | Structured logging | structlog |
+| `security` | JWT auth + token generation | PyJWT, cryptography |
+| `production` | unsloth + ui + validation + logging + security | (bundle) |
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
@@ -103,12 +107,12 @@ result = trainer.multi_run(
 ### Export to Ollama
 
 ```python
-trainer.export(
-    format="gguf",
-    quantization="q4_k_m",
-    register_ollama=True,
-    model_name="my-finetuned-model",
-)
+# Export to GGUF
+result = trainer.export("gguf", quantization="q4_k_m")
+
+# Register with Ollama separately
+from backpropagate import register_with_ollama
+register_with_ollama(result.path, "my-finetuned-model")
 # ollama run my-finetuned-model
 ```
 
@@ -118,7 +122,8 @@ trainer.export(
 backprop train --data my_data.jsonl --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
-backpropagate --ui --port 7862
+backprop ui --port 7862
+backprop info
 ```
 
 ## Windows Support
@@ -147,11 +152,19 @@ backpropagate/
 ├── trainer.py           # Core Trainer class
 ├── multi_run.py         # Multi-run SLAO training
 ├── slao.py              # SLAO LoRA merging algorithm
-├── datasets.py          # Dataset loading & filtering
+├── datasets.py          # Dataset loading, filtering & curriculum
 ├── export.py            # GGUF/Ollama export
-├── config.py            # Pydantic settings
+├── config.py            # Pydantic settings + training presets
 ├── gpu_safety.py        # GPU monitoring & safety
-└── ui.py                # Gradio interface
+├── cli.py               # CLI entry point (backprop command)
+├── checkpoints.py       # Checkpoint management
+├── exceptions.py        # Structured error hierarchy
+├── feature_flags.py     # Optional feature detection
+├── security.py          # Path traversal & torch security
+├── logging_config.py    # Structured logging setup
+├── theme.py             # Gradio theme customization
+├── ui.py                # Gradio interface
+└── ui_security.py       # Rate limiting, CSRF, file validation
 ```
 
 ## Privacy

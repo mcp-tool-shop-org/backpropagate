@@ -6,6 +6,23 @@ from io import StringIO
 import sys
 
 
+class TestVersion:
+    """Tests for CLI version reporting."""
+
+    def test_version_flag_matches_package(self, cli_parser):
+        """--version reports the actual package version, not a stale hardcoded value."""
+        with pytest.raises(SystemExit) as exc:
+            cli_parser.parse_args(["--version"])
+        assert exc.value.code == 0
+
+    def test_version_is_not_hardcoded_old(self):
+        """Regression: version must not be hardcoded to 0.1.0."""
+        from backpropagate.cli import _get_version
+        version = _get_version()
+        assert version != "0.1.0", "CLI version is still hardcoded to 0.1.0"
+        assert version != "unknown"
+
+
 class TestParser:
     """Tests for CLI argument parser."""
 

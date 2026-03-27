@@ -603,6 +603,15 @@ def cmd_config(args: argparse.Namespace) -> int:
 # PARSER
 # =============================================================================
 
+def _get_version() -> str:
+    """Get version from package metadata."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("backpropagate")
+    except Exception:
+        return "unknown"
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -622,7 +631,7 @@ Examples:
     parser.add_argument(
         "--version", "-V",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {_get_version()}",
     )
 
     parser.add_argument(

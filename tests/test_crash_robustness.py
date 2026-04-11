@@ -11,14 +11,11 @@ Tests robustness against:
 import os
 import shutil
 import tempfile
-from unittest.mock import patch, MagicMock
 
-import pytest
 import torch
 
-from backpropagate.checkpoints import CheckpointManager, CheckpointPolicy, CheckpointInfo
-from backpropagate.slao import SLAOMerger, SLAOConfig, MergeResult
-
+from backpropagate.checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy
+from backpropagate.slao import MergeResult, SLAOConfig, SLAOMerger
 
 # =============================================================================
 # CHECKPOINT CRASH TESTS

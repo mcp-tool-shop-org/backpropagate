@@ -12,13 +12,9 @@ Covers:
 - Format conversion
 """
 
-import pytest
-import json
-import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
-from io import StringIO
+from unittest.mock import patch
 
+import pytest
 
 # =============================================================================
 # QUALITY FILTERING TESTS
@@ -98,7 +94,7 @@ class TestQualityFiltering:
 
     def test_filter_stats_returned(self):
         """FilterStats object returned with filtering info."""
-        from backpropagate.datasets import filter_by_quality, FilterStats
+        from backpropagate.datasets import filter_by_quality
 
         samples = [
             {"text": "short"},
@@ -128,7 +124,7 @@ class TestFormatDetection:
 
     def test_detect_sharegpt_format(self):
         """ShareGPT format detected correctly."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = {
             "conversations": [
@@ -141,7 +137,7 @@ class TestFormatDetection:
 
     def test_detect_alpaca_format(self):
         """Alpaca format detected correctly."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = {
             "instruction": "Translate to French",
@@ -153,7 +149,7 @@ class TestFormatDetection:
 
     def test_detect_openai_format(self):
         """OpenAI format detected correctly."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = {
             "messages": [
@@ -166,7 +162,7 @@ class TestFormatDetection:
 
     def test_detect_chatml_format(self):
         """ChatML format detected correctly."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = {"text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi!<|im_end|>"}
         result = detect_format(sample)
@@ -174,7 +170,7 @@ class TestFormatDetection:
 
     def test_detect_raw_text_format(self):
         """Raw text format detected correctly."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = "This is just plain text without any special formatting."
         result = detect_format(sample)
@@ -182,7 +178,7 @@ class TestFormatDetection:
 
     def test_detect_unknown_format(self):
         """Unknown format returns UNKNOWN."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         sample = {"random_field": "value", "other": 123}
         result = detect_format(sample)
@@ -190,7 +186,7 @@ class TestFormatDetection:
 
     def test_empty_samples(self):
         """Empty list returns UNKNOWN."""
-        from backpropagate.datasets import detect_format, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, detect_format
 
         result = detect_format([])
         assert result == DatasetFormat.UNKNOWN
@@ -274,7 +270,6 @@ class TestMinHashDedup:
 
     def test_datasketch_not_installed(self):
         """ImportError raised when datasketch not available."""
-        from backpropagate.datasets import deduplicate_minhash
 
         with patch.dict('sys.modules', {'datasketch': None}):
             # This should raise ImportError if datasketch is missing
@@ -446,7 +441,7 @@ class TestDatasetStatistics:
 
     def test_empty_dataset_stats(self):
         """Empty dataset returns zero stats."""
-        from backpropagate.datasets import get_dataset_stats, DatasetFormat
+        from backpropagate.datasets import get_dataset_stats
 
         stats = get_dataset_stats([])
         assert stats.total_samples == 0
@@ -454,7 +449,7 @@ class TestDatasetStatistics:
 
     def test_stats_structure(self):
         """DatasetStats has expected fields."""
-        from backpropagate.datasets import get_dataset_stats, DatasetStats
+        from backpropagate.datasets import get_dataset_stats
 
         samples = [
             {"text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi!<|im_end|>"},
@@ -488,7 +483,7 @@ class TestFormatConversion:
 
     def test_sharegpt_to_chatml(self):
         """ShareGPT converted to ChatML."""
-        from backpropagate.datasets import convert_to_chatml, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, convert_to_chatml
 
         samples = [{
             "conversations": [
@@ -504,7 +499,7 @@ class TestFormatConversion:
 
     def test_alpaca_to_chatml(self):
         """Alpaca converted to ChatML."""
-        from backpropagate.datasets import convert_to_chatml, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, convert_to_chatml
 
         samples = [{
             "instruction": "Translate to French",
@@ -518,7 +513,7 @@ class TestFormatConversion:
 
     def test_openai_to_chatml(self):
         """OpenAI format converted to ChatML."""
-        from backpropagate.datasets import convert_to_chatml, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, convert_to_chatml
 
         samples = [{
             "messages": [
@@ -549,7 +544,7 @@ class TestDatasetValidation:
 
     def test_validate_sharegpt_format(self):
         """Valid ShareGPT passes validation."""
-        from backpropagate.datasets import validate_dataset, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, validate_dataset
 
         samples = [{
             "conversations": [
@@ -563,7 +558,7 @@ class TestDatasetValidation:
 
     def test_validate_missing_field(self):
         """Missing required field reported."""
-        from backpropagate.datasets import validate_dataset, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, validate_dataset
 
         samples = [{"wrong_field": "value"}]
 
@@ -573,7 +568,7 @@ class TestDatasetValidation:
 
     def test_validate_empty_text(self):
         """Empty text flagged as error."""
-        from backpropagate.datasets import validate_dataset, DatasetFormat
+        from backpropagate.datasets import DatasetFormat, validate_dataset
 
         samples = [{"text": ""}]
 
@@ -623,7 +618,6 @@ class TestDatasetLoader:
 
     def test_loader_with_samples(self):
         """DatasetLoader can be initialized with samples."""
-        from backpropagate.datasets import DatasetLoader
 
         samples = [{"text": "Hello world"}]
         # DatasetLoader may need a file or HF dataset
@@ -685,15 +679,15 @@ class TestModuleExports:
         from backpropagate.datasets import (
             DatasetFormat,
             DatasetLoader,
-            ValidationResult,
-            ValidationError,
             DatasetStats,
             FormatConverter,
-            detect_format,
-            validate_dataset,
+            ValidationError,
+            ValidationResult,
             convert_to_chatml,
-            preview_samples,
+            detect_format,
             get_dataset_stats,
+            preview_samples,
+            validate_dataset,
         )
         assert all([
             DatasetFormat,
@@ -713,9 +707,9 @@ class TestModuleExports:
         """Filtering exports available."""
         from backpropagate.datasets import (
             FilterStats,
-            filter_by_quality,
             deduplicate_exact,
             deduplicate_minhash,
+            filter_by_quality,
         )
         assert all([FilterStats, filter_by_quality, deduplicate_exact, deduplicate_minhash])
 
@@ -723,10 +717,10 @@ class TestModuleExports:
         """Curriculum learning exports available."""
         from backpropagate.datasets import (
             CurriculumStats,
-            compute_difficulty_score,
-            order_by_difficulty,
-            get_curriculum_chunks,
             analyze_curriculum,
+            compute_difficulty_score,
+            get_curriculum_chunks,
+            order_by_difficulty,
         )
         assert all([
             CurriculumStats,

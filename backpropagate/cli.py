@@ -6,7 +6,7 @@ Command-line interface for LLM fine-tuning.
 
 Usage:
     # Train a model
-    backprop train --model Qwen/Qwen2.5-7B-Instruct --data my_data.jsonl --steps 100
+    backprop train --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --data my_data.jsonl --steps 100
 
     # Export to GGUF
     backprop export ./output/lora --format gguf --quantization q4_k_m
@@ -29,36 +29,13 @@ from pathlib import Path
 
 from .exceptions import (
     BackpropagateError,
-    BatchOperationError,
-    ConfigurationError,
     DatasetError,
     ExportError,
-    GPUError,
     TrainingError,
 )
 from .security import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
-
-
-# Exit codes per Ship Gate B2
-EXIT_OK = 0
-EXIT_USER = 1       # Bad input, missing args, invalid config
-EXIT_RUNTIME = 2    # Crash, IO failure, GPU error, dependency missing
-EXIT_PARTIAL = 3    # Some items ok, some failed
-
-
-def _exit_code_for(err: Exception) -> int:
-    """Map exception type to exit code."""
-    if isinstance(err, (ConfigurationError, DatasetError)):
-        return EXIT_USER
-    if isinstance(err, BatchOperationError):
-        return EXIT_PARTIAL
-    if isinstance(err, (TrainingError, GPUError, ExportError)):
-        return EXIT_RUNTIME
-    if isinstance(err, BackpropagateError):
-        return EXIT_RUNTIME
-    return EXIT_RUNTIME
 
 __all__ = ["main", "create_parser"]
 
@@ -240,27 +217,27 @@ def cmd_train(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Dataset error details")
-        return _exit_code_for(e)
+        return 1
     except TrainingError as e:
         _print_error(f"Training error: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Training error details")
-        return _exit_code_for(e)
+        return 1
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return _exit_code_for(e)
+        return 1
     except Exception as e:
         _print_error(f"Training failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return EXIT_RUNTIME
+        return 1
 
 
 # =============================================================================
@@ -324,13 +301,13 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return _exit_code_for(e)
+        return 1
     except Exception as e:
         _print_error(f"Multi-run failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return EXIT_RUNTIME
+        return 1
 
 
 # =============================================================================
@@ -421,20 +398,20 @@ def cmd_export(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Export error details")
-        return _exit_code_for(e)
+        return 1
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return _exit_code_for(e)
+        return 1
     except Exception as e:
         _print_error(f"Export failed: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
-        return EXIT_RUNTIME
+        return 1
 
 
 # =============================================================================
@@ -483,8 +460,8 @@ def cmd_info(_args: argparse.Namespace) -> int:
     # Features
     print(f"\n{Colors.BOLD}Features{Colors.RESET}")
     for feature, available in FEATURES.items():
-        feature_status = f"{Colors.GREEN}[+]{Colors.RESET}" if available else f"{Colors.DIM}[-]{Colors.RESET}"
-        print(f"  {feature_status} {feature}")
+        status = f"{Colors.GREEN}[+]{Colors.RESET}" if available else f"{Colors.DIM}[-]{Colors.RESET}"
+        print(f"  {status} {feature}")
 
     # Config
     print(f"\n{Colors.BOLD}Configuration{Colors.RESET}")
@@ -603,15 +580,6 @@ def cmd_config(args: argparse.Namespace) -> int:
 # PARSER
 # =============================================================================
 
-def _get_version() -> str:
-    """Get version from package metadata."""
-    try:
-        from importlib.metadata import version as _pkg_version
-        return _pkg_version("backpropagate")
-    except Exception:
-        return "unknown"
-
-
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -631,7 +599,7 @@ Examples:
     parser.add_argument(
         "--version", "-V",
         action="version",
-        version=f"%(prog)s {_get_version()}",
+        version="%(prog)s 0.1.0",
     )
 
     parser.add_argument(
@@ -650,8 +618,8 @@ Examples:
     )
     train_parser.add_argument(
         "--model", "-m",
-        default="Qwen/Qwen2.5-7B-Instruct",
-        help="Model name or path (default: Qwen/Qwen2.5-7B-Instruct)",
+        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+        help="Model name or path (default: unsloth/Qwen2.5-7B-Instruct-bnb-4bit)",
     )
     train_parser.add_argument(
         "--data", "-d",
@@ -707,7 +675,7 @@ Examples:
     )
     multi_parser.add_argument(
         "--model", "-m",
-        default="Qwen/Qwen2.5-7B-Instruct",
+        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
         help="Model name or path",
     )
     multi_parser.add_argument(
@@ -847,7 +815,7 @@ Examples:
 # MAIN
 # =============================================================================
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list | None = None) -> int:
     """Main entry point for the CLI."""
     parser = create_parser()
     args = parser.parse_args(argv)
@@ -857,7 +825,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Execute the command
-    return int(args.func(args))
+    return args.func(args)
 
 
 if __name__ == "__main__":

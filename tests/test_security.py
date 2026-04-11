@@ -2,10 +2,10 @@
 Tests for backpropagate.security module.
 """
 
-import pytest
 import warnings
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestSafePath:
@@ -53,7 +53,7 @@ class TestSafePath:
 
     def test_safe_path_allowed_base_traversal(self, tmp_path):
         """safe_path should reject paths outside allowed_base."""
-        from backpropagate.security import safe_path, PathTraversalError
+        from backpropagate.security import PathTraversalError, safe_path
 
         # Create a base directory
         base_dir = tmp_path / "base"
@@ -82,8 +82,9 @@ class TestSafePath:
 
     def test_safe_path_logs_traversal_pattern(self, tmp_path, caplog):
         """safe_path should log when path contains '..'."""
-        from backpropagate.security import safe_path
         import logging
+
+        from backpropagate.security import safe_path
 
         caplog.set_level(logging.WARNING)
 
@@ -132,7 +133,7 @@ class TestCheckTorchSecurity:
 
     def test_check_torch_security_old_version(self):
         """check_torch_security should warn for PyTorch < 2.0."""
-        from backpropagate.security import check_torch_security, SecurityWarning
+        from backpropagate.security import SecurityWarning, check_torch_security
 
         mock_torch = MagicMock()
         mock_torch.__version__ = "1.9.0"
@@ -186,7 +187,6 @@ class TestSafeTorchLoad:
 
     def test_safe_torch_load_prefers_safetensors(self, tmp_path):
         """safe_torch_load should prefer safetensors format."""
-        from backpropagate.security import safe_torch_load
 
         # Create a mock safetensors file
         st_file = tmp_path / "model.safetensors"
@@ -202,8 +202,9 @@ class TestSafeTorchLoad:
 
     def test_safe_torch_load_with_weights_only(self, tmp_path):
         """safe_torch_load should pass weights_only to torch.load."""
-        from backpropagate.security import safe_torch_load
         import torch
+
+        from backpropagate.security import safe_torch_load
 
         # Create a simple tensor file
         pt_file = tmp_path / "weights.pt"
@@ -220,8 +221,9 @@ class TestAuditLog:
 
     def test_audit_log_success(self, caplog):
         """audit_log should log successful operations."""
-        from backpropagate.security import audit_log
         import logging
+
+        from backpropagate.security import audit_log
 
         caplog.set_level(logging.INFO, logger="backpropagate.security.audit")
 
@@ -232,8 +234,9 @@ class TestAuditLog:
 
     def test_audit_log_failure(self, caplog):
         """audit_log should log failed operations at WARNING level."""
-        from backpropagate.security import audit_log
         import logging
+
+        from backpropagate.security import audit_log
 
         caplog.set_level(logging.WARNING, logger="backpropagate.security.audit")
 
@@ -256,10 +259,10 @@ class TestSecurityModuleExports:
     def test_exports_from_package(self):
         """Security utilities should be importable from backpropagate."""
         from backpropagate import (
-            safe_path,
-            check_torch_security,
-            SecurityWarning,
             PathTraversalError,
+            SecurityWarning,
+            check_torch_security,
+            safe_path,
         )
 
         assert callable(safe_path)

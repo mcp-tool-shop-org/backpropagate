@@ -5,9 +5,8 @@ This tests the CLI entry point that allows:
     python -m backpropagate
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import sys
+from unittest.mock import patch
 
 
 class TestMainModule:
@@ -79,7 +78,7 @@ class TestMainModule:
 
         # --version exits with code 0
         assert result.returncode == 0
-        assert "1.0.2" in result.stdout
+        assert "0.1.0" in result.stdout
 
     def test_run_as_module_info_command(self):
         """Test running 'python -m backpropagate info' via subprocess."""

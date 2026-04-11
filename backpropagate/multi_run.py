@@ -182,14 +182,14 @@ class MultiRunTrainer:
 
     def __init__(
         self,
-        model: str | None = None,
+        model: str = None,
         config: MultiRunConfig | None = None,
         # Convenience overrides
-        num_runs: int | None = None,
-        steps_per_run: int | None = None,
-        samples_per_run: int | None = None,
-        merge_mode: str | MergeMode | None = None,
-        checkpoint_dir: str | None = None,
+        num_runs: int = None,
+        steps_per_run: int = None,
+        samples_per_run: int = None,
+        merge_mode: str | MergeMode = None,
+        checkpoint_dir: str = None,
         # Callbacks
         on_run_start: Callable[[int], None] | None = None,
         on_run_complete: Callable[[RunResult], None] | None = None,
@@ -238,7 +238,7 @@ class MultiRunTrainer:
         self.on_gpu_status = on_gpu_status
 
         # Internal state
-        self._trainer: Any = None
+        self._trainer = None
         self._slao_merger: SLAOMerger | None = None
         self._gpu_monitor: GPUMonitor | None = None
         self._is_running = False
@@ -354,9 +354,10 @@ class MultiRunTrainer:
                     )
 
                     # Phase 4.3: Check early stopping
-                    if self.config.early_stopping and val_loss is not None and self._check_early_stopping(val_loss, run_idx):
-                        self._abort_reason = "Early stopping triggered"
-                        break
+                    if self.config.early_stopping and val_loss is not None:
+                        if self._check_early_stopping(val_loss, run_idx):
+                            self._abort_reason = "Early stopping triggered"
+                            break
                 else:
                     run_result = self._execute_run(
                         run_idx=run_idx,
@@ -443,7 +444,7 @@ class MultiRunTrainer:
             chunk_dataset = self._trainer._pre_tokenize(chunk_dataset)
 
         # Training arguments (TRL 0.24+ uses SFTConfig)
-        training_args = SFTConfig(  # type: ignore[call-arg]
+        training_args = SFTConfig(
             output_dir=str(checkpoint_dir / f"run_{run_idx:03d}"),
             per_device_train_batch_size=self._trainer.batch_size,
             gradient_accumulation_steps=self._trainer.gradient_accumulation,
@@ -662,7 +663,7 @@ class MultiRunTrainer:
 
         elif self.config.replay_strategy == "random":
             # Random samples from all previous runs
-            all_prev_indices: list[int] = []
+            all_prev_indices = []
             for prev_run in range(1, run_idx):
                 prev_start = ((prev_run - 1) * samples_per_run) % total_samples
                 prev_end = min(prev_start + samples_per_run, total_samples)
@@ -686,7 +687,8 @@ class MultiRunTrainer:
             return None
 
         random.seed(settings.training.seed + run_idx + 1000)  # Different seed for replay
-        replay_indices = random.sample(available_indices, min(count, len(available_indices)))  # nosec B311
+        replay_indices = random.sample(available_indices, min(count, len(available_indices)))
+
         return full_dataset.select(replay_indices)
 
     def _get_learning_rate(self, run_idx: int) -> float:
@@ -727,8 +729,7 @@ class MultiRunTrainer:
 
         # Try to get PEFT adapter state
         if hasattr(model, 'get_adapter_state_dict'):
-            import typing
-            return typing.cast(dict[str, Any], model.get_adapter_state_dict())
+            return model.get_adapter_state_dict()
 
         # Fallback: extract lora parameters manually
         lora_state = {}
@@ -1021,7 +1022,7 @@ class MultiRunTrainer:
 # CLI INTERFACE
 # =============================================================================
 
-def main() -> None:
+def main():
     """CLI entry point for speedrun training."""
     import argparse
 

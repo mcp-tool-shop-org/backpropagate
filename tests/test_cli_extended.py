@@ -9,13 +9,10 @@ Covers:
 - UI command
 """
 
-import pytest
 import argparse
 import os
 import sys
-from unittest.mock import MagicMock, patch, PropertyMock
-from io import StringIO
-
+from unittest.mock import MagicMock, patch
 
 # =============================================================================
 # COLOR SUPPORT DETECTION TESTS
@@ -29,7 +26,6 @@ class TestSupportsColorExtended:
         """NO_COLOR environment variable should disable colors."""
         with patch.dict(os.environ, {"NO_COLOR": "1"}):
             # Need to reimport to get fresh evaluation
-            import importlib
             from backpropagate import cli
 
             result = cli._supports_color()
@@ -184,7 +180,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 2  # EXIT_RUNTIME for TrainingError
+            assert result == 1
             captured = capsys.readouterr()
             assert "Out of memory" in captured.err
             assert "reducing batch size" in captured.out
@@ -217,7 +213,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 2  # EXIT_RUNTIME for BackpropagateError
+            assert result == 1
             captured = capsys.readouterr()
             assert "Generic error" in captured.err
 
@@ -271,7 +267,7 @@ class TestCmdTrainErrorHandling:
             )
 
             result = cmd_train(args)
-            assert result == 2  # EXIT_RUNTIME for TrainingError
+            assert result == 1
 
 
 # =============================================================================
@@ -309,7 +305,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 2  # EXIT_RUNTIME for BackpropagateError
+            assert result == 1
             captured = capsys.readouterr()
             assert "Config invalid" in captured.err
             assert "num_runs" in captured.out
@@ -337,7 +333,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 2  # EXIT_RUNTIME for generic Exception
+            assert result == 1
             captured = capsys.readouterr()
             assert "Unexpected error" in captured.err
 
@@ -363,7 +359,7 @@ class TestCmdMultiRunErrorHandling:
             )
 
             result = cmd_multi_run(args)
-            assert result == 2  # EXIT_RUNTIME for generic Exception
+            assert result == 1
 
     def test_keyboard_interrupt(self, capsys, tmp_path):
         """KeyboardInterrupt in multi-run returns 130."""
@@ -517,7 +513,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 2  # EXIT_RUNTIME for ExportError
+            assert result == 1
             captured = capsys.readouterr()
             assert "Export failed" in captured.err or "Export error" in captured.err
 
@@ -548,7 +544,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 2  # EXIT_RUNTIME for BackpropagateError
+            assert result == 1
 
     def test_generic_exception_in_export(self, capsys, tmp_path):
         """Generic exception in export."""
@@ -573,7 +569,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 2  # EXIT_RUNTIME for generic Exception
+            assert result == 1
             captured = capsys.readouterr()
             assert "Disk full" in captured.err
 
@@ -599,7 +595,7 @@ class TestCmdExportErrorHandling:
             )
 
             result = cmd_export(args)
-            assert result == 2  # EXIT_RUNTIME for generic Exception
+            assert result == 1
 
     def test_ollama_registration_failure(self, capsys, tmp_path):
         """Ollama registration failure handled."""
@@ -753,8 +749,9 @@ class TestCmdUI:
 
     def test_ui_import_error(self, capsys):
         """Missing gradio shows helpful error."""
-        from backpropagate import cli as cli_module
         import builtins
+
+        from backpropagate import cli as cli_module
 
         args = argparse.Namespace(
             port=7860,

@@ -8,9 +8,10 @@ Tests cover:
 - Successful import when features are available
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestLazyImports:

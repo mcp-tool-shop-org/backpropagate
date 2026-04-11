@@ -17,7 +17,6 @@ Usage:
 import logging
 import warnings
 from pathlib import Path
-from typing import Any
 
 __all__ = [
     "safe_path",
@@ -102,7 +101,7 @@ def safe_path(
             # This will raise ValueError if resolved is not relative to base_resolved
             resolved.relative_to(base_resolved)
         except ValueError:
-            raise PathTraversalError(str(user_path), str(allowed_base)) from None
+            raise PathTraversalError(str(user_path), str(allowed_base))
 
     # Check for suspicious path components even without base restriction
     # This catches obvious traversal attempts like "../../"
@@ -163,8 +162,8 @@ def check_torch_security() -> bool:
 def safe_torch_load(
     path: str | Path,
     weights_only: bool = True,
-    **kwargs: Any
-) -> dict[str, Any]:
+    **kwargs
+) -> dict:
     """
     Safely load PyTorch weights with security checks.
 
@@ -206,8 +205,7 @@ def safe_torch_load(
 
     # Fall back to torch.load with security enabled
     logger.debug(f"Loading PyTorch file with weights_only={weights_only}: {path}")
-    import typing
-    return typing.cast(dict[str, Any], torch.load(path, weights_only=weights_only, **kwargs))  # nosec B614 - weights_only=True by default
+    return torch.load(path, weights_only=weights_only, **kwargs)  # nosec B614 - weights_only=True by default
 
 
 def audit_log(

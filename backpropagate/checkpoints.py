@@ -421,7 +421,7 @@ class CheckpointManager:
         valid = [cp for cp in self._checkpoints if cp.validation_loss is not None]
         if not valid:
             return None
-        return min(valid, key=lambda x: x.validation_loss or float('inf'))
+        return min(valid, key=lambda x: x.validation_loss)
 
     def get_final_checkpoint(self) -> CheckpointInfo | None:
         """Get the most recent checkpoint."""

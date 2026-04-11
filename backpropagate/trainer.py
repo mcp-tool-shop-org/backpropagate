@@ -33,7 +33,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .config import settings
 from .exceptions import (
@@ -48,10 +48,6 @@ from .exceptions import (
 )
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
-
-if TYPE_CHECKING:
-    from .export import ExportResult
-    from .multi_run import MultiRunResult, MultiRunTrainer, SpeedrunTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +105,15 @@ class Trainer:
 
     def __init__(
         self,
-        model: str | None = None,
-        lora_r: int | None = None,
-        lora_alpha: int | None = None,
-        lora_dropout: float | None = None,
-        learning_rate: float | None = None,
+        model: str = None,
+        lora_r: int = None,
+        lora_alpha: int = None,
+        lora_dropout: float = None,
+        learning_rate: float = None,
         batch_size: int | str = "auto",
-        gradient_accumulation: int | None = None,
-        max_seq_length: int | None = None,
-        output_dir: str | None = None,
+        gradient_accumulation: int = None,
+        max_seq_length: int = None,
+        output_dir: str = None,
         use_unsloth: bool = True,
         train_on_responses: bool = True,  # Phase 1.1: Only compute loss on assistant responses
     ):
@@ -134,17 +130,17 @@ class Trainer:
 
         # Auto batch size
         if batch_size == "auto":
-            self.batch_size: int = self._detect_batch_size()
+            self.batch_size = self._detect_batch_size()
         else:
-            self.batch_size = int(batch_size)
+            self.batch_size = batch_size
 
         # Phase 1.1: Train on responses only
         self._train_on_responses = train_on_responses
 
         # Internal state
-        self._model: Any = None
-        self._tokenizer: Any = None
-        self._trainer: Any = None
+        self._model = None
+        self._tokenizer = None
+        self._trainer = None
         self._is_loaded = False
         self._training_runs: list[TrainingRun] = []
 
@@ -315,9 +311,9 @@ class Trainer:
     def train(
         self,
         dataset: str | Any = None,
-        steps: int | None = None,
-        samples: int | None = None,
-        callback: TrainingCallback | None = None,
+        steps: int = None,
+        samples: int = None,
+        callback: TrainingCallback = None,
     ) -> TrainingRun:
         """
         Train the model on a dataset.
@@ -341,16 +337,18 @@ class Trainer:
         from trl import SFTConfig, SFTTrainer
 
         # Validate inputs
-        if steps is not None and (not isinstance(steps, int) or steps <= 0):
-            raise InvalidSettingError(
-                "steps", steps, "positive integer",
-                suggestion="Use steps=100 or higher"
-            )
-        if samples is not None and (not isinstance(samples, int) or samples <= 0):
-            raise InvalidSettingError(
-                "samples", samples, "positive integer",
-                suggestion="Use samples=1000 or higher"
-            )
+        if steps is not None:
+            if not isinstance(steps, int) or steps <= 0:
+                raise InvalidSettingError(
+                    "steps", steps, "positive integer",
+                    suggestion="Use steps=100 or higher"
+                )
+        if samples is not None:
+            if not isinstance(samples, int) or samples <= 0:
+                raise InvalidSettingError(
+                    "samples", samples, "positive integer",
+                    suggestion="Use samples=1000 or higher"
+                )
 
         # Load model if not loaded
         if not self._is_loaded:
@@ -364,7 +362,7 @@ class Trainer:
             train_dataset = self._pre_tokenize(train_dataset)
 
         # Training arguments (TRL 0.27+ uses SFTConfig)
-        training_args = SFTConfig(  # type: ignore[call-arg]
+        training_args = SFTConfig(
             output_dir=str(self.output_dir),
             per_device_train_batch_size=self.batch_size,
             gradient_accumulation_steps=self.gradient_accumulation,
@@ -420,7 +418,7 @@ class Trainer:
         # Train
         run_id = f"run_{len(self._training_runs) + 1}"
         start_time = time.time()
-        loss_history: list[float] = []
+        loss_history = []
 
         logger.info(f"Starting training: {run_id}")
         logger.info(f"  Steps: {steps or settings.training.max_steps}")
@@ -488,7 +486,7 @@ class Trainer:
     def _load_dataset(
         self,
         dataset: str | Any,
-        samples: int | None = None,
+        samples: int = None,
     ) -> Any:
         """
         Load dataset from various sources.
@@ -573,20 +571,19 @@ class Trainer:
         """Pre-tokenize dataset for Windows safety."""
         logger.info("Pre-tokenizing dataset (Windows-safe mode)")
 
-        def tokenize_fn(examples: dict[str, Any]) -> dict[str, Any]:
+        def tokenize_fn(examples):
             try:
-                import typing
-                return typing.cast(dict[str, Any], self._tokenizer(
+                return self._tokenizer(
                     examples[settings.data.text_column],
                     truncation=True,
                     max_length=self.max_seq_length,
                     padding=False,
-                ))
+                )
             except KeyError:
                 raise DatasetError(
                     f"Dataset missing required column '{settings.data.text_column}'",
                     suggestion=f"Available columns: {list(examples.keys()) if hasattr(examples, 'keys') else 'unknown'}"
-                ) from None
+                )
 
         try:
             tokenized = dataset.map(
@@ -603,7 +600,7 @@ class Trainer:
 
         return tokenized
 
-    def save(self, path: str | None = None, save_merged: bool = False) -> str:
+    def save(self, path: str = None, save_merged: bool = False) -> str:
         """
         Save the trained model.
 
@@ -663,7 +660,7 @@ class Trainer:
         quantization: str = "q4_k_m",
         push_to_hub: bool = False,
         repo_id: str | None = None,
-        **kwargs: Any,
+        **kwargs,
     ) -> "ExportResult":
         """
         Export the trained model.
@@ -742,12 +739,12 @@ class Trainer:
         logger.info(f"Pushed to HuggingFace Hub: {repo_id}")
 
     @property
-    def model(self) -> Any:
+    def model(self):
         """Access the underlying model."""
         return self._model
 
     @property
-    def tokenizer(self) -> Any:
+    def tokenizer(self):
         """Access the tokenizer."""
         return self._tokenizer
 
@@ -763,8 +760,8 @@ class Trainer:
         steps_per_run: int = 100,
         samples_per_run: int = 1000,
         merge_mode: str = "slao",
-        checkpoint_dir: str | None = None,
-        on_run_complete: Callable[..., Any] | None = None,
+        checkpoint_dir: str = None,
+        on_run_complete: Callable = None,
     ) -> "MultiRunResult":
         """
         Execute SLAO Multi-Run training (multiple short runs with LoRA merging).
@@ -828,10 +825,10 @@ class Trainer:
 # =============================================================================
 
 def load_model(
-    model_name: str | None = None,
-    _load_in_4bit: bool = True,
+    model_name: str = None,
+    load_in_4bit: bool = True,
     max_seq_length: int = 2048,
-) -> tuple[Any, Any]:
+) -> tuple:
     """
     Load a model and tokenizer.
 
@@ -850,8 +847,8 @@ def load_model(
 
 def load_dataset(
     dataset: str | Any,
-    max_samples: int | None = None,
-    split: str | None = None,
+    max_samples: int = None,
+    split: str = None,
 ) -> Any:
     """
     Load a dataset.
@@ -883,7 +880,7 @@ def load_dataset(
 
 
 # Import MultiRunTrainer for re-export (lazy to avoid circular imports)
-def __getattr__(name: str) -> Any:
+def __getattr__(name):
     if name == "MultiRunTrainer":
         from .multi_run import MultiRunTrainer
         return MultiRunTrainer

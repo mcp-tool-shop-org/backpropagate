@@ -3,10 +3,11 @@ Tests for UI security features.
 """
 
 import logging
-import pytest
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestRateLimiter:
@@ -213,8 +214,9 @@ class TestLaunchSecurity:
 
     def test_launch_warns_on_share_without_auth(self):
         """launch should warn when share=True without auth."""
-        from backpropagate.ui import launch, SecurityWarning
         import warnings
+
+        from backpropagate.ui import SecurityWarning, launch
 
         with patch("backpropagate.ui.create_ui") as mock_create_ui:
             mock_app = MagicMock()
@@ -234,8 +236,9 @@ class TestLaunchSecurity:
 
     def test_launch_no_warning_with_auth(self):
         """launch should not warn when share=True with auth."""
-        from backpropagate.ui import launch, SecurityWarning
         import warnings
+
+        from backpropagate.ui import SecurityWarning, launch
 
         with patch("backpropagate.ui.create_ui") as mock_create_ui:
             mock_app = MagicMock()
@@ -274,10 +277,10 @@ class TestUISecurityExports:
     def test_security_functions_available(self):
         """Security functions should be importable from ui module."""
         from backpropagate.ui import (
-            validate_path_input,
+            generate_auth_token,
             sanitize_model_name,
             sanitize_text_input,
-            generate_auth_token,
+            validate_path_input,
         )
 
         assert callable(validate_path_input)
@@ -668,7 +671,7 @@ class TestHealthCheck:
 
     def test_get_health_status_returns_healthy(self):
         """Health status should return healthy by default."""
-        from backpropagate.ui_security import get_health_status, HealthStatus
+        from backpropagate.ui_security import HealthStatus, get_health_status
 
         status = get_health_status(include_gpu=False)
 
@@ -822,8 +825,9 @@ class TestEnvConfigOverride:
 
     def test_load_config_from_env_int_values(self):
         """Should load integer values from environment."""
-        from backpropagate.ui_security import load_config_from_env, SecurityConfig
         import os
+
+        from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
         # Set env var
         os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "10"
@@ -836,8 +840,9 @@ class TestEnvConfigOverride:
 
     def test_load_config_from_env_bool_values(self):
         """Should load boolean values from environment."""
-        from backpropagate.ui_security import load_config_from_env, SecurityConfig
         import os
+
+        from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
         os.environ["BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON"] = "true"
 
@@ -849,8 +854,9 @@ class TestEnvConfigOverride:
 
     def test_load_config_ignores_invalid_env_vars(self):
         """Should ignore environment variables with invalid values."""
-        from backpropagate.ui_security import load_config_from_env, SecurityConfig
         import os
+
+        from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
         os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "not_a_number"
 
@@ -867,7 +873,7 @@ class TestSessionManager:
 
     def test_create_session(self):
         """Should create a session successfully."""
-        from backpropagate.ui_security import SessionManager, SecurityConfig
+        from backpropagate.ui_security import SecurityConfig, SessionManager
 
         # Reset singleton for testing
         SessionManager._instance = None
@@ -888,7 +894,7 @@ class TestSessionManager:
 
     def test_session_limit_per_ip(self):
         """Should enforce session limit per IP."""
-        from backpropagate.ui_security import SessionManager, SecurityConfig
+        from backpropagate.ui_security import SecurityConfig, SessionManager
 
         # Reset singleton for testing
         SessionManager._instance = None
@@ -917,7 +923,7 @@ class TestSessionManager:
 
     def test_session_validation_and_timeout(self):
         """Should validate and timeout sessions."""
-        from backpropagate.ui_security import SessionManager, SecurityConfig
+        from backpropagate.ui_security import SecurityConfig, SessionManager
 
         # Reset singleton for testing
         SessionManager._instance = None
@@ -943,7 +949,7 @@ class TestSessionManager:
 
     def test_end_session(self):
         """Should properly end sessions."""
-        from backpropagate.ui_security import SessionManager, SecurityConfig
+        from backpropagate.ui_security import SecurityConfig, SessionManager
 
         SessionManager._instance = None
         manager = SessionManager()
@@ -965,7 +971,7 @@ class TestSessionManager:
 
     def test_get_active_count(self):
         """Should track active session count."""
-        from backpropagate.ui_security import SessionManager, SecurityConfig
+        from backpropagate.ui_security import SecurityConfig, SessionManager
 
         SessionManager._instance = None
         manager = SessionManager()
@@ -1232,8 +1238,9 @@ class TestJSONSecurityFormatter:
 
     def test_formats_as_json(self):
         """Should format log records as JSON."""
-        from backpropagate.ui_security import JSONSecurityFormatter
         import json
+
+        from backpropagate.ui_security import JSONSecurityFormatter
 
         formatter = JSONSecurityFormatter()
         record = logging.LogRecord(
@@ -1259,8 +1266,9 @@ class TestJSONSecurityFormatter:
 
     def test_includes_extra_fields(self):
         """Should include extra fields in JSON output."""
-        from backpropagate.ui_security import JSONSecurityFormatter
         import json
+
+        from backpropagate.ui_security import JSONSecurityFormatter
 
         formatter = JSONSecurityFormatter()
         record = logging.LogRecord(
@@ -1283,8 +1291,9 @@ class TestJSONSecurityFormatter:
 
     def test_handles_different_log_levels(self):
         """Should format different log levels correctly."""
-        from backpropagate.ui_security import JSONSecurityFormatter
         import json
+
+        from backpropagate.ui_security import JSONSecurityFormatter
 
         formatter = JSONSecurityFormatter()
 
@@ -1306,8 +1315,9 @@ class TestJSONSecurityFormatter:
 
     def test_result_is_single_line(self):
         """JSON output should be single line for log aggregation."""
-        from backpropagate.ui_security import JSONSecurityFormatter
         import json
+
+        from backpropagate.ui_security import JSONSecurityFormatter
 
         formatter = JSONSecurityFormatter()
         record = logging.LogRecord(

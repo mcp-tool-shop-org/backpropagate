@@ -140,14 +140,11 @@ def _configure_structlog(
     )
 
     # Configure standard library logging to use structlog
-    log_level = getattr(logging, level, logging.INFO)
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
-        level=log_level,
+        level=getattr(logging, level, logging.INFO),
     )
-    # Explicitly set root level (basicConfig is no-op if handlers exist)
-    logging.getLogger().setLevel(log_level)
 
     # Add file handler if specified
     if log_file:
@@ -217,7 +214,11 @@ def _configure_standard_logging(
     root.setLevel(log_level)
 
     # Create handler
-    handler: logging.Handler = logging.FileHandler(log_file) if log_file else logging.StreamHandler(sys.stdout)
+    handler: logging.Handler
+    if log_file:
+        handler = logging.FileHandler(log_file)
+    else:
+        handler = logging.StreamHandler(sys.stdout)
 
     handler.setLevel(log_level)
 

@@ -419,7 +419,10 @@ def export_gguf(
 
     try:
         # Merge if needed
-        merged_model = model.merge_and_unload() if _is_peft_model(model) else model
+        if _is_peft_model(model):
+            merged_model = model.merge_and_unload()
+        else:
+            merged_model = model
 
         # Save in HF format
         merged_model.save_pretrained(merged_path)
@@ -460,7 +463,7 @@ def export_gguf(
             quant_str,
         ]
         try:
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
                 check=True,
                 capture_output=True,
@@ -538,7 +541,10 @@ def create_modelfile(
     """
     gguf_path = Path(gguf_path).resolve()
 
-    modelfile_path = Path(output_path) if output_path else gguf_path.parent / "Modelfile"
+    if output_path:
+        modelfile_path = Path(output_path)
+    else:
+        modelfile_path = gguf_path.parent / "Modelfile"
 
     lines = [
         f'FROM "{gguf_path}"',
@@ -610,7 +616,7 @@ def register_with_ollama(
 
     try:
         # Run ollama create
-        subprocess.run(
+        result = subprocess.run(
             ["ollama", "create", model_name, "-f", str(modelfile_path)],
             capture_output=True,
             text=True,

@@ -335,7 +335,7 @@ def get_system_info() -> dict[str, Any]:
         "python_version": sys.version,
         "platform": platform.platform(),
         "processor": platform.processor(),
-        "features": dict(FEATURES),
+        "features": dict(FEATURES.items()),
         "gpu": get_gpu_info(),
     }
 

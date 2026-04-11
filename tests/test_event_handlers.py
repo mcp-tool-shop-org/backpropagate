@@ -12,11 +12,9 @@ See docs/EVENT_HANDLER_TEST_ROADMAP.md for the full testing plan.
 import threading
 import time
 from dataclasses import fields
-from typing import Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # =============================================================================
 # TRAINING CALLBACK UNIT TESTS
@@ -81,6 +79,7 @@ class TestTrainingCallbackUnit:
     def test_callback_is_dataclass(self):
         """TrainingCallback should be a proper dataclass."""
         from dataclasses import is_dataclass
+
         from backpropagate.trainer import TrainingCallback
 
         assert is_dataclass(TrainingCallback)
@@ -113,7 +112,7 @@ class TestTrainingCallbackIntegration:
 
     def test_callback_none_safe(self):
         """Training should work without any callbacks (None)."""
-        from backpropagate.trainer import Trainer, TrainingCallback
+        from backpropagate.trainer import Trainer
 
         # No callback at all should work
         trainer = Trainer(model="test-model")
@@ -390,7 +389,7 @@ class TestMultiRunCallbackUnit:
 
     def test_multirun_accepts_all_callbacks(self):
         """MultiRunTrainer constructor accepts all callback parameters."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks_received = {}
 
@@ -424,7 +423,7 @@ class TestMultiRunCallbackUnit:
 
     def test_multirun_no_callbacks(self):
         """MultiRunTrainer works without any callbacks."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         trainer = MultiRunTrainer(
             model="test-model",
@@ -438,7 +437,7 @@ class TestMultiRunCallbackUnit:
 
     def test_multirun_partial_callbacks(self):
         """MultiRunTrainer works with subset of callbacks."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         def on_run_complete(result):
             pass
@@ -456,7 +455,7 @@ class TestMultiRunCallbackUnit:
 
     def test_multirun_callback_types(self):
         """Callback type validation (None or Callable)."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         trainer = MultiRunTrainer(
             model="test-model",
@@ -474,7 +473,7 @@ class TestMultiRunCallbackSequencing:
 
     def test_on_run_start_receives_run_index(self):
         """on_run_start receives the run index (1-based in actual code)."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         received_indices = []
 
@@ -496,7 +495,7 @@ class TestMultiRunCallbackSequencing:
 
     def test_on_run_complete_receives_run_result(self):
         """on_run_complete receives RunResult object."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig, RunResult
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer, RunResult
 
         received_results = []
 
@@ -522,7 +521,7 @@ class TestMultiRunCallbackSequencing:
 
     def test_on_step_receives_run_step_loss(self):
         """on_step receives (run_idx, step, loss)."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         received_calls = []
 
@@ -544,7 +543,7 @@ class TestMultiRunCallbackSequencing:
 
     def test_callback_run_index_sequence(self):
         """Run indices should increment correctly."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         indices = []
 
@@ -588,7 +587,7 @@ class TestMultiRunCallbackSequencing:
 
     def test_callback_timing_between_runs(self):
         """Callbacks should fire in correct sequence relative to run boundaries."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         event_log = []
 
@@ -621,8 +620,8 @@ class TestMultiRunGPUStatusCallbacks:
 
     def test_on_gpu_status_receives_gpustatus(self, gpu_status_safe):
         """on_gpu_status receives GPUStatus object."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
         from backpropagate.gpu_safety import GPUStatus
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         received_statuses = []
 
@@ -644,7 +643,7 @@ class TestMultiRunGPUStatusCallbacks:
 
     def test_on_gpu_status_content_validation(self):
         """GPUStatus object should have valid fields."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         statuses = []
 
@@ -672,7 +671,7 @@ class TestMultiRunGPUStatusCallbacks:
 
     def test_gpu_callback_thread_safety(self):
         """GPU status callbacks should be thread-safe."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         results = []
         lock = threading.Lock()
@@ -709,7 +708,7 @@ class TestMultiRunAbortCallbacks:
 
     def test_callback_invoked_before_abort(self):
         """Callbacks should still fire before abort."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         run_starts = []
 
@@ -732,7 +731,7 @@ class TestMultiRunAbortCallbacks:
 
     def test_abort_preserves_callback_state(self):
         """Callbacks should maintain state after abort."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig, RunResult
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer, RunResult
 
         completed_runs = []
 
@@ -760,7 +759,7 @@ class TestMultiRunAbortCallbacks:
 
     def test_early_stopping_callbacks(self):
         """Callbacks should work with early stopping."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig, RunResult
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer, RunResult
 
         run_indices = []
 
@@ -882,7 +881,7 @@ class TestGPUMonitorEventDispatch:
 
     def test_on_warning_receives_warning_status(self):
         """on_warning callback receives warning-condition status."""
-        from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig, GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUMonitor, GPUSafetyConfig, GPUStatus
 
         received = []
 
@@ -913,7 +912,7 @@ class TestGPUMonitorEventDispatch:
 
     def test_on_critical_receives_critical_status(self, gpu_status_critical):
         """on_critical callback receives critical-condition status."""
-        from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUMonitor, GPUSafetyConfig
 
         received = []
 
@@ -933,7 +932,7 @@ class TestGPUMonitorEventDispatch:
 
     def test_on_emergency_receives_emergency_status(self, gpu_status_emergency):
         """on_emergency callback receives emergency-condition status."""
-        from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUMonitor, GPUSafetyConfig
 
         received = []
 
@@ -970,7 +969,7 @@ class TestGPUMonitorEventDispatch:
 
     def test_callback_status_has_condition(self):
         """GPUStatus.condition should match the event type."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         conditions_received = []
 
@@ -1175,7 +1174,7 @@ class TestGPUMonitorEventEscalation:
 
     def test_callback_receives_correct_condition(self):
         """Each callback receives status with matching condition."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         conditions_received = []
 
@@ -1218,7 +1217,7 @@ class TestGPUMonitorEventEscalation:
 
     def test_warning_to_critical_escalation(self):
         """Verify escalation from WARNING to CRITICAL."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         escalation_log = []
 
@@ -1239,7 +1238,7 @@ class TestGPUMonitorEventEscalation:
 
     def test_critical_to_emergency_escalation(self):
         """Verify escalation from CRITICAL to EMERGENCY."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         escalation_log = []
 
@@ -1259,7 +1258,7 @@ class TestGPUMonitorEventEscalation:
 
     def test_deescalation_on_cooldown(self):
         """Verify de-escalation when conditions improve."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         condition_log = []
 
@@ -1285,7 +1284,7 @@ class TestGPUMonitorEventEscalation:
 
     def test_multiple_events_per_check(self):
         """Multiple condition changes can occur in sequence."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         events = []
 

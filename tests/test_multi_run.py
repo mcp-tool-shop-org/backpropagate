@@ -11,21 +11,18 @@ Tests cover:
 - Callback handling
 """
 
-import pytest
-import math
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock, PropertyMock
-from dataclasses import asdict
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from backpropagate.gpu_safety import GPUCondition, GPUStatus
 from backpropagate.multi_run import (
-    MultiRunTrainer,
+    MergeMode,
     MultiRunConfig,
     MultiRunResult,
+    MultiRunTrainer,
     RunResult,
-    MergeMode,
 )
-from backpropagate.gpu_safety import GPUStatus, GPUCondition
 
 
 class TestMergeMode:
@@ -923,19 +920,19 @@ class TestBackwardsCompatibility:
 
     def test_speedrun_trainer_alias(self):
         """SpeedrunTrainer should be alias for MultiRunTrainer."""
-        from backpropagate.multi_run import SpeedrunTrainer, MultiRunTrainer
+        from backpropagate.multi_run import MultiRunTrainer, SpeedrunTrainer
 
         assert SpeedrunTrainer is MultiRunTrainer
 
     def test_speedrun_config_alias(self):
         """SpeedrunConfig should be alias for MultiRunConfig."""
-        from backpropagate.multi_run import SpeedrunConfig, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, SpeedrunConfig
 
         assert SpeedrunConfig is MultiRunConfig
 
     def test_speedrun_result_alias(self):
         """SpeedrunResult should be alias for MultiRunResult."""
-        from backpropagate.multi_run import SpeedrunResult, MultiRunResult
+        from backpropagate.multi_run import MultiRunResult, SpeedrunResult
 
         assert SpeedrunResult is MultiRunResult
 

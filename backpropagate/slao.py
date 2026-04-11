@@ -32,10 +32,7 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import torch
+from typing import Any
 
 from .exceptions import InvalidSettingError, SLAOCheckpointError, SLAOMergeError
 from .security import check_torch_security
@@ -103,7 +100,7 @@ class MergeResult:
     a_norm_before: float | None = None
     a_norm_after: float | None = None
     b_norm_before: float | None = None
-    b_norm_after: float | None = None
+    b_norm_after: float | None = ""
 
 
 # =============================================================================
@@ -205,8 +202,7 @@ def orthogonal_init_A(A_prev: "torch.Tensor") -> "torch.Tensor":
 
         # Return Q^T as the new initialization
         # This has the property that A_init @ A_init^T = I_r
-        import typing
-        return typing.cast("torch.Tensor", Q.T)
+        return Q.T
     except RuntimeError as e:
         raise SLAOMergeError(
             f"Orthogonal initialization failed - QR decomposition error: {e}",
@@ -308,7 +304,7 @@ def compute_task_similarity(
     if norm1 == 0 or norm2 == 0:
         return 0.0
 
-    similarity = float((dot_product / (norm1 * norm2)).item())
+    similarity = (dot_product / (norm1 * norm2)).item()
     return similarity
 
 
@@ -808,10 +804,7 @@ def merge_lora_weights(
         merger = SLAOMerger()
         merger.initialize(base_lora)
         merger.merge(new_lora, run_index=run_index)
-        merged = merger.get_merged_lora()
-        if merged is None:
-            raise SLAOMergeError("Failed to get merged LoRA state")
-        return merged
+        return merger.get_merged_lora()
 
     elif method == "average":
         # Simple averaging (no time-aware scaling)

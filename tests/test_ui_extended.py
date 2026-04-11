@@ -12,11 +12,9 @@ Covers:
 - Error handling
 """
 
-import pytest
-import os
-from unittest.mock import MagicMock, patch, PropertyMock
-from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # UI AVAILABILITY TESTS
@@ -278,10 +276,10 @@ class TestDatasetInterface:
     def test_dataset_preview(self, tmp_path):
         """Dataset preview shows samples."""
         try:
-            from backpropagate.ui import preview_dataset
-
             # Create test dataset
             import json
+
+            from backpropagate.ui import preview_dataset
             data_path = tmp_path / "test.jsonl"
             with open(data_path, "w") as f:
                 f.write(json.dumps({"text": "Sample 1"}) + "\n")
@@ -338,8 +336,8 @@ class TestGPUMonitoringDisplay:
     def test_gpu_status_display(self):
         """GPU status displayed correctly."""
         try:
+            from backpropagate.gpu_safety import GPUCondition, GPUStatus
             from backpropagate.ui import format_gpu_status
-            from backpropagate.gpu_safety import GPUStatus, GPUCondition
 
             # Use real GPUStatus object instead of MagicMock
             status = GPUStatus(
@@ -553,8 +551,8 @@ class TestUIErrorHandling:
     def test_training_error_display(self):
         """Training errors displayed correctly."""
         try:
-            from backpropagate.ui import format_error_message
             from backpropagate.exceptions import TrainingError
+            from backpropagate.ui import format_error_message
 
             error = TrainingError(
                 message="Out of memory",
@@ -571,8 +569,8 @@ class TestUIErrorHandling:
     def test_dataset_error_display(self):
         """Dataset errors displayed correctly."""
         try:
-            from backpropagate.ui import format_error_message
             from backpropagate.exceptions import DatasetError
+            from backpropagate.ui import format_error_message
 
             error = DatasetError(
                 message="Invalid format",

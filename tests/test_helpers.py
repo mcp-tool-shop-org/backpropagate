@@ -7,10 +7,10 @@ Provides:
 - assert_callback_sequence: Verify callback ordering
 """
 
-import time
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+import time
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -38,8 +38,8 @@ class CallbackSpy:
         spy.assert_called_with(step=5, loss=0.5)
     """
 
-    def __init__(self, return_value: Any = None, side_effect: Optional[Exception] = None):
-        self.calls: List[CallbackInvocation] = []
+    def __init__(self, return_value: Any = None, side_effect: Exception | None = None):
+        self.calls: list[CallbackInvocation] = []
         self._lock = threading.Lock()
         self._return_value = return_value
         self._side_effect = side_effect
@@ -75,12 +75,12 @@ class CallbackSpy:
         return self.call_count > 0
 
     @property
-    def last_call(self) -> Optional[CallbackInvocation]:
+    def last_call(self) -> CallbackInvocation | None:
         """Get the most recent invocation, or None if never called."""
         with self._lock:
             return self.calls[-1] if self.calls else None
 
-    def assert_called(self, times: Optional[int] = None) -> None:
+    def assert_called(self, times: int | None = None) -> None:
         """Assert the callback was called (optionally a specific number of times)."""
         if times is not None:
             assert self.call_count == times, (
@@ -128,23 +128,23 @@ class CallbackSpy:
             self.calls.clear()
             self._event.clear()
 
-    def get_args_list(self) -> List[tuple]:
+    def get_args_list(self) -> list[tuple]:
         """Get list of all args from all invocations."""
         with self._lock:
             return [c.args for c in self.calls]
 
-    def get_timestamps(self) -> List[float]:
+    def get_timestamps(self) -> list[float]:
         """Get list of all timestamps from all invocations."""
         with self._lock:
             return [c.timestamp for c in self.calls]
 
 
 def wait_for_callback(
-    calls: Dict[str, List],
+    calls: dict[str, list],
     key: str,
     count: int = 1,
     timeout: float = 5.0,
-) -> List[Any]:
+) -> list[Any]:
     """
     Wait for a callback to be called a certain number of times.
 
@@ -173,8 +173,8 @@ def wait_for_callback(
 
 
 def assert_callback_sequence(
-    call_log: List[Tuple[str, Any]],
-    expected_sequence: List[str],
+    call_log: list[tuple[str, Any]],
+    expected_sequence: list[str],
 ) -> None:
     """
     Assert callbacks were called in expected order.
@@ -217,7 +217,7 @@ class CallbackTracker:
         trainer.train(callback=callback)
         tracker.assert_sequence(["step", "step", "step", "complete"])
     """
-    calls: List[Tuple[str, tuple, dict]] = field(default_factory=list)
+    calls: list[tuple[str, tuple, dict]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def track(self, name: str):
@@ -227,22 +227,22 @@ class CallbackTracker:
                 self.calls.append((name, args, kwargs))
         return callback
 
-    def get_sequence(self) -> List[str]:
+    def get_sequence(self) -> list[str]:
         """Get the sequence of callback names in order."""
         with self._lock:
             return [name for name, _, _ in self.calls]
 
-    def get_calls(self, name: str) -> List[Tuple[tuple, dict]]:
+    def get_calls(self, name: str) -> list[tuple[tuple, dict]]:
         """Get all calls for a specific callback name."""
         with self._lock:
             return [(args, kwargs) for n, args, kwargs in self.calls if n == name]
 
-    def assert_sequence(self, expected: List[str]) -> None:
+    def assert_sequence(self, expected: list[str]) -> None:
         """Assert callbacks were called in expected sequence."""
         actual = self.get_sequence()
         assert actual == expected, f"Expected {expected}, got {actual}"
 
-    def assert_contains(self, name: str, times: Optional[int] = None) -> None:
+    def assert_contains(self, name: str, times: int | None = None) -> None:
         """Assert a callback was called (optionally a specific number of times)."""
         calls = self.get_calls(name)
         if times is not None:
@@ -272,7 +272,7 @@ class AsyncCallbackCollector:
     """
 
     def __init__(self, expected_count: int = 1):
-        self.results: List[Any] = []
+        self.results: list[Any] = []
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._expected_count = expected_count
@@ -288,7 +288,7 @@ class AsyncCallbackCollector:
         """Wait for expected number of callbacks."""
         return self._event.wait(timeout)
 
-    def reset(self, expected_count: Optional[int] = None) -> None:
+    def reset(self, expected_count: int | None = None) -> None:
         """Reset the collector for reuse."""
         with self._lock:
             self.results.clear()

@@ -19,7 +19,6 @@ Features:
 """
 
 import os
-from dataclasses import dataclass as dc_dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -256,14 +255,15 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Authentication
         require_auth: bool = False  # Set True in production
         auth_username: str | None = None
-        auth_password: str | None = Field(default=None, json_schema_extra={"secret": True})  # nosec B105
+        auth_password: str | None = Field(default=None, json_schema_extra={"secret": True})
+
         # Path restrictions
         allowed_paths: list[str] | None = None  # None = no restriction
         block_path_traversal: bool = True
 
         # Session management
         session_timeout_minutes: int = 30
-        jwt_secret: str | None = Field(default=None, json_schema_extra={"secret": True})  # nosec B105
+        jwt_secret: str | None = Field(default=None, json_schema_extra={"secret": True})
         jwt_algorithm: str = "HS256"
 
         # CSRF protection
@@ -382,7 +382,7 @@ else:
     # Fallback implementation using dataclasses
     from dataclasses import dataclass, field
 
-    def _get_env(key: str, default: str | None = None) -> str | None:
+    def _get_env(key: str, default: str = None) -> str | None:
         return os.environ.get(f"BACKPROPAGATE_{key}", default)
 
     def _get_env_int(key: str, default: int) -> int:
@@ -398,7 +398,7 @@ else:
         return val.lower() in ("true", "1", "yes") if val else default
 
     @dataclass
-    class ModelConfig:  # type: ignore[no-redef]
+    class ModelConfig:
         name: str = "Qwen/Qwen2.5-7B-Instruct"  # Official model, Unsloth handles 4-bit
         load_in_4bit: bool = True
         max_seq_length: int = 2048
@@ -406,7 +406,7 @@ else:
         trust_remote_code: bool = True
 
     @dataclass
-    class LoRAConfig:  # type: ignore[no-redef]
+    class LoRAConfig:
         r: int = 16
         lora_alpha: int = 32
         lora_dropout: float = 0.05
@@ -418,7 +418,7 @@ else:
         random_state: int = 42
 
     @dataclass
-    class TrainingConfig:  # type: ignore[no-redef]
+    class TrainingConfig:
         per_device_train_batch_size: int = 2
         gradient_accumulation_steps: int = 4
         max_steps: int = 100
@@ -438,7 +438,7 @@ else:
         overwrite_output_dir: bool = True
 
     @dataclass
-    class DataConfig:  # type: ignore[no-redef]
+    class DataConfig:
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         dataset_split: str = "train_sft"
         max_samples: int = 1000
@@ -449,14 +449,14 @@ else:
         packing: bool = False
 
     @dataclass
-    class UIConfig:  # type: ignore[no-redef]
+    class UIConfig:
         port: int = 7862
         host: str = "127.0.0.1"
         share: bool = False
         auto_open: bool = True
 
     @dataclass
-    class WindowsConfig:  # type: ignore[no-redef]
+    class WindowsConfig:
         dataloader_num_workers: int = 0
         tokenizers_parallelism: bool = False
         xformers_disabled: bool = True
@@ -464,7 +464,7 @@ else:
         pre_tokenize: bool = True
 
     @dataclass
-    class MultiRunConfig:  # type: ignore[no-redef]
+    class MultiRunConfig:
         num_runs: int = 5
         steps_per_run: int = 100
         samples_per_run: int = 1000
@@ -472,7 +472,7 @@ else:
         save_intermediate: bool = True
 
     @dataclass
-    class SecurityConfig:  # type: ignore[no-redef]
+    class SecurityConfig:
         """Security configuration (fallback without pydantic-settings)."""
         require_auth: bool = False
         auth_username: str | None = None
@@ -505,7 +505,7 @@ else:
             return warnings
 
     @dataclass
-    class Settings:  # type: ignore[no-redef]
+    class Settings:
         model: ModelConfig = field(default_factory=ModelConfig)
         training: TrainingConfig = field(default_factory=TrainingConfig)
         lora: LoRAConfig = field(default_factory=LoRAConfig)
@@ -525,6 +525,8 @@ else:
                 os.environ["TOKENIZERS_PARALLELISM"] = str(self.windows.tokenizers_parallelism).lower()
                 if self.windows.xformers_disabled:
                     os.environ["XFORMERS_DISABLED"] = "1"
+                if self.windows.cuda_launch_blocking:
+                    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 
 # =============================================================================
@@ -607,6 +609,8 @@ def get_training_args() -> dict:
 # =============================================================================
 # Research shows LoRA works best with effective batch size 8-32
 # See: https://arxiv.org/abs/2512.23017, Unsloth hyperparameters guide
+
+from dataclasses import dataclass as dc_dataclass
 
 
 @dc_dataclass

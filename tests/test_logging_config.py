@@ -12,19 +12,16 @@ Tests cover:
 
 import logging
 import os
-from io import StringIO
 from unittest import mock
 
-import pytest
-
 from backpropagate.logging_config import (
+    STRUCTLOG_AVAILABLE,
+    LogContext,
+    add_request_context,
+    clear_request_context,
     configure_logging,
     get_logger,
     get_standard_logger,
-    add_request_context,
-    clear_request_context,
-    LogContext,
-    STRUCTLOG_AVAILABLE,
 )
 
 
@@ -203,9 +200,8 @@ class TestLogContext:
 
     def test_log_context_nested(self):
         """Nested LogContext works correctly."""
-        with LogContext(outer="1"):
-            with LogContext(inner="2"):
-                pass  # Should not raise
+        with LogContext(outer="1"), LogContext(inner="2"):
+            pass  # Should not raise
 
 
 class TestAddRequestContext:
@@ -366,6 +362,7 @@ class TestStructuredFormatter:
     def test_structured_formatter_format(self):
         """StructuredFormatter.format returns JSON string."""
         import json
+
         from backpropagate.logging_config import StructuredFormatter
 
         formatter = StructuredFormatter()
@@ -391,6 +388,7 @@ class TestStructuredFormatter:
     def test_structured_formatter_with_exception(self):
         """StructuredFormatter includes exception info."""
         import json
+
         from backpropagate.logging_config import StructuredFormatter
 
         formatter = StructuredFormatter()
@@ -540,8 +538,8 @@ class TestFallbackLogging:
     def test_configure_standard_logging_json(self):
         """_configure_standard_logging with JSON formatter."""
         from backpropagate.logging_config import (
-            _configure_standard_logging,
             StructuredFormatter,
+            _configure_standard_logging,
         )
 
         root = logging.getLogger()

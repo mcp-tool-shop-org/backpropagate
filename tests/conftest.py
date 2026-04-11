@@ -1,8 +1,8 @@
 """Pytest configuration and fixtures."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # CUDA/GPU FIXTURES
@@ -141,7 +141,7 @@ def gpu_safety_config():
 @pytest.fixture
 def gpu_status_safe():
     """Create a safe GPU status for testing."""
-    from backpropagate.gpu_safety import GPUStatus, GPUCondition
+    from backpropagate.gpu_safety import GPUCondition, GPUStatus
     return GPUStatus(
         available=True,
         device_name="Test GPU",
@@ -156,7 +156,7 @@ def gpu_status_safe():
 @pytest.fixture
 def gpu_status_critical():
     """Create a critical GPU status for testing."""
-    from backpropagate.gpu_safety import GPUStatus, GPUCondition
+    from backpropagate.gpu_safety import GPUCondition, GPUStatus
     return GPUStatus(
         available=True,
         device_name="Test GPU",
@@ -172,7 +172,7 @@ def gpu_status_critical():
 @pytest.fixture
 def gpu_status_emergency():
     """Create an emergency GPU status for testing."""
-    from backpropagate.gpu_safety import GPUStatus, GPUCondition
+    from backpropagate.gpu_safety import GPUCondition, GPUStatus
     return GPUStatus(
         available=True,
         device_name="Test GPU",
@@ -224,7 +224,7 @@ def multi_run_config():
 @pytest.fixture
 def multi_run_config_fast():
     """Create a fast multi-run config for quick tests."""
-    from backpropagate.multi_run import MultiRunConfig, MergeMode
+    from backpropagate.multi_run import MergeMode, MultiRunConfig
     return MultiRunConfig(
         num_runs=2,
         steps_per_run=10,
@@ -372,7 +372,7 @@ def checkpoint_dir(tmp_path):
 @pytest.fixture
 def mock_gpu_status():
     """Mock GPU status for non-GPU testing."""
-    from backpropagate.gpu_safety import GPUStatus, GPUCondition
+    from backpropagate.gpu_safety import GPUCondition, GPUStatus
     return GPUStatus(
         available=True,
         device_name="Mock GPU",

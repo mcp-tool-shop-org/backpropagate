@@ -13,43 +13,43 @@ Tests cover:
 """
 
 import pytest
+
 from backpropagate.exceptions import (
     # Base
     BackpropagateError,
+    # Batch
+    BatchOperationError,
+    CheckpointError,
     # Configuration
     ConfigurationError,
-    InvalidSettingError,
     # Dataset
     DatasetError,
+    DatasetFormatError,
     DatasetNotFoundError,
     DatasetParseError,
     DatasetValidationError,
-    DatasetFormatError,
-    # Training
-    TrainingError,
-    ModelLoadError,
-    TrainingAbortedError,
-    CheckpointError,
     # Export
     ExportError,
-    LoRAExportError,
     GGUFExportError,
-    MergeExportError,
-    OllamaRegistrationError,
     # GPU
     GPUError,
-    GPUNotAvailableError,
     GPUMemoryError,
-    GPUTemperatureError,
     GPUMonitoringError,
+    GPUNotAvailableError,
+    GPUTemperatureError,
+    InvalidSettingError,
+    LoRAExportError,
+    MergeExportError,
+    ModelLoadError,
+    OllamaRegistrationError,
+    SLAOCheckpointError,
     # SLAO
     SLAOError,
     SLAOMergeError,
-    SLAOCheckpointError,
-    # Batch
-    BatchOperationError,
+    TrainingAbortedError,
+    # Training
+    TrainingError,
 )
-
 
 # =============================================================================
 # BASE EXCEPTION TESTS
@@ -1085,10 +1085,10 @@ class TestExportsFromModule:
             BackpropagateError,
             ConfigurationError,
             DatasetError,
-            TrainingError,
             ExportError,
             GPUError,
             SLAOError,
+            TrainingError,
         )
 
         assert BackpropagateError is not None

@@ -12,10 +12,7 @@ See docs/EVENT_HANDLER_TEST_ROADMAP.md for the full testing plan.
 
 import threading
 import time
-from unittest.mock import MagicMock, patch, call
-
-import pytest
-
+from unittest.mock import MagicMock, patch
 
 # =============================================================================
 # E2E TRAINING CALLBACK TESTS
@@ -83,7 +80,7 @@ class TestE2EMultiRunCallbacks:
 
     def test_multirun_callback_full_sequence(self, mock_multirun_callbacks):
         """Test full callback sequence across multiple runs."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks, calls = mock_multirun_callbacks
 
@@ -115,7 +112,7 @@ class TestE2EMultiRunCallbacks:
 
     def test_multirun_callback_run_indices_sequential(self, mock_multirun_callbacks):
         """Run indices should be sequential starting from 0."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks, calls = mock_multirun_callbacks
 
@@ -133,7 +130,7 @@ class TestE2EMultiRunCallbacks:
 
     def test_multirun_step_callback_tracks_loss_progression(self, mock_multirun_callbacks):
         """Step callback should show loss decreasing within runs."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks, calls = mock_multirun_callbacks
 
@@ -191,7 +188,7 @@ class TestE2EGPUMonitoringCallbacks:
         self, mock_get_status, gpu_status_critical
     ):
         """Critical GPU status should trigger critical callback."""
-        from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUMonitor, GPUSafetyConfig
 
         mock_get_status.return_value = gpu_status_critical
 
@@ -377,7 +374,7 @@ class TestCrossComponentCallbackFlow:
         controller = TrainingController()
 
         # Simulate emergency status
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         emergency_status = GPUStatus(
             available=True,
@@ -522,7 +519,7 @@ class TestConcurrentCallbacks:
 
     def test_multiple_monitors_concurrent_callbacks(self):
         """Multiple monitors can have concurrent callbacks."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition
+        from backpropagate.gpu_safety import GPUCondition, GPUStatus
 
         results = {"monitor1": [], "monitor2": []}
         lock = threading.Lock()
@@ -792,7 +789,7 @@ class TestMultiRunCallbackInvocationOrder:
 
     def test_run_start_before_steps(self, callback_tracker):
         """on_run_start should be called before any on_step calls."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         trainer = MultiRunTrainer(
             model="test-model",
@@ -813,7 +810,7 @@ class TestMultiRunCallbackInvocationOrder:
 
     def test_run_complete_after_all_steps(self, callback_tracker):
         """on_run_complete should be called after all steps in a run."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         trainer = MultiRunTrainer(
             model="test-model",
@@ -833,7 +830,7 @@ class TestMultiRunCallbackInvocationOrder:
 
     def test_multirun_full_sequence(self, callback_tracker):
         """Test complete callback sequence across multiple runs."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         trainer = MultiRunTrainer(
             model="test-model",
@@ -858,7 +855,7 @@ class TestMultiRunCallbackInvocationOrder:
 
     def test_run_indices_passed_correctly(self, mock_multirun_callbacks):
         """Run indices should be passed correctly to all callbacks."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks, calls = mock_multirun_callbacks
 
@@ -883,7 +880,7 @@ class TestMultiRunCallbackInvocationOrder:
 
     def test_step_numbers_reset_each_run(self, mock_multirun_callbacks):
         """Step numbers should restart from 1 each run."""
-        from backpropagate.multi_run import MultiRunTrainer, MultiRunConfig
+        from backpropagate.multi_run import MultiRunConfig, MultiRunTrainer
 
         callbacks, calls = mock_multirun_callbacks
 
@@ -1061,7 +1058,7 @@ class TestEventEscalation:
 
     def test_safe_to_warning_escalation(self):
         """Temperature rise should escalate from SAFE to WARNING."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition, GPUSafetyConfig
+        from backpropagate.gpu_safety import GPUCondition, GPUSafetyConfig, GPUStatus
 
         config = GPUSafetyConfig()
 
@@ -1092,7 +1089,7 @@ class TestEventEscalation:
 
     def test_warning_to_critical_escalation(self):
         """Further temperature rise should escalate to CRITICAL."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition, GPUSafetyConfig
+        from backpropagate.gpu_safety import GPUCondition, GPUSafetyConfig, GPUStatus
 
         config = GPUSafetyConfig()
 
@@ -1122,7 +1119,7 @@ class TestEventEscalation:
 
     def test_critical_to_emergency_escalation(self):
         """Extreme conditions should escalate to EMERGENCY."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition, GPUSafetyConfig
+        from backpropagate.gpu_safety import GPUCondition, GPUSafetyConfig, GPUStatus
 
         config = GPUSafetyConfig()
 
@@ -1141,7 +1138,7 @@ class TestEventEscalation:
 
     def test_deescalation_on_cooldown(self):
         """Temperature drop should de-escalate condition."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition, GPUSafetyConfig
+        from backpropagate.gpu_safety import GPUCondition, GPUSafetyConfig, GPUStatus
 
         config = GPUSafetyConfig()
 
@@ -1186,9 +1183,7 @@ class TestEventEscalation:
     @patch("backpropagate.gpu_safety.get_gpu_status")
     def test_escalation_triggers_appropriate_callbacks(self, mock_get_status):
         """Escalating conditions should trigger appropriate callbacks."""
-        from backpropagate.gpu_safety import (
-            GPUMonitor, GPUSafetyConfig, GPUStatus, GPUCondition
-        )
+        from backpropagate.gpu_safety import GPUCondition, GPUMonitor, GPUSafetyConfig, GPUStatus
 
         callbacks_fired = {"warning": [], "critical": [], "emergency": []}
 
@@ -1249,7 +1244,7 @@ class TestEventEscalation:
 
     def test_vram_escalation_independent_of_temperature(self):
         """VRAM exhaustion should escalate independent of temperature."""
-        from backpropagate.gpu_safety import GPUStatus, GPUCondition, GPUSafetyConfig
+        from backpropagate.gpu_safety import GPUCondition, GPUSafetyConfig, GPUStatus
 
         config = GPUSafetyConfig()
 

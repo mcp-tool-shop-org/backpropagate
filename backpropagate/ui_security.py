@@ -35,7 +35,6 @@ Usage:
     )
 """
 
-import hmac
 import json
 import logging
 import os
@@ -312,7 +311,7 @@ class EnhancedRateLimiter:
             # Try to get IP from request
             client_ip = getattr(request, "client", {})
             if isinstance(client_ip, dict):
-                return str(client_ip.get("host", "anonymous"))
+                return client_ip.get("host", "anonymous")
             return str(client_ip) if client_ip else "anonymous"
         return "anonymous"
 
@@ -603,7 +602,7 @@ def safe_gradio_handler(
     """
     def decorator(func: F) -> F:
         @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args, **kwargs):
             # Check rate limit
             if rate_limiter is not None:
                 request = kwargs.get("request")
@@ -623,12 +622,12 @@ def safe_gradio_handler(
                 raise
 
             except RateLimitExceeded as e:
-                raise gr.Error(str(e), duration=10, title="Rate Limited") from None
+                raise gr.Error(str(e), duration=10, title="Rate Limited")
 
             except FileNotFoundError as e:
                 if log_errors:
                     logger.error(f"{operation_name} failed - file not found: {e}")
-                raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found") from None
+                raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
 
             except PermissionError as e:
                 if log_errors:
@@ -637,12 +636,12 @@ def safe_gradio_handler(
                     "Permission denied. Check file/folder permissions.",
                     duration=10,
                     title="Permission Denied",
-                ) from None
+                )
 
             except ValueError as e:
                 if log_errors:
                     logger.warning(f"{operation_name} validation error: {e}")
-                raise gr.Error(f"Invalid input: {e}", duration=10, title="Validation Error") from None
+                raise gr.Error(f"Invalid input: {e}", duration=10, title="Validation Error")
 
             except Exception as e:
                 if log_errors:
@@ -660,7 +659,7 @@ def safe_gradio_handler(
                     f"An error occurred during {operation_name}. Check logs for details.",
                     duration=10,
                     title="Error",
-                ) from None
+                )
 
         return wrapper  # type: ignore
     return decorator
@@ -701,7 +700,7 @@ def validate_numeric_input(
     try:
         num = float(value)
     except (ValueError, TypeError):
-        raise gr.Error(f"{name} must be a number, got: {type(value).__name__}", duration=5) from None
+        raise gr.Error(f"{name} must be a number, got: {type(value).__name__}", duration=5)
 
     if min_value is not None and num < min_value:
         raise gr.Error(f"{name} must be at least {min_value}, got {num}", duration=5)
@@ -766,8 +765,9 @@ def validate_string_input(
         )
 
     # Check pattern
-    if pattern is not None and not re.match(pattern, text):
-        raise gr.Error(f"{name} has invalid format", duration=5)
+    if pattern is not None:
+        if not re.match(pattern, text):
+            raise gr.Error(f"{name} has invalid format", duration=5)
 
     return text
 
@@ -795,7 +795,7 @@ def validate_and_log_request(
             client_id = client.get("host", "anonymous")
 
     # Sanitize params for logging (truncate long values)
-    safe_params: dict[str, Any] = {}
+    safe_params = {}
     for key, value in params.items():
         if isinstance(value, str) and len(value) > 100:
             safe_params[key] = value[:100] + "..."
@@ -826,7 +826,6 @@ class SecurityLogger:
     """
 
     _instance: Optional["SecurityLogger"] = None
-    _logger: logging.Logger
 
     def __new__(cls) -> "SecurityLogger":
         if cls._instance is None:
@@ -949,7 +948,7 @@ class HealthStatus:
     rate_limit_status: str = "ok"
     timestamp: str = ""
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -1018,7 +1017,7 @@ def get_health_status(
             gpu_status = get_gpu_status()
             status.gpu_available = gpu_status.available
             if gpu_status.available:
-                status.gpu_name = gpu_status.device_name
+                status.gpu_name = gpu_status.gpu_name
                 status.gpu_memory_used_gb = gpu_status.vram_used_gb
                 status.gpu_memory_total_gb = gpu_status.vram_total_gb
                 status.gpu_temperature_c = gpu_status.temperature_c
@@ -1027,7 +1026,7 @@ def get_health_status(
                 if gpu_status.temperature_c and gpu_status.temperature_c > 85:
                     status.status = "degraded"
         except Exception:
-            pass  # nosec B110 - GPU check failed, continue without
+            pass  # GPU check failed, continue without
 
     return status
 
@@ -1195,16 +1194,14 @@ class SessionManager:
 
     _instance: Optional["SessionManager"] = None
     _lock: Lock = Lock()
-    _sessions: dict[str, SessionInfo]
-    _sessions_by_ip: dict[str, list[str]]
 
     def __new__(cls) -> "SessionManager":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._sessions = {}
-                    cls._instance._sessions_by_ip = {}
+                    cls._instance._sessions: dict[str, SessionInfo] = {}
+                    cls._instance._sessions_by_ip: dict[str, list[str]] = {}
         return cls._instance
 
     def create_session(
@@ -1363,7 +1360,7 @@ class ConcurrencyLimiter:
         if request is not None:
             client = getattr(request, "client", {})
             if isinstance(client, dict):
-                return str(client.get("host", "anonymous"))
+                return client.get("host", "anonymous")
         return "anonymous"
 
     def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:
@@ -1623,11 +1620,11 @@ class JWTManager:
         if additional_claims:
             payload.update(additional_claims)
 
-        token = str(pyjwt.encode(
+        token = pyjwt.encode(
             payload,
             self.config.secret,
             algorithm=self.config.algorithm,
-        ))
+        )
 
         log_security_event(
             "jwt_token_created",
@@ -1829,6 +1826,9 @@ class CSRFProtection:
         for sid in expired:
             del self._tokens[sid]
 
+
+# Need hmac for constant-time comparison
+import hmac
 
 # =============================================================================
 # COMBINED SESSION + CSRF HANDLER

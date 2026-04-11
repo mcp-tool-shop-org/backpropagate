@@ -162,7 +162,7 @@ def get_gpu_status(device_index: int = 0, config: GPUSafetyConfig | None = None)
         props = torch.cuda.get_device_properties(device_index)
         status.vram_total_gb = props.total_memory / (1024**3)
 
-        _allocated = torch.cuda.memory_allocated(device_index)
+        allocated = torch.cuda.memory_allocated(device_index)
         reserved = torch.cuda.memory_reserved(device_index)
         status.vram_used_gb = reserved / (1024**3)
         status.vram_free_gb = status.vram_total_gb - status.vram_used_gb

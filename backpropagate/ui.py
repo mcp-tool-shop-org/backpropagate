@@ -2351,20 +2351,11 @@ def launch(
         # Multiple users
         launch(share=True, auth=[("user1", "pass1"), ("user2", "pass2")])
     """
-    import warnings
-
     # Security check: require auth when sharing publicly
-    if share and auth is None:
-        warnings.warn(
-            "Creating a public URL without authentication is a security risk. "
-            "Anyone with the URL can access your training interface. "
-            "Consider using auth=('username', 'password') for protection.",
-            SecurityWarning,
-            stacklevel=2,
-        )
-        logger.warning(
-            "SECURITY: Public share link created without authentication. "
-            "This exposes training controls to anyone with the URL."
+    if share and auth is None and DEFAULT_SECURITY_CONFIG.require_auth_for_share:
+        raise ValueError(
+            "Authentication required when share=True. "
+            "Set auth parameter or disable require_auth_for_share in SecurityConfig."
         )
 
     app = create_ui()

@@ -875,16 +875,14 @@ class MultiRunTrainer:
         model = self._trainer._model
         tokenizer = self._trainer._tokenizer
 
-        # Get validation samples (use samples from far in the future to avoid overlap)
+        # Dedicated hold-out split: reserve the last 10% of the dataset for validation.
+        # Training data (_get_data_chunk) draws from the front of the dataset and wraps
+        # around, so keeping validation at the tail prevents overlap.
         total_samples = len(full_dataset)
-        val_start = (self.config.num_runs * self.config.samples_per_run) % total_samples
-        val_end = min(val_start + self.config.validation_samples, total_samples)
-
-        if val_end <= val_start:
-            # Wrap around
-            val_indices = list(range(val_start, total_samples)) + list(range(0, self.config.validation_samples - (total_samples - val_start)))
-        else:
-            val_indices = list(range(val_start, val_end))
+        holdout_size = max(int(total_samples * 0.10), 1)
+        val_start = total_samples - holdout_size
+        val_count = min(self.config.validation_samples, holdout_size)
+        val_indices = list(range(val_start, val_start + val_count))
 
         val_dataset = full_dataset.select(val_indices)
 

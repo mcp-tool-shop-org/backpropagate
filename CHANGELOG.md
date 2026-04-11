@@ -125,5 +125,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop/backpropagate/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/mcp-tool-shop/backpropagate/releases/tag/v0.1.0
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v0.1.7...v1.0.0
+[0.1.7]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v0.1.4...v0.1.7
+[0.1.4]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v0.1.0...v0.1.3
+[0.1.0]: https://github.com/mcp-tool-shop-org/backpropagate/releases/tag/v0.1.0

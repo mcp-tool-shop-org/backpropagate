@@ -41,5 +41,5 @@ trainer.export("gguf", quantization="q4_k_m")
 - Config via env vars (`BACKPROPAGATE_MODEL__NAME`, etc.) or `.env` file
 
 ## Links
-- Repo: https://github.com/mcp-tool-shop/backpropagate
+- Repo: https://github.com/mcp-tool-shop-org/backpropagate
 - PyPI: https://pypi.org/project/backpropagate/

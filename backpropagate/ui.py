@@ -53,7 +53,7 @@ from .feature_flags import (
     list_available_features,
 )
 from .gpu_safety import GPUCondition, get_gpu_status
-from .security import PathTraversalError, SecurityWarning, safe_path
+from .security import PathTraversalError, safe_path
 from .theme import create_backpropagate_theme, get_css
 
 # Import production security utilities
@@ -2351,28 +2351,22 @@ def launch(
         # Multiple users
         launch(share=True, auth=[("user1", "pass1"), ("user2", "pass2")])
     """
-    import warnings
-
     # Security check: require auth when sharing publicly
-    if share and auth is None:
-        warnings.warn(
-            "Creating a public URL without authentication is a security risk. "
-            "Anyone with the URL can access your training interface. "
-            "Consider using auth=('username', 'password') for protection.",
-            SecurityWarning,
-            stacklevel=2,
-        )
-        logger.warning(
-            "SECURITY: Public share link created without authentication. "
-            "This exposes training controls to anyone with the URL."
+    if share and auth is None and DEFAULT_SECURITY_CONFIG.require_auth_for_share:
+        raise ValueError(
+            "Authentication required when share=True. "
+            "Set auth parameter or disable require_auth_for_share in SecurityConfig."
         )
 
     app = create_ui()
     theme = create_backpropagate_theme()
     css = get_css()
 
+    # Bind to all interfaces only when sharing publicly; localhost otherwise
+    server_name = "0.0.0.0" if share else "127.0.0.1"
+
     launch_kwargs = {
-        "server_name": "0.0.0.0",
+        "server_name": server_name,
         "server_port": port,
         "share": share,
         "inbrowser": True,

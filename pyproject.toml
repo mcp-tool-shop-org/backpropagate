@@ -24,7 +24,7 @@ keywords = [
     "api",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -259,4 +259,4 @@ dict_synonyms = "Struct, NamedTuple"
 [tool.poodle]
 source_folders = ["backpropagate"]
 [tool.poodle.runner_opts]
-command_line = "pytest F:/AI/backpropagate/tests/ -x --assert=plain -o 'pythonpath={PYTHONPATH}' --ignore=F:/AI/backpropagate/tests/test_cli.py --ignore=F:/AI/backpropagate/tests/test_cli_extended.py"
+command_line = "pytest tests/ -x --assert=plain --ignore=tests/test_cli.py --ignore=tests/test_cli_extended.py"

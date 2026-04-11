@@ -438,11 +438,10 @@ def export_gguf(
     # Try to find llama.cpp convert script
     gguf_path = output_path / f"{model_name}-{quant_str}.gguf"
 
-    # Check for llama-cpp-python or llama.cpp
+    # Check for llama-cpp-python or llama.cpp (system/user paths only, no CWD-relative)
     convert_script = None
     llama_cpp_paths = [
         Path.home() / "llama.cpp" / "convert_hf_to_gguf.py",
-        Path("llama.cpp") / "convert_hf_to_gguf.py",
         Path("/usr/local/bin/convert_hf_to_gguf.py"),
     ]
 
@@ -452,6 +451,7 @@ def export_gguf(
             break
 
     if convert_script:
+        logger.warning(f"Using llama.cpp convert script: {convert_script}")
         # Run conversion
         cmd = [
             "python",

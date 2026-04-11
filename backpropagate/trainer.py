@@ -119,12 +119,12 @@ class Trainer:
     ):
         # Use settings as defaults, override with provided values
         self.model_name = model or settings.model.name
-        self.lora_r = lora_r or settings.lora.r
-        self.lora_alpha = lora_alpha or settings.lora.lora_alpha
-        self.lora_dropout = lora_dropout or settings.lora.lora_dropout
-        self.learning_rate = learning_rate or settings.training.learning_rate
-        self.gradient_accumulation = gradient_accumulation or settings.training.gradient_accumulation_steps
-        self.max_seq_length = max_seq_length or settings.model.max_seq_length
+        self.lora_r = lora_r if lora_r is not None else settings.lora.r
+        self.lora_alpha = lora_alpha if lora_alpha is not None else settings.lora.lora_alpha
+        self.lora_dropout = lora_dropout if lora_dropout is not None else settings.lora.lora_dropout
+        self.learning_rate = learning_rate if learning_rate is not None else settings.training.learning_rate
+        self.gradient_accumulation = gradient_accumulation if gradient_accumulation is not None else settings.training.gradient_accumulation_steps
+        self.max_seq_length = max_seq_length if max_seq_length is not None else settings.model.max_seq_length
         self.output_dir = Path(output_dir or settings.training.output_dir)
         self.use_unsloth = use_unsloth and check_feature("unsloth")
 

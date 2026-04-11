@@ -36,6 +36,7 @@ Usage:
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -254,6 +255,9 @@ class MultiRunTrainer:
         self._gpu_max_temp = 0.0
         self._gpu_max_vram = 0.0
 
+        # GPU pause event: set when GPU is overheating, cleared when safe
+        self._gpu_pause_event = threading.Event()
+
         # Phase 4.3: Early stopping tracking
         self._validation_losses: list[float] = []
         self._early_stop_counter = 0
@@ -344,6 +348,14 @@ class MultiRunTrainer:
             for run_idx in range(1, self.config.num_runs + 1):
                 if self._should_abort:
                     break
+
+                # Check if GPU pause is active (B-020: overheat protection).
+                # The monitor thread sets the event when overheating and clears it
+                # when the GPU is safe again. We poll here so the main thread blocks.
+                if self._gpu_pause_event.is_set():
+                    logger.info("Waiting for GPU cooldown before starting run...")
+                    while self._gpu_pause_event.is_set() and not self._should_abort:
+                        time.sleep(1.0)
 
                 # Phase 4.3: Use validation wrapper if validation or early stopping enabled
                 if self.config.validate_every_run or self.config.early_stopping:
@@ -834,12 +846,22 @@ class MultiRunTrainer:
             self.on_gpu_status(status)
 
     def _on_gpu_critical(self, status: GPUStatus) -> None:
-        """Handle critical GPU condition."""
+        """Handle critical GPU condition by signaling the training loop to pause."""
         logger.warning(f"GPU CRITICAL: {status.condition_reason}")
 
         if self.config.pause_on_overheat:
-            logger.info("Pausing for cooldown...")
-            # Note: actual pause would need deeper integration with training loop
+            logger.info("Pausing training for GPU cooldown...")
+            self._gpu_pause_event.set()
+            # Wait for GPU to return to safe temps before clearing the pause
+            safe = wait_for_safe_gpu(
+                max_wait_seconds=self.config.cooldown_seconds,
+                check_interval=5.0,
+            )
+            self._gpu_pause_event.clear()
+            if safe:
+                logger.info("GPU cooled down, resuming training.")
+            else:
+                logger.warning("GPU did not cool down within timeout, resuming anyway.")
 
     def _on_gpu_emergency(self, status: GPUStatus) -> None:
         """Handle emergency GPU condition."""
@@ -875,16 +897,14 @@ class MultiRunTrainer:
         model = self._trainer._model
         tokenizer = self._trainer._tokenizer
 
-        # Get validation samples (use samples from far in the future to avoid overlap)
+        # Dedicated hold-out split: reserve the last 10% of the dataset for validation.
+        # Training data (_get_data_chunk) draws from the front of the dataset and wraps
+        # around, so keeping validation at the tail prevents overlap.
         total_samples = len(full_dataset)
-        val_start = (self.config.num_runs * self.config.samples_per_run) % total_samples
-        val_end = min(val_start + self.config.validation_samples, total_samples)
-
-        if val_end <= val_start:
-            # Wrap around
-            val_indices = list(range(val_start, total_samples)) + list(range(0, self.config.validation_samples - (total_samples - val_start)))
-        else:
-            val_indices = list(range(val_start, val_end))
+        holdout_size = max(int(total_samples * 0.10), 1)
+        val_start = total_samples - holdout_size
+        val_count = min(self.config.validation_samples, holdout_size)
+        val_indices = list(range(val_start, val_start + val_count))
 
         val_dataset = full_dataset.select(val_indices)
 

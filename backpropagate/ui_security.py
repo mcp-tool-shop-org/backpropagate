@@ -304,6 +304,7 @@ class EnhancedRateLimiter:
         self._requests: dict[str, list[float]] = {}
         self._last_cleanup = time.time()
         self._cleanup_interval = 300  # Cleanup every 5 minutes
+        self._lock = Lock()
 
     def _get_client_id(self, request: gr.Request | None = None) -> str:
         """Get client identifier (IP or fallback to 'anonymous')."""
@@ -321,17 +322,18 @@ class EnhancedRateLimiter:
         if now - self._last_cleanup < self._cleanup_interval:
             return
 
-        self._last_cleanup = now
-        cutoff = now - self.window_seconds
+        with self._lock:
+            self._last_cleanup = now
+            cutoff = now - self.window_seconds
 
-        # Remove old requests
-        for client_id in list(self._requests.keys()):
-            self._requests[client_id] = [
-                t for t in self._requests[client_id] if t > cutoff
-            ]
-            # Remove empty entries
-            if not self._requests[client_id]:
-                del self._requests[client_id]
+            # Remove old requests
+            for client_id in list(self._requests.keys()):
+                self._requests[client_id] = [
+                    t for t in self._requests[client_id] if t > cutoff
+                ]
+                # Remove empty entries
+                if not self._requests[client_id]:
+                    del self._requests[client_id]
 
     def check(self, request: gr.Request | None = None) -> tuple[bool, float]:
         """
@@ -346,36 +348,37 @@ class EnhancedRateLimiter:
         now = time.time()
         cutoff = now - self.window_seconds
 
-        # Get requests for this client
-        if client_id not in self._requests:
-            self._requests[client_id] = []
+        with self._lock:
+            # Get requests for this client
+            if client_id not in self._requests:
+                self._requests[client_id] = []
 
-        # Filter to recent requests
-        recent = [t for t in self._requests[client_id] if t > cutoff]
-        self._requests[client_id] = recent
+            # Filter to recent requests
+            recent = [t for t in self._requests[client_id] if t > cutoff]
+            self._requests[client_id] = recent
 
-        # Check limit (with burst allowance)
-        effective_limit = self.max_requests + self.burst_allowance
+            # Check limit (with burst allowance)
+            effective_limit = self.max_requests + self.burst_allowance
 
-        if len(recent) >= effective_limit:
-            # Calculate wait time
-            oldest = min(recent)
-            wait_time = max(0.0, self.window_seconds - (now - oldest))
+            if len(recent) >= effective_limit:
+                # Calculate wait time
+                oldest = min(recent)
+                wait_time = max(0.0, self.window_seconds - (now - oldest))
 
-            # Log rate limit event
-            log_security_event(
-                "rate_limit_exceeded",
-                client_id=client_id,
-                operation=self.operation_name,
-                requests_in_window=len(recent),
-                limit=effective_limit,
-            )
+                # Log rate limit event
+                log_security_event(
+                    "rate_limit_exceeded",
+                    client_id=client_id,
+                    operation=self.operation_name,
+                    requests_in_window=len(recent),
+                    limit=effective_limit,
+                )
 
-            return False, wait_time
+                return False, wait_time
 
-        # Allow and record
-        self._requests[client_id].append(now)
-        return True, 0.0
+            # Allow and record
+            self._requests[client_id].append(now)
+            return True, 0.0
 
     def is_allowed(self, request: gr.Request | None = None) -> bool:
         """Simple check returning just bool."""

@@ -249,6 +249,52 @@ from .trainer import (
     load_model,
 )
 
+# Learning system - Contracts
+from .contracts import (
+    LearningSignal,
+    TraceStep,
+    Trace,
+    SignalSource,
+    SCHEMA_VERSION,
+    MIN_DELTA,
+    MAX_DELTA,
+)
+
+# Learning system - Feedback scoring
+from .feedback import (
+    score_feedback,
+    score_binary_feedback,
+    score_numeric_feedback,
+    apply_time_decay,
+    aggregate_signals,
+    is_positive_feedback,
+    is_negative_feedback,
+    is_neutral_feedback,
+)
+
+# Learning system - Trace graph
+from .trace import (
+    TraceGraph,
+    TraceGraphBuilder,
+    build_trace_from_steps,
+    get_tool_statistics,
+)
+
+# Learning system - Memory
+from .memory import (
+    MemoryUpdater,
+    ToolMemory,
+    MemoryStats,
+)
+
+# Learning system - Engine
+from .engine import (
+    BackpropagationEngine,
+    PropagationResult,
+    SimulationResult,
+    create_engine,
+)
+
 __version__ = _pkg_version("backpropagate")
 
 
@@ -465,6 +511,42 @@ __all__ = [
     "order_by_difficulty",
     "get_curriculum_chunks",
     "analyze_curriculum",
+
+    # Learning system (contracts)
+    "LearningSignal",
+    "TraceStep",
+    "Trace",
+    "SignalSource",
+    "SCHEMA_VERSION",
+    "MIN_DELTA",
+    "MAX_DELTA",
+
+    # Learning system (feedback)
+    "score_feedback",
+    "score_binary_feedback",
+    "score_numeric_feedback",
+    "apply_time_decay",
+    "aggregate_signals",
+    "is_positive_feedback",
+    "is_negative_feedback",
+    "is_neutral_feedback",
+
+    # Learning system (trace)
+    "TraceGraph",
+    "TraceGraphBuilder",
+    "build_trace_from_steps",
+    "get_tool_statistics",
+
+    # Learning system (memory)
+    "MemoryUpdater",
+    "ToolMemory",
+    "MemoryStats",
+
+    # Learning system (engine)
+    "BackpropagationEngine",
+    "PropagationResult",
+    "SimulationResult",
+    "create_engine",
 
     # Lazy-loaded (UI)
     "launch",

@@ -655,3 +655,83 @@ def async_callback_collector():
         return AsyncCallbackCollector(expected_count=expected_count)
 
     return _create_collector
+
+
+# =============================================================================
+# LEARNING MODULE FIXTURES
+# =============================================================================
+
+class DummyLLM:
+    """Mock LLM for testing learning modules."""
+    def __init__(self, response: str = "mock response"):
+        self.response = response
+        self.calls: list[dict] = []
+    def __call__(self, prompt: str, **kwargs) -> str:
+        self.calls.append({"prompt": prompt, **kwargs})
+        return self.response
+    def generate(self, prompt: str, **kwargs) -> str:
+        return self(prompt, **kwargs)
+
+
+@pytest.fixture
+def dummy_llm():
+    """Create a dummy LLM for testing."""
+    return DummyLLM()
+
+
+@pytest.fixture
+def sample_trace():
+    """Create a sample successful trace for testing."""
+    from backpropagate.contracts import Trace, TraceStep
+    return Trace(
+        trace_id="test-trace-001",
+        steps=[
+            TraceStep(tool_id="search_tool", input_data={"query": "test query"},
+                      output_data={"results": ["result1", "result2"]},
+                      success=True, duration_ms=100.0, order=0),
+            TraceStep(tool_id="summarize_tool", input_data={"text": "result1"},
+                      output_data={"summary": "test summary"},
+                      success=True, duration_ms=50.0, order=1),
+        ],
+        success=True,
+    )
+
+
+@pytest.fixture
+def failed_trace():
+    """Create a sample failed trace for testing."""
+    from backpropagate.contracts import Trace, TraceStep
+    return Trace(
+        trace_id="test-trace-002",
+        steps=[
+            TraceStep(tool_id="search_tool", input_data={"query": "bad query"},
+                      output_data={"results": []},
+                      success=True, duration_ms=100.0, order=0),
+            TraceStep(tool_id="parse_tool", input_data={"data": None},
+                      output_data={"error": "No data to parse"},
+                      success=False, duration_ms=10.0, order=1),
+        ],
+        success=False,
+    )
+
+
+@pytest.fixture
+def learning_signal():
+    """Create a sample learning signal for testing."""
+    from backpropagate.contracts import LearningSignal, SignalSource
+    return LearningSignal(tool_id="test_tool", delta=0.5, confidence=0.8,
+                          source=SignalSource.USER_FEEDBACK)
+
+
+@pytest.fixture
+def memory_updater():
+    """Create a memory updater for testing."""
+    from backpropagate.memory import MemoryUpdater
+    return MemoryUpdater(max_signals_per_tool=100)
+
+
+@pytest.fixture
+def backprop_engine(memory_updater):
+    """Create a backpropagation engine for testing."""
+    from backpropagate.engine import BackpropagationEngine
+    return BackpropagationEngine(memory=memory_updater)

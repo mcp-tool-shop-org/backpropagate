@@ -750,15 +750,20 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
         >>> lr = get_recommended_lr(5000)  # Returns 2e-4
         >>> lr = get_recommended_lr(50000)  # Returns 1e-4
     """
+    # Scale all ranges proportionally relative to base_lr.
+    # The default base_lr (2e-4) maps to: small=5e-4, medium=2e-4, large=1e-4.
+    # A custom base_lr scales these proportionally (e.g. base_lr=4e-4 gives small=1e-3).
+    scale = base_lr / 2e-4
+
     if dataset_size < 1000:
         # Small dataset: higher LR, more aggressive learning
-        return 5e-4
+        return 5e-4 * scale
     elif dataset_size < 10000:
         # Medium dataset: standard LoRA LR
         return base_lr
     else:
         # Large dataset: lower LR for stability
-        return 1e-4
+        return 1e-4 * scale
 
 
 def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:

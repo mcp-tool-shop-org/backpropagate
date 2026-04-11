@@ -14,7 +14,7 @@ Thank you for your interest in contributing to Backpropagate! This document prov
 
 ```bash
 # Clone the repository
-git clone https://github.com/mikeyfrilot/backpropagate
+git clone https://github.com/mcp-tool-shop-org/backpropagate
 cd backpropagate
 
 # Create a virtual environment

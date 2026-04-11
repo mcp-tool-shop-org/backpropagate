@@ -2371,8 +2371,11 @@ def launch(
     theme = create_backpropagate_theme()
     css = get_css()
 
+    # Bind to all interfaces only when sharing publicly; localhost otherwise
+    server_name = "0.0.0.0" if share else "127.0.0.1"
+
     launch_kwargs = {
-        "server_name": "0.0.0.0",
+        "server_name": server_name,
         "server_port": port,
         "share": share,
         "inbrowser": True,

@@ -9,6 +9,7 @@ on:
       - 'pyproject.toml'
       - 'setup.cfg'
       - 'requirements*.txt'
+      - 'site/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -18,6 +19,7 @@ on:
       - 'pyproject.toml'
       - 'setup.cfg'
       - 'requirements*.txt'
+      - 'site/**'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -257,3 +259,44 @@ jobs:
           echo "| Secret Detection | ${{ needs.secrets-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "View detailed results in the Security tab." >> $GITHUB_STEP_SUMMARY
+
+  # --- GitHub Pages deployment (merged from pages.yml) ---
+  # Only runs on push to main when site/** changes
+
+  build-site:
+    name: Build site
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install site dependencies
+        working-directory: site
+        run: npm ci
+
+      - name: Build site
+        working-directory: site
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/dist
+
+  deploy-site:
+    name: Deploy site to GitHub Pages
+    needs: build-site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -47,6 +47,7 @@ from typing import Any
 from .checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy, CheckpointStats
 from .config import settings
 from .exceptions import (
+    ConfigurationError,
     DatasetError,
     DatasetNotFoundError,
     TrainingError,
@@ -235,7 +236,12 @@ class MultiRunTrainer:
             self.config.checkpoint_dir = checkpoint_dir
         if merge_mode is not None:
             if isinstance(merge_mode, str):
-                self.config.merge_mode = MergeMode(merge_mode.lower())
+                try:
+                    self.config.merge_mode = MergeMode(merge_mode.lower())
+                except ValueError:
+                    raise ConfigurationError(
+                        f"Invalid merge mode: '{merge_mode}'. Available: slao, simple"
+                    ) from None
             else:
                 self.config.merge_mode = merge_mode
 

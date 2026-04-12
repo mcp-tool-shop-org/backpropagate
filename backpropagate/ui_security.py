@@ -1279,7 +1279,10 @@ class SessionManager:
             # Check session limit per IP
             ip_sessions = self._sessions_by_ip.get(client_ip, [])
             if len(ip_sessions) >= config.max_sessions_per_ip:
-                return False, None, f"Maximum {config.max_sessions_per_ip} sessions per IP"
+                return False, None, (
+                    f"Maximum {config.max_sessions_per_ip} sessions per IP. "
+                    "Close unused browser tabs running this app, or wait for inactive sessions to expire."
+                )
 
             # Create session
             session_id = str(uuid.uuid4())

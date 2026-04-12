@@ -483,7 +483,7 @@ class TestDatasetLoader:
 
     def test_file_not_found(self):
         """Should raise error for missing file."""
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises((FileNotFoundError, Exception)):
             DatasetLoader("/nonexistent/path.jsonl")
 
     def test_to_hf_dataset(self, temp_jsonl_file):

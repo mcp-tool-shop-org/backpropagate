@@ -277,8 +277,10 @@ def require_feature(feature: str) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not FEATURES.get(feature, False):
                 hint = INSTALL_HINTS.get(feature, f"pip install backpropagate[{feature}]")
+                desc = FEATURE_DESCRIPTIONS.get(feature, "")
+                desc_suffix = f" ({desc})" if desc else ""
                 raise ImportError(
-                    f"Feature '{feature}' is required but not installed. "
+                    f"Feature '{feature}'{desc_suffix} is required but not installed. "
                     f"Install with: {hint}"
                 )
             return func(*args, **kwargs)

@@ -32,6 +32,17 @@ trainer.train("my_data.jsonl", steps=100)
 trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 ```
 
+## Dataset Format
+
+Your JSONL training file should have one example per line. The simplest format is ShareGPT chat:
+
+```jsonl
+{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
+{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
+```
+
+Alpaca (`instruction`/`output`), OpenAI chat (`messages`), and raw text formats are also supported.
+
 ## Why Backpropagate?
 
 | Problem | Solution |
@@ -74,6 +85,10 @@ pip install backpropagate[full]        # Everything
 | `production` | unsloth + ui + validation + logging + security | (bundle) |
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
+
+## Configuration
+
+All settings can be overridden with environment variables using the `BACKPROPAGATE_` prefix (e.g., `BACKPROPAGATE_LOG_LEVEL=debug`). A `.env` file in the project root is loaded automatically when the `[validation]` extra is installed.
 
 ## Usage
 

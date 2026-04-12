@@ -498,8 +498,8 @@ def export_gguf(
             "GGUF export requires either Unsloth or llama.cpp",
             output_path=str(output_path),
             suggestion=(
-                "Install Unsloth: pip install unsloth\n"
-                "Or clone llama.cpp: git clone https://github.com/ggerganov/llama.cpp"
+                "Install Unsloth (pip install unsloth) or clone llama.cpp to "
+                "~/llama.cpp/ (expected: ~/llama.cpp/convert_hf_to_gguf.py)"
             )
         )
 

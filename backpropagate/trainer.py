@@ -219,11 +219,13 @@ class Trainer:
             raise ModelLoadError(
                 self.model_name,
                 str(e),
+                suggestion="Check model name, network connection, and HuggingFace Hub status",
             ) from e
         except Exception as e:
             raise ModelLoadError(
                 self.model_name,
                 str(e),
+                suggestion="Check model name, network connection, and HuggingFace Hub status",
             ) from e
 
         self._is_loaded = True

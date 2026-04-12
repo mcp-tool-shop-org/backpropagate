@@ -1,5 +1,6 @@
 """Tests for export functions."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -695,3 +696,121 @@ class TestExportResultSummary:
         summary = result.summary()
         assert "Quantization" not in summary
         assert "merged" in summary.lower()
+
+
+# =============================================================================
+# TQ-001: PermissionError on output directory creation
+# =============================================================================
+
+
+class TestPermissionErrorOnOutputDir:
+    """Tests for PermissionError when creating output directories (TQ-001)."""
+
+    def test_export_lora_permission_error(self, temp_dir, mock_peft_model):
+        """export_lora should raise ExportError when output dir can't be created."""
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import export_lora
+
+        with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
+            with pytest.raises(ExportError, match="Cannot create output directory"):
+                export_lora(model=mock_peft_model, output_dir=temp_dir / "locked")
+
+    def test_export_merged_permission_error(self, temp_dir, mock_peft_model, mock_tokenizer):
+        """export_merged should raise MergeExportError when output dir can't be created."""
+        from backpropagate.exceptions import MergeExportError
+        from backpropagate.export import export_merged
+
+        with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
+            with pytest.raises(MergeExportError, match="Cannot create output directory"):
+                export_merged(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "locked",
+                )
+
+    def test_export_gguf_permission_error(self, temp_dir, mock_peft_model, mock_tokenizer):
+        """export_gguf should raise GGUFExportError when output dir can't be created."""
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
+
+        with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
+            with pytest.raises(GGUFExportError, match="Cannot create output directory"):
+                export_gguf(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "locked",
+                    quantization="q4_k_m",
+                )
+
+
+# =============================================================================
+# TQ-002: subprocess.TimeoutExpired
+# =============================================================================
+
+
+class TestSubprocessTimeout:
+    """Tests for subprocess.TimeoutExpired handling (TQ-002)."""
+
+    def test_export_gguf_llama_cpp_timeout(self, temp_dir, mock_peft_model, mock_tokenizer):
+        """export_gguf should raise GGUFExportError when llama.cpp conversion times out."""
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
+
+        merged_model = MagicMock()
+        merged_model.save_pretrained = MagicMock()
+        mock_peft_model.merge_and_unload.return_value = merged_model
+
+        # Fake a llama.cpp convert script on disk
+        convert_script = Path.home() / "llama.cpp" / "convert_hf_to_gguf.py"
+
+        with patch("backpropagate.export._has_unsloth", return_value=False), \
+             patch("backpropagate.export._is_peft_model", return_value=True), \
+             patch.object(Path, "exists", return_value=True), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python convert", timeout=1800)):
+            with pytest.raises(GGUFExportError, match="timed out"):
+                export_gguf(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "gguf_timeout",
+                    quantization="q4_k_m",
+                )
+
+    def test_register_with_ollama_timeout(self, sample_gguf_path):
+        """register_with_ollama should raise OllamaRegistrationError on timeout."""
+        from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import register_with_ollama
+
+        with patch("shutil.which", return_value="/usr/bin/ollama"), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ollama create", timeout=600)):
+            with pytest.raises(OllamaRegistrationError, match="timed out"):
+                register_with_ollama(sample_gguf_path, "test-model")
+
+
+# =============================================================================
+# TQ-003: Empty GGUF file (0 bytes)
+# =============================================================================
+
+
+class TestEmptyGgufFile:
+    """Tests for empty GGUF file detection (TQ-003)."""
+
+    def test_export_gguf_empty_file_raises(self, temp_dir, mock_peft_model, mock_tokenizer):
+        """export_gguf should raise GGUFExportError when output file is 0 bytes."""
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
+
+        # Unsloth save creates an empty GGUF file (0 bytes)
+        def mock_save_gguf(path, tokenizer, quantization_method):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "model-q4_k_m.gguf").write_bytes(b"")  # Empty file
+
+        mock_peft_model.save_pretrained_gguf = mock_save_gguf
+
+        with patch("backpropagate.export._has_unsloth", return_value=True):
+            with pytest.raises(GGUFExportError, match="empty.*0 bytes"):
+                export_gguf(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "gguf_empty",
+                    quantization="q4_k_m",
+                )

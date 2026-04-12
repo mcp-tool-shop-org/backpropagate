@@ -932,7 +932,7 @@ class TestCmdConfigExtended:
 
         assert result == 0
         captured = capsys.readouterr()
-        assert "not yet implemented" in captured.out.lower() or "WARN" in captured.out
+        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
 
     def test_windows_config_shown_on_windows(self, capsys):
         """Windows settings shown on Windows platform."""

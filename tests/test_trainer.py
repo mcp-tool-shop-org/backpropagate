@@ -776,11 +776,14 @@ class TestTrainerLoadDataset:
 
         from backpropagate.trainer import Trainer
 
-        # Create test dataset with many samples
+        # Create test dataset with many samples (ShareGPT format for DatasetLoader)
         jsonl_path = temp_dir / "data.jsonl"
         with open(jsonl_path, "w") as f:
             for i in range(100):
-                f.write(json.dumps({"text": f"sample {i}"}) + "\n")
+                f.write(json.dumps({"conversations": [
+                    {"from": "human", "value": f"Question {i}"},
+                    {"from": "gpt", "value": f"Answer {i}"},
+                ]}) + "\n")
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
@@ -1174,8 +1177,8 @@ class TestDatasetLoadingErrors:
                 trainer._load_dataset(str(temp_dir / "nonexistent.jsonl"))
 
     def test_load_dataset_invalid_json(self, temp_dir):
-        """Invalid JSON file should raise DatasetParseError."""
-        from backpropagate.exceptions import DatasetParseError
+        """Invalid JSON file should raise a DatasetError (or subclass)."""
+        from backpropagate.exceptions import DatasetError
         from backpropagate.trainer import Trainer
 
         # Create invalid JSON file
@@ -1185,7 +1188,7 @@ class TestDatasetLoadingErrors:
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-            with pytest.raises(DatasetParseError):
+            with pytest.raises(DatasetError):
                 trainer._load_dataset(str(invalid_file))
 
 

@@ -34,6 +34,7 @@ Usage:
     results = runner.run()
 """
 
+import gc
 import logging
 import os
 import threading
@@ -46,6 +47,7 @@ from typing import Any
 
 from .checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy, CheckpointStats
 from .config import settings
+from .datasets import DatasetLoader
 from .exceptions import (
     ConfigurationError,
     DatasetError,
@@ -356,6 +358,7 @@ class MultiRunTrainer:
             self._trainer = Trainer(
                 model=self.model_name,
                 learning_rate=self.config.initial_lr,
+                train_on_responses=True,  # FT-010: same quality optimization as single-run
             )
             self._trainer.load_model()
 
@@ -597,6 +600,19 @@ class MultiRunTrainer:
         self._gpu_max_temp = 0.0
         self._gpu_max_vram = 0.0
 
+        # VRAM cleanup between runs (FT-003): release the per-run SFTTrainer
+        # and reclaim GPU memory so subsequent runs don't OOM.
+        import torch
+
+        del trainer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info(
+                f"VRAM cleanup after run {run_idx}: "
+                f"{torch.cuda.memory_allocated() / 1e9:.1f}GB allocated"
+            )
+
         if run_failed:
             logger.warning(f"Run {run_idx} FAILED: {failure_reason} (time={duration:.1f}s)")
         else:
@@ -818,6 +834,10 @@ class MultiRunTrainer:
         """
         Load the full dataset for chunking.
 
+        Routes local file paths through DatasetLoader for format detection,
+        validation, and ChatML conversion (same behaviour as Trainer._load_dataset).
+        HuggingFace Hub names and pre-loaded Dataset objects still work as before.
+
         Raises:
             DatasetNotFoundError: If a local file path doesn't exist
             DatasetError: For network errors, parse failures, or unsupported types
@@ -827,22 +847,49 @@ class MultiRunTrainer:
         if dataset is None:
             dataset = settings.data.dataset_name
 
+        # File extensions handled by DatasetLoader
+        _LOCAL_FILE_EXTENSIONS = (
+            '.jsonl', '.json', '.csv', '.parquet', '.txt', '.md',
+        )
+
         try:
-            if isinstance(dataset, str):
-                if dataset.endswith('.jsonl') or dataset.endswith('.json'):
-                    path = Path(dataset)
-                    if not path.exists():
+            if isinstance(dataset, DatasetLoader):
+                # Already a DatasetLoader — validate and convert
+                validation = dataset.validation_result
+                if validation and validation.warnings:
+                    for w in validation.warnings[:5]:
+                        logger.warning(f"Dataset validation warning: {w}")
+                ds = dataset.to_hf_dataset()
+            elif isinstance(dataset, str):
+                if any(dataset.lower().endswith(ext) for ext in _LOCAL_FILE_EXTENSIONS):
+                    # Local file — route through DatasetLoader for format
+                    # detection, validation, and ChatML conversion
+                    try:
+                        loader = DatasetLoader(dataset, validate=True)
+                    except FileNotFoundError as e:
                         raise DatasetNotFoundError(
                             dataset,
                             suggestion="Create the file or use a HuggingFace dataset name",
+                        ) from e
+
+                    logger.info(f"DatasetLoader detected format: {loader.detected_format.value}")
+
+                    # Log validation warnings/errors
+                    validation = loader.validation_result
+                    if validation and validation.warnings:
+                        for w in validation.warnings[:5]:
+                            logger.warning(f"Dataset validation warning: {w}")
+                    if validation and not validation.is_valid:
+                        logger.warning(
+                            f"Dataset has {validation.error_count} validation errors "
+                            f"({validation.error_rate:.1%} error rate) — proceeding anyway"
                         )
-                    ds = load_dataset('json', data_files=dataset, split='train')
-                elif dataset.endswith('.csv'):
-                    path = Path(dataset)
-                    if not path.exists():
-                        raise DatasetNotFoundError(dataset)
-                    ds = load_dataset('csv', data_files=dataset, split='train')
+                        for err in validation.errors[:5]:
+                            logger.warning(f"  {err}")
+
+                    ds = loader.to_hf_dataset()
                 else:
+                    # HuggingFace Hub dataset name
                     ds = load_dataset(dataset, split=settings.data.dataset_split)
             elif isinstance(dataset, Dataset):
                 ds = dataset

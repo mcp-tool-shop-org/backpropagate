@@ -41,6 +41,7 @@ __all__ = [
     "CheckpointInfo",
     "CheckpointStats",
     "CheckpointManager",
+    "RunHistoryManager",
 ]
 
 
@@ -599,3 +600,190 @@ class CheckpointManager:
         except Exception as e:
             logger.warning(f"Manifest save error after force prune: {e}")
         return pruned
+
+
+# =============================================================================
+# RUN HISTORY MANAGER
+# =============================================================================
+
+class RunHistoryManager:
+    """
+    Lightweight persistence layer for training run metadata.
+
+    Stores run history as a JSON array in ``run_history.json`` inside the
+    output directory.  Each entry captures the key facts about a completed
+    training run so they survive process exit and can be queried later.
+
+    Usage:
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager("/path/to/output")
+        history.record_run({
+            "run_id": "abc123",
+            "model_name": "llama-7b",
+            "final_loss": 0.42,
+            ...
+        })
+
+        best = history.get_best_run()
+        all_runs = history.get_history()
+    """
+
+    HISTORY_FILE = "run_history.json"
+
+    # Fields that a well-formed run entry should contain.
+    _EXPECTED_FIELDS = frozenset({
+        "run_id",
+        "timestamp",
+        "model_name",
+        "dataset_info",
+        "steps",
+        "final_loss",
+        "loss_history",
+        "hyperparameters",
+        "duration_seconds",
+        "gpu_max_temp",
+        "checkpoint_path",
+    })
+
+    # Maximum loss-history samples stored per run to bound file size.
+    MAX_LOSS_HISTORY_POINTS = 100
+
+    def __init__(self, output_dir: str) -> None:
+        """
+        Initialize the run history manager.
+
+        Args:
+            output_dir: Directory where ``run_history.json`` will be stored.
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._history_path = self.output_dir / self.HISTORY_FILE
+
+    # --------------------------------------------------------------------- #
+    # Internal helpers
+    # --------------------------------------------------------------------- #
+
+    def _load(self) -> list[dict[str, Any]]:
+        """Load the history file from disk, returning an empty list on failure."""
+        if not self._history_path.exists():
+            return []
+        try:
+            with open(self._history_path) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            logger.warning("run_history.json is not a JSON array — resetting")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to load run history: {e}")
+            return []
+
+    def _save(self, history: list[dict[str, Any]]) -> bool:
+        """Persist the history list to disk.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            with open(self._history_path, "w") as f:
+                json.dump(history, f, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save run history: {e}")
+            return False
+
+    @staticmethod
+    def _downsample_loss_history(
+        loss_history: list[float],
+        max_points: int,
+    ) -> list[float]:
+        """Downsample a loss history list to at most *max_points* entries.
+
+        Uses uniform index sampling so the shape of the curve is preserved.
+        """
+        if len(loss_history) <= max_points:
+            return list(loss_history)
+
+        step = len(loss_history) / max_points
+        return [
+            loss_history[int(i * step)]
+            for i in range(max_points)
+        ]
+
+    # --------------------------------------------------------------------- #
+    # Public API
+    # --------------------------------------------------------------------- #
+
+    def record_run(self, run_data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Append a completed run to the history file.
+
+        The caller provides a dict with run metadata.  Missing fields are
+        filled with ``None`` so every entry has a consistent shape.  The
+        ``loss_history`` list is downsampled to at most
+        :pyattr:`MAX_LOSS_HISTORY_POINTS` entries.
+
+        Args:
+            run_data: Dictionary of run metadata.  Expected keys:
+                run_id, timestamp, model_name, dataset_info, steps,
+                final_loss, loss_history, hyperparameters,
+                duration_seconds, gpu_max_temp, checkpoint_path.
+
+        Returns:
+            The normalised entry that was persisted.
+        """
+        # Build a normalised entry with every expected field.
+        entry: dict[str, Any] = {}
+        for key in self._EXPECTED_FIELDS:
+            entry[key] = run_data.get(key)
+
+        # Ensure a timestamp exists.
+        if entry.get("timestamp") is None:
+            entry["timestamp"] = datetime.now().isoformat()
+
+        # Downsample loss_history to bound file size.
+        if isinstance(entry.get("loss_history"), list):
+            entry["loss_history"] = self._downsample_loss_history(
+                entry["loss_history"],
+                self.MAX_LOSS_HISTORY_POINTS,
+            )
+
+        # Persist.
+        history = self._load()
+        history.append(entry)
+        if not self._save(history):
+            logger.warning(
+                "Run history save failed — entry may be lost on next load"
+            )
+
+        logger.info(
+            f"Recorded run: id={entry.get('run_id')}, "
+            f"final_loss={entry.get('final_loss')}, "
+            f"steps={entry.get('steps')}"
+        )
+        return entry
+
+    def get_history(self) -> list[dict[str, Any]]:
+        """
+        Load and return the full run history.
+
+        Returns:
+            List of run-metadata dicts, oldest first.
+        """
+        return self._load()
+
+    def get_best_run(self) -> dict[str, Any] | None:
+        """
+        Return the run with the lowest ``final_loss``.
+
+        Runs where ``final_loss`` is ``None`` are skipped.
+
+        Returns:
+            The best run dict, or ``None`` if no runs have a recorded loss.
+        """
+        history = self._load()
+        valid = [r for r in history if r.get("final_loss") is not None]
+        if not valid:
+            return None
+        return min(valid, key=lambda r: r["final_loss"])

@@ -873,11 +873,14 @@ class TestMultiRunTrainerDatasetLoading:
 
         trainer = MultiRunTrainer(model="test-model")
 
-        # Create test JSONL
+        # Create test JSONL (ShareGPT format for DatasetLoader)
         jsonl_path = tmp_path / "data.jsonl"
         with open(jsonl_path, "w") as f:
             for i in range(10):
-                f.write(json.dumps({"text": f"sample {i}"}) + "\n")
+                f.write(json.dumps({"conversations": [
+                    {"from": "human", "value": f"Question {i}"},
+                    {"from": "gpt", "value": f"Answer {i}"},
+                ]}) + "\n")
 
         ds = trainer._load_full_dataset(str(jsonl_path))
 
@@ -887,8 +890,14 @@ class TestMultiRunTrainerDatasetLoading:
         """_load_full_dataset should load CSV files."""
         trainer = MultiRunTrainer(model="test-model")
 
+        # Alpaca format CSV (instruction + output) for DatasetLoader
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("text\nsample 1\nsample 2\nsample 3\n")
+        csv_path.write_text(
+            "instruction,input,output\n"
+            "Say hello,,Hello there\n"
+            "Say goodbye,,Goodbye\n"
+            "Say thanks,,Thank you\n"
+        )
 
         ds = trainer._load_full_dataset(str(csv_path))
 

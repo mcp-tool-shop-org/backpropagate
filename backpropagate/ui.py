@@ -583,7 +583,7 @@ def start_training(
     - Path validation for custom datasets
     - Security event logging
     """
-    from .trainer import Trainer
+    from .trainer import Trainer, TrainingCallback
 
     # Rate limiting check with IP tracking
     allowed, wait_time = _training_limiter.check(request)
@@ -624,11 +624,24 @@ def start_training(
             )
 
     # Resolve dataset with path validation for custom datasets
+    # UI-002: If the user uploaded a dataset in the Dataset tab, use it directly
+    dataset_loader_obj = None
     if dataset_preset == "Custom JSONL":
-        is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
-        if not is_valid:
-            raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
-        dataset_name = str(validated_path)
+        if state.dataset_loader is not None:
+            # Use the already-loaded DatasetLoader from the Dataset tab
+            dataset_loader_obj = state.dataset_loader
+            dataset_name = str(state.dataset_loader.source)
+        elif custom_dataset and custom_dataset.strip():
+            is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
+            if not is_valid:
+                raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
+            dataset_name = str(validated_path)
+        else:
+            raise gr.Error(
+                "No custom dataset specified. Upload a file in the Dataset tab or enter a path.",
+                duration=10,
+                title="Missing Dataset",
+            )
     elif dataset_preset in DATASET_PRESETS:
         dataset_name = DATASET_PRESETS[dataset_preset]
     else:
@@ -690,11 +703,22 @@ def start_training(
         status = f"🏋️ Training on {max_samples} samples for {max_steps} steps..."
         yield status, format_loss_plot([]), get_gpu_status_display()
 
-        # Train
+        # UI-003: Build a stop-check callback so the stop button works during training
+        def _stop_check_on_step(step: int, loss: float) -> None:
+            if state.stop_requested.is_set():
+                raise KeyboardInterrupt("Training stopped by user")
+
+        stop_callback = TrainingCallback(on_step=_stop_check_on_step)
+
+        # Train — pass DatasetLoader directly when available (UI-002)
+        train_dataset_arg = dataset_loader_obj if dataset_loader_obj is not None else (
+            dataset_name if dataset_name != "custom" else None
+        )
         run = state.trainer.train(
-            dataset=dataset_name if dataset_name != "custom" else None,
+            dataset=train_dataset_arg,
             steps=max_steps,
             samples=max_samples,
+            callback=stop_callback,
         )
 
         state.current_run = run
@@ -1601,7 +1625,7 @@ def create_ui() -> gr.Blocks:
                 )
 
                 # Phase 5.1: Training Dashboard Sidebar
-                with gr.Sidebar(position="right", open=False, elem_id="training-dashboard") as training_sidebar:
+                with gr.Sidebar(position="right", open=True, elem_id="training-dashboard") as training_sidebar:
                     gr.Markdown("## 📊 Training Dashboard")
 
                     # Live Metrics Section
@@ -2187,27 +2211,32 @@ def create_ui() -> gr.Blocks:
                     settings_model = gr.Textbox(
                         value=settings.model.name,
                         label="Default Model",
-                        info="HuggingFace model path"
+                        info="HuggingFace model path",
+                        interactive=False,
                     )
                     settings_max_seq = gr.Number(
                         value=settings.model.max_seq_length,
                         label="Max Sequence Length",
-                        precision=0
+                        precision=0,
+                        interactive=False,
                     )
 
                 # LoRA Defaults
                 with gr.Accordion("LoRA Defaults", open=False), gr.Row():
                     settings_lora_r = gr.Slider(
                         minimum=4, maximum=128, value=settings.lora.r,
-                        step=4, label="LoRA Rank (r)"
+                        step=4, label="LoRA Rank (r)",
+                        interactive=False,
                     )
                     settings_lora_alpha = gr.Slider(
                         minimum=8, maximum=256, value=settings.lora.lora_alpha,
-                        step=8, label="LoRA Alpha"
+                        step=8, label="LoRA Alpha",
+                        interactive=False,
                     )
                     settings_lora_dropout = gr.Slider(
                         minimum=0, maximum=0.5, value=settings.lora.lora_dropout,
-                        step=0.01, label="Dropout"
+                        step=0.01, label="Dropout",
+                        interactive=False,
                     )
 
                 # Training Defaults
@@ -2215,27 +2244,32 @@ def create_ui() -> gr.Blocks:
                     with gr.Row():
                         settings_lr = gr.Number(
                             value=settings.training.learning_rate,
-                            label="Learning Rate"
+                            label="Learning Rate",
+                            interactive=False,
                         )
                         settings_batch = gr.Number(
                             value=settings.training.per_device_train_batch_size,
                             label="Batch Size",
-                            precision=0
+                            precision=0,
+                            interactive=False,
                         )
                         settings_grad_accum = gr.Number(
                             value=settings.training.gradient_accumulation_steps,
                             label="Gradient Accumulation",
-                            precision=0
+                            precision=0,
+                            interactive=False,
                         )
                     with gr.Row():
                         settings_warmup = gr.Number(
                             value=settings.training.warmup_steps,
                             label="Warmup Steps",
-                            precision=0
+                            precision=0,
+                            interactive=False,
                         )
                         settings_output = gr.Textbox(
                             value=settings.training.output_dir,
-                            label="Output Directory"
+                            label="Output Directory",
+                            interactive=False,
                         )
 
                 # Settings guidance

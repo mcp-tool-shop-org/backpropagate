@@ -698,7 +698,8 @@ class TestMultiRunGPUStatusCallbacks:
             t.start()
 
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert len(results) == 10
 
@@ -1365,7 +1366,8 @@ class TestCallbackSpy:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert callback_spy.call_count == 500
 
@@ -1407,7 +1409,8 @@ class TestCallbackSpy:
 
         # Should return True when called
         assert callback_spy.wait_for_call(timeout=1.0)
-        thread.join()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "Thread did not finish within timeout"
 
 
 class TestCallbackTracker:
@@ -1480,7 +1483,8 @@ class TestCallbackTracker:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should have 50 calls total (5 threads x 10 calls)
         callback_tracker.assert_contains("concurrent", times=50)
@@ -1504,7 +1508,8 @@ class TestAsyncCallbackCollector:
 
         assert collector.wait(timeout=2.0)
         assert len(collector.results) == 3
-        thread.join()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "Thread did not finish within timeout"
 
     def test_collector_timeout(self, async_callback_collector):
         """Collector times out if not enough callbacks."""
@@ -1543,7 +1548,8 @@ class TestAsyncCallbackCollector:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert collector.wait(timeout=1.0)
         assert len(collector.results) == 50

@@ -7,7 +7,7 @@ on:
       - 'backpropagate/**'
       - 'tests/**'
       - 'pyproject.toml'
-      - 'setup.cfg'
+      - 'Dockerfile'
       - 'requirements*.txt'
       - 'site/**'
       - '.github/workflows/**'
@@ -17,7 +17,7 @@ on:
       - 'backpropagate/**'
       - 'tests/**'
       - 'pyproject.toml'
-      - 'setup.cfg'
+      - 'Dockerfile'
       - 'requirements*.txt'
       - 'site/**'
       - '.github/workflows/**'
@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v6
@@ -96,8 +96,7 @@ jobs:
             -c pyproject.toml \
             -f sarif \
             -o bandit-results.sarif \
-            --severity-level medium \
-            || true
+            --severity-level high
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
@@ -135,8 +134,7 @@ jobs:
           pip-audit \
             --desc on \
             --format markdown \
-            --output pip-audit-report.md \
-            || true
+            --output pip-audit-report.md
 
       - name: Display results
         if: always()

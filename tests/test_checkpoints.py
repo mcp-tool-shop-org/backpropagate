@@ -1095,7 +1095,8 @@ class TestConcurrentSaveOperations:
 
         # Wait for all to complete
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should have no errors
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -1128,7 +1129,8 @@ class TestConcurrentSaveOperations:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should handle concurrent prunes gracefully
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -1169,8 +1171,10 @@ class TestConcurrentSaveOperations:
 
         t1.start()
         t2.start()
-        t1.join()
-        t2.join()
+        t1.join(timeout=10.0)
+        assert not t1.is_alive(), "Thread did not finish within timeout"
+        t2.join(timeout=10.0)
+        assert not t2.is_alive(), "Thread did not finish within timeout"
 
         # Should complete without errors
         assert len(errors) == 0, f"Errors occurred: {errors}"

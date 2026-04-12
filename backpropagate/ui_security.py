@@ -1196,15 +1196,19 @@ class SessionManager:
     """
 
     _instance: Optional["SessionManager"] = None
-    _lock: Lock = Lock()
+    _class_lock: Lock = Lock()  # Only used for singleton construction
+    _lock: Lock
+    _sessions: dict[str, SessionInfo]
+    _sessions_by_ip: dict[str, list[str]]
 
     def __new__(cls) -> "SessionManager":
         if cls._instance is None:
-            with cls._lock:
+            with cls._class_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._sessions: dict[str, SessionInfo] = {}
-                    cls._instance._sessions_by_ip: dict[str, list[str]] = {}
+                    cls._instance._lock = Lock()
+                    cls._instance._sessions = {}
+                    cls._instance._sessions_by_ip = {}
         return cls._instance
 
     def create_session(

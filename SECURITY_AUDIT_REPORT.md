@@ -1,5 +1,7 @@
 # Backpropagate Security Audit & Implementation Report
 
+> **Note:** This document was a point-in-time audit from early development. The project is now at v1.0.2 (Production/Stable) with 1796+ tests. Pre-commit hooks, CI security scanners (Bandit, pip-audit, Semgrep, Trivy, TruffleHog), and all recommendations below marked "Should Do" are now implemented. See CI workflows and README for current security posture. Retained for historical reference only.
+
 **Date:** January 18, 2026
 **Auditor:** Claude (Opus 4.5)
 **Scope:** Full codebase security review and hardening
@@ -130,7 +132,7 @@ All user-provided paths now validated:
 
 **Total Test Results:**
 ```
-563 passed, 2 skipped, 0 warnings
+~1,796 passed (as of v1.0.2), 0 warnings
 ```
 
 ---

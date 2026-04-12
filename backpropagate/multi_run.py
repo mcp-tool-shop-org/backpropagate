@@ -46,6 +46,11 @@ from typing import Any
 
 from .checkpoints import CheckpointManager, CheckpointPolicy, CheckpointStats
 from .config import settings
+from .exceptions import (
+    DatasetError,
+    DatasetNotFoundError,
+    TrainingError,
+)
 from .gpu_safety import (
     GPUCondition,
     GPUMonitor,
@@ -148,6 +153,8 @@ class RunResult:
     validation_loss: float | None = None
     gpu_max_temp: float | None = None
     gpu_max_vram_percent: float | None = None
+    failed: bool = False
+    failure_reason: str | None = None
 
 
 @dataclass
@@ -485,53 +492,80 @@ class MultiRunTrainer:
             args=training_args,
         )
 
-        # Train
+        # Train — wrapped so a single run crash (OOM, CUDA error) does not
+        # kill the entire multi-run session.
         logger.info(f"Training run {run_idx}...")
-        result = trainer.train()
-
-        # Extract loss history
-        loss_history = []
-        if hasattr(trainer, 'state') and trainer.state.log_history:
-            loss_history = [
-                log.get('loss', 0) for log in trainer.state.log_history
-                if 'loss' in log
-            ]
-
-        # Add to aggregate
-        self._aggregate_loss.extend(loss_history)
-
-        final_loss = result.training_loss if hasattr(result, 'training_loss') else (
-            loss_history[-1] if loss_history else 0.0
-        )
-
-        # Merge LoRA weights
+        run_failed = False
+        failure_reason: str | None = None
+        loss_history: list[float] = []
+        final_loss = 0.0
         merge_result = None
-        if self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
-            lora_state = self._get_lora_state_dict()
-            merge_result = self._slao_merger.merge(lora_state, run_index=run_idx)
+        checkpoint_path: str | None = None
 
-        # Save checkpoint
-        checkpoint_path = None
+        try:
+            result = trainer.train()
+
+            # Extract loss history
+            if hasattr(trainer, 'state') and trainer.state.log_history:
+                loss_history = [
+                    log.get('loss', 0) for log in trainer.state.log_history
+                    if 'loss' in log
+                ]
+
+            # Add to aggregate
+            self._aggregate_loss.extend(loss_history)
+
+            final_loss = result.training_loss if hasattr(result, 'training_loss') else (
+                loss_history[-1] if loss_history else 0.0
+            )
+
+            # Merge LoRA weights
+            if self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
+                lora_state = self._get_lora_state_dict()
+                merge_result = self._slao_merger.merge(lora_state, run_index=run_idx)
+
+        except (KeyboardInterrupt, SystemExit):
+            # Never swallow these — let them propagate
+            raise
+        except Exception as e:
+            run_failed = True
+            failure_reason = f"{type(e).__name__}: {e}"
+            logger.error(f"Run {run_idx} failed: {failure_reason}")
+
+            # Salvage any partial loss history from the trainer state
+            if hasattr(trainer, 'state') and hasattr(trainer.state, 'log_history') and trainer.state.log_history:
+                loss_history = [
+                    log.get('loss', 0) for log in trainer.state.log_history
+                    if 'loss' in log
+                ]
+                self._aggregate_loss.extend(loss_history)
+                final_loss = loss_history[-1] if loss_history else 0.0
+
+        # Save checkpoint (even on failure — preserves partial work)
         if self.config.save_every_run:
-            checkpoint_path = str(checkpoint_dir / f"run_{run_idx:03d}" / "lora")
-            self._trainer.save(checkpoint_path)
-            logger.info(f"Checkpoint saved: {checkpoint_path}")
+            try:
+                checkpoint_path = str(checkpoint_dir / f"run_{run_idx:03d}" / "lora")
+                self._trainer.save(checkpoint_path)
+                logger.info(f"Checkpoint saved: {checkpoint_path}")
 
-            # Also save SLAO merger state
-            if self._slao_merger:
-                self._slao_merger.save(str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"))
+                # Also save SLAO merger state
+                if self._slao_merger:
+                    self._slao_merger.save(str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"))
 
-            # Phase 5.3: Register with checkpoint manager for smart pruning
-            if self._checkpoint_manager:
-                is_first_run = (run_idx == 1)
-                self._checkpoint_manager.register(
-                    run_index=run_idx,
-                    checkpoint_path=checkpoint_path,
-                    validation_loss=None,  # Will be updated if validation is enabled
-                    training_loss=final_loss,
-                    is_run_boundary=is_first_run,
-                )
-                # Note: auto_prune happens inside register() if enabled
+                # Phase 5.3: Register with checkpoint manager for smart pruning
+                if self._checkpoint_manager:
+                    is_first_run = (run_idx == 1)
+                    self._checkpoint_manager.register(
+                        run_index=run_idx,
+                        checkpoint_path=checkpoint_path,
+                        validation_loss=None,  # Will be updated if validation is enabled
+                        training_loss=final_loss,
+                        is_run_boundary=is_first_run,
+                    )
+                    # Note: auto_prune happens inside register() if enabled
+            except Exception as save_err:
+                logger.error(f"Failed to save checkpoint for run {run_idx}: {save_err}")
+                checkpoint_path = None
 
         duration = time.time() - run_start
 
@@ -547,13 +581,18 @@ class MultiRunTrainer:
             merge_result=merge_result,
             gpu_max_temp=self._gpu_max_temp,
             gpu_max_vram_percent=self._gpu_max_vram,
+            failed=run_failed,
+            failure_reason=failure_reason,
         )
 
         # Reset GPU tracking for next run
         self._gpu_max_temp = 0.0
         self._gpu_max_vram = 0.0
 
-        logger.info(f"Run {run_idx} complete: loss={final_loss:.4f}, time={duration:.1f}s")
+        if run_failed:
+            logger.warning(f"Run {run_idx} FAILED: {failure_reason} (time={duration:.1f}s)")
+        else:
+            logger.info(f"Run {run_idx} complete: loss={final_loss:.4f}, time={duration:.1f}s")
 
         return run_result
 
@@ -768,23 +807,54 @@ class MultiRunTrainer:
                 model_state[name].copy_(param)
 
     def _load_full_dataset(self, dataset: str | Any) -> Any:
-        """Load the full dataset for chunking."""
+        """
+        Load the full dataset for chunking.
+
+        Raises:
+            DatasetNotFoundError: If a local file path doesn't exist
+            DatasetError: For network errors, parse failures, or unsupported types
+        """
         from datasets import Dataset, load_dataset
 
         if dataset is None:
             dataset = settings.data.dataset_name
 
-        if isinstance(dataset, str):
-            if dataset.endswith('.jsonl') or dataset.endswith('.json'):
-                ds = load_dataset('json', data_files=dataset, split='train')
-            elif dataset.endswith('.csv'):
-                ds = load_dataset('csv', data_files=dataset, split='train')
+        try:
+            if isinstance(dataset, str):
+                if dataset.endswith('.jsonl') or dataset.endswith('.json'):
+                    path = Path(dataset)
+                    if not path.exists():
+                        raise DatasetNotFoundError(
+                            dataset,
+                            suggestion="Create the file or use a HuggingFace dataset name",
+                        )
+                    ds = load_dataset('json', data_files=dataset, split='train')
+                elif dataset.endswith('.csv'):
+                    path = Path(dataset)
+                    if not path.exists():
+                        raise DatasetNotFoundError(dataset)
+                    ds = load_dataset('csv', data_files=dataset, split='train')
+                else:
+                    ds = load_dataset(dataset, split=settings.data.dataset_split)
+            elif isinstance(dataset, Dataset):
+                ds = dataset
             else:
-                ds = load_dataset(dataset, split=settings.data.dataset_split)
-        elif isinstance(dataset, Dataset):
-            ds = dataset
-        else:
-            raise ValueError(f"Unsupported dataset type: {type(dataset)}")
+                raise DatasetError(
+                    f"Unsupported dataset type: {type(dataset).__name__}",
+                    suggestion="Use a file path (JSONL, CSV), HuggingFace dataset name, or Dataset object",
+                )
+        except (DatasetNotFoundError, DatasetError):
+            raise
+        except FileNotFoundError as e:
+            raise DatasetNotFoundError(
+                str(e),
+                suggestion="Check the file path and ensure the file exists",
+            ) from e
+        except Exception as e:
+            raise DatasetError(
+                f"Failed to load dataset: {e}",
+                suggestion="Check dataset name/path and network connection",
+            ) from e
 
         return ds
 

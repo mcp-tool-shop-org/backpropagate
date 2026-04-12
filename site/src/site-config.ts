@@ -22,11 +22,11 @@ export const config: SiteConfig = {
       },
       {
         label: 'Multi-run SLAO',
-        code: '# SLAO: prevents catastrophic forgetting across long runs\nfrom backpropagate import MultiRunTrainer\n\ntrainer = MultiRunTrainer(\n    model="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",\n    strategy="slao",          # smart loss-aware ordering\n    checkpoint_every=500,\n    max_runs=5,\n)\ntrainer.train("my_data.jsonl")',
+        code: 'from backpropagate.multi_run import MultiRunTrainer\n\nrunner = MultiRunTrainer(\n    model="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",\n    num_runs=5, steps_per_run=100,\n    merge_mode="slao",\n)\nresult = runner.run("my_data.jsonl")',
       },
       {
         label: 'Export to Ollama',
-        code: '# Export GGUF and register with local Ollama\ntrainer.export(\n    format="gguf",\n    quantization="q4_k_m",    # q2_k / q4_k_m / q8_0 / f16\n    register_ollama=True,     # auto-creates Modelfile\n    model_name="my-model",    # ollama run my-model\n)',
+        code: 'from backpropagate.export import export_gguf, register_with_ollama\n\nresult = export_gguf(model, tokenizer, "./output", quantization="q4_k_m")\nregister_with_ollama(result.path, model_name="my-model")',
       },
     ],
   },
@@ -84,11 +84,11 @@ export const config: SiteConfig = {
         },
         {
           title: 'Multi-run SLAO',
-          code: 'from backpropagate import MultiRunTrainer\n\n# Prevents catastrophic forgetting\ntrainer = MultiRunTrainer(\n    model="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",\n    strategy="slao",\n    checkpoint_every=500,\n    max_runs=5,\n)\ntrainer.train("my_data.jsonl")',
+          code: 'from backpropagate.multi_run import MultiRunTrainer\n\nrunner = MultiRunTrainer(\n    model="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",\n    num_runs=5, steps_per_run=100,\n    merge_mode="slao",\n)\nresult = runner.run("my_data.jsonl")',
         },
         {
           title: 'Export to Ollama',
-          code: 'trainer.export(\n    format="gguf",\n    quantization="q4_k_m",\n    register_ollama=True,\n    model_name="my-finetuned-model",\n)\n\n# Then use it locally:\n# ollama run my-finetuned-model',
+          code: 'from backpropagate.export import export_gguf, register_with_ollama\n\nresult = export_gguf(model, tokenizer, "./output", quantization="q4_k_m")\nregister_with_ollama(result.path, model_name="my-model")\n# ollama run my-model',
         },
       ],
     },

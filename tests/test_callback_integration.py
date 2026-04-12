@@ -554,7 +554,8 @@ class TestConcurrentCallbacks:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert len(results["monitor1"]) == 10
         assert len(results["monitor2"]) == 10

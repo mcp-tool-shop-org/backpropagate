@@ -34,6 +34,7 @@ Usage:
         monitor.stop()
 """
 
+import atexit
 import logging
 import threading
 import time
@@ -42,6 +43,64 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# PYNVML INIT-ONCE PATTERN (BR-009)
+# =============================================================================
+# nvmlInit()/nvmlShutdown() on every get_gpu_status() call causes driver-level
+# errors under rapid polling. Instead, init once and register atexit shutdown.
+
+_nvml_initialized = False
+_nvml_init_lock = threading.Lock()
+
+
+def _ensure_nvml_initialized() -> bool:
+    """
+    Initialize pynvml once. Thread-safe via double-checked locking.
+
+    Returns True if pynvml is ready, False if unavailable or init failed.
+    """
+    global _nvml_initialized
+
+    if _nvml_initialized:
+        return True
+
+    with _nvml_init_lock:
+        # Double-check after acquiring lock
+        if _nvml_initialized:
+            return True
+
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+            _nvml_initialized = True
+            atexit.register(_shutdown_nvml)
+            logger.debug("pynvml initialized (init-once pattern)")
+            return True
+        except ImportError:
+            logger.debug("pynvml not installed - temperature/power monitoring unavailable")
+            return False
+        except Exception as e:
+            logger.debug(f"pynvml init failed: {e}")
+            return False
+
+
+def _shutdown_nvml() -> None:
+    """Atexit handler to cleanly shut down pynvml."""
+    global _nvml_initialized
+
+    if not _nvml_initialized:
+        return
+
+    try:
+        import pynvml
+
+        pynvml.nvmlShutdown()
+        _nvml_initialized = False
+        logger.debug("pynvml shut down via atexit")
+    except Exception as e:
+        logger.debug(f"pynvml shutdown error: {e}")
 
 __all__ = [
     "GPUMonitor",
@@ -175,63 +234,56 @@ def get_gpu_status(device_index: int = 0, config: GPUSafetyConfig | None = None)
         return status
 
     # Try pynvml for detailed metrics (temperature, power)
-    try:
-        import pynvml
-
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
-
-        # Temperature
+    # Uses init-once pattern — nvmlInit() called once, nvmlShutdown() via atexit
+    if _ensure_nvml_initialized():
         try:
-            status.temperature_c = pynvml.nvmlDeviceGetTemperature(
-                handle, pynvml.NVML_TEMPERATURE_GPU
-            )
-        except pynvml.NVMLError as e:
-            logger.debug(f"pynvml temperature query failed: {e}")
-        except Exception as e:
-            logger.debug(f"Unexpected error querying GPU temperature: {e}")
+            import pynvml
 
-        # Max temperature threshold
-        try:
-            status.temperature_max_c = pynvml.nvmlDeviceGetTemperatureThreshold(
-                handle, pynvml.NVML_TEMPERATURE_THRESHOLD_SHUTDOWN
-            )
-        except pynvml.NVMLError as e:
-            logger.debug(f"pynvml temperature threshold query failed: {e}")
-        except Exception as e:
-            logger.debug(f"Unexpected error querying temperature threshold: {e}")
+            handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
 
-        # Power
-        try:
-            status.power_draw_w = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
-            status.power_limit_w = pynvml.nvmlDeviceGetPowerManagementLimit(handle) / 1000.0
-            if status.power_limit_w > 0:
-                status.power_percent = (status.power_draw_w / status.power_limit_w) * 100
-        except pynvml.NVMLError as e:
-            logger.debug(f"pynvml power query failed: {e}")
-        except Exception as e:
-            logger.debug(f"Unexpected error querying power: {e}")
+            # Temperature
+            try:
+                status.temperature_c = pynvml.nvmlDeviceGetTemperature(
+                    handle, pynvml.NVML_TEMPERATURE_GPU
+                )
+            except pynvml.NVMLError as e:
+                logger.debug(f"pynvml temperature query failed: {e}")
+            except Exception as e:
+                logger.debug(f"Unexpected error querying GPU temperature: {e}")
 
-        # Utilization
-        try:
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            status.gpu_utilization = util.gpu
-            status.memory_utilization = util.memory
-        except pynvml.NVMLError as e:
-            logger.debug(f"pynvml utilization query failed: {e}")
-        except Exception as e:
-            logger.debug(f"Unexpected error querying utilization: {e}")
+            # Max temperature threshold
+            try:
+                status.temperature_max_c = pynvml.nvmlDeviceGetTemperatureThreshold(
+                    handle, pynvml.NVML_TEMPERATURE_THRESHOLD_SHUTDOWN
+                )
+            except pynvml.NVMLError as e:
+                logger.debug(f"pynvml temperature threshold query failed: {e}")
+            except Exception as e:
+                logger.debug(f"Unexpected error querying temperature threshold: {e}")
 
-        # Always shutdown pynvml
-        try:
-            pynvml.nvmlShutdown()
-        except Exception as e:
-            logger.debug(f"pynvml shutdown error: {e}")
+            # Power
+            try:
+                status.power_draw_w = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
+                status.power_limit_w = pynvml.nvmlDeviceGetPowerManagementLimit(handle) / 1000.0
+                if status.power_limit_w > 0:
+                    status.power_percent = (status.power_draw_w / status.power_limit_w) * 100
+            except pynvml.NVMLError as e:
+                logger.debug(f"pynvml power query failed: {e}")
+            except Exception as e:
+                logger.debug(f"Unexpected error querying power: {e}")
 
-    except ImportError:
-        logger.debug("pynvml not installed - temperature/power monitoring unavailable")
-    except Exception as e:
-        logger.debug(f"pynvml query failed: {e}")
+            # Utilization
+            try:
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                status.gpu_utilization = util.gpu
+                status.memory_utilization = util.memory
+            except pynvml.NVMLError as e:
+                logger.debug(f"pynvml utilization query failed: {e}")
+            except Exception as e:
+                logger.debug(f"Unexpected error querying utilization: {e}")
+
+        except Exception as e:
+            logger.debug(f"pynvml query failed: {e}")
 
     # Evaluate safety condition
     status.condition, status.condition_reason = _evaluate_condition(status, config)

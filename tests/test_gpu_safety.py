@@ -388,12 +388,12 @@ class TestGPUMonitor:
         with patch("backpropagate.gpu_safety.get_gpu_status", return_value=mock_status):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
+            try:
+                time.sleep(0.3)
 
-            time.sleep(0.3)
-
-            assert monitor.is_emergency is True
-
-            monitor.stop()
+                assert monitor.is_emergency is True
+            finally:
+                monitor.stop()
 
     def test_status_history(self):
         """Should maintain status history."""
@@ -405,12 +405,13 @@ class TestGPUMonitor:
         with patch("backpropagate.gpu_safety.get_gpu_status", return_value=mock_status):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
+            try:
+                time.sleep(0.5)
 
-            time.sleep(0.5)
-            monitor.stop()
-
-            history = monitor.get_status_history()
-            assert len(history) > 0
+                history = monitor.get_status_history()
+                assert len(history) > 0
+            finally:
+                monitor.stop()
 
     def test_pause_resume(self):
         """Should support pause and resume."""
@@ -689,10 +690,11 @@ class TestGPUSafetyEdgeCases:
         with patch("backpropagate.gpu_safety.get_gpu_status", side_effect=raise_error):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
-
-            # Should not crash
-            time.sleep(0.3)
-            monitor.stop()
+            try:
+                # Should not crash
+                time.sleep(0.3)
+            finally:
+                monitor.stop()
 
     def test_concurrent_monitors(self):
         """Should support multiple concurrent monitors."""
@@ -704,12 +706,12 @@ class TestGPUSafetyEdgeCases:
 
             monitor1.start()
             monitor2.start()
+            try:
+                time.sleep(0.3)
 
-            time.sleep(0.3)
-
-            monitor1.stop()
-            monitor2.stop()
-
-            # Both should have collected history
-            assert len(monitor1.get_status_history()) > 0
-            assert len(monitor2.get_status_history()) > 0
+                # Both should have collected history
+                assert len(monitor1.get_status_history()) > 0
+                assert len(monitor2.get_status_history()) > 0
+            finally:
+                monitor1.stop()
+                monitor2.stop()

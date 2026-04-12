@@ -33,10 +33,10 @@ class TestMainModule:
         """Test that main returns an integer exit code."""
         from backpropagate.__main__ import main
 
-        # Call with empty args (shows help, returns 0)
+        # Call with empty args (no subcommand, returns 1)
         result = main([])
         assert isinstance(result, int)
-        assert result == 0
+        assert result == 1
 
     def test_main_module_main_with_info_command(self):
         """Test main with info command."""
@@ -57,7 +57,7 @@ class TestMainModule:
         from backpropagate.__main__ import main
 
         # Verify main can be called and returns proper exit codes
-        assert main([]) == 0  # No command shows help
+        assert main([]) == 1  # No command returns 1 (no subcommand given)
         assert main(["info"]) == 0  # Info command works
         assert main(["config"]) == 0  # Config command works
 
@@ -126,7 +126,7 @@ class TestMainModuleIntegration:
             exit_code = main([])
             mock_exit(exit_code)
 
-            mock_exit.assert_called_once_with(0)
+            mock_exit.assert_called_once_with(1)
 
     def test_main_with_invalid_command_shows_error(self):
         """Test main with an invalid command."""

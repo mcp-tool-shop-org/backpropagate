@@ -536,7 +536,7 @@ class TestVersion:
 
         settings = Settings()
         assert hasattr(settings, 'version')
-        assert settings.version == "0.1.0"
+        assert settings.version  # dynamic version from package metadata
 
     def test_name_attribute(self):
         """Settings has name attribute."""

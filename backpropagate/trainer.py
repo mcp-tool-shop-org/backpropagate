@@ -28,6 +28,7 @@ Features:
 - Multiple export formats (LoRA, merged, GGUF)
 """
 
+import gc
 import logging
 import os
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
+from .datasets import DatasetLoader
 from .exceptions import (
     DatasetError,
     DatasetNotFoundError,
@@ -185,6 +187,28 @@ class Trainer:
         except Exception as e:
             logger.warning(f"Unexpected error detecting batch size: {type(e).__name__}: {e}")
         return 2  # Safe default
+
+    def _cleanup_vram(self) -> None:
+        """
+        Release unused GPU memory.
+
+        Calls gc.collect() to free Python-side references, then
+        torch.cuda.empty_cache() to return unreferenced GPU memory to the
+        CUDA allocator. Safe to call even when no GPU is present.
+
+        Intended for use between multi_run iterations or after training
+        completes to reclaim VRAM before the next operation.
+        """
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.debug("VRAM cleanup: gc.collect() + torch.cuda.empty_cache()")
+            else:
+                logger.debug("VRAM cleanup: gc.collect() (no CUDA available)")
+        except ImportError:
+            logger.debug("VRAM cleanup: gc.collect() (torch not installed)")
 
     def load_model(self) -> None:
         """
@@ -502,6 +526,15 @@ class Trainer:
         """
         Load dataset from various sources.
 
+        Accepts:
+            - None: uses default dataset from config (HuggingFace)
+            - str with file extension (.jsonl, .json, .csv, .parquet, .txt, .md):
+              routes through DatasetLoader for format detection, validation, and
+              ChatML conversion, then returns a HuggingFace Dataset
+            - str without file extension: treated as HuggingFace dataset name
+            - datasets.Dataset: used directly
+            - DatasetLoader: calls .to_hf_dataset() directly
+
         Raises:
             DatasetNotFoundError: If dataset file doesn't exist
             DatasetParseError: If dataset cannot be parsed
@@ -511,6 +544,11 @@ class Trainer:
 
         max_samples = samples or settings.data.max_samples
 
+        # File extensions that DatasetLoader handles
+        _LOCAL_FILE_EXTENSIONS = (
+            '.jsonl', '.json', '.csv', '.parquet', '.txt', '.md',
+        )
+
         try:
             if dataset is None:
                 # Use default dataset from config
@@ -518,36 +556,51 @@ class Trainer:
                     settings.data.dataset_name,
                     split=settings.data.dataset_split,
                 )
+            elif isinstance(dataset, DatasetLoader):
+                # DatasetLoader passed directly — use its validated output
+                validation = dataset.validation_result
+                if validation.warnings:
+                    for w in validation.warnings[:5]:
+                        logger.warning(f"Dataset validation warning: {w}")
+                if not validation.is_valid:
+                    logger.warning(
+                        f"Dataset has {validation.error_count} validation errors "
+                        f"({validation.error_rate:.1%} error rate) — proceeding anyway"
+                    )
+                    for err in validation.errors[:5]:
+                        logger.warning(f"  {err}")
+                ds = dataset.to_hf_dataset()
             elif isinstance(dataset, str):
-                if dataset.endswith('.jsonl') or dataset.endswith('.json'):
-                    # Check file exists before trying to load
-                    dataset_path = Path(dataset)
-                    if not dataset_path.exists():
+                if any(dataset.lower().endswith(ext) for ext in _LOCAL_FILE_EXTENSIONS):
+                    # Local file — route through DatasetLoader for format detection,
+                    # validation, and ChatML conversion
+                    try:
+                        loader = DatasetLoader(dataset, validate=True)
+                    except FileNotFoundError as e:
                         raise DatasetNotFoundError(
                             dataset,
                             suggestion="Create the file or use a HuggingFace dataset name"
+                        ) from e
+
+                    # Log format detection
+                    logger.info(f"DatasetLoader detected format: {loader.detected_format.value}")
+
+                    # Log validation warnings/errors
+                    validation = loader.validation_result
+                    if validation.warnings:
+                        for w in validation.warnings[:5]:
+                            logger.warning(f"Dataset validation warning: {w}")
+                    if not validation.is_valid:
+                        logger.warning(
+                            f"Dataset has {validation.error_count} validation errors "
+                            f"({validation.error_rate:.1%} error rate) — proceeding anyway"
                         )
-                    try:
-                        ds = load_dataset('json', data_files=dataset, split='train')
-                    except Exception as e:
-                        raise DatasetParseError(
-                            f"Failed to parse JSON dataset: {e}",
-                            path=dataset,
-                            suggestion="Check that the file contains valid JSONL format"
-                        ) from e
-                elif dataset.endswith('.csv'):
-                    dataset_path = Path(dataset)
-                    if not dataset_path.exists():
-                        raise DatasetNotFoundError(dataset)
-                    try:
-                        ds = load_dataset('csv', data_files=dataset, split='train')
-                    except Exception as e:
-                        raise DatasetParseError(
-                            f"Failed to parse CSV dataset: {e}",
-                            path=dataset,
-                        ) from e
+                        for err in validation.errors[:5]:
+                            logger.warning(f"  {err}")
+
+                    ds = loader.to_hf_dataset()
                 else:
-                    # Assume HuggingFace dataset name
+                    # No file extension — assume HuggingFace dataset name
                     try:
                         ds = load_dataset(dataset, split=settings.data.dataset_split)
                     except Exception as e:
@@ -560,7 +613,7 @@ class Trainer:
             else:
                 raise DatasetError(
                     f"Unsupported dataset type: {type(dataset).__name__}",
-                    suggestion="Use a file path (JSONL, CSV), HuggingFace dataset name, or Dataset object"
+                    suggestion="Use a file path (JSONL, CSV, Parquet), HuggingFace dataset name, Dataset object, or DatasetLoader"
                 )
         except (DatasetNotFoundError, DatasetParseError, DatasetError):
             raise

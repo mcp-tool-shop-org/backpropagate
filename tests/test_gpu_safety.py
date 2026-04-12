@@ -381,7 +381,7 @@ class TestGPUMonitor:
             finally:
                 monitor.stop()
 
-            assert len(warning_called) > 0, "Expected warning callbacks within timeout"
+            assert len(warning_called) > 0, "Expected at least one warning callback within timeout"
 
     def test_emergency_flag(self):
         """Should set emergency flag on emergency condition."""
@@ -417,11 +417,11 @@ class TestGPUMonitor:
             try:
                 deadline = time.monotonic() + 5.0
                 while time.monotonic() < deadline:
-                    if len(monitor.get_status_history()) > 0:
+                    if len(monitor.get_status_history()) >= 2:
                         break
                     time.sleep(0.05)
                 history = monitor.get_status_history()
-                assert len(history) > 0, "Expected status history within timeout"
+                assert len(history) >= 2, f"Expected >=2 history entries with 5s deadline and 0.1s interval, got {len(history)}"
             finally:
                 monitor.stop()
 
@@ -732,14 +732,14 @@ class TestGPUSafetyEdgeCases:
             try:
                 deadline = time.monotonic() + 5.0
                 while time.monotonic() < deadline:
-                    if (len(monitor1.get_status_history()) > 0
-                            and len(monitor2.get_status_history()) > 0):
+                    if (len(monitor1.get_status_history()) >= 2
+                            and len(monitor2.get_status_history()) >= 2):
                         break
                     time.sleep(0.05)
 
                 # Both should have collected history
-                assert len(monitor1.get_status_history()) > 0, "Monitor1 expected history"
-                assert len(monitor2.get_status_history()) > 0, "Monitor2 expected history"
+                assert len(monitor1.get_status_history()) >= 2, f"Monitor1 expected >=2 history entries, got {len(monitor1.get_status_history())}"
+                assert len(monitor2.get_status_history()) >= 2, f"Monitor2 expected >=2 history entries, got {len(monitor2.get_status_history())}"
             finally:
                 monitor1.stop()
                 monitor2.stop()

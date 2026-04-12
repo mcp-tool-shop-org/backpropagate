@@ -136,5 +136,5 @@ ci:
   autoupdate_branch: ''
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
   autoupdate_schedule: weekly
-  skip: [pip-audit]  # Skip slow checks in CI (handled by security.yml)
+  skip: [pip-audit]  # Skip slow checks in CI (handled by ci.yml security jobs)
   submodules: false

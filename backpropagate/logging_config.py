@@ -140,6 +140,11 @@ def _configure_structlog(
     )
 
     # Configure standard library logging to use structlog
+    # Clear existing root handlers first — basicConfig is a no-op when handlers
+    # already exist, which would silently skip our format/stream/level settings.
+    log_level = getattr(logging, level, logging.INFO)
+    root = logging.getLogger()
+    root.handlers.clear()
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,

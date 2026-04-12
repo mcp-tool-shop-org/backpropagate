@@ -200,6 +200,7 @@ class UIState:
         self.dataset_loader: DatasetLoader | None = None
         self.dataset_validation: ValidationResult | None = None
         self.train_start_time: float = 0.0
+        self.multi_run_start_time: float = 0.0
         # Stop signal for cooperative cancellation
         import threading
         self.stop_requested: threading.Event = threading.Event()
@@ -993,6 +994,7 @@ def start_multi_run(
     state.multi_run_loss_history = []
     state.multi_run_run_boundaries = []
     state.multi_run_current_run = 0
+    state.multi_run_start_time = time.time()
 
     status = f"Initializing SLAO Multi-Run with {model_name}..."
     yield (
@@ -1146,7 +1148,6 @@ def get_dashboard_metrics() -> dict[str, str]:
         "gpu_condition": "**Status:** -",
         # SLAO Merge Stats
         "scale_factor": "**Scale Factor:** -",
-        "similarity": "**Task Similarity:** -",
         "a_matrices": "**A Matrices Merged:** -",
         "b_matrices": "**B Matrices Merged:** -",
         # Early Stopping
@@ -1201,6 +1202,18 @@ def get_dashboard_metrics() -> dict[str, str]:
             # Calculate completed runs
             completed = len(state.multi_run_results.runs) if state.multi_run_results else 0
             metrics["completed_runs"] = f"**Completed:** {completed}"
+
+            # Compute ETA based on completed runs and elapsed time
+            if completed > 0 and state.multi_run_start_time > 0:
+                elapsed = time.time() - state.multi_run_start_time
+                remaining_runs = config.num_runs - completed
+                eta_seconds = (elapsed / completed) * remaining_runs
+                if eta_seconds > 3600:
+                    metrics["eta"] = f"**ETA:** {eta_seconds/3600:.1f}h"
+                elif eta_seconds > 60:
+                    metrics["eta"] = f"**ETA:** {eta_seconds/60:.1f}m"
+                else:
+                    metrics["eta"] = f"**ETA:** {eta_seconds:.0f}s"
 
             # Current loss from history
             if state.multi_run_loss_history:
@@ -1296,7 +1309,6 @@ def refresh_dashboard() -> tuple:
         m["gpu_condition"],
         # SLAO Merge Stats
         m["scale_factor"],
-        m["similarity"],
         m["a_matrices"],
         m["b_matrices"],
         # Early Stopping
@@ -1594,7 +1606,6 @@ def create_ui() -> gr.Blocks:
                     # SLAO Merge Stats Section (Phase 5.2)
                     with gr.Accordion("🔄 SLAO Merge Stats", open=False):
                         dashboard_scale_factor = gr.Markdown("**Scale Factor:** -")
-                        dashboard_similarity = gr.Markdown("**Task Similarity:** -")
                         dashboard_a_matrices = gr.Markdown("**A Matrices Merged:** -")
                         dashboard_b_matrices = gr.Markdown("**B Matrices Merged:** -")
 
@@ -1852,7 +1863,6 @@ def create_ui() -> gr.Blocks:
                         dashboard_gpu_condition,
                         # SLAO Merge Stats
                         dashboard_scale_factor,
-                        dashboard_similarity,
                         dashboard_a_matrices,
                         dashboard_b_matrices,
                         # Early Stopping

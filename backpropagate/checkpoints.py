@@ -191,8 +191,12 @@ class CheckpointManager:
         else:
             self._checkpoints = []
 
-    def _save_manifest(self) -> None:
-        """Save checkpoint manifest to disk."""
+    def _save_manifest(self) -> bool:
+        """Save checkpoint manifest to disk.
+
+        Returns:
+            True if saved successfully, False on failure.
+        """
         try:
             data = {
                 "version": "1.0",
@@ -203,8 +207,10 @@ class CheckpointManager:
             with open(self._manifest_path, "w") as f:
                 json.dump(data, f, indent=2)
             logger.debug(f"Saved manifest with {len(self._checkpoints)} checkpoints")
+            return True
         except Exception as e:
             logger.error(f"Failed to save manifest: {e}")
+            return False
 
     def _get_checkpoint_size(self, path: str) -> int:
         """Get total size of a checkpoint directory/file in bytes."""
@@ -263,7 +269,14 @@ class CheckpointManager:
         )
 
         self._checkpoints.append(info)
-        self._save_manifest()
+        try:
+            if not self._save_manifest():
+                logger.warning(
+                    "Manifest save failed after registering checkpoint — "
+                    "in-memory state may diverge from disk"
+                )
+        except Exception as e:
+            logger.warning(f"Manifest save error after registering checkpoint: {e}")
 
         val_str = f"{validation_loss:.4f}" if validation_loss is not None else "N/A"
         logger.info(
@@ -407,7 +420,14 @@ class CheckpointManager:
             except Exception as e:
                 logger.error(f"Failed to prune checkpoint {cp.path}: {e}")
 
-        self._save_manifest()
+        try:
+            if not self._save_manifest():
+                logger.warning(
+                    "Manifest save failed after pruning — "
+                    "in-memory state may diverge from disk"
+                )
+        except Exception as e:
+            logger.warning(f"Manifest save error after pruning: {e}")
 
         logger.info(
             f"Pruned {len(pruned)} checkpoints, "
@@ -468,7 +488,11 @@ class CheckpointManager:
         for cp in self._checkpoints:
             if cp.run_index == run_index:
                 cp.protected = True
-                self._save_manifest()
+                try:
+                    if not self._save_manifest():
+                        logger.warning("Manifest save failed after protecting checkpoint")
+                except Exception as e:
+                    logger.warning(f"Manifest save error after protecting checkpoint: {e}")
                 logger.info(f"Protected checkpoint: run={run_index}")
                 return True
         return False
@@ -486,7 +510,11 @@ class CheckpointManager:
         for cp in self._checkpoints:
             if cp.run_index == run_index:
                 cp.protected = False
-                self._save_manifest()
+                try:
+                    if not self._save_manifest():
+                        logger.warning("Manifest save failed after unprotecting checkpoint")
+                except Exception as e:
+                    logger.warning(f"Manifest save error after unprotecting checkpoint: {e}")
                 logger.info(f"Unprotected checkpoint: run={run_index}")
                 return True
         return False
@@ -508,7 +536,11 @@ class CheckpointManager:
             logger.info(f"Removed orphaned manifest entry: {cp.path}")
 
         if orphaned:
-            self._save_manifest()
+            try:
+                if not self._save_manifest():
+                    logger.warning("Manifest save failed after cleaning orphaned entries")
+            except Exception as e:
+                logger.warning(f"Manifest save error after cleaning orphaned entries: {e}")
 
         return len(orphaned)
 
@@ -561,5 +593,9 @@ class CheckpointManager:
         else:
             logger.error(f"force_prune_to_size hit {max_iterations} iteration limit — aborting to prevent infinite loop")
 
-        self._save_manifest()
+        try:
+            if not self._save_manifest():
+                logger.warning("Manifest save failed after force prune")
+        except Exception as e:
+            logger.warning(f"Manifest save error after force prune: {e}")
         return pruned

@@ -1069,8 +1069,9 @@ def get_health_status(
                 # Check for GPU issues
                 if gpu_status.temperature_c and gpu_status.temperature_c > 85:
                     status.status = "degraded"
-        except Exception:
-            pass  # GPU check failed, continue without
+        except Exception as e:
+            status.status = "degraded"
+            logger.error("GPU health check failed, marking status degraded: %s", e)
 
     return status
 

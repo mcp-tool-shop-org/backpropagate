@@ -116,7 +116,7 @@ export const config: SiteConfig = {
       kind: 'data-table',
       id: 'scorecard',
       title: 'Quality scorecard',
-      subtitle: 'Ship Gate audit — 23/31 checked, 14 skipped, 100% pass.',
+      subtitle: 'Ship Gate audit — 23/35 checked, 12 skipped, 100% pass.',
       columns: ['Category', 'Score', 'Notes'],
       rows: [
         ['A. Security', '6/8', 'SECURITY.md, trust model, no secrets/telemetry, safe_path()'],

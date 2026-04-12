@@ -9,6 +9,7 @@ Tests cover:
 - Statistics computation
 """
 
+import os
 import json
 import tempfile
 from pathlib import Path
@@ -363,7 +364,7 @@ class TestDatasetLoader:
 
     @pytest.fixture
     def temp_jsonl_file(self):
-        """Create a temporary JSONL file."""
+        """Create a temporary JSONL file, cleaned up after test."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             samples = [
                 {"conversations": [{"from": "human", "value": "Hi"}, {"from": "gpt", "value": "Hello"}]},
@@ -371,18 +372,28 @@ class TestDatasetLoader:
             ]
             for sample in samples:
                 f.write(json.dumps(sample) + "\n")
-            return Path(f.name)
+            path = Path(f.name)
+        yield path
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
     @pytest.fixture
     def temp_json_file(self):
-        """Create a temporary JSON file."""
+        """Create a temporary JSON file, cleaned up after test."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
             samples = [
                 {"instruction": "Q1", "output": "A1"},
                 {"instruction": "Q2", "output": "A2"},
             ]
             json.dump(samples, f)
-            return Path(f.name)
+            path = Path(f.name)
+        yield path
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
     def test_load_jsonl(self, temp_jsonl_file):
         """Should load JSONL file."""
@@ -390,7 +401,6 @@ class TestDatasetLoader:
 
         assert len(loader) == 2
         assert loader.detected_format == DatasetFormat.SHAREGPT
-        temp_jsonl_file.unlink()
 
     def test_load_json(self, temp_json_file):
         """Should load JSON file."""
@@ -398,7 +408,6 @@ class TestDatasetLoader:
 
         assert len(loader) == 2
         assert loader.detected_format == DatasetFormat.ALPACA
-        temp_json_file.unlink()
 
     def test_load_from_list(self):
         """Should load from list directly."""
@@ -418,7 +427,6 @@ class TestDatasetLoader:
         assert len(chatml) == 2
         assert "text" in chatml[0]
         assert "<|im_start|>" in chatml[0]["text"]
-        temp_jsonl_file.unlink()
 
     def test_preview(self, temp_jsonl_file):
         """Should preview samples."""
@@ -427,7 +435,6 @@ class TestDatasetLoader:
 
         assert len(previews) == 1
         assert "<|im_start|>" in previews[0]
-        temp_jsonl_file.unlink()
 
     def test_validation_report(self, temp_jsonl_file):
         """Should generate validation report."""
@@ -436,7 +443,6 @@ class TestDatasetLoader:
 
         assert "sharegpt" in report.lower()
         assert "2" in report  # Total rows
-        temp_jsonl_file.unlink()
 
     def test_stats(self, temp_jsonl_file):
         """Should compute statistics."""
@@ -446,7 +452,6 @@ class TestDatasetLoader:
         assert stats.total_samples == 2
         assert stats.total_tokens_approx > 0
         assert stats.format_detected == DatasetFormat.SHAREGPT
-        temp_jsonl_file.unlink()
 
     def test_shuffle(self, temp_jsonl_file):
         """Should shuffle samples."""
@@ -454,7 +459,6 @@ class TestDatasetLoader:
         shuffled = loader.shuffle(seed=42)
 
         assert len(shuffled) == len(loader)
-        temp_jsonl_file.unlink()
 
     def test_split(self, temp_jsonl_file):
         """Should split into train/test."""
@@ -463,7 +467,6 @@ class TestDatasetLoader:
 
         assert len(train) == 1
         assert len(test) == 1
-        temp_jsonl_file.unlink()
 
     def test_iter(self, temp_jsonl_file):
         """Should be iterable."""
@@ -471,14 +474,12 @@ class TestDatasetLoader:
         samples = list(loader)
 
         assert len(samples) == 2
-        temp_jsonl_file.unlink()
 
     def test_getitem(self, temp_jsonl_file):
         """Should support indexing."""
         loader = DatasetLoader(temp_jsonl_file)
 
         assert "conversations" in loader[0]
-        temp_jsonl_file.unlink()
 
     def test_file_not_found(self):
         """Should raise error for missing file."""
@@ -497,7 +498,6 @@ class TestDatasetLoader:
 
         assert len(hf_dataset) == 2
         assert "text" in hf_dataset.column_names
-        temp_jsonl_file.unlink()
 
 
 # =============================================================================

@@ -38,6 +38,7 @@ import atexit
 import logging
 import threading
 import time
+import collections
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -364,6 +365,10 @@ def wait_for_safe_gpu(
 
     Useful after a critical condition is detected to allow cooldown.
 
+    .. warning::
+        This function blocks with ``time.sleep()``. Call it from a background
+        thread, never from a Gradio handler or an async event loop directly.
+
     Args:
         device_index: GPU device index
         config: Safety configuration
@@ -460,8 +465,7 @@ class GPUMonitor:
         self._pause_event = threading.Event()
         self._pause_event.set()  # Not paused initially
 
-        self._status_history: list[GPUStatus] = []
-        self._max_history: int = 100
+        self._status_history: collections.deque[GPUStatus] = collections.deque(maxlen=100)
 
         self._emergency_triggered = False
         self._critical_count = 0
@@ -522,10 +526,8 @@ class GPUMonitor:
             try:
                 status = get_gpu_status(self.device_index, self.config)
 
-                # Store in history
+                # Store in history (deque with maxlen handles eviction)
                 self._status_history.append(status)
-                if len(self._status_history) > self._max_history:
-                    self._status_history.pop(0)
 
                 # Always call on_status if provided
                 if self.on_status and self._pause_event.is_set():

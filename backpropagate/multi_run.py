@@ -916,22 +916,21 @@ class MultiRunTrainer:
             self.on_gpu_status(status)
 
     def _on_gpu_critical(self, status: GPUStatus) -> None:
-        """Handle critical GPU condition by signaling the training loop to pause."""
+        """Handle critical GPU condition.
+
+        Note: pause_on_overheat only takes effect between runs (checked in
+        the run loop), not mid-training.  During a run the GPU monitor can
+        only log and, in the emergency case, abort.  To actually pause a
+        running trainer we would need deeper integration with the training
+        loop's callback system.
+        """
         logger.warning(f"GPU CRITICAL: {status.condition_reason}")
 
         if self.config.pause_on_overheat:
-            logger.info("Pausing training for GPU cooldown...")
-            self._gpu_pause_event.set()
-            # Wait for GPU to return to safe temps before clearing the pause
-            safe = wait_for_safe_gpu(
-                max_wait_seconds=self.config.cooldown_seconds,
-                check_interval=5.0,
+            logger.warning(
+                "pause_on_overheat is set but pause only applies between runs, "
+                "not during an active training step"
             )
-            self._gpu_pause_event.clear()
-            if safe:
-                logger.info("GPU cooled down, resuming training.")
-            else:
-                logger.warning("GPU did not cool down within timeout, resuming anyway.")
 
     def _on_gpu_emergency(self, status: GPUStatus) -> None:
         """Handle emergency GPU condition."""
@@ -982,44 +981,56 @@ class MultiRunTrainer:
         model.eval()
         total_loss = 0.0
         count = 0
+        skipped = 0
 
         with torch.no_grad():
             for sample in val_dataset:
-                # Get text
-                if 'text' in sample:
-                    text = sample['text']
-                elif 'messages' in sample:
-                    text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
-                elif 'conversations' in sample:
-                    # ShareGPT format
-                    text = '\n'.join([c.get('value', '') for c in sample['conversations']])
-                else:
-                    continue
+                try:
+                    # Get text
+                    if 'text' in sample:
+                        text = sample['text']
+                    elif 'messages' in sample:
+                        text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
+                    elif 'conversations' in sample:
+                        # ShareGPT format
+                        text = '\n'.join([c.get('value', '') for c in sample['conversations']])
+                    else:
+                        continue
 
-                # Tokenize
-                inputs = tokenizer(
-                    text,
-                    return_tensors='pt',
-                    truncation=True,
-                    max_length=self._trainer.max_seq_length,
-                )
+                    # Tokenize
+                    inputs = tokenizer(
+                        text,
+                        return_tensors='pt',
+                        truncation=True,
+                        max_length=self._trainer.max_seq_length,
+                    )
 
-                # Move to device
-                inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    # Move to device
+                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-                # Forward pass
-                outputs = model(**inputs, labels=inputs['input_ids'])
-                total_loss += outputs.loss.item()
-                count += 1
+                    # Forward pass
+                    outputs = model(**inputs, labels=inputs['input_ids'])
+                    total_loss += outputs.loss.item()
+                    count += 1
 
-                # Limit to prevent slow validation
-                if count >= self.config.validation_samples:
-                    break
+                    # Limit to prevent slow validation
+                    if count >= self.config.validation_samples:
+                        break
+                except Exception as e:
+                    skipped += 1
+                    logger.warning(f"Skipped validation sample (error: {e})")
 
         model.train()
 
-        avg_loss = total_loss / max(count, 1)
-        logger.info(f"Validation loss (run {run_idx}): {avg_loss:.4f}")
+        if skipped > 0:
+            logger.warning(f"Skipped {skipped} validation samples due to errors")
+
+        if count == 0:
+            logger.warning("No validation samples were successfully evaluated")
+            return float('inf')
+
+        avg_loss = total_loss / count
+        logger.info(f"Validation loss (run {run_idx}): {avg_loss:.4f} ({count} samples)")
         return avg_loss
 
     def _check_early_stopping(self, val_loss: float, run_idx: int) -> bool:

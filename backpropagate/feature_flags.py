@@ -44,6 +44,7 @@ __all__ = [
     "get_install_hint",
     "list_available_features",
     "list_missing_features",
+    "refresh_features",
     "FeatureNotAvailable",
 ]
 
@@ -175,6 +176,23 @@ def _detect_features() -> None:
 
 # Run detection on module load
 _detect_features()
+
+
+def refresh_features() -> dict[str, bool]:
+    """
+    Re-run feature detection and update the FEATURES dict.
+
+    Useful after installing or uninstalling optional dependencies at runtime
+    (e.g., in a notebook or long-running process) without restarting the interpreter.
+
+    Returns:
+        Updated FEATURES dict.
+    """
+    # Reset all flags before re-detection
+    for key in FEATURES:
+        FEATURES[key] = False
+    _detect_features()
+    return dict(FEATURES)
 
 
 # =============================================================================

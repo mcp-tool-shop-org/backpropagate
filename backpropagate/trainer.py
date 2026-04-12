@@ -415,7 +415,11 @@ class Trainer:
             except Exception as e:
                 logger.warning(f"Failed to apply train_on_responses_only: {e}")
         elif self._train_on_responses and os.name == "nt":
-            logger.info("train_on_responses_only disabled on Windows (multiprocessing issues)")
+            logger.warning(
+                "train_on_responses_only disabled on Windows (multiprocessing issues) "
+                "- training will compute loss on full conversations including user prompts, "
+                "which may reduce fine-tuning quality"
+            )
 
         # Train
         run_id = f"run_{len(self._training_runs) + 1}"

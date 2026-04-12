@@ -19,6 +19,8 @@ Features:
 """
 
 import os
+import threading
+from dataclasses import dataclass as dc_dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -552,11 +554,21 @@ settings = get_settings()
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
+_reload_lock = threading.Lock()
+
+
 def reload_settings() -> Settings:
-    """Reload all settings from environment variables."""
-    get_settings.cache_clear()
+    """Reload all settings from environment variables.
+
+    Note: Settings is not designed for concurrent modifications.  This lock
+    serialises reload calls so that cache_clear + re-read is atomic, but
+    callers should not rely on settings being safe for truly concurrent
+    read-while-write scenarios across threads.
+    """
     global settings
-    settings = get_settings()
+    with _reload_lock:
+        get_settings.cache_clear()
+        settings = get_settings()
     return settings
 
 

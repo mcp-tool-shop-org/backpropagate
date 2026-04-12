@@ -7,7 +7,7 @@ on:
       - 'backpropagate/**'
       - 'tests/**'
       - 'pyproject.toml'
-      - 'setup.cfg'
+      - 'Dockerfile'
       - 'requirements*.txt'
       - 'site/**'
       - '.github/workflows/**'
@@ -17,7 +17,7 @@ on:
       - 'backpropagate/**'
       - 'tests/**'
       - 'pyproject.toml'
-      - 'setup.cfg'
+      - 'Dockerfile'
       - 'requirements*.txt'
       - 'site/**'
       - '.github/workflows/**'
@@ -34,10 +34,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v6
@@ -60,12 +61,13 @@ jobs:
         run: mypy backpropagate/ --ignore-missing-imports
 
       - name: Run tests
+        if: matrix.python-version != '3.11'
         run: pytest tests/ -v --tb=short -m "not gpu and not slow"
 
       - name: Run tests with coverage
         if: matrix.python-version == '3.11'
         run: |
-          pytest tests/ --cov=backpropagate --cov-report=xml -m "not gpu and not slow"
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=50 -m "not gpu and not slow"
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
@@ -79,6 +81,7 @@ jobs:
   bandit:
     name: Bandit SAST
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -96,8 +99,7 @@ jobs:
             -c pyproject.toml \
             -f sarif \
             -o bandit-results.sarif \
-            --severity-level medium \
-            || true
+            --severity-level high
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
@@ -116,6 +118,7 @@ jobs:
   pip-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -135,8 +138,7 @@ jobs:
           pip-audit \
             --desc on \
             --format markdown \
-            --output pip-audit-report.md \
-            || true
+            --output pip-audit-report.md
 
       - name: Display results
         if: always()
@@ -152,6 +154,7 @@ jobs:
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     container:
       image: semgrep/semgrep
     steps:
@@ -178,6 +181,7 @@ jobs:
   trivy:
     name: Trivy Vulnerability Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -200,13 +204,14 @@ jobs:
   secrets-scan:
     name: Secret Detection
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@v3.88.0
         with:
           extra_args: --only-verified --results=json
         continue-on-error: true

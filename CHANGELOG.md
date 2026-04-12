@@ -121,6 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.0.2 | 2026-03-25 | CLI version fix, regression tests |
+| 1.0.1 | 2026-02-27 | Ship Gate audit, verify.sh, proper exit codes |
+| 1.0.0 | 2026-02-27 | Stable release - production-ready |
+| 0.1.7 | 2026-02-27 | Codecov, quality scorecard, privacy section |
+| 0.1.4 | 2026-02-22 | Bandit false positive fix |
+| 0.1.3 | 2026-02-22 | Qwen2.5-3B preset, local dataset helper |
 | 0.1.0 | 2026-01-19 | Initial release - SLAO, QLoRA, Windows support |
 
 ---

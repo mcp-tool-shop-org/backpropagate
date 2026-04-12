@@ -38,6 +38,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .exceptions import DatasetParseError
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -1569,15 +1571,32 @@ class DatasetLoader:
     def _load_jsonl(self, path: Path) -> list[dict]:
         """Load JSONL file."""
         samples = []
+        total_lines = 0
+        skipped_lines = 0
         with open(path, encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
+                total_lines += 1
                 try:
                     samples.append(json.loads(line))
                 except json.JSONDecodeError as e:
+                    skipped_lines += 1
                     logger.warning(f"Invalid JSON on line {line_num}: {e}")
+
+        if total_lines > 0 and not samples:
+            raise DatasetParseError(
+                f"All {total_lines} non-empty lines in {path.name} failed JSON parsing. "
+                "File may be corrupted or not in JSONL format."
+            )
+
+        if total_lines > 0 and skipped_lines > total_lines * 0.5:
+            logger.warning(
+                f"High parse failure rate: {skipped_lines}/{total_lines} lines "
+                f"({skipped_lines * 100 // total_lines}%) failed in {path.name}"
+            )
+
         return samples
 
     def _load_json(self, path: Path) -> list[dict]:

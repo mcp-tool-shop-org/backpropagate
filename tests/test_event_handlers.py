@@ -698,7 +698,8 @@ class TestMultiRunGPUStatusCallbacks:
             t.start()
 
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert len(results) == 10
 
@@ -1016,12 +1017,16 @@ class TestGPUMonitorThreadSafety:
 
         try:
             monitor.start()
-            time.sleep(0.2)  # Wait for a few callbacks
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if len(callback_threads) > 0:
+                    break
+                time.sleep(0.05)
         finally:
             monitor.stop()
 
         # Callbacks should come from a non-main thread
-        assert len(callback_threads) > 0
+        assert len(callback_threads) > 0, "Expected callbacks within timeout"
         main_thread = threading.main_thread().name
         assert any(name != main_thread for name in callback_threads)
 
@@ -1046,12 +1051,16 @@ class TestGPUMonitorThreadSafety:
 
         try:
             monitor.start()
-            time.sleep(0.2)  # Wait for multiple callbacks
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if call_count[0] > 1:
+                    break
+                time.sleep(0.05)
         finally:
             monitor.stop()
 
         # Monitor should continue after exception
-        assert call_count[0] > 1
+        assert call_count[0] > 1, "Expected monitor to continue after exception"
 
     @patch("backpropagate.gpu_safety.get_gpu_status")
     def test_concurrent_callback_access(self, mock_get_status, gpu_status_safe):
@@ -1074,12 +1083,17 @@ class TestGPUMonitorThreadSafety:
 
         try:
             monitor.start()
-            time.sleep(0.15)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with lock:
+                    if shared_state["count"] > 0:
+                        break
+                time.sleep(0.05)
         finally:
             monitor.stop()
 
         # Should have incremented multiple times without race conditions
-        assert shared_state["count"] > 0
+        assert shared_state["count"] > 0, "Expected callbacks within timeout"
 
     @patch("backpropagate.gpu_safety.get_gpu_status")
     def test_stop_during_callback(self, mock_get_status, gpu_status_safe):
@@ -1141,18 +1155,29 @@ class TestGPUMonitorThreadSafety:
 
         try:
             monitor.start()
-            time.sleep(0.1)  # Let some callbacks fire
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with lock:
+                    if callback_times["active"] > 0:
+                        break
+                time.sleep(0.05)
 
             monitor.pause()
             time.sleep(0.1)  # Paused period
 
             monitor.resume()
-            time.sleep(0.1)  # More callbacks
+            active_before = callback_times["active"]
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with lock:
+                    if callback_times["active"] > active_before:
+                        break
+                time.sleep(0.05)
         finally:
             monitor.stop()
 
         # Should have received callbacks when active
-        assert callback_times["active"] > 0
+        assert callback_times["active"] > 0, "Expected active callbacks within timeout"
 
 
 class TestGPUMonitorEventEscalation:
@@ -1365,7 +1390,8 @@ class TestCallbackSpy:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert callback_spy.call_count == 500
 
@@ -1407,7 +1433,8 @@ class TestCallbackSpy:
 
         # Should return True when called
         assert callback_spy.wait_for_call(timeout=1.0)
-        thread.join()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "Thread did not finish within timeout"
 
 
 class TestCallbackTracker:
@@ -1480,7 +1507,8 @@ class TestCallbackTracker:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should have 50 calls total (5 threads x 10 calls)
         callback_tracker.assert_contains("concurrent", times=50)
@@ -1504,7 +1532,8 @@ class TestAsyncCallbackCollector:
 
         assert collector.wait(timeout=2.0)
         assert len(collector.results) == 3
-        thread.join()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "Thread did not finish within timeout"
 
     def test_collector_timeout(self, async_callback_collector):
         """Collector times out if not enough callbacks."""
@@ -1543,7 +1572,8 @@ class TestAsyncCallbackCollector:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         assert collector.wait(timeout=1.0)
         assert len(collector.results) == 50

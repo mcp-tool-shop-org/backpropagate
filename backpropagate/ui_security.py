@@ -48,6 +48,7 @@ from functools import wraps
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional, TypeVar
+from urllib.parse import urlparse
 
 import gradio as gr
 
@@ -299,6 +300,7 @@ class EnhancedRateLimiter:
         self.window_seconds = window_seconds
         self.burst_allowance = burst_allowance
         self.operation_name = operation_name
+        self._max_clients = 10000
 
         # Track requests per IP
         self._requests: dict[str, list[float]] = {}
@@ -335,6 +337,33 @@ class EnhancedRateLimiter:
                 if not self._requests[client_id]:
                     del self._requests[client_id]
 
+    def _enforce_client_cap(self) -> None:
+        """Hard cap on tracked client IDs to prevent unbounded memory growth."""
+        if len(self._requests) <= self._max_clients:
+            return
+
+        # Force immediate cleanup regardless of interval
+        now = time.time()
+        self._last_cleanup = now
+        cutoff = now - self.window_seconds
+        for client_id in list(self._requests.keys()):
+            self._requests[client_id] = [
+                t for t in self._requests[client_id] if t > cutoff
+            ]
+            if not self._requests[client_id]:
+                del self._requests[client_id]
+
+        # If still over cap, evict oldest entries
+        if len(self._requests) > self._max_clients:
+            # Sort by most recent request timestamp (oldest first)
+            by_age = sorted(
+                self._requests.items(),
+                key=lambda item: max(item[1]) if item[1] else 0.0,
+            )
+            excess = len(self._requests) - self._max_clients
+            for client_id, _ in by_age[:excess]:
+                del self._requests[client_id]
+
     def check(self, request: gr.Request | None = None) -> tuple[bool, float]:
         """
         Check if request is allowed.
@@ -343,6 +372,7 @@ class EnhancedRateLimiter:
             Tuple of (is_allowed, wait_seconds_if_denied)
         """
         self._cleanup_old_entries()
+        self._enforce_client_cap()
 
         client_id = self._get_client_id(request)
         now = time.time()
@@ -911,10 +941,21 @@ def check_csrf_protection(
 
     # If localhost only, check origin
     if config.csrf_localhost_only:
-        localhost_patterns = ["localhost", "127.0.0.1", "::1"]
+        localhost_hostnames = {"localhost", "127.0.0.1", "::1"}
 
-        origin_ok = not origin or any(p in origin for p in localhost_patterns)
-        referer_ok = not referer or any(p in referer for p in localhost_patterns)
+        def _is_localhost(url: str) -> bool:
+            """Check if a URL's hostname is exactly a localhost address."""
+            if not url:
+                return True  # Empty origin/referer is allowed
+            try:
+                parsed = urlparse(url)
+                hostname = parsed.hostname or ""
+                return hostname in localhost_hostnames
+            except Exception:
+                return False
+
+        origin_ok = _is_localhost(origin)
+        referer_ok = _is_localhost(referer)
 
         if not (origin_ok and referer_ok):
             log_security_event(
@@ -1028,8 +1069,9 @@ def get_health_status(
                 # Check for GPU issues
                 if gpu_status.temperature_c and gpu_status.temperature_c > 85:
                     status.status = "degraded"
-        except Exception:
-            pass  # GPU check failed, continue without
+        except Exception as e:
+            status.status = "degraded"
+            logger.error("GPU health check failed, marking status degraded: %s", e)
 
     return status
 
@@ -1196,15 +1238,19 @@ class SessionManager:
     """
 
     _instance: Optional["SessionManager"] = None
-    _lock: Lock = Lock()
+    _class_lock: Lock = Lock()  # Only used for singleton construction
+    _lock: Lock
+    _sessions: dict[str, SessionInfo]
+    _sessions_by_ip: dict[str, list[str]]
 
     def __new__(cls) -> "SessionManager":
         if cls._instance is None:
-            with cls._lock:
+            with cls._class_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._sessions: dict[str, SessionInfo] = {}
-                    cls._instance._sessions_by_ip: dict[str, list[str]] = {}
+                    cls._instance._lock = Lock()
+                    cls._instance._sessions = {}
+                    cls._instance._sessions_by_ip = {}
         return cls._instance
 
     def create_session(
@@ -1733,8 +1779,9 @@ class CSRFProtection:
         is_valid = csrf.validate_token(session_id, token)
     """
 
-    def __init__(self, expiry_minutes: int = 60):
+    def __init__(self, expiry_minutes: int = 60, max_tokens: int = 10000):
         self.expiry_minutes = expiry_minutes
+        self._max_tokens = max_tokens
         self._tokens: dict[str, CSRFToken] = {}
         self._lock = Lock()
 
@@ -1754,6 +1801,7 @@ class CSRFProtection:
 
         with self._lock:
             self._cleanup_expired()
+            self._enforce_token_cap()
             self._tokens[session_id] = CSRFToken(
                 token=token_value,
                 created_at=time.time(),
@@ -1827,6 +1875,19 @@ class CSRFProtection:
             if (now - token.created_at) / 60 > token.expiry_minutes
         ]
         for sid in expired:
+            del self._tokens[sid]
+
+    def _enforce_token_cap(self) -> None:
+        """Evict oldest tokens when dict exceeds max_tokens cap."""
+        if len(self._tokens) <= self._max_tokens:
+            return
+        # Sort by created_at ascending (oldest first), evict excess
+        by_age = sorted(
+            self._tokens.items(),
+            key=lambda item: item[1].created_at,
+        )
+        excess = len(self._tokens) - self._max_tokens
+        for sid, _ in by_age[:excess]:
             del self._tokens[sid]
 
 

@@ -1095,7 +1095,8 @@ class TestConcurrentSaveOperations:
 
         # Wait for all to complete
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should have no errors
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -1128,7 +1129,8 @@ class TestConcurrentSaveOperations:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=10.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
 
         # Should handle concurrent prunes gracefully
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -1169,8 +1171,10 @@ class TestConcurrentSaveOperations:
 
         t1.start()
         t2.start()
-        t1.join()
-        t2.join()
+        t1.join(timeout=10.0)
+        assert not t1.is_alive(), "Thread did not finish within timeout"
+        t2.join(timeout=10.0)
+        assert not t2.is_alive(), "Thread did not finish within timeout"
 
         # Should complete without errors
         assert len(errors) == 0, f"Errors occurred: {errors}"
@@ -1180,46 +1184,61 @@ class TestDiskFullHandling:
     """Tests for graceful error handling when disk is full."""
 
     def test_disk_full_on_manifest_save(self, temp_checkpoint_dir, monkeypatch):
-        """Graceful error when disk is full during manifest save."""
+        """Graceful behavior when disk is full during manifest save.
+
+        Patches _save_manifest to raise OSError, then verifies the manager
+        does not crash and prior in-memory state remains intact.
+        _save_manifest catches all exceptions internally and returns False,
+        so register() should still succeed (in-memory) even when persistence fails.
+        """
         policy = CheckpointPolicy(auto_prune=False)
         manager = CheckpointManager(str(temp_checkpoint_dir), policy)
 
-        # Create a checkpoint
-        cp = create_dummy_checkpoint(temp_checkpoint_dir, "cp0")
+        # Register a checkpoint successfully first
+        cp0 = create_dummy_checkpoint(temp_checkpoint_dir, "cp0")
+        info0 = manager.register(0, str(cp0), validation_loss=0.5)
+        assert info0 is not None
+        assert len(manager.list_checkpoints()) == 1
 
-        # Mock file open to raise disk full error on second call (manifest save)
-        original_open = open
-        call_count = [0]
-
-        def mock_open(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] > 1 and 'w' in args[1] if len(args) > 1 else kwargs.get('mode', '') == 'w':
-                raise OSError(28, "No space left on device")
-            return original_open(*args, **kwargs)
-
-        # Note: This test is somewhat limited because we can't easily mock
-        # the json.dump or file write operations without more complex setup
-        # The key point is demonstrating the test structure
-
-        # For now, just verify normal operation works
-        info = manager.register(0, str(cp), validation_loss=0.5)
-        assert info is not None
-
-    def test_disk_full_simulation(self, temp_checkpoint_dir, monkeypatch):
-        """Simulate disk full by patching Path.write_bytes."""
-        policy = CheckpointPolicy(auto_prune=False)
-        manager = CheckpointManager(str(temp_checkpoint_dir), policy)
-
-        # Create checkpoint first
-        cp = create_dummy_checkpoint(temp_checkpoint_dir, "cp0")
-        manager.register(0, str(cp), validation_loss=0.5)
-
-        # Simulate disk full on _save_manifest
-        def mock_save_manifest():
+        # Patch _save_manifest to simulate disk-full on the next register
+        def failing_save():
             raise OSError(28, "No space left on device")
 
-        # This would need deeper integration to properly test
-        # For now, verify the manager handles exceptions in _save_manifest
+        monkeypatch.setattr(manager, "_save_manifest", failing_save)
+
+        # Second register — _save_manifest failure is caught internally,
+        # so the checkpoint is still tracked in memory
+        cp1 = create_dummy_checkpoint(temp_checkpoint_dir, "cp1")
+        info1 = manager.register(1, str(cp1), validation_loss=0.4)
+        assert info1 is not None
+        # Both checkpoints should be tracked in memory despite persistence failure
+        assert len(manager.list_checkpoints()) == 2
+
+    def test_disk_full_simulation(self, temp_checkpoint_dir, monkeypatch):
+        """Simulate disk full during prune manifest persistence.
+
+        Verifies that a disk-full error during _save_manifest after pruning
+        does not corrupt previously registered in-memory checkpoint state.
+        """
+        policy = CheckpointPolicy(auto_prune=False)
+        manager = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # Register a checkpoint successfully
+        cp = create_dummy_checkpoint(temp_checkpoint_dir, "cp0")
+        manager.register(0, str(cp), validation_loss=0.5)
+        assert len(manager.list_checkpoints()) == 1
+
+        # Patch _save_manifest to simulate disk full
+        def failing_save():
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(manager, "_save_manifest", failing_save)
+
+        # Prune should not crash even if manifest save fails internally
+        pruned = manager.prune()
+
+        # Original checkpoint data should still be queryable in memory
+        assert len(manager.list_checkpoints()) >= 1
 
     def test_readonly_checkpoint_directory(self, temp_checkpoint_dir):
         """Handle read-only checkpoint directory gracefully."""

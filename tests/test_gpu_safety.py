@@ -372,10 +372,16 @@ class TestGPUMonitor:
             )
 
             monitor.start()
-            time.sleep(0.3)
-            monitor.stop()
+            try:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if len(warning_called) > 0:
+                        break
+                    time.sleep(0.05)
+            finally:
+                monitor.stop()
 
-            assert len(warning_called) > 0
+            assert len(warning_called) > 0, "Expected at least one warning callback within timeout"
 
     def test_emergency_flag(self):
         """Should set emergency flag on emergency condition."""
@@ -388,12 +394,15 @@ class TestGPUMonitor:
         with patch("backpropagate.gpu_safety.get_gpu_status", return_value=mock_status):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
-
-            time.sleep(0.3)
-
-            assert monitor.is_emergency is True
-
-            monitor.stop()
+            try:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if monitor.is_emergency:
+                        break
+                    time.sleep(0.05)
+                assert monitor.is_emergency is True, "Expected emergency flag within timeout"
+            finally:
+                monitor.stop()
 
     def test_status_history(self):
         """Should maintain status history."""
@@ -405,12 +414,16 @@ class TestGPUMonitor:
         with patch("backpropagate.gpu_safety.get_gpu_status", return_value=mock_status):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
-
-            time.sleep(0.5)
-            monitor.stop()
-
-            history = monitor.get_status_history()
-            assert len(history) > 0
+            try:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if len(monitor.get_status_history()) >= 2:
+                        break
+                    time.sleep(0.05)
+                history = monitor.get_status_history()
+                assert len(history) >= 2, f"Expected >=2 history entries with 5s deadline and 0.1s interval, got {len(history)}"
+            finally:
+                monitor.stop()
 
     def test_pause_resume(self):
         """Should support pause and resume."""
@@ -428,12 +441,18 @@ class TestGPUMonitor:
             )
 
             monitor.start()
-            time.sleep(0.25)
+            # Wait until we have at least one callback
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if callback_count[0] > 0:
+                    break
+                time.sleep(0.05)
 
             count_before_pause = callback_count[0]
+            assert count_before_pause > 0, "Expected callbacks before pause"
 
             monitor.pause()
-            time.sleep(0.25)
+            time.sleep(0.15)
 
             count_after_pause = callback_count[0]
 
@@ -442,7 +461,12 @@ class TestGPUMonitor:
             assert count_after_pause <= count_before_pause + 1
 
             monitor.resume()
-            time.sleep(0.25)
+            # Wait until callbacks resume
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if callback_count[0] > count_after_pause:
+                    break
+                time.sleep(0.05)
 
             count_after_resume = callback_count[0]
 
@@ -689,10 +713,11 @@ class TestGPUSafetyEdgeCases:
         with patch("backpropagate.gpu_safety.get_gpu_status", side_effect=raise_error):
             monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.1))
             monitor.start()
-
-            # Should not crash
-            time.sleep(0.3)
-            monitor.stop()
+            try:
+                # Should not crash
+                time.sleep(0.3)
+            finally:
+                monitor.stop()
 
     def test_concurrent_monitors(self):
         """Should support multiple concurrent monitors."""
@@ -704,12 +729,17 @@ class TestGPUSafetyEdgeCases:
 
             monitor1.start()
             monitor2.start()
+            try:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if (len(monitor1.get_status_history()) >= 2
+                            and len(monitor2.get_status_history()) >= 2):
+                        break
+                    time.sleep(0.05)
 
-            time.sleep(0.3)
-
-            monitor1.stop()
-            monitor2.stop()
-
-            # Both should have collected history
-            assert len(monitor1.get_status_history()) > 0
-            assert len(monitor2.get_status_history()) > 0
+                # Both should have collected history
+                assert len(monitor1.get_status_history()) >= 2, f"Monitor1 expected >=2 history entries, got {len(monitor1.get_status_history())}"
+                assert len(monitor2.get_status_history()) >= 2, f"Monitor2 expected >=2 history entries, got {len(monitor2.get_status_history())}"
+            finally:
+                monitor1.stop()
+                monitor2.stop()

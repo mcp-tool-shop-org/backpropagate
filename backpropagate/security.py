@@ -159,6 +159,9 @@ def check_torch_security() -> bool:
         return True  # Assume safe if we can't check
 
 
+_torch_security_checked: bool = False
+
+
 def safe_torch_load(
     path: str | Path,
     weights_only: bool = True,
@@ -182,6 +185,8 @@ def safe_torch_load(
         FileNotFoundError: If path doesn't exist
         RuntimeError: If loading fails
     """
+    global _torch_security_checked
+
     import torch
 
     path = Path(path)
@@ -189,8 +194,10 @@ def safe_torch_load(
     if not path.exists():
         raise FileNotFoundError(f"Weights file not found: {path}")
 
-    # Check PyTorch security on first load
-    check_torch_security()
+    # Check PyTorch security once (cached after first call)
+    if not _torch_security_checked:
+        check_torch_security()
+        _torch_security_checked = True
 
     # Prefer safetensors format (more secure)
     if path.suffix == ".safetensors":

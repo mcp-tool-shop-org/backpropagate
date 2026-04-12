@@ -53,7 +53,7 @@ from .feature_flags import (
     list_available_features,
 )
 from .gpu_safety import GPUCondition, get_gpu_status
-from .security import PathTraversalError, safe_path
+from .security import PathTraversalError, SecurityWarning, safe_path
 from .theme import create_backpropagate_theme, get_css
 
 # Import production security utilities
@@ -182,21 +182,28 @@ DATASET_PRESETS = {
 
 class UIState:
     """Global UI state container."""
-    trainer = None
-    is_training = False
-    current_run = None
-    loss_history = []
-    runs_history = []
-    # Multi-run state
-    multi_run_trainer = None
-    multi_run_is_running = False
-    multi_run_results = None
-    multi_run_current_run = 0
-    multi_run_loss_history = []
-    multi_run_run_boundaries = []
-    # Dataset state
-    dataset_loader: DatasetLoader | None = None
-    dataset_validation: ValidationResult | None = None
+
+    def __init__(self) -> None:
+        self.trainer: Any = None
+        self.is_training: bool = False
+        self.current_run: Any = None
+        self.loss_history: list[float] = []
+        self.runs_history: list[Any] = []
+        # Multi-run state
+        self.multi_run_trainer: Any = None
+        self.multi_run_is_running: bool = False
+        self.multi_run_results: Any = None
+        self.multi_run_current_run: int = 0
+        self.multi_run_loss_history: list[float] = []
+        self.multi_run_run_boundaries: list[int] = []
+        # Dataset state
+        self.dataset_loader: DatasetLoader | None = None
+        self.dataset_validation: ValidationResult | None = None
+        self.train_start_time: float = 0.0
+        self.multi_run_start_time: float = 0.0
+        # Stop signal for cooperative cancellation
+        import threading
+        self.stop_requested: threading.Event = threading.Event()
 
 
 state = UIState()
@@ -639,6 +646,7 @@ def start_training(
     state.is_training = True
     state.loss_history = []
     state.train_start_time = time.time()
+    state.stop_requested.clear()
 
     # Show info message
     gr.Info(f"Starting training with {model_name}...", duration=3)
@@ -647,6 +655,11 @@ def start_training(
     yield status, format_loss_plot([]), get_gpu_status_display()
 
     try:
+        # Check for cooperative stop between phases
+        if state.stop_requested.is_set():
+            yield "⚠️ Training stopped before model load", format_loss_plot([]), get_gpu_status_display()
+            return
+
         # Create trainer
         state.trainer = Trainer(
             model=model_name,
@@ -659,7 +672,15 @@ def start_training(
         status = "📦 Loading model..."
         yield status, format_loss_plot([]), get_gpu_status_display()
 
+        if state.stop_requested.is_set():
+            yield "⚠️ Training stopped before model load", format_loss_plot([]), get_gpu_status_display()
+            return
+
         state.trainer.load_model()
+
+        if state.stop_requested.is_set():
+            yield "⚠️ Training stopped before training started", format_loss_plot([]), get_gpu_status_display()
+            return
 
         status = f"🏋️ Training on {max_samples} samples for {max_steps} steps..."
         yield status, format_loss_plot([]), get_gpu_status_display()
@@ -710,27 +731,32 @@ def start_training(
 
 
 def stop_training() -> str:
-    """Stop the current training run."""
-    # Note: Proper interruption requires more complex handling
+    """Stop the current training run cooperatively.
+
+    Sets the stop_requested event so the training generator loop
+    breaks after the current step completes.
+    """
+    state.stop_requested.set()
     state.is_training = False
-    return "Training stop requested..."
+    gr.Info("Training will stop after the current step completes.", duration=5)
+    return "Training stop requested — finishing current step..."
 
 
 def save_model(output_path: str, save_merged: bool) -> str:
     """Save the trained model."""
     if state.trainer is None:
-        return "No model to save. Train a model first."
+        raise gr.Error("No model to save. Train a model first.", title="No Model")
 
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
     if not is_valid:
-        return f"Invalid output path: {error_msg}"
+        raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
     try:
         path = state.trainer.save(str(validated_path), save_merged=save_merged)
         return f"Model saved to: {path}"
     except Exception as e:
-        return f"Save failed: {str(e)}"
+        raise gr.Error(f"Save failed: {str(e)[:200]}", title="Save Error")
 
 
 def export_model(
@@ -767,7 +793,7 @@ def export_model(
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
     if not is_valid:
-        return f"Invalid output path: {error_msg}"
+        raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
     try:
         result = state.trainer.export(
@@ -777,7 +803,7 @@ def export_model(
         )
         return result.summary()
     except Exception as e:
-        return f"Export failed: {str(e)}"
+        raise gr.Error(f"Export failed: {str(e)[:200]}", title="Export Error")
 
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
@@ -904,20 +930,61 @@ def start_multi_run(
     ckpt_max_total: int = 10,
     ckpt_keep_final: bool = True,
     ckpt_keep_boundaries: bool = False,
-    progress=gr.Progress(),
-) -> tuple:
-    """Start SLAO Multi-Run training."""
+    _progress: Any = gr.Progress(),
+    _request: gr.Request | None = None,
+) -> Any:
+    """Start SLAO Multi-Run training with input validation."""
     from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
-    # Resolve model
+    # Rate limiting (same as start_training)
+    allowed, wait_time = _training_limiter.check(_request)
+    if not allowed:
+        log_security_event("multi_run_rate_limited", wait_seconds=wait_time)
+        raise gr.Error(
+            f"Too many training requests. Please wait {wait_time:.0f} seconds.",
+            duration=10,
+            title="Rate Limited",
+        )
+
+    # Validate numeric inputs (mirrors start_training validation)
+    try:
+        num_runs = int(validate_numeric_input(num_runs, "Number of runs", min_value=1, max_value=20) or 0)
+        steps_per_run = int(validate_numeric_input(steps_per_run, "Steps per run", min_value=1, max_value=100000) or 0)
+        if samples_per_run:
+            samples_per_run = int(validate_numeric_input(samples_per_run, "Samples per run", min_value=1, max_value=1000000) or 0)
+        initial_lr = float(validate_numeric_input(initial_lr, "Initial learning rate", min_value=1e-8, max_value=1.0) or 0.0)
+        final_lr = float(validate_numeric_input(final_lr, "Final learning rate", min_value=1e-8, max_value=1.0) or 0.0)
+        max_temp = float(validate_numeric_input(max_temp, "Max GPU temperature", min_value=1.0, max_value=100.0) or 85.0)
+    except gr.Error:
+        raise
+    except Exception as e:
+        raise gr.Error(f"Invalid parameter: {e}", duration=10) from None
+
+    if final_lr > initial_lr:
+        raise gr.Error(
+            f"Final LR ({final_lr}) must be <= Initial LR ({initial_lr})",
+            duration=10,
+            title="Invalid Learning Rate",
+        )
+
+    # Resolve and sanitize model name
     if model_preset in MODEL_PRESETS:
         model_name = MODEL_PRESETS[model_preset]
     else:
-        model_name = custom_model
+        model_name = sanitize_model_name(custom_model)
+        if not model_name:
+            raise gr.Error(
+                "Invalid model name. Use format: org/model-name",
+                duration=10,
+                title="Invalid Model",
+            )
 
-    # Resolve dataset
+    # Resolve dataset with path validation for custom datasets
     if dataset_preset == "Custom JSONL":
-        dataset_name = custom_dataset
+        is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
+        if not is_valid:
+            raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
+        dataset_name = str(validated_path)
     elif dataset_preset in DATASET_PRESETS:
         dataset_name = DATASET_PRESETS[dataset_preset]
     else:
@@ -927,6 +994,7 @@ def start_multi_run(
     state.multi_run_loss_history = []
     state.multi_run_run_boundaries = []
     state.multi_run_current_run = 0
+    state.multi_run_start_time = time.time()
 
     status = f"Initializing SLAO Multi-Run with {model_name}..."
     yield (
@@ -1003,7 +1071,15 @@ def start_multi_run(
 
     except Exception as e:
         logger.error(f"Multi-run failed: {e}")
-        status = f"Multi-run failed: {str(e)}"
+        error_msg = str(e)
+        # Surface suggestion hints from BackpropagateError subtypes
+        suggestion = getattr(e, "suggestion", None)
+        if suggestion:
+            error_msg = f"{error_msg}\n\nSuggestion: {suggestion}"
+            gr.Warning(f"Multi-run failed: {str(e)[:100]} — {suggestion}", duration=10)
+        else:
+            gr.Warning(f"Multi-run failed: {str(e)[:100]}", duration=10)
+        status = f"Multi-run failed: {error_msg}"
         yield (
             status,
             format_multi_run_plot(state.multi_run_loss_history, state.multi_run_run_boundaries),
@@ -1072,7 +1148,6 @@ def get_dashboard_metrics() -> dict[str, str]:
         "gpu_condition": "**Status:** -",
         # SLAO Merge Stats
         "scale_factor": "**Scale Factor:** -",
-        "similarity": "**Task Similarity:** -",
         "a_matrices": "**A Matrices Merged:** -",
         "b_matrices": "**B Matrices Merged:** -",
         # Early Stopping
@@ -1127,6 +1202,18 @@ def get_dashboard_metrics() -> dict[str, str]:
             # Calculate completed runs
             completed = len(state.multi_run_results.runs) if state.multi_run_results else 0
             metrics["completed_runs"] = f"**Completed:** {completed}"
+
+            # Compute ETA based on completed runs and elapsed time
+            if completed > 0 and state.multi_run_start_time > 0:
+                elapsed = time.time() - state.multi_run_start_time
+                remaining_runs = config.num_runs - completed
+                eta_seconds = (elapsed / completed) * remaining_runs
+                if eta_seconds > 3600:
+                    metrics["eta"] = f"**ETA:** {eta_seconds/3600:.1f}h"
+                elif eta_seconds > 60:
+                    metrics["eta"] = f"**ETA:** {eta_seconds/60:.1f}m"
+                else:
+                    metrics["eta"] = f"**ETA:** {eta_seconds:.0f}s"
 
             # Current loss from history
             if state.multi_run_loss_history:
@@ -1222,7 +1309,6 @@ def refresh_dashboard() -> tuple:
         m["gpu_condition"],
         # SLAO Merge Stats
         m["scale_factor"],
-        m["similarity"],
         m["a_matrices"],
         m["b_matrices"],
         # Early Stopping
@@ -1520,7 +1606,6 @@ def create_ui() -> gr.Blocks:
                     # SLAO Merge Stats Section (Phase 5.2)
                     with gr.Accordion("🔄 SLAO Merge Stats", open=False):
                         dashboard_scale_factor = gr.Markdown("**Scale Factor:** -")
-                        dashboard_similarity = gr.Markdown("**Task Similarity:** -")
                         dashboard_a_matrices = gr.Markdown("**A Matrices Merged:** -")
                         dashboard_b_matrices = gr.Markdown("**B Matrices Merged:** -")
 
@@ -1778,7 +1863,6 @@ def create_ui() -> gr.Blocks:
                         dashboard_gpu_condition,
                         # SLAO Merge Stats
                         dashboard_scale_factor,
-                        dashboard_similarity,
                         dashboard_a_matrices,
                         dashboard_b_matrices,
                         # Early Stopping
@@ -2136,13 +2220,8 @@ def create_ui() -> gr.Blocks:
                             label="Output Directory"
                         )
 
-                # Actions
-                with gr.Row():
-                    save_settings_btn = gr.Button("Save Settings", variant="primary")
-                    reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
-                    export_settings_btn = gr.Button("Export JSON", variant="secondary")
-
-                settings_status = gr.Markdown("")
+                # Settings guidance
+                gr.Markdown("Settings are configured via environment variables or `backpropagate.toml` config file. See the [documentation](https://github.com/mcp-tool-shop-org/backpropagate) for details.")
 
                 with gr.Accordion("Raw Configuration", open=False):
                     gr.Code(
@@ -2304,19 +2383,19 @@ backprop config""",
                 with gr.Row():
                     gr.Button(
                         "GitHub",
-                        link="https://github.com/mikeyfrilot/backpropagate",
+                        link="https://github.com/mcp-tool-shop-org/backpropagate",
                         variant="secondary",
                         size="sm"
                     )
                     gr.Button(
                         "Documentation",
-                        link="https://github.com/mikeyfrilot/backpropagate#readme",
+                        link="https://github.com/mcp-tool-shop-org/backpropagate#readme",
                         variant="secondary",
                         size="sm"
                     )
                     gr.Button(
                         "Report Issue",
-                        link="https://github.com/mikeyfrilot/backpropagate/issues",
+                        link="https://github.com/mcp-tool-shop-org/backpropagate/issues",
                         variant="secondary",
                         size="sm"
                     )

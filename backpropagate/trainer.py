@@ -118,14 +118,16 @@ class Trainer:
         train_on_responses: bool = True,  # Phase 1.1: Only compute loss on assistant responses
     ):
         # Use settings as defaults, override with provided values
-        self.model_name = model or settings.model.name
+        # NOTE: Use `is not None` checks instead of falsy `or` to allow
+        # legitimate zero values (e.g. lora_dropout=0.0, learning_rate=0.0)
+        self.model_name = model if model is not None else settings.model.name
         self.lora_r = lora_r if lora_r is not None else settings.lora.r
         self.lora_alpha = lora_alpha if lora_alpha is not None else settings.lora.lora_alpha
         self.lora_dropout = lora_dropout if lora_dropout is not None else settings.lora.lora_dropout
         self.learning_rate = learning_rate if learning_rate is not None else settings.training.learning_rate
         self.gradient_accumulation = gradient_accumulation if gradient_accumulation is not None else settings.training.gradient_accumulation_steps
         self.max_seq_length = max_seq_length if max_seq_length is not None else settings.model.max_seq_length
-        self.output_dir = Path(output_dir or settings.training.output_dir)
+        self.output_dir = Path(output_dir if output_dir is not None else settings.training.output_dir)
         self.use_unsloth = use_unsloth and check_feature("unsloth")
 
         # Auto batch size
@@ -413,7 +415,11 @@ class Trainer:
             except Exception as e:
                 logger.warning(f"Failed to apply train_on_responses_only: {e}")
         elif self._train_on_responses and os.name == "nt":
-            logger.info("train_on_responses_only disabled on Windows (multiprocessing issues)")
+            logger.warning(
+                "train_on_responses_only disabled on Windows (multiprocessing issues) "
+                "- training will compute loss on full conversations including user prompts, "
+                "which may reduce fine-tuning quality"
+            )
 
         # Train
         run_id = f"run_{len(self._training_runs) + 1}"
@@ -689,7 +695,7 @@ class Trainer:
         )
 
         if not self._is_loaded:
-            raise RuntimeError("No model loaded. Call load_model() or train() first.")
+            raise TrainingError("No model loaded. Call load_model() or train() first.")
 
         output_path = Path(output_dir or self.output_dir / format)
 
@@ -732,7 +738,7 @@ class Trainer:
     def push_to_hub(self, repo_id: str, private: bool = True) -> None:
         """Push model to HuggingFace Hub."""
         if not self._is_loaded:
-            raise RuntimeError("No model loaded.")
+            raise TrainingError("No model loaded. Call load_model() or train() first.")
 
         self._model.push_to_hub(repo_id, private=private)
         self._tokenizer.push_to_hub(repo_id, private=private)
@@ -797,7 +803,7 @@ class Trainer:
 
         # Pre-flight GPU check
         if not check_gpu_safe():
-            raise RuntimeError("GPU safety check failed. Check temperature and VRAM.")
+            raise GPUNotAvailableError("GPU safety check failed. Check temperature and VRAM.")
 
         config = MultiRunConfig(
             num_runs=num_runs,

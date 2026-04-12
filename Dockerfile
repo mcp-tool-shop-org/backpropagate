@@ -13,7 +13,7 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY --chown=root:root backpropagate/ backpropagate/
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-RUN useradd --create-home appuser
+RUN useradd -m -r appuser
 USER appuser
 ENTRYPOINT ["backpropagate"]
 CMD ["--help"]

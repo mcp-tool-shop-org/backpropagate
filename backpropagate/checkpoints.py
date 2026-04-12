@@ -524,8 +524,9 @@ class CheckpointManager:
         """
         max_bytes = max_size_gb * (1024**3)
         pruned = []
+        max_iterations = 100
 
-        while True:
+        for _iteration in range(max_iterations):
             total_size = sum(cp.size_bytes for cp in self._checkpoints)
             if total_size <= max_bytes:
                 break
@@ -557,6 +558,8 @@ class CheckpointManager:
             except Exception as e:
                 logger.error(f"Failed to force-prune {victim.path}: {e}")
                 break
+        else:
+            logger.error(f"force_prune_to_size hit {max_iterations} iteration limit — aborting to prevent infinite loop")
 
         self._save_manifest()
         return pruned

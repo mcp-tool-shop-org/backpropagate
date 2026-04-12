@@ -1133,48 +1133,27 @@ class TestCmdConfigSet:
 class TestSupportsColor:
     """Tests for _supports_color function."""
 
-    def test_supports_color_no_color_env(self):
+    def test_supports_color_no_color_env(self, monkeypatch):
         """Test NO_COLOR environment variable disables colors.
 
         This tests lines 36-37.
         """
-        import os
-
         from backpropagate.cli import _supports_color
 
-        orig = os.environ.get("NO_COLOR")
-        try:
-            os.environ["NO_COLOR"] = "1"
-            # Need to reimport to test since Colors is class-level
-            assert _supports_color() is False
-        finally:
-            if orig is not None:
-                os.environ["NO_COLOR"] = orig
-            else:
-                os.environ.pop("NO_COLOR", None)
+        monkeypatch.setenv("NO_COLOR", "1")
+        # Need to reimport to test since Colors is class-level
+        assert _supports_color() is False
 
-    def test_supports_color_force_color_env(self):
+    def test_supports_color_force_color_env(self, monkeypatch):
         """Test FORCE_COLOR environment variable enables colors.
 
         This tests lines 38-39.
         """
-        import os
-
         from backpropagate.cli import _supports_color
 
-        orig_no = os.environ.get("NO_COLOR")
-        orig_force = os.environ.get("FORCE_COLOR")
-        try:
-            os.environ.pop("NO_COLOR", None)
-            os.environ["FORCE_COLOR"] = "1"
-            assert _supports_color() is True
-        finally:
-            if orig_no is not None:
-                os.environ["NO_COLOR"] = orig_no
-            if orig_force is not None:
-                os.environ["FORCE_COLOR"] = orig_force
-            else:
-                os.environ.pop("FORCE_COLOR", None)
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        assert _supports_color() is True
 
 
 class TestProgressBarSuffix:

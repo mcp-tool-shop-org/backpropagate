@@ -11,6 +11,7 @@ Tests robustness against:
 import os
 import shutil
 import tempfile
+from unittest.mock import patch, MagicMock
 
 import torch
 
@@ -25,200 +26,149 @@ from backpropagate.slao import MergeResult, SLAOConfig, SLAOMerger
 class TestCheckpointCrashRobustness:
     """Tests for checkpoint manager crash scenarios."""
 
-    def test_checkpoint_manager_creates_missing_dir(self):
+    def test_checkpoint_manager_creates_missing_dir(self, tmp_path):
         """Manager should create missing directories automatically."""
-        temp_path = tempfile.mktemp()  # Path doesn't exist yet
-        try:
-            manager = CheckpointManager(temp_path, CheckpointPolicy())
-            assert os.path.exists(temp_path)
-            assert os.path.isdir(temp_path)
-        finally:
-            shutil.rmtree(temp_path, ignore_errors=True)
+        temp_path = str(tmp_path / "new_subdir")
+        manager = CheckpointManager(temp_path, CheckpointPolicy())
+        assert os.path.exists(temp_path)
+        assert os.path.isdir(temp_path)
 
-    def test_checkpoint_manager_handles_corrupt_manifest(self):
+    def test_checkpoint_manager_handles_corrupt_manifest(self, tmp_path):
         """Manager should handle corrupt manifest gracefully, starting fresh."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            # Create corrupt manifest
-            manifest_path = os.path.join(temp_dir, "manifest.json")
-            with open(manifest_path, "w") as f:
-                f.write("{invalid json that won't parse")
+        # Create corrupt manifest
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text("{invalid json that won't parse")
 
-            # Should not crash, should start fresh
-            manager = CheckpointManager(temp_dir, CheckpointPolicy())
-            assert len(manager.list_checkpoints()) == 0
+        # Should not crash, should start fresh
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy())
+        assert len(manager.list_checkpoints()) == 0
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_manager_handles_empty_manifest(self):
+    def test_checkpoint_manager_handles_empty_manifest(self, tmp_path):
         """Manager should handle empty manifest file."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manifest_path = os.path.join(temp_dir, "manifest.json")
-            with open(manifest_path, "w") as f:
-                f.write("")
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text("")
 
-            manager = CheckpointManager(temp_dir, CheckpointPolicy())
-            assert len(manager.list_checkpoints()) == 0
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy())
+        assert len(manager.list_checkpoints()) == 0
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_register_handles_nonexistent_path(self):
+    def test_checkpoint_register_handles_nonexistent_path(self, tmp_path):
         """Registering non-existent checkpoint path should work with 0 size."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            manager.register(
-                run_index=1,
-                checkpoint_path="/nonexistent/path/that/does/not/exist",
-                validation_loss=0.5,
-            )
-            checkpoints = manager.list_checkpoints()
-            assert len(checkpoints) == 1
-            assert checkpoints[0].size_bytes == 0
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        manager.register(
+            run_index=1,
+            checkpoint_path="/nonexistent/path/that/does/not/exist",
+            validation_loss=0.5,
+        )
+        checkpoints = manager.list_checkpoints()
+        assert len(checkpoints) == 1
+        assert checkpoints[0].size_bytes == 0
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_handles_nan_validation_loss(self):
+    def test_checkpoint_handles_nan_validation_loss(self, tmp_path):
         """Should handle NaN validation loss without crashing."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            manager.register(
-                run_index=1,
-                checkpoint_path=temp_dir,
-                validation_loss=float('nan'),
-            )
-            stats = manager.get_stats()
-            assert stats.total_count == 1
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        manager.register(
+            run_index=1,
+            checkpoint_path=str(tmp_path),
+            validation_loss=float('nan'),
+        )
+        stats = manager.get_stats()
+        assert stats.total_count == 1
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_handles_inf_validation_loss(self):
+    def test_checkpoint_handles_inf_validation_loss(self, tmp_path):
         """Should handle inf validation loss without crashing."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            manager.register(
-                run_index=1,
-                checkpoint_path=temp_dir,
-                validation_loss=float('inf'),
-            )
-            stats = manager.get_stats()
-            assert stats.total_count == 1
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        manager.register(
+            run_index=1,
+            checkpoint_path=str(tmp_path),
+            validation_loss=float('inf'),
+        )
+        stats = manager.get_stats()
+        assert stats.total_count == 1
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_handles_negative_inf_validation_loss(self):
+    def test_checkpoint_handles_negative_inf_validation_loss(self, tmp_path):
         """Should handle -inf validation loss without crashing."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            manager.register(
-                run_index=1,
-                checkpoint_path=temp_dir,
-                validation_loss=float('-inf'),
-            )
-            stats = manager.get_stats()
-            assert stats.total_count == 1
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        manager.register(
+            run_index=1,
+            checkpoint_path=str(tmp_path),
+            validation_loss=float('-inf'),
+        )
+        stats = manager.get_stats()
+        assert stats.total_count == 1
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_handles_very_long_path(self):
+    def test_checkpoint_handles_very_long_path(self, tmp_path):
         """Should handle very long checkpoint paths."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            # Create a path that's long but not OS-breaking
-            long_name = "a" * 200
-            long_path = os.path.join(temp_dir, long_name)
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        # Create a path that's long but not OS-breaking
+        long_name = "a" * 200
+        long_path = os.path.join(str(tmp_path), long_name)
 
-            manager.register(
-                run_index=1,
-                checkpoint_path=long_path,
-                validation_loss=0.5,
-            )
-            assert len(manager.list_checkpoints()) == 1
+        manager.register(
+            run_index=1,
+            checkpoint_path=long_path,
+            validation_loss=0.5,
+        )
+        assert len(manager.list_checkpoints()) == 1
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_checkpoint_handles_unicode_path(self):
+    def test_checkpoint_handles_unicode_path(self, tmp_path):
         """Should handle unicode characters in paths."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
-            unicode_path = os.path.join(temp_dir, "模型_checkpoint_日本語")
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
+        unicode_path = os.path.join(str(tmp_path), "模型_checkpoint_日本語")
 
-            manager.register(
-                run_index=1,
-                checkpoint_path=unicode_path,
-                validation_loss=0.5,
-            )
-            assert len(manager.list_checkpoints()) == 1
-
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        manager.register(
+            run_index=1,
+            checkpoint_path=unicode_path,
+            validation_loss=0.5,
+        )
+        assert len(manager.list_checkpoints()) == 1
 
 
 class TestCheckpointConcurrencyRobustness:
     """Tests for concurrent access scenarios."""
 
-    def test_checkpoint_manager_handles_deleted_checkpoint(self):
+    def test_checkpoint_manager_handles_deleted_checkpoint(self, tmp_path):
         """Manager should handle checkpoint deleted during operation."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy(auto_prune=False))
+        import shutil
 
-            # Create and register a checkpoint
-            ckpt_path = os.path.join(temp_dir, "run_001")
-            os.makedirs(ckpt_path)
-            manager.register(run_index=1, checkpoint_path=ckpt_path)
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
 
-            # Delete the checkpoint directory
-            shutil.rmtree(ckpt_path)
+        # Create and register a checkpoint
+        ckpt_path = tmp_path / "run_001"
+        ckpt_path.mkdir()
+        manager.register(run_index=1, checkpoint_path=str(ckpt_path))
 
-            # Cleanup should handle gracefully
-            orphaned = manager.cleanup_orphaned()
-            assert orphaned == 1
+        # Delete the checkpoint directory
+        shutil.rmtree(str(ckpt_path))
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        # Cleanup should handle gracefully
+        orphaned = manager.cleanup_orphaned()
+        assert orphaned == 1
 
-    def test_checkpoint_prune_handles_already_deleted(self):
+    def test_checkpoint_prune_handles_already_deleted(self, tmp_path):
         """Pruning should handle already-deleted checkpoints."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            policy = CheckpointPolicy(keep_best_n=1, max_total=2, auto_prune=False)
-            manager = CheckpointManager(temp_dir, policy)
+        import shutil
 
-            # Register several checkpoints
-            for i in range(5):
-                ckpt_path = os.path.join(temp_dir, f"run_{i:03d}")
-                os.makedirs(ckpt_path, exist_ok=True)
-                manager.register(
-                    run_index=i + 1,
-                    checkpoint_path=ckpt_path,
-                    validation_loss=float(i) * 0.1,
-                )
+        policy = CheckpointPolicy(keep_best_n=1, max_total=2, auto_prune=False)
+        manager = CheckpointManager(str(tmp_path), policy)
 
-            # Delete some checkpoints manually
-            shutil.rmtree(os.path.join(temp_dir, "run_001"), ignore_errors=True)
-            shutil.rmtree(os.path.join(temp_dir, "run_002"), ignore_errors=True)
+        # Register several checkpoints
+        for i in range(5):
+            ckpt_path = tmp_path / f"run_{i:03d}"
+            ckpt_path.mkdir(exist_ok=True)
+            manager.register(
+                run_index=i + 1,
+                checkpoint_path=str(ckpt_path),
+                validation_loss=float(i) * 0.1,
+            )
 
-            # Prune should not crash - returns list of pruned checkpoints
-            pruned = manager.prune()
-            # Should have cleaned up some
-            assert isinstance(pruned, list)
+        # Delete some checkpoints manually
+        shutil.rmtree(str(tmp_path / "run_001"), ignore_errors=True)
+        shutil.rmtree(str(tmp_path / "run_002"), ignore_errors=True)
 
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        # Prune should not crash - returns list of pruned checkpoints
+        pruned = manager.prune()
+        # Should have cleaned up some
+        assert isinstance(pruned, list)
 
 
 # =============================================================================
@@ -385,18 +335,13 @@ class TestSLAOCrashRobustness:
 class TestEdgeCases:
     """Tests for general edge cases."""
 
-    def test_empty_checkpoint_list_stats(self):
+    def test_empty_checkpoint_list_stats(self, tmp_path):
         """Getting stats on empty manager should work."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            manager = CheckpointManager(temp_dir, CheckpointPolicy())
-            stats = manager.get_stats()
-            assert stats.total_count == 0
-            assert stats.total_size_bytes == 0
-            assert stats.best_checkpoint is None
-
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        manager = CheckpointManager(str(tmp_path), CheckpointPolicy())
+        stats = manager.get_stats()
+        assert stats.total_count == 0
+        assert stats.total_size_bytes == 0
+        assert stats.best_checkpoint is None
 
     def test_checkpoint_info_serialization_edge_cases(self):
         """CheckpointInfo should serialize edge case values."""
@@ -443,33 +388,28 @@ class TestEdgeCases:
 class TestResourceExhaustion:
     """Tests for resource exhaustion scenarios."""
 
-    def test_many_checkpoints_registered(self):
+    def test_many_checkpoints_registered(self, tmp_path):
         """Should handle many checkpoints being registered."""
-        temp_dir = tempfile.mkdtemp()
-        try:
-            policy = CheckpointPolicy(
-                keep_best_n=5,
-                max_total=10,
-                auto_prune=True,
+        policy = CheckpointPolicy(
+            keep_best_n=5,
+            max_total=10,
+            auto_prune=True,
+        )
+        manager = CheckpointManager(str(tmp_path), policy)
+
+        # Register 100 checkpoints
+        for i in range(100):
+            ckpt_path = tmp_path / f"run_{i:03d}"
+            ckpt_path.mkdir(exist_ok=True)
+            manager.register(
+                run_index=i + 1,
+                checkpoint_path=str(ckpt_path),
+                validation_loss=float(i) * 0.01,
             )
-            manager = CheckpointManager(temp_dir, policy)
 
-            # Register 100 checkpoints
-            for i in range(100):
-                ckpt_path = os.path.join(temp_dir, f"run_{i:03d}")
-                os.makedirs(ckpt_path, exist_ok=True)
-                manager.register(
-                    run_index=i + 1,
-                    checkpoint_path=ckpt_path,
-                    validation_loss=float(i) * 0.01,
-                )
-
-            # Should have pruned to stay within limits
-            stats = manager.get_stats()
-            assert stats.total_count <= policy.max_total + 5  # Some slack for protected
-
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        # Should have pruned to stay within limits
+        stats = manager.get_stats()
+        assert stats.total_count <= policy.max_total + 5  # Some slack for protected
 
     def test_slao_many_merges(self):
         """SLAO should handle many sequential merges."""

@@ -744,18 +744,18 @@ def stop_training() -> str:
 def save_model(output_path: str, save_merged: bool) -> str:
     """Save the trained model."""
     if state.trainer is None:
-        return "No model to save. Train a model first."
+        raise gr.Error("No model to save. Train a model first.", title="No Model")
 
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
     if not is_valid:
-        return f"Invalid output path: {error_msg}"
+        raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
     try:
         path = state.trainer.save(str(validated_path), save_merged=save_merged)
         return f"Model saved to: {path}"
     except Exception as e:
-        return f"Save failed: {str(e)}"
+        raise gr.Error(f"Save failed: {str(e)[:200]}", title="Save Error")
 
 
 def export_model(
@@ -792,7 +792,7 @@ def export_model(
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
     if not is_valid:
-        return f"Invalid output path: {error_msg}"
+        raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
     try:
         result = state.trainer.export(
@@ -802,7 +802,7 @@ def export_model(
         )
         return result.summary()
     except Exception as e:
-        return f"Export failed: {str(e)}"
+        raise gr.Error(f"Export failed: {str(e)[:200]}", title="Export Error")
 
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
@@ -2210,13 +2210,8 @@ def create_ui() -> gr.Blocks:
                             label="Output Directory"
                         )
 
-                # Actions
-                with gr.Row():
-                    save_settings_btn = gr.Button("Save Settings", variant="primary")
-                    reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
-                    export_settings_btn = gr.Button("Export JSON", variant="secondary")
-
-                settings_status = gr.Markdown("")
+                # Settings guidance
+                gr.Markdown("Settings are configured via environment variables or `backpropagate.toml` config file. See the [documentation](https://github.com/mcp-tool-shop-org/backpropagate) for details.")
 
                 with gr.Accordion("Raw Configuration", open=False):
                     gr.Code(

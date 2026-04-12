@@ -691,7 +691,7 @@ class Trainer:
         )
 
         if not self._is_loaded:
-            raise RuntimeError("No model loaded. Call load_model() or train() first.")
+            raise TrainingError("No model loaded. Call load_model() or train() first.")
 
         output_path = Path(output_dir or self.output_dir / format)
 
@@ -734,7 +734,7 @@ class Trainer:
     def push_to_hub(self, repo_id: str, private: bool = True) -> None:
         """Push model to HuggingFace Hub."""
         if not self._is_loaded:
-            raise RuntimeError("No model loaded.")
+            raise TrainingError("No model loaded. Call load_model() or train() first.")
 
         self._model.push_to_hub(repo_id, private=private)
         self._tokenizer.push_to_hub(repo_id, private=private)
@@ -799,7 +799,7 @@ class Trainer:
 
         # Pre-flight GPU check
         if not check_gpu_safe():
-            raise RuntimeError("GPU safety check failed. Check temperature and VRAM.")
+            raise GPUNotAvailableError("GPU safety check failed. Check temperature and VRAM.")
 
         config = MultiRunConfig(
             num_runs=num_runs,

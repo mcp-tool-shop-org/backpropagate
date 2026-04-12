@@ -199,7 +199,7 @@ button, .btn {
 .generate-btn,
 button.primary,
 button[class*="primary"],
-.svelte-cmf5ev.primary {
+.primary {
     background-color: #5BA3A3 !important;
     background: linear-gradient(135deg, #6BB8B8 0%, #5BA3A3 100%) !important;
     color: #FFFFFF !important;
@@ -230,7 +230,7 @@ button[class*="primary"]:active {
 /* Secondary button - Subtle steel gray */
 button.secondary,
 button[class*="secondary"],
-.svelte-cmf5ev.secondary {
+.secondary {
     background-color: var(--ocean-gray5) !important;
     color: var(--ocean-label) !important;
     border: 1px solid var(--ocean-gray4) !important;

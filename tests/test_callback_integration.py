@@ -1234,14 +1234,20 @@ class TestEventEscalation:
 
         try:
             monitor.start()
-            time.sleep(0.15)  # Allow time for callbacks
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if (len(callbacks_fired["warning"]) > 0
+                        and len(callbacks_fired["critical"]) > 0
+                        and len(callbacks_fired["emergency"]) > 0):
+                    break
+                time.sleep(0.05)
         finally:
             monitor.stop()
 
         # All escalation callbacks should have fired
-        assert len(callbacks_fired["warning"]) > 0
-        assert len(callbacks_fired["critical"]) > 0
-        assert len(callbacks_fired["emergency"]) > 0
+        assert len(callbacks_fired["warning"]) > 0, "Expected warning callbacks"
+        assert len(callbacks_fired["critical"]) > 0, "Expected critical callbacks"
+        assert len(callbacks_fired["emergency"]) > 0, "Expected emergency callbacks"
 
     def test_vram_escalation_independent_of_temperature(self):
         """VRAM exhaustion should escalate independent of temperature."""

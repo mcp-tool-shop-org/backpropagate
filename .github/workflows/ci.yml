@@ -34,6 +34,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +61,13 @@ jobs:
         run: mypy backpropagate/ --ignore-missing-imports
 
       - name: Run tests
+        if: matrix.python-version != '3.11'
         run: pytest tests/ -v --tb=short -m "not gpu and not slow"
 
       - name: Run tests with coverage
         if: matrix.python-version == '3.11'
         run: |
-          pytest tests/ --cov=backpropagate --cov-report=xml -m "not gpu and not slow"
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=50 -m "not gpu and not slow"
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
@@ -79,6 +81,7 @@ jobs:
   bandit:
     name: Bandit SAST
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -115,6 +118,7 @@ jobs:
   pip-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -150,6 +154,7 @@ jobs:
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     container:
       image: semgrep/semgrep
     steps:
@@ -176,6 +181,7 @@ jobs:
   trivy:
     name: Trivy Vulnerability Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -198,6 +204,7 @@ jobs:
   secrets-scan:
     name: Secret Detection
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:

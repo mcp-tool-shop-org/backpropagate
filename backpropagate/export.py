@@ -468,6 +468,16 @@ def export_gguf(
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            # Clean up on timeout
+            shutil.rmtree(merged_path, ignore_errors=True)
+            raise GGUFExportError(
+                "llama.cpp conversion timed out after 30 minutes",
+                output_path=str(output_path),
+                quantization=quant_str,
+                suggestion="The model may be too large for conversion, or llama.cpp may be stuck. Try a smaller model or check system resources."
             )
         except subprocess.CalledProcessError as e:
             # Clean up on failure
@@ -621,9 +631,16 @@ def register_with_ollama(
             capture_output=True,
             text=True,
             check=True,
+            timeout=600,
         )
         logger.info(f"Successfully registered model '{model_name}' with Ollama")
         return True
+    except subprocess.TimeoutExpired:
+        raise OllamaRegistrationError(
+            model_name,
+            "ollama create timed out after 10 minutes",
+            suggestion="The model may be too large or Ollama may be unresponsive. Check 'ollama serve' status and try again."
+        )
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr[:500] if e.stderr else "Unknown error"
         raise OllamaRegistrationError(
@@ -656,6 +673,7 @@ def list_ollama_models() -> list[str]:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
 
         # Parse output (skip header line)
@@ -668,5 +686,5 @@ def list_ollama_models() -> list[str]:
                 if parts:
                     models.append(parts[0])
         return models
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []

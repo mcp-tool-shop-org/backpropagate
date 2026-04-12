@@ -27,6 +27,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import __version__
 from .exceptions import (
     BackpropagateError,
     DatasetError,
@@ -233,7 +234,10 @@ def cmd_train(args: argparse.Namespace) -> int:
             logger.exception("Error details")
         return 1
     except Exception as e:
-        _print_error(f"Training failed: {e}")
+        msg = f"Training failed: {e}"
+        if not args.verbose:
+            msg += " (run with --verbose for full traceback)"
+        _print_error(msg)
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -303,7 +307,10 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             logger.exception("Error details")
         return 1
     except Exception as e:
-        _print_error(f"Multi-run failed: {e}")
+        msg = f"Multi-run failed: {e}"
+        if not args.verbose:
+            msg += " (run with --verbose for full traceback)"
+        _print_error(msg)
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -407,7 +414,10 @@ def cmd_export(args: argparse.Namespace) -> int:
             logger.exception("Error details")
         return 1
     except Exception as e:
-        _print_error(f"Export failed: {e}")
+        msg = f"Export failed: {e}"
+        if not args.verbose:
+            msg += " (run with --verbose for full traceback)"
+        _print_error(msg)
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -515,7 +525,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
         _print_info("UI stopped")
         return 0
     except Exception as e:
-        _print_error(f"Failed to launch UI: {e}")
+        msg = f"Failed to launch UI: {e}"
+        if not args.verbose:
+            msg += " (run with --verbose for full traceback)"
+        _print_error(msg)
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -531,14 +544,12 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     if args.reset:
         # Reset to defaults
-        _print_warning("Config reset not yet implemented")
-        _print_info("Delete your config file to reset to defaults")
+        _print_info("Config editing via CLI is planned. For now, set BACKPROPAGATE_* environment variables or edit your .env file.")
         return 0
 
     if args.set:
         # Set a value
-        _print_warning("Config --set not yet implemented")
-        _print_info("Edit your config file directly or use environment variables")
+        _print_info("Config editing via CLI is planned. For now, set BACKPROPAGATE_* environment variables or edit your .env file.")
         return 0
 
     # Show current config
@@ -599,7 +610,7 @@ Examples:
     parser.add_argument(
         "--version", "-V",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
@@ -821,8 +832,8 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.command:
-        parser.print_help()
-        return 0
+        print("No command specified. Run backprop --help for usage.")
+        return 1
 
     # Execute the command
     return args.func(args)

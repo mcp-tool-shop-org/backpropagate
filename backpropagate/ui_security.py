@@ -689,7 +689,7 @@ def safe_gradio_handler(
 
                 # Don't expose internal errors to users
                 raise gr.Error(
-                    f"An error occurred during {operation_name}. Check logs for details.",
+                    f"An unexpected error occurred during {operation_name} ({type(e).__name__}). Check the terminal/logs for full details.",
                     duration=10,
                     title="Error",
                 )
@@ -1061,7 +1061,7 @@ def get_health_status(
             gpu_status = get_gpu_status()
             status.gpu_available = gpu_status.available
             if gpu_status.available:
-                status.gpu_name = gpu_status.gpu_name
+                status.gpu_name = gpu_status.device_name
                 status.gpu_memory_used_gb = gpu_status.vram_used_gb
                 status.gpu_memory_total_gb = gpu_status.vram_total_gb
                 status.gpu_temperature_c = gpu_status.temperature_c
@@ -1279,7 +1279,10 @@ class SessionManager:
             # Check session limit per IP
             ip_sessions = self._sessions_by_ip.get(client_ip, [])
             if len(ip_sessions) >= config.max_sessions_per_ip:
-                return False, None, f"Maximum {config.max_sessions_per_ip} sessions per IP"
+                return False, None, (
+                    f"Maximum {config.max_sessions_per_ip} sessions per IP. "
+                    "Close unused browser tabs running this app, or wait for inactive sessions to expire."
+                )
 
             # Create session
             session_id = str(uuid.uuid4())

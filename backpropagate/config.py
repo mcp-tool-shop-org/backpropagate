@@ -22,6 +22,7 @@ import os
 import threading
 from dataclasses import dataclass as dc_dataclass
 from functools import lru_cache
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 __all__ = [
@@ -342,7 +343,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         security: SecurityConfig = Field(default_factory=SecurityConfig)
 
         # Package info
-        version: str = "0.1.0"
+        version: str = _pkg_version("backpropagate")
         name: str = "backpropagate"
 
         def to_dict(self) -> dict:

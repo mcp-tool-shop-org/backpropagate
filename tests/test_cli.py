@@ -189,12 +189,12 @@ class TestParser:
 class TestMain:
     """Tests for main CLI entry point."""
 
-    def test_no_command_returns_zero(self):
-        """Test main with no command returns 0 (shows help)."""
+    def test_no_command_returns_nonzero(self):
+        """Test main with no command returns 1 (no subcommand given)."""
         from backpropagate.cli import main
 
         result = main([])
-        assert result == 0
+        assert result == 1
 
     def test_info_command_runs(self):
         """Test info command runs successfully."""
@@ -293,7 +293,7 @@ class TestCmdConfig:
         assert result == 0
 
         captured = capsys.readouterr()
-        assert "reset" in captured.out.lower() or "WARN" in captured.out
+        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
 
 
 class TestCmdTrain:
@@ -1110,7 +1110,7 @@ class TestCmdConfigSet:
 
         assert result == 0
         captured = capsys.readouterr()
-        assert "not yet implemented" in captured.out.lower() or "WARN" in captured.out
+        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
 
     def test_cmd_config_windows_section_on_windows(self, capsys):
         """Test config command shows Windows section on Windows.

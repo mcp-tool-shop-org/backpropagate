@@ -38,7 +38,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .exceptions import DatasetParseError
+from .exceptions import DatasetNotFoundError, DatasetParseError
 
 logger = logging.getLogger(__name__)
 
@@ -1541,7 +1541,10 @@ class DatasetLoader:
 
         path = Path(self.source)
         if not path.exists():
-            raise FileNotFoundError(f"Dataset file not found: {path}")
+            raise DatasetNotFoundError(
+                str(path),
+                suggestion="Check the file path. Supported formats: .jsonl, .json, .txt, .md, .parquet, .csv",
+            )
 
         suffix = path.suffix.lower()
 

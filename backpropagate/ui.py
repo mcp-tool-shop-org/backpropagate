@@ -669,14 +669,19 @@ def start_training(
             batch_size=batch_size,
         )
 
-        status = "📦 Loading model..."
+        status = "📦 Loading model (this may take several minutes for large models)..."
         yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
             yield "⚠️ Training stopped before model load", format_loss_plot([]), get_gpu_status_display()
             return
 
+        load_start = time.time()
         state.trainer.load_model()
+        load_elapsed = time.time() - load_start
+
+        status = f"📦 Model loaded in {load_elapsed:.0f}s"
+        yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
             yield "⚠️ Training stopped before training started", format_loss_plot([]), get_gpu_status_display()
@@ -722,8 +727,14 @@ def start_training(
             model=model_name,
             error=str(e)[:200],
         )
-        gr.Warning(f"Training failed: {str(e)[:100]}", duration=10)
-        status = f"❌ Training failed: {str(e)}"
+        error_msg = str(e)[:200]
+        suggestion = getattr(e, "suggestion", None)
+        if suggestion:
+            gr.Warning(f"Training failed: {error_msg}", duration=10)
+            status = f"❌ Training failed: {error_msg}\n\n💡 **Suggestion:** {suggestion}"
+        else:
+            gr.Warning(f"Training failed: {error_msg}", duration=10)
+            status = f"❌ Training failed: {error_msg}"
         yield status, format_loss_plot(state.loss_history), get_gpu_status_display()
 
     finally:
@@ -1448,6 +1459,7 @@ def create_ui() -> gr.Blocks:
                         custom_model = gr.Textbox(
                             label="Custom Model (HuggingFace path)",
                             placeholder="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+                            info="Format: org/model-name (e.g., unsloth/Qwen2.5-7B)",
                             visible=False,
                         )
 
@@ -1481,6 +1493,7 @@ def create_ui() -> gr.Blocks:
                         learning_rate = gr.Number(
                             value=2e-4,
                             label="Learning Rate",
+                            info="Typical range: 1e-5 to 5e-4. Default 2e-4 works for most tasks.",
                         )
                         batch_size = gr.Slider(
                             minimum=1,
@@ -1497,6 +1510,7 @@ def create_ui() -> gr.Blocks:
                                 value=16,
                                 step=4,
                                 label="LoRA Rank (r)",
+                                info="Higher = more capacity but more VRAM. 16 is balanced.",
                             )
                             lora_alpha = gr.Slider(
                                 minimum=8,
@@ -1504,6 +1518,7 @@ def create_ui() -> gr.Blocks:
                                 value=32,
                                 step=8,
                                 label="LoRA Alpha",
+                                info="Usually 2x rank. Higher = stronger adaptation.",
                             )
 
                         with gr.Row():
@@ -1890,6 +1905,7 @@ def create_ui() -> gr.Blocks:
             # =================================================================
             with gr.Tab("Runs", id="runs"):
                 gr.Markdown("### Training History")
+                gr.Markdown("Training runs will appear here after you start training.")
 
                 runs_table = gr.Dataframe(
                     headers=["Run ID", "Steps", "Final Loss", "Duration", "Samples"],
@@ -1911,6 +1927,8 @@ def create_ui() -> gr.Blocks:
                     """
                     ### Save & Export Model
                     Export your trained model to various formats for deployment.
+
+                    *Train a model first, then return here to save or export it.*
                     """
                 )
 
@@ -2046,7 +2064,7 @@ def create_ui() -> gr.Blocks:
                         ds_load_status = gr.Markdown("")
 
                         gr.Markdown("### Dataset Info")
-                        ds_status = gr.Markdown("No dataset loaded")
+                        ds_status = gr.Markdown("Upload a JSONL, JSON, CSV, or Parquet file above to validate and preview your training data.")
 
                         ds_stats_table = gr.Dataframe(
                             headers=["Property", "Value"],

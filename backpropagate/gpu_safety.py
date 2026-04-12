@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 _nvml_initialized = False
 _nvml_init_lock = threading.Lock()
+_nvml_unavailable_logged = False
 
 
 def _ensure_nvml_initialized() -> bool:
@@ -80,7 +81,10 @@ def _ensure_nvml_initialized() -> bool:
             logger.debug("pynvml initialized (init-once pattern)")
             return True
         except ImportError:
-            logger.debug("pynvml not installed - temperature/power monitoring unavailable")
+            global _nvml_unavailable_logged
+            if not _nvml_unavailable_logged:
+                logger.info("pynvml not installed - temperature/power monitoring unavailable. Install with: pip install pynvml")
+                _nvml_unavailable_logged = True
             return False
         except Exception as e:
             logger.debug(f"pynvml init failed: {e}")
@@ -347,7 +351,11 @@ def check_gpu_safe(
 
     if status.condition == GPUCondition.UNKNOWN:
         # No GPU or can't determine - allow training but log
-        logger.warning("GPU status unknown - proceeding with caution")
+        logger.warning(
+            "GPU safety status unknown (no CUDA GPU detected or monitoring unavailable). "
+            "Training will proceed without temperature safety checks. "
+            "For GPU monitoring: pip install pynvml"
+        )
         return True
 
     logger.error(f"GPU unsafe: {status.condition_reason}")
@@ -403,7 +411,11 @@ def wait_for_safe_gpu(
 
         time.sleep(check_interval)
 
-    logger.error(f"GPU did not reach safe temperature within {max_wait_seconds}s")
+    logger.error(
+        f"GPU did not reach safe temperature within {max_wait_seconds}s. "
+        "Try: reduce batch_size, check GPU cooling, close other GPU applications, "
+        "or increase cooldown timeout"
+    )
     return False
 
 

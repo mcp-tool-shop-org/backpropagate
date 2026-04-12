@@ -267,7 +267,7 @@ class TestSettings:
         from backpropagate.config import Settings
 
         s = Settings()
-        assert s.version == "0.1.0"
+        assert s.version  # dynamic version from package metadata
         assert s.name == "backpropagate"
 
     def test_settings_to_dict(self):

@@ -669,14 +669,19 @@ def start_training(
             batch_size=batch_size,
         )
 
-        status = "📦 Loading model..."
+        status = "📦 Loading model (this may take several minutes for large models)..."
         yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
             yield "⚠️ Training stopped before model load", format_loss_plot([]), get_gpu_status_display()
             return
 
+        load_start = time.time()
         state.trainer.load_model()
+        load_elapsed = time.time() - load_start
+
+        status = f"📦 Model loaded in {load_elapsed:.0f}s"
+        yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
             yield "⚠️ Training stopped before training started", format_loss_plot([]), get_gpu_status_display()
@@ -722,8 +727,14 @@ def start_training(
             model=model_name,
             error=str(e)[:200],
         )
-        gr.Warning(f"Training failed: {str(e)[:100]}", duration=10)
-        status = f"❌ Training failed: {str(e)}"
+        error_msg = str(e)[:200]
+        suggestion = getattr(e, "suggestion", None)
+        if suggestion:
+            gr.Warning(f"Training failed: {error_msg}", duration=10)
+            status = f"❌ Training failed: {error_msg}\n\n💡 **Suggestion:** {suggestion}"
+        else:
+            gr.Warning(f"Training failed: {error_msg}", duration=10)
+            status = f"❌ Training failed: {error_msg}"
         yield status, format_loss_plot(state.loss_history), get_gpu_status_display()
 
     finally:
@@ -1911,6 +1922,8 @@ def create_ui() -> gr.Blocks:
                     """
                     ### Save & Export Model
                     Export your trained model to various formats for deployment.
+
+                    *Train a model first, then return here to save or export it.*
                     """
                 )
 

@@ -358,6 +358,7 @@ def export_gguf(
     # Try Unsloth first (fastest)
     if _has_unsloth():
         try:
+            print("Exporting to GGUF format... this may take several minutes for large models.")
             # Unsloth handles everything
             model.save_pretrained_gguf(
                 str(output_path),
@@ -404,6 +405,7 @@ def export_gguf(
         except Exception as e:
             # Fall through to manual conversion
             logger.warning(f"Unsloth GGUF export failed: {e}. Trying manual conversion...")
+            print("WARNING: Unsloth GGUF export failed, falling back to llama.cpp conversion (slower)...")
 
     # Manual conversion: merge first, then convert
     # This requires llama.cpp's convert script

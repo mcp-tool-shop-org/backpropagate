@@ -483,7 +483,10 @@ class Trainer:
                 ) from e
             if callback and callback.on_error:
                 callback.on_error(e)
-            raise TrainingError(f"Training failed: {e}") from e
+            raise TrainingError(
+                f"Training failed: {e}",
+                suggestion="Check model/dataset compatibility and package versions (trl, transformers, peft). Run with --verbose for full traceback.",
+            ) from e
         except Exception as e:
             if callback and callback.on_error:
                 callback.on_error(e)

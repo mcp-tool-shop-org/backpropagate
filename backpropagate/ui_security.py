@@ -689,7 +689,7 @@ def safe_gradio_handler(
 
                 # Don't expose internal errors to users
                 raise gr.Error(
-                    f"An error occurred during {operation_name}. Check logs for details.",
+                    f"An unexpected error occurred during {operation_name} ({type(e).__name__}). Check the terminal/logs for full details.",
                     duration=10,
                     title="Error",
                 )
@@ -1061,7 +1061,7 @@ def get_health_status(
             gpu_status = get_gpu_status()
             status.gpu_available = gpu_status.available
             if gpu_status.available:
-                status.gpu_name = gpu_status.gpu_name
+                status.gpu_name = gpu_status.device_name
                 status.gpu_memory_used_gb = gpu_status.vram_used_gb
                 status.gpu_memory_total_gb = gpu_status.vram_total_gb
                 status.gpu_temperature_c = gpu_status.temperature_c

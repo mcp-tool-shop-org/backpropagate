@@ -27,6 +27,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import __version__
 from .exceptions import (
     BackpropagateError,
     DatasetError,
@@ -599,7 +600,7 @@ Examples:
     parser.add_argument(
         "--version", "-V",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
@@ -821,8 +822,8 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.command:
-        parser.print_help()
-        return 0
+        print("No command specified. Run backprop --help for usage.")
+        return 1
 
     # Execute the command
     return args.func(args)

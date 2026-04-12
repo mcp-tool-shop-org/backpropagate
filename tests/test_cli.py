@@ -189,12 +189,12 @@ class TestParser:
 class TestMain:
     """Tests for main CLI entry point."""
 
-    def test_no_command_returns_zero(self):
-        """Test main with no command returns 0 (shows help)."""
+    def test_no_command_returns_nonzero(self):
+        """Test main with no command returns 1 (no subcommand given)."""
         from backpropagate.cli import main
 
         result = main([])
-        assert result == 0
+        assert result == 1
 
     def test_info_command_runs(self):
         """Test info command runs successfully."""

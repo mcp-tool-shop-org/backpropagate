@@ -58,9 +58,9 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
 
-          EXCLUDE_BITSANDBYTES=""
+          PLATFORM_EXCLUDES=""
           if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
-            EXCLUDE_BITSANDBYTES="--exclude-module bitsandbytes"
+            PLATFORM_EXCLUDES="--exclude-module bitsandbytes"
           fi
 
           # Invoke PyInstaller via Python to set recursion limit first
@@ -71,6 +71,7 @@ jobs:
           from PyInstaller.__main__ import run
           run([
               '--onefile', '--name', '${{ env.TOOL_NAME }}', '--console',
+              '--strip',
               '--collect-submodules', 'rich',
               '--collect-submodules', 'peft',
               '--collect-submodules', 'trl',
@@ -88,8 +89,18 @@ jobs:
               '--hidden-import', 'transformers.trainer',
               '--hidden-import', 'transformers.tokenization_utils',
               '--hidden-import', 'transformers.modeling_utils',
+              '--exclude-module', 'torch.test',
+              '--exclude-module', 'torch.testing',
+              '--exclude-module', 'torch.utils.tensorboard',
+              '--exclude-module', 'torch.distributed',
+              '--exclude-module', 'transformers.testing_utils',
+              '--exclude-module', 'matplotlib',
+              '--exclude-module', 'PIL',
+              '--exclude-module', 'IPython',
+              '--exclude-module', 'notebook',
+              '--exclude-module', 'scipy',
               '${{ env.ENTRYPOINT }}',
-          ] + '$EXCLUDE_BITSANDBYTES'.split())"
+          ] + '$PLATFORM_EXCLUDES'.split())"
 
           OUTNAME="${{ env.TOOL_NAME }}-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
           mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"

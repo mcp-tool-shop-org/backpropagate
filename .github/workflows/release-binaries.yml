@@ -47,8 +47,8 @@ jobs:
         run: |
           # Skip bitsandbytes on macOS (no CUDA support)
           if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
-            uv pip install . "pyinstaller>=6.9.0" --no-deps
-            uv pip install transformers datasets trl peft accelerate tenacity packaging rich
+            uv pip install . "pyinstaller>=6.9.0" macholib --no-deps
+            uv pip install transformers datasets trl peft accelerate tenacity packaging rich macholib
           else
             uv pip install . "pyinstaller>=6.9.0"
           fi

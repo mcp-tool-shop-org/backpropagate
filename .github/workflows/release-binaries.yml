@@ -58,39 +58,38 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
 
-          # Bump recursion limit for deep import trees (transformers/torch)
-          export PYTHONRECURSIONLIMIT=5000
-
-          PYINSTALLER_ARGS="--onefile --name ${{ env.TOOL_NAME }} --console"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules rich"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules peft"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules trl"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules accelerate"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules datasets"
-
-          # torch and transformers are too deep for --collect-submodules on macOS
-          # Use --hidden-import for the specific modules backpropagate needs
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch.nn"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch.optim"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch.cuda"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch.backends"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import torch.utils.data"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers.models"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers.training_args"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers.trainer"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers.tokenization_utils"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --hidden-import transformers.modeling_utils"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-data transformers"
-          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-data torch"
-
-          # Exclude bitsandbytes on macOS
+          EXCLUDE_BITSANDBYTES=""
           if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
-            PYINSTALLER_ARGS="$PYINSTALLER_ARGS --exclude-module bitsandbytes"
+            EXCLUDE_BITSANDBYTES="--exclude-module bitsandbytes"
           fi
 
-          uv run pyinstaller $PYINSTALLER_ARGS "${{ env.ENTRYPOINT }}"
+          # Invoke PyInstaller via Python to set recursion limit first
+          # (torch/transformers have very deep import trees)
+          uv run python -c "
+          import sys
+          sys.setrecursionlimit(10000)
+          from PyInstaller.__main__ import run
+          run([
+              '--onefile', '--name', '${{ env.TOOL_NAME }}', '--console',
+              '--collect-submodules', 'rich',
+              '--collect-submodules', 'peft',
+              '--collect-submodules', 'trl',
+              '--collect-submodules', 'accelerate',
+              '--collect-submodules', 'datasets',
+              '--hidden-import', 'torch',
+              '--hidden-import', 'torch.nn',
+              '--hidden-import', 'torch.optim',
+              '--hidden-import', 'torch.cuda',
+              '--hidden-import', 'torch.backends',
+              '--hidden-import', 'torch.utils.data',
+              '--hidden-import', 'transformers',
+              '--hidden-import', 'transformers.models',
+              '--hidden-import', 'transformers.training_args',
+              '--hidden-import', 'transformers.trainer',
+              '--collect-data', 'transformers',
+              '--collect-data', 'torch',
+              '${{ env.ENTRYPOINT }}',
+          ] + '$EXCLUDE_BITSANDBYTES'.split())"
 
           OUTNAME="${{ env.TOOL_NAME }}-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
           mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"

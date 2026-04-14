@@ -1,0 +1,107 @@
+name: Release Binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  TOOL_NAME: backpropagate
+  ENTRYPOINT: backpropagate/__main__.py
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            ext: ""
+          - os: macos-latest
+            target: darwin-arm64
+            ext: ""
+          - os: windows-latest
+            target: win-x64
+            ext: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - run: uv python install 3.12
+
+      - run: uv venv
+
+      - name: Install CPU-only torch
+        shell: bash
+        run: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install backpropagate + PyInstaller
+        shell: bash
+        run: |
+          # Skip bitsandbytes on macOS (no CUDA support)
+          if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
+            uv pip install . "pyinstaller>=6.9.0" --no-deps
+            uv pip install transformers datasets trl peft accelerate tenacity packaging rich
+          else
+            uv pip install . "pyinstaller>=6.9.0"
+          fi
+
+      - name: Build binary
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+
+          PYINSTALLER_ARGS="--onefile --name ${{ env.TOOL_NAME }} --console"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules rich"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules transformers"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules datasets"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules torch"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules trl"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules peft"
+          PYINSTALLER_ARGS="$PYINSTALLER_ARGS --collect-submodules accelerate"
+
+          # Exclude bitsandbytes on macOS
+          if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
+            PYINSTALLER_ARGS="$PYINSTALLER_ARGS --exclude-module bitsandbytes"
+          fi
+
+          uv run pyinstaller $PYINSTALLER_ARGS "${{ env.ENTRYPOINT }}"
+
+          OUTNAME="${{ env.TOOL_NAME }}-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
+          mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"
+          echo "ASSET_NAME=${OUTNAME}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/${{ env.ASSET_NAME }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          cd artifacts
+          sha256sum * > "checksums-${VERSION}.txt"
+          cat "checksums-${VERSION}.txt"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

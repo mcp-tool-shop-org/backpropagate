@@ -27,12 +27,17 @@ References:
     - K-Merge: https://arxiv.org/abs/2510.13537
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 from .exceptions import InvalidSettingError, SLAOCheckpointError, SLAOMergeError
 from .security import check_torch_security
@@ -100,7 +105,7 @@ class MergeResult:
     a_norm_before: float | None = None
     a_norm_after: float | None = None
     b_norm_before: float | None = None
-    b_norm_after: float | None = ""
+    b_norm_after: float | None = None
 
 
 # =============================================================================
@@ -159,14 +164,14 @@ def time_aware_scale(run_index: int, scaling_type: str = "sqrt", min_scale: floa
         # Slower decay: lambda(i) = 1/log(i+1)
         # Maintains more plasticity in later runs
         scale = 1.0 / math.log(run_index + 1)
-    elif scaling_type == "constant":
+    else:  # constant — validated above
         # No decay (simple averaging)
         scale = 1.0
 
     return max(scale, min_scale)
 
 
-def orthogonal_init_A(A_prev: "torch.Tensor") -> "torch.Tensor":
+def orthogonal_init_A(A_prev: torch.Tensor) -> torch.Tensor:
     """
     Initialize new A matrix using orthogonal basis extracted from previous A.
 
@@ -202,7 +207,8 @@ def orthogonal_init_A(A_prev: "torch.Tensor") -> "torch.Tensor":
 
         # Return Q^T as the new initialization
         # This has the property that A_init @ A_init^T = I_r
-        return Q.T
+        result: torch.Tensor = Q.T
+        return result
     except RuntimeError as e:
         raise SLAOMergeError(
             f"Orthogonal initialization failed - QR decomposition error: {e}",
@@ -211,10 +217,10 @@ def orthogonal_init_A(A_prev: "torch.Tensor") -> "torch.Tensor":
 
 
 def merge_B_matrices(
-    B_merged: "torch.Tensor",
-    B_new: "torch.Tensor",
+    B_merged: torch.Tensor,
+    B_new: torch.Tensor,
     scale: float
-) -> "torch.Tensor":
+) -> torch.Tensor:
     """
     Merge B matrix using time-aware scaling.
 
@@ -233,7 +239,7 @@ def merge_B_matrices(
     return B_merged + scale * (B_new - B_merged)
 
 
-def merge_A_matrices(A_new: "torch.Tensor") -> "torch.Tensor":
+def merge_A_matrices(A_new: torch.Tensor) -> torch.Tensor:
     """
     Merge A matrix using direct replacement.
 
@@ -257,8 +263,8 @@ def merge_A_matrices(A_new: "torch.Tensor") -> "torch.Tensor":
 # =============================================================================
 
 def compute_task_similarity(
-    lora_state_1: dict[str, "torch.Tensor"],
-    lora_state_2: dict[str, "torch.Tensor"],
+    lora_state_1: dict[str, torch.Tensor],
+    lora_state_2: dict[str, torch.Tensor],
 ) -> float:
     """
     Compute similarity between two LoRA adapters using cosine similarity.
@@ -304,7 +310,7 @@ def compute_task_similarity(
     if norm1 == 0 or norm2 == 0:
         return 0.0
 
-    similarity = (dot_product / (norm1 * norm2)).item()
+    similarity: float = (dot_product / (norm1 * norm2)).item()
     return similarity
 
 
@@ -386,7 +392,7 @@ def get_layer_scale(
         return late_scale
 
 
-def estimate_total_layers(lora_state: dict[str, "torch.Tensor"]) -> int:
+def estimate_total_layers(lora_state: dict[str, torch.Tensor]) -> int:
     """
     Estimate total layers from LoRA state dict.
 
@@ -450,7 +456,7 @@ class SLAOMerger:
 
         logger.info(f"SLAOMerger initialized with config: scaling={self.config.scaling_type}")
 
-    def initialize(self, lora_state_dict: dict[str, "torch.Tensor"]) -> None:
+    def initialize(self, lora_state_dict: dict[str, torch.Tensor]) -> None:
         """
         Initialize the merger with the first LoRA.
 
@@ -468,7 +474,7 @@ class SLAOMerger:
 
         logger.info(f"SLAO initialized with {len(lora_state_dict)} parameters")
 
-    def get_init_weights(self) -> dict[str, "torch.Tensor"] | None:
+    def get_init_weights(self) -> dict[str, torch.Tensor] | None:
         """
         Get initialization weights for the next training run.
 
@@ -503,7 +509,7 @@ class SLAOMerger:
 
     def merge(
         self,
-        new_lora_state: dict[str, "torch.Tensor"],
+        new_lora_state: dict[str, torch.Tensor],
         run_index: int | None = None,
     ) -> MergeResult:
         """
@@ -633,7 +639,7 @@ class SLAOMerger:
 
         return result
 
-    def get_merged_lora(self) -> dict[str, "torch.Tensor"] | None:
+    def get_merged_lora(self) -> dict[str, torch.Tensor] | None:
         """Get the current merged LoRA state dict."""
         return self._merged_state
 
@@ -781,11 +787,11 @@ class SLAOMerger:
 # =============================================================================
 
 def merge_lora_weights(
-    base_lora: dict[str, "torch.Tensor"],
-    new_lora: dict[str, "torch.Tensor"],
+    base_lora: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
     run_index: int = 2,
     method: str = "slao",
-) -> dict[str, "torch.Tensor"]:
+) -> dict[str, torch.Tensor]:
     """
     Convenience function to merge two LoRA state dicts.
 
@@ -804,7 +810,9 @@ def merge_lora_weights(
         merger = SLAOMerger()
         merger.initialize(base_lora)
         merger.merge(new_lora, run_index=run_index)
-        return merger.get_merged_lora()
+        merged = merger.get_merged_lora()
+        assert merged is not None  # guaranteed after initialize()
+        return merged
 
     elif method == "average":
         # Simple averaging (no time-aware scaling)

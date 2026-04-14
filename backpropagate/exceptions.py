@@ -187,7 +187,7 @@ class DatasetParseError(DatasetError):
         self.path = path
         self.line_number = line_number
 
-        details = {}
+        details: dict[str, str | int] = {}
         if path:
             details["path"] = str(path)
         if line_number is not None:
@@ -220,7 +220,7 @@ class DatasetValidationError(DatasetError):
 
         super().__init__(
             full_message,
-            details={"error_count": len(self.errors), "errors": errors[:20]},
+            details={"error_count": len(self.errors), "errors": self.errors[:20]},
             suggestion=suggestion,
         )
 

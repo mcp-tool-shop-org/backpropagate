@@ -37,6 +37,7 @@ Usage:
 import logging
 import secrets
 import time
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -356,7 +357,7 @@ def get_gpu_safety_status() -> str:
 # DATASET FUNCTIONS
 # =============================================================================
 
-def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
+def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple[str, str, Any, Any, str]:
     """
     Load and validate a dataset file with security checks.
 
@@ -389,6 +390,9 @@ def load_dataset_file(file_obj, request: gr.Request = None) -> tuple:
         raise gr.Error(error_msg, duration=10, title="Invalid File")
 
     try:
+        if validated_path is None:
+            raise gr.Error("File validation failed", duration=10, title="Invalid File")
+
         file_path = str(validated_path)
         loader = DatasetLoader(file_path)
         state.dataset_loader = loader
@@ -510,7 +514,7 @@ def export_converted_dataset(output_path: str) -> str:
 
     # Validate output path
     is_valid, error_msg, validated_path = validate_path_input(output_path)
-    if not is_valid:
+    if not is_valid or validated_path is None:
         return f"Invalid output path: {error_msg}"
 
     try:
@@ -570,9 +574,9 @@ def start_training(
     batch_size: int,
     lora_r: int,
     lora_alpha: int,
-    progress=gr.Progress(),
-    request: gr.Request = None,
-) -> tuple:
+    progress: Any = gr.Progress(),
+    request: gr.Request | None = None,
+) -> Generator[tuple[Any, ...], None, None]:
     """
     Start a training run with security checks.
 
@@ -600,12 +604,12 @@ def start_training(
 
     # Validate numeric inputs
     try:
-        max_samples = int(validate_numeric_input(max_samples, "Max samples", min_value=1, max_value=1000000))
-        max_steps = int(validate_numeric_input(max_steps, "Max steps", min_value=1, max_value=100000))
-        learning_rate = validate_numeric_input(learning_rate, "Learning rate", min_value=1e-8, max_value=1.0)
-        batch_size = int(validate_numeric_input(batch_size, "Batch size", min_value=1, max_value=64))
-        lora_r = int(validate_numeric_input(lora_r, "LoRA rank", min_value=1, max_value=256))
-        lora_alpha = int(validate_numeric_input(lora_alpha, "LoRA alpha", min_value=1, max_value=512))
+        max_samples = int(validate_numeric_input(max_samples, "Max samples", min_value=1, max_value=1000000) or 0)
+        max_steps = int(validate_numeric_input(max_steps, "Max steps", min_value=1, max_value=100000) or 0)
+        learning_rate = float(validate_numeric_input(learning_rate, "Learning rate", min_value=1e-8, max_value=1.0) or 0.0)
+        batch_size = int(validate_numeric_input(batch_size, "Batch size", min_value=1, max_value=64) or 0)
+        lora_r = int(validate_numeric_input(lora_r, "LoRA rank", min_value=1, max_value=256) or 0)
+        lora_alpha = int(validate_numeric_input(lora_alpha, "LoRA alpha", min_value=1, max_value=512) or 0)
     except gr.Error:
         raise
     except Exception as e:
@@ -798,7 +802,7 @@ def export_model(
     export_format: str,
     quantization: str,
     output_path: str,
-    request: gr.Request = None,
+    request: gr.Request | None = None,
 ) -> str:
     """
     Export the trained model with security checks.
@@ -836,7 +840,8 @@ def export_model(
             output_dir=str(validated_path),
             quantization=quantization,
         )
-        return result.summary()
+        summary: str = result.summary()
+        return summary
     except Exception as e:
         raise gr.Error(f"Export failed: {str(e)[:200]}", title="Export Error")
 
@@ -847,7 +852,7 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
 
     # Validate GGUF path
     is_valid, error_msg, validated_path = validate_path_input(gguf_path, must_exist=True)
-    if not is_valid:
+    if not is_valid or validated_path is None:
         return f"Invalid GGUF path: {error_msg}"
 
     # Sanitize model name
@@ -895,7 +900,7 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
 
     # Validate GGUF path
     is_valid, error_msg, validated_gguf = validate_path_input(gguf_path, must_exist=True)
-    if not is_valid:
+    if not is_valid or validated_gguf is None:
         return f"Invalid GGUF path: {error_msg}"
 
     # Validate output path if provided
@@ -1062,7 +1067,7 @@ def start_multi_run(
             checkpoint_auto_prune=ckpt_auto_prune,
         )
 
-        def on_run_complete(run_result):
+        def on_run_complete(run_result: Any) -> None:
             state.multi_run_current_run = run_result.run_index
             state.multi_run_loss_history.extend(run_result.loss_history)
             state.multi_run_run_boundaries.append(len(state.multi_run_loss_history))
@@ -1421,6 +1426,7 @@ def refresh_train_sidebar() -> tuple:
 def create_ui() -> gr.Blocks:
     """Create the Gradio UI."""
     # Note: In Gradio 6.x, theme and css are passed to launch() not Blocks()
+    app: gr.Blocks
     with gr.Blocks(
         title="Backpropagate - LLM Fine-Tuning",
     ) as app:
@@ -1760,7 +1766,7 @@ def create_ui() -> gr.Blocks:
                             mr_adaptive_range = gr.Slider(
                                 minimum=0.2,
                                 maximum=2.0,
-                                value=[0.5, 1.5],
+                                value=1.0,
                                 label="Scale Range (min, max)",
                                 visible=False,
                             )
@@ -2496,7 +2502,7 @@ def launch(
     # Bind to all interfaces only when sharing publicly; localhost otherwise
     server_name = "0.0.0.0" if share else "127.0.0.1"
 
-    launch_kwargs = {
+    launch_kwargs: dict[str, Any] = {
         "server_name": server_name,
         "server_port": port,
         "share": share,

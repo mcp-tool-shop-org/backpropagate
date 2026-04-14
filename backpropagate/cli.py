@@ -470,8 +470,8 @@ def cmd_info(_args: argparse.Namespace) -> int:
     # Features
     print(f"\n{Colors.BOLD}Features{Colors.RESET}")
     for feature, available in FEATURES.items():
-        status = f"{Colors.GREEN}[+]{Colors.RESET}" if available else f"{Colors.DIM}[-]{Colors.RESET}"
-        print(f"  {status} {feature}")
+        feature_status = f"{Colors.GREEN}[+]{Colors.RESET}" if available else f"{Colors.DIM}[-]{Colors.RESET}"
+        print(f"  {feature_status} {feature}")
 
     # Config
     print(f"\n{Colors.BOLD}Configuration{Colors.RESET}")
@@ -836,7 +836,8 @@ def main(argv: list | None = None) -> int:
         return 1
 
     # Execute the command
-    return args.func(args)
+    result: int = args.func(args)
+    return result
 
 
 if __name__ == "__main__":

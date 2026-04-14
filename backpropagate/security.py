@@ -17,6 +17,7 @@ Usage:
 import logging
 import warnings
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "safe_path",
@@ -165,8 +166,8 @@ _torch_security_checked: bool = False
 def safe_torch_load(
     path: str | Path,
     weights_only: bool = True,
-    **kwargs
-) -> dict:
+    **kwargs: Any,
+) -> dict[str, Any]:
     """
     Safely load PyTorch weights with security checks.
 
@@ -212,7 +213,8 @@ def safe_torch_load(
 
     # Fall back to torch.load with security enabled
     logger.debug(f"Loading PyTorch file with weights_only={weights_only}: {path}")
-    return torch.load(path, weights_only=weights_only, **kwargs)  # nosec B614 - weights_only=True by default
+    result: dict[str, Any] = torch.load(path, weights_only=weights_only, **kwargs)  # nosec B614 - weights_only=True by default
+    return result
 
 
 def audit_log(

@@ -32,11 +32,11 @@ import json
 import logging
 import random
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .exceptions import DatasetNotFoundError, DatasetParseError
 
@@ -221,7 +221,7 @@ class FilterStats:
 # FORMAT DETECTION
 # =============================================================================
 
-def detect_format(data: dict | list[dict] | str) -> DatasetFormat:
+def detect_format(data: dict | list[dict | str] | str) -> DatasetFormat:
     """
     Auto-detect the format of a dataset sample.
 
@@ -426,16 +426,22 @@ class FormatConverter:
         """Convert any format to ChatML."""
         if format_type == DatasetFormat.CHATML:
             if isinstance(sample, dict):
-                return sample.get("text", "")
+                return str(sample.get("text", ""))
             return sample
 
         if format_type == DatasetFormat.SHAREGPT:
+            if not isinstance(sample, dict):
+                raise ValueError(f"ShareGPT format requires dict, got {type(sample)}")
             return cls.sharegpt_to_chatml(sample)
 
         if format_type == DatasetFormat.ALPACA:
+            if not isinstance(sample, dict):
+                raise ValueError(f"Alpaca format requires dict, got {type(sample)}")
             return cls.alpaca_to_chatml(sample)
 
         if format_type == DatasetFormat.OPENAI:
+            if not isinstance(sample, dict):
+                raise ValueError(f"OpenAI format requires dict, got {type(sample)}")
             return cls.openai_to_chatml(sample)
 
         if format_type == DatasetFormat.RAW_TEXT:
@@ -707,12 +713,33 @@ def validate_sample(
         return _validate_chatml(text, row_index)
 
     if format_type == DatasetFormat.SHAREGPT:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"ShareGPT format requires dict, got {type(sample).__name__}",
+            )]
         return _validate_sharegpt(sample, row_index)
 
     if format_type == DatasetFormat.ALPACA:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"Alpaca format requires dict, got {type(sample).__name__}",
+            )]
         return _validate_alpaca(sample, row_index)
 
     if format_type == DatasetFormat.OPENAI:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"OpenAI format requires dict, got {type(sample).__name__}",
+            )]
         return _validate_openai(sample, row_index)
 
     if format_type == DatasetFormat.RAW_TEXT:
@@ -902,7 +929,7 @@ def _get_text_content(sample: dict | str, key: str = "text") -> str:
     """Extract text content from sample."""
     if isinstance(sample, str):
         return sample
-    return sample.get(key, "")
+    return str(sample.get(key, ""))
 
 
 def deduplicate_exact(
@@ -1096,8 +1123,8 @@ class PerplexityFilter:
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
-        self._model = None
-        self._tokenizer = None
+        self._model: Any = None
+        self._tokenizer: Any = None
 
         # Determine device
         if device is None:
@@ -1196,8 +1223,7 @@ class PerplexityFilter:
         """
         self._load_model()
 
-
-        scores = []
+        scores: list[float | None] = []
         total = len(samples)
 
         # Process in batches
@@ -1222,8 +1248,7 @@ class PerplexityFilter:
 
     def _score_batch(self, texts: list[str]) -> list[float | None]:
         """Score a batch of texts."""
-
-        scores = []
+        scores: list[float | None] = []
 
         for text in texts:
             try:
@@ -1508,7 +1533,7 @@ class DatasetLoader:
 
     def __init__(
         self,
-        source: str | Path | list[dict],
+        source: str | Path | list[dict | str],
         format_type: DatasetFormat | None = None,
         validate: bool = True,
     ):
@@ -1521,7 +1546,7 @@ class DatasetLoader:
             validate: Whether to validate on load
         """
         self.source = source
-        self._samples: list[dict | str] = []
+        self._samples: list[dict[Any, Any] | str] = []
         self._format: DatasetFormat = format_type or DatasetFormat.UNKNOWN
         self._validation: ValidationResult | None = None
         self._loaded = False
@@ -1571,9 +1596,9 @@ class DatasetLoader:
         except Exception as e:
             raise ValueError(f"Failed to load dataset: {e}") from e
 
-    def _load_jsonl(self, path: Path) -> list[dict]:
+    def _load_jsonl(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load JSONL file."""
-        samples = []
+        samples: list[dict[Any, Any] | str] = []
         total_lines = 0
         skipped_lines = 0
         with open(path, encoding="utf-8") as f:
@@ -1602,15 +1627,15 @@ class DatasetLoader:
 
         return samples
 
-    def _load_json(self, path: Path) -> list[dict]:
+    def _load_json(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load JSON file."""
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
-                return data
+                return cast(list[dict[Any, Any] | str], data)
             return [data]
 
-    def _load_text(self, path: Path) -> list[str]:
+    def _load_text(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load text file."""
         with open(path, encoding="utf-8") as f:
             content = f.read()
@@ -1619,21 +1644,21 @@ class DatasetLoader:
                 return [s.strip() for s in content.split("\n\n") if s.strip()]
             return [content]
 
-    def _load_parquet(self, path: Path) -> list[dict]:
+    def _load_parquet(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load Parquet file."""
         try:
             import pandas as pd
             df = pd.read_parquet(path)
-            return df.to_dict("records")
+            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
         except ImportError:
             raise ImportError("pandas and pyarrow required for parquet: pip install pandas pyarrow")
 
-    def _load_csv(self, path: Path) -> list[dict]:
+    def _load_csv(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load CSV file."""
         try:
             import pandas as pd
             df = pd.read_csv(path)
-            return df.to_dict("records")
+            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
         except ImportError:
             raise ImportError("pandas required for CSV: pip install pandas")
 
@@ -1656,6 +1681,7 @@ class DatasetLoader:
         """Check if dataset is valid."""
         if self._validation is None:
             self._validate()
+        assert self._validation is not None
         return self._validation.is_valid
 
     @property
@@ -1663,6 +1689,7 @@ class DatasetLoader:
         """Get validation result."""
         if self._validation is None:
             self._validate()
+        assert self._validation is not None
         return self._validation
 
     def validation_report(self) -> str:
@@ -1673,7 +1700,7 @@ class DatasetLoader:
         """Convert all samples to ChatML format."""
         return convert_to_chatml(self._samples, self._format)
 
-    def to_hf_dataset(self, split: str | None = None):
+    def to_hf_dataset(self, split: str | None = None) -> Any:
         """
         Convert to HuggingFace Dataset.
 
@@ -1681,7 +1708,7 @@ class DatasetLoader:
             split: Optional split name (e.g., "train", "test")
 
         Returns:
-            datasets.Dataset
+            datasets.Dataset or dict with split key
         """
         try:
             from datasets import Dataset
@@ -1771,7 +1798,7 @@ class DatasetLoader:
         filtered, stats = filter_by_quality(
             chatml_samples,
             min_tokens=min_tokens if min_tokens is not None else 0,
-            max_tokens=max_tokens if max_tokens is not None else float("inf"),
+            max_tokens=max_tokens if max_tokens is not None else 2**31,
             min_turns=min_turns if min_turns is not None else 0,
             max_turns=max_turns,
             remove_empty=True,
@@ -1781,7 +1808,11 @@ class DatasetLoader:
 
         logger.info(f"Filter: {stats.total_before} -> {stats.total_after} samples")
 
-        return DatasetLoader(filtered, DatasetFormat.CHATML, validate=False)
+        return DatasetLoader(
+            cast(list[dict[Any, Any] | str], filtered),
+            DatasetFormat.CHATML,
+            validate=False,
+        )
 
     def deduplicate(
         self,
@@ -1801,7 +1832,9 @@ class DatasetLoader:
             New DatasetLoader with duplicates removed
         """
         # Convert to ChatML first
-        chatml_samples = self.to_chatml()
+        chatml_samples: list[dict[Any, Any] | str] = cast(
+            list[dict[Any, Any] | str], self.to_chatml()
+        )
 
         if method == "exact":
             deduped, num_removed = deduplicate_exact(chatml_samples, key=key)
@@ -1858,7 +1891,9 @@ class DatasetLoader:
             print(stats.summary())
         """
         # Convert to ChatML first
-        chatml_samples = self.to_chatml()
+        chatml_samples: list[dict[Any, Any] | str] = cast(
+            list[dict[Any, Any] | str], self.to_chatml()
+        )
 
         # Filter by perplexity
         filtered, stats = filter_by_perplexity(
@@ -1934,7 +1969,7 @@ class DatasetLoader:
     def __getitem__(self, idx: int) -> dict | str:
         return self._samples[idx]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[dict[Any, Any] | str]:
         return iter(self._samples)
 
 
@@ -1988,14 +2023,14 @@ class StreamingDatasetLoader:
         path = Path(source)
         self._is_hf_dataset = not path.exists()
 
-    def _create_iterator(self):
+    def _create_iterator(self) -> Iterator[dict[Any, Any] | str]:
         """Create the underlying iterator."""
         if self._is_hf_dataset:
             return self._stream_hf_dataset()
         else:
             return self._stream_local_file()
 
-    def _stream_hf_dataset(self):
+    def _stream_hf_dataset(self) -> Iterator[dict[Any, Any] | str]:
         """Stream from HuggingFace dataset."""
         try:
             from datasets import load_dataset
@@ -2017,7 +2052,7 @@ class StreamingDatasetLoader:
         for sample in dataset:
             yield sample
 
-    def _stream_local_file(self):
+    def _stream_local_file(self) -> Iterator[dict[Any, Any] | str]:
         """Stream from local file."""
         path = Path(self.source)
         suffix = path.suffix.lower()
@@ -2032,7 +2067,7 @@ class StreamingDatasetLoader:
             # Try JSONL
             yield from self._stream_jsonl(path)
 
-    def _stream_jsonl(self, path: Path):
+    def _stream_jsonl(self, path: Path) -> Iterator[dict[Any, Any] | str]:
         """Stream JSONL file."""
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -2047,7 +2082,7 @@ class StreamingDatasetLoader:
                 except json.JSONDecodeError:
                     continue
 
-    def _stream_json(self, path: Path):
+    def _stream_json(self, path: Path) -> Iterator[dict[Any, Any] | str]:
         """Stream JSON array file."""
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -2059,7 +2094,7 @@ class StreamingDatasetLoader:
             else:
                 yield data
 
-    def _stream_text(self, path: Path):
+    def _stream_text(self, path: Path) -> Iterator[dict[Any, Any] | str]:
         """Stream text file."""
         with open(path, encoding="utf-8") as f:
             content = f.read()
@@ -2072,7 +2107,7 @@ class StreamingDatasetLoader:
             else:
                 yield content
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[dict[Any, Any] | str]:
         """Iterate over all samples."""
         return self._create_iterator()
 
@@ -2093,7 +2128,7 @@ class StreamingDatasetLoader:
             samples.append(sample)
         return samples
 
-    def skip(self, n: int):
+    def skip(self, n: int) -> Iterator[dict[Any, Any] | str]:
         """
         Skip first n samples and return iterator for rest.
 
@@ -2107,7 +2142,7 @@ class StreamingDatasetLoader:
             if i >= n:
                 yield sample
 
-    def batches(self, batch_size: int):
+    def batches(self, batch_size: int) -> Iterator[list[dict[Any, Any] | str]]:
         """
         Yield samples in batches.
 
@@ -2147,7 +2182,7 @@ class StreamingDatasetLoader:
         max_turns: int | None = None,
         require_assistant: bool = True,
         custom_filter: Callable[[dict], bool] | None = None,
-    ):
+    ) -> Iterator[dict[str, str]]:
         """
         Yield filtered samples.
 
@@ -2190,7 +2225,7 @@ class StreamingDatasetLoader:
                 continue
 
             # Custom filter
-            if custom_filter is not None and not custom_filter(sample):
+            if custom_filter is not None and isinstance(sample, dict) and not custom_filter(sample):
                 continue
 
             yield {"text": chatml}
@@ -2206,7 +2241,7 @@ class StreamingDatasetLoader:
 # =============================================================================
 
 def preview_samples(
-    source: str | Path | list[dict],
+    source: str | Path | list[dict[Any, Any] | str],
     n: int = 3,
     as_chatml: bool = True,
 ) -> list[str]:

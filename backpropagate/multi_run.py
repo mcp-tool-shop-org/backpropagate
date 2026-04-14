@@ -205,14 +205,14 @@ class MultiRunTrainer:
 
     def __init__(
         self,
-        model: str = None,
+        model: str | None = None,
         config: MultiRunConfig | None = None,
         # Convenience overrides
-        num_runs: int = None,
-        steps_per_run: int = None,
-        samples_per_run: int = None,
-        merge_mode: str | MergeMode = None,
-        checkpoint_dir: str = None,
+        num_runs: int | None = None,
+        steps_per_run: int | None = None,
+        samples_per_run: int | None = None,
+        merge_mode: str | MergeMode | None = None,
+        checkpoint_dir: str | None = None,
         # Callbacks
         on_run_start: Callable[[int], None] | None = None,
         on_run_complete: Callable[[RunResult], None] | None = None,
@@ -266,7 +266,7 @@ class MultiRunTrainer:
         self.on_gpu_status = on_gpu_status
 
         # Internal state
-        self._trainer = None
+        self._trainer: Any = None
         self._slao_merger: SLAOMerger | None = None
         self._gpu_monitor: GPUMonitor | None = None
         self._is_running = False
@@ -748,7 +748,7 @@ class MultiRunTrainer:
 
         elif self.config.replay_strategy == "random":
             # Random samples from all previous runs
-            all_prev_indices = []
+            all_prev_indices: list[int] = []
             for prev_run in range(1, run_idx):
                 prev_start = ((prev_run - 1) * samples_per_run) % total_samples
                 prev_end = min(prev_start + samples_per_run, total_samples)
@@ -814,7 +814,8 @@ class MultiRunTrainer:
 
         # Try to get PEFT adapter state
         if hasattr(model, 'get_adapter_state_dict'):
-            return model.get_adapter_state_dict()
+            result: dict[str, Any] = model.get_adapter_state_dict()
+            return result
 
         # Fallback: extract lora parameters manually
         lora_state = {}
@@ -1188,7 +1189,7 @@ class MultiRunTrainer:
 # CLI INTERFACE
 # =============================================================================
 
-def main():
+def main() -> None:
     """CLI entry point for speedrun training."""
     import argparse
 

@@ -314,7 +314,8 @@ class EnhancedRateLimiter:
             # Try to get IP from request
             client_ip = getattr(request, "client", {})
             if isinstance(client_ip, dict):
-                return client_ip.get("host", "anonymous")
+                host: str = client_ip.get("host", "anonymous")
+                return host
             return str(client_ip) if client_ip else "anonymous"
         return "anonymous"
 
@@ -635,7 +636,7 @@ def safe_gradio_handler(
     """
     def decorator(func: F) -> F:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Check rate limit
             if rate_limiter is not None:
                 request = kwargs.get("request")
@@ -828,7 +829,7 @@ def validate_and_log_request(
             client_id = client.get("host", "anonymous")
 
     # Sanitize params for logging (truncate long values)
-    safe_params = {}
+    safe_params: dict[str, str | int | float | bool] = {}
     for key, value in params.items():
         if isinstance(value, str) and len(value) > 100:
             safe_params[key] = value[:100] + "..."
@@ -859,6 +860,7 @@ class SecurityLogger:
     """
 
     _instance: Optional["SecurityLogger"] = None
+    _logger: logging.Logger
 
     def __new__(cls) -> "SecurityLogger":
         if cls._instance is None:
@@ -992,7 +994,7 @@ class HealthStatus:
     rate_limit_status: str = "ok"
     timestamp: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -1412,7 +1414,8 @@ class ConcurrencyLimiter:
         if request is not None:
             client = getattr(request, "client", {})
             if isinstance(client, dict):
-                return client.get("host", "anonymous")
+                host: str = client.get("host", "anonymous")
+                return host
         return "anonymous"
 
     def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:

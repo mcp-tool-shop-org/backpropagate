@@ -43,6 +43,8 @@ Usage:
     launch()
 """
 
+from typing import Any
+
 # Exceptions (custom error hierarchy)
 from .exceptions import (
     # Base
@@ -263,7 +265,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """
     Lazy loading for optional features with helpful error messages.
 
@@ -281,7 +283,7 @@ def __getattr__(name: str):
 
         # Special handling for launch
         if name == "launch":
-            def _launch(port: int = 7862, share: bool = False):
+            def _launch(port: int = 7862, share: bool = False) -> None:
                 from .ui import create_ui
                 app = create_ui()
                 app.launch(

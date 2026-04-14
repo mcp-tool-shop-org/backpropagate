@@ -563,7 +563,7 @@ def create_backpropagate_theme() -> gr.themes.Base:
     )
 
     # Apply Ocean Mist color overrides
-    theme = theme.set(
+    theme_base: gr.themes.Base = theme.set(
         # =================================================================
         # BACKGROUNDS (Ocean Mist Dark Mode)
         # =================================================================
@@ -653,7 +653,7 @@ def create_backpropagate_theme() -> gr.themes.Base:
         slider_color_dark=ACCENT["blue"],
     )
 
-    return theme
+    return theme_base
 
 
 def get_css() -> str:

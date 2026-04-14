@@ -385,7 +385,7 @@ else:
     # Fallback implementation using dataclasses
     from dataclasses import dataclass, field
 
-    def _get_env(key: str, default: str = None) -> str | None:
+    def _get_env(key: str, default: str | None = None) -> str | None:
         return os.environ.get(f"BACKPROPAGATE_{key}", default)
 
     def _get_env_int(key: str, default: int) -> int:
@@ -401,7 +401,7 @@ else:
         return val.lower() in ("true", "1", "yes") if val else default
 
     @dataclass
-    class ModelConfig:
+    class ModelConfig:  # type: ignore[no-redef]
         name: str = "Qwen/Qwen2.5-7B-Instruct"  # Official model, Unsloth handles 4-bit
         load_in_4bit: bool = True
         max_seq_length: int = 2048
@@ -409,7 +409,7 @@ else:
         trust_remote_code: bool = True
 
     @dataclass
-    class LoRAConfig:
+    class LoRAConfig:  # type: ignore[no-redef]
         r: int = 16
         lora_alpha: int = 32
         lora_dropout: float = 0.05
@@ -421,7 +421,7 @@ else:
         random_state: int = 42
 
     @dataclass
-    class TrainingConfig:
+    class TrainingConfig:  # type: ignore[no-redef]
         per_device_train_batch_size: int = 2
         gradient_accumulation_steps: int = 4
         max_steps: int = 100
@@ -441,7 +441,7 @@ else:
         overwrite_output_dir: bool = True
 
     @dataclass
-    class DataConfig:
+    class DataConfig:  # type: ignore[no-redef]
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         dataset_split: str = "train_sft"
         max_samples: int = 1000
@@ -452,14 +452,14 @@ else:
         packing: bool = False
 
     @dataclass
-    class UIConfig:
+    class UIConfig:  # type: ignore[no-redef]
         port: int = 7862
         host: str = "127.0.0.1"
         share: bool = False
         auto_open: bool = True
 
     @dataclass
-    class WindowsConfig:
+    class WindowsConfig:  # type: ignore[no-redef]
         dataloader_num_workers: int = 0
         tokenizers_parallelism: bool = False
         xformers_disabled: bool = True
@@ -467,7 +467,7 @@ else:
         pre_tokenize: bool = True
 
     @dataclass
-    class MultiRunConfig:
+    class MultiRunConfig:  # type: ignore[no-redef]
         num_runs: int = 5
         steps_per_run: int = 100
         samples_per_run: int = 1000
@@ -475,7 +475,7 @@ else:
         save_intermediate: bool = True
 
     @dataclass
-    class SecurityConfig:
+    class SecurityConfig:  # type: ignore[no-redef]
         """Security configuration (fallback without pydantic-settings)."""
         require_auth: bool = False
         auth_username: str | None = None
@@ -508,7 +508,7 @@ else:
             return warnings
 
     @dataclass
-    class Settings:
+    class Settings:  # type: ignore[no-redef]
         model: ModelConfig = field(default_factory=ModelConfig)
         training: TrainingConfig = field(default_factory=TrainingConfig)
         lora: LoRAConfig = field(default_factory=LoRAConfig)

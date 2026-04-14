@@ -244,7 +244,7 @@ class TestStructlogAvailable:
     def test_structlog_import_consistent(self):
         """STRUCTLOG_AVAILABLE matches actual import."""
         try:
-            import structlog
+            import structlog  # noqa: F401
             assert STRUCTLOG_AVAILABLE is True
         except ImportError:
             assert STRUCTLOG_AVAILABLE is False

@@ -494,7 +494,7 @@ class TestSLAOMergeIntegration:
             initial_state = {k: v.clone() for k, v in initial_lora.items()}
 
             # Simulate 3 runs with different LoRA states
-            for i in range(3):
+            for _i in range(3):
                 new_state = {
                     k: torch.randn_like(v)
                     for k, v in sample_lora_state.items()

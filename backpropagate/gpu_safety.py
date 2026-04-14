@@ -35,10 +35,10 @@ Usage:
 """
 
 import atexit
+import collections
 import logging
 import threading
 import time
-import collections
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum

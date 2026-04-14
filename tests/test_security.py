@@ -169,7 +169,7 @@ class TestSecurityWarning:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.filterwarnings("always", category=SecurityWarning)
-            warnings.warn("test", SecurityWarning)
+            warnings.warn("test", SecurityWarning, stacklevel=2)
 
             assert len(w) == 1
             assert issubclass(w[0].category, SecurityWarning)

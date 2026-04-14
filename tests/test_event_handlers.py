@@ -56,7 +56,7 @@ class TestTrainingCallbackUnit:
         """TrainingCallback works with subset of handlers."""
         from backpropagate.trainer import TrainingCallback
 
-        on_step = lambda step, loss: None
+        def on_step(step, loss): return None
         callback = TrainingCallback(on_step=on_step)
 
         assert callback.on_step is on_step
@@ -102,7 +102,7 @@ class TestTrainingCallbackUnit:
         callback = TrainingCallback()
 
         # Default dataclass allows mutation
-        new_handler = lambda step, loss: None
+        def new_handler(step, loss): return None
         callback.on_step = new_handler
         assert callback.on_step is new_handler
 
@@ -157,7 +157,7 @@ class TestTrainingCallbackIntegration:
             losses.append(loss)
             # Verify loss is a valid float
             assert isinstance(loss, (int, float))
-            assert not (loss != loss)  # Check for NaN
+            assert loss == loss  # Check for NaN
 
         callback = TrainingCallback(on_step=on_step)
 
@@ -166,7 +166,7 @@ class TestTrainingCallbackIntegration:
             callback.on_step(i, 2.5 - i * 0.1)
 
         assert len(losses) == 5
-        assert all(isinstance(l, float) for l in losses)
+        assert all(isinstance(val, float) for val in losses)
 
     def test_on_epoch_receives_epoch_number(self):
         """on_epoch callback receives epoch number."""
@@ -692,7 +692,7 @@ class TestMultiRunGPUStatusCallbacks:
 
         # Simulate concurrent calls
         threads = []
-        for i in range(10):
+        for _i in range(10):
             t = threading.Thread(target=thread_safe_callback, args=(status,))
             threads.append(t)
             t.start()
@@ -851,7 +851,7 @@ class TestGPUMonitorCallbackRegistration:
         assert monitor.on_status is None
 
         # Update callback
-        new_callback = lambda s: None
+        def new_callback(s): return None
         monitor.on_status = new_callback
         assert monitor.on_status is new_callback
 
@@ -1500,7 +1500,7 @@ class TestCallbackTracker:
         cb = callback_tracker.track("concurrent")
 
         def call_from_thread(n):
-            for i in range(n):
+            for _i in range(n):
                 cb(threading.current_thread().name)
 
         threads = [threading.Thread(target=call_from_thread, args=(10,)) for _ in range(5)]

@@ -623,7 +623,6 @@ def get_training_args() -> dict:
 # Research shows LoRA works best with effective batch size 8-32
 # See: https://arxiv.org/abs/2512.23017, Unsloth hyperparameters guide
 
-from dataclasses import dataclass as dc_dataclass
 
 
 @dc_dataclass

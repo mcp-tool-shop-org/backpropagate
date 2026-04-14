@@ -451,7 +451,7 @@ class TestCustomCSSConstant:
         """CUSTOM_CSS doesn't have obvious syntax issues."""
         # Check for common CSS syntax issues
         lines = CUSTOM_CSS.split("\n")
-        for i, line in enumerate(lines):
+        for _i, line in enumerate(lines):
             stripped = line.strip()
             # Skip comments and empty lines
             if not stripped or stripped.startswith("/*") or stripped.startswith("*"):

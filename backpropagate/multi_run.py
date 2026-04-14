@@ -45,22 +45,19 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy, CheckpointStats
+from .checkpoints import CheckpointManager, CheckpointPolicy, CheckpointStats
 from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
     ConfigurationError,
     DatasetError,
     DatasetNotFoundError,
-    TrainingError,
 )
 from .gpu_safety import (
     GPUCondition,
     GPUMonitor,
     GPUSafetyConfig,
     GPUStatus,
-    check_gpu_safe,
-    format_gpu_status,
     get_gpu_status,
     wait_for_safe_gpu,
 )

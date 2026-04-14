@@ -9,8 +9,8 @@ Tests cover:
 - Statistics computation
 """
 
-import os
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -489,7 +489,7 @@ class TestDatasetLoader:
     def test_to_hf_dataset(self, temp_jsonl_file):
         """Should convert to HuggingFace dataset."""
         try:
-            from datasets import Dataset
+            from datasets import Dataset  # noqa: F401
         except ImportError:
             pytest.skip("datasets not installed")
 
@@ -878,7 +878,7 @@ class TestDeduplicateMinhash:
 
         # This test should skip if datasketch is installed
         try:
-            import datasketch
+            import datasketch  # noqa: F401
             pytest.skip("datasketch is installed")
         except ImportError:
             samples = [{"text": "Hello"}]
@@ -889,7 +889,7 @@ class TestDeduplicateMinhash:
     def test_dedupe_minhash_basic(self):
         """Should remove near-duplicates."""
         try:
-            from datasketch import MinHash
+            from datasketch import MinHash  # noqa: F401
         except ImportError:
             pytest.skip("datasketch not installed")
 

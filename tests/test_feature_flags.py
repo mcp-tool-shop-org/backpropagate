@@ -91,7 +91,7 @@ class TestListFeatures:
         from backpropagate.feature_flags import list_available_features
 
         result = list_available_features()
-        for feature, desc in result.items():
+        for _feature, desc in result.items():
             assert isinstance(desc, str)
 
     def test_list_missing_features_returns_dict(self):
@@ -106,7 +106,7 @@ class TestListFeatures:
         from backpropagate.feature_flags import list_missing_features
 
         result = list_missing_features()
-        for feature, hint in result.items():
+        for _feature, hint in result.items():
             assert isinstance(hint, str)
             # Should contain pip install command
             assert "pip" in hint or hint == ""
@@ -364,7 +364,7 @@ class TestGetSystemInfo:
 
         result = get_system_info()
         assert isinstance(result["features"], dict)
-        for key, value in result["features"].items():
+        for _key, value in result["features"].items():
             assert isinstance(value, bool)
 
     def test_get_system_info_gpu_is_dict(self):

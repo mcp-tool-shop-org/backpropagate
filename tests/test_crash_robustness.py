@@ -10,8 +10,6 @@ Tests robustness against:
 
 import os
 import shutil
-import tempfile
-from unittest.mock import patch, MagicMock
 
 import torch
 
@@ -128,7 +126,6 @@ class TestCheckpointConcurrencyRobustness:
 
     def test_checkpoint_manager_handles_deleted_checkpoint(self, tmp_path):
         """Manager should handle checkpoint deleted during operation."""
-        import shutil
 
         manager = CheckpointManager(str(tmp_path), CheckpointPolicy(auto_prune=False))
 
@@ -146,7 +143,6 @@ class TestCheckpointConcurrencyRobustness:
 
     def test_checkpoint_prune_handles_already_deleted(self, tmp_path):
         """Pruning should handle already-deleted checkpoints."""
-        import shutil
 
         policy = CheckpointPolicy(keep_best_n=1, max_total=2, auto_prune=False)
         manager = CheckpointManager(str(tmp_path), policy)

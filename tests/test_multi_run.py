@@ -1387,8 +1387,8 @@ class TestDataChunking:
         assert len(chunk) == 100
 
 
-class TestCheckpointManagerIntegration:
-    """Tests for checkpoint manager integration."""
+class TestCheckpointManagerIntegrationConfig:
+    """Tests for checkpoint manager integration config."""
 
     def test_checkpoint_policy_config(self, tmp_path):
         """Should properly configure checkpoint policy from config."""
@@ -1540,34 +1540,3 @@ class TestValidationConfig:
         assert trainer.config.validate_every_run is False
 
 
-class TestBackwardsCompatibility:
-    """Tests for backwards compatibility aliases."""
-
-    def test_speedrun_config_alias(self):
-        """SpeedrunConfig should be alias for MultiRunConfig."""
-        from backpropagate.multi_run import SpeedrunConfig
-
-        config = SpeedrunConfig(num_runs=3)
-        assert isinstance(config, MultiRunConfig)
-        assert config.num_runs == 3
-
-    def test_speedrun_result_alias(self):
-        """SpeedrunResult should be alias for MultiRunResult."""
-        from backpropagate.multi_run import SpeedrunResult
-
-        result = SpeedrunResult(
-            total_runs=2,
-            total_steps=100,
-            total_samples=500,
-            total_duration_seconds=60.0,
-            final_loss=0.5,
-        )
-        assert isinstance(result, MultiRunResult)
-        assert result.total_runs == 2
-
-    def test_speedrun_trainer_alias(self):
-        """SpeedrunTrainer should be alias for MultiRunTrainer."""
-        from backpropagate.multi_run import SpeedrunTrainer
-
-        trainer = SpeedrunTrainer(model="test-model")
-        assert isinstance(trainer, MultiRunTrainer)

@@ -631,12 +631,12 @@ class TestUILaunch:
             pytest.skip("UI dependencies not installed")
 
     def test_launch_with_share(self):
-        """Launch with share enabled."""
+        """Launch with share enabled requires auth."""
         try:
             from backpropagate.ui import launch
 
             with patch("gradio.Blocks.launch") as mock_launch:
-                launch(share=True)
+                launch(share=True, auth=("admin", "password"))
                 mock_launch.assert_called_once()
         except ImportError:
             pytest.skip("UI dependencies not installed")

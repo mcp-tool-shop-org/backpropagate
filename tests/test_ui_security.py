@@ -212,48 +212,27 @@ class TestGenerateAuthToken:
 class TestLaunchSecurity:
     """Tests for launch function security features."""
 
-    def test_launch_warns_on_share_without_auth(self):
-        """launch should warn when share=True without auth."""
-        import warnings
-
-        from backpropagate.ui import SecurityWarning, launch
+    def test_launch_raises_on_share_without_auth(self):
+        """launch should raise ValueError when share=True without auth."""
+        from backpropagate.ui import launch
 
         with patch("backpropagate.ui.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
-            with warnings.catch_warnings(record=True) as w:
-                warnings.filterwarnings("always", category=SecurityWarning)
+            with pytest.raises(ValueError, match="Authentication required"):
                 launch(share=True, auth=None)
 
-                # Check that warning was raised
-                security_warnings = [
-                    warning for warning in w
-                    if issubclass(warning.category, SecurityWarning)
-                ]
-                assert len(security_warnings) >= 1
-                assert "security risk" in str(security_warnings[0].message).lower()
-
-    def test_launch_no_warning_with_auth(self):
-        """launch should not warn when share=True with auth."""
-        import warnings
-
-        from backpropagate.ui import SecurityWarning, launch
+    def test_launch_no_error_with_auth(self):
+        """launch should not raise when share=True with auth."""
+        from backpropagate.ui import launch
 
         with patch("backpropagate.ui.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
-            with warnings.catch_warnings(record=True) as w:
-                warnings.filterwarnings("always", category=SecurityWarning)
-                launch(share=True, auth=("admin", "password"))
-
-                # Check that no security warning was raised
-                security_warnings = [
-                    warning for warning in w
-                    if issubclass(warning.category, SecurityWarning)
-                ]
-                assert len(security_warnings) == 0
+            # Should not raise ValueError when auth is provided
+            launch(share=True, auth=("admin", "password"))
 
     def test_launch_passes_auth_to_gradio(self):
         """launch should pass auth credentials to Gradio."""

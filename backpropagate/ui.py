@@ -53,7 +53,7 @@ from .feature_flags import (
     list_available_features,
 )
 from .gpu_safety import GPUCondition, get_gpu_status
-from .security import PathTraversalError, safe_path
+from .security import PathTraversalError, SecurityWarning, safe_path
 from .theme import create_backpropagate_theme, get_css
 
 # Import production security utilities
@@ -151,7 +151,7 @@ def generate_auth_token() -> str:
     """Generate a secure authentication token."""
     return secrets.token_urlsafe(32)
 
-__all__ = ["create_ui", "launch"]
+__all__ = ["create_ui", "launch", "SecurityWarning"]
 
 
 # =============================================================================

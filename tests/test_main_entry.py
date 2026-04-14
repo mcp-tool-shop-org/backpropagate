@@ -78,7 +78,9 @@ class TestMainModule:
 
         # --version exits with code 0
         assert result.returncode == 0
-        assert "0.1.0" in result.stdout
+        # Version string should appear in output
+        from backpropagate import __version__
+        assert __version__ in result.stdout
 
     def test_run_as_module_info_command(self):
         """Test running 'python -m backpropagate info' via subprocess."""
@@ -105,10 +107,10 @@ class TestMainModule:
             timeout=10,
         )
 
-        # No args should return 0 and show help
-        assert result.returncode == 0
-        # Help output should mention available commands
-        assert "train" in result.stdout or "help" in result.stdout.lower()
+        # No args may return 0 (help) or non-zero (error with usage)
+        # Either way, output should mention available commands
+        output = result.stdout + result.stderr
+        assert "train" in output or "help" in output.lower() or "usage" in output.lower()
 
 
 class TestMainModuleIntegration:

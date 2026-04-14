@@ -450,10 +450,15 @@ class TestHelperFunctions:
         try:
             result = _has_unsloth()
             assert isinstance(result, bool)
-        except RuntimeError as e:
-            # Python 3.14 torch.compile issue - this is expected
-            assert "torch.compile" in str(e) or "3.14" in str(e)
-            pytest.skip("Unsloth incompatible with Python 3.14")
+        except (RuntimeError, Exception) as e:
+            # May fail on Python 3.14 (torch.compile) or CI (no GPU)
+            error_msg = str(e).lower()
+            if "torch.compile" in error_msg or "3.14" in error_msg:
+                pytest.skip("Unsloth incompatible with Python 3.14")
+            elif "accelerator" in error_msg or "gpu" in error_msg:
+                pytest.skip("Unsloth requires GPU")
+            else:
+                raise
 
 
 # =============================================================================

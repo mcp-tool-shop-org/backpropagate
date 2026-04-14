@@ -38,17 +38,19 @@ jobs:
 
       - run: uv venv
 
-      - name: Install CPU-only torch
-        shell: bash
-        run: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
-
       - name: Install backpropagate + PyInstaller
         shell: bash
         run: |
-          # Install backpropagate with --no-deps on ALL platforms so pip doesn't
-          # override our CPU-only torch with a CUDA build (adds ~2.6GB of nvidia libs)
-          uv pip install . "pyinstaller>=6.9.0" --no-deps
-          uv pip install transformers datasets trl peft accelerate tenacity packaging rich
+          # Install all deps using CPU torch index so nothing pulls CUDA
+          # --index-url forces ALL packages to resolve against CPU-only torch
+          uv pip install . "pyinstaller>=6.9.0" \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple/
+
+          # Windows needs pywin32-ctypes for PyInstaller
+          if [ "${{ matrix.target }}" = "win-x64" ]; then
+            uv pip install pywin32-ctypes
+          fi
 
           # macOS needs macholib for Mach-O binary packaging
           if [ "${{ matrix.target }}" = "darwin-arm64" ]; then

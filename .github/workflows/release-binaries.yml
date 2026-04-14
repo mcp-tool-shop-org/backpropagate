@@ -45,12 +45,14 @@ jobs:
       - name: Install backpropagate + PyInstaller
         shell: bash
         run: |
-          # Skip bitsandbytes on macOS (no CUDA support)
+          # Install backpropagate with --no-deps on ALL platforms so pip doesn't
+          # override our CPU-only torch with a CUDA build (adds ~2.6GB of nvidia libs)
+          uv pip install . "pyinstaller>=6.9.0" --no-deps
+          uv pip install transformers datasets trl peft accelerate tenacity packaging rich
+
+          # macOS needs macholib for Mach-O binary packaging
           if [ "${{ matrix.target }}" = "darwin-arm64" ]; then
-            uv pip install . "pyinstaller>=6.9.0" macholib --no-deps
-            uv pip install transformers datasets trl peft accelerate tenacity packaging rich macholib
-          else
-            uv pip install . "pyinstaller>=6.9.0"
+            uv pip install macholib
           fi
 
       - name: Strip shared libs (Linux only)

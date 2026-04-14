@@ -86,8 +86,8 @@ jobs:
               '--hidden-import', 'transformers.models',
               '--hidden-import', 'transformers.training_args',
               '--hidden-import', 'transformers.trainer',
-              '--collect-data', 'transformers',
-              '--collect-data', 'torch',
+              '--hidden-import', 'transformers.tokenization_utils',
+              '--hidden-import', 'transformers.modeling_utils',
               '${{ env.ENTRYPOINT }}',
           ] + '$EXCLUDE_BITSANDBYTES'.split())"
 

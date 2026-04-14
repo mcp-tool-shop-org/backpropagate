@@ -53,6 +53,16 @@ jobs:
             uv pip install . "pyinstaller>=6.9.0"
           fi
 
+      - name: Strip torch shared libs (Linux only)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          # Strip debug symbols from torch .so files BEFORE PyInstaller bundles them
+          # torch ships ~3GB of .so files with debug symbols on Linux
+          SITE=$(uv run python -c "import site; print(site.getsitepackages()[0])")
+          find "$SITE/torch" -name "*.so" -exec strip --strip-debug {} \; 2>/dev/null || true
+          find "$SITE/torch" -name "*.so.*" -exec strip --strip-debug {} \; 2>/dev/null || true
+
       - name: Build binary
         shell: bash
         run: |

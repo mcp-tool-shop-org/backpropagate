@@ -30,9 +30,9 @@ jobs:
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v7
 
       - run: uv python install 3.12
 
@@ -106,7 +106,7 @@ jobs:
           mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"
           echo "ASSET_NAME=${OUTNAME}" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: dist/${{ env.ASSET_NAME }}
@@ -117,7 +117,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -130,6 +130,6 @@ jobs:
           sha256sum * > "checksums-${VERSION}.txt"
           cat "checksums-${VERSION}.txt"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*

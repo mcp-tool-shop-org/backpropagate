@@ -197,6 +197,26 @@ show_error_codes = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+# Reflex's `rx.flex(...) / rx.box(...) / rx.button(...)` builders are typed as
+# returning `Component`, but mypy infers `Any` from the dynamically-generated
+# child types. Strict no-any-return + the Reflex component-tree style adds 50+
+# false positives across ui_app/. Loosen for the Reflex tree specifically;
+# the rest of the codebase stays strict.
+[[tool.mypy.overrides]]
+module = "backpropagate.ui_app.*"
+warn_return_any = false
+disallow_untyped_defs = false
+
+# The legacy Gradio implementation is preserved as v1.0 reference; we don't
+# enforce v1.1's stricter type config on it. Removed in v1.2.
+[[tool.mypy.overrides]]
+module = "backpropagate.ui_gradio_legacy"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "backpropagate.theme_gradio_legacy"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = [
@@ -241,7 +261,18 @@ exclude_lines = [
 ]
 
 [tool.bandit]
-exclude_dirs = ["tests", "venv", ".venv"]
+# exclude_dirs is substring-matched against every scanned path, so listing
+# the v1.0 Gradio legacy modules by basename suffices to skip them. They're
+# preserved as v1.0 reference until v1.2; findings inside them are already
+# documented and shouldn't re-gate v1.1.x. .web/ is Reflex's working dir.
+exclude_dirs = [
+    "tests",
+    "venv",
+    ".venv",
+    "ui_gradio_legacy.py",
+    "theme_gradio_legacy.py",
+    ".web",
+]
 skips = [
     "B101",  # assert - fine in non-production code
     "B104",  # bind 0.0.0.0 - expected for UI server, users should firewall

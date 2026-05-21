@@ -1849,7 +1849,9 @@ class DatasetLoader:
         # random.shuffle so we still get a non-deterministic shuffle without
         # touching the global seed.
         if seed is not None:
-            rng = random.Random(seed)
+            # nosec B311 — deterministic dataset shuffle, not crypto. Local
+            # random.Random per B-002 (no global seed mutation).
+            rng = random.Random(seed)  # nosec B311 — non-crypto dataset shuffle; see comment above
             rng.shuffle(shuffled)
         else:
             random.shuffle(shuffled)

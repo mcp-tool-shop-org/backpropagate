@@ -142,7 +142,7 @@ def _positive_float(value: str) -> float:
 #   "the token: abc is wrong"        → unchanged (value too short, prose-like)
 #   "try a different password"       → unchanged (no separator)
 #   "Authorization: Bearer xyz"      → "Authorization: Bearer <REDACTED>"
-#   "api_key=sk_live_AbC123XyZ987"   → "api_key=<REDACTED>"
+#   "api_key=EXAMPLE-NOT-A-REAL-KEY"   → "api_key=<REDACTED>"
 #   "password=hunter2!@#secret_key"  → "password=<REDACTED>"
 _SECRET_PATTERNS = [
     (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
@@ -171,7 +171,7 @@ def _redact_secrets(text: str) -> str:
 
     Designed to leave human-readable prose intact (e.g. "the token: abc is
     wrong" is NOT redacted because "abc" is too short / has no digit) while
-    catching realistic credential leaks (e.g. "api_key=sk_live_AbC123XyZ987"
+    catching realistic credential leaks (e.g. "api_key=EXAMPLE-NOT-A-REAL-KEY"
     is redacted to "api_key=<REDACTED>"). The separator character (``:`` vs
     ``=``) is preserved in the output to avoid silently rewriting the
     operator's input shape.
@@ -1392,12 +1392,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 merge_mode=MergeMode(hp.get("merge_mode") or "slao"),
                 checkpoint_dir=str(history_dir),
             )
-            trainer = MultiRunTrainer(
+            mr_trainer = MultiRunTrainer(
                 model=model,
                 config=config,
                 resume_from=run_id,
             )
-            result = trainer.run(dataset)
+            result = mr_trainer.run(dataset)
             _print_success("Multi-run resume complete!")
             _print_kv("Total runs", str(result.total_runs))
             _print_kv("Final loss", f"{result.final_loss:.4f}")

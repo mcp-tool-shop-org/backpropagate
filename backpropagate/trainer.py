@@ -53,6 +53,7 @@ from .exceptions import (
     DatasetParseError,
     GPUNotAvailableError,
     InvalidSettingError,
+    ModelLoadCauseCategory,
     ModelLoadError,
     TrainingAbortedError,
     TrainingError,
@@ -202,7 +203,7 @@ def _retry_hf_call(
 # raising at import-time when an upstream dep is missing.
 
 
-def _classify_model_load_cause(exc: BaseException) -> str:
+def _classify_model_load_cause(exc: BaseException) -> ModelLoadCauseCategory:
     """Best-effort classification of a model-load exception.
 
     Returns one of the ``ModelLoadCauseCategory`` Literal values:
@@ -1044,7 +1045,7 @@ class Trainer:
                     try:
                         if _torch.cuda.is_available():
                             _torch.cuda.empty_cache()
-                    except Exception:
+                    except Exception:  # nosec B110 — best-effort CUDA cache reclaim; failures are non-fatal
                         pass
 
                     if current_batch > 1:

@@ -2769,7 +2769,7 @@ _PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
     re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
     re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
-    re.compile(r"/tmp/[^\s'\":]+"),
+    re.compile(r"/tmp/[^\s'\":]+"),  # nosec B108 — regex pattern matches /tmp paths for REDACTION in error messages; not an actual /tmp file write
     re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),
     re.compile(r"~?/?\.cache/huggingface/[^\s'\":]*"),
 )

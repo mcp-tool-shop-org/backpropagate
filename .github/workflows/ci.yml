@@ -234,9 +234,14 @@ jobs:
       # block below activates; until then the job runs anonymously and may
       # rate-limit on heavy-traffic windows.
       image: semgrep/semgrep:1.163.0@sha256:7cad2bc2d1e44f87f0bf4be6d1fa23aa90fb72015bebc89fb91385d813987a03
-      credentials:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # NOTE: Docker Hub credentials block removed — Stage B's amend added
+      # `credentials: { username: ${{ secrets.DOCKERHUB_USERNAME }}, ...}` to
+      # lift the anonymous 100/6hr pull cap, but GHA validates secret refs at
+      # workflow-parse time and rejects empty/missing secrets with "Unexpected
+      # value ''". The block ran fine when secrets were present, and broke
+      # the entire job parse when they weren't. Anonymous pull works for this
+      # repo's CI volume; if rate-limited, the maintainer can add the secrets
+      # and restore the block. Tracked: baseline-before-enforce doctrine.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -295,8 +300,15 @@ jobs:
       - name: TruffleHog Secret Scan
         # --only-verified means TruffleHog actively verified the secret against the live API
         # — these are the highest-confidence positives. Fail the job on any such finding.
+        #
+        # base/head: scan the full repo on push-to-main or workflow_dispatch
+        # (BASE==HEAD if we don't override, which errors out per the action's
+        # documented behavior). On pull_request events the action defaults to
+        # base=PR base / head=PR head, which is what we want.
         uses: trufflesecurity/trufflehog@37b77001d0174ebec2fcca2bd83ff83a6d45a3ab  # v3.95.3
         with:
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
           extra_args: --only-verified --fail --results=json
 
   build:

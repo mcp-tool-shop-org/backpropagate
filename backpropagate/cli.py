@@ -2141,8 +2141,9 @@ Exit codes (Ship Gate B2):
     # ui command
     ui_parser = subparsers.add_parser(
         "ui",
-        help="Launch the Gradio web interface",
-        description="Launch interactive web UI for training, export, and monitoring",
+        help="Launch the Reflex web interface",
+        description="Launch the Reflex (Radix UI) web interface for training, "
+                    "export, and monitoring. Requires `pip install backpropagate[ui]`.",
     )
     ui_parser.add_argument(
         "--port", "-p",

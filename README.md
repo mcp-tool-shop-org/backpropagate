@@ -45,7 +45,7 @@ pip install backpropagate[standard]
 backprop ui --port 7862
 ```
 
-The Gradio interface lets you point at a JSONL file, pick a model, train, and export — no Python required. If you want to expose the UI on a public `*.gradio.live` URL, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+The Reflex (Radix UI) interface lets you point at a JSONL file, pick a model, train, and export — no Python required. The UI is local-first; for public-internet exposure see [Web UI](#web-ui) below for the `--share` + `--auth` security contract and supported tunnel options (Cloudflare Tunnel, ngrok).
 
 ## Dataset Format
 
@@ -82,7 +82,7 @@ Alpaca (`instruction`/`output`), OpenAI chat (`messages`), and raw text formats 
 ```bash
 pip install backpropagate              # Core only (minimal)
 pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-pip install backpropagate[ui]          # + Gradio web UI
+pip install backpropagate[ui]          # + Reflex (Radix UI) web interface
 pip install backpropagate[standard]    # unsloth + ui (recommended)
 pip install backpropagate[full]        # Everything
 ```
@@ -90,7 +90,7 @@ pip install backpropagate[full]        # Everything
 | Extra | Description | Dependencies |
 |-------|-------------|--------------|
 | `unsloth` | 2x faster training, 50% less VRAM | unsloth |
-| `ui` | Gradio web interface | gradio>=5.6.0 |
+| `ui` | Reflex (Radix UI) web interface | reflex>=0.9.2, fastapi>=0.115 |
 | `validation` | Pydantic config validation | pydantic, pydantic-settings |
 | `export` | GGUF export for Ollama | llama-cpp-python |
 | `monitoring` | WandB + system monitoring (auto-wired into trainer in v1.1.0) | wandb, psutil |
@@ -234,7 +234,7 @@ Run history survives across processes — the `Runs` tab in the web UI is a sepa
 
 ### Web UI
 
-Launch the Gradio interface locally:
+Launch the Reflex interface locally:
 
 ```bash
 backprop ui --port 7862
@@ -292,9 +292,16 @@ backpropagate/
 ├── feature_flags.py     # Optional feature detection
 ├── security.py          # Path traversal & torch security
 ├── logging_config.py    # Structured logging setup
-├── theme.py             # Gradio theme customization
-├── ui.py                # Gradio interface
-└── ui_security.py       # Rate limiting, CSRF, file validation
+├── ui_theme.py          # Radix theme tokens + CSS (Reflex era)
+├── ui_state.py          # rx.State subclasses
+├── ui_app/              # Reflex web interface (Radix UI)
+│   ├── app.py           #   rx.App entry point
+│   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
+│   ├── pages/           #   Train / Multi-Run / Export / Dataset
+│   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
+├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
+├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
+└── theme_gradio_legacy.py  # DEPRECATED — same
 ```
 
 ## Troubleshooting

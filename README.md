@@ -346,7 +346,7 @@ All training happens locally on your GPU. Backpropagate makes no network request
 | E. Identity | 4/4 | Logo, translations, landing page, metadata |
 | **Total** | **25/31** | 14 items skipped with justification · `shipcheck audit` passes 100% · Audit date: 2026-05-21 (B-row re-graded after Stage B + Stage A CLI exit-code work) |
 
-Design history and what each line item maps to: see [ROADMAP.md](ROADMAP.md) — all Week 1–4 items are shipped in v1.0.5.
+Design history and what each line item maps to: see [ROADMAP.md](ROADMAP.md) — all Week 1–4 items are shipped in v1.1.0.
 
 ## License
 

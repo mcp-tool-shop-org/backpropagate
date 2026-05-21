@@ -5,7 +5,7 @@ Backpropagate - Headless LLM Fine-Tuning
 A clean, production-ready interface for LLM fine-tuning that makes
 complex training accessible through simple parameters and smart defaults.
 
-v1.0.5: Production-ready with modular architecture and optional features
+v1.1.0: Reflex UI, HF Hub push, resume-from-checkpoint, run history, model cards, W&B wiring
 
 Installation:
     pip install backpropagate              # Core only (minimal)

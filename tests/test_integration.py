@@ -277,11 +277,10 @@ class TestE2EExportAndInference:
         output_path = temp_dir / "exported"
 
         mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
 
         with patch("backpropagate.export._is_peft_model", return_value=True), \
              patch("peft.PeftModel.from_pretrained", return_value=mock_model):
-            result = export_lora(mock_model, mock_tokenizer, str(output_path))
+            result = export_lora(mock_model, str(output_path))
 
             assert result is not None
             mock_model.save_pretrained.assert_called_once()
@@ -432,10 +431,9 @@ class TestTrainExportWorkflow:
 
         # Export phase
         mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
 
         with patch("backpropagate.export._is_peft_model", return_value=True):
-            result = export_lora(mock_model, mock_tokenizer, str(temp_dir / "exported"))
+            result = export_lora(mock_model, str(temp_dir / "exported"))
             assert result is not None
 
     def test_multi_run_then_export_merged(self, temp_dir):

@@ -3,10 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Test pollution: some export tests pass MagicMock to mkdir(), creating MagicMock/mock/<id>/
-# at cwd. Real fix is in the test (use tmp_path); .gitignore stops the spam.
-MagicMock/
-
 # C extensions
 *.so
 

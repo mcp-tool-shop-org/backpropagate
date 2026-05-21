@@ -10,21 +10,21 @@ sidebar:
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
 trainer.save("./my-model")
 ```
 
-Smart defaults automatically configure learning rate, batch size, gradient accumulation, and LoRA rank based on your hardware and dataset size.
+`Qwen/Qwen2.5-7B-Instruct` is the canonical default — what `Trainer()` resolves when called with no model argument. Older examples used the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; both work. Smart defaults automatically configure learning rate, batch size, gradient accumulation, and LoRA rank based on your hardware and dataset size.
 
 ## Multi-run SLAO training
 
-SLAO (Single LoRA Continual Learning via Asymmetric Merging) prevents catastrophic forgetting during extended fine-tuning by merging LoRA adapters between runs using orthogonal initialization and time-aware scaling:
+SLAO — Single LoRA Continual Learning via Asymmetric Merging ([arXiv:2512.23017](https://arxiv.org/abs/2512.23017)) — prevents catastrophic forgetting during extended fine-tuning by merging LoRA adapters between runs using orthogonal initialization (QR-decomposition on A matrices), asymmetric A/B handling, and time-aware scaling `λ(i) = 1/√i`:
 
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 
 result = trainer.multi_run(
     dataset="HuggingFaceH4/ultrachat_200k",
@@ -35,10 +35,10 @@ result = trainer.multi_run(
 )
 ```
 
-CLI equivalent:
+CLI equivalent (note: the CLI flag is `--samples`, not `--samples-per-run` — the underlying field is `samples_per_run`):
 
 ```bash
-backprop multi-run --data my_data.jsonl --runs 5 --steps 100
+backprop multi-run --data my_data.jsonl --runs 5 --steps 100 --samples 1000
 ```
 
 ## Trainer parameters
@@ -57,7 +57,22 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | `max_seq_length` | 2048 | Maximum sequence length |
 | `output_dir` | `./output` | Where to save checkpoints and exports |
 | `use_unsloth` | `True` | Use Unsloth for 2x faster training (if installed) |
-| `train_on_responses` | `True` | Compute loss only on assistant responses (disabled on Windows) |
+| `train_on_responses` | `True` (auto-disabled on Windows) | Compute loss only on assistant responses. See note below. |
+| `oom_recovery` | `True` | B-002 graceful OOM handling: catch `torch.cuda.OutOfMemoryError`, halve batch size, clear cache, retry. Up to 3 retries at the minimum batch size. Set `False` to make OOM a hard failure. |
+| `unsloth_fallback` | `True` | B-010 graceful degradation: if `use_unsloth=True` but Unsloth's loader raises (e.g. a broken nightly), fall back to plain `transformers` + `peft`. Set `False` to make Unsloth failures hard-fail. |
+
+### `train_on_responses` on Windows
+
+The default is `True`, but Backpropagate automatically disables it on Windows because the underlying Unsloth helper uses multiprocessing in a way that hangs / crashes on Windows. Effectively:
+
+- Linux: loss is computed only on assistant turns.
+- Windows: loss is computed on the full conversation (user + assistant). Same model trains, but loss numbers and (slightly) the final quality differ from a Linux run on the same dataset.
+
+If you need parity, run training in WSL or on a Linux host. There is no per-Trainer override for the Windows auto-disable — it is keyed off `os.name == "nt"`.
+
+### Graceful degradation knobs
+
+`oom_recovery` and `unsloth_fallback` are the two big "things will keep working when the environment misbehaves" knobs. Both default `True`. Operators triaging "why did my batch size silently halve?" or "why is the trainer using transformers when I asked for Unsloth?" should look at the startup log line `Degradation knobs: oom_recovery=... unsloth_fallback=...`, then either keep the defaults (preferred for production) or set the knob to `False` to force hard failures while you fix the underlying issue.
 
 ## Training callbacks
 
@@ -80,7 +95,7 @@ callback = TrainingCallback(
     on_error=lambda err: print(f"Error: {err}"),
 )
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("data.jsonl", steps=100, callback=callback)
 ```
 

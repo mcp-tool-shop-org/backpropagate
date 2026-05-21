@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ship Gate audit — all hard gates pass (23/31 checked, 14 skipped, 100%)
 - verify.sh — single-command verification script (Ship Gate D1)
 - Proper CLI exit codes: 1 user error, 2 runtime error, 3 partial success (Ship Gate B2)
-- SHIP_GATE.md + SCORECARD.md
+- SHIP_GATE.md (the scorecard itself is rendered inline in README and on the landing page; no standalone SCORECARD.md file)
 
 ### Changed
 - Scorecard in README and landing page reflects actual `shipcheck audit` results

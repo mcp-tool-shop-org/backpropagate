@@ -55,7 +55,7 @@ Backpropagate accepts JSONL files with conversation data. The simplest format is
 
 Save this as `my_data.jsonl`. Each line is one conversation. Aim for at least 100 examples for a meaningful fine-tune, though 500+ is better.
 
-Backpropagate also auto-detects ShareGPT, Alpaca, and ChatML formats, so use whatever you have.
+Backpropagate also auto-detects ShareGPT, Alpaca, and ChatML formats, so use whatever you have. The repo ships an `examples/quickstart.jsonl` (5 ShareGPT examples) you can use to verify your install before bringing your own data.
 
 ## 5. Train your first model
 
@@ -64,7 +64,7 @@ Three lines of Python:
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
 trainer.save("./my-model")
 ```
@@ -88,6 +88,36 @@ Or use the web UI:
 ```bash
 backprop ui
 ```
+
+If you plan to share the UI on a public URL (`backprop ui --share`), you also need `--auth user:password` — see [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-input_auth_required-mean) for the reasoning. Local-only `backprop ui` (no `--share`) needs no auth.
+
+## What you'll see
+
+A successful first run prints something like:
+
+```
+run_started run_id=8f3a2c1d-9e4b-4c5a-...
+Trainer initialized: Qwen/Qwen2.5-7B-Instruct
+  LoRA: r=16, alpha=32
+  Batch: 2, LR: 0.0002
+  Degradation knobs: oom_recovery=True, unsloth_fallback=True
+Training: [####################] 100% loss=0.42  steps=100
+Saved to ./output/lora
+run_ended run_id=8f3a2c1d-... duration_seconds=412.3
+```
+
+After the run, your output directory has:
+
+```
+my-model/
+├── adapter_config.json       <- adapter metadata
+├── adapter_model.safetensors <- the trained LoRA weights
+└── tokenizer.json            <- copied from the base model
+```
+
+To know it worked: `adapter_model.safetensors` should be ~50–200 MB (rank 16 LoRA on a 7B base), and `backprop info` should show no errors. If the loss decreased over the run (you'll see logging lines every 10 steps), the model learned something.
+
+If something went wrong, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's keyed by what you actually saw in stderr.
 
 ## 6. Export and run with Ollama
 

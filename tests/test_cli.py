@@ -58,9 +58,12 @@ class TestParser:
         assert args.no_unsloth is False
 
     def test_train_requires_data(self, cli_parser):
-        """Test train command requires --data."""
-        with pytest.raises(SystemExit):
-            cli_parser.parse_args(["train"])
+        """`backprop train` without --data now parses successfully; the handler
+        surfaces a friendly first-run guidance + EXIT_USER_ERROR (Stage C
+        C-CLI-007). Argparse-level rejection was replaced with handler-level."""
+        args = cli_parser.parse_args(["train"])
+        assert args.command == "train"
+        assert args.data is None
 
     def test_multi_run_command_basic(self, cli_parser):
         """Test multi-run command parsing."""
@@ -211,11 +214,12 @@ class TestMain:
         assert result == 0
 
     def test_train_missing_data_returns_error(self):
-        """Test train command without data returns error."""
+        """`backprop train` without --data prints friendly guidance to stderr
+        and returns EXIT_USER_ERROR (Stage C C-CLI-007)."""
         from backpropagate.cli import main
 
-        with pytest.raises(SystemExit):
-            main(["train"])
+        result = main(["train"])
+        assert result == 1
 
 
 class TestCmdInfo:
@@ -282,7 +286,8 @@ class TestCmdConfig:
         assert "Training" in captured.out
 
     def test_cmd_config_reset_message(self, capsys):
-        """Test cmd_config reset shows message."""
+        """`config --reset` is not implemented; surfaces EXIT_USER_ERROR with a
+        not-implemented message on stderr (Stage C C-CLI-003)."""
         import argparse
 
         from backpropagate.cli import cmd_config
@@ -290,10 +295,11 @@ class TestCmdConfig:
         args = argparse.Namespace(show=False, set=None, reset=True, verbose=False)
         result = cmd_config(args)
 
-        assert result == 0
+        assert result == 1
 
         captured = capsys.readouterr()
-        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
+        msg = (captured.out + captured.err).lower()
+        assert "planned" in msg or "environment" in msg or "not implemented" in msg
 
 
 class TestCmdTrain:
@@ -1100,10 +1106,8 @@ class TestCmdConfigSet:
     """Tests for config command --set option."""
 
     def test_cmd_config_set_not_implemented(self, capsys):
-        """Test config --set shows not implemented message.
-
-        This tests lines 435-439.
-        """
+        """`config --set` is not implemented; surfaces EXIT_USER_ERROR with a
+        not-implemented message on stderr (Stage C C-CLI-003)."""
         import argparse
 
         from backpropagate.cli import cmd_config
@@ -1111,9 +1115,10 @@ class TestCmdConfigSet:
         args = argparse.Namespace(show=False, set="key=value", reset=False, verbose=False)
         result = cmd_config(args)
 
-        assert result == 0
+        assert result == 1
         captured = capsys.readouterr()
-        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
+        msg = (captured.out + captured.err).lower()
+        assert "planned" in msg or "environment" in msg or "not implemented" in msg
 
     def test_cmd_config_windows_section_on_windows(self, capsys):
         """Test config command shows Windows section on Windows.

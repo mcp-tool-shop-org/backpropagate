@@ -1216,8 +1216,9 @@ class TestHfTransientRetryStatusCodeFilter:
     model name would hang ~65s before showing the real error."""
 
     def test_does_not_retry_401_403_404(self):
-        from backpropagate.trainer import _is_transient_hf_exception
         import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
 
         for code in (401, 403, 404, 400, 422):
             exc = requests.exceptions.HTTPError(f"HTTP {code}")
@@ -1226,8 +1227,9 @@ class TestHfTransientRetryStatusCodeFilter:
                 f"HTTP {code} should NOT retry (not transient)"
 
     def test_retries_429_and_5xx(self):
-        from backpropagate.trainer import _is_transient_hf_exception
         import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
 
         for code in (429, 500, 502, 503, 504):
             exc = requests.exceptions.HTTPError(f"HTTP {code}")
@@ -1251,8 +1253,9 @@ class TestHfTransientRetryStatusCodeFilter:
         """If an HTTPError carries no .response attribute, retry conservatively
         (we can't tell whether it was transient, but retrying is safer than
         bailing on a genuine connection blip)."""
-        from backpropagate.trainer import _is_transient_hf_exception
         import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
 
         exc = requests.exceptions.HTTPError("no response object")
         assert _is_transient_hf_exception(exc)

@@ -29,3 +29,14 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Tested on RTX 5080 (16GB VRAM)
 - 1805 tests in `tests/`, 50% coverage floor (`fail_under = 50` in coverage config)
 - All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
+
+## User-facing docs surface
+
+- Canonical handbook lives under `site/src/content/docs/handbook/` (Astro/Starlight). The Jekyll tree at `docs/` is legacy — `docs/index.md` now redirects to the handbook.
+- Stage B contracts documented (added 2026-05-21 by docs swarm agent):
+  - `handbook/error-codes.md` — full catalog of stable codes (INPUT_/CONFIG_/DEP_/RUNTIME_/STATE_/PARTIAL_)
+  - `handbook/troubleshooting.md` — symptoms-first reverse index
+  - `handbook/env-vars.md` — every `BACKPROPAGATE_*` knob
+  - `handbook/cli-reference.md` — every subcommand + flag
+  - README "Troubleshooting" + "Reporting bugs" + "Web UI" + "Platform prerequisites" subsections cover the load-bearing user-facing contracts (run_id correlation, --share+--auth gating, redacted stderr, sandbox env var).
+- `examples/quickstart.jsonl` is a 5-line ShareGPT-format starter dataset referenced by the README Quick Start.

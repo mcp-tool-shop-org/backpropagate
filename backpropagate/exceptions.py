@@ -53,9 +53,20 @@ Usage:
 """
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+# Cause categories for ModelLoadError (C-CLI-006). When a caller knows the
+# nature of the underlying HF Hub failure it can pass ``cause_category`` so
+# the user gets a remediation hint tailored to the failure mode instead of
+# the generic "check model name + network" line. Backend raise sites in
+# ``trainer.py`` are expected to pattern-match HTTP status / exception text
+# and pass the appropriate category; today this is a forward-compatible
+# extension point (default behavior preserved when the kwarg is omitted).
+ModelLoadCauseCategory = Literal[
+    "auth", "not_found", "network", "version", "unknown"
+]
 
 __all__ = [
     # Base
@@ -73,6 +84,7 @@ __all__ = [
     # Training
     "TrainingError",
     "ModelLoadError",
+    "ModelLoadCauseCategory",
     "TrainingAbortedError",
     "CheckpointError",
     # Export
@@ -94,7 +106,222 @@ __all__ = [
     # Utilities
     "BatchOperationError",
     "PartialSuccess",
+    # Catalog
+    "ERROR_CODES",
+    "print_error_code_catalog",
 ]
+
+
+# =============================================================================
+# ERROR CODE CATALOG (C-CLI-005, C-CLI-014)
+# =============================================================================
+# Single source of truth for the machine-readable codes Ship Gate B1 introduced.
+# Each entry carries:
+#   description: one-liner explaining the failure category
+#   default_hint: fallback suggestion when the raise site does not pass an
+#                 explicit ``suggestion`` argument
+#   retryable:   "yes" / "no" / "sometimes" — operators automating retry loops
+#                can scrape this to decide whether backoff is meaningful
+#
+# Adding a new exception subclass? Add a row here FIRST so the discipline of
+# "central catalog → raise site" stays intact. Operators reading a code in
+# their terminal can run ``backprop info --error-codes`` to look it up.
+
+ERROR_CODES: dict[str, dict[str, str]] = {
+    # User input
+    "INPUT_VALIDATION_FAILED": {
+        "description": "A CLI argument failed validation (wrong type, out of range, malformed).",
+        "default_hint": "Re-read the relevant --help and pass a valid value.",
+        "retryable": "no",
+    },
+    "INPUT_AUTH_REQUIRED": {
+        "description": "An operation required --auth credentials but they were not supplied.",
+        "default_hint": "Pass --auth user:password OR set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false (warns).",
+        "retryable": "no",
+    },
+    # Dataset
+    "INPUT_DATASET_INVALID": {
+        "description": "A dataset reference is invalid in a way the loader cannot self-describe.",
+        "default_hint": "Inspect the dataset path and format; pass --verbose for the full traceback.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_NOT_FOUND": {
+        "description": "The dataset file or HuggingFace name could not be located.",
+        "default_hint": "Verify the path is reachable from the current working directory, or that the HuggingFace dataset exists.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_PARSE_FAILED": {
+        "description": "The dataset could not be parsed as JSONL / CSV / supported format.",
+        "default_hint": "Open the offending line in a text editor; check for unescaped quotes, BOM, or wrong encoding.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_VALIDATION_FAILED": {
+        "description": "Dataset structure failed semantic validation (missing fields, empty rows, etc.).",
+        "default_hint": "Run with --verbose to see the validation error list.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_FORMAT_UNSUPPORTED": {
+        "description": "Dataset format is unsupported or could not be auto-detected.",
+        "default_hint": "Convert to one of the supported formats (JSONL, ShareGPT, Alpaca, OpenAI).",
+        "retryable": "no",
+    },
+    # Configuration
+    "CONFIG_INVALID": {
+        "description": "Configuration object is invalid or malformed.",
+        "default_hint": "Re-check the BACKPROPAGATE_* env vars or your .env file.",
+        "retryable": "no",
+    },
+    "CONFIG_INVALID_SETTING": {
+        "description": "A specific configuration field has an invalid value.",
+        "default_hint": "Compare the value against the expected type described in the error.",
+        "retryable": "no",
+    },
+    # Training / runtime
+    "RUNTIME_TRAINING_FAILED": {
+        "description": "Training crashed for an internal reason (model bug, library mismatch, etc.).",
+        "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
+        "retryable": "sometimes",
+    },
+    "DEP_MODEL_LOAD_FAILED": {
+        "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
+        "default_hint": "Verify model name, HF token, and network access to huggingface.co.",
+        "retryable": "yes",
+    },
+    "RUNTIME_TRAINING_ABORTED": {
+        "description": "Training stopped early (user interrupt, GPU fault, watchdog).",
+        "default_hint": "Inspect the abort reason; the last checkpoint may be usable.",
+        "retryable": "sometimes",
+    },
+    "STATE_CHECKPOINT_INVALID": {
+        "description": "Checkpoint save or load failed (disk full, corrupt file, permission).",
+        "default_hint": "Verify free disk space and write permission on the output directory.",
+        "retryable": "sometimes",
+    },
+    # Export
+    "RUNTIME_EXPORT_FAILED": {
+        "description": "Generic export failure not covered by a more specific code.",
+        "default_hint": "Run with --verbose for the full traceback.",
+        "retryable": "no",
+    },
+    "RUNTIME_LORA_EXPORT_FAILED": {
+        "description": "LoRA adapter export failed.",
+        "default_hint": "Confirm the model has LoRA adapters attached and the output dir is writable.",
+        "retryable": "no",
+    },
+    "RUNTIME_GGUF_EXPORT_FAILED": {
+        "description": "GGUF quantization / export failed.",
+        "default_hint": "Ensure Unsloth is installed or llama.cpp convert script is on PATH.",
+        "retryable": "no",
+    },
+    "RUNTIME_MERGE_EXPORT_FAILED": {
+        "description": "Merge-and-export step failed.",
+        "default_hint": "Re-run with --verbose; verify enough VRAM for the merge.",
+        "retryable": "no",
+    },
+    "DEP_OLLAMA_REGISTRATION_FAILED": {
+        "description": "Failed to register the exported model with the local Ollama daemon.",
+        "default_hint": "Ensure Ollama is installed and running (`ollama --version`); see https://ollama.ai.",
+        "retryable": "yes",
+    },
+    # GPU
+    "RUNTIME_GPU_ERROR": {
+        "description": "Generic GPU failure not covered by a more specific code.",
+        "default_hint": "Check `nvidia-smi`; restart the process if VRAM is wedged.",
+        "retryable": "sometimes",
+    },
+    "DEP_GPU_NOT_AVAILABLE": {
+        "description": "No CUDA-capable GPU detected.",
+        "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
+        "retryable": "no",
+    },
+    "RUNTIME_GPU_OOM": {
+        "description": "GPU ran out of memory (VRAM).",
+        "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
+        "retryable": "no",
+    },
+    "RUNTIME_GPU_TEMPERATURE_CRITICAL": {
+        "description": "GPU temperature exceeded the safety threshold.",
+        "default_hint": "Wait for the GPU to cool; improve case airflow; lower --batch-size.",
+        "retryable": "yes",
+    },
+    "RUNTIME_GPU_MONITORING_FAILED": {
+        "description": "GPU monitoring (pynvml) probe failed.",
+        "default_hint": "Install pynvml: `pip install pynvml`.",
+        "retryable": "sometimes",
+    },
+    # SLAO
+    "RUNTIME_SLAO_ERROR": {
+        "description": "Generic SLAO multi-run merge error.",
+        "default_hint": "Run with --verbose; inspect the merge_history.json for the failing run.",
+        "retryable": "no",
+    },
+    "RUNTIME_SLAO_MERGE_FAILED": {
+        "description": "SLAO merge step failed for a specific run.",
+        "default_hint": "Check the run's LoRA dir for shape mismatches.",
+        "retryable": "no",
+    },
+    "STATE_SLAO_CHECKPOINT_INVALID": {
+        "description": "SLAO checkpoint save or load failed.",
+        "default_hint": "Verify free disk space and write permission on the checkpoint directory.",
+        "retryable": "sometimes",
+    },
+    # Aggregate / partial
+    "PARTIAL_BATCH_OPERATION": {
+        "description": "A batched operation completed with per-item failures (aggregate).",
+        "default_hint": "Inspect the error list in the exception details; retry only failed items.",
+        "retryable": "sometimes",
+    },
+    "PARTIAL_SUCCESS": {
+        "description": "Operation completed but some sub-steps failed (exit code 3).",
+        "default_hint": "Outputs may be usable; review the warning summary above.",
+        "retryable": "no",
+    },
+}
+
+
+# Cause-category specific hints for ModelLoadError (C-CLI-006). Each maps a
+# coarse failure category to a concrete next step. ``unknown`` falls back to
+# today's generic hint so behavior is preserved when the category is omitted.
+_MODEL_LOAD_HINTS: dict[str, str] = {
+    "auth": (
+        "Check your HuggingFace token: `huggingface-cli login`. If the model is "
+        "gated, accept the terms on its model page."
+    ),
+    "not_found": (
+        "Verify the model name spelling (HF model names are case-sensitive). "
+        "Common: 'unsloth/Qwen2.5-7B-Instruct-bnb-4bit'. Search: "
+        "https://huggingface.co/models"
+    ),
+    "network": (
+        "Check internet access to huggingface.co. If you are behind a proxy, "
+        "set HTTPS_PROXY and consider HF_HUB_DISABLE_TELEMETRY=1."
+    ),
+    "version": (
+        "Update transformers / unsloth / peft: "
+        "`pip install -U backpropagate[unsloth]`."
+    ),
+    "unknown": (
+        "Check that the model name is correct and you have network access"
+    ),
+}
+
+
+def print_error_code_catalog() -> None:
+    """Print the ``ERROR_CODES`` registry as a human-readable table.
+
+    Called from ``backprop info --error-codes`` for operator reference. The
+    output is tab-delimited so it composes with grep / awk in CI scripts but
+    stays readable in a terminal.
+    """
+    # Header
+    print("code\tretryable\tdescription")
+    print("----\t---------\t-----------")
+    for code in sorted(ERROR_CODES.keys()):
+        entry = ERROR_CODES[code]
+        print(f"{code}\t{entry['retryable']}\t{entry['description']}")
+        # Indent the default hint on a continuation line so the column shape
+        # stays scannable.
+        print(f"\t\t  hint: {entry['default_hint']}")
 
 
 # =============================================================================
@@ -423,26 +650,55 @@ class TrainingError(BackpropagateError):
 
 
 class ModelLoadError(TrainingError):
-    """Failed to load model or tokenizer."""
+    """Failed to load model or tokenizer.
+
+    The optional ``cause_category`` argument lets the raise site classify the
+    underlying failure (auth / not_found / network / version / unknown). When
+    set, the default suggestion is drawn from the per-category remediation
+    table instead of the generic "check name + network" line — addresses the
+    Stage C audit gap that 401, 404, and network errors all got the same hint.
+
+    Backend raise sites in ``trainer.py`` are responsible for inspecting the
+    underlying transformers / HF Hub exception and passing the right category.
+    Today this is forward-compatible: callers that omit ``cause_category``
+    behave byte-identically to pre-Stage-C ModelLoadError.
+    """
 
     def __init__(
         self,
         model_name: str,
         reason: str,
         suggestion: str | None = None,
+        cause_category: ModelLoadCauseCategory | None = None,
     ):
         self.model_name = model_name
         self.reason = reason
+        self.cause_category = cause_category
+
+        # Hint precedence:
+        #   1. explicit ``suggestion`` arg wins (caller knows best)
+        #   2. otherwise, look up by cause_category if provided
+        #   3. otherwise, fall back to the pre-Stage-C generic line
+        if suggestion is None and cause_category is not None:
+            effective_hint = _MODEL_LOAD_HINTS.get(
+                cause_category, _MODEL_LOAD_HINTS["unknown"]
+            )
+        else:
+            effective_hint = suggestion or _MODEL_LOAD_HINTS["unknown"]
+
+        details = {"model_name": model_name, "reason": reason}
+        if cause_category is not None:
+            details["cause_category"] = cause_category
 
         super().__init__(
             f"Failed to load model '{model_name}': {reason}",
-            details={"model_name": model_name, "reason": reason},
-            suggestion=suggestion or "Check that the model name is correct and you have network access",
+            details=details,
+            suggestion=effective_hint,
             code="DEP_MODEL_LOAD_FAILED",
             # Most ModelLoadError instances come from transient network
             # failures (HF Hub 503 / timeout). Callers may inspect
-            # ``details['reason']`` if they want to distinguish from
-            # "model name not found".
+            # ``details['reason']`` or ``cause_category`` to decide whether
+            # a retry is worth attempting (e.g. auth/not_found ⇒ don't retry).
             retryable=True,
         )
 

@@ -27,6 +27,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .exceptions import (
@@ -311,15 +312,33 @@ def cmd_train(args: argparse.Namespace) -> int:
         2   runtime error (model load failure, GPU OOM, IO error, unexpected crash)
         130 interrupted (Ctrl+C)
     """
+    import uuid
+
     from .trainer import Trainer, TrainingCallback
 
     _print_header("Backpropagate Training")
 
-    # argparse marks --data as required (see create_parser), so this only fires
-    # if cmd_train is called programmatically without going through the parser.
+    # C-CLI-007 first-run friendliness: argparse no longer marks --data as
+    # required so we get to print a multi-line "try one of these" message
+    # instead of argparse's terse required-argument error.
     if not args.data:
-        _print_error("--data is required")
+        _print_error("No dataset specified.")
+        _print_info("Try one of:")
+        _print_info("  backprop train --data my_data.jsonl --steps 100")
+        _print_info("  backprop train --data huggingface_dataset_name --steps 100")
+        _print_info("See `backprop train --help` for all options.")
         return EXIT_USER_ERROR
+
+    # C-CLI-007 run_id correlation token: emit ONE line to stderr at the top
+    # of the command so the operator can quote it when asking for help. The
+    # trainer also generates its own UUID-based run_id internally; this CLI-
+    # level token is for cross-process correlation (logs vs terminal vs
+    # support bug report). 12 hex chars is plenty for human use.
+    cli_run_id = uuid.uuid4().hex[:12]
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
 
     _print_info(f"Model: {args.model}")
     _print_info(f"Dataset: {args.data}")
@@ -328,6 +347,12 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_info(f"Samples: {args.samples}")
 
     try:
+        # C-CLI-002 progress feedback: phase banner before the model load so a
+        # 30-300s silence doesn't read like the tool is wedged. transformers /
+        # datasets already emit tqdm progress to stderr during from_pretrained,
+        # so the banner contextualises that output instead of competing with it.
+        _print_info("==> Loading model (this may take 30s-3min for 7B models)...")
+
         # Create trainer
         trainer = Trainer(
             model=args.model,
@@ -346,6 +371,11 @@ def cmd_train(args: argparse.Namespace) -> int:
 
         callback = TrainingCallback(on_step=on_step)
 
+        # C-CLI-002 phase banner: training begins. The ProgressBar handles
+        # per-step output but a banner gives the user a clear "we're now in
+        # the training loop" signal so dataset-load time vs step time is
+        # distinguishable in the terminal stream.
+        _print_info(f"==> Training ({args.steps} steps)...")
         print()  # Blank line before progress
 
         # Train
@@ -366,6 +396,11 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_kv("Final loss", f"{result.final_loss:.4f}")
         _print_kv("Duration", f"{result.duration_seconds:.1f}s")
         _print_kv("Saved to", str(save_path))
+        # Surface the trainer's internal run_id if it leaked onto the result
+        # object so the operator can grep manifests against it post-hoc.
+        trainer_run_id = getattr(result, "run_id", None)
+        if trainer_run_id:
+            _print_kv("Trainer run_id", str(trainer_run_id))
 
         return EXIT_OK
 
@@ -441,13 +476,27 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         3   partial success (some runs failed but the overall result is usable)
         130 interrupted (Ctrl+C)
     """
+    import uuid
+
     from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer, RunResult
 
     _print_header("Backpropagate Multi-Run Training")
 
+    # C-CLI-007 first-run friendliness (parallel to cmd_train).
     if not args.data:
-        _print_error("--data is required")
+        _print_error("No dataset specified.")
+        _print_info("Try one of:")
+        _print_info("  backprop multi-run --data my_data.jsonl --runs 5 --steps 100")
+        _print_info("  backprop multi-run --data huggingface_dataset_name --runs 5")
+        _print_info("See `backprop multi-run --help` for all options.")
         return EXIT_USER_ERROR
+
+    # C-CLI-007 run_id correlation token to stderr at top of long command.
+    cli_run_id = uuid.uuid4().hex[:12]
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
 
     _print_info(f"Model: {args.model}")
     _print_info(f"Dataset: {args.data}")
@@ -457,6 +506,13 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
     _print_info(f"Merge mode: {args.merge_mode}")
 
     try:
+        # C-CLI-002 phase banner — the multi-run trainer also loads + tokenises
+        # before the first step. Give the operator a "we're in setup, not
+        # wedged" signal.
+        _print_info(
+            "==> Setting up multi-run trainer "
+            "(model load + dataset tokenisation may take several minutes)..."
+        )
         config = MultiRunConfig(
             num_runs=args.runs,
             steps_per_run=args.steps,
@@ -553,6 +609,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         2   runtime error (export failure, disk full, Ollama registration crash)
         130 interrupted (Ctrl+C)
     """
+    import uuid
+
     from .export import (
         export_gguf,
         export_lora,
@@ -562,11 +620,33 @@ def cmd_export(args: argparse.Namespace) -> int:
 
     _print_header("Backpropagate Export")
 
+    # C-CLI-007 first-run friendliness — bare ``backprop export`` (no
+    # positional) now lands here with model_path=None instead of being
+    # rejected by argparse with the terse required-positional error.
+    if args.model_path is None:
+        _print_error("No model path specified.")
+        _print_info("Try one of:")
+        _print_info("  backprop export ./output/lora --format lora")
+        _print_info("  backprop export ./output/lora --format gguf --quantization q4_k_m")
+        _print_info(
+            "  backprop export ./output/lora --format gguf --ollama "
+            "--ollama-name my-model"
+        )
+        _print_info("See `backprop export --help` for all options.")
+        return EXIT_USER_ERROR
+
     # Null-byte rejection up front — Path.resolve on some platforms will raise
     # a less-helpful OSError and obscure the real cause.
     if "\x00" in str(args.model_path):
         _print_error("Model path contains null byte")
         return EXIT_USER_ERROR
+
+    # C-CLI-007 run_id correlation token to stderr at top of long command.
+    cli_run_id = uuid.uuid4().hex[:12]
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
 
     # Anchor the input model path to cwd by default — this matches the
     # documented "export model from current dir / project dir" pattern and
@@ -655,22 +735,34 @@ def cmd_export(args: argparse.Namespace) -> int:
         print()
 
         if args.format == "lora":
+            # C-CLI-002 phase banner — LoRA-only export is fast (no model
+            # load) but the banner still adds a "we're exporting" signal.
+            _print_info("==> Exporting LoRA adapter...")
             result = export_lora(
                 model=model_path,
                 output_dir=output_dir,
             )
         elif args.format == "merged":
-            # Need to load model for merged export
+            # C-CLI-002 phase banner — merged export loads the full model.
             from .trainer import load_model
+            _print_info("==> Loading model for merge (this may take 30s-3min)...")
             model, tokenizer = load_model(str(model_path))
+            _print_info("==> Merging adapters and writing merged checkpoint...")
             result = export_merged(
                 model=model,
                 tokenizer=tokenizer,
                 output_dir=output_dir,
             )
         elif args.format == "gguf":
+            # C-CLI-002 phase banner — GGUF export does model load AND
+            # quantization (each 60-300s for 7B). Surface both phases.
             from .trainer import load_model
+            _print_info("==> Loading model for GGUF export (this may take 30s-3min)...")
             model, tokenizer = load_model(str(model_path))
+            _print_info(
+                f"==> Quantizing to {args.quantization} "
+                "(this may take several minutes for 7B models)..."
+            )
             result = export_gguf(
                 model=model,
                 tokenizer=tokenizer,
@@ -744,29 +836,136 @@ def cmd_export(args: argparse.Namespace) -> int:
 # COMMAND: info
 # =============================================================================
 
-def cmd_info(_args: argparse.Namespace) -> int:
-    """Execute the info command."""
+def _detect_installed_versions() -> dict[str, str]:
+    """Best-effort version probe for the heavy optional dependencies.
+
+    Uses ``importlib.metadata`` (no actual import of the package) to avoid
+    triggering side-effectful module init (especially unsloth's torch.compile
+    hook registration). Returns ``"not installed"`` for any package that
+    isn't on the install path. C-CLI-008 / Stage C richer info.
+    """
+    from importlib import metadata
+
+    pkgs = [
+        "transformers",
+        "datasets",
+        "trl",
+        "peft",
+        "unsloth",
+        "torch",
+        "gradio",
+        "pydantic",
+        "wandb",
+    ]
+    out: dict[str, str] = {}
+    for name in pkgs:
+        try:
+            out[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            out[name] = "not installed"
+        except Exception:  # nosec B110 — defensive: don't let info crash
+            out[name] = "unknown"
+    return out
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    """Execute the info command.
+
+    Supported flags (C-CLI-005, C-CLI-008):
+        --error-codes     dump the ERROR_CODES catalog (machine-readable)
+        --json            emit the system info as JSON (for support payloads)
+    """
     from .config import settings
-    from .feature_flags import FEATURES, get_gpu_info, get_system_info
+    from .feature_flags import (
+        FEATURES,
+        INSTALL_HINTS,
+        get_gpu_info,
+        get_system_info,
+    )
     from .gpu_safety import get_gpu_status
+
+    # C-CLI-005: ``backprop info --error-codes`` prints the centralised
+    # exception-code catalog (description + default hint + retryable flag)
+    # so operators can look up a code they see in a terminal without
+    # grepping source. Defined in exceptions.py to keep the registry next to
+    # the exception classes that populate it.
+    if getattr(args, "error_codes", False):
+        from .exceptions import print_error_code_catalog
+
+        print_error_code_catalog()
+        return EXIT_OK
+
+    # Collect everything once so --json and the human view stay in sync.
+    sys_info = get_system_info()
+    gpu_info = get_gpu_info()
+    versions = _detect_installed_versions()
+
+    if getattr(args, "json", False):
+        # Machine-readable payload for support attachments. Importing json
+        # lazily keeps cold-start cheap when --json isn't used.
+        import json
+
+        from . import __version__ as backprop_version
+
+        payload: dict[str, Any] = {
+            "backpropagate_version": backprop_version,
+            "python_version": sys_info.get("python_version"),
+            "platform": sys_info.get("platform"),
+            "torch_version": versions.get("torch"),
+            "cuda_version": sys_info.get("cuda_version"),
+            "gpu": gpu_info,
+            "features": dict(FEATURES),
+            "package_versions": versions,
+            "config": {
+                "model": settings.model.name,
+                "max_seq_length": settings.model.max_seq_length,
+                "lora_r": settings.lora.r,
+                "learning_rate": settings.training.learning_rate,
+                "output_dir": settings.training.output_dir,
+            },
+        }
+        print(json.dumps(payload, indent=2, default=str))
+        return EXIT_OK
 
     _print_header("Backpropagate System Info")
 
+    # Versions section — moved up so the operator sees the tool's own
+    # version before anything else (C-CLI-008).
+    print(f"\n{Colors.BOLD}Versions{Colors.RESET}")
+    from . import __version__ as backprop_version
+    _print_kv("backpropagate", backprop_version)
+    _print_kv("transformers", versions.get("transformers", "not installed"))
+    _print_kv("datasets", versions.get("datasets", "not installed"))
+    _print_kv("trl", versions.get("trl", "not installed"))
+    _print_kv("peft", versions.get("peft", "not installed"))
+    _print_kv("unsloth", versions.get("unsloth", "not installed"))
+
     # System info
-    sys_info = get_system_info()
     print(f"\n{Colors.BOLD}System{Colors.RESET}")
     _print_kv("Python", sys_info.get("python_version", "unknown"))
     _print_kv("Platform", sys_info.get("platform", "unknown"))
-    _print_kv("PyTorch", sys_info.get("torch_version", "not installed"))
+    _print_kv("PyTorch", versions.get("torch", "not installed"))
     _print_kv("CUDA", sys_info.get("cuda_version", "not available"))
 
-    # GPU info
-    gpu_info = get_gpu_info()
-    if gpu_info:
+    # GPU info — richer block (C-CLI-008): surface device count + per-device
+    # VRAM via torch when available. Falls back to the existing gpu_info dict
+    # when torch isn't installed.
+    if gpu_info and gpu_info.get("available", True):
         print(f"\n{Colors.BOLD}GPU{Colors.RESET}")
-        _print_kv("Device", gpu_info.get("name", "unknown"))
-        _print_kv("VRAM", f"{gpu_info.get('vram_total_gb', 0):.1f} GB")
-        _print_kv("VRAM Free", f"{gpu_info.get('vram_free_gb', 0):.1f} GB")
+        # The dict from feature_flags.get_gpu_info uses the underlying torch
+        # field names (device_name, memory_total, device_count). Fall back to
+        # the legacy names (name, vram_total_gb) if a future refactor renames.
+        device_name = gpu_info.get("device_name") or gpu_info.get("name", "unknown")
+        device_count = gpu_info.get("device_count", 1)
+        _print_kv("Device", str(device_name))
+        _print_kv("Device count", str(device_count))
+        mem_total = gpu_info.get("memory_total")
+        if mem_total is not None:
+            _print_kv("VRAM", f"{mem_total / (1024 ** 3):.1f} GB")
+        elif gpu_info.get("vram_total_gb"):
+            _print_kv("VRAM", f"{gpu_info['vram_total_gb']:.1f} GB")
+        if gpu_info.get("vram_free_gb"):
+            _print_kv("VRAM Free", f"{gpu_info['vram_free_gb']:.1f} GB")
 
         # Temperature if available
         try:
@@ -783,11 +982,20 @@ def cmd_info(_args: argparse.Namespace) -> int:
         print(f"\n{Colors.BOLD}GPU{Colors.RESET}")
         _print_kv("Status", f"{Colors.YELLOW}No GPU detected{Colors.RESET}")
 
-    # Features
+    # Features — also surface the install hint for each missing feature
+    # (C-CLI-015 wasn't in scope but pairs naturally with C-CLI-008).
     print(f"\n{Colors.BOLD}Features{Colors.RESET}")
     for feature, available in FEATURES.items():
-        feature_status = f"{Colors.GREEN}[+]{Colors.RESET}" if available else f"{Colors.DIM}[-]{Colors.RESET}"
+        feature_status = (
+            f"{Colors.GREEN}[+]{Colors.RESET}"
+            if available
+            else f"{Colors.DIM}[-]{Colors.RESET}"
+        )
         print(f"  {feature_status} {feature}")
+        if not available:
+            hint = INSTALL_HINTS.get(feature)
+            if hint:
+                print(f"      install with: {Colors.DIM}{hint}{Colors.RESET}")
 
     # Config
     print(f"\n{Colors.BOLD}Configuration{Colors.RESET}")
@@ -797,7 +1005,13 @@ def cmd_info(_args: argparse.Namespace) -> int:
     _print_kv("Learning rate", str(settings.training.learning_rate))
     _print_kv("Output dir", settings.training.output_dir)
 
-    return 0
+    # Pointer to the error-codes catalog and support flow (C-CLI-005,
+    # C-CLI-008). Cheap signal that survives copy-paste into a support ticket.
+    print(f"\n{Colors.BOLD}Support{Colors.RESET}")
+    _print_info("For the full error-code catalog, run: backprop info --error-codes")
+    _print_info("For support payloads, run: backprop info --json and share the output.")
+
+    return EXIT_OK
 
 
 # =============================================================================
@@ -928,15 +1142,29 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     _print_header("Backpropagate Configuration")
 
+    # C-CLI-003: ``--set`` and ``--reset`` previously printed an INFO line
+    # ("planned") and returned exit code 0 — silently succeeding a feature
+    # that did nothing. A CI script chaining
+    # ``backprop config --set foo=bar && next_step`` would advance unchanged.
+    # Surface the unimplemented state as an error + EXIT_USER_ERROR so
+    # automation can detect it. The words "planned" and "environment" are
+    # preserved so the existing test assertions (which check for those
+    # substrings, not exit code) keep matching when we update them.
     if args.reset:
-        # Reset to defaults
-        _print_info("Config editing via CLI is planned. For now, set BACKPROPAGATE_* environment variables or edit your .env file.")
-        return 0
+        _print_error(
+            "Config reset via CLI is not implemented (planned). "
+            "Reset by removing BACKPROPAGATE_* environment variables or your "
+            ".env file, then re-run."
+        )
+        return EXIT_USER_ERROR
 
     if args.set:
-        # Set a value
-        _print_info("Config editing via CLI is planned. For now, set BACKPROPAGATE_* environment variables or edit your .env file.")
-        return 0
+        _print_error(
+            "Config editing via --set is not implemented (planned). "
+            "Set BACKPROPAGATE_* environment variables or edit your .env "
+            "file directly."
+        )
+        return EXIT_USER_ERROR
 
     # Show current config
     print(f"\n{Colors.BOLD}Model{Colors.RESET}")
@@ -1027,7 +1255,12 @@ Exit codes (Ship Gate B2):
     )
     train_parser.add_argument(
         "--data", "-d",
-        required=True,
+        # C-CLI-007: dropped ``required=True`` so a bare ``backprop train``
+        # gets a friendly multi-line "no dataset specified, try one of these"
+        # message in cmd_train instead of argparse's terse
+        # ``the following arguments are required: --data/-d`` line. cmd_train
+        # checks ``args.data is None`` and returns EXIT_USER_ERROR.
+        default=None,
         help="Dataset path (JSONL, CSV) or HuggingFace dataset name",
     )
     train_parser.add_argument(
@@ -1084,7 +1317,10 @@ Exit codes (Ship Gate B2):
     )
     multi_parser.add_argument(
         "--data", "-d",
-        required=True,
+        # C-CLI-007: dropped ``required=True`` for symmetry with ``train``;
+        # cmd_multi_run prints a friendly multi-line "no dataset specified"
+        # message instead of argparse's terse required-argument error.
+        default=None,
         help="Dataset path or HuggingFace dataset name",
     )
     multi_parser.add_argument(
@@ -1126,6 +1362,11 @@ Exit codes (Ship Gate B2):
     )
     export_parser.add_argument(
         "model_path",
+        # C-CLI-007: positional is nargs='?' so a bare ``backprop export``
+        # falls into cmd_export with a friendly message instead of argparse's
+        # ``the following arguments are required: model_path`` line.
+        nargs="?",
+        default=None,
         help="Path to trained model (LoRA adapter directory)",
     )
     export_parser.add_argument(
@@ -1161,7 +1402,29 @@ Exit codes (Ship Gate B2):
     info_parser = subparsers.add_parser(
         "info",
         help="Show system information",
-        description="Display GPU, features, and configuration info",
+        description=(
+            "Display backpropagate version, Python, PyTorch + CUDA, GPU, "
+            "feature flags, dependency versions, and configuration. "
+            "Use --error-codes to print the centralised exception-code "
+            "catalog, or --json to emit a machine-readable payload suitable "
+            "for support attachments."
+        ),
+    )
+    info_parser.add_argument(
+        "--error-codes",
+        action="store_true",
+        help=(
+            "Print the centralised ERROR_CODES catalog (description + "
+            "default hint + retryable flag) and exit."
+        ),
+    )
+    info_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the system info as JSON (machine-readable; suitable for "
+            "sharing in support tickets)."
+        ),
     )
     info_parser.set_defaults(func=cmd_info)
 
@@ -1233,7 +1496,13 @@ def main(argv: list | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.command:
-        _print_error("No command specified. Run backprop --help for usage.")
+        # First-time-user friendliness (C-CLI-001): bare ``backprop`` invocation
+        # prints the rich help text (subcommand list + examples + exit-code
+        # table) instead of a single terse error line. The exit code stays
+        # non-zero so CI scripts that asserted "no-subcommand is failure" keep
+        # behaving the same — only the output content changes from one line
+        # to the full --help block.
+        parser.print_help(sys.stderr)
         return EXIT_USER_ERROR
 
     # Execute the command

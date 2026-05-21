@@ -1149,9 +1149,10 @@ class TestCmdConfigExtended:
 
         result = cmd_config(args)
 
-        assert result == 0
+        assert result == 1
         captured = capsys.readouterr()
-        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
+        msg = (captured.out + captured.err).lower()
+        assert "planned" in msg or "environment" in msg or "not implemented" in msg
 
     def test_windows_config_shown_on_windows(self, capsys):
         """Windows settings shown on Windows platform."""

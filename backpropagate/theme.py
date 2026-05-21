@@ -296,7 +296,47 @@ input[type="text"]:focus,
 input[type="number"]:focus {
     border-color: var(--ocean-teal) !important;
     box-shadow: 0 0 0 4px rgba(126, 200, 200, 0.25) !important;
-    outline: none !important;
+    /* C-A11Y-001: do NOT use `outline: none` here — Windows High Contrast
+       Mode strips box-shadow, leaving keyboard users with no focus
+       indicator (WCAG 2.4.7 failure). The :focus-visible + forced-colors
+       blocks below restore a proper visible outline. */
+    outline: 2px solid transparent !important;
+    outline-offset: 2px !important;
+}
+
+/* C-A11Y-001: keyboard-only focus indicator. :focus-visible matches
+   focus from keyboard navigation (Tab, arrows) but not from mouse click,
+   so sighted mouse users don't see an outline while keyboard users do. */
+*:focus-visible {
+    outline: 2px solid var(--ocean-teal) !important;
+    outline-offset: 2px !important;
+}
+
+/* C-A11Y-001: Windows High Contrast Mode / forced-colors. Browsers strip
+   all colors including box-shadow in this mode; the `Highlight` system
+   color is the OS's selected-item color, which is always visible. */
+@media (forced-colors: active) {
+    textarea:focus,
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    button:focus,
+    .tabs > .tab-nav > button:focus,
+    *:focus-visible {
+        outline: 2px solid Highlight !important;
+        outline-offset: 2px !important;
+    }
+}
+
+/* C-A11Y-001: prefers-contrast: more — high-contrast users who aren't
+   in full forced-colors mode still need a stronger, color-stable outline. */
+@media (prefers-contrast: more) {
+    textarea:focus,
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    *:focus-visible {
+        outline: 2px solid #FFFFFF !important;
+        outline-offset: 2px !important;
+    }
 }
 
 textarea::placeholder,

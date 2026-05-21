@@ -38,7 +38,9 @@ import logging
 import re
 import secrets
 import sys
+import threading
 import time
+from collections import deque
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -152,6 +154,40 @@ def sanitize_text_input(text: str, max_length: int = 1000) -> str:
     return text.strip()
 
 
+def safe_markdown_fence(content: str, language: str = "") -> str:
+    """Wrap user content in a fenced Markdown code block safely (C-UX-005).
+
+    Dataset / Modelfile / Ollama previews wrap user-supplied content in
+    triple-backtick fences for display in gr.Markdown. If the content
+    itself contains the literal sequence ``` (extremely common — ChatML
+    samples literally include code fences as training data, and Modelfile
+    bodies read from disk can contain arbitrary characters), the outer
+    fence terminates early. The rest renders as raw markdown / creates a
+    Markdown injection vector.
+
+    Defense: count the longest backtick run inside the content and use a
+    fence one tick longer. CommonMark explicitly allows this. We always
+    use at least three backticks so the output renders correctly in
+    historical viewers too.
+    """
+    if content is None:
+        content = ""
+    # Find the longest run of consecutive backticks in the content.
+    longest = 0
+    current = 0
+    for ch in content:
+        if ch == "`":
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    fence_len = max(3, longest + 1)
+    fence = "`" * fence_len
+    lang = language or ""
+    return f"{fence}{lang}\n{content}\n{fence}"
+
+
 # FB-011: user-facing error sanitization.
 # Raw exception messages from torch / transformers / huggingface_hub frequently
 # embed absolute filesystem paths (home directory, HF cache, internal model
@@ -247,6 +283,11 @@ __all__ = ["create_ui", "launch", "SecurityWarning"]
 # MODEL PRESETS
 # =============================================================================
 
+# C-UX-001: "Custom / Other" sentinel makes the custom-model textbox reachable
+# from the dropdown. The start_training / start_multi_run handlers check
+# `model_preset in MODEL_PRESETS`; the sentinel maps to "" so the lookup falls
+# through to sanitize_model_name(custom_model), which is the documented HF path.
+CUSTOM_MODEL_CHOICE = "Custom / Other"
 MODEL_PRESETS = {
     "Qwen 2.5 7B (Recommended)": "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
     "Qwen 2.5 3B (Fast)": "unsloth/Qwen2.5-3B-Instruct-bnb-4bit",
@@ -255,6 +296,7 @@ MODEL_PRESETS = {
     "Llama 3.2 1B": "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",
     "Mistral 7B v0.3": "unsloth/mistral-7b-instruct-v0.3-bnb-4bit",
     "Phi-3 Mini": "unsloth/Phi-3-mini-4k-instruct-bnb-4bit",
+    CUSTOM_MODEL_CHOICE: "",
 }
 
 DATASET_PRESETS = {
@@ -291,11 +333,123 @@ class UIState:
         self.train_start_time: float = 0.0
         self.multi_run_start_time: float = 0.0
         # Stop signal for cooperative cancellation
-        import threading
         self.stop_requested: threading.Event = threading.Event()
 
 
 state = UIState()
+
+
+# =============================================================================
+# EVENT BUFFER (C-UX-002, C-UX-003)
+# =============================================================================
+#
+# Stage B added real backend retry / OOM-shrink / GPU-pause behavior, but those
+# events log to the server only. UI users running share=True + auth have no
+# access to server logs, so a 90-second cooldown pause looks like a freeze.
+#
+# Shape: a bounded thread-safe deque of timestamped strings. The training and
+# multi-run generators emit events into it via _push_event(); a gr.Timer
+# polls _format_event_log() on a 0.5-1s cadence to drive a status banner.
+#
+# We also attach a custom logging handler that mirrors the "hf_retry",
+# "oom_retry", "gpu_paused", "gpu_resumed" loglines from trainer.py /
+# multi_run.py / datasets.py into the deque so this works without requiring
+# the backend to publish a structured queue. The classifier is keyword-based;
+# it errs on the side of surfacing too much rather than too little.
+
+_EVENT_BUFFER_MAX = 100
+_event_buffer: deque[tuple[float, str]] = deque(maxlen=_EVENT_BUFFER_MAX)
+_event_buffer_lock = threading.Lock()
+
+
+def _push_event(message: str) -> None:
+    """Append a timestamped event to the shared UI event buffer.
+
+    Thread-safe. Used by training generators and the log-mirror handler to
+    surface backend events (HF retries, OOM batch-shrink, GPU pause/resume,
+    run lifecycle) into the UI status panel.
+    """
+    if not message:
+        return
+    # Trim a single very long line so a runaway traceback can't dominate the
+    # buffer. 200 chars is enough to convey the event without flooding.
+    message = message.replace("\n", " ").replace("\r", " ")[:200]
+    with _event_buffer_lock:
+        _event_buffer.append((time.time(), message))
+
+
+def _format_event_log(max_lines: int = 30) -> str:
+    """Format the event buffer as a newline-separated string for display."""
+    with _event_buffer_lock:
+        # Take the most-recent max_lines events
+        items = list(_event_buffer)[-max_lines:]
+    if not items:
+        return "(no events yet — run-time messages will appear here)"
+    lines = []
+    for ts, msg in items:
+        # HH:MM:SS local time
+        ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
+        lines.append(f"[{ts_str}] {msg}")
+    return "\n".join(lines)
+
+
+# Keyword tokens for the log-mirror handler. Keep narrow so we don't flood
+# the user with every routine log line — only the events Stage B made real.
+_EVENT_LOG_KEYWORDS = (
+    "Retrying",          # trainer.py HF retry
+    "retry",             # generic retry signal
+    "OOM",               # CUDA OOM
+    "out of memory",     # torch OutOfMemoryError text
+    "batch_size",        # batch-shrink retry surface
+    "GPU at",            # gpu_safety pause line "GPU at 92C, pausing"
+    "pausing",           # pause keyword
+    "resuming",          # resume keyword
+    "cooling",           # gpu cooling
+    "loaded model",      # load_model completion
+    "Loading model",     # load_model start
+    "Downloading",       # HF Hub download
+    "Resolving",         # HF Hub resolve
+)
+
+
+class _UIEventLogHandler(logging.Handler):
+    """Mirror selected log records into the UI event buffer.
+
+    This bridges the Stage B backend (which logs structured retry / pause /
+    resume events) to the Stage C UI (which needs to surface them to users
+    who have no access to server logs). Keyword-gated so we don't push
+    every INFO line to the UI.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+        except Exception:  # pragma: no cover - defensive against bad formatters
+            return
+        if not any(kw.lower() in msg.lower() for kw in _EVENT_LOG_KEYWORDS):
+            return
+        # Tag with the level so the user knows whether it's a warning
+        level = record.levelname
+        _push_event(f"{level}: {_redact_paths(msg)}")
+
+
+def _install_event_log_handler() -> None:
+    """Attach the UI event log handler to the package root logger.
+
+    Idempotent — calling twice doesn't duplicate the handler.
+    """
+    pkg_logger = logging.getLogger("backpropagate")
+    for h in pkg_logger.handlers:
+        if isinstance(h, _UIEventLogHandler):
+            return
+    handler = _UIEventLogHandler(level=logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    pkg_logger.addHandler(handler)
+
+
+def refresh_event_log() -> str:
+    """gr.Timer-bound poll function that returns the current event log."""
+    return _format_event_log()
 
 
 # =============================================================================
@@ -530,8 +684,13 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
         validation_text = loader.validation_report()
 
         # Get preview samples
+        # C-UX-005: safe_markdown_fence escapes user content so a sample
+        # containing ``` doesn't break the outer fence or inject markdown.
         previews = loader.preview(n=3, as_chatml=True)
-        preview_text = "\n\n---\n\n".join([f"**Sample {i+1}:**\n```\n{p}\n```" for i, p in enumerate(previews)])
+        preview_text = "\n\n---\n\n".join([
+            f"**Sample {i+1}:**\n{safe_markdown_fence(p)}"
+            for i, p in enumerate(previews)
+        ])
 
         # Format table data
         table_data = [
@@ -583,8 +742,9 @@ def convert_dataset_format(target_format: str) -> tuple:
         if target_format == "ChatML":
             samples = state.dataset_loader.to_chatml()
             # Show first 3 samples
+            # C-UX-005: safe_markdown_fence escapes converted ChatML text.
             preview = "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```\n{s['text']}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(s['text'])}"
                 for i, s in enumerate(samples[:3])
             ])
             return f"Converted {len(samples)} samples to ChatML format", preview
@@ -645,14 +805,16 @@ def refresh_dataset_preview(show_raw: bool) -> str:
         if show_raw:
             import json
             samples = state.dataset_loader.samples[:3]
+            # C-UX-005: safe fence for raw JSON dump.
             return "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```json\n{json.dumps(s, indent=2)}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(json.dumps(s, indent=2), language='json')}"
                 for i, s in enumerate(samples)
             ])
         else:
             previews = state.dataset_loader.preview(n=3, as_chatml=True)
+            # C-UX-005: safe fence for ChatML preview.
             return "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```\n{p}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(p)}"
                 for i, p in enumerate(previews)
             ])
 
@@ -720,7 +882,10 @@ def start_training(
         raise gr.Error(f"Invalid parameter: {e}", duration=10)
 
     # Resolve and sanitize model name
-    if model_preset in MODEL_PRESETS:
+    # C-UX-001: the "Custom / Other" preset (CUSTOM_MODEL_CHOICE) maps to empty
+    # string, which signals "use the user's custom_model textbox"; fall through
+    # to the sanitize branch for that case.
+    if model_preset in MODEL_PRESETS and model_preset != CUSTOM_MODEL_CHOICE:
         model_name = MODEL_PRESETS[model_preset]
     else:
         model_name = sanitize_model_name(custom_model)
@@ -769,6 +934,10 @@ def start_training(
     state.train_start_time = time.time()
     state.stop_requested.clear()
 
+    # C-UX-002/003: surface run lifecycle into the UI event buffer so users
+    # see what's happening during the otherwise-silent load + train windows.
+    _push_event(f"run_started: model={model_name} samples={max_samples} steps={max_steps}")
+
     # Show info message
     gr.Info(f"Starting training with {model_name}...", duration=3)
 
@@ -791,6 +960,14 @@ def start_training(
         )
 
         status = "📦 Loading model (this may take several minutes for large models)..."
+        # C-UX-002: gr.Progress feedback during the 30s-5min load window so
+        # users don't think the UI is frozen. Granular phases come from
+        # the HF Hub log lines mirrored into the event buffer.
+        try:
+            progress(0.0, desc=f"Downloading and loading {model_name}...")
+        except Exception:  # gr.Progress is best-effort
+            pass
+        _push_event(f"load_model start: {model_name}")
         yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
@@ -800,6 +977,12 @@ def start_training(
         load_start = time.time()
         state.trainer.load_model()
         load_elapsed = time.time() - load_start
+
+        try:
+            progress(1.0, desc=f"Model loaded in {load_elapsed:.0f}s")
+        except Exception:
+            pass
+        _push_event(f"load_model complete in {load_elapsed:.0f}s")
 
         status = f"📦 Model loaded in {load_elapsed:.0f}s"
         yield status, format_loss_plot([]), get_gpu_status_display()
@@ -844,12 +1027,15 @@ def start_training(
         # Show success info
         gr.Info(f"Training complete! Loss: {run.final_loss:.4f}", duration=5)
 
+        _push_event(f"run_completed: final_loss={run.final_loss:.4f} duration={run.duration_seconds:.1f}s")
+
         status = f"✅ Training complete! Final loss: {run.final_loss:.4f}"
         yield status, format_loss_plot(run.loss_history), get_gpu_status_display()
 
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
         gr.Warning("Training interrupted by user", duration=5)
+        _push_event("run_interrupted: stopped by user")
         yield "⚠️ Training interrupted", format_loss_plot(state.loss_history), get_gpu_status_display()
 
     except Exception as e:
@@ -870,6 +1056,7 @@ def start_training(
         else:
             gr.Warning(f"Training failed: {user_msg}", duration=10)
             status = f"❌ Training failed: {user_msg}"
+        _push_event(f"run_failed: {user_msg}")
         yield status, format_loss_plot(state.loss_history), get_gpu_status_display()
 
     finally:
@@ -1002,7 +1189,13 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
         )
 
         if success:
-            return f"Successfully registered with Ollama!\n\nRun with:\n```\nollama run {safe_model_name}\n```"
+            # C-UX-005: safe_model_name has been sanitized but still wrap
+            # via safe_markdown_fence in case future validation widens.
+            run_cmd = f"ollama run {safe_model_name}"
+            return (
+                f"Successfully registered with Ollama!\n\nRun with:\n"
+                f"{safe_markdown_fence(run_cmd)}"
+            )
         else:
             return "Failed to register with Ollama. Check that Ollama is running."
 
@@ -1071,7 +1264,11 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
         )
 
         content = modelfile.read_text()
-        return f"Modelfile created: {modelfile}\n\n```\n{content}\n```"
+        # C-UX-005: Modelfile body is read from disk and may contain
+        # arbitrary content (a malicious file could embed ``` markers to
+        # inject markdown into the operator's screen). safe_markdown_fence
+        # picks a fence longer than any backtick run in the content.
+        return f"Modelfile created: {modelfile}\n\n{safe_markdown_fence(content)}"
 
     except Exception as e:
         logger.exception("Modelfile creation failed")
@@ -1162,7 +1359,8 @@ def start_multi_run(
         )
 
     # Resolve and sanitize model name
-    if model_preset in MODEL_PRESETS:
+    # C-UX-001: same custom-preset fall-through as start_training.
+    if model_preset in MODEL_PRESETS and model_preset != CUSTOM_MODEL_CHOICE:
         model_name = MODEL_PRESETS[model_preset]
     else:
         model_name = sanitize_model_name(custom_model)
@@ -1174,11 +1372,26 @@ def start_multi_run(
             )
 
     # Resolve dataset with path validation for custom datasets
+    # C-UX-010: mirror the Train tab's pattern — if the user uploaded a
+    # dataset in the Dataset tab, use that DatasetLoader directly instead of
+    # forcing the user to retype a path that the Multi-Run tab has no
+    # uploader for. Falls back to the path-validation branch otherwise.
+    mr_dataset_loader_obj = None
     if dataset_preset == "Custom JSONL":
-        is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
-        if not is_valid:
-            raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
-        dataset_name = str(validated_path)
+        if state.dataset_loader is not None:
+            mr_dataset_loader_obj = state.dataset_loader
+            dataset_name = str(state.dataset_loader.source)
+        elif custom_dataset and custom_dataset.strip():
+            is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
+            if not is_valid:
+                raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
+            dataset_name = str(validated_path)
+        else:
+            raise gr.Error(
+                "No custom dataset specified. Upload a file in the Dataset tab or enter a path.",
+                duration=10,
+                title="Missing Dataset",
+            )
     elif dataset_preset in DATASET_PRESETS:
         dataset_name = DATASET_PRESETS[dataset_preset]
     else:
@@ -1190,6 +1403,11 @@ def start_multi_run(
     state.multi_run_current_run = 0
     state.multi_run_start_time = time.time()
 
+    _push_event(
+        f"multi_run_started: model={model_name} runs={num_runs} "
+        f"steps_per_run={steps_per_run}"
+    )
+
     status = f"Initializing SLAO Multi-Run with {model_name}..."
     yield (
         status,
@@ -1197,6 +1415,37 @@ def start_multi_run(
         get_gpu_safety_status(),
         get_multi_run_progress_table(),
     )
+
+    # C-UX-011: adaptive_scaling and layer_scaling are wired in the UI
+    # (mr_adaptive_scaling, mr_layer_scaling checkboxes) but MultiRunConfig
+    # does not currently accept these fields. Adding fields is the backend
+    # team's responsibility (cross-domain). Until that lands, surface a
+    # gr.Warning when the user has enabled either checkbox so they're not
+    # silently no-op'd. TODO(backend): plumb adaptive_scaling and
+    # layer_scaling into MultiRunConfig + the SLAO merge implementation,
+    # then thread the values through the kwargs below.
+    if adaptive_scaling or layer_scaling:
+        enabled = []
+        if adaptive_scaling:
+            enabled.append("Adaptive Scaling")
+        if layer_scaling:
+            enabled.append("Layer Scaling")
+        gr.Warning(
+            f"{' and '.join(enabled)} not yet implemented in the merge "
+            "backend — this run will proceed with the default SLAO "
+            "merge. Tracking issue: backend MultiRunConfig field "
+            "addition.",
+            duration=8,
+        )
+        _push_event(
+            f"WARN: {' and '.join(enabled)} requested but no-op "
+            "(backend field missing). Run proceeds with default SLAO."
+        )
+        logger.warning(
+            "Advanced SLAO checkboxes set but MultiRunConfig has no "
+            "adaptive_scaling/layer_scaling fields: adaptive=%s layer=%s",
+            adaptive_scaling, layer_scaling,
+        )
 
     try:
         config = MultiRunConfig(
@@ -1213,6 +1462,10 @@ def start_multi_run(
             validation_samples=int(val_samples),
             early_stopping=early_stopping,
             early_stopping_patience=int(early_patience),
+            # TODO(backend, C-UX-011): once MultiRunConfig grows
+            # adaptive_scaling: bool and layer_scaling: bool fields, pass
+            # them here. The UI inputs already exist; only the backend
+            # plumbing is missing.
             # Phase 5.3 checkpoint options
             checkpoint_keep_best_n=int(ckpt_keep_best),
             checkpoint_keep_final=ckpt_keep_final,
@@ -1225,6 +1478,16 @@ def start_multi_run(
             state.multi_run_current_run = run_result.run_index
             state.multi_run_loss_history.extend(run_result.loss_history)
             state.multi_run_run_boundaries.append(len(state.multi_run_loss_history))
+            # C-UX-003: surface per-run completion so users see progress
+            # without watching the server log.
+            try:
+                _push_event(
+                    f"multi_run progress: run {run_result.run_index} "
+                    f"complete, loss={run_result.final_loss:.4f}"
+                )
+            except Exception:
+                # Be tolerant — UI event push should never break training
+                pass
 
         state.multi_run_trainer = MultiRunTrainer(
             model=model_name,
@@ -1241,7 +1504,21 @@ def start_multi_run(
         )
 
         # Run the multi-run training
-        result = state.multi_run_trainer.run(dataset_name)
+        # C-UX-010: prefer the in-memory DatasetLoader (uploaded via the
+        # Dataset tab) when available. If MultiRunTrainer.run() doesn't
+        # accept a DatasetLoader, fall back to the source string. This keeps
+        # the parity with the Train tab without forcing a backend change.
+        mr_dataset_arg: Any
+        if mr_dataset_loader_obj is not None:
+            try:
+                mr_dataset_arg = mr_dataset_loader_obj  # MultiRunTrainer may accept it directly
+                result = state.multi_run_trainer.run(mr_dataset_arg)
+            except TypeError:
+                # Older MultiRunTrainer signature only accepts a string path
+                logger.info("MultiRunTrainer.run did not accept DatasetLoader; falling back to source path")
+                result = state.multi_run_trainer.run(dataset_name)
+        else:
+            result = state.multi_run_trainer.run(dataset_name)
 
         state.multi_run_results = result
         state.multi_run_loss_history = result.aggregate_loss_history
@@ -1249,11 +1526,16 @@ def start_multi_run(
 
         if result.aborted:
             status = f"Multi-run aborted: {result.abort_reason}"
+            _push_event(f"multi_run aborted: {result.abort_reason}")
         else:
             status = (
                 f"Multi-run complete! {result.total_runs} runs, "
                 f"Final loss: {result.final_loss:.4f}, "
                 f"Time: {result.total_duration_seconds/60:.1f}min"
+            )
+            _push_event(
+                f"multi_run_completed: {result.total_runs} runs, "
+                f"final_loss={result.final_loss:.4f}"
             )
 
         yield (
@@ -1276,6 +1558,7 @@ def start_multi_run(
         else:
             error_msg = user_msg
             gr.Warning(f"Multi-run failed: {user_msg}", duration=10)
+        _push_event(f"multi_run_failed: {user_msg}")
         status = f"Multi-run failed: {error_msg}"
         yield (
             status,
@@ -1582,6 +1865,11 @@ def refresh_train_sidebar() -> tuple:
 
 def create_ui() -> gr.Blocks:
     """Create the Gradio UI."""
+    # C-UX-002/003: install the log-mirror handler so Stage B backend
+    # events (HF retry, OOM batch-shrink, GPU pause/resume) end up in the
+    # UI event buffer. Idempotent.
+    _install_event_log_handler()
+
     # Note: In Gradio 6.x, theme and css are passed to launch() not Blocks()
     app: gr.Blocks
     with gr.Blocks(
@@ -1609,7 +1897,20 @@ def create_ui() -> gr.Blocks:
                         train_sidebar_vram = gr.Markdown("**VRAM:** -")
                         train_sidebar_power = gr.Markdown("**Power:** -")
 
-                    train_sidebar_refresh = gr.Button("🔄 Refresh", size="sm")
+                    # C-UX-002/003: Status log surfaces backend events
+                    # (load_model progress, HF retry, OOM batch-shrink,
+                    # GPU pause/resume) so the UI user sees what's
+                    # happening even without access to the server log.
+                    with gr.Accordion("📝 Status log", open=True):
+                        train_status_log = gr.Textbox(
+                            label="Recent events",
+                            value=_format_event_log(),
+                            lines=8,
+                            interactive=False,
+                            max_lines=8,
+                        )
+
+                    train_sidebar_refresh = gr.Button("🔄 Refresh Metrics", size="sm")
 
                     # Quick Start - below metrics for reference
                     with gr.Accordion("🚀 Quick Start", open=False):
@@ -1743,6 +2044,15 @@ def create_ui() -> gr.Blocks:
                     outputs=[custom_dataset],
                 )
 
+                # C-UX-001: toggle the custom-model textbox visible when
+                # the "Custom / Other" preset is selected. Without this the
+                # documented HF-path entry is unreachable from the UI.
+                model_preset.change(
+                    fn=lambda x: gr.update(visible=x == CUSTOM_MODEL_CHOICE),
+                    inputs=[model_preset],
+                    outputs=[custom_model],
+                )
+
                 train_btn.click(
                     fn=start_training,
                     inputs=[
@@ -1771,6 +2081,41 @@ def create_ui() -> gr.Blocks:
                         train_sidebar_power,
                     ],
                 )
+
+                # C-UX-006: auto-refresh the sidebar so 'Live Metrics' is
+                # actually live. 2s cadence is the typical training-dash
+                # value. gr.Timer is Gradio 5+; we try/except so an
+                # unusually old Gradio install degrades gracefully back to
+                # the manual Refresh button.
+                try:
+                    train_metrics_timer = gr.Timer(value=2.0, active=True)
+                    train_metrics_timer.tick(
+                        fn=refresh_train_sidebar,
+                        outputs=[
+                            train_sidebar_step,
+                            train_sidebar_loss,
+                            train_sidebar_speed,
+                            train_sidebar_temp,
+                            train_sidebar_vram,
+                            train_sidebar_power,
+                        ],
+                    )
+                    # C-UX-002/003: poll the event buffer on a snappier
+                    # 0.5s cadence so retry / OOM / pause events appear
+                    # near-immediately in the status log.
+                    train_status_timer = gr.Timer(value=0.5, active=True)
+                    train_status_timer.tick(
+                        fn=refresh_event_log,
+                        outputs=[train_status_log],
+                    )
+                except (AttributeError, TypeError) as _timer_err:
+                    # gr.Timer not available in this Gradio version — log
+                    # and rely on the manual Refresh button. Don't crash.
+                    logger.warning(
+                        "gr.Timer not available (%s); live metrics will "
+                        "require manual refresh.",
+                        _timer_err,
+                    )
 
             # =================================================================
             # MULTI-RUN TAB (SLAO Multi-Run Training)
@@ -1834,8 +2179,19 @@ def create_ui() -> gr.Blocks:
                         dashboard_ckpt_prunable = gr.Markdown("**Prunable:** -")
                         dashboard_ckpt_policy = gr.Markdown("**Policy:** -")
 
+                    # C-UX-002/003: Status log mirrored from the same global
+                    # event buffer that the Train tab sidebar uses.
+                    with gr.Accordion("📝 Status log", open=True):
+                        mr_status_log = gr.Textbox(
+                            label="Recent events",
+                            value=_format_event_log(),
+                            lines=8,
+                            interactive=False,
+                            max_lines=8,
+                        )
+
                     # Refresh button for manual updates
-                    dashboard_refresh_btn = gr.Button("🔄 Refresh", size="sm")
+                    dashboard_refresh_btn = gr.Button("🔄 Refresh Dashboard", size="sm")
 
                 with gr.Row():
                     # Left column - Configuration
@@ -2027,6 +2383,13 @@ def create_ui() -> gr.Blocks:
                     outputs=[mr_custom_dataset],
                 )
 
+                # C-UX-001: same custom-model toggle for the Multi-Run tab.
+                mr_model_preset.change(
+                    fn=lambda x: gr.update(visible=x == CUSTOM_MODEL_CHOICE),
+                    inputs=[mr_model_preset],
+                    outputs=[mr_custom_model],
+                )
+
                 mr_start_btn.click(
                     fn=start_multi_run,
                     inputs=[
@@ -2050,42 +2413,64 @@ def create_ui() -> gr.Blocks:
                 )
 
                 # Dashboard refresh event handler
+                _dashboard_outputs = [
+                    # Live Metrics
+                    dashboard_current_run,
+                    dashboard_current_step,
+                    dashboard_current_loss,
+                    dashboard_eta,
+                    # GPU Status
+                    dashboard_gpu_temp,
+                    dashboard_gpu_vram,
+                    dashboard_gpu_power,
+                    dashboard_gpu_condition,
+                    # SLAO Merge Stats
+                    dashboard_scale_factor,
+                    dashboard_a_matrices,
+                    dashboard_b_matrices,
+                    # Early Stopping
+                    dashboard_val_loss,
+                    dashboard_best_val,
+                    dashboard_patience,
+                    dashboard_early_stop_status,
+                    # Run Timeline
+                    dashboard_total_runs,
+                    dashboard_completed_runs,
+                    dashboard_total_steps,
+                    dashboard_total_samples,
+                    dashboard_total_time,
+                    # Phase 5.3: Checkpoints
+                    dashboard_ckpt_count,
+                    dashboard_ckpt_size,
+                    dashboard_ckpt_best,
+                    dashboard_ckpt_prunable,
+                    dashboard_ckpt_policy,
+                ]
                 dashboard_refresh_btn.click(
                     fn=refresh_dashboard,
-                    outputs=[
-                        # Live Metrics
-                        dashboard_current_run,
-                        dashboard_current_step,
-                        dashboard_current_loss,
-                        dashboard_eta,
-                        # GPU Status
-                        dashboard_gpu_temp,
-                        dashboard_gpu_vram,
-                        dashboard_gpu_power,
-                        dashboard_gpu_condition,
-                        # SLAO Merge Stats
-                        dashboard_scale_factor,
-                        dashboard_a_matrices,
-                        dashboard_b_matrices,
-                        # Early Stopping
-                        dashboard_val_loss,
-                        dashboard_best_val,
-                        dashboard_patience,
-                        dashboard_early_stop_status,
-                        # Run Timeline
-                        dashboard_total_runs,
-                        dashboard_completed_runs,
-                        dashboard_total_steps,
-                        dashboard_total_samples,
-                        dashboard_total_time,
-                        # Phase 5.3: Checkpoints
-                        dashboard_ckpt_count,
-                        dashboard_ckpt_size,
-                        dashboard_ckpt_best,
-                        dashboard_ckpt_prunable,
-                        dashboard_ckpt_policy,
-                    ],
+                    outputs=_dashboard_outputs,
                 )
+
+                # C-UX-006: auto-refresh dashboard so the 'Live Metrics'
+                # panel is actually live mid-training. Same try/except
+                # fallback as the Train tab.
+                try:
+                    mr_dashboard_timer = gr.Timer(value=2.0, active=True)
+                    mr_dashboard_timer.tick(
+                        fn=refresh_dashboard,
+                        outputs=_dashboard_outputs,
+                    )
+                    mr_status_timer = gr.Timer(value=0.5, active=True)
+                    mr_status_timer.tick(
+                        fn=refresh_event_log,
+                        outputs=[mr_status_log],
+                    )
+                except (AttributeError, TypeError) as _timer_err:
+                    logger.warning(
+                        "gr.Timer not available (%s); dashboard will "
+                        "require manual refresh.",
+                        _timer_err,
+                    )
 
             # =================================================================
             # RUNS TAB
@@ -2119,13 +2504,26 @@ def create_ui() -> gr.Blocks:
                     """
                 )
 
+                # C-UX-014: defaults must live under get_ui_output_dir()
+                # so they pass the safe_path validation that all UI sinks
+                # enforce. The old relative paths ('./output/lora' etc.)
+                # were theatrical — they showed a plausible filename but
+                # were guaranteed to fail validation, leaving the user with
+                # "Invalid output path" on a first-time export.
+                _ui_base = get_ui_output_dir()
+                _default_lora_path = str(_ui_base / "lora")
+                _default_gguf_dir = str(_ui_base / "gguf")
+                _default_gguf_file = str(_ui_base / "gguf" / "model-q4_k_m.gguf")
+                _default_modelfile_path = str(_ui_base / "Modelfile")
+
                 with gr.Row():
                     # Left column - Save and Export
                     with gr.Column(scale=1):
                         gr.Markdown("#### Save LoRA Adapter")
                         save_path = gr.Textbox(
                             label="Output Path",
-                            value="./output/lora",
+                            value=_default_lora_path,
+                            info="Default is your UI output directory; validated for safety.",
                         )
                         save_merged = gr.Checkbox(
                             label="Save merged weights (larger but standalone)",
@@ -2148,9 +2546,10 @@ def create_ui() -> gr.Blocks:
                         )
                         export_path = gr.Textbox(
                             label="Output Path",
-                            value="./output/gguf",
+                            value=_default_gguf_dir,
+                            info="Default is your UI output directory; validated for safety.",
                         )
-                        export_btn = gr.Button("Export", variant="primary")
+                        export_btn = gr.Button("Export Model", variant="primary")
                         export_status = gr.Markdown("")
 
                     # Right column - Ollama Integration
@@ -2164,7 +2563,7 @@ def create_ui() -> gr.Blocks:
 
                         ollama_gguf_path = gr.Textbox(
                             label="GGUF File Path",
-                            value="./output/gguf/model-q4_k_m.gguf",
+                            value=_default_gguf_file,
                             placeholder="Path to your exported GGUF file",
                         )
                         ollama_model_name = gr.Textbox(
@@ -2194,7 +2593,8 @@ def create_ui() -> gr.Blocks:
                         with gr.Accordion("Create Modelfile Only", open=False):
                             modelfile_output = gr.Textbox(
                                 label="Modelfile Output Path",
-                                value="./output/Modelfile",
+                                value=_default_modelfile_path,
+                                info="Default is your UI output directory; validated for safety.",
                             )
                             modelfile_btn = gr.Button("Create Modelfile")
                             modelfile_status = gr.Markdown("")
@@ -2291,9 +2691,12 @@ def create_ui() -> gr.Blocks:
 
                         ds_convert_status = gr.Markdown("")
 
+                        # C-UX-014: default into get_ui_output_dir() so the
+                        # path passes validate_path_input(allowed_base=...).
                         ds_export_path = gr.Textbox(
                             label="Export Path",
-                            value="./data/converted.jsonl",
+                            value=str(get_ui_output_dir() / "converted.jsonl"),
+                            info="Default is your UI output directory; validated for safety.",
                         )
                         ds_export_btn = gr.Button("Export Converted Dataset", variant="primary")
                         ds_export_status = gr.Markdown("")

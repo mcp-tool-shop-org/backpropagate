@@ -16,6 +16,8 @@
 
 **Headless LLM fine-tuning in 3 lines. Smart defaults, VRAM-aware batch sizing, multi-run SLAO, and one-click GGUF export for Ollama.**
 
+*SLAO is Single LoRA Continual Learning via Asymmetric Merging — the merge-between-runs technique that prevents catastrophic forgetting in extended fine-tuning campaigns ([paper](https://arxiv.org/abs/2512.23017)).*
+
 *Train LLMs in 3 lines of code. Export to Ollama in one more.*
 
 ## Quick Start
@@ -27,10 +29,23 @@ pip install backpropagate[standard]
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
-trainer.train("my_data.jsonl", steps=100)
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
+trainer.train("examples/quickstart.jsonl", steps=10)
 trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
 ```
+
+The repo ships a small `examples/quickstart.jsonl` (5 ShareGPT-format examples) so the snippet above runs end-to-end on a clean install. For your own training, see [Dataset Format](#dataset-format) below.
+
+### No-code path: Web UI
+
+Prefer a UI to a Python REPL? Install the same extra and run:
+
+```bash
+pip install backpropagate[standard]
+backprop ui --port 7862
+```
+
+The Gradio interface lets you point at a JSONL file, pick a model, train, and export — no Python required. If you want to expose the UI on a public `*.gradio.live` URL, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Dataset Format
 
@@ -41,7 +56,7 @@ Your JSONL training file should have one example per line. The simplest format i
 {"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
 ```
 
-Alpaca (`instruction`/`output`), OpenAI chat (`messages`), and raw text formats are also supported.
+Alpaca (`instruction`/`output`), OpenAI chat (`messages`), and raw text formats are also supported. See `examples/quickstart.jsonl` for a copyable starting point.
 
 ## Why Backpropagate?
 
@@ -86,9 +101,36 @@ pip install backpropagate[full]        # Everything
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
+### Platform prerequisites
+
+Backpropagate handles the runtime quirks (multiprocessing, xformers on RTX 40/50, dataloader workers on Windows). It does **not** handle the install-time platform pain — fix those first:
+
+- **CUDA toolkit version.** PyTorch is published per-CUDA — picking the wrong wheel silently installs CPU-only torch. Use the picker at <https://pytorch.org/get-started/locally/> for the exact `pip install torch ...` command for your driver. Run `nvidia-smi` to see your driver / CUDA version.
+- **Windows.** Visual Studio Build Tools (C++) and CMake are required for the `[export]` extra (`llama-cpp-python` builds from source). `bitsandbytes` wheel is published for Windows natively now (>= 0.43); older guides mentioning `bitsandbytes-windows` are stale.
+- **macOS.** GPU training is **not supported** — no CUDA. You can install Backpropagate to run *inference* on an exported GGUF via Ollama, but `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`. Use a CUDA machine for training.
+- **Linux.** Most distros work out of the box. If you're using the PyPI binary release, note that the Linux build uses CPU-only torch (to stay under GitHub's 2 GB release-asset cap); install with the matching CUDA wheel from pytorch.org first.
+
+For the long-form install troubleshooting, see [the troubleshooting handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/).
+
 ## Configuration
 
 All settings can be overridden with environment variables using the `BACKPROPAGATE_` prefix (e.g., `BACKPROPAGATE_LOG_LEVEL=debug`). A `.env` file in the project root is loaded automatically when the `[validation]` extra is installed.
+
+Common knobs (see [the full env-vars reference](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/) for everything):
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `BACKPROPAGATE_LOG_JSON` | auto | Force JSON (`true`) or console (`false`) logs |
+| `BACKPROPAGATE_LOG_FILE` | unset | Path to mirror logs into |
+| `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | unset | Skip optional-dep detection at startup for the fastest CLI cold start |
+| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | When `true`, refuses `backprop ui --share` without `--auth` |
+| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Sandbox base for all UI filesystem writes; denylist-validated |
+| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Default model |
+| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Learning rate |
+| `BACKPROPAGATE_LORA__R` | `16` | LoRA rank |
+
+Nested keys use double underscore as the delimiter (Pydantic `env_nested_delimiter` convention).
 
 ## Usage
 
@@ -97,27 +139,31 @@ All settings can be overridden with environment variables using the `BACKPROPAGA
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
 trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
+
+`Qwen/Qwen2.5-7B-Instruct` is the canonical default — the value `Trainer()` resolves when called with no model argument (see [`config.py`](backpropagate/config.py) `ModelConfig.name`). Older examples pinned the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; we switched the default to the official Qwen weights for better reliability ([CHANGELOG v0.1.3](CHANGELOG.md)). Either model works.
 
 ### Multi-Run SLAO Training
 
 ```python
 from backpropagate import Trainer
 
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 
 result = trainer.multi_run(
     dataset="HuggingFaceH4/ultrachat_200k",
     num_runs=5,
     steps_per_run=100,
     samples_per_run=1000,
-    merge_mode="slao",  # Smart LoRA merging
+    merge_mode="slao",  # Single LoRA Continual Learning via Asymmetric Merging
 )
 ```
+
+SLAO (Single LoRA Continual Learning via Asymmetric Merging) implements the [Merge before Forget](https://arxiv.org/abs/2512.23017) paper: orthogonal A-matrix init via QR decomposition, asymmetric A/B handling, and time-aware `λ(i) = 1/√i` scaling. The CLI flag is `--samples` (the underlying field is `samples_per_run`).
 
 ### Export to Ollama
 
@@ -134,12 +180,38 @@ register_with_ollama(result.path, "my-finetuned-model")
 ### CLI
 
 ```bash
-backprop train --data my_data.jsonl --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --steps 100
+backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
 backprop info
 ```
+
+See the [CLI reference](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/) for every subcommand and flag, or run `backprop <subcommand> --help`.
+
+### Web UI
+
+Launch the Gradio interface locally:
+
+```bash
+backprop ui --port 7862
+```
+
+To expose a public-internet URL, you must pair `--share` with `--auth`:
+
+```bash
+backprop ui --share --auth alice:hunter2
+```
+
+`backprop ui --share` without `--auth` exits with code `1` and the structured error `[INPUT_AUTH_REQUIRED]`. The rationale: `--share` publishes a `*.gradio.live` URL that anyone on the internet can hit, and without auth that means anyone can drive your training pipeline.
+
+To explicitly opt out (e.g. an internal dev environment), set the env var `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. A loud warning will print on every launch — and there's a 5-second grace period before the unauth'd UI binds, so you can `Ctrl-C` if it looks wrong.
+
+Filesystem writes from the UI are sandboxed to a single directory:
+
+- Default: `~/.backpropagate/ui-outputs`
+- Override: `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
+- The override is **denylist-validated** — system / credential paths (`/etc`, `/var`, `~/.ssh`, `~/.aws`, `C:\Windows\System32`, etc.) are refused with `[UI_OUTPUT_DIR_FORBIDDEN]`.
 
 ## Windows Support
 
@@ -182,6 +254,33 @@ backpropagate/
 └── ui_security.py       # Rate limiting, CSRF, file validation
 ```
 
+## Troubleshooting
+
+A short index of the most common first-run failures. The full reverse index lives at [the troubleshooting handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/); every code below is documented at [error codes](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/).
+
+| Symptom | Code | Fix |
+|---------|------|-----|
+| GPU runs out of memory mid-training | `RUNTIME_GPU_OOM` | OOM auto-recovery (B-002) halves batch size up to 3 times automatically. To opt out: `Trainer(oom_recovery=False)`. To force smaller: `--batch-size 1`. |
+| HF Hub returns 401 / "model not found" | `DEP_MODEL_LOAD_FAILED` | `huggingface-cli login` and re-try. For typos, copy the exact id from <https://huggingface.co/models>. |
+| Bad model name typo | `INPUT_VALIDATION_FAILED` or `DEP_MODEL_LOAD_FAILED` | Verify the `org/name` identifier at <https://huggingface.co/models>. |
+| `register_with_ollama` connection refused | `DEP_OLLAMA_REGISTRATION_FAILED` | Start the daemon: `ollama serve`. Install from <https://ollama.com>. Retryable. |
+| Disk full during checkpoint save | `STATE_CHECKPOINT_INVALID` | Atomic writes leave a `.partial` directory on crash — safe to delete. Previous good checkpoint is intact. |
+| Training paused / aborted on GPU overheat | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 monitor pauses on NVML temp threshold; resumes automatically as the GPU cools. Improve airflow or lower sustained load. |
+| `backprop ui --share` rejected | `INPUT_AUTH_REQUIRED` | Pass `--auth user:password`, or set `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` to opt out (loud warning). |
+| Multi-run "validation overlap" | `CONFIG_INVALID` (Stage A backend B-001) | Lower `--samples` below the training-pool size, increase dataset, or disable validation. |
+| GGUF export failed on first try | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; on Windows you also need Visual C++ Build Tools + CMake. |
+
+## Reporting bugs
+
+When something fails, Backpropagate prints a `run_started run_id=<uuid>` line at startup and binds the same id to checkpoint manifests, SLAO merge history, and structured log lines. Include the `run_id` in any bug report — it lets a maintainer correlate every log line, every checkpoint, and every merge for that exact run.
+
+A good bug report includes:
+
+1. **`run_id`** — the uuid printed at startup (also available as `TrainingRun.run_id` and `RunResult.run_id`).
+2. **The error code** — the `[CODE_NAME]: message` line in stderr is what to grep for; see [error codes](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) for the catalog.
+3. **The redacted command line.** Stderr in non-verbose mode is automatically redacted (Bearer tokens, `sk-*`, `hf_*`, AWS keys, `password=`/`token=`/`api_key=` pairs are scrubbed) — safe to paste. For the full unredacted traceback, re-run with `--verbose`, but review before posting.
+4. **Python / PyTorch versions, GPU model, OS.** `backprop info` prints all of this in one go.
+
 ## Privacy
 
 All training happens locally on your GPU. Backpropagate makes no network requests except to download models from HuggingFace (which you initiate). No telemetry, no cloud dependency.
@@ -191,11 +290,13 @@ All training happens locally on your GPU. Backpropagate makes no network request
 | Category | Score | Notes |
 |----------|-------|-------|
 | A. Security | 6/8 | SECURITY.md, trust model, no secrets/telemetry, safe_path(). MCP items skipped |
-| B. Error Handling | 3/7 | Structured exceptions + exit codes + no raw stacks. MCP/desktop/vscode skipped |
+| B. Error Handling | 3/7* | Structured exceptions + exit codes + no raw stacks. MCP/desktop/vscode skipped. *Re-audit pending — Stage B (May 2026) substantially extended the surface (stable code registry, `run_id` correlation, OOM auto-recovery, Unsloth fallback, redacted stderr, `--share`+`--auth` gating); the next coordinator pass will re-grade this row. |
 | C. Operator Docs | 4/7 | README, CHANGELOG, LICENSE, --help. Logging/MCP/complex skipped |
 | D. Shipping Hygiene | 6/9 | verify.sh, version=tag, 5 scanners in CI, dependabot, python_requires, clean build |
 | E. Identity | 4/4 | Logo, translations, landing page, metadata |
-| **Total** | **23/31** | 14 items skipped with justification · `shipcheck audit` passes 100% |
+| **Total** | **23/31** | 14 items skipped with justification · `shipcheck audit` passes 100% · Audit date: 2026-02-27 (B-row re-audit queued for v1.0.6) |
+
+Design history and what each line item maps to: see [ROADMAP.md](ROADMAP.md) — all Week 1–4 items are shipped in v1.0.5.
 
 ## License
 

@@ -167,12 +167,14 @@ Prefixes:
 ### Bug Reports
 
 Include:
+- **`run_id`** — printed at startup as `run_started run_id=<uuid>` and exposed as `TrainingRun.run_id` / `RunResult.run_id`. This correlates every log line, checkpoint, and SLAO merge for the failing run; it is the single most useful thing in a bug report.
+- **The structured error code** — the `[CODE_NAME]: message` line in stderr. See the full catalog at `site/src/content/docs/handbook/error-codes.md` or the rendered handbook page.
 - Python version
 - PyTorch version
-- GPU model and VRAM
+- GPU model and VRAM (a copy-paste of `backprop info` covers all four)
 - Operating system
 - Minimal reproduction code
-- Full error traceback
+- **Error traceback** — stderr in non-verbose mode is automatically redacted (Bearer tokens, `sk-*`, `hf_*`, AWS access keys, `password=`/`token=`/`api_key=` pairs are scrubbed), so it is **safe to paste** as-is. For the full unredacted output, re-run with `--verbose` and review the output for any secrets before posting.
 
 ### Feature Requests
 

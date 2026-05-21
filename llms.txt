@@ -3,7 +3,7 @@
 > Headless LLM fine-tuning in 3 lines of Python with GGUF export to Ollama.
 
 ## Purpose
-Backpropagate wraps Unsloth/HuggingFace training into a minimal API. It handles VRAM auto-sizing, Windows quirks (multiprocessing, xformers), and multi-run SLAO training to prevent catastrophic forgetting. Export to GGUF and register with Ollama in one call.
+Backpropagate wraps Unsloth/HuggingFace training into a minimal API. It handles VRAM auto-sizing, Windows quirks (multiprocessing, xformers), and multi-run SLAO training to prevent catastrophic forgetting. Export to GGUF and register with Ollama in one call. SLAO expands to "Single LoRA Continual Learning via Asymmetric Merging" (arXiv:2512.23017).
 
 ## Quickstart
 ```bash
@@ -11,36 +11,69 @@ pip install backpropagate[standard]
 ```
 ```python
 from backpropagate import Trainer
-trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
-trainer.train("my_data.jsonl", steps=100)
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
+trainer.train("examples/quickstart.jsonl", steps=10)
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ## Key API (Python)
-- `Trainer(model, lora_r=16, lora_alpha=32, learning_rate=2e-4, batch_size="auto")`
-- `trainer.train(dataset, steps=100, samples=1000)` -> `TrainingRun`
+- `Trainer(model, lora_r=16, lora_alpha=32, learning_rate=2e-4, batch_size="auto", oom_recovery=True, unsloth_fallback=True)`
+- `trainer.train(dataset, steps=100, samples=1000)` -> `TrainingRun` (has `run_id`)
 - `trainer.save(path)` -- save LoRA adapter
 - `trainer.export(format, quantization)` -- export to GGUF
-- `trainer.multi_run(dataset, num_runs=5, steps_per_run=100, merge_mode="slao")` -- multi-run SLAO
+- `trainer.multi_run(dataset, num_runs=5, steps_per_run=100, merge_mode="slao")` -- multi-run SLAO; `RunResult.run_id` is the correlation token
 - `register_with_ollama(gguf_path, name)` -- register model with Ollama
 - `check_gpu_safe()` / `get_gpu_status()` / `GPUMonitor` -- GPU health monitoring
+- `BackpropagateError.to_dict()` -- structured envelope `{type, code, message, retryable, suggestion, details, cause}`
 
 ## Key CLI Commands
 - `backprop train --data <file> --model <name> --steps N`
-- `backprop multi-run --data <file> --runs N --steps N`
+- `backprop multi-run --data <file> --runs N --steps N --samples N` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
 - `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
 - `backprop info` -- system info and feature detection
-- `backprop ui --port 7862` -- launch Gradio web UI
+- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Gradio web UI; `--share` requires `--auth` unless `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`
 - `backprop config` -- show resolved configuration
 
+Exit codes: 0 success, 1 user error, 2 runtime error, 3 partial success.
+
+## Error codes (stable)
+Every exception carries a code drawn from prefixes INPUT_/CONFIG_/DEP_/RUNTIME_/STATE_/PARTIAL_. The codes are stable across class renames and intended for log-grep / bug-report correlation.
+
+- INPUT_VALIDATION_FAILED, INPUT_AUTH_REQUIRED, INPUT_AUTH_INVALID_SHAPE
+- INPUT_DATASET_INVALID, INPUT_DATASET_NOT_FOUND, INPUT_DATASET_PARSE_FAILED, INPUT_DATASET_VALIDATION_FAILED, INPUT_DATASET_FORMAT_UNSUPPORTED
+- CONFIG_INVALID, CONFIG_INVALID_SETTING
+- DEP_MODEL_LOAD_FAILED (retryable), DEP_GPU_NOT_AVAILABLE, DEP_OLLAMA_REGISTRATION_FAILED (retryable)
+- RUNTIME_TRAINING_FAILED, RUNTIME_TRAINING_ABORTED, RUNTIME_EXPORT_FAILED, RUNTIME_LORA_EXPORT_FAILED, RUNTIME_GGUF_EXPORT_FAILED, RUNTIME_MERGE_EXPORT_FAILED
+- RUNTIME_GPU_ERROR, RUNTIME_GPU_OOM (auto-recovered when oom_recovery=True), RUNTIME_GPU_TEMPERATURE_CRITICAL (retryable), RUNTIME_GPU_MONITORING_FAILED
+- RUNTIME_SLAO_ERROR, RUNTIME_SLAO_MERGE_FAILED, SLAO_MERGE_DIVERGED
+- PEFT_API_INCOMPATIBLE, UI_OUTPUT_DIR_FORBIDDEN
+- STATE_CHECKPOINT_INVALID, STATE_SLAO_CHECKPOINT_INVALID
+- PARTIAL_BATCH_OPERATION, PARTIAL_SUCCESS
+
+Full catalog: https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/
+
+## Environment variables
+All settings overridable via BACKPROPAGATE_* prefix; nested keys use double underscore. Highlights:
+- BACKPROPAGATE_LOG_LEVEL (DEBUG/INFO/WARNING/ERROR), BACKPROPAGATE_LOG_JSON, BACKPROPAGATE_LOG_FILE
+- BACKPROPAGATE_DEFER_FEATURE_DETECTION (fast-startup opt-out)
+- BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE (default true; refuses ui --share without --auth)
+- BACKPROPAGATE_UI__OUTPUT_DIR (default ~/.backpropagate/ui-outputs; denylist-validated against /etc, ~/.ssh, etc.)
+- BACKPROPAGATE_MODEL__NAME (default Qwen/Qwen2.5-7B-Instruct), BACKPROPAGATE_TRAINING__LEARNING_RATE, BACKPROPAGATE_LORA__R
+- Group prefixes: MODEL__, LORA__, TRAINING__, DATA__, UI__, WINDOWS__, MULTIRUN__, SECURITY__
+
+Full reference: https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/
+
 ## Constraints
-- Requires CUDA GPU (8GB+ VRAM recommended); CPU-only not supported
+- Requires CUDA GPU (8GB+ VRAM recommended); CPU-only not supported; macOS unsupported for training
 - Python 3.10+, PyTorch 2.0+
 - Modular installs: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[standard]`, `[full]`
-- Windows auto-fixes: pre-tokenization, xformers disable for RTX 40/50 series
+- Windows auto-fixes: pre-tokenization, xformers disable for RTX 40/50 series, dataloader_num_workers=0; train_on_responses auto-disabled on Windows (multiprocessing)
 - Dataset formats (auto-detected): ShareGPT (`conversations` with `from`/`value`), Alpaca (`instruction`/`output`), OpenAI chat (`messages`), ChatML, JSONL with `text` field, raw text, or any HuggingFace dataset name
 - Config via env vars (`BACKPROPAGATE_MODEL__NAME`, etc.) or `.env` file
+- Each training run prints `run_started run_id=<uuid>` — quote this in bug reports for log correlation
+- Stderr in non-verbose mode is automatically redacted (Bearer / sk- / hf_ / AWS keys / password+token+api_key kv pairs)
 
 ## Links
 - Repo: https://github.com/mcp-tool-shop-org/backpropagate
 - PyPI: https://pypi.org/project/backpropagate/
+- Handbook: https://mcp-tool-shop-org.github.io/backpropagate/handbook/

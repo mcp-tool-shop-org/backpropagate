@@ -17,7 +17,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     open-pull-requests-limit: 3
     groups:
       actions:
@@ -27,3 +27,31 @@ updates:
       - "ci"
     commit-message:
       prefix: "ci"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(docker)"
+
+  - package-ecosystem: "npm"
+    directory: "/site"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      astro-deps:
+        patterns:
+          - "@astrojs/*"
+          - "astro"
+          - "@starlight/*"
+      site-dev:
+        dependency-type: "development"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(site)"

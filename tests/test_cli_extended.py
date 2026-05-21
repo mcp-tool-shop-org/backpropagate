@@ -784,10 +784,24 @@ class TestCmdInfoExtended:
 
 
 class TestCmdUI:
-    """Tests for cmd_ui command."""
+    """Tests for cmd_ui command.
 
-    def test_ui_import_error(self, capsys):
-        """Missing gradio shows helpful error."""
+    v1.1.0 (2026-05-21): the Web UI migrated from Gradio (in-process launch)
+    to Reflex (subprocess via ``reflex run``). The CLI-layer share+auth gate
+    is preserved end-to-end — the tests below pin it through the new
+    subprocess boundary instead of the old in-process ``launch()`` call.
+    The mocking surface moved from ``backpropagate.ui.launch`` to
+    ``backpropagate.cli.subprocess.run``.
+    """
+
+    @staticmethod
+    def _mock_subprocess_result(returncode: int = 0) -> MagicMock:
+        result = MagicMock()
+        result.returncode = returncode
+        return result
+
+    def test_ui_import_error(self, capsys, monkeypatch):
+        """Missing Reflex (no [ui] extra) shows helpful error."""
         import builtins
 
         from backpropagate import cli as cli_module
@@ -799,29 +813,28 @@ class TestCmdUI:
             verbose=False,
         )
 
-        # Simulate ImportError when trying to import backpropagate.ui
+        # Simulate ImportError when cmd_ui tries to import reflex.
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
-            if name == 'backpropagate.ui' or (args and 'ui' in str(args)):
-                raise ImportError("No module named 'gradio'")
+            if name == "reflex":
+                raise ImportError("No module named 'reflex'")
             return original_import(name, *args, **kwargs)
 
-        with patch.object(builtins, '__import__', side_effect=mock_import):
-            # cmd_ui should catch the ImportError and return 1
+        with patch.object(builtins, "__import__", side_effect=mock_import):
             result = cli_module.cmd_ui(args)
 
-            # Verify it returns error code
-            assert result == 1
-            captured = capsys.readouterr()
-            # Should show error about missing gradio
-            assert "gradio" in captured.err.lower() or "ui" in captured.err.lower() or result == 1
+        assert result == 1
+        captured = capsys.readouterr()
+        combined = (captured.err + captured.out).lower()
+        assert "ui" in combined or "reflex" in combined or "install" in combined
 
     def test_auth_invalid_format(self, capsys):
         """Auth string without colon raises error."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch"):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -834,14 +847,14 @@ class TestCmdUI:
             assert result == 1
             captured = capsys.readouterr()
             assert "Invalid auth format" in captured.err
+            mock_run.assert_not_called()
 
     def test_auth_parsed_correctly(self, capsys):
-        """user:pass format parsed into tuple."""
+        """user:pass format parses into tuple AND exports BACKPROPAGATE_UI_AUTH."""
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -852,17 +865,16 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once()
-            call_kwargs = mock_launch.call_args[1]
-            assert call_kwargs['auth'] == ("testuser", "testpass")
+            mock_run.assert_called_once()
+            env = mock_run.call_args.kwargs["env"]
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "testuser:testpass"
 
     def test_auth_with_colon_in_password(self, capsys):
         """Password can contain colons."""
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -873,21 +885,23 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            call_kwargs = mock_launch.call_args[1]
-            assert call_kwargs['auth'] == ("user", "pass:with:colons")
+            env = mock_run.call_args.kwargs["env"]
+            # The password half includes the trailing colons; we preserve the
+            # original user:password shape in the env var (Reflex side parses).
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "user:pass:with:colons"
 
     def test_launch_success(self, capsys):
-        """Successful UI launch.
+        """Successful UI launch via subprocess.
 
-        Note: F-001 enforcement requires --auth when --share is on (unless
-        BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false is set). To keep
-        this test asserting the happy path, we supply --auth USER:PASS.
+        Note: F-001 enforcement requires --auth when --share is on. The
+        --share flag is preserved at the CLI layer but Reflex has no
+        built-in tunneling, so a warning prints and the subprocess still
+        launches locally.
         """
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7862,
                 share=True,
@@ -898,15 +912,19 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once_with(
-                port=7862, share=True, auth=("user", "password")
-            )
+            mock_run.assert_called_once()
+            # Check the constructed command line passed to reflex.
+            cmd = mock_run.call_args.args[0]
+            assert "reflex" in cmd
+            assert "run" in cmd
+            assert "--frontend-port" in cmd
+            assert str(7862) in cmd
 
     def test_launch_keyboard_interrupt(self, capsys):
         """KeyboardInterrupt during UI exits cleanly."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=KeyboardInterrupt()):
+        with patch("backpropagate.cli.subprocess.run", side_effect=KeyboardInterrupt()):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -927,7 +945,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=RuntimeError("Port in use")):
+        with patch("backpropagate.cli.subprocess.run", side_effect=RuntimeError("Port in use")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -948,7 +966,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=ValueError("Test error")):
+        with patch("backpropagate.cli.subprocess.run", side_effect=ValueError("Test error")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -963,31 +981,21 @@ class TestCmdUI:
     # ------------------------------------------------------------------ #
     # SB-T-001: --share + --auth gate at the CLI layer.
     #
-    # The library-side gate (test_ui_security.py::TestLaunchSecurity::
-    # test_launch_raises_on_share_without_auth) covers the defence-in-depth
-    # path at the launch() call site. These tests pin the CLI-layer
-    # contract — the [INPUT_AUTH_REQUIRED] structured prefix, the env-var
-    # opt-out, and the parsed-auth-tuple hand-off — that the library test
-    # cannot see. Together they form a regression dam: a future refactor
-    # that removes the CLI gate thinking "the library handles it" will
-    # still trip the [INPUT_AUTH_REQUIRED] assertion.
+    # These tests pin the CLI-layer F-001 contract — the [INPUT_AUTH_REQUIRED]
+    # structured prefix, the env-var opt-out, and the parsed-auth-string
+    # hand-off — that has SURVIVED the Gradio→Reflex migration unchanged.
+    # The mocking boundary moved from backpropagate.ui.launch to the
+    # ``backpropagate.cli.subprocess.run`` subprocess call site.
     # ------------------------------------------------------------------ #
 
     def test_cmd_ui_share_without_auth_blocked_by_default(self, capsys, monkeypatch):
-        """--share without --auth blocks with INPUT_AUTH_REQUIRED by default.
-
-        Pins the CLI-layer Wave 1 F-001 gate: when --share is supplied but
-        --auth is omitted, cmd_ui must return 1 AND emit the structured
-        [INPUT_AUTH_REQUIRED] prefix (an operator-facing contract that
-        scripts can parse).
-        """
+        """--share without --auth blocks with INPUT_AUTH_REQUIRED by default."""
         from backpropagate.cli import cmd_ui
 
-        # Make sure the env-var opt-out isn't lingering from another test
         monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
 
-        mock_launch = MagicMock()
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=True,
@@ -999,24 +1007,16 @@ class TestCmdUI:
 
             assert result == 1
             captured = capsys.readouterr()
-            # Structured prefix is the operator contract — pin it specifically
             assert "[INPUT_AUTH_REQUIRED]" in captured.err
-            # And the human-readable reason should mention --auth
             assert "--auth" in captured.err or "--auth" in captured.out
-            # launch() must never be called when the gate fires
-            mock_launch.assert_not_called()
+            mock_run.assert_not_called()
 
     def test_cmd_ui_share_with_auth_allowed(self, capsys):
-        """--share with --auth parses credentials and calls launch().
-
-        Pins the happy path through the CLI gate: the --auth string is split
-        on ':' into a (username, password) tuple AND passed through to
-        launch() AND cmd_ui returns 0.
-        """
+        """--share with --auth parses credentials and launches subprocess."""
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=True,
@@ -1027,25 +1027,29 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once()
-            call_kwargs = mock_launch.call_args.kwargs
-            assert call_kwargs.get("auth") == ("alice", "secret123")
-            assert call_kwargs.get("share") is True
+            mock_run.assert_called_once()
+            env = mock_run.call_args.kwargs["env"]
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
 
     def test_cmd_ui_share_without_auth_opt_out_via_env(self, capsys, monkeypatch):
         """Env opt-out lets --share through without --auth + emits a warning.
 
         Operator override path: setting
         BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false disables the
-        gate so --share without --auth proceeds, BUT the CLI must still emit
-        a loud unauthenticated-share warning so the operator can't miss it.
+        gate so --share without --auth proceeds, BUT the CLI must still
+        emit a loud unauthenticated-share warning AND honor the 5-second
+        grace period before subprocess launch.
         """
         from backpropagate.cli import cmd_ui
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "false")
 
-        mock_launch = MagicMock()
-        with patch("backpropagate.ui.launch", mock_launch):
+        # Patch time.sleep so the grace period doesn't block the test
+        with (
+            patch("backpropagate.cli.subprocess.run") as mock_run,
+            patch("time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=True,
@@ -1056,16 +1060,11 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once()
-            call_kwargs = mock_launch.call_args.kwargs
-            # When auth wasn't supplied, launch() should receive auth=None
-            assert call_kwargs.get("auth") is None
-            assert call_kwargs.get("share") is True
+            mock_run.assert_called_once()
+            # The 5s grace period must run.
+            mock_sleep.assert_called_once_with(5)
 
             captured = capsys.readouterr()
-            # Loud warning required so the unauthenticated-share posture is
-            # not silent. Match on a load-bearing keyword that the production
-            # code uses ("no authentication" / "publicly").
             combined = (captured.err + captured.out).lower()
             assert (
                 "no authentication" in combined
@@ -1074,17 +1073,13 @@ class TestCmdUI:
             ), f"Expected loud unauthenticated-share warning in output, got: {combined!r}"
 
     def test_cmd_ui_share_without_auth_env_opt_in_explicit(self, capsys, monkeypatch):
-        """Setting env to 'true' explicitly is parity with the default.
-
-        Defensive against a future refactor that might invert the default —
-        explicit opt-in must keep the gate active.
-        """
+        """Setting env to 'true' explicitly is parity with the default."""
         from backpropagate.cli import cmd_ui
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "true")
 
-        mock_launch = MagicMock()
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=True,
@@ -1097,21 +1092,16 @@ class TestCmdUI:
             assert result == 1
             captured = capsys.readouterr()
             assert "[INPUT_AUTH_REQUIRED]" in captured.err
-            mock_launch.assert_not_called()
+            mock_run.assert_not_called()
 
     def test_cmd_ui_local_without_share_no_auth_required(self, capsys, monkeypatch):
-        """Local UI (no --share) does NOT require --auth.
-
-        Sanity: the gate only fires when --share is on. Plain local UI
-        with no public exposure must launch without any auth requirement.
-        """
+        """Local UI (no --share) does NOT require --auth."""
         from backpropagate.cli import cmd_ui
 
-        # Default-on regardless of env (default mode)
         monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
 
-        mock_launch = MagicMock()
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -1122,10 +1112,7 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once()
-            call_kwargs = mock_launch.call_args.kwargs
-            assert call_kwargs.get("share") is False
-            assert call_kwargs.get("auth") is None
+            mock_run.assert_called_once()
 
 
 # =============================================================================

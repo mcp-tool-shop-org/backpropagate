@@ -84,7 +84,7 @@ class TestValidatePathInput:
 
     def test_validate_empty_path(self):
         """validate_path_input should reject empty paths."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         is_valid, error, path = validate_path_input("")
         assert is_valid is False
@@ -93,7 +93,7 @@ class TestValidatePathInput:
 
     def test_validate_existing_path(self, tmp_path):
         """validate_path_input should accept existing paths."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
@@ -105,7 +105,7 @@ class TestValidatePathInput:
 
     def test_validate_nonexistent_path(self, tmp_path):
         """validate_path_input should reject nonexistent paths when must_exist=True."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         is_valid, error, path = validate_path_input(
             str(tmp_path / "nonexistent.txt"), must_exist=True
@@ -115,7 +115,7 @@ class TestValidatePathInput:
 
     def test_validate_path_traversal(self, tmp_path):
         """validate_path_input should reject path traversal attempts."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         base_dir = tmp_path / "safe"
         base_dir.mkdir()
@@ -133,14 +133,14 @@ class TestSanitizeModelName:
 
     def test_sanitize_valid_name(self):
         """sanitize_model_name should preserve valid names."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         assert sanitize_model_name("Qwen2.5-7B") == "Qwen2.5-7B"
         assert sanitize_model_name("unsloth/model-name") == "unsloth/model-name"
 
     def test_sanitize_removes_dangerous_chars(self):
         """sanitize_model_name should remove dangerous characters."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         result = sanitize_model_name("model<script>alert('xss')</script>")
         assert "<" not in result
@@ -150,7 +150,7 @@ class TestSanitizeModelName:
 
     def test_sanitize_empty_name(self):
         """sanitize_model_name should handle empty input."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         assert sanitize_model_name("") == ""
         assert sanitize_model_name(None) == ""
@@ -161,7 +161,7 @@ class TestSanitizeTextInput:
 
     def test_sanitize_truncates_long_input(self):
         """sanitize_text_input should truncate long inputs."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         long_text = "a" * 2000
         result = sanitize_text_input(long_text, max_length=100)
@@ -169,7 +169,7 @@ class TestSanitizeTextInput:
 
     def test_sanitize_removes_null_bytes(self):
         """sanitize_text_input should remove null bytes."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         result = sanitize_text_input("hello\x00world")
         assert "\x00" not in result
@@ -177,14 +177,14 @@ class TestSanitizeTextInput:
 
     def test_sanitize_strips_whitespace(self):
         """sanitize_text_input should strip whitespace."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         result = sanitize_text_input("  hello world  ")
         assert result == "hello world"
 
     def test_sanitize_empty_input(self):
         """sanitize_text_input should handle empty input."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         assert sanitize_text_input("") == ""
         assert sanitize_text_input(None) == ""
@@ -195,7 +195,7 @@ class TestGenerateAuthToken:
 
     def test_generate_auth_token_length(self):
         """generate_auth_token should create tokens of appropriate length."""
-        from backpropagate.ui import generate_auth_token
+        from backpropagate.ui_gradio_legacy import generate_auth_token
 
         token = generate_auth_token()
         # 32 bytes base64url encoded = 43 characters
@@ -203,7 +203,7 @@ class TestGenerateAuthToken:
 
     def test_generate_auth_token_unique(self):
         """generate_auth_token should create unique tokens."""
-        from backpropagate.ui import generate_auth_token
+        from backpropagate.ui_gradio_legacy import generate_auth_token
 
         tokens = [generate_auth_token() for _ in range(10)]
         assert len(set(tokens)) == 10  # All unique
@@ -214,9 +214,9 @@ class TestLaunchSecurity:
 
     def test_launch_raises_on_share_without_auth(self):
         """launch should raise ValueError when share=True without auth."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -225,9 +225,9 @@ class TestLaunchSecurity:
 
     def test_launch_no_error_with_auth(self):
         """launch should not raise when share=True with auth."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -236,9 +236,9 @@ class TestLaunchSecurity:
 
     def test_launch_passes_auth_to_gradio(self):
         """launch should pass auth credentials to Gradio."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -255,7 +255,7 @@ class TestUISecurityExports:
 
     def test_security_functions_available(self):
         """Security functions should be importable from ui module."""
-        from backpropagate.ui import (
+        from backpropagate.ui_gradio_legacy import (
             generate_auth_token,
             sanitize_model_name,
             sanitize_text_input,

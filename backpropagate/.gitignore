@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.web
+assets/external/
+*.db
+.states
+
+# Reflex regenerates this on first `reflex run` — pyproject.toml is source-of-truth
+requirements.txt

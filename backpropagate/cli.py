@@ -25,6 +25,7 @@ import argparse
 import logging
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -1039,7 +1040,14 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def cmd_ui(args: argparse.Namespace) -> int:
     """
-    Execute the ui command to launch the Gradio interface.
+    Execute the ui command to launch the Reflex web interface.
+
+    The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This
+    handler now subprocess-launches ``reflex run`` from the directory
+    containing ``rxconfig.py``. All Ship Gate B2 / F-001 / F-003 / FB-012
+    validation runs BEFORE the subprocess launch — auth shape, share+auth
+    requirement, 5-second grace period — so misconfigured launches fail loudly
+    on the CLI side regardless of what the UI framework does.
 
     Exit codes (Ship Gate B2):
         0   UI launched and exited cleanly (including Ctrl+C)
@@ -1047,15 +1055,26 @@ def cmd_ui(args: argparse.Namespace) -> int:
             --share supplied without --auth while the
             BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE setting is on
             (default: on; set to ``false`` to explicitly opt out)
-        2   runtime error — Gradio launch failure
+        2   runtime error — Reflex subprocess failure
     """
+    # Verify Reflex is installed before we do anything else.
     try:
-        from .ui import launch
+        import reflex  # noqa: F401
     except ImportError:
         _print_error("UI dependencies not installed")
         _print_info("Install with: pip install backpropagate[ui]")
         if args.verbose:
             logger.exception("Import error details")
+        return EXIT_USER_ERROR
+
+    # Pull in the framework-agnostic auth-shape validator so a malformed
+    # --auth fails on the CLI side before we hand it to the subprocess.
+    try:
+        from .ui_security import validate_auth_shape
+    except ImportError:
+        # ui_security pulls gradio in for type hints; if [ui] isn't installed
+        # the import above already failed, but be defensive.
+        _print_error("UI security helpers not importable")
         return EXIT_USER_ERROR
 
     _print_header("Backpropagate UI")
@@ -1093,25 +1112,107 @@ def cmd_ui(args: argparse.Namespace) -> int:
             _print_error("Invalid auth format. Use --auth username:password")
             return EXIT_USER_ERROR
 
+    # FB-012: validate the shape at the CLI boundary so a malformed
+    # --auth produces a structured BackpropagateError before subprocess.
+    try:
+        validate_auth_shape(auth)
+    except BackpropagateError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_USER_ERROR
+
     # Loud warning if the user explicitly opted out of the auth requirement
-    # while sharing publicly. The frontend agent layers a Gradio-side warning
-    # too; this stderr line is the CLI signal.
+    # while sharing publicly. The stderr line is the CLI signal; a 5-second
+    # grace period gives them time to Ctrl+C.
     if args.share and not args.auth and not require_auth_for_share:
+        warning_msg = (
+            "WARNING: launching public Reflex UI with NO authentication.\n"
+            "    BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false was set\n"
+            "    explicitly; anyone reaching this port can use the UI.\n"
+            "    Continuing in 5 seconds — Ctrl+C to abort."
+        )
         _print_warning(
             "Sharing publicly with NO authentication. "
             "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false was set "
-            "explicitly; anyone with the *.gradio.live URL can use this UI."
+            "explicitly; anyone reaching this port can use this UI."
         )
+        print(f"\n{warning_msg}\n", file=sys.stderr, flush=True)
+        import time as _time
+        try:
+            _time.sleep(5)
+        except KeyboardInterrupt:
+            print()
+            _print_info("UI launch aborted")
+            return EXIT_INTERRUPTED
+
+    # --share has no first-class Reflex equivalent (no built-in tunneling).
+    # Phase 1 of the migration keeps the flag in argparse but emits a warning
+    # and continues without tunneling; operators should use Cloudflare Tunnel
+    # / ngrok / SSH port-forwarding to expose the local Reflex port.
+    if args.share:
+        _print_warning(
+            "--share is not yet supported by the Reflex UI. "
+            "Use Cloudflare Tunnel / ngrok / SSH port-forwarding to expose "
+            "the local port. Launching locally for now."
+        )
+
+    # Resolve the directory containing rxconfig.py. Reflex requires the
+    # ``app_name`` package to be a direct subdirectory of the cwd, so we use
+    # the package dir (``.../backpropagate/``) which ships
+    # ``rxconfig.py`` + ``ui_app/`` side-by-side.
+    package_dir = Path(__file__).resolve().parent
+    rx_config = package_dir / "rxconfig.py"
+    if not rx_config.exists():
+        _print_error(
+            f"rxconfig.py not found at {rx_config}. "
+            "The Reflex UI requires the package-side rxconfig.py to be present."
+        )
+        _print_info(
+            "Hint: reinstall the [ui] extra, or run "
+            "`python -m backpropagate.ui_app.app` manually."
+        )
+        return EXIT_RUNTIME_ERROR
+
+    # Set env vars that Reflex's state can pick up. ``BACKPROPAGATE_UI_AUTH``
+    # is the agreed handoff for the Reflex side to enforce per-request auth
+    # via FastAPI middleware once Phase 3 wires it. For Phase 1 the variable
+    # is exported but Reflex doesn't read it yet.
+    env = os.environ.copy()
+    if auth:
+        env["BACKPROPAGATE_UI_AUTH"] = f"{auth[0]}:{auth[1]}"
+    env["BACKPROPAGATE_UI_PORT"] = str(args.port)
+
+    # Reflex's port convention: the frontend serves on --frontend-port and
+    # the backend on --backend-port. We map --port to the frontend (what
+    # users hit in the browser) and the backend gets port+1.
+    cmd = [
+        sys.executable,
+        "-m",
+        "reflex",
+        "run",
+        "--frontend-port",
+        str(args.port),
+        "--backend-port",
+        str(args.port + 1),
+    ]
 
     try:
         print()
-        _print_info("Launching Gradio interface...")
-        launch(port=args.port, share=args.share, auth=auth)
-        return EXIT_OK
+        _print_info("Launching Reflex interface...")
+        result = subprocess.run(cmd, env=env, cwd=str(package_dir))
+        return result.returncode if result.returncode is not None else EXIT_OK
     except KeyboardInterrupt:
         print()
         _print_info("UI stopped")
         return EXIT_OK
+    except FileNotFoundError:
+        _print_error(
+            "Failed to launch Reflex — interpreter not found. "
+            "This usually means the [ui] extra wasn't fully installed."
+        )
+        _print_info("Install with: pip install backpropagate[ui]")
+        return EXIT_USER_ERROR
     except UserInputError as e:
         _print_error(f"{e.message}")
         if e.suggestion:

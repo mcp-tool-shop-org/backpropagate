@@ -1,17 +1,19 @@
 """
-Tests for __init__.py lazy loading functionality.
+DEPRECATED — __init__.py lazy-loading tests targeting the Gradio launch path.
 
-Tests cover:
-- Lazy loading of optional features (ui, theme)
-- ImportError with helpful messages when features unavailable
-- __getattr__ mechanism
-- Successful import when features are available
+The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). The lazy
+``_LAZY_IMPORTS`` dict that pointed at ``launch / create_backpropagate_theme /
+get_theme_info / get_css`` is replaced by a deprecation-error dispatcher; the
+tests below assume the old structure and are skipped at collection time. The
+v1.1.0 deprecation behavior gets fresh tests in Phase 3.
 """
 
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.skip(reason="Gradio lazy-load path removed in v1.1.0 (Reflex migration)")
 
 
 class TestLazyImports:

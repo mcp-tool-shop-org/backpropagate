@@ -1,29 +1,29 @@
 """
-Tests for backpropagate.theme module.
+DEPRECATED — Gradio theme tests.
 
-Tests cover:
-- Theme creation and configuration
-- CSS generation
-- Theme info retrieval
-- Color palette constants
-- All exported symbols
+The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). These tests
+target the legacy ``backpropagate.theme_gradio_legacy`` module and are skipped
+at collection time. The Reflex theme tokens live at
+``backpropagate.ui_theme`` and will get fresh tests in Phase 3 of the
+migration plan.
 """
 
+import pytest
 
-# Import module under test
-from backpropagate import theme
-from backpropagate.theme import (
-    ACCENT,
-    CUSTOM_CSS,
-    DARK_COLORS,
-    LIGHT_COLORS,
-    RADIUS,
-    SEMANTIC,
-    SPACING,
-    create_backpropagate_theme,
-    get_css,
-    get_theme_info,
-)
+pytestmark = pytest.mark.skip(reason="Gradio theme removed in v1.1.0 (Reflex migration)")
+
+# Defer the legacy imports so collection works even after the rename.
+theme = pytest.importorskip("backpropagate.theme_gradio_legacy")
+ACCENT = getattr(theme, "ACCENT", None)
+CUSTOM_CSS = getattr(theme, "CUSTOM_CSS", None)
+DARK_COLORS = getattr(theme, "DARK_COLORS", None)
+LIGHT_COLORS = getattr(theme, "LIGHT_COLORS", None)
+RADIUS = getattr(theme, "RADIUS", None)
+SEMANTIC = getattr(theme, "SEMANTIC", None)
+SPACING = getattr(theme, "SPACING", None)
+create_backpropagate_theme = getattr(theme, "create_backpropagate_theme", None)
+get_css = getattr(theme, "get_css", None)
+get_theme_info = getattr(theme, "get_theme_info", None)
 
 
 class TestThemeCreation:

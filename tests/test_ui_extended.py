@@ -27,7 +27,7 @@ class TestUIAvailability:
     def test_ui_module_imports(self):
         """UI module can be imported."""
         try:
-            from backpropagate import ui
+            from backpropagate import ui_gradio_legacy as ui  # legacy alias — Reflex UI in ui_app/
             assert ui is not None
         except ImportError:
             pytest.skip("UI dependencies not installed")
@@ -35,7 +35,7 @@ class TestUIAvailability:
     def test_launch_function_exists(self):
         """Launch function exists."""
         try:
-            from backpropagate.ui import launch
+            from backpropagate.ui_gradio_legacy import launch
             assert callable(launch)
         except ImportError:
             pytest.skip("UI dependencies not installed")
@@ -43,7 +43,7 @@ class TestUIAvailability:
     def test_create_ui_function_exists(self):
         """create_ui function exists."""
         try:
-            from backpropagate.ui import create_ui
+            from backpropagate.ui_gradio_legacy import create_ui
             assert callable(create_ui)
         except ImportError:
             pytest.skip("UI dependencies not installed")
@@ -60,7 +60,7 @@ class TestUITheme:
     def test_theme_creation(self):
         """Custom theme can be created."""
         try:
-            from backpropagate.ui import create_theme
+            from backpropagate.ui_gradio_legacy import create_theme
 
             theme = create_theme()
             assert theme is not None
@@ -73,7 +73,7 @@ class TestUITheme:
     def test_css_available(self):
         """Custom CSS is available."""
         try:
-            from backpropagate.ui import CUSTOM_CSS
+            from backpropagate.ui_gradio_legacy import CUSTOM_CSS
 
             assert isinstance(CUSTOM_CSS, str)
         except ImportError:
@@ -93,7 +93,7 @@ class TestUISecurity:
     def test_rate_limiter_creation(self):
         """Rate limiter can be created."""
         try:
-            from backpropagate.ui import RateLimiter
+            from backpropagate.ui_gradio_legacy import RateLimiter
 
             limiter = RateLimiter(max_calls=10, window_seconds=60)
             assert limiter is not None
@@ -105,7 +105,7 @@ class TestUISecurity:
     def test_rate_limiter_allows_calls(self):
         """Rate limiter allows calls within limit."""
         try:
-            from backpropagate.ui import RateLimiter
+            from backpropagate.ui_gradio_legacy import RateLimiter
 
             limiter = RateLimiter(max_calls=5, window_seconds=60)
 
@@ -119,7 +119,7 @@ class TestUISecurity:
     def test_rate_limiter_blocks_over_limit(self):
         """Rate limiter blocks calls over limit."""
         try:
-            from backpropagate.ui import RateLimiter
+            from backpropagate.ui_gradio_legacy import RateLimiter
 
             limiter = RateLimiter(max_calls=2, window_seconds=60)
 
@@ -134,7 +134,7 @@ class TestUISecurity:
     def test_input_sanitization(self):
         """Input sanitization works."""
         try:
-            from backpropagate.ui import sanitize_input
+            from backpropagate.ui_gradio_legacy import sanitize_input
 
             result = sanitize_input("<script>alert('xss')</script>")
             assert "<script>" not in result
@@ -146,7 +146,7 @@ class TestUISecurity:
     def test_path_validation(self):
         """Path validation prevents traversal."""
         try:
-            from backpropagate.ui import validate_path
+            from backpropagate.ui_gradio_legacy import validate_path
 
             # Valid path should work
             assert validate_path("/home/user/data.jsonl")
@@ -170,7 +170,7 @@ class TestTrainingInterface:
     def test_training_tab_creation(self):
         """Training tab can be created."""
         try:
-            from backpropagate.ui import create_training_tab
+            from backpropagate.ui_gradio_legacy import create_training_tab
 
             with patch("gradio.Tab"):
                 tab = create_training_tab()
@@ -183,7 +183,7 @@ class TestTrainingInterface:
     def test_model_dropdown_options(self):
         """Model dropdown has options."""
         try:
-            from backpropagate.ui import get_model_options
+            from backpropagate.ui_gradio_legacy import get_model_options
 
             options = get_model_options()
             assert isinstance(options, list)
@@ -196,7 +196,7 @@ class TestTrainingInterface:
     def test_training_validation(self):
         """Training parameters are validated."""
         try:
-            from backpropagate.ui import validate_training_params
+            from backpropagate.ui_gradio_legacy import validate_training_params
 
             # Valid params
             errors = validate_training_params(
@@ -223,7 +223,7 @@ class TestTrainingInterface:
     def test_start_training_handler(self):
         """Start training handler works."""
         try:
-            from backpropagate.ui import handle_start_training
+            from backpropagate.ui_gradio_legacy import handle_start_training
 
             with patch("backpropagate.trainer.Trainer") as mock_trainer:
                 mock_instance = MagicMock()
@@ -242,7 +242,7 @@ class TestTrainingInterface:
     def test_stop_training_handler(self):
         """Stop training handler works."""
         try:
-            from backpropagate.ui import handle_stop_training
+            from backpropagate.ui_gradio_legacy import handle_stop_training
 
             result = handle_stop_training()
             # Should return some status
@@ -263,7 +263,7 @@ class TestDatasetInterface:
     def test_dataset_tab_creation(self):
         """Dataset tab can be created."""
         try:
-            from backpropagate.ui import create_dataset_tab
+            from backpropagate.ui_gradio_legacy import create_dataset_tab
 
             with patch("gradio.Tab"):
                 tab = create_dataset_tab()
@@ -279,7 +279,7 @@ class TestDatasetInterface:
             # Create test dataset
             import json
 
-            from backpropagate.ui import preview_dataset
+            from backpropagate.ui_gradio_legacy import preview_dataset
             data_path = tmp_path / "test.jsonl"
             with open(data_path, "w") as f:
                 f.write(json.dumps({"text": "Sample 1"}) + "\n")
@@ -295,7 +295,7 @@ class TestDatasetInterface:
     def test_dataset_validation_display(self):
         """Validation results displayed correctly."""
         try:
-            from backpropagate.ui import format_validation_results
+            from backpropagate.ui_gradio_legacy import format_validation_results
 
             results = {
                 "is_valid": True,
@@ -315,7 +315,7 @@ class TestDatasetInterface:
     def test_format_detection_display(self):
         """Detected format shown correctly."""
         try:
-            from backpropagate.ui import format_detection_result
+            from backpropagate.ui_gradio_legacy import format_detection_result
 
             result = format_detection_result("sharegpt")
             assert "sharegpt" in result.lower()
@@ -337,7 +337,7 @@ class TestGPUMonitoringDisplay:
         """GPU status displayed correctly."""
         try:
             from backpropagate.gpu_safety import GPUCondition, GPUStatus
-            from backpropagate.ui import format_gpu_status
+            from backpropagate.ui_gradio_legacy import format_gpu_status
 
             # Use real GPUStatus object instead of MagicMock
             status = GPUStatus(
@@ -361,7 +361,7 @@ class TestGPUMonitoringDisplay:
     def test_temperature_color_coding(self):
         """Temperature displayed with color coding."""
         try:
-            from backpropagate.ui import get_temperature_color
+            from backpropagate.ui_gradio_legacy import get_temperature_color
 
             color_safe = get_temperature_color(50)
             color_warn = get_temperature_color(80)
@@ -377,7 +377,7 @@ class TestGPUMonitoringDisplay:
     def test_vram_bar_display(self):
         """VRAM usage shown with progress bar."""
         try:
-            from backpropagate.ui import format_vram_display
+            from backpropagate.ui_gradio_legacy import format_vram_display
 
             display = format_vram_display(
                 used_gb=8.0,
@@ -393,7 +393,7 @@ class TestGPUMonitoringDisplay:
     def test_gpu_history_graph(self):
         """Temperature history can be graphed."""
         try:
-            from backpropagate.ui import create_temperature_plot
+            from backpropagate.ui_gradio_legacy import create_temperature_plot
 
             history = [60, 62, 65, 63, 61, 64]
             plot = create_temperature_plot(history)
@@ -415,7 +415,7 @@ class TestExportInterface:
     def test_export_tab_creation(self):
         """Export tab can be created."""
         try:
-            from backpropagate.ui import create_export_tab
+            from backpropagate.ui_gradio_legacy import create_export_tab
 
             with patch("gradio.Tab"):
                 tab = create_export_tab()
@@ -428,7 +428,7 @@ class TestExportInterface:
     def test_format_options(self):
         """Export format options available."""
         try:
-            from backpropagate.ui import EXPORT_FORMATS
+            from backpropagate.ui_gradio_legacy import EXPORT_FORMATS
 
             assert "lora" in EXPORT_FORMATS
             assert "merged" in EXPORT_FORMATS
@@ -441,7 +441,7 @@ class TestExportInterface:
     def test_quantization_options(self):
         """Quantization options available for GGUF."""
         try:
-            from backpropagate.ui import QUANTIZATION_OPTIONS
+            from backpropagate.ui_gradio_legacy import QUANTIZATION_OPTIONS
 
             assert "q4_k_m" in QUANTIZATION_OPTIONS
             assert "q8_0" in QUANTIZATION_OPTIONS
@@ -453,7 +453,7 @@ class TestExportInterface:
     def test_export_handler(self, tmp_path):
         """Export handler works."""
         try:
-            from backpropagate.ui import handle_export
+            from backpropagate.ui_gradio_legacy import handle_export
 
             with patch("backpropagate.export.export_lora") as mock_export:
                 mock_result = MagicMock()
@@ -483,7 +483,7 @@ class TestUICallbacks:
     def test_progress_callback(self):
         """Progress callback updates UI."""
         try:
-            from backpropagate.ui import create_progress_callback
+            from backpropagate.ui_gradio_legacy import create_progress_callback
 
             progress_updates = []
 
@@ -503,7 +503,7 @@ class TestUICallbacks:
     def test_error_callback(self):
         """Error callback shows message."""
         try:
-            from backpropagate.ui import create_error_callback
+            from backpropagate.ui_gradio_legacy import create_error_callback
 
             errors = []
 
@@ -523,7 +523,7 @@ class TestUICallbacks:
     def test_completion_callback(self):
         """Completion callback shows success."""
         try:
-            from backpropagate.ui import create_completion_callback
+            from backpropagate.ui_gradio_legacy import create_completion_callback
 
             completions = []
 
@@ -552,7 +552,7 @@ class TestUIErrorHandling:
         """Training errors displayed correctly."""
         try:
             from backpropagate.exceptions import TrainingError
-            from backpropagate.ui import format_error_message
+            from backpropagate.ui_gradio_legacy import format_error_message
 
             error = TrainingError(
                 message="Out of memory",
@@ -570,7 +570,7 @@ class TestUIErrorHandling:
         """Dataset errors displayed correctly."""
         try:
             from backpropagate.exceptions import DatasetError
-            from backpropagate.ui import format_error_message
+            from backpropagate.ui_gradio_legacy import format_error_message
 
             error = DatasetError(
                 message="Invalid format",
@@ -587,7 +587,7 @@ class TestUIErrorHandling:
     def test_generic_error_display(self):
         """Generic errors displayed correctly."""
         try:
-            from backpropagate.ui import format_error_message
+            from backpropagate.ui_gradio_legacy import format_error_message
 
             error = RuntimeError("Something went wrong")
 
@@ -610,7 +610,7 @@ class TestUILaunch:
     def test_launch_default_settings(self):
         """Launch with default settings."""
         try:
-            from backpropagate.ui import launch
+            from backpropagate.ui_gradio_legacy import launch
 
             with patch("gradio.Blocks.launch") as mock_launch:
                 launch()
@@ -621,7 +621,7 @@ class TestUILaunch:
     def test_launch_custom_port(self):
         """Launch with custom port."""
         try:
-            from backpropagate.ui import launch
+            from backpropagate.ui_gradio_legacy import launch
 
             with patch("gradio.Blocks.launch") as mock_launch:
                 launch(port=7890)
@@ -633,7 +633,7 @@ class TestUILaunch:
     def test_launch_with_share(self):
         """Launch with share enabled requires auth."""
         try:
-            from backpropagate.ui import launch
+            from backpropagate.ui_gradio_legacy import launch
 
             with patch("gradio.Blocks.launch") as mock_launch:
                 launch(share=True, auth=("admin", "password"))
@@ -644,7 +644,7 @@ class TestUILaunch:
     def test_launch_with_auth(self):
         """Launch with authentication."""
         try:
-            from backpropagate.ui import launch
+            from backpropagate.ui_gradio_legacy import launch
 
             with patch("gradio.Blocks.launch") as mock_launch:
                 launch(auth=("user", "pass"))
@@ -664,7 +664,7 @@ class TestUIState:
     def test_training_state_initial(self):
         """Initial training state is correct."""
         try:
-            from backpropagate.ui import TrainingState
+            from backpropagate.ui_gradio_legacy import TrainingState
 
             state = TrainingState()
             assert not state.is_training
@@ -677,7 +677,7 @@ class TestUIState:
     def test_training_state_update(self):
         """Training state updates correctly."""
         try:
-            from backpropagate.ui import TrainingState
+            from backpropagate.ui_gradio_legacy import TrainingState
 
             state = TrainingState()
             state.start_training()
@@ -705,7 +705,7 @@ class TestUIComponents:
     def test_model_selector_component(self):
         """Model selector component works."""
         try:
-            from backpropagate.ui import create_model_selector
+            from backpropagate.ui_gradio_legacy import create_model_selector
 
             with patch("gradio.Dropdown"):
                 selector = create_model_selector()
@@ -718,7 +718,7 @@ class TestUIComponents:
     def test_file_browser_component(self):
         """File browser component works."""
         try:
-            from backpropagate.ui import create_file_browser
+            from backpropagate.ui_gradio_legacy import create_file_browser
 
             with patch("gradio.File"):
                 browser = create_file_browser()
@@ -731,7 +731,7 @@ class TestUIComponents:
     def test_progress_component(self):
         """Progress component works."""
         try:
-            from backpropagate.ui import create_progress_display
+            from backpropagate.ui_gradio_legacy import create_progress_display
 
             with patch("gradio.Progress"):
                 progress = create_progress_display()
@@ -753,7 +753,7 @@ class TestUIAccessibility:
     def test_components_have_labels(self):
         """UI components have accessibility labels."""
         try:
-            from backpropagate.ui import create_ui
+            from backpropagate.ui_gradio_legacy import create_ui
 
             with patch("gradio.Blocks"):
                 ui = create_ui()

@@ -10,7 +10,7 @@ v1.0.5: Production-ready with modular architecture and optional features
 Installation:
     pip install backpropagate              # Core only (minimal)
     pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-    pip install backpropagate[ui]          # + Gradio web UI
+    pip install backpropagate[ui]          # + Reflex web UI (migrated from Gradio in v1.1.0)
     pip install backpropagate[standard]    # unsloth + ui (recommended)
     pip install backpropagate[full]        # Everything
 
@@ -22,7 +22,7 @@ Features (Core):
 
 Features (Optional):
 - [unsloth] 2x faster training with 50% less VRAM
-- [ui] Gradio web interface for training management
+- [ui] Reflex web interface for training management (Radix UI, WebSocket state)
 - [validation] Pydantic configuration validation
 - [export] GGUF export for Ollama/llama.cpp
 - [monitoring] WandB logging and system monitoring
@@ -38,9 +38,11 @@ Usage:
     # Export to GGUF for Ollama
     trainer.export("gguf", quantization="q4_k_m")
 
-    # UI (requires [ui] extra)
-    from backpropagate import launch
-    launch()
+    # UI (requires [ui] extra). The Reflex UI runs as a subprocess managed
+    # by the CLI rather than a Python function, so launch via the CLI:
+    #     backprop ui --port 7862
+    # programmatically:
+    #     from backpropagate.cli import cmd_ui
 """
 
 from typing import Any
@@ -253,15 +255,33 @@ __version__ = _pkg_version("backpropagate")
 
 
 # =============================================================================
-# LAZY LOADING FOR OPTIONAL FEATURES
+# DEPRECATED LAZY-LOADED UI ATTRIBUTES
 # =============================================================================
+#
+# v1.1.0 migrated the Web UI from Gradio (in-process Python launch) to Reflex
+# (subprocess via the CLI). The Python-level ``launch()`` entry point is gone;
+# operators run ``backprop ui --port N`` instead. For backwards compatibility
+# we keep ``__getattr__`` so callers that import the old names get a clear
+# deprecation error pointing at the CLI.
 
-_LAZY_IMPORTS = {
-    # UI features
-    "launch": ("ui", None),  # Special handling
-    "create_backpropagate_theme": ("ui", ".theme"),
-    "get_theme_info": ("ui", ".theme"),
-    "get_css": ("ui", ".theme"),
+_DEPRECATED_UI_ATTRS = {
+    "launch": (
+        "backpropagate.launch() is removed in v1.1.0. The Web UI migrated "
+        "from Gradio to Reflex and is now subprocess-launched via the CLI. "
+        "Run `backprop ui --port 7862` instead."
+    ),
+    "create_backpropagate_theme": (
+        "create_backpropagate_theme() is removed in v1.1.0. The Reflex UI "
+        "uses Radix theme tokens at backpropagate.ui_theme.RADIX_THEME."
+    ),
+    "get_theme_info": (
+        "get_theme_info() is removed in v1.1.0. Inspect "
+        "backpropagate.ui_theme.THEME_TOKENS / LIGHT_TOKENS directly."
+    ),
+    "get_css": (
+        "get_css() is removed in v1.1.0. The Reflex CSS lives at "
+        "backpropagate.ui_theme.TOKENS_CSS."
+    ),
 }
 
 
@@ -269,36 +289,11 @@ def __getattr__(name: str) -> Any:
     """
     Lazy loading for optional features with helpful error messages.
 
-    When a user tries to import an optional feature that isn't installed,
-    this provides a clear error message with installation instructions.
+    When a user tries to import a removed Gradio-era attribute, raise an
+    ImportError pointing at the v1.1.0 Reflex replacement.
     """
-    if name in _LAZY_IMPORTS:
-        feature, module = _LAZY_IMPORTS[name]
-        if not FEATURES.get(feature, False):
-            hint = get_install_hint(feature)
-            raise ImportError(
-                f"'{name}' requires the [{feature}] feature. "
-                f"Install with: {hint}"
-            )
-
-        # Special handling for launch
-        if name == "launch":
-            def _launch(port: int = 7862, share: bool = False) -> None:
-                from .ui import create_ui
-                app = create_ui()
-                app.launch(
-                    server_name="127.0.0.1",
-                    server_port=port,
-                    share=share,
-                    inbrowser=True,
-                )
-            return _launch
-
-        # Import the actual object
-        if module:
-            import importlib
-            mod = importlib.import_module(module, __package__)
-            return getattr(mod, name)
+    if name in _DEPRECATED_UI_ATTRS:
+        raise ImportError(_DEPRECATED_UI_ATTRS[name])
 
     raise AttributeError(f"module 'backpropagate' has no attribute '{name}'")
 
@@ -465,9 +460,4 @@ __all__ = [
     "get_curriculum_chunks",
     "analyze_curriculum",
 
-    # Lazy-loaded (UI)
-    "launch",
-    "create_backpropagate_theme",
-    "get_theme_info",
-    "get_css",
 ]

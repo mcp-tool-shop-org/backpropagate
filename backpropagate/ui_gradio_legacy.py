@@ -1,37 +1,26 @@
 """
-Backpropagate - Gradio 6 Web Interface
-=======================================
+DEPRECATED — Gradio implementation of the Web UI.
 
-A beautiful, Apple-inspired interface for LLM fine-tuning.
+The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This module
+is preserved as reference for the Stage B/C contract behaviors (event buffer,
+output_dir denylist, file-magic validator, auth-shape validation, error
+redaction). The framework-agnostic helpers moved to ui_security.py; the new
+Reflex implementation lives in ui_app/.
 
-Features:
-- Ocean Mist theme (brand consistent with Comfy Headless)
-- Live training progress with loss plots
-- GPU monitoring dashboard
-- Dataset preview and validation
-- Run history and comparison
-- One-click export to multiple formats
+Do not import this module from new code. It will be removed in v1.2.
 
-Security (Production-Hardened):
-- Authentication required when share=True (public URLs)
-- Path validation to prevent traversal attacks
-- Input sanitization for user-provided values
-- Rate limiting with IP tracking for training operations
-- File upload validation (CVE-2024-47872 mitigation)
-- CSRF protection (CVE-2024-1727 mitigation)
-- Security event logging for monitoring
-- Proper gr.Error/gr.Warning/gr.Info for user feedback
+Original docstring (preserved for context)
+==========================================
 
-Based on:
-- Trail of Bits Gradio 5 Security Audit
-- OWASP Web Security Best Practices
+Backpropagate - Gradio 6 Web Interface — Ocean Mist theme, live training
+progress with loss plots, GPU monitoring dashboard, dataset preview, run
+history, one-click export.
 
-Usage:
-    from backpropagate import launch
-    launch(port=7862)
+Security primitives (auth shape validation, file upload validation, rate
+limiting, CSRF protection, error sanitization) moved to ui_security.py.
 
-    # With authentication (required for public sharing)
-    launch(port=7862, share=True, auth=("admin", "password"))
+Based on Trail of Bits Gradio 5 Security Audit and OWASP Web Security Best
+Practices.
 """
 
 import logging
@@ -60,7 +49,7 @@ from .feature_flags import (
 )
 from .gpu_safety import GPUCondition, get_gpu_status
 from .security import PathTraversalError, SecurityWarning, safe_path
-from .theme import create_backpropagate_theme, get_css
+from .theme_gradio_legacy import create_backpropagate_theme, get_css
 
 # Import production security utilities
 from .ui_security import (

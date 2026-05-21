@@ -470,22 +470,27 @@ class TestDatasetImports:
         assert callable(analyze_curriculum)
 
 
-class TestLazyLoadingImports:
-    """Tests for lazy-loaded optional features."""
+class TestDeprecatedLazyLoadingImports:
+    """Tests for the v1.1.0 Gradio-removal deprecation surface.
 
-    def test_launch_lazy_load(self):
-        """launch function is lazy-loaded."""
-        import backpropagate
-        # Check it's in __all__
-        assert "launch" in backpropagate.__all__
-        # Don't actually call it as it may not be available
+    In v1.0.x the package exposed lazy-loaded ``launch / create_backpropagate_theme /
+    get_theme_info / get_css`` attributes. v1.1.0 migrated the Web UI from
+    Gradio to Reflex and the function-call surface is gone; accessing any of
+    those names raises ImportError with a message pointing at the CLI.
+    """
 
-    def test_theme_functions_lazy_load(self):
-        """Theme functions are lazy-loaded."""
+    @pytest.mark.parametrize(
+        "name",
+        ["launch", "create_backpropagate_theme", "get_theme_info", "get_css"],
+    )
+    def test_removed_attribute_raises_import_error(self, name):
         import backpropagate
-        assert "create_backpropagate_theme" in backpropagate.__all__
-        assert "get_theme_info" in backpropagate.__all__
-        assert "get_css" in backpropagate.__all__
+
+        with pytest.raises(ImportError) as exc_info:
+            _ = getattr(backpropagate, name)
+        error_msg = str(exc_info.value)
+        # Each removed name should mention v1.1.0 OR the CLI replacement.
+        assert "v1.1.0" in error_msg or "Reflex" in error_msg or "backprop ui" in error_msg.lower()
 
 
 class TestAllExportsComplete:
@@ -511,12 +516,8 @@ class TestAllExportsComplete:
         """Non-lazy exports in __all__ are importable."""
         import backpropagate
 
-        lazy_items = {"launch", "create_backpropagate_theme", "get_theme_info", "get_css"}
-
+        # v1.1.0: Gradio-era lazy names are removed from __all__; nothing to skip.
         for name in backpropagate.__all__:
-            if name in lazy_items:
-                continue  # Skip lazy-loaded items
-
             assert hasattr(backpropagate, name), f"Missing export: {name}"
 
 
@@ -524,16 +525,18 @@ class TestGetAttrForMissingFeatures:
     """Tests for helpful error messages on missing features."""
 
     def test_missing_feature_error_message(self):
-        """Missing feature provides helpful error message."""
+        """v1.1.0+: accessing removed Gradio launch path raises ImportError with v1.1.0 hint."""
         import backpropagate
-        from backpropagate import FEATURES
 
-        # If UI feature is missing, trying to access launch should give helpful error
-        if not FEATURES.get("ui", False):
-            with pytest.raises(ImportError) as exc_info:
-                _ = backpropagate.launch
-            error_msg = str(exc_info.value)
-            assert "ui" in error_msg.lower() or "install" in error_msg.lower()
+        with pytest.raises(ImportError) as exc_info:
+            _ = backpropagate.launch
+        error_msg = str(exc_info.value)
+        # Should mention v1.1.0 or Reflex or the CLI replacement.
+        assert (
+            "v1.1.0" in error_msg
+            or "Reflex" in error_msg
+            or "backprop ui" in error_msg.lower()
+        )
 
     def test_invalid_attribute_error(self):
         """Invalid attribute raises AttributeError."""

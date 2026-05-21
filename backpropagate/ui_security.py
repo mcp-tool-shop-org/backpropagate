@@ -50,7 +50,49 @@ from threading import Lock
 from typing import Any, Optional, TypeVar
 from urllib.parse import urlparse
 
-import gradio as gr
+# Gradio import is conditional. The Web UI migrated from Gradio to Reflex in
+# v1.1.0; many helpers in this module are framework-agnostic (rate limiter,
+# file validator, auth-shape, error sanitization, path/IP extraction) and
+# should stay importable when neither Gradio nor Reflex is installed.
+# Gradio-specific surfaces (gr.Error wrappers, gr.Request type hints) check
+# GRADIO_AVAILABLE before use; type-hint references to ``gr.Request`` resolve
+# to the lightweight stub below when Gradio is absent so the module body still
+# evaluates without ImportError under [ui] = reflex-only.
+try:
+    import gradio as gr
+    GRADIO_AVAILABLE = True
+except ImportError:  # pragma: no cover — exercised when [ui] uses reflex only
+    GRADIO_AVAILABLE = False
+
+    class _GradioShim:
+        """Stand-in for the ``gradio`` module when it isn't installed.
+
+        Provides a ``Request`` placeholder type for annotations and an
+        ``Error`` subclass that mirrors Gradio's user-facing exception so
+        ``raise gr.Error(...)`` keeps working in unit tests / mocks. The
+        ``Warning`` / ``Info`` shims are no-ops.
+        """
+
+        class Request:  # type: ignore[no-redef]
+            pass
+
+        class Error(Exception):  # type: ignore[no-redef]
+            def __init__(self, message: str, *, duration: int = 10, title: str = "Error") -> None:
+                super().__init__(message)
+                self.duration = duration
+                self.title = title
+
+        @staticmethod
+        def Warning(message: str, *, duration: int = 5, title: str = "Warning") -> None:  # noqa: N802, ARG004
+            _ = (message, duration, title)
+            return None
+
+        @staticmethod
+        def Info(message: str, *, duration: int = 5, title: str = "Info") -> None:  # noqa: N802, ARG004
+            _ = (message, duration, title)
+            return None
+
+    gr = _GradioShim()  # type: ignore[assignment]
 
 __all__ = [
     # Configuration
@@ -110,6 +152,10 @@ __all__ = [
     "DEFAULT_GRADIO_CSP",
     "get_gradio_csp",
     "apply_security_headers",
+    # Framework-agnostic helpers (moved from ui.py during Reflex migration v1.1.0)
+    "safe_markdown_fence",
+    "sanitize_error_for_user",
+    "validate_auth_shape",
 ]
 
 logger = logging.getLogger(__name__)
@@ -2661,3 +2707,227 @@ def apply_security_headers(
     elif hasattr(response, "set_header"):
         for name, value in headers.items():
             response.set_header(name, value)
+
+
+# =============================================================================
+# FRAMEWORK-AGNOSTIC HELPERS (moved from ui.py during Reflex migration v1.1.0)
+#
+# These helpers were authored against the Gradio surface in Stage B/C but their
+# logic is framework-independent — pure string/path/auth manipulation that the
+# Reflex pages call the same way. The moves preserve them as a stable surface
+# across the UI framework migration.
+# =============================================================================
+
+
+def safe_markdown_fence(content: str, language: str = "") -> str:
+    """Wrap user content in a fenced Markdown code block safely (C-UX-005).
+
+    Dataset / Modelfile / Ollama previews wrap user-supplied content in
+    triple-backtick fences for display. If the content itself contains the
+    literal sequence ``` (extremely common — ChatML samples literally include
+    code fences as training data, and Modelfile bodies read from disk can
+    contain arbitrary characters), the outer fence terminates early. The rest
+    renders as raw markdown / creates a Markdown injection vector.
+
+    Defense: count the longest backtick run inside the content and use a
+    fence one tick longer. CommonMark explicitly allows this. We always
+    use at least three backticks so the output renders correctly in
+    historical viewers too.
+    """
+    if content is None:
+        content = ""
+    # Find the longest run of consecutive backticks in the content.
+    longest = 0
+    current = 0
+    for ch in content:
+        if ch == "`":
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    fence_len = max(3, longest + 1)
+    fence = "`" * fence_len
+    lang = language or ""
+    return f"{fence}{lang}\n{content}\n{fence}"
+
+
+# FB-011: user-facing error sanitization.
+# Raw exception messages from torch / transformers / huggingface_hub frequently
+# embed absolute filesystem paths (home directory, HF cache, internal model
+# layout). Surfacing those into the UI toast leaks both PII (the operator's
+# username) and an internal-map of the deployment that attackers shouldn't get
+# from a UI handler. The patterns below redact:
+#   - Unix-style absolute paths starting with /home/, /Users/, /root/
+#   - Windows-style absolute paths under C:\Users\<name>\, including UNC roots
+#   - The HF cache location (~/.cache/huggingface/...)
+#   - Whole tempdirs surfaced by tempfile / shutil
+# Truncate to a fixed limit so a 10 KB pyarrow traceback can't blow up the
+# toast component.
+_REDACTED = "<redacted-path>"
+_PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
+    re.compile(r"/tmp/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),
+    re.compile(r"~?/?\.cache/huggingface/[^\s'\":]*"),
+)
+
+
+def _redact_paths(text: str) -> str:
+    """
+    Replace absolute filesystem paths with ``<redacted-path>`` for UI display.
+
+    Used by ``sanitize_error_for_user`` so trainer / transformers errors that
+    embed the operator's home directory don't leak into the UI toast.
+    """
+    if not text:
+        return text
+    for pat in _PATH_REDACTION_PATTERNS:
+        text = pat.sub(_REDACTED, text)
+    return text
+
+
+def sanitize_error_for_user(
+    exc: BaseException,
+    operation: str,
+    max_length: int = 240,
+) -> tuple[str, str | None]:
+    """
+    Convert a backend exception into a user-safe display message (FB-011).
+
+    Returns a ``(message, suggestion)`` tuple:
+
+    - For ``BackpropagateError`` subclasses, return the structured
+      ``{code}: {message}`` plus the suggestion (already user-facing — these
+      are authored to be safe to display).
+    - For any other exception type, return a generic "Internal error
+      (RUNTIME_UI). Check server logs for details." — the full traceback is
+      still logged server-side via ``logger.exception`` at the call site,
+      so operators see the real cause; users see something actionable
+      without internal paths leaking.
+
+    The ``operation`` argument is folded into the user-facing message
+    ("during training", "during export") so the toast tells the user which
+    handler failed even when the underlying exception is hidden.
+    """
+    from .exceptions import BackpropagateError
+
+    # BackpropagateError: structured, user-authored — surface code + message.
+    if isinstance(exc, BackpropagateError):
+        code = exc.code or "BACKPROPAGATE_ERROR"
+        message = _redact_paths(exc.message or str(exc))
+        if len(message) > max_length:
+            message = message[: max_length - 1] + "…"
+        suggestion = exc.suggestion
+        if suggestion:
+            suggestion = _redact_paths(suggestion)
+            if len(suggestion) > max_length:
+                suggestion = suggestion[: max_length - 1] + "…"
+        return f"{code}: {message}", suggestion
+
+    # Anything else: hide the type + the full message; surface a stable
+    # operator-actionable string with the operation name only.
+    generic = (
+        f"Internal error during {operation} (RUNTIME_UI). "
+        "Check the server logs for full details."
+    )
+    return generic, None
+
+
+def validate_auth_shape(auth: Any) -> None:
+    """
+    FB-012: Validate the shape of the ``auth`` kwarg before passing it to the
+    UI server (Gradio originally; Reflex/FastAPI in v1.1.0+).
+
+    Frameworks' own validation is permissive in ways that can grant
+    unintended access — e.g. an empty list silently disables auth, a
+    one-element tuple raises a confusing internal TypeError, and a list
+    containing a non-tuple element gets coerced. Validate at the launch
+    boundary so misconfigured auth fails loudly rather than degrading to "no
+    auth" or "auth-but-not-in-the-shape-you-think".
+
+    Accepts:
+        - ``None`` (caller's responsibility to enforce share+auth)
+        - A 2-element tuple ``(username, password)`` — both non-empty strings.
+        - A non-empty list of such 2-element tuples (multi-user).
+        - A ``callable`` (Gradio supports custom auth functions; preserved
+          for backward compat though Reflex doesn't use it).
+
+    Rejects everything else with ``BackpropagateError(
+    code="INPUT_AUTH_INVALID_SHAPE")`` and a hint enumerating the accepted
+    shapes.
+    """
+    from .exceptions import BackpropagateError
+
+    if auth is None:
+        return
+
+    if callable(auth):
+        # Callable auth (legacy Gradio) — defer validation to the framework.
+        return
+
+    def _is_credential_pair(value: Any) -> bool:
+        if not isinstance(value, tuple):
+            return False
+        if len(value) != 2:
+            return False
+        username, password = value
+        if not isinstance(username, str) or not isinstance(password, str):
+            return False
+        # Empty strings produce a silently-broken login flow.
+        return bool(username) and bool(password)
+
+    accepted_shapes_hint = (
+        "Accepted shapes: (username, password) tuple of non-empty strings; "
+        "list of such tuples; or a callable (username, password) -> bool. "
+        "Empty strings, empty lists, and non-tuple elements are rejected."
+    )
+
+    if isinstance(auth, tuple):
+        if not _is_credential_pair(auth):
+            raise BackpropagateError(
+                message="auth tuple must be (username, password) of non-empty strings.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "tuple", "length": len(auth)},
+            )
+        return
+
+    if isinstance(auth, list):
+        if not auth:
+            raise BackpropagateError(
+                message="auth list must contain at least one (username, password) tuple — empty lists silently disable auth.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "list", "length": 0},
+            )
+        for index, entry in enumerate(auth):
+            if not _is_credential_pair(entry):
+                raise BackpropagateError(
+                    message=(
+                        f"auth[{index}] must be a (username, password) tuple of non-empty strings."
+                    ),
+                    code="INPUT_AUTH_INVALID_SHAPE",
+                    suggestion=accepted_shapes_hint,
+                    details={"shape": "list", "bad_index": index},
+                )
+        return
+
+    # Anything else (dict, str, int, ...) — reject.
+    raise BackpropagateError(
+        message=(
+            f"auth must be None, a (username, password) tuple, a list of such tuples, "
+            f"or a callable. Got: {type(auth).__name__}"
+        ),
+        code="INPUT_AUTH_INVALID_SHAPE",
+        suggestion=accepted_shapes_hint,
+        details={"shape": type(auth).__name__},
+    )
+
+
+# Internal alias preserved for any code that imported the leading-underscore
+# name from ui.py — those imports will be updated, but the alias prevents
+# transient breakage during the migration.
+_validate_auth_shape = validate_auth_shape

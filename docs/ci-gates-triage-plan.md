@@ -27,6 +27,7 @@ exactly that for each of the four scanners.
 | Semgrep (SAST) | gating (default action behavior) | same | 0 (clean after rollback) |
 | TruffleHog | **removed entirely** | gating with `--only-verified --fail` | n/a — Trivy's built-in secret scanner covers this surface |
 | Security-summary aggregate | advisory (`continue-on-error: true`) | gating | n/a (it's a roll-up of the above) |
+| mypy (typing) | advisory (`continue-on-error: true`) | gating (no override) | 12 errors (see ci-cleanup commit) |
 
 Branch protection on `main` does NOT currently require any security check as
 a gating status. That's intentional during the rollback — once each underlying
@@ -83,6 +84,13 @@ Expected real bugs (pattern from the v1.1.0 work):
   - `python-multipart → 0.0.20+` (CVE-2026-42561)
   - `site/package-lock.json` — likely `astro` / `vite` / `@starlight` minor bumps; check Dependabot's open PRs first, they may cover most.
 - **mypy real type bugs** — the v1.1.0 rollback PR caught `_classify_model_load_cause` (return type `str` → `ModelLoadCauseCategory`) and `cmd_resume` type narrowing. Any new mypy errors since: triage same way.
+- **Fix the 12 mypy errors** (rolled to advisory in the hotfix that added this row to the gate-states table):
+  - `rxconfig.py:17` — Reflex 0.9 dropped the `backend_only=` kwarg; drop it from the `rx.Config(...)` call (real fix, not a typing-only change).
+  - `backpropagate/datasets.py:90` and `backpropagate/trainer.py:131` — `no-any-return`; wrap the returned expression in an explicit `bool(...)` cast.
+  - `backpropagate/multi_run.py:2008` — `asdict()` arg-type narrowing; either `typing.cast(DataclassInstance, x)` or guard with `isinstance(x, …)` first.
+  - `backpropagate/ui_app/pages/multi_run.py:147` and `backpropagate/ui_app/pages/dataset.py:118` — Reflex `Var.length` vs `list.length` typing mismatch; use Reflex's `Var.length()` helper or `len()` against the unwrapped value.
+  - `pyproject.toml` `[tool.mypy.overrides]` — change `module = "backpropagate.ui_app.*"` to `"backpropagate.ui_app.**"` so nested `components/` and `pages/` modules are silenced too (the one-level glob is why most of these errors surface at all).
+  - Acceptance: `mypy backpropagate/ --ignore-missing-imports` exits 0; remove `continue-on-error: true` from the ci.yml mypy step in the same PR.
 
 After Phase 2 the baseline files from Phase 1 should re-run with significantly fewer findings.
 

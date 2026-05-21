@@ -15,9 +15,14 @@ env:
 permissions:
   contents: read
 
+# Release workflows must serialize, not cancel. A rapid re-publish or
+# release-body edit (which retriggers 'release.published') would otherwise
+# kill an in-flight PyInstaller build (10-20 min) and ship a release with
+# zero binaries attached. Group keeps only one build per release tag in
+# flight; queued runs wait rather than cancel.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -47,6 +52,8 @@ jobs:
       - name: Install backpropagate + PyInstaller
         shell: bash
         run: |
+          set -euo pipefail
+
           uv pip install . "pyinstaller>=6.9.0"
 
           # Windows needs pywin32-ctypes for PyInstaller
@@ -62,6 +69,8 @@ jobs:
       - name: Build binary
         shell: bash
         run: |
+          set -euo pipefail
+
           VERSION=${GITHUB_REF_NAME#v}
 
           PLATFORM_EXCLUDES=""
@@ -108,8 +117,32 @@ jobs:
               '${{ env.ENTRYPOINT }}',
           ] + '$PLATFORM_EXCLUDES'.split())"
 
+          # Verify PyInstaller actually produced a binary before renaming.
+          # Without this, a silent build failure would surface only when 'mv'
+          # complains about a missing source file, masking the real error.
+          SRC="dist/${{ env.TOOL_NAME }}${{ matrix.ext }}"
+          if [ ! -f "$SRC" ]; then
+            echo "::error::PyInstaller produced no binary at $SRC"
+            ls -la dist/ || true
+            exit 1
+          fi
+          if [ ! -s "$SRC" ]; then
+            echo "::error::PyInstaller produced an empty binary at $SRC"
+            exit 1
+          fi
+
           OUTNAME="${{ env.TOOL_NAME }}-${VERSION}-${{ matrix.target }}${{ matrix.ext }}"
-          mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"
+          mv "$SRC" "dist/${OUTNAME}"
+
+          # Smoke-test the produced binary so we never upload a non-functional
+          # artifact (e.g., bundled module missing at runtime). --version is
+          # import-light: it exercises the entrypoint shim + minimal import tree.
+          chmod +x "dist/${OUTNAME}" || true
+          if ! "dist/${OUTNAME}" --version; then
+            echo "::error::Binary smoke-test failed (dist/${OUTNAME} --version)"
+            exit 1
+          fi
+
           echo "ASSET_NAME=${OUTNAME}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -131,10 +164,29 @@ jobs:
       - name: Generate checksums
         shell: bash
         run: |
+          set -euo pipefail
+
           VERSION=${GITHUB_REF_NAME#v}
           cd artifacts
-          sha256sum * > "checksums-${VERSION}.txt"
+
+          # Fail loudly if upload-artifact patterns produced zero binaries;
+          # otherwise we would publish an empty checksums file alongside the
+          # release, leaving users unable to verify integrity.
+          shopt -s nullglob
+          files=( * )
+          shopt -u nullglob
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No binary artifacts found in artifacts/ — nothing to checksum"
+            exit 1
+          fi
+
+          sha256sum "${files[@]}" > "checksums-${VERSION}.txt"
           cat "checksums-${VERSION}.txt"
+
+          if [ ! -s "checksums-${VERSION}.txt" ]; then
+            echo "::error::Generated checksums file is empty"
+            exit 1
+          fi
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:

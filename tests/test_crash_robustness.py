@@ -11,6 +11,7 @@ Tests robustness against:
 import os
 import shutil
 
+import pytest
 import torch
 
 from backpropagate.checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy
@@ -235,32 +236,30 @@ class TestSLAOCrashRobustness:
             )
 
     def test_slao_merger_handles_nan_tensors(self):
-        """SLAO merger should handle tensors containing NaN."""
-        merger = SLAOMerger(SLAOConfig())
+        """NaN inputs must raise SLAO_MERGE_DIVERGED, not silently produce garbage."""
+        from backpropagate.exceptions import BackpropagateError
 
-        # Initialize with valid tensors
+        merger = SLAOMerger(SLAOConfig())
         init_state = {
             "layer.lora_A.weight": torch.randn(16, 256),
             "layer.lora_B.weight": torch.randn(32, 16),
         }
         merger.initialize(init_state)
 
-        # Merge with NaN-containing tensors
         nan_tensor = torch.randn(16, 256)
         nan_tensor[0, 0] = float('nan')
-
         state = {
             "layer.lora_A.weight": nan_tensor,
             "layer.lora_B.weight": torch.randn(32, 16),
         }
-        # Should not crash
-        result = merger.merge(state, run_index=2)
-        assert isinstance(result, MergeResult)
+        with pytest.raises(BackpropagateError, match="non-finite|SLAO_MERGE_DIVERGED"):
+            merger.merge(state, run_index=2)
 
     def test_slao_merger_handles_inf_tensors(self):
-        """SLAO merger should handle tensors containing inf."""
-        merger = SLAOMerger(SLAOConfig())
+        """inf inputs must raise SLAO_MERGE_DIVERGED, not silently produce garbage."""
+        from backpropagate.exceptions import BackpropagateError
 
+        merger = SLAOMerger(SLAOConfig())
         init_state = {
             "layer.lora_A.weight": torch.randn(16, 256),
             "layer.lora_B.weight": torch.randn(32, 16),
@@ -269,13 +268,12 @@ class TestSLAOCrashRobustness:
 
         inf_tensor = torch.randn(16, 256)
         inf_tensor[0, 0] = float('inf')
-
         state = {
             "layer.lora_A.weight": inf_tensor,
             "layer.lora_B.weight": torch.randn(32, 16),
         }
-        result = merger.merge(state, run_index=2)
-        assert isinstance(result, MergeResult)
+        with pytest.raises(BackpropagateError, match="non-finite|SLAO_MERGE_DIVERGED"):
+            merger.merge(state, run_index=2)
 
     def test_slao_merger_handles_zero_tensors(self):
         """SLAO merger should handle all-zero tensors."""

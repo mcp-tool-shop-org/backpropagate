@@ -39,7 +39,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import torch
 
-from .exceptions import InvalidSettingError, SLAOCheckpointError, SLAOMergeError
+from .exceptions import (
+    BackpropagateError,
+    InvalidSettingError,
+    SLAOCheckpointError,
+    SLAOMergeError,
+)
 from .security import check_torch_security
 
 logger = logging.getLogger(__name__)
@@ -511,6 +516,7 @@ class SLAOMerger:
         self,
         new_lora_state: dict[str, torch.Tensor],
         run_index: int | None = None,
+        run_id: str | None = None,
     ) -> MergeResult:
         """
         Merge a newly trained LoRA into the accumulated merged LoRA.
@@ -518,9 +524,21 @@ class SLAOMerger:
         Args:
             new_lora_state: State dict from newly trained LoRA
             run_index: Optional run index (auto-increments if not provided)
+            run_id: Optional correlation token threaded into log lines and the
+                error envelope if a divergence (NaN/inf) is detected — see B-001
+                / B-008. Used for triage, never for math.
 
         Returns:
-            MergeResult with merge statistics
+            MergeResult with merge statistics. Populates ``a_norm_before /
+            after`` and ``b_norm_before / after`` (sampled from one
+            representative A and B matrix) so post-mortems can detect silent
+            corruption without re-running the merge.
+
+        Raises:
+            BackpropagateError(code="SLAO_MERGE_DIVERGED"): If a representative
+                merged A or B matrix contains NaN or inf after the merge step.
+                The error carries the run_index, run_id, and offending layer
+                so an operator can rewind to the last healthy checkpoint.
         """
         import time
 
@@ -575,6 +593,28 @@ class SLAOMerger:
         b_count = 0
         total_params = 0
 
+        # B-008: capture sampled before-norms on one representative A and B
+        # matrix so we can populate MergeResult.{a,b}_norm_{before,after} for
+        # post-mortem observability. We pick the FIRST matched key per matrix
+        # type (deterministic given dict ordering on Python 3.7+).
+        rep_a_key: str | None = None
+        rep_b_key: str | None = None
+        a_norm_before: float | None = None
+        b_norm_before: float | None = None
+        for key in new_lora_state:
+            if rep_a_key is None and ".lora_A." in key and key in self._merged_state:
+                rep_a_key = key
+                tensor = self._merged_state[key]
+                if isinstance(tensor, torch.Tensor):
+                    a_norm_before = float(tensor.detach().float().norm().item())
+            if rep_b_key is None and ".lora_B." in key and key in self._merged_state:
+                rep_b_key = key
+                tensor = self._merged_state[key]
+                if isinstance(tensor, torch.Tensor):
+                    b_norm_before = float(tensor.detach().float().norm().item())
+            if rep_a_key is not None and rep_b_key is not None:
+                break
+
         # Merge each parameter
         for key, new_value in new_lora_state.items():
             if not isinstance(new_value, torch.Tensor):
@@ -618,6 +658,55 @@ class SLAOMerger:
 
             total_params += new_value.numel()
 
+        # B-008: sample after-norms on the same representative keys so the
+        # before/after pair is comparable across the merge step.
+        a_norm_after: float | None = None
+        b_norm_after: float | None = None
+        if rep_a_key is not None and rep_a_key in self._merged_state:
+            tensor = self._merged_state[rep_a_key]
+            if isinstance(tensor, torch.Tensor):
+                a_norm_after = float(tensor.detach().float().norm().item())
+        if rep_b_key is not None and rep_b_key in self._merged_state:
+            tensor = self._merged_state[rep_b_key]
+            if isinstance(tensor, torch.Tensor):
+                b_norm_after = float(tensor.detach().float().norm().item())
+
+        # B-008: invariant — both representative norms must be finite. If
+        # either is NaN or inf the merger has silently corrupted the
+        # accumulator (bf16 underflow, prior-merge corruption, etc.).
+        # Raise SLAO_MERGE_DIVERGED with run_id + run_index + offending key
+        # so triage doesn't require re-running the failed merge.
+        def _is_finite(x: float | None) -> bool:
+            if x is None:
+                return True  # nothing was sampled — neutral
+            return math.isfinite(x)
+
+        if not _is_finite(a_norm_after) or not _is_finite(b_norm_after):
+            bad_key = rep_a_key if not _is_finite(a_norm_after) else rep_b_key
+            logger.warning(
+                f"SLAO merge diverged: run_index={self._run_index} "
+                f"run_id={run_id} layer={bad_key} "
+                f"a_norm_after={a_norm_after} b_norm_after={b_norm_after}"
+            )
+            raise BackpropagateError(
+                f"SLAO merge produced non-finite weights at run {self._run_index} "
+                f"(layer={bad_key})",
+                code="SLAO_MERGE_DIVERGED",
+                details={
+                    "run_index": self._run_index,
+                    "run_id": run_id,
+                    "layer": bad_key,
+                    "a_norm_after": a_norm_after,
+                    "b_norm_after": b_norm_after,
+                },
+                suggestion=(
+                    "Rewind to the previous healthy checkpoint and inspect "
+                    "the latest training run for bf16 underflow, exploding "
+                    "gradients, or a corrupted PEFT adapter."
+                ),
+                retryable=False,
+            )
+
         merge_time = time.time() - start_time
 
         result = MergeResult(
@@ -627,6 +716,10 @@ class SLAOMerger:
             b_matrices_merged=b_count,
             total_params_merged=total_params,
             merge_time_seconds=merge_time,
+            a_norm_before=a_norm_before,
+            a_norm_after=a_norm_after,
+            b_norm_before=b_norm_before,
+            b_norm_after=b_norm_after,
         )
 
         if self.config.save_merge_history:
@@ -643,72 +736,129 @@ class SLAOMerger:
         """Get the current merged LoRA state dict."""
         return self._merged_state
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, run_id: str | None = None) -> None:
         """
-        Save the merged LoRA and merge history.
+        Save the merged LoRA and merge history atomically.
+
+        B-006: writes flow into a sibling ``<path>.partial`` directory first,
+        then ``shutil.move()`` promotes it to the final path. If anything
+        raises mid-write the ``.partial`` directory is removed via the
+        ``finally`` clause so the operator never sees a half-written SLAO
+        checkpoint (config.json present, weights missing).
 
         Args:
-            path: Directory path to save to
+            path: Final directory path. Existing contents at this path are
+                overwritten only on successful promotion.
+            run_id: Optional correlation token persisted into merge_history.json
+                under ``run_id`` so operators can grep one identifier across
+                logs + manifests + SLAO history (see B-001).
 
         Raises:
-            SLAOCheckpointError: If save fails
+            SLAOCheckpointError: If save fails. The partial directory is
+                cleaned up before the exception escapes.
         """
+        import shutil
+
         import torch
 
         save_dir = Path(path)
+        partial_dir = save_dir.with_name(save_dir.name + ".partial")
 
+        # Pre-flight: parent directory must be creatable, partial slot must be
+        # clean. We deliberately do NOT mkdir(save_dir) — the atomic promote
+        # at the end is responsible for placing the directory.
         try:
-            save_dir.mkdir(parents=True, exist_ok=True)
+            save_dir.parent.mkdir(parents=True, exist_ok=True)
         except PermissionError as e:
             raise SLAOCheckpointError(
                 "save", str(save_dir),
-                f"Permission denied creating directory: {e}"
+                f"Permission denied creating parent directory: {e}"
             ) from e
         except OSError as e:
             raise SLAOCheckpointError(
                 "save", str(save_dir),
-                f"Failed to create directory: {e}"
+                f"Failed to create parent directory: {e}"
             ) from e
 
-        # Save merged weights
-        if self._merged_state is not None:
-            try:
-                torch.save(self._merged_state, save_dir / "merged_lora.pt")
-            except Exception as e:
-                raise SLAOCheckpointError(
-                    "save", str(save_dir / "merged_lora.pt"),
-                    f"Failed to save weights: {e}"
-                ) from e
-
-        # Save merge history
-        history_data = {
-            "run_index": self._run_index,
-            "config": {
-                "scaling_type": self.config.scaling_type,
-                "min_scale": self.config.min_scale,
-                "use_orthogonal_init": self.config.use_orthogonal_init,
-            },
-            "history": [
-                {
-                    "run_index": r.run_index,
-                    "scale_factor": r.scale_factor,
-                    "a_matrices_merged": r.a_matrices_merged,
-                    "b_matrices_merged": r.b_matrices_merged,
-                    "total_params_merged": r.total_params_merged,
-                    "merge_time_seconds": r.merge_time_seconds,
-                }
-                for r in self._merge_history
-            ]
-        }
+        # Wipe any leftover partial from a prior crash before we start.
+        if partial_dir.exists():
+            shutil.rmtree(partial_dir, ignore_errors=True)
 
         try:
-            with open(save_dir / "merge_history.json", "w") as f:
-                json.dump(history_data, f, indent=2)
+            partial_dir.mkdir(parents=True, exist_ok=False)
+        except OSError as e:
+            raise SLAOCheckpointError(
+                "save", str(partial_dir),
+                f"Failed to create partial directory: {e}"
+            ) from e
+
+        try:
+            # Save merged weights
+            if self._merged_state is not None:
+                try:
+                    torch.save(self._merged_state, partial_dir / "merged_lora.pt")
+                except Exception as e:
+                    raise SLAOCheckpointError(
+                        "save", str(partial_dir / "merged_lora.pt"),
+                        f"Failed to save weights: {e}"
+                    ) from e
+
+            # Save merge history (B-001: include run_id correlation token,
+            # B-008: include norms so post-mortems can detect drift over time)
+            history_data = {
+                "run_index": self._run_index,
+                "run_id": run_id,
+                "config": {
+                    "scaling_type": self.config.scaling_type,
+                    "min_scale": self.config.min_scale,
+                    "use_orthogonal_init": self.config.use_orthogonal_init,
+                },
+                "history": [
+                    {
+                        "run_index": r.run_index,
+                        "scale_factor": r.scale_factor,
+                        "a_matrices_merged": r.a_matrices_merged,
+                        "b_matrices_merged": r.b_matrices_merged,
+                        "total_params_merged": r.total_params_merged,
+                        "merge_time_seconds": r.merge_time_seconds,
+                        "a_norm_before": r.a_norm_before,
+                        "a_norm_after": r.a_norm_after,
+                        "b_norm_before": r.b_norm_before,
+                        "b_norm_after": r.b_norm_after,
+                    }
+                    for r in self._merge_history
+                ]
+            }
+
+            try:
+                with open(partial_dir / "merge_history.json", "w") as f:
+                    json.dump(history_data, f, indent=2)
+            except Exception as e:
+                raise SLAOCheckpointError(
+                    "save", str(partial_dir / "merge_history.json"),
+                    f"Failed to save history: {e}"
+                ) from e
+
+            # Atomic promote: if save_dir already exists (re-save), remove it
+            # first so shutil.move drops the partial into place cleanly. The
+            # window between rmtree(save_dir) and move(partial) is tiny but
+            # NOT atomic across processes — single-process MultiRunTrainer
+            # callers (the only callers in this repo) are unaffected.
+            if save_dir.exists():
+                shutil.rmtree(save_dir)
+            shutil.move(str(partial_dir), str(save_dir))
+        except SLAOCheckpointError:
+            raise
         except Exception as e:
             raise SLAOCheckpointError(
-                "save", str(save_dir / "merge_history.json"),
-                f"Failed to save history: {e}"
+                "save", str(save_dir),
+                f"Atomic promotion failed: {e}"
             ) from e
+        finally:
+            # Belt-and-braces: if partial_dir still exists after any failure
+            # path, remove it so a retry has a clean slot.
+            if partial_dir.exists():
+                shutil.rmtree(partial_dir, ignore_errors=True)
 
         logger.info(f"SLAO merger saved to {save_dir}")
 

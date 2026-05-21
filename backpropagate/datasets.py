@@ -42,6 +42,81 @@ from .exceptions import DatasetNotFoundError, DatasetParseError
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# B-017 HUGGINGFACE HUB TRANSIENT RETRY (mirror of trainer._retry_hf_call)
+# =============================================================================
+# Wraps load_dataset and from_pretrained calls with exponential backoff so a
+# transient 5xx / 429 / connection blip on the Hub doesn't kill a long job.
+
+_HF_RETRY_ATTEMPTS = 3
+_HF_RETRY_BASE_SECONDS = 5
+_HF_RETRY_MAX_SECONDS = 60
+_HF_RETRY_MULTIPLIER = 2
+
+
+def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
+    """Return the exception classes worth retrying for HF Hub calls."""
+    excs: list[type[BaseException]] = [ConnectionError, TimeoutError]
+    try:
+        import requests  # type: ignore
+
+        excs.extend([
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+        ])
+    except ImportError:
+        pass
+    try:
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+
+        excs.append(HfHubHTTPError)
+    except ImportError:
+        pass
+    return tuple(excs)
+
+
+def _retry_hf_call(
+    fn: Callable[..., Any],
+    *args: Any,
+    _label: str = "hf_call",
+    **kwargs: Any,
+) -> Any:
+    """B-017: invoke ``fn`` with tenacity-based retry on transient HF errors."""
+    from tenacity import (
+        before_sleep_log,
+        retry,
+        retry_if_exception_type,
+        stop_after_attempt,
+        wait_exponential,
+    )
+
+    transient_excs = _hf_transient_exceptions()
+
+    @retry(
+        stop=stop_after_attempt(_HF_RETRY_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=_HF_RETRY_MULTIPLIER,
+            min=_HF_RETRY_BASE_SECONDS,
+            max=_HF_RETRY_MAX_SECONDS,
+        ),
+        retry=retry_if_exception_type(transient_excs),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    def _call() -> Any:
+        return fn(*args, **kwargs)
+
+    try:
+        return _call()
+    except transient_excs as exc:
+        logger.error(
+            f"HF transient retry exhausted: label={_label} "
+            f"err={type(exc).__name__}: {exc}"
+        )
+        raise
+
 __all__ = [
     # Core classes
     "DatasetFormat",
@@ -1152,13 +1227,20 @@ class PerplexityFilter:
 
         logger.info(f"Loading perplexity model: {self.model_name}")
 
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        # B-017: retry on transient HF Hub failures (5xx, 429, timeouts).
+        self._tokenizer = _retry_hf_call(
+            AutoTokenizer.from_pretrained,
+            self.model_name,
+            _label=f"perplexity_tokenizer:{self.model_name}",
+        )
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._model = _retry_hf_call(
+            AutoModelForCausalLM.from_pretrained,
             self.model_name,
             torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
+            _label=f"perplexity_model:{self.model_name}",
         )
         self._model.to(self._device)
         self._model.eval()
@@ -2039,13 +2121,25 @@ class StreamingDatasetLoader:
             return self._stream_local_file()
 
     def _stream_hf_dataset(self) -> Iterator[dict[Any, Any] | str]:
-        """Stream from HuggingFace dataset."""
+        """Stream from HuggingFace dataset.
+
+        B-017: ``load_dataset`` is wrapped with the HF transient-retry
+        decorator. The streaming iterator itself is NOT retried (mid-stream
+        retries would replay samples and break determinism); only the
+        initial connection is retried.
+        """
         try:
             from datasets import load_dataset
         except ImportError:
             raise ImportError("datasets required: pip install datasets")
 
-        dataset = load_dataset(self.source, split=self.split, streaming=True)
+        dataset = _retry_hf_call(
+            load_dataset,
+            self.source,
+            split=self.split,
+            streaming=True,
+            _label=f"streaming_load_dataset:{self.source}",
+        )
 
         # Detect format from first sample
         first_sample = None

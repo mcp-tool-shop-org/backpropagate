@@ -21,5 +21,13 @@ COPY --chown=root:root backpropagate/ backpropagate/
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN useradd -m -r appuser
 USER appuser
+
+# Healthcheck exercises the entrypoint shim + minimal import tree.
+# Provides 'docker ps' health signal for downstream orchestrators
+# (Kubernetes, Docker Swarm, ECS) consuming this image as a base or
+# running it as a long-lived training container.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=10s --retries=3 \
+    CMD backpropagate --version >/dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["backpropagate"]
 CMD ["--help"]

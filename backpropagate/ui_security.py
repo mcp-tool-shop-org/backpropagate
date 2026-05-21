@@ -174,6 +174,168 @@ def _extract_client_ip(request: gr.Request | None) -> str:
 # UI OUTPUT DIRECTORY (F-002 fix)
 # =============================================================================
 
+# Categories of system / credential paths an operator should never accidentally
+# point ``BACKPROPAGATE_UI__OUTPUT_DIR`` at. We err on the side of "obviously
+# dangerous" rather than enumerating every plausible-but-unusual path. Each
+# entry is expanded with ``~`` resolution and ``Path.resolve()`` before being
+# compared with ``Path.is_relative_to``.
+#
+# Categories (used by the hint surfaced on rejection):
+#   - System root + system bin/lib trees (Linux/macOS)
+#   - Boot / kernel / device pseudo-filesystems (Linux)
+#   - Per-host runtime/state trees (``/var/run``, ``/var/lib``)
+#   - Root user's home (``/root``)
+#   - User credential directories under any home (``~/.ssh``, ``~/.aws``,
+#     ``~/.kube``, ``~/.docker``, ``~/.gnupg``, ``~/.config``)
+#   - Windows system + program-files trees + ``ProgramData``
+#   - Windows per-user credential dirs (``%USERPROFILE%\.ssh``, AppData crypto)
+_FORBIDDEN_OUTPUT_BASE_CATEGORIES = (
+    "system roots (/, /etc, /usr, /var, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
+    "root home (/root)",
+    "user credential dirs (~/.ssh, ~/.aws, ~/.kube, ~/.docker, ~/.gnupg, ~/.config)",
+    "Windows system roots (C:\\Windows, C:\\Program Files, C:\\Program Files (x86), C:\\ProgramData)",
+    "Windows per-user credential dirs (%USERPROFILE%\\.ssh, %APPDATA%\\Microsoft\\Crypto)",
+)
+
+
+def _forbidden_output_bases() -> list[Path]:
+    """
+    Build the resolved list of forbidden output bases for the current host.
+
+    Resolved at call time (not module import) so test code can monkeypatch
+    ``Path.home`` / ``os.environ`` and see the result reflected. Paths that
+    don't exist on this host are still included — ``Path.is_relative_to``
+    works on lexical comparison after ``resolve()``, so a Linux denylist
+    entry on a Windows host is harmless (just never matches).
+    """
+    raw: list[str] = [
+        "/",
+        "/etc",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/boot",
+        "/var/run",
+        "/var/lib",
+        "/var",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/root",
+        "C:\\",
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\ProgramData",
+    ]
+    # Per-user credential directories — expand to the current user's home.
+    home = Path.home()
+    home_credential_subdirs = (
+        ".ssh",
+        ".aws",
+        ".kube",
+        ".docker",
+        ".gnupg",
+        ".config",
+    )
+    for sub in home_credential_subdirs:
+        raw.append(str(home / sub))
+
+    # Windows-specific per-user credential roots.
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        raw.append(str(Path(appdata) / "Microsoft" / "Crypto"))
+
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for entry in raw:
+        try:
+            p = Path(entry).expanduser().resolve()
+        except (OSError, RuntimeError):
+            # Resolving a non-existent Windows drive on Linux (or vice versa)
+            # can raise; that just means this entry can't apply here.
+            continue
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(p)
+    return resolved
+
+
+def _is_forbidden_output_base(path: Path) -> bool:
+    """
+    Return True if ``path`` resolves to (or under) any denylisted category.
+
+    The check uses ``Path.is_relative_to`` (Python 3.9+) for ancestor
+    matching, plus an exact-equality check so that, e.g., ``Path('/etc')``
+    itself is rejected. ``path`` is expected to already be resolved by the
+    caller; we resolve defensively in case it isn't.
+
+    Liberal-by-design: when the candidate is strictly inside the current
+    user's home directory, system-tree rejections (``/var``, ``/usr``,
+    etc.) are skipped — a service account whose home happens to be
+    ``/var/lib/jenkins`` should still be allowed to use the default
+    ``~/.backpropagate/ui-outputs``. Credential-dir matches (``~/.ssh``,
+    ``%APPDATA%\\Microsoft\\Crypto``, etc.) are still enforced even
+    inside the home, because those are the actual foot-guns we care
+    about.
+    """
+    try:
+        candidate = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        # If we can't even resolve it, treat as forbidden (fail-closed).
+        return True
+
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        home = None
+
+    # Set of "credential" forbidden roots, computed identically here to the
+    # main list so we can selectively enforce them inside the home directory.
+    credential_subdirs = (".ssh", ".aws", ".kube", ".docker", ".gnupg", ".config")
+    credential_roots: set[Path] = set()
+    if home is not None:
+        for sub in credential_subdirs:
+            try:
+                credential_roots.add((home / sub).resolve())
+            except (OSError, RuntimeError):
+                continue
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        try:
+            credential_roots.add((Path(appdata) / "Microsoft" / "Crypto").resolve())
+        except (OSError, RuntimeError):
+            pass
+
+    # If the candidate is strictly under the home directory and is NOT under
+    # one of the credential roots, allow it — covers /var/lib/jenkins/.* and
+    # similar service-account homes that happen to live under a system root.
+    if home is not None:
+        try:
+            if candidate.is_relative_to(home) and candidate != home:
+                for cred in credential_roots:
+                    try:
+                        if candidate == cred or candidate.is_relative_to(cred):
+                            return True
+                    except (ValueError, OSError):
+                        continue
+                return False
+        except (ValueError, OSError):
+            pass
+
+    for forbidden in _forbidden_output_bases():
+        try:
+            if candidate == forbidden or candidate.is_relative_to(forbidden):
+                return True
+        except (ValueError, OSError):
+            # Cross-drive comparison on Windows can raise ValueError; that
+            # just means this entry can't match.
+            continue
+    return False
+
+
 def get_ui_output_dir() -> Path:
     """
     Return the single allowed-base directory for ALL UI-initiated filesystem
@@ -194,6 +356,16 @@ def get_ui_output_dir() -> Path:
     any authenticated remote user. Every UI sink now passes this directory
     as ``allowed_base`` so user-supplied paths must resolve inside it.
 
+    System-path guard (FB-003):
+        After resolving the override (or the default), the path is checked
+        against a small denylist of obviously dangerous bases — system
+        roots, credential directories, etc. — and rejected with a
+        ``BackpropagateError(code="UI_OUTPUT_DIR_FORBIDDEN")`` if it
+        matches. The denylist is intentionally conservative (system trees
+        and well-known credential directories only); operators with niche
+        legitimate use cases should pick a non-system directory and the
+        guard will pass.
+
     The directory is created (with parents) on first call so the path is
     immediately writable. The directory's permissions are NOT chmod'd —
     that's the operator's responsibility.
@@ -203,6 +375,34 @@ def get_ui_output_dir() -> Path:
         base = Path(override).expanduser().resolve()
     else:
         base = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+
+    # FB-003: refuse to mkdir into a system / credential directory.
+    if _is_forbidden_output_base(base):
+        from .exceptions import BackpropagateError
+
+        categories_hint = "; ".join(_FORBIDDEN_OUTPUT_BASE_CATEGORIES)
+        log_security_event(
+            "ui_output_dir_forbidden",
+            requested=str(base),
+            source="env" if override else "default",
+        )
+        raise BackpropagateError(
+            message=(
+                f"BACKPROPAGATE_UI__OUTPUT_DIR resolves to a forbidden system "
+                f"or credential path: {base}"
+            ),
+            code="UI_OUTPUT_DIR_FORBIDDEN",
+            suggestion=(
+                "Pick a non-system directory under your home (e.g. "
+                "~/.backpropagate/ui-outputs or ~/work/backprop-out). The "
+                f"following categories are refused: {categories_hint}."
+            ),
+            details={
+                "requested": str(base),
+                "source": "env" if override else "default",
+            },
+        )
+
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -583,6 +783,34 @@ class FileValidator:
                 max_mb = self.max_size_bytes / (1024 * 1024)
                 actual_mb = size / (1024 * 1024)
                 return False, f"File too large ({actual_mb:.1f}MB). Maximum: {max_mb:.0f}MB", None
+
+        # FB-010: Magic-bytes validation — wire the config flag end-to-end.
+        # When BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=true (or the
+        # SecurityConfig is constructed with validate_file_magic=True), every
+        # accepted-extension upload is also content-sniffed. This catches the
+        # "rename .html → .jsonl" extension-spoof case Trail of Bits flagged
+        # against Gradio 5 (CVE-2024-47872 family). For extensions with no
+        # canonical signature (.csv/.txt/.safetensors), validate_file_magic
+        # still runs the suspicious-starts heuristic (HTML / shell / PHP),
+        # so even no-signature types get a minimum defense.
+        if self.config.validate_file_magic and file_path.exists():
+            is_ok, magic_msg = validate_file_magic(file_path, expected_extension=ext)
+            if not is_ok:
+                log_security_event(
+                    "file_magic_rejected",
+                    file_name=file_path.name,
+                    extension=ext,
+                    purpose=purpose,
+                    reason=magic_msg,
+                )
+                return (
+                    False,
+                    (
+                        f"File content does not match {ext} (magic-bytes check failed): "
+                        f"{magic_msg}"
+                    ),
+                    None,
+                )
 
         # Sanitize filename (remove path components)
         safe_name = sanitize_filename(file_path.name)
@@ -1591,6 +1819,27 @@ FILE_SIGNATURES: dict[str, list[bytes]] = {
 }
 
 
+# Hand-rolled "this is HTML/PHP/shell, not data" header heuristic. Used both
+# inside the signature-positive path (signature present but not matched) and
+# the signature-absent path (.csv/.txt/.safetensors have no canonical magic
+# bytes but should still never start with these). Kept module-level so other
+# callers (e.g. a future trainer-side upload sink) can reuse it.
+_SUSPICIOUS_FILE_HEADERS: tuple[bytes, ...] = (
+    b"<!DOCTYPE",
+    b"<html",
+    b"<HTML",
+    b"<script",
+    b"<SCRIPT",
+    b"<?php",
+    b"<?PHP",
+    b"#!/",
+    b"MZ",            # Windows PE/DOS executable
+    b"\x7fELF",       # Linux ELF executable
+    b"\xca\xfe\xba\xbe",  # macOS Mach-O fat binary (also Java class — both bad here)
+    b"PK\x03\x04",    # ZIP/JAR/DOCX — never a legitimate dataset format here
+)
+
+
 def validate_file_magic(
     file_path: Path,
     expected_extension: str | None = None,
@@ -1600,6 +1849,15 @@ def validate_file_magic(
 
     This helps prevent extension spoofing attacks where malicious files
     are renamed to bypass extension checks.
+
+    Behavior by extension category:
+        - Signature-defined (``.json``, ``.jsonl``, ``.parquet``, ``.gguf``):
+          must match a known signature, otherwise we check the suspicious-
+          headers list and reject on match (HTML/PHP/shell/binary).
+        - Signature-absent (``.csv``, ``.txt``, ``.safetensors``): no
+          positive signature exists, but we still apply the suspicious-
+          headers heuristic so a renamed ``index.html`` cannot slide in
+          as a ``.csv`` upload (FB-010).
 
     Args:
         file_path: Path to file to validate
@@ -1616,38 +1874,60 @@ def validate_file_magic(
     # Get expected signatures for this extension
     signatures = FILE_SIGNATURES.get(ext, [])
 
-    if not signatures:
-        # No signature check for this type
-        return True, "No signature check available"
-
     try:
         with open(file_path, "rb") as f:
             # Read enough bytes to check signature
             header = f.read(16)
-
-        for sig in signatures:
-            if header.startswith(sig):
-                return True, "Signature valid"
-
-        # Check if it might be HTML/script masquerading as data
-        suspicious_starts = [
-            b"<!DOCTYPE", b"<html", b"<HTML", b"<script", b"<SCRIPT",
-            b"<?php", b"<?PHP", b"#!/",
-        ]
-        for suspicious in suspicious_starts:
-            if header.startswith(suspicious):
-                log_security_event(
-                    "suspicious_file_content",
-                    file=file_path.name,
-                    expected_extension=ext,
-                    found_signature=header[:20].decode("utf-8", errors="replace"),
-                )
-                return False, f"File content appears to be HTML/script, not {ext}"
-
-        return True, "Content check passed"
-
     except Exception as e:
         return False, f"Failed to read file: {e}"
+
+    # First: always run the suspicious-headers heuristic so no-signature
+    # extensions (.csv/.txt/.safetensors) still get a minimum defense.
+    # Categorize the rejection so the message stays useful while remaining
+    # backward-compatible with existing "HTML/script" assertions.
+    html_script_signatures = (
+        b"<!DOCTYPE", b"<html", b"<HTML", b"<script", b"<SCRIPT",
+        b"<?php", b"<?PHP", b"#!/",
+    )
+    binary_signatures = (
+        b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe", b"PK\x03\x04",
+    )
+    for suspicious in html_script_signatures:
+        if header.startswith(suspicious):
+            log_security_event(
+                "suspicious_file_content",
+                file=file_path.name,
+                expected_extension=ext,
+                found_signature=header[:20].decode("utf-8", errors="replace"),
+            )
+            return False, f"File content appears to be HTML/script, not {ext}"
+    for suspicious in binary_signatures:
+        if header.startswith(suspicious):
+            log_security_event(
+                "suspicious_file_content",
+                file=file_path.name,
+                expected_extension=ext,
+                found_signature=header[:20].hex(),
+            )
+            return False, (
+                f"File content appears to be a binary executable or archive, not {ext}"
+            )
+
+    if not signatures:
+        # No positive signature for this extension; the suspicious-headers
+        # check above is the only defense available. Message preserves the
+        # legacy "No signature check available" wording so downstream
+        # tooling that grep'd that string still matches.
+        return True, "No signature check available"
+
+    # Positive signature defined — at least one must match.
+    for sig in signatures:
+        if header.startswith(sig):
+            return True, "Signature valid"
+
+    # Reaches here when a signature is defined but none match AND no
+    # suspicious header tripped — flag as content mismatch.
+    return False, f"File content does not match expected {ext} signature"
 
 
 # =============================================================================

@@ -85,6 +85,9 @@ class CheckpointInfo:
         is_final: True if this is the most recent checkpoint
         size_bytes: Size of the checkpoint in bytes
         protected: If True, this checkpoint won't be pruned
+        run_id: Optional correlation token (B-001) so manifest entries can
+            be grepped by the same identifier used in log lines + SLAO
+            merge_history.json.
     """
     run_index: int
     path: str
@@ -95,13 +98,17 @@ class CheckpointInfo:
     is_final: bool = False
     size_bytes: int = 0
     protected: bool = False
+    run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CheckpointInfo":
-        return cls(**data)
+        # Forward-compat: tolerate unknown keys from newer manifests by
+        # filtering down to the dataclass fields we know about.
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -237,6 +244,7 @@ class CheckpointManager:
         training_loss: float | None = None,
         is_run_boundary: bool = False,
         protected: bool = False,
+        run_id: str | None = None,
     ) -> CheckpointInfo:
         """
         Register a new checkpoint.
@@ -248,6 +256,9 @@ class CheckpointManager:
             training_loss: Training loss
             is_run_boundary: True if this is the start of a new run
             protected: If True, this checkpoint won't be pruned
+            run_id: Optional correlation token (B-001) persisted on the
+                manifest entry so triage can grep one identifier across logs
+                + checkpoints + SLAO history.
 
         Returns:
             CheckpointInfo for the registered checkpoint
@@ -267,6 +278,7 @@ class CheckpointManager:
             is_final=True,  # This is now the latest
             size_bytes=size,
             protected=protected,
+            run_id=run_id,
         )
 
         self._checkpoints.append(info)

@@ -39,6 +39,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -49,6 +50,7 @@ from .checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy, Ch
 from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
+    BackpropagateError,
     ConfigurationError,
     DatasetError,
     DatasetNotFoundError,
@@ -64,6 +66,7 @@ from .gpu_safety import (
     get_gpu_status,
     wait_for_safe_gpu,
 )
+from .logging_config import bind_run_context, unbind_run_context
 from .slao import MergeResult, SLAOConfig, SLAOMerger
 
 logger = logging.getLogger(__name__)
@@ -170,6 +173,12 @@ class RunResult:
     gpu_max_vram_percent: float | None = None
     failed: bool = False
     failure_reason: str | None = None
+    # B-001: correlation token (UUID4-derived). Shared with the session-level
+    # run_id so per-run records can be grouped back to the parent multi-run.
+    run_id: str | None = None
+    # B-002: number of OOM-driven retries the run survived (0 on the happy
+    # path). When >0, batch_size / gradient_accumulation differ from config.
+    oom_retries: int = 0
 
 
 @dataclass
@@ -189,6 +198,9 @@ class MultiRunResult:
     abort_reason: str | None = None
     # Phase 5.3: Checkpoint stats
     checkpoint_stats: CheckpointStats | None = None
+    # B-001: stable session-wide correlation token. Persist this and grep
+    # logs/checkpoints/run_history.json/merge_history.json by it.
+    run_id: str | None = None
 
 
 # Backwards compatibility alias
@@ -203,6 +215,10 @@ class MultiRunTrainer:
     to maximize learning while preventing catastrophic forgetting.
     """
 
+    # B-002: OOM-recovery tuning constants. Exposed at module scope so future
+    # contributors don't have to grep the body for magic numbers.
+    _OOM_MAX_RETRIES_AT_MIN_BATCH = 3  # consecutive OOMs at batch=1 before abort
+
     def __init__(
         self,
         model: str | None = None,
@@ -213,6 +229,9 @@ class MultiRunTrainer:
         samples_per_run: int | None = None,
         merge_mode: str | MergeMode | None = None,
         checkpoint_dir: str | None = None,
+        # B-002: opt out of OOM recovery (default ON — backward-compatible
+        # because preserves prior observable surface for non-OOM runs).
+        oom_recovery: bool = True,
         # Callbacks
         on_run_start: Callable[[int], None] | None = None,
         on_run_complete: Callable[[RunResult], None] | None = None,
@@ -230,6 +249,11 @@ class MultiRunTrainer:
             samples_per_run: Fresh samples per run
             merge_mode: "simple" or "slao"
             checkpoint_dir: Where to save checkpoints
+            oom_recovery: When True (default), a CUDA OOM in any single run
+                triggers batch_size halving + gradient_accumulation doubling
+                (preserving effective batch size) and the run retries. After
+                3 consecutive OOMs at batch=1 the session aborts with a
+                structured error. Set False to make OOMs hard-fail the run.
             on_run_start: Callback when run starts
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)
@@ -259,6 +283,9 @@ class MultiRunTrainer:
 
         self.model_name = model or settings.model.name
 
+        # B-002: OOM recovery flag (default True for graceful degradation).
+        self.oom_recovery = oom_recovery
+
         # Callbacks
         self.on_run_start = on_run_start
         self.on_run_complete = on_run_complete
@@ -273,6 +300,10 @@ class MultiRunTrainer:
         self._should_abort = False
         self._abort_reason: str | None = None
 
+        # B-001: session-wide correlation token. Minted lazily at run() entry
+        # so a re-used MultiRunTrainer instance gets a fresh ID per session.
+        self._run_id: str | None = None
+
         # Results
         self._runs: list[RunResult] = []
         self._aggregate_loss: list[float] = []
@@ -285,6 +316,10 @@ class MultiRunTrainer:
         # GPU pause event: set when GPU is overheating, cleared when safe
         self._gpu_pause_event = threading.Event()
 
+        # B-002: OOM-retry bookkeeping (lives across runs to detect a
+        # cascading failure pattern; reset on each successful run).
+        self._oom_consecutive_at_min_batch = 0
+
         # Phase 4.3: Early stopping tracking
         self._validation_losses: list[float] = []
         self._early_stop_counter = 0
@@ -293,19 +328,27 @@ class MultiRunTrainer:
         # Phase 5.3: Checkpoint manager
         self._checkpoint_manager: CheckpointManager | None = None
 
-        logger.info(f"SpeedrunTrainer initialized: {self.config.num_runs} runs x "
-                    f"{self.config.steps_per_run} steps x {self.config.samples_per_run} samples")
-        logger.info(f"Merge mode: {self.config.merge_mode.value}")
+        # B-033: log labels reflect the canonical MultiRun naming. The
+        # SpeedrunTrainer alias still works for callers, but the log surface
+        # consistently says "MultiRun".
+        logger.info(
+            f"MultiRunTrainer initialized: {self.config.num_runs} runs x "
+            f"{self.config.steps_per_run} steps x {self.config.samples_per_run} samples"
+        )
+        logger.info(f"Merge mode: {self.config.merge_mode.value}, oom_recovery={self.oom_recovery}")
 
     def run(self, dataset: str | Any = None) -> SpeedrunResult:
         """
-        Execute all speedrun training runs.
+        Execute all multi-run training runs.
 
         Args:
             dataset: Dataset name/path or HuggingFace dataset object
 
         Returns:
-            SpeedrunResult with all run results and aggregate metrics
+            MultiRunResult with all run results and aggregate metrics. The
+            ``run_id`` field on the result is the same correlation token
+            attached to every log line, checkpoint manifest entry, and SLAO
+            merge_history.json entry produced by this session.
         """
         from .trainer import Trainer
 
@@ -313,6 +356,15 @@ class MultiRunTrainer:
         self._is_running = True
         self._should_abort = False
         self._abort_reason = None
+
+        # B-001: mint a session-wide correlation token and bind it to the
+        # structured-logger context so every log line emitted from this point
+        # forward carries `run_id=<id>`. The unbind happens in the finally
+        # block at the bottom of this method so the context doesn't leak into
+        # callers that reuse the same thread.
+        self._run_id = uuid.uuid4().hex
+        bind_run_context(run_id=self._run_id, session_kind="multi_run")
+        logger.info(f"run_started run_id={self._run_id}")
 
         # Setup checkpoint directory
         checkpoint_dir = Path(self.config.checkpoint_dir)
@@ -342,6 +394,10 @@ class MultiRunTrainer:
 
         # Pre-flight GPU check
         if not self._preflight_gpu_check():
+            # B-001: emit run_ended and unbind context on this early-exit path
+            # so the correlation token doesn't leak into the next caller.
+            logger.info(f"run_ended run_id={self._run_id} status=aborted")
+            unbind_run_context("run_id", "session_kind")
             return self._create_abort_result("GPU safety check failed")
 
         # Start GPU monitoring
@@ -371,6 +427,13 @@ class MultiRunTrainer:
                 train_on_responses=True,  # FT-010: same quality optimization as single-run
             )
             self._trainer.load_model()
+
+            # B-005: fail loud at startup if the installed PEFT version does
+            # not expose a usable extraction path. Without this, a future PEFT
+            # rename of get_adapter_state_dict / lora_A / lora_B substrings
+            # would silently no-op the SLAO accumulator across runs.
+            if self.config.merge_mode == MergeMode.SLAO:
+                self._verify_peft_api()
 
             # Execute runs
             for run_idx in range(1, self.config.num_runs + 1):
@@ -416,24 +479,34 @@ class MultiRunTrainer:
                     self._check_cooldown()
 
         except Exception as e:
-            logger.error(f"Speedrun failed: {e}")
+            logger.error(f"MultiRun failed: {e}")
             self._abort_reason = str(e)
+            # B-001: emit run_ended with status before re-raising so the
+            # operator sees both endpoints of the correlation window.
+            logger.info(f"run_ended run_id={self._run_id} status=error")
             raise
 
         finally:
             self._is_running = False
             if self._gpu_monitor:
                 self._gpu_monitor.stop()
+            # B-001: unbind the correlation token so subsequent unrelated work
+            # on this thread doesn't accidentally pick up our run_id.
+            unbind_run_context("run_id", "session_kind")
+
+        # B-001: success path — emit run_ended explicitly. (The error path
+        # already emitted run_ended inside the except above.)
+        logger.info(f"run_ended run_id={self._run_id} status=ok")
 
         # Create final result
         total_duration = time.time() - start_time
         return self._create_result(total_duration)
 
     def abort(self, reason: str = "User requested abort") -> None:
-        """Request abort of current speedrun."""
+        """Request abort of current multi-run session."""
         self._should_abort = True
         self._abort_reason = reason
-        logger.warning(f"Speedrun abort requested: {reason}")
+        logger.warning(f"MultiRun abort requested: {reason}")
 
     def get_checkpoint_manager(self) -> CheckpointManager | None:
         """Get the checkpoint manager for external access (e.g., UI)."""
@@ -445,19 +518,46 @@ class MultiRunTrainer:
             return self._checkpoint_manager.get_stats()
         return None
 
+    @staticmethod
+    def _is_oom_error(exc: BaseException) -> bool:
+        """B-002: identify CUDA OOMs across torch + RuntimeError variants.
+
+        ``torch.cuda.OutOfMemoryError`` was added in torch 2.0. Older torch
+        and some driver-level errors surface as a plain ``RuntimeError``
+        whose message contains ``"out of memory"``. We accept both.
+        """
+        try:
+            import torch
+            if isinstance(exc, torch.cuda.OutOfMemoryError):  # type: ignore[attr-defined]
+                return True
+        except (ImportError, AttributeError):
+            pass
+        if isinstance(exc, RuntimeError):
+            return "out of memory" in str(exc).lower()
+        return False
+
     def _execute_run(
         self,
         run_idx: int,
         full_dataset: Any,
         checkpoint_dir: Path,
     ) -> RunResult:
-        """Execute a single training run."""
+        """Execute a single training run.
+
+        B-002: the actual ``trainer.train()`` call is wrapped in an inner
+        retry loop that halves ``per_device_train_batch_size`` and doubles
+        ``gradient_accumulation_steps`` on CUDA OOM (preserving effective
+        batch size), clears the CUDA allocator, and retries. After
+        :attr:`_OOM_MAX_RETRIES_AT_MIN_BATCH` consecutive OOMs at
+        ``batch_size==1`` the session is aborted with a structured error
+        pointing the operator at smaller-model / shorter-seq remediations.
+        """
         from trl import SFTConfig, SFTTrainer
 
         run_start = time.time()
 
         logger.info(f"\n{'='*60}")
-        logger.info(f"SPEEDRUN {run_idx}/{self.config.num_runs}")
+        logger.info(f"MULTIRUN {run_idx}/{self.config.num_runs} run_id={self._run_id}")
         logger.info(f"{'='*60}")
 
         # Callback
@@ -483,38 +583,16 @@ class MultiRunTrainer:
         if os.name == "nt" and settings.windows.pre_tokenize:
             chunk_dataset = self._trainer._pre_tokenize(chunk_dataset)
 
-        # Training arguments (TRL 0.24+ uses SFTConfig)
-        training_args = SFTConfig(
-            output_dir=str(checkpoint_dir / f"run_{run_idx:03d}"),
-            per_device_train_batch_size=self._trainer.batch_size,
-            gradient_accumulation_steps=self._trainer.gradient_accumulation,
-            max_steps=self.config.steps_per_run,
-            learning_rate=lr,
-            warmup_steps=self.config.warmup_steps_per_run,
-            optim=settings.training.optim,
-            lr_scheduler_type="cosine",
-            logging_steps=10,
-            bf16=settings.training.bf16,
-            fp16=settings.training.fp16,
-            overwrite_output_dir=True,
-            dataloader_num_workers=0 if os.name == "nt" else 4,
-            report_to="none",
-            seed=settings.training.seed + run_idx,  # Different seed each run
-            # SFT-specific args (TRL 0.24+)
-            max_length=self._trainer.max_seq_length,
-            packing=settings.data.packing,
-        )
-
-        # Create trainer for this run (TRL 0.24+ uses processing_class)
-        trainer = SFTTrainer(
-            model=self._trainer._model,
-            processing_class=self._trainer._tokenizer,
-            train_dataset=chunk_dataset,
-            args=training_args,
-        )
+        # B-019: reset GPU tracking BEFORE the run so the snapshot at the end
+        # reflects ONLY this run's window (eliminates the GPU-monitor-races-
+        # main-thread observation: the reset used to happen after the snapshot).
+        self._gpu_max_temp = 0.0
+        self._gpu_max_vram = 0.0
 
         # Train — wrapped so a single run crash (OOM, CUDA error) does not
-        # kill the entire multi-run session.
+        # kill the entire multi-run session. B-002 layers an inner OOM-retry
+        # loop on top so the run can survive a one-shot VRAM spike instead
+        # of compounding the failure across the remaining runs.
         logger.info(f"Training run {run_idx}...")
         run_failed = False
         failure_reason: str | None = None
@@ -522,58 +600,202 @@ class MultiRunTrainer:
         final_loss = 0.0
         merge_result = None
         checkpoint_path: str | None = None
+        oom_retries = 0
+        trainer = None  # noqa: ignore — assigned inside the loop, referenced after
+        result: Any = None
 
-        try:
-            result = trainer.train()
-
-            # Extract loss history
-            if hasattr(trainer, 'state') and trainer.state.log_history:
-                loss_history = [
-                    log.get('loss', 0) for log in trainer.state.log_history
-                    if 'loss' in log
-                ]
-
-            # Add to aggregate
-            self._aggregate_loss.extend(loss_history)
-
-            final_loss = result.training_loss if hasattr(result, 'training_loss') else (
-                loss_history[-1] if loss_history else 0.0
+        # B-002: per-run OOM retry. We keep retrying with halved batch until
+        # batch_size hits 1 (the floor). At the floor, _OOM_MAX_RETRIES_AT_MIN_BATCH
+        # consecutive OOMs trigger session abort.
+        while True:
+            # Build training args inside the loop so a retry picks up the
+            # halved batch / doubled accumulation.
+            training_args = SFTConfig(
+                output_dir=str(checkpoint_dir / f"run_{run_idx:03d}"),
+                per_device_train_batch_size=self._trainer.batch_size,
+                gradient_accumulation_steps=self._trainer.gradient_accumulation,
+                max_steps=self.config.steps_per_run,
+                learning_rate=lr,
+                warmup_steps=self.config.warmup_steps_per_run,
+                optim=settings.training.optim,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+                bf16=settings.training.bf16,
+                fp16=settings.training.fp16,
+                overwrite_output_dir=True,
+                dataloader_num_workers=0 if os.name == "nt" else 4,
+                report_to="none",
+                seed=settings.training.seed + run_idx,  # Different seed each run
+                # SFT-specific args (TRL 0.24+)
+                max_length=self._trainer.max_seq_length,
+                packing=settings.data.packing,
             )
 
-            # Merge LoRA weights
-            if self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
-                lora_state = self._get_lora_state_dict()
-                merge_result = self._slao_merger.merge(lora_state, run_index=run_idx)
+            trainer = SFTTrainer(
+                model=self._trainer._model,
+                processing_class=self._trainer._tokenizer,
+                train_dataset=chunk_dataset,
+                args=training_args,
+            )
 
-        except (KeyboardInterrupt, SystemExit):
-            # Never swallow these — let them propagate
-            raise
-        except Exception as e:
-            run_failed = True
-            failure_reason = f"{type(e).__name__}: {e}"
-            logger.error(f"Run {run_idx} failed: {failure_reason}")
+            try:
+                result = trainer.train()
 
-            # Salvage any partial loss history from the trainer state
-            if hasattr(trainer, 'state') and hasattr(trainer.state, 'log_history') and trainer.state.log_history:
-                loss_history = [
-                    log.get('loss', 0) for log in trainer.state.log_history
-                    if 'loss' in log
-                ]
+                # Extract loss history
+                if hasattr(trainer, 'state') and trainer.state.log_history:
+                    loss_history = [
+                        log.get('loss', 0) for log in trainer.state.log_history
+                        if 'loss' in log
+                    ]
+
+                # Add to aggregate
                 self._aggregate_loss.extend(loss_history)
-                final_loss = loss_history[-1] if loss_history else 0.0
+
+                final_loss = result.training_loss if hasattr(result, 'training_loss') else (
+                    loss_history[-1] if loss_history else 0.0
+                )
+
+                # Merge LoRA weights (B-008: passes run_id through for the
+                # divergence-trigger envelope)
+                if self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
+                    lora_state = self._get_lora_state_dict()
+                    merge_result = self._slao_merger.merge(
+                        lora_state,
+                        run_index=run_idx,
+                        run_id=self._run_id,
+                    )
+
+                # B-002: success resets the consecutive-OOM-at-floor counter.
+                self._oom_consecutive_at_min_batch = 0
+                break  # Successful run — exit retry loop
+
+            except (KeyboardInterrupt, SystemExit):
+                # Never swallow these — let them propagate.
+                raise
+            except Exception as exc:
+                if self.oom_recovery and self._is_oom_error(exc):
+                    # B-002: OOM-specific recovery path.
+                    import torch as _torch
+
+                    current_batch = self._trainer.batch_size
+                    current_accum = self._trainer.gradient_accumulation
+                    effective = current_batch * current_accum
+                    logger.warning(
+                        f"OOM detected on run {run_idx} (run_id={self._run_id}) "
+                        f"batch={current_batch} grad_accum={current_accum} "
+                        f"effective_batch={effective}: {exc}"
+                    )
+
+                    # Free everything we can before retrying.
+                    try:
+                        del trainer
+                    except UnboundLocalError:
+                        pass
+                    trainer = None
+                    gc.collect()
+                    try:
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+
+                    if current_batch > 1:
+                        # Halve batch, double accumulation to preserve
+                        # effective batch size. Reset floor-counter since
+                        # we're not at the floor yet.
+                        new_batch = max(1, current_batch // 2)
+                        new_accum = max(1, current_accum * 2)
+                        logger.warning(
+                            f"OOM recovery: halving batch_size {current_batch}->{new_batch}, "
+                            f"doubling gradient_accumulation {current_accum}->{new_accum} "
+                            f"(effective batch preserved at {new_batch * new_accum})"
+                        )
+                        self._trainer.batch_size = new_batch
+                        self._trainer.gradient_accumulation = new_accum
+                        self._oom_consecutive_at_min_batch = 0
+                        oom_retries += 1
+                        continue  # Retry with new args
+
+                    # Already at min batch — count toward the abort threshold.
+                    self._oom_consecutive_at_min_batch += 1
+                    oom_retries += 1
+                    logger.error(
+                        f"OOM at batch=1 (run_id={self._run_id}) "
+                        f"consecutive={self._oom_consecutive_at_min_batch}/"
+                        f"{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
+                    )
+                    if self._oom_consecutive_at_min_batch >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
+                        raise BackpropagateError(
+                            f"Persistent CUDA OOM at batch_size=1 "
+                            f"({self._oom_consecutive_at_min_batch} consecutive "
+                            f"OOMs across runs); cannot recover automatically.",
+                            code="RUNTIME_GPU_OOM",
+                            details={
+                                "run_index": run_idx,
+                                "run_id": self._run_id,
+                                "consecutive_oom_at_min_batch": self._oom_consecutive_at_min_batch,
+                            },
+                            suggestion=(
+                                "Use a smaller model (3B → 1B), reduce "
+                                "max_seq_length, enable gradient_checkpointing, "
+                                "or apply 4-bit / 8-bit quantization. If you "
+                                "want OOMs to hard-fail the run instead of "
+                                "session-abort, construct the trainer with "
+                                "oom_recovery=False."
+                            ),
+                            retryable=False,
+                            cause=exc,
+                        ) from exc
+
+                    # Below the threshold — record the failure for this run
+                    # but don't retry (we've already retried at min batch
+                    # `consecutive` times across the session).
+                    run_failed = True
+                    failure_reason = f"{type(exc).__name__}: {exc}"
+                    break
+
+                # Non-OOM exception (or OOM with oom_recovery=False).
+                run_failed = True
+                failure_reason = f"{type(exc).__name__}: {exc}"
+                logger.error(f"Run {run_idx} failed: {failure_reason}")
+
+                # Salvage any partial loss history from the trainer state
+                if (
+                    trainer is not None
+                    and hasattr(trainer, 'state')
+                    and hasattr(trainer.state, 'log_history')
+                    and trainer.state.log_history
+                ):
+                    loss_history = [
+                        log.get('loss', 0) for log in trainer.state.log_history
+                        if 'loss' in log
+                    ]
+                    self._aggregate_loss.extend(loss_history)
+                    final_loss = loss_history[-1] if loss_history else 0.0
+                break
 
         # Save checkpoint (even on failure — preserves partial work)
         if self.config.save_every_run:
             try:
+                # B-006: atomic write. Trainer.save() now writes into
+                # <path>.partial and shutil.move()s it into place on success;
+                # the partial dir is removed if anything raises mid-write.
                 checkpoint_path = str(checkpoint_dir / f"run_{run_idx:03d}" / "lora")
-                self._trainer.save(checkpoint_path)
+                self._trainer.save(
+                    checkpoint_path,
+                    run_id=self._run_id,
+                )
                 logger.info(f"Checkpoint saved: {checkpoint_path}")
 
-                # Also save SLAO merger state
+                # Also save SLAO merger state (B-001: thread run_id through)
                 if self._slao_merger:
-                    self._slao_merger.save(str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"))
+                    self._slao_merger.save(
+                        str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"),
+                        run_id=self._run_id,
+                    )
 
                 # Phase 5.3: Register with checkpoint manager for smart pruning
+                # (B-001: pass run_id so manifest can carry the correlation token)
                 if self._checkpoint_manager:
                     is_first_run = (run_idx == 1)
                     self._checkpoint_manager.register(
@@ -582,6 +804,7 @@ class MultiRunTrainer:
                         validation_loss=None,  # Will be updated if validation is enabled
                         training_loss=final_loss,
                         is_run_boundary=is_first_run,
+                        run_id=self._run_id,
                     )
                     # Note: auto_prune happens inside register() if enabled
             except Exception as save_err:
@@ -604,17 +827,16 @@ class MultiRunTrainer:
             gpu_max_vram_percent=self._gpu_max_vram,
             failed=run_failed,
             failure_reason=failure_reason,
+            run_id=self._run_id,
+            oom_retries=oom_retries,
         )
-
-        # Reset GPU tracking for next run
-        self._gpu_max_temp = 0.0
-        self._gpu_max_vram = 0.0
 
         # VRAM cleanup between runs (FT-003): release the per-run SFTTrainer
         # and reclaim GPU memory so subsequent runs don't OOM.
         import torch
 
-        del trainer
+        if trainer is not None:
+            del trainer
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -918,22 +1140,102 @@ class MultiRunTrainer:
         # For SIMPLE mode, just continue with current weights
 
     def _get_lora_state_dict(self) -> dict[str, Any]:
-        """Extract LoRA adapter state dict from model."""
+        """Extract LoRA adapter state dict from model.
+
+        B-005: logs the extraction path (PEFT API vs manual) at DEBUG so
+        operators can see which code path produced the SLAO inputs when
+        triaging a divergent merge. The startup invariant
+        (see :meth:`_verify_peft_api`) is the LOUD failure surface; this
+        method's logging is the quiet breadcrumb.
+        """
 
         model = self._trainer._model
 
-        # Try to get PEFT adapter state
+        # Try to get PEFT adapter state via published API.
         if hasattr(model, 'get_adapter_state_dict'):
+            logger.debug("LoRA extraction path=peft_get_adapter_state_dict")
             result: dict[str, Any] = model.get_adapter_state_dict()
             return result
 
-        # Fallback: extract lora parameters manually
+        # Fallback: extract lora parameters manually (kept for forward-compat
+        # with PEFT versions that may rename or drop the helper).
+        logger.debug("LoRA extraction path=manual_named_parameters_scan")
         lora_state = {}
         for name, param in model.named_parameters():
             if 'lora_' in name.lower():
                 lora_state[name] = param.data.clone()
 
         return lora_state
+
+    def _verify_peft_api(self) -> None:
+        """B-005: invariant check at session start.
+
+        After the model is loaded, verify that at least one known PEFT
+        extraction path produces a non-empty LoRA state dict whose keys
+        match the expected ``.lora_A.`` / ``.lora_B.`` pattern. If not,
+        raise :class:`BackpropagateError(code="PEFT_API_INCOMPATIBLE")`
+        with a hint pointing at the supported PEFT version range from
+        pyproject.toml.
+
+        The pre-existing silent-fallback path (manual ``named_parameters``
+        scan) means a future PEFT rename of ``lora_A`` / ``lora_B``
+        substrings would produce an EMPTY state dict, which SLAOMerger
+        would happily merge into a no-op accumulator — the model trains
+        fine each run, but multi-run merging is silently dead. This
+        check fails loud at startup before any training happens.
+        """
+        try:
+            lora_state = self._get_lora_state_dict()
+        except Exception as e:
+            raise BackpropagateError(
+                f"PEFT adapter state extraction raised an exception at startup: {e}",
+                code="PEFT_API_INCOMPATIBLE",
+                details={"reason": str(e)},
+                suggestion=(
+                    "Backpropagate requires peft>=0.7.0 (see pyproject.toml). "
+                    "Reinstall: pip install 'peft>=0.7.0'. If you pinned a "
+                    "specific PEFT version, verify it still exposes "
+                    "get_adapter_state_dict / load_adapter_state_dict OR "
+                    "uses '.lora_A.' / '.lora_B.' parameter names."
+                ),
+                retryable=False,
+            ) from e
+
+        if not lora_state:
+            raise BackpropagateError(
+                "PEFT API invariant check failed: no LoRA parameters extracted.",
+                code="PEFT_API_INCOMPATIBLE",
+                details={"extracted_param_count": 0},
+                suggestion=(
+                    "The installed PEFT version does not expose any "
+                    "`.lora_A.` / `.lora_B.` parameters and lacks "
+                    "get_adapter_state_dict. Required range: peft>=0.7.0 "
+                    "(see pyproject.toml). Reinstall: pip install 'peft>=0.7.0'."
+                ),
+                retryable=False,
+            )
+
+        a_keys = sum(1 for k in lora_state if '.lora_A.' in k or 'lora_A' in k.lower())
+        b_keys = sum(1 for k in lora_state if '.lora_B.' in k or 'lora_B' in k.lower())
+        path = (
+            "peft_get_adapter_state_dict"
+            if hasattr(self._trainer._model, 'get_adapter_state_dict')
+            else "manual_named_parameters_scan"
+        )
+        logger.debug(
+            f"PEFT API invariant OK: path={path} "
+            f"params={len(lora_state)} A_keys={a_keys} B_keys={b_keys}"
+        )
+        if a_keys == 0 or b_keys == 0:
+            # Soft warn: extraction yielded SOMETHING but not the canonical
+            # A/B split SLAO depends on. This isn't necessarily fatal (some
+            # adapter modules have only one matrix per layer), but it's
+            # worth surfacing.
+            logger.warning(
+                f"PEFT extraction yielded {len(lora_state)} params but A_keys={a_keys} "
+                f"and B_keys={b_keys} — SLAO merge expects both. Verify PEFT "
+                f"version compatibility (pyproject.toml requires peft>=0.7.0)."
+            )
 
     def _load_lora_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load LoRA state dict into model."""
@@ -1010,8 +1312,15 @@ class MultiRunTrainer:
 
                     ds = loader.to_hf_dataset()
                 else:
-                    # HuggingFace Hub dataset name
-                    ds = load_dataset(dataset, split=settings.data.dataset_split)
+                    # HuggingFace Hub dataset name (B-017: transient retry)
+                    from .trainer import _retry_hf_call
+
+                    ds = _retry_hf_call(
+                        load_dataset,
+                        dataset,
+                        split=settings.data.dataset_split,
+                        _label=f"multi_run_load_dataset:{dataset}",
+                    )
             elif isinstance(dataset, Dataset):
                 ds = dataset
             else:
@@ -1079,13 +1388,34 @@ class MultiRunTrainer:
         self._gpu_monitor.start()
 
     def _on_gpu_status(self, status: GPUStatus) -> None:
-        """Handle GPU status update."""
+        """Handle GPU status update.
+
+        B-003: when the GPU returns to a SAFE / WARM condition AND
+        ``pause_on_overheat`` is enabled, clear ``_gpu_pause_event`` so the
+        run loop's polling wake-up at multi_run.py:383 can proceed. The
+        complementary ``set()`` lives in :meth:`_on_gpu_critical` — together
+        they implement the safety promise the docstring made and the
+        original wiring forgot.
+        """
         # Track max values
         if status.temperature_c and status.temperature_c > self._gpu_max_temp:
             self._gpu_max_temp = status.temperature_c
 
         if status.vram_percent > self._gpu_max_vram:
             self._gpu_max_vram = status.vram_percent
+
+        # B-003: pause/resume edge — clear the pause event when the GPU
+        # recovers so the run loop can resume scheduling new runs.
+        if (
+            self.config.pause_on_overheat
+            and status.condition in (GPUCondition.SAFE, GPUCondition.WARM)
+            and self._gpu_pause_event.is_set()
+        ):
+            logger.warning(
+                f"GPU recovered ({status.condition.value}, "
+                f"temp={status.temperature_c}C); resuming multi-run scheduling"
+            )
+            self._gpu_pause_event.clear()
 
         # Callback
         if self.on_gpu_status:
@@ -1094,19 +1424,24 @@ class MultiRunTrainer:
     def _on_gpu_critical(self, status: GPUStatus) -> None:
         """Handle critical GPU condition.
 
-        Note: pause_on_overheat only takes effect between runs (checked in
-        the run loop), not mid-training.  During a run the GPU monitor can
-        only log and, in the emergency case, abort.  To actually pause a
-        running trainer we would need deeper integration with the training
-        loop's callback system.
+        B-003: when ``pause_on_overheat=True``, set ``_gpu_pause_event`` so
+        the run loop at the top of :meth:`run` blocks before starting the
+        NEXT run until the GPU recovers (cleared from :meth:`_on_gpu_status`
+        on SAFE/WARM). Mid-training pause is still out of scope (would
+        require deeper SFTTrainer callback integration), but the safety
+        promise — "the next run gates on cooldown" — is now real.
         """
         logger.warning(f"GPU CRITICAL: {status.condition_reason}")
 
         if self.config.pause_on_overheat:
-            logger.warning(
-                "pause_on_overheat is set but pause only applies between runs, "
-                "not during an active training step"
-            )
+            # B-003: actually arm the pause event. Pre-fix this was a logged
+            # no-op despite the run-loop polling for it.
+            if not self._gpu_pause_event.is_set():
+                logger.warning(
+                    "pause_on_overheat armed: next run start will wait for "
+                    "GPU recovery before launching"
+                )
+                self._gpu_pause_event.set()
 
     def _on_gpu_emergency(self, status: GPUStatus) -> None:
         """Handle emergency GPU condition."""
@@ -1281,6 +1616,9 @@ class MultiRunTrainer:
             aborted=self._should_abort,
             abort_reason=self._abort_reason,
             checkpoint_stats=checkpoint_stats,
+            # B-001: correlation token surfaced on the aggregate result so
+            # callers can persist it alongside their own bookkeeping.
+            run_id=self._run_id,
         )
 
     def _create_abort_result(self, reason: str) -> SpeedrunResult:
@@ -1293,6 +1631,7 @@ class MultiRunTrainer:
             final_loss=0.0,
             aborted=True,
             abort_reason=reason,
+            run_id=self._run_id,
         )
 
 

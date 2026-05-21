@@ -106,6 +106,148 @@ class TestSafePath:
         # Check warning was logged
         assert any("traversal pattern" in record.message.lower() for record in caplog.records)
 
+    # ------------------------------------------------------------------ #
+    # SB-T-004: complete the raise-vs-warn matrix for the Wave 1
+    # safe_path harden (security.py:129-155). Without these, a future
+    # refactor that drops the `if allowed_base is None` gate (or the
+    # warn-only legacy branch for relative-cwd-bound ".." normalisation)
+    # would not fail any test. The matrix exhaustively covers:
+    #   (a) absolute  + ".." + no base                -> RAISE
+    #   (b) relative  + ".." + outside cwd + no base  -> RAISE
+    #   (c) relative  + ".." + inside  cwd + no base  -> WARN-ONLY (legacy)
+    #   (d) absolute  + clean (no "..") + no base     -> unchanged
+    #   (e) absolute  + outside allowed_base          -> RAISE
+    #   (f) absolute  + inside  allowed_base          -> OK
+    #   (g) absolute  + ".." + inside allowed_base    -> OK (strict gate is
+    #                                                       allowed_base=None only)
+    # ------------------------------------------------------------------ #
+
+    def test_safe_path_relative_traversal_outside_cwd_raises(self, tmp_path, monkeypatch):
+        """SB-T-004 case (b): relative `..` resolving OUTSIDE cwd raises."""
+        from backpropagate.security import PathTraversalError, safe_path
+
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        monkeypatch.chdir(subdir)
+
+        # `../../escape` from tmp_path/subdir resolves to tmp_path.parent — outside cwd
+        with pytest.raises(PathTraversalError):
+            safe_path("../../escape", must_exist=False)
+
+    def test_safe_path_relative_with_dotdot_inside_cwd_warns_only(
+        self, tmp_path, caplog, monkeypatch
+    ):
+        """SB-T-004 case (c): relative `..` that normalizes back inside cwd warns, no raise.
+
+        This is the legacy preserved branch — security.py:154 keeps
+        warn-only behaviour so simple-normalization callers (e.g.
+        ``safe_path('subdir/../other')`` for path cleanup) are unaffected.
+        """
+        import logging
+
+        from backpropagate.security import safe_path
+
+        # cwd is tmp_path; "subdir/../other" normalizes to tmp_path/other — still inside cwd
+        monkeypatch.chdir(tmp_path)
+        caplog.set_level(logging.WARNING)
+
+        # Must not raise
+        result = safe_path("subdir/../other", must_exist=False)
+
+        # Resolves to a path under cwd
+        assert result == (tmp_path / "other").resolve()
+        # And the warn-only log fires
+        assert any(
+            "traversal pattern" in record.message.lower() for record in caplog.records
+        ), (
+            "Legacy warn-only path expected to log 'traversal pattern' "
+            f"(security.py:154). caplog records: {[r.message for r in caplog.records]}"
+        )
+
+    def test_safe_path_absolute_clean_no_dotdot_returns_unchanged(self, tmp_path):
+        """SB-T-004 case (d): clean absolute path with no '..' is unchanged."""
+        from backpropagate.security import safe_path
+
+        result = safe_path(str(tmp_path), must_exist=False)
+        assert result == tmp_path.resolve()
+
+    def test_safe_path_absolute_with_dotdot_raises(self, tmp_path):
+        """SB-T-004 case (a): absolute path with `..` and no allowed_base raises."""
+        from backpropagate.security import PathTraversalError, safe_path
+
+        # Absolute path with ".." raises regardless of where it resolves
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        with pytest.raises(PathTraversalError):
+            safe_path(str(subdir / ".." / "etc"), must_exist=False)
+
+    def test_safe_path_with_allowed_base_outside_raises(self, tmp_path):
+        """SB-T-004 case (e): path outside allowed_base raises PathTraversalError."""
+        from backpropagate.security import PathTraversalError, safe_path
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+
+        with pytest.raises(PathTraversalError):
+            safe_path(str(outside), allowed_base=base_dir)
+
+    def test_safe_path_with_allowed_base_inside_succeeds(self, tmp_path):
+        """SB-T-004 case (f): path inside allowed_base returns the resolved path."""
+        from backpropagate.security import safe_path
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        inside = base_dir / "child" / "leaf"
+
+        result = safe_path(str(inside), allowed_base=base_dir, must_exist=False)
+        assert result == inside.resolve()
+
+    def test_safe_path_absolute_dotdot_with_allowed_base_inside_succeeds(self, tmp_path):
+        """SB-T-004 case (g): absolute `..` path INSIDE allowed_base succeeds.
+
+        The strict `..` check is gated by `if allowed_base is None`
+        (security.py:137). With an allowed_base, the relative_to() check
+        governs — and a `..` path that resolves back inside the base
+        (e.g. /base/child/../sibling) must NOT trip the strict check.
+        Pins the gate so a refactor that drops the `is None` clause
+        doesn't break callers using path cleanup inside a known scope.
+        """
+        from backpropagate.security import safe_path
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        (base_dir / "child").mkdir()
+        (base_dir / "sibling").mkdir()
+
+        # /base/child/../sibling resolves to /base/sibling — inside allowed_base
+        result = safe_path(
+            str(base_dir / "child" / ".." / "sibling"),
+            allowed_base=base_dir,
+            must_exist=False,
+        )
+        assert result == (base_dir / "sibling").resolve()
+
+    def test_safe_path_relative_dotdot_with_allowed_base_uses_base_check(self, tmp_path):
+        """SB-T-004: with allowed_base, relative `..` is governed by relative_to() not the strict check.
+
+        Verifies the gating: the strict `..` check at security.py:137 is
+        ONLY active when allowed_base is None. When allowed_base IS set,
+        the relative_to() check fires (and rejects only if the resolved
+        path escapes the base).
+        """
+        from backpropagate.security import PathTraversalError, safe_path
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        # Relative path that escapes via "..", with an allowed_base, must raise.
+        # The point is: it raises via the relative_to() check, NOT the strict
+        # `..` check (which is gated off when allowed_base is set).
+        with pytest.raises(PathTraversalError, match="escapes"):
+            safe_path("../outside", allowed_base=base_dir)
+
 
 class TestPathTraversalError:
     """Tests for PathTraversalError exception."""

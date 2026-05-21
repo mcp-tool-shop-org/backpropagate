@@ -29,7 +29,9 @@ Installation commands for each feature:
 """
 
 import functools
+import importlib.util
 import logging
+import os
 import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -89,89 +91,147 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
 # FEATURE DETECTION
 # =============================================================================
 
+def _has_module(name: str) -> bool:
+    """Check whether a module is importable WITHOUT executing it.
+
+    Uses :func:`importlib.util.find_spec`, which inspects the import system's
+    finders without running module-level code. This avoids the side effects
+    of eagerly importing heavy / opinionated packages just to flip a boolean:
+
+    * ``unsloth`` registers ``torch.compile`` hooks and emits warnings
+    * ``wandb`` may probe network on import (rare, but observed in some envs)
+    * ``opentelemetry`` registers a global tracer provider
+    * ``flash_attn`` triggers a multi-second CUDA capability probe
+
+    ``find_spec`` returns a :class:`ModuleSpec` or ``None`` and is roughly
+    100x faster than the corresponding ``try: import X`` for a missing
+    package — the difference compounds across 8 optional features and is
+    visible on ``backprop --help`` startup latency.
+
+    Returns ``False`` if any error occurs during the lookup (e.g. a
+    half-installed package whose ``__init__.py`` cannot even be located).
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, ModuleNotFoundError):
+        # Some packages register pathological finders that throw on lookup
+        # rather than returning None — treat any failure as "not available".
+        return False
+
+
 def _detect_features() -> None:
-    """Detect which optional features are available."""
+    """Detect which optional features are available.
+
+    Honors the ``BACKPROPAGATE_DEFER_FEATURE_DETECTION`` env var as an opt-out
+    for power users who want the absolute-fastest CLI startup; when set, all
+    features remain ``False`` until :func:`refresh_features` is called.
+    """
     global FEATURES
 
-    # Unsloth feature
-    # Note: Unsloth uses torch.compile which isn't supported on Python 3.14+
-    # Suppress the import order warning - it's expected when checking availability
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message=".*Unsloth should be imported before.*")
-            import unsloth  # noqa: F401
-        FEATURES["unsloth"] = True
-        logger.debug("Feature 'unsloth' available")
-    except ImportError:
-        logger.debug("Feature 'unsloth' unavailable: unsloth not installed")
-    except RuntimeError as e:
-        # torch.compile not supported on Python 3.14+
-        logger.warning(f"Feature 'unsloth' unavailable (Python 3.14+ incompatibility): {e}")
-    except Exception as e:
-        logger.warning(f"Feature 'unsloth' failed to load: {e}")
+    if os.environ.get("BACKPROPAGATE_DEFER_FEATURE_DETECTION"):
+        logger.debug(
+            "Feature detection deferred via BACKPROPAGATE_DEFER_FEATURE_DETECTION"
+        )
+        return
+
+    # Unsloth feature — find_spec only, never actually imports unsloth
+    # (which would register torch.compile hooks and emit warnings).
+    # Note: Unsloth uses torch.compile which isn't supported on Python 3.14+,
+    # but the runtime check there happens only when unsloth is actually used.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*Unsloth should be imported before.*")
+        if _has_module("unsloth"):
+            FEATURES["unsloth"] = True
+            logger.debug("Feature 'unsloth' available (spec found, not imported)")
+        else:
+            logger.debug("Feature 'unsloth' unavailable: unsloth not installed")
 
     # UI feature (Gradio)
-    try:
-        import gradio  # noqa: F401
+    if _has_module("gradio"):
         FEATURES["ui"] = True
         logger.debug("Feature 'ui' available: gradio installed")
-    except ImportError:
+    else:
         logger.debug("Feature 'ui' unavailable: gradio not installed")
 
-    # Validation feature (Pydantic)
-    try:
-        import pydantic  # noqa: F401
-        import pydantic_settings  # noqa: F401
+    # Validation feature (Pydantic) — needs BOTH pydantic and pydantic_settings
+    if _has_module("pydantic") and _has_module("pydantic_settings"):
         FEATURES["validation"] = True
         logger.debug("Feature 'validation' available: pydantic installed")
-    except ImportError:
+    else:
         logger.debug("Feature 'validation' unavailable: pydantic not installed")
 
     # Export feature (llama-cpp-python)
-    try:
-        import llama_cpp  # noqa: F401
+    if _has_module("llama_cpp"):
         FEATURES["export"] = True
         logger.debug("Feature 'export' available: llama-cpp-python installed")
-    except ImportError:
+    else:
         logger.debug("Feature 'export' unavailable: llama-cpp-python not installed")
 
-    # Monitoring feature (WandB + psutil)
-    try:
-        import psutil  # noqa: F401
-        import wandb  # noqa: F401
+    # Monitoring feature (WandB + psutil) — needs both
+    if _has_module("psutil") and _has_module("wandb"):
         FEATURES["monitoring"] = True
         logger.debug("Feature 'monitoring' available: wandb and psutil installed")
-    except ImportError:
+    else:
         logger.debug("Feature 'monitoring' unavailable")
 
     # Observability feature (OpenTelemetry)
-    try:
-        import opentelemetry  # noqa: F401
+    if _has_module("opentelemetry"):
         FEATURES["observability"] = True
         logger.debug("Feature 'observability' available: opentelemetry installed")
-    except ImportError:
+    else:
         logger.debug("Feature 'observability' unavailable")
 
     # Flash Attention feature
-    try:
-        import flash_attn  # noqa: F401
+    if _has_module("flash_attn"):
         FEATURES["flash_attention"] = True
         logger.debug("Feature 'flash_attention' available")
-    except ImportError:
+    else:
         logger.debug("Feature 'flash_attention' unavailable")
 
     # Triton feature
-    try:
-        import triton  # noqa: F401
+    if _has_module("triton"):
         FEATURES["triton"] = True
         logger.debug("Feature 'triton' available")
-    except ImportError:
+    else:
         logger.debug("Feature 'triton' unavailable")
 
     # Log summary of detected features
     available = [name for name, enabled in FEATURES.items() if enabled]
     missing = [name for name, enabled in FEATURES.items() if not enabled]
     logger.debug(f"Feature detection complete: {len(available)} available, {len(missing)} missing")
+
+
+def check_unsloth_runtime() -> tuple[bool, str | None]:
+    """
+    Lazy runtime probe for unsloth's actual usability.
+
+    ``_detect_features`` only checks whether the ``unsloth`` package is
+    importable; it does NOT import the module (to avoid torch.compile hook
+    registration). Callers that are about to actually use unsloth should
+    call this helper first to surface Python-version incompatibilities
+    (unsloth currently requires Python <3.14 because it depends on
+    ``torch.compile``) or other init-time failures BEFORE the import fans
+    out across the training stack.
+
+    Returns:
+        ``(ok, error_message)`` — ``ok=True`` means import succeeded;
+        otherwise ``error_message`` describes why.
+    """
+    if not FEATURES.get("unsloth"):
+        return False, "unsloth package not installed"
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*Unsloth should be imported before.*"
+            )
+            import unsloth  # noqa: F401
+        return True, None
+    except RuntimeError as e:
+        # torch.compile not supported on Python 3.14+
+        return False, f"Python 3.14+ incompatibility: {e}"
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"unsloth failed to load: {e}"
 
 
 # Run detection on module load

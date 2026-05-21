@@ -60,22 +60,120 @@ EXIT_PARTIAL_SUCCESS = 3
 EXIT_INTERRUPTED = 130
 
 
+# =============================================================================
+# ARGPARSE TYPE VALIDATORS
+# =============================================================================
+# Defensive-coding helpers used by `create_parser` to reject obviously wrong
+# numeric values at parse time (argparse exits with code 2 by convention)
+# instead of letting them propagate to a deep stack trace much later.
+
+def _positive_int(value: str) -> int:
+    """argparse type for integers that must be > 0.
+
+    Raises:
+        argparse.ArgumentTypeError: if value is not parseable as int or <= 0.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}")
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be positive (> 0), got {n}")
+    return n
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type for integers that must be >= 0 (allows 0)."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be non-negative (>= 0), got {n}")
+    return n
+
+
+def _port_int(value: str) -> int:
+    """argparse type for TCP port numbers (1..65535)."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected an integer port, got {value!r}")
+    if not (1 <= n <= 65535):
+        raise argparse.ArgumentTypeError(
+            f"port must be in range 1..65535, got {n}"
+        )
+    return n
+
+
+def _positive_float(value: str) -> float:
+    """argparse type for floats that must be > 0 (e.g. learning rate)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a float, got {value!r}")
+    if n <= 0.0:
+        raise argparse.ArgumentTypeError(
+            f"must be positive (> 0), got {n}"
+        )
+    return n
+
+
 # Patterns used to redact common secret-bearing tokens from non-verbose
-# error output. Conservative on purpose: prefer false-positives (a redacted
-# string) over leaking. Use `_print_error_redacted` for unexpected-exception
-# paths where the exception message may quote a downstream library payload.
+# error output. The previous catch-all (`(password|...)\s*[=:]\s*\S+`) had
+# two defects: (1) it matched plain prose like "the token: abc is wrong"
+# (false-positive — any sentence with a configuration-flavored word followed
+# by punctuation got mangled), and (2) the replacement template `\1=<REDACTED>`
+# hardcoded `=` regardless of whether the input used `:` or `=` (silently
+# rewriting the operator's input shape).
+#
+# Current shape:
+# - High-signal prefixes (Bearer, sk-, hf_, AKIA) trigger redaction on their
+#   own — these have low false-positive rates by construction.
+# - The keyword-prefixed pattern now requires an `=` or `:` AND at least 8
+#   non-space characters of value (with at least one digit or special char)
+#   — high-entropy enough to filter out prose. The separator is captured
+#   in group 2 and re-emitted in the replacement so `token: foo` stays
+#   `token: <REDACTED>` (NOT `token=<REDACTED>`).
+#
+# Negative-test expectations (NOT to be redacted):
+#   "the token: abc is wrong"        → unchanged (value too short, prose-like)
+#   "try a different password"       → unchanged (no separator)
+#   "Authorization: Bearer xyz"      → "Authorization: Bearer <REDACTED>"
+#   "api_key=sk_live_AbC123XyZ987"   → "api_key=<REDACTED>"
+#   "password=hunter2!@#secret_key"  → "password=<REDACTED>"
 _SECRET_PATTERNS = [
     (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
     (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
     (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
-    (re.compile(r"(password|passwd|pwd|token|api[_-]?key)\s*[=:]\s*\S+", re.IGNORECASE),
-     r"\1=<REDACTED>"),
+    # Keyword-prefixed credentials: require key=value OR key:value shape with
+    # a high-entropy value (>=8 non-space chars including >=1 digit-or-special).
+    # The separator (group 2) is preserved in the replacement.
+    (
+        re.compile(
+            r"(password|passwd|pwd|secret|token|api[_-]?key)"
+            r"(\s*[=:]\s*)"
+            r'(?=[^\s]*[\d!@#$%^&*()+\-./?_=])'  # lookahead: at least one digit/special
+            r"[^\s]{8,}",
+            re.IGNORECASE,
+        ),
+        r"\1\2<REDACTED>",
+    ),
 ]
 
 
 def _redact_secrets(text: str) -> str:
-    """Best-effort redaction of common secret patterns in error output."""
+    """
+    Best-effort redaction of common secret patterns in error output.
+
+    Designed to leave human-readable prose intact (e.g. "the token: abc is
+    wrong" is NOT redacted because "abc" is too short / has no digit) while
+    catching realistic credential leaks (e.g. "api_key=sk_live_AbC123XyZ987"
+    is redacted to "api_key=<REDACTED>"). The separator character (``:`` vs
+    ``=``) is preserved in the output to avoid silently rewriting the
+    operator's input shape.
+    """
     for pattern, replacement in _SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
@@ -470,21 +568,35 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_error("Model path contains null byte")
         return EXIT_USER_ERROR
 
-    # Resolve the input model path inside the parent directory it points at.
-    # This gives `safe_path` an explicit base to enforce traversal protection
-    # against, instead of relying on the (newly stricter) default behavior.
+    # Anchor the input model path to cwd by default — this matches the
+    # documented "export model from current dir / project dir" pattern and
+    # gives safe_path a meaningful containing box (the previous Wave 1 attempt
+    # passed `Path(args.model_path).parent.resolve()`, which is tautological:
+    # any path is inside its own parent, so the check collapsed to null-byte +
+    # exists only). Users with models stored elsewhere can pass an absolute
+    # path; we accept it but log a WARN to flag the cwd-sandbox opt-out.
+    cwd_resolved = Path.cwd().resolve()
     try:
-        input_base = Path(args.model_path).expanduser().parent.resolve()
+        model_path_raw = Path(args.model_path).expanduser()
     except (OSError, ValueError) as e:
         _print_error(f"Invalid model path: {e}")
         return EXIT_USER_ERROR
 
     try:
-        model_path = safe_path(
-            args.model_path,
-            must_exist=True,
-            allowed_base=input_base,
-        )
+        if model_path_raw.is_absolute():
+            _print_warning(
+                f"Absolute --model_path supplied; opting out of cwd sandbox: "
+                f"{model_path_raw}"
+            )
+            # Absolute-input: safe_path's default-stricter mode rejects ".."
+            # in absolute paths and outside-cwd ".." patterns.
+            model_path = safe_path(str(model_path_raw), must_exist=True)
+        else:
+            model_path = safe_path(
+                str(model_path_raw),
+                must_exist=True,
+                allowed_base=cwd_resolved,
+            )
     except PathTraversalError as e:
         _print_error(f"Security error: {e}")
         return EXIT_USER_ERROR
@@ -498,8 +610,8 @@ def cmd_export(args: argparse.Namespace) -> int:
 
     # Validate / resolve the output directory inside the current working
     # directory (the conventional "export-to-here" pattern). Users who want
-    # to write elsewhere can pass an absolute --output and we accept it.
-    cwd = Path.cwd()
+    # to write elsewhere can pass an absolute --output and we accept it (with
+    # a loud WARN to mirror the input-path opt-out signal).
     raw_output: Path
     if args.output:
         raw_output = Path(args.output).expanduser()
@@ -508,6 +620,14 @@ def cmd_export(args: argparse.Namespace) -> int:
 
     try:
         if raw_output.is_absolute():
+            if args.output:
+                # Only warn when the user explicitly supplied an absolute
+                # --output — auto-derived defaults under model_path.parent
+                # are an implementation detail, not a sandbox opt-out.
+                _print_warning(
+                    f"Absolute --output supplied; opting out of cwd sandbox: "
+                    f"{raw_output}"
+                )
             # Absolute output paths bypass the cwd-bound check but are still
             # normalized; safe_path with no allowed_base will reject ".."
             # patterns under the new default behavior.
@@ -516,7 +636,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             output_dir = safe_path(
                 str(raw_output),
                 must_exist=False,
-                allowed_base=cwd,
+                allowed_base=cwd_resolved,
             )
     except PathTraversalError as e:
         _print_error(f"Security error: output path escapes its allowed base: {e}")
@@ -912,15 +1032,15 @@ Exit codes (Ship Gate B2):
     )
     train_parser.add_argument(
         "--steps",
-        type=int,
+        type=_positive_int,
         default=100,
-        help="Number of training steps (default: 100)",
+        help="Number of training steps (default: 100; must be > 0)",
     )
     train_parser.add_argument(
         "--samples",
-        type=int,
+        type=_positive_int,
         default=None,
-        help="Maximum samples to use from dataset",
+        help="Maximum samples to use from dataset (must be > 0)",
     )
     train_parser.add_argument(
         "--batch-size",
@@ -929,15 +1049,15 @@ Exit codes (Ship Gate B2):
     )
     train_parser.add_argument(
         "--lr",
-        type=float,
+        type=_positive_float,
         default=2e-4,
-        help="Learning rate (default: 2e-4)",
+        help="Learning rate (default: 2e-4; must be > 0)",
     )
     train_parser.add_argument(
         "--lora-r",
-        type=int,
+        type=_positive_int,
         default=16,
-        help="LoRA rank (default: 16)",
+        help="LoRA rank (default: 16; must be > 0)",
     )
     train_parser.add_argument(
         "--output", "-o",
@@ -969,21 +1089,21 @@ Exit codes (Ship Gate B2):
     )
     multi_parser.add_argument(
         "--runs",
-        type=int,
+        type=_positive_int,
         default=5,
-        help="Number of training runs (default: 5)",
+        help="Number of training runs (default: 5; must be > 0)",
     )
     multi_parser.add_argument(
         "--steps",
-        type=int,
+        type=_positive_int,
         default=100,
-        help="Steps per run (default: 100)",
+        help="Steps per run (default: 100; must be > 0)",
     )
     multi_parser.add_argument(
         "--samples",
-        type=int,
+        type=_positive_int,
         default=1000,
-        help="Samples per run (default: 1000)",
+        help="Samples per run (default: 1000; must be > 0)",
     )
     multi_parser.add_argument(
         "--merge-mode",
@@ -1076,9 +1196,9 @@ Exit codes (Ship Gate B2):
     )
     ui_parser.add_argument(
         "--port", "-p",
-        type=int,
+        type=_port_int,
         default=7862,
-        help="Port to run the server on (default: 7862)",
+        help="Port to run the server on (default: 7862; must be in range 1..65535)",
     )
     ui_parser.add_argument(
         "--share",

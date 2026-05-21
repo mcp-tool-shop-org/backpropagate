@@ -666,7 +666,11 @@ class TestTrainerTrain:
                 assert isinstance(run, TrainingRun)
                 assert run.final_loss == 0.42
                 assert run.loss_history == [1.0, 0.7, 0.42]
-                assert run.run_id == "run_1"
+                import re
+                assert re.fullmatch(r"[a-f0-9]{32}", run.run_id), (
+                    f"run_id should be a UUID4 hex (32 chars), got {run.run_id!r}"
+                )
+                assert run.metadata.get("legacy_run_label") == "run_1"
 
     def test_train_appends_to_runs_list(self, temp_dir):
         """train() should append result to trainer.runs list."""

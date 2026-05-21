@@ -316,9 +316,14 @@ class TestWaitForSafeGPU:
             assert result is False
 
 
-@pytest.mark.integration
-class TestGPUMonitor:
-    """Tests for the GPUMonitor class."""
+class TestGPUMonitorConstruction:
+    """Pure-construction tests for GPUMonitor — no threads, no subprocess.
+
+    Split out from TestGPUMonitor (R-004 reaudit / SB-T-009) so that a unit
+    CI run (`pytest -m 'not integration'`) still exercises the cheap-but-
+    useful constructor smoke test. The class-level @pytest.mark.integration
+    on TestGPUMonitor below applies only to the threaded tests.
+    """
 
     def test_initialization(self):
         """Should initialize with default config."""
@@ -327,6 +332,16 @@ class TestGPUMonitor:
         assert monitor.config is not None
         assert monitor.device_index == 0
         assert monitor._thread is None
+
+
+@pytest.mark.integration
+class TestGPUMonitor:
+    """Threading / subprocess tests for the GPUMonitor class.
+
+    All tests in this class start a real monitoring thread; they belong in
+    the integration tier. Pure-construction tests live in
+    :class:`TestGPUMonitorConstruction` above.
+    """
 
     def test_start_stop(self):
         """Should start and stop monitoring thread."""

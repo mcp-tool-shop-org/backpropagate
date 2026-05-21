@@ -960,6 +960,173 @@ class TestCmdUI:
 
             assert result == 2
 
+    # ------------------------------------------------------------------ #
+    # SB-T-001: --share + --auth gate at the CLI layer.
+    #
+    # The library-side gate (test_ui_security.py::TestLaunchSecurity::
+    # test_launch_raises_on_share_without_auth) covers the defence-in-depth
+    # path at the launch() call site. These tests pin the CLI-layer
+    # contract — the [INPUT_AUTH_REQUIRED] structured prefix, the env-var
+    # opt-out, and the parsed-auth-tuple hand-off — that the library test
+    # cannot see. Together they form a regression dam: a future refactor
+    # that removes the CLI gate thinking "the library handles it" will
+    # still trip the [INPUT_AUTH_REQUIRED] assertion.
+    # ------------------------------------------------------------------ #
+
+    def test_cmd_ui_share_without_auth_blocked_by_default(self, capsys, monkeypatch):
+        """--share without --auth blocks with INPUT_AUTH_REQUIRED by default.
+
+        Pins the CLI-layer Wave 1 F-001 gate: when --share is supplied but
+        --auth is omitted, cmd_ui must return 1 AND emit the structured
+        [INPUT_AUTH_REQUIRED] prefix (an operator-facing contract that
+        scripts can parse).
+        """
+        from backpropagate.cli import cmd_ui
+
+        # Make sure the env-var opt-out isn't lingering from another test
+        monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
+
+        mock_launch = MagicMock()
+        with patch("backpropagate.ui.launch", mock_launch):
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 1
+            captured = capsys.readouterr()
+            # Structured prefix is the operator contract — pin it specifically
+            assert "[INPUT_AUTH_REQUIRED]" in captured.err
+            # And the human-readable reason should mention --auth
+            assert "--auth" in captured.err or "--auth" in captured.out
+            # launch() must never be called when the gate fires
+            mock_launch.assert_not_called()
+
+    def test_cmd_ui_share_with_auth_allowed(self, capsys):
+        """--share with --auth parses credentials and calls launch().
+
+        Pins the happy path through the CLI gate: the --auth string is split
+        on ':' into a (username, password) tuple AND passed through to
+        launch() AND cmd_ui returns 0.
+        """
+        from backpropagate.cli import cmd_ui
+
+        mock_launch = MagicMock()
+        with patch("backpropagate.ui.launch", mock_launch):
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth="alice:secret123",
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_launch.assert_called_once()
+            call_kwargs = mock_launch.call_args.kwargs
+            assert call_kwargs.get("auth") == ("alice", "secret123")
+            assert call_kwargs.get("share") is True
+
+    def test_cmd_ui_share_without_auth_opt_out_via_env(self, capsys, monkeypatch):
+        """Env opt-out lets --share through without --auth + emits a warning.
+
+        Operator override path: setting
+        BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false disables the
+        gate so --share without --auth proceeds, BUT the CLI must still emit
+        a loud unauthenticated-share warning so the operator can't miss it.
+        """
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "false")
+
+        mock_launch = MagicMock()
+        with patch("backpropagate.ui.launch", mock_launch):
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_launch.assert_called_once()
+            call_kwargs = mock_launch.call_args.kwargs
+            # When auth wasn't supplied, launch() should receive auth=None
+            assert call_kwargs.get("auth") is None
+            assert call_kwargs.get("share") is True
+
+            captured = capsys.readouterr()
+            # Loud warning required so the unauthenticated-share posture is
+            # not silent. Match on a load-bearing keyword that the production
+            # code uses ("no authentication" / "publicly").
+            combined = (captured.err + captured.out).lower()
+            assert (
+                "no authentication" in combined
+                or "publicly" in combined
+                or "anyone" in combined
+            ), f"Expected loud unauthenticated-share warning in output, got: {combined!r}"
+
+    def test_cmd_ui_share_without_auth_env_opt_in_explicit(self, capsys, monkeypatch):
+        """Setting env to 'true' explicitly is parity with the default.
+
+        Defensive against a future refactor that might invert the default —
+        explicit opt-in must keep the gate active.
+        """
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "true")
+
+        mock_launch = MagicMock()
+        with patch("backpropagate.ui.launch", mock_launch):
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 1
+            captured = capsys.readouterr()
+            assert "[INPUT_AUTH_REQUIRED]" in captured.err
+            mock_launch.assert_not_called()
+
+    def test_cmd_ui_local_without_share_no_auth_required(self, capsys, monkeypatch):
+        """Local UI (no --share) does NOT require --auth.
+
+        Sanity: the gate only fires when --share is on. Plain local UI
+        with no public exposure must launch without any auth requirement.
+        """
+        from backpropagate.cli import cmd_ui
+
+        # Default-on regardless of env (default mode)
+        monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
+
+        mock_launch = MagicMock()
+        with patch("backpropagate.ui.launch", mock_launch):
+            args = argparse.Namespace(
+                port=7860,
+                share=False,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_launch.assert_called_once()
+            call_kwargs = mock_launch.call_args.kwargs
+            assert call_kwargs.get("share") is False
+            assert call_kwargs.get("auth") is None
+
 
 # =============================================================================
 # CONFIG COMMAND TESTS

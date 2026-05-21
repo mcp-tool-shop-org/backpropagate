@@ -35,6 +35,7 @@ Usage:
 """
 
 import logging
+import re
 import secrets
 import sys
 import time
@@ -49,6 +50,7 @@ from .datasets import (
     DatasetLoader,
     ValidationResult,
 )
+from .exceptions import BackpropagateError
 from .feature_flags import (
     get_gpu_info,
     get_system_info,
@@ -148,6 +150,90 @@ def sanitize_text_input(text: str, max_length: int = 1000) -> str:
     # Remove null bytes and other problematic characters
     text = text.replace("\x00", "")
     return text.strip()
+
+
+# FB-011: user-facing error sanitization.
+# Raw exception messages from torch / transformers / huggingface_hub frequently
+# embed absolute filesystem paths (home directory, HF cache, internal model
+# layout). Surfacing those into the Gradio toast leaks both PII (the operator's
+# username) and an internal-map of the deployment that attackers shouldn't get
+# from a UI handler. The patterns below redact:
+#   - Unix-style absolute paths starting with /home/, /Users/, /root/
+#   - Windows-style absolute paths under C:\Users\<name>\, including UNC roots
+#   - The HF cache location (~/.cache/huggingface/...)
+#   - Whole tempdirs surfaced by tempfile / shutil
+# Truncate to a fixed limit so a 10 KB pyarrow traceback can't blow up the
+# toast component.
+_REDACTED = "<redacted-path>"
+_PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
+    re.compile(r"/tmp/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),
+    re.compile(r"~?/?\.cache/huggingface/[^\s'\":]*"),
+)
+
+
+def _redact_paths(text: str) -> str:
+    """
+    Replace absolute filesystem paths with ``<redacted-path>`` for UI display.
+
+    Used by ``sanitize_error_for_user`` so trainer / transformers errors that
+    embed the operator's home directory don't leak into the Gradio toast.
+    """
+    if not text:
+        return text
+    for pat in _PATH_REDACTION_PATTERNS:
+        text = pat.sub(_REDACTED, text)
+    return text
+
+
+def sanitize_error_for_user(
+    exc: BaseException,
+    operation: str,
+    max_length: int = 240,
+) -> tuple[str, str | None]:
+    """
+    Convert a backend exception into a user-safe display message (FB-011).
+
+    Returns a ``(message, suggestion)`` tuple:
+
+    - For ``BackpropagateError`` subclasses, return the structured
+      ``{code}: {message}`` plus the suggestion (already user-facing — these
+      are authored to be safe to display).
+    - For ``KeyboardInterrupt`` / ``RateLimitExceeded`` / other library
+      exceptions we let bubble up via ``gr.Error``, redact paths and trim.
+    - For any other exception type, return a generic "Internal error
+      (RUNTIME_UI). Check server logs for details." — the full traceback is
+      still logged server-side via ``logger.exception`` at the call site,
+      so operators see the real cause; users see something actionable
+      without internal paths leaking.
+
+    The ``operation`` argument is folded into the user-facing message
+    ("during training", "during export") so the toast tells the user which
+    handler failed even when the underlying exception is hidden.
+    """
+    # BackpropagateError: structured, user-authored — surface code + message.
+    if isinstance(exc, BackpropagateError):
+        code = exc.code or "BACKPROPAGATE_ERROR"
+        message = _redact_paths(exc.message or str(exc))
+        if len(message) > max_length:
+            message = message[: max_length - 1] + "…"
+        suggestion = exc.suggestion
+        if suggestion:
+            suggestion = _redact_paths(suggestion)
+            if len(suggestion) > max_length:
+                suggestion = suggestion[: max_length - 1] + "…"
+        return f"{code}: {message}", suggestion
+
+    # Anything else: hide the type + the full message; surface a stable
+    # operator-actionable string with the operation name only.
+    generic = (
+        f"Internal error during {operation} (RUNTIME_UI). "
+        "Check the server logs for full details."
+    )
+    return generic, None
 
 
 def generate_auth_token() -> str:
@@ -472,7 +558,7 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
         raise
     except FileNotFoundError as e:
         logger.error(f"Dataset file not found: {e}")
-        raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
+        raise gr.Error("File not found (path redacted). Check the server logs for details.", duration=10, title="File Not Found")
     except Exception as e:
         logger.exception("Failed to load dataset")
         log_security_event(
@@ -480,11 +566,12 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
             error=str(e)[:200],
             filename=getattr(file_obj, "name", "unknown"),
         )
-        raise gr.Error(
-            f"Failed to load dataset: {str(e)}",
-            duration=10,
-            title="Load Error",
-        )
+        # FB-011: don't leak the raw exception (may contain HF cache / home
+        # directory paths). Sanitize via the central helper.
+        user_msg, hint = sanitize_error_for_user(e, operation="dataset load")
+        if hint:
+            user_msg = f"{user_msg}\n\nHint: {hint}"
+        raise gr.Error(user_msg, duration=10, title="Load Error")
 
 
 def convert_dataset_format(target_format: str) -> tuple:
@@ -506,7 +593,11 @@ def convert_dataset_format(target_format: str) -> tuple:
 
     except Exception as e:
         logger.exception("Failed to convert dataset")
-        return f"Error: {str(e)}", ""
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="dataset conversion")
+        if suggestion:
+            return f"Error: {user_msg}\n\nHint: {suggestion}", ""
+        return f"Error: {user_msg}", ""
 
 
 def export_converted_dataset(output_path: str) -> str:
@@ -538,7 +629,11 @@ def export_converted_dataset(output_path: str) -> str:
 
     except Exception as e:
         logger.exception("Failed to export dataset")
-        return f"Error: {str(e)}"
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="dataset export")
+        if suggestion:
+            return f"Error: {user_msg}\n\nHint: {suggestion}"
+        return f"Error: {user_msg}"
 
 
 def refresh_dataset_preview(show_raw: bool) -> str:
@@ -562,7 +657,10 @@ def refresh_dataset_preview(show_raw: bool) -> str:
             ])
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        logger.exception("Failed to refresh dataset preview")
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, _suggestion = sanitize_error_for_user(e, operation="dataset preview refresh")
+        return f"Error: {user_msg}"
 
 
 # =============================================================================
@@ -761,14 +859,17 @@ def start_training(
             model=model_name,
             error=str(e)[:200],
         )
-        error_msg = str(e)[:200]
-        suggestion = getattr(e, "suggestion", None)
+        # FB-011: sanitize through the central helper so raw torch / HF /
+        # transformers messages (which embed home directory + HF cache
+        # paths) never reach the user toast or the status text. The full
+        # exception stays in the server log via logger.exception above.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="training")
         if suggestion:
-            gr.Warning(f"Training failed: {error_msg}", duration=10)
-            status = f"❌ Training failed: {error_msg}\n\n💡 **Suggestion:** {suggestion}"
+            gr.Warning(f"Training failed: {user_msg}", duration=10)
+            status = f"❌ Training failed: {user_msg}\n\n💡 **Suggestion:** {suggestion}"
         else:
-            gr.Warning(f"Training failed: {error_msg}", duration=10)
-            status = f"❌ Training failed: {error_msg}"
+            gr.Warning(f"Training failed: {user_msg}", duration=10)
+            status = f"❌ Training failed: {user_msg}"
         yield status, format_loss_plot(state.loss_history), get_gpu_status_display()
 
     finally:
@@ -805,7 +906,13 @@ def save_model(output_path: str, save_merged: bool) -> str:
         path = state.trainer.save(str(validated_path), save_merged=save_merged)
         return f"Model saved to: {path}"
     except Exception as e:
-        raise gr.Error(f"Save failed: {str(e)[:200]}", title="Save Error")
+        logger.exception("Model save failed")
+        # FB-011: sanitize before surfacing — save paths can include the
+        # operator's home directory and HF cache layout.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="save")
+        if suggestion:
+            user_msg = f"{user_msg}\n\nHint: {suggestion}"
+        raise gr.Error(f"Save failed: {user_msg}", title="Save Error") from e
 
 
 def export_model(
@@ -857,7 +964,13 @@ def export_model(
         summary: str = result.summary()
         return summary
     except Exception as e:
-        raise gr.Error(f"Export failed: {str(e)[:200]}", title="Export Error")
+        logger.exception("Model export failed")
+        # FB-011: sanitize export errors — these frequently embed the GGUF
+        # writer's internal temp paths and the HF cache layout.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="export")
+        if suggestion:
+            user_msg = f"{user_msg}\n\nHint: {suggestion}"
+        raise gr.Error(f"Export failed: {user_msg}", title="Export Error") from e
 
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
@@ -894,7 +1007,12 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
             return "Failed to register with Ollama. Check that Ollama is running."
 
     except Exception as e:
-        return f"Ollama registration failed: {str(e)}"
+        logger.exception("Ollama registration failed")
+        # FB-011: sanitize before returning the message to the UI markdown.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="Ollama registration")
+        if suggestion:
+            return f"Ollama registration failed: {user_msg}\n\nHint: {suggestion}"
+        return f"Ollama registration failed: {user_msg}"
 
 
 def list_ollama() -> str:
@@ -909,7 +1027,10 @@ def list_ollama() -> str:
         return "**Ollama Models:**\n" + "\n".join([f"- {m}" for m in models])
 
     except Exception as e:
-        return f"Error listing Ollama models: {str(e)}"
+        logger.exception("Failed to list Ollama models")
+        # FB-011: sanitize before surfacing.
+        user_msg, _suggestion = sanitize_error_for_user(e, operation="Ollama list")
+        return f"Error listing Ollama models: {user_msg}"
 
 
 def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str, temperature: float) -> str:
@@ -953,7 +1074,12 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
         return f"Modelfile created: {modelfile}\n\n```\n{content}\n```"
 
     except Exception as e:
-        return f"Failed to create Modelfile: {str(e)}"
+        logger.exception("Modelfile creation failed")
+        # FB-011: sanitize before returning the message to the UI markdown.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="Modelfile creation")
+        if suggestion:
+            return f"Failed to create Modelfile: {user_msg}\n\nHint: {suggestion}"
+        return f"Failed to create Modelfile: {user_msg}"
 
 
 def get_runs_table() -> list[list[Any]]:
@@ -1138,15 +1264,18 @@ def start_multi_run(
         )
 
     except Exception as e:
-        logger.error(f"Multi-run failed: {e}")
-        error_msg = str(e)
-        # Surface suggestion hints from BackpropagateError subtypes
-        suggestion = getattr(e, "suggestion", None)
+        logger.exception("Multi-run failed")
+        # FB-011: sanitize via the central helper. BackpropagateError
+        # subclasses still surface their code + suggestion; raw torch /
+        # transformers errors are collapsed to the generic message so
+        # absolute paths don't leak.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="multi-run training")
         if suggestion:
-            error_msg = f"{error_msg}\n\nSuggestion: {suggestion}"
-            gr.Warning(f"Multi-run failed: {str(e)[:100]} — {suggestion}", duration=10)
+            error_msg = f"{user_msg}\n\nSuggestion: {suggestion}"
+            gr.Warning(f"Multi-run failed: {user_msg} — {suggestion}", duration=10)
         else:
-            gr.Warning(f"Multi-run failed: {str(e)[:100]}", duration=10)
+            error_msg = user_msg
+            gr.Warning(f"Multi-run failed: {user_msg}", duration=10)
         status = f"Multi-run failed: {error_msg}"
         yield (
             status,
@@ -2489,6 +2618,97 @@ backprop config""",
     return app
 
 
+def _validate_auth_shape(auth: Any) -> None:
+    """
+    FB-012: Validate the shape of the ``auth`` kwarg before passing it to
+    Gradio.
+
+    Gradio's own validation is permissive in ways that can grant unintended
+    access — e.g. an empty list silently disables auth, a one-element tuple
+    raises a confusing internal TypeError, and a list containing a non-tuple
+    element gets coerced. Validate at the launch boundary so misconfigured
+    auth fails loudly rather than degrading to "no auth" or "auth-but-not-
+    in-the-shape-you-think".
+
+    Accepts:
+        - ``None`` (caller's responsibility to enforce share+auth)
+        - A 2-element tuple ``(username, password)`` — both non-empty strings.
+        - A non-empty list of such 2-element tuples (multi-user).
+        - A ``callable`` (Gradio supports custom auth functions).
+
+    Rejects everything else with ``BackpropagateError(
+    code="INPUT_AUTH_INVALID_SHAPE")`` and a hint enumerating the accepted
+    shapes.
+    """
+    if auth is None:
+        return
+
+    if callable(auth):
+        # Gradio supports custom auth callables — defer their validation to
+        # Gradio itself. Don't introspect the callable's signature; that
+        # creates a cross-version-fragile contract.
+        return
+
+    def _is_credential_pair(value: Any) -> bool:
+        if not isinstance(value, tuple):
+            return False
+        if len(value) != 2:
+            return False
+        username, password = value
+        if not isinstance(username, str) or not isinstance(password, str):
+            return False
+        # Empty strings are accepted by Gradio but produce a silently-
+        # broken login flow. Reject them at the boundary.
+        return bool(username) and bool(password)
+
+    accepted_shapes_hint = (
+        "Accepted shapes: (username, password) tuple of non-empty strings; "
+        "list of such tuples; or a callable (username, password) -> bool. "
+        "Empty strings, empty lists, and non-tuple elements are rejected."
+    )
+
+    if isinstance(auth, tuple):
+        if not _is_credential_pair(auth):
+            raise BackpropagateError(
+                message="auth tuple must be (username, password) of non-empty strings.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "tuple", "length": len(auth)},
+            )
+        return
+
+    if isinstance(auth, list):
+        if not auth:
+            raise BackpropagateError(
+                message="auth list must contain at least one (username, password) tuple — empty lists silently disable auth in Gradio.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "list", "length": 0},
+            )
+        for index, entry in enumerate(auth):
+            if not _is_credential_pair(entry):
+                raise BackpropagateError(
+                    message=(
+                        f"auth[{index}] must be a (username, password) tuple of non-empty strings."
+                    ),
+                    code="INPUT_AUTH_INVALID_SHAPE",
+                    suggestion=accepted_shapes_hint,
+                    details={"shape": "list", "bad_index": index},
+                )
+        return
+
+    # Anything else (dict, str, int, ...) — reject.
+    raise BackpropagateError(
+        message=(
+            f"auth must be None, a (username, password) tuple, a list of such tuples, "
+            f"or a callable. Got: {type(auth).__name__}"
+        ),
+        code="INPUT_AUTH_INVALID_SHAPE",
+        suggestion=accepted_shapes_hint,
+        details={"shape": type(auth).__name__},
+    )
+
+
 def launch(
     port: int = 7862,
     share: bool = False,
@@ -2502,11 +2722,18 @@ def launch(
         share: Create a public shareable link (default: False)
         auth: Authentication credentials. Required when share=True for security.
               Can be a tuple (username, password) or list of tuples for multiple users.
+              May also be a callable (per Gradio); deferred to Gradio's validation.
 
     Raises:
         ValueError: If share=True but no auth is provided AND
             BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE is not explicitly
             set to "false" (the default).
+        BackpropagateError(code="INPUT_AUTH_INVALID_SHAPE"):
+            If ``auth`` is not None and does not match one of the accepted
+            shapes (FB-012). Empty lists, one-element tuples, and tuples
+            with empty username/password strings are rejected at the
+            launch boundary instead of degrading to silent no-auth /
+            broken-login behavior inside Gradio.
 
     Security notes:
         - The ``require_auth_for_share`` flag (config + env var
@@ -2534,6 +2761,11 @@ def launch(
         # Multiple users
         launch(share=True, auth=[("user1", "pass1"), ("user2", "pass2")])
     """
+    # FB-012: validate auth shape BEFORE the share+auth gate so a malformed
+    # auth=([],) or auth=('admin',) fails loudly rather than silently
+    # disabling auth or hitting a confusing internal TypeError.
+    _validate_auth_shape(auth)
+
     # Security check: require auth when sharing publicly
     if share and auth is None and DEFAULT_SECURITY_CONFIG.require_auth_for_share:
         raise ValueError(

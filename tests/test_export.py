@@ -717,7 +717,7 @@ class TestPermissionErrorOnOutputDir:
         from backpropagate.export import export_lora
 
         with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
-            with pytest.raises(ExportError, match="Cannot create output directory"):
+            with pytest.raises(ExportError, match="Cannot create (output|parent) directory"):
                 export_lora(model=mock_peft_model, output_dir=temp_dir / "locked")
 
     def test_export_merged_permission_error(self, temp_dir, mock_peft_model, mock_tokenizer):
@@ -726,7 +726,7 @@ class TestPermissionErrorOnOutputDir:
         from backpropagate.export import export_merged
 
         with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
-            with pytest.raises(MergeExportError, match="Cannot create output directory"):
+            with pytest.raises(MergeExportError, match="Cannot create (output|parent) directory"):
                 export_merged(
                     model=mock_peft_model,
                     tokenizer=mock_tokenizer,

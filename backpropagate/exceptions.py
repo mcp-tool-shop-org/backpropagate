@@ -52,7 +52,10 @@ Usage:
         print(f"Training failed: {e}")
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     # Base
@@ -109,10 +112,14 @@ class BackpropagateError(Exception):
         message: Human-readable error description.
         details: Optional dict with additional context for debugging.
         suggestion: Optional suggestion for how to fix the error.
-        code: Machine-readable identifier (Ship Gate B1). Stable across
-              class renames. Defaults to the upper-cased class name
-              (e.g. ``DATASETNOTFOUNDERROR``); subclasses may set a more
-              human-friendly value like ``DATASET_NOT_FOUND``.
+        code: Machine-readable identifier (Ship Gate B1). Intended to be
+              STABLE across class renames — every subclass sets an explicit
+              value drawn from the Ship Gate registry prefixes
+              (``IO_``, ``CONFIG_``, ``PERM_``, ``DEP_``, ``RUNTIME_``,
+              ``PARTIAL_``, ``INPUT_``, ``STATE_``). When ``code`` is left
+              ``None`` we emit a debug log so missing codes stay visible
+              (the previous auto-derived ``cls.__name__.upper()`` default
+              silently drifted on every class rename).
         cause: The underlying exception, if any. Also chained via
                ``raise X from cause`` semantics (``self.__cause__``).
         retryable: Whether a caller can retry the operation without user
@@ -120,9 +127,10 @@ class BackpropagateError(Exception):
                    missing dataset file -> False). Defaults to ``False``.
 
     Backward compatibility:
-        ``code``, ``cause``, and ``retryable`` are optional keyword arguments
-        with defaults that preserve previous behavior. Existing callers that
-        only pass ``message`` / ``details`` / ``suggestion`` work unchanged.
+        ``code``, ``cause``, and ``retryable`` are optional keyword arguments.
+        Existing callers that only pass ``message`` / ``details`` /
+        ``suggestion`` work unchanged; ``code`` will be ``None`` (with a
+        debug log line) instead of a derived upper-case class name.
     """
 
     def __init__(
@@ -137,7 +145,21 @@ class BackpropagateError(Exception):
         self.message = message
         self.details = details or {}
         self.suggestion = suggestion
-        self.code = code if code is not None else self.__class__.__name__.upper()
+        # B-004: drop the auto-derived `cls.__name__.upper()` default — it
+        # silently broke the documented "stable across renames" contract on
+        # every subclass rename. Subclasses now set an explicit code; a
+        # missing code stays visible as `None` (debug-logged) instead of
+        # invisibly drifting.
+        self.code = code
+        if code is None:
+            # Debug-level (not warn) — base BackpropagateError is intentionally
+            # constructed in many user-facing codepaths without a stable code.
+            logger.debug(
+                "BackpropagateError instance has no stable `code`: "
+                "class=%s message=%r",
+                self.__class__.__name__,
+                message,
+            )
         self.cause = cause
         self.retryable = retryable
 
@@ -200,7 +222,7 @@ class UserInputError(BackpropagateError):
             message,
             details=details,
             suggestion=hint,
-            code=code or "USER_INPUT_ERROR",
+            code=code or "INPUT_VALIDATION_FAILED",
             retryable=False,
         )
 
@@ -211,7 +233,24 @@ class UserInputError(BackpropagateError):
 
 class ConfigurationError(BackpropagateError):
     """Invalid configuration or settings."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "CONFIG_INVALID",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class InvalidSettingError(ConfigurationError):
@@ -233,6 +272,7 @@ class InvalidSettingError(ConfigurationError):
             message,
             details={"setting": setting_name, "value": value, "expected": expected},
             suggestion=suggestion,
+            code="CONFIG_INVALID_SETTING",
         )
 
 
@@ -242,7 +282,24 @@ class InvalidSettingError(ConfigurationError):
 
 class DatasetError(BackpropagateError):
     """Base class for dataset-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "INPUT_DATASET_INVALID",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class DatasetNotFoundError(DatasetError):
@@ -254,7 +311,7 @@ class DatasetNotFoundError(DatasetError):
             f"Dataset not found: {path}",
             details={"path": str(path)},
             suggestion=suggestion or f"Check that the file exists at: {path}",
-            code="DATASET_NOT_FOUND",
+            code="INPUT_DATASET_NOT_FOUND",
             retryable=False,
         )
 
@@ -283,6 +340,7 @@ class DatasetParseError(DatasetError):
             message,
             details=details,
             suggestion=suggestion or "Check that the file contains valid JSON/CSV data",
+            code="INPUT_DATASET_PARSE_FAILED",
         )
 
 
@@ -307,6 +365,7 @@ class DatasetValidationError(DatasetError):
             full_message,
             details={"error_count": len(self.errors), "errors": self.errors[:20]},
             suggestion=suggestion,
+            code="INPUT_DATASET_VALIDATION_FAILED",
         )
 
 
@@ -333,6 +392,7 @@ class DatasetFormatError(DatasetError):
                 "supported_formats": supported_formats,
             },
             suggestion=suggestion,
+            code="INPUT_DATASET_FORMAT_UNSUPPORTED",
         )
 
 
@@ -342,7 +402,24 @@ class DatasetFormatError(DatasetError):
 
 class TrainingError(BackpropagateError):
     """Base class for training-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_TRAINING_FAILED",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class ModelLoadError(TrainingError):
@@ -361,6 +438,12 @@ class ModelLoadError(TrainingError):
             f"Failed to load model '{model_name}': {reason}",
             details={"model_name": model_name, "reason": reason},
             suggestion=suggestion or "Check that the model name is correct and you have network access",
+            code="DEP_MODEL_LOAD_FAILED",
+            # Most ModelLoadError instances come from transient network
+            # failures (HF Hub 503 / timeout). Callers may inspect
+            # ``details['reason']`` if they want to distinguish from
+            # "model name not found".
+            retryable=True,
         )
 
 
@@ -390,6 +473,7 @@ class TrainingAbortedError(TrainingError):
                 "steps_completed": steps_completed,
                 "checkpoint_path": checkpoint_path,
             },
+            code="RUNTIME_TRAINING_ABORTED",
         )
 
 
@@ -409,6 +493,7 @@ class CheckpointError(TrainingError):
         super().__init__(
             f"Failed to {operation} checkpoint at '{path}': {reason}",
             details={"operation": operation, "path": path, "reason": reason},
+            code="STATE_CHECKPOINT_INVALID",
         )
 
 
@@ -418,7 +503,24 @@ class CheckpointError(TrainingError):
 
 class ExportError(BackpropagateError):
     """Base class for model export errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_EXPORT_FAILED",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class LoRAExportError(ExportError):
@@ -439,6 +541,7 @@ class LoRAExportError(ExportError):
             message,
             details={"output_path": output_path},
             suggestion=suggestion or "Check that the model has LoRA adapters attached",
+            code="RUNTIME_LORA_EXPORT_FAILED",
         )
 
 
@@ -465,6 +568,7 @@ class GGUFExportError(ExportError):
                 "quantization": quantization,
             },
             suggestion=suggestion or "Ensure Unsloth is installed or llama.cpp convert script is available",
+            code="RUNTIME_GGUF_EXPORT_FAILED",
         )
 
 
@@ -475,6 +579,7 @@ class MergeExportError(ExportError):
         super().__init__(
             f"Merge export failed: {reason}",
             suggestion=suggestion,
+            code="RUNTIME_MERGE_EXPORT_FAILED",
         )
 
 
@@ -493,6 +598,11 @@ class OllamaRegistrationError(ExportError):
             f"Failed to register '{model_name}' with Ollama: {reason}",
             details={"model_name": model_name},
             suggestion=suggestion or "Ensure Ollama is installed and running (https://ollama.ai)",
+            code="DEP_OLLAMA_REGISTRATION_FAILED",
+            # Ollama daemon failures are typically transient (service
+            # starting, restarting, or temporarily unreachable). Callers
+            # implementing backoff should treat this as retryable.
+            retryable=True,
         )
 
 
@@ -502,7 +612,24 @@ class OllamaRegistrationError(ExportError):
 
 class GPUError(BackpropagateError):
     """Base class for GPU-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_GPU_ERROR",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class GPUNotAvailableError(GPUError):
@@ -512,6 +639,7 @@ class GPUNotAvailableError(GPUError):
         super().__init__(
             "No CUDA GPU available",
             suggestion=suggestion or "Ensure CUDA is installed and a compatible GPU is present",
+            code="DEP_GPU_NOT_AVAILABLE",
         )
 
 
@@ -536,6 +664,10 @@ class GPUMemoryError(GPUError):
             details={"required_gb": required_gb, "available_gb": available_gb},
             suggestion=suggestion or "Try reducing batch size, using gradient checkpointing, or a smaller model",
             code="RUNTIME_GPU_OOM",
+            # Not retryable by default — if the model literally won't fit, a
+            # retry just OOMs again. Callers who know they're dealing with a
+            # transient peak-allocation can construct a subclass or rebuild
+            # with retryable=True.
             retryable=False,
         )
 
@@ -556,7 +688,7 @@ class GPUTemperatureError(GPUError):
             f"GPU temperature critical: {temperature}°C (threshold: {threshold}°C)",
             details={"temperature": temperature, "threshold": threshold},
             suggestion=suggestion or "Wait for GPU to cool down or improve cooling",
-            code="GPU_TEMPERATURE_CRITICAL",
+            code="RUNTIME_GPU_TEMPERATURE_CRITICAL",
             # Retryable: temperature naturally recovers as the GPU cools.
             retryable=True,
         )
@@ -569,6 +701,7 @@ class GPUMonitoringError(GPUError):
         super().__init__(
             f"GPU monitoring failed: {reason}",
             suggestion=suggestion or "Install pynvml for GPU monitoring: pip install pynvml",
+            code="RUNTIME_GPU_MONITORING_FAILED",
         )
 
 
@@ -578,7 +711,24 @@ class GPUMonitoringError(GPUError):
 
 class SLAOError(BackpropagateError):
     """Base class for SLAO merging errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_SLAO_ERROR",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class SLAOMergeError(SLAOError):
@@ -600,6 +750,7 @@ class SLAOMergeError(SLAOError):
             message,
             details={"run_index": run_index},
             suggestion=suggestion,
+            code="RUNTIME_SLAO_MERGE_FAILED",
         )
 
 
@@ -618,6 +769,7 @@ class SLAOCheckpointError(SLAOError):
         super().__init__(
             f"SLAO checkpoint {operation} failed at '{path}': {reason}",
             details={"operation": operation, "path": path},
+            code="STATE_SLAO_CHECKPOINT_INVALID",
         )
 
 
@@ -671,6 +823,7 @@ class BatchOperationError(BackpropagateError):
                 "error_count": len(errors),
             },
             suggestion=suggestion,
+            code="PARTIAL_BATCH_OPERATION",
         )
 
     @property

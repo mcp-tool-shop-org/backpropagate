@@ -38,7 +38,16 @@ class SecurityWarning(UserWarning):
 
 
 class PathTraversalError(ValueError):
-    """Error raised when path traversal is detected."""
+    """Error raised when path traversal is detected.
+
+    Carries a stable Ship Gate B1 ``code`` (``INPUT_PATH_TRAVERSAL``) for
+    structured logging / machine-readable handling parallel to the
+    ``BackpropagateError`` hierarchy, even though this class inherits from
+    :class:`ValueError` (not :class:`BackpropagateError`) for compatibility
+    with callers that already catch ``ValueError``.
+    """
+
+    code: str = "INPUT_PATH_TRAVERSAL"
 
     def __init__(self, path: str, allowed_base: str | None = None):
         self.path = path

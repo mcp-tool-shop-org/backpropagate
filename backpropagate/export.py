@@ -136,7 +136,13 @@ def export_lora(
     adapter_name: str = "default",
 ) -> ExportResult:
     """
-    Export LoRA adapter only.
+    Export LoRA adapter only, atomically (B-006).
+
+    Writes flow into ``<output_dir>.partial`` first and ``shutil.move()``
+    promotes the directory to the final path on success. The partial
+    directory is removed on any failure so a disk-full crash mid-write
+    doesn't leave a half-populated adapter directory behind (which would
+    raise a cryptic 'state_dict missing keys' on the next resume).
 
     Args:
         model: PeftModel or path to saved model
@@ -151,16 +157,25 @@ def export_lora(
     """
     start_time = time.time()
     output_path = Path(output_dir)
+    partial_path = output_path.with_name(output_path.name + ".partial")
 
     try:
-        output_path.mkdir(parents=True, exist_ok=True)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
         raise ExportError(
-            f"Cannot create output directory: {e}",
+            f"Cannot create parent directory: {e}",
             suggestion=f"Check write permissions for {output_path.parent}"
         ) from e
     except OSError as e:
-        raise ExportError(f"Failed to create output directory: {e}") from e
+        raise ExportError(f"Failed to create parent directory: {e}") from e
+
+    if partial_path.exists():
+        shutil.rmtree(partial_path, ignore_errors=True)
+
+    try:
+        partial_path.mkdir(parents=True, exist_ok=False)
+    except OSError as e:
+        raise ExportError(f"Failed to create partial directory: {e}") from e
 
     try:
         if isinstance(model, (str, Path)):
@@ -176,7 +191,7 @@ def export_lora(
                 files_copied = 0
                 for pattern in ["adapter_*.safetensors", "adapter_*.bin", "adapter_config.json"]:
                     for f in src_path.glob(pattern):
-                        shutil.copy2(f, output_path / f.name)
+                        shutil.copy2(f, partial_path / f.name)
                         files_copied += 1
                 if files_copied == 0:
                     raise ExportError(
@@ -185,16 +200,25 @@ def export_lora(
                     )
         elif _is_peft_model(model):
             # Save from PeftModel
-            model.save_pretrained(output_path, adapter_name=adapter_name)
+            model.save_pretrained(partial_path, adapter_name=adapter_name)
         else:
             raise ExportError(
                 f"Cannot export LoRA from {type(model).__name__}",
                 suggestion="Expected PeftModel or path to saved adapter"
             )
+
+        # Atomic promote.
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        shutil.move(str(partial_path), str(output_path))
     except ExportError:
         raise
     except Exception as e:
         raise ExportError(f"LoRA export failed: {e}") from e
+    finally:
+        # Belt-and-braces cleanup on every path.
+        if partial_path.exists():
+            shutil.rmtree(partial_path, ignore_errors=True)
 
     export_time = time.time() - start_time
     size_mb = _get_dir_size_mb(output_path)
@@ -356,26 +380,52 @@ def export_gguf(
     model_name = model_name or "model"
 
     # Try Unsloth first (fastest)
+    # B-006: write into a sibling .partial directory so a mid-conversion
+    # disk-full / crash doesn't leave a half-written .gguf file at the
+    # final path. On success we move the produced .gguf into output_path.
     if _has_unsloth():
+        unsloth_partial = output_path / "_unsloth_partial"
+        if unsloth_partial.exists():
+            shutil.rmtree(unsloth_partial, ignore_errors=True)
+        try:
+            unsloth_partial.mkdir(parents=True, exist_ok=False)
+        except OSError as e:
+            raise GGUFExportError(
+                f"Failed to create partial directory: {e}",
+                output_path=str(output_path),
+                quantization=quant_str,
+            ) from e
+
         try:
             print("Exporting to GGUF format... this may take several minutes for large models.")
-            # Unsloth handles everything
+            # Unsloth handles everything (writes into the partial dir)
             model.save_pretrained_gguf(
-                str(output_path),
+                str(unsloth_partial),
                 tokenizer,
                 quantization_method=quant_str,
             )
-            # Find the generated GGUF file
-            gguf_files = list(output_path.glob("*.gguf"))
-            if gguf_files:
-                gguf_path = gguf_files[0]
-            else:
-                gguf_path = output_path / f"{model_name}-{quant_str}.gguf"
 
-            # Validate output exists
+            # Find the generated GGUF file in the partial dir.
+            gguf_files = list(unsloth_partial.glob("*.gguf"))
+            if not gguf_files:
+                raise GGUFExportError(
+                    f"GGUF file was not created in partial directory: {unsloth_partial}",
+                    output_path=str(output_path),
+                    quantization=quant_str,
+                    suggestion="Check Unsloth logs for conversion errors"
+                )
+
+            # Atomic promote: move the final .gguf into output_path.
+            final_gguf_name = gguf_files[0].name
+            gguf_path = output_path / final_gguf_name
+            if gguf_path.exists():
+                gguf_path.unlink()
+            shutil.move(str(gguf_files[0]), str(gguf_path))
+
+            # Validate output exists at the final path
             if not gguf_path.exists():
                 raise GGUFExportError(
-                    f"GGUF file was not created at expected path: {gguf_path}",
+                    f"GGUF file was not promoted to expected path: {gguf_path}",
                     output_path=str(output_path),
                     quantization=quant_str,
                     suggestion="Check Unsloth logs for conversion errors"
@@ -393,6 +443,11 @@ def export_gguf(
 
             logger.info(f"GGUF exported via Unsloth to {gguf_path} ({size_mb:.1f} MB)")
 
+            # B-006: clean up the partial dir (any leftover Unsloth scratch
+            # files that we didn't promote) before returning.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
+
             return ExportResult(
                 format=ExportFormat.GGUF,
                 path=gguf_path,
@@ -401,9 +456,15 @@ def export_gguf(
                 export_time_seconds=export_time,
             )
         except GGUFExportError:
+            # Clean up the partial dir on a structured failure too.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
             raise
         except Exception as e:
-            # Fall through to manual conversion
+            # Fall through to manual conversion. The partial dir is removed
+            # so the next attempt has a clean slot.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
             logger.warning(f"Unsloth GGUF export failed: {e}. Trying manual conversion...")
             print("WARNING: Unsloth GGUF export failed, falling back to llama.cpp conversion (slower)...")
 

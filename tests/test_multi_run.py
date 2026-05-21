@@ -328,12 +328,168 @@ class TestMultiRunTrainerDataChunking:
             seen_indices.update(indices)
 
     def test_data_chunk_wraparound(self, trainer):
-        """Should handle wraparound when dataset is smaller than needed."""
-        trainer.config.samples_per_run = 200
-        trainer.config.num_runs = 5
-        # Total needed: 1000 samples, but dataset only has 500
+        """Wraparound (samples_per_run * num_runs > dataset) cycles inside the train pool.
 
-        # The function should cycle through the dataset
+        SB-T-003 (a): the previous body was a comment + no assertion. The
+        Wave 1 multi_run.py fix carefully distinguishes (i) the wraparound
+        case (chunk_size <= train_pool_size, wrap inside [0, train_pool_size))
+        from (ii) the new ConfigurationError case (chunk_size > train_pool_size,
+        raise). This test pins case (i): wraparound succeeds without raising
+        AND respects the validation-holdout boundary on every wrap.
+        """
+        from datasets import Dataset
+
+        # 100 samples, 10 per run, 12 runs = forces wraparound through the train pool.
+        # With validate_every_run=True the holdout = max(int(100 * 0.10), 1) = 10
+        # → train_pool = [0, 90), val_holdout = [90, 100).
+        total_samples = 100
+        samples_per_run = 10
+        num_runs = 12
+
+        trainer.config.samples_per_run = samples_per_run
+        trainer.config.num_runs = num_runs
+        trainer.config.shuffle_data = False
+        trainer.config.replay_fraction = 0.0  # isolate the new-samples path
+        trainer.config.validate_every_run = True
+
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(total_samples)]})
+
+        # Expected train pool & holdout
+        val_start = total_samples - max(int(total_samples * 0.10), 1)
+        # = 100 - 10 = 90
+        assert val_start == 90
+
+        for run_idx in range(1, num_runs + 1):
+            chunk = trainer._get_data_chunk(dataset, run_idx)
+            assert chunk is not None
+            assert len(chunk) == samples_per_run
+            # The dataset values are deterministic strings; convert back to indices
+            for value in chunk["text"]:
+                # value looks like "sample_N"
+                idx = int(value.split("_")[1])
+                assert 0 <= idx < val_start, (
+                    f"Run {run_idx} produced a chunk containing index {idx} "
+                    f"which falls in the validation holdout [{val_start}, {total_samples}). "
+                    f"Wraparound must wrap inside the train pool only."
+                )
+
+    def test_get_data_chunk_raises_when_chunk_exceeds_train_pool(self):
+        """SB-T-003: chunk_size > train_pool with validation active → ConfigurationError.
+
+        Pins the Wave 1 multi_run.py:758 raise. A future change that silently
+        clamps chunk_size to train_pool_size to "be forgiving" would let
+        validation samples leak into training without any CI signal.
+        """
+        from datasets import Dataset
+
+        from backpropagate.exceptions import ConfigurationError
+
+        trainer = MultiRunTrainer(
+            model="test-model",
+            config=MultiRunConfig(
+                num_runs=3,
+                samples_per_run=100,  # > train pool of 50 - 5 = 45
+                validate_every_run=True,
+                shuffle_data=False,
+            ),
+        )
+
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(50)]})
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            trainer._get_data_chunk(dataset, 1)
+
+        # The error message must mention the actionable parameter
+        msg = str(exc_info.value).lower()
+        assert "samples_per_run" in msg or "samples per run" in msg, (
+            f"Error message should mention samples_per_run for operator hint: {msg}"
+        )
+
+    def test_get_replay_samples_clamped_to_train_pool(self):
+        """SB-T-003: replay indices stay inside [0, train_pool_size).
+
+        Pins the Wave 1 unification of replay + chunker on _get_train_pool_size.
+        A future regression that lets replay pull from [train_pool_size,
+        total_samples) would silently resurrect validation-holdout samples
+        into training, polluting the held-out set used to measure
+        catastrophic forgetting.
+        """
+        from datasets import Dataset
+
+        trainer = MultiRunTrainer(
+            model="test-model",
+            config=MultiRunConfig(
+                num_runs=5,
+                samples_per_run=20,
+                replay_fraction=0.5,
+                replay_strategy="all_previous",
+                validate_every_run=True,
+                shuffle_data=False,
+            ),
+        )
+
+        total_samples = 200
+        train_pool_size = total_samples - max(int(total_samples * 0.10), 1)  # = 180
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(total_samples)]})
+
+        # Run several replays from later run indices — these are the ones most
+        # likely to push past the train pool if the clamp regressed.
+        for run_idx in range(2, 6):
+            replay = trainer._get_replay_samples(dataset, run_idx=run_idx, count=10)
+            if replay is None:
+                continue
+            for value in replay["text"]:
+                idx = int(value.split("_")[1])
+                assert 0 <= idx < train_pool_size, (
+                    f"Replay for run {run_idx} surfaced index {idx} outside "
+                    f"the train pool [0, {train_pool_size}) — would leak the "
+                    f"validation holdout into the replay buffer."
+                )
+
+    def test_replay_uses_local_rng_not_global(self):
+        """SB-T-003: _get_replay_samples does NOT mutate the global random state.
+
+        Pins the Wave 1 random.Random fix. A future refactor that swaps the
+        local rng for random.sample(...) would re-introduce the global RNG
+        pollution that silently breaks deterministic-seed-controlled callers
+        running in the same process (MinHash for dedup, custom_filter, etc.).
+        """
+        import random
+
+        from datasets import Dataset
+
+        trainer = MultiRunTrainer(
+            model="test-model",
+            config=MultiRunConfig(
+                num_runs=5,
+                samples_per_run=20,
+                replay_fraction=0.5,
+                replay_strategy="random",
+                shuffle_data=False,
+            ),
+        )
+
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(200)]})
+
+        # Snapshot the global RNG state, call replay, then check the state
+        # against a reference draw from the same snapshot. If _get_replay_samples
+        # mutated the global state, the two draws will diverge.
+        random.seed(42)
+        snapshot = random.getstate()
+
+        # Reference draw — what should happen if the global state is untouched
+        random.setstate(snapshot)
+        reference = [random.random() for _ in range(10)]
+
+        # Reset and run replay between snapshot and the actual draw
+        random.setstate(snapshot)
+        _ = trainer._get_replay_samples(dataset, run_idx=3, count=5)
+        actual_after_replay = [random.random() for _ in range(10)]
+
+        assert actual_after_replay == reference, (
+            "Global random state mutated by _get_replay_samples — the local "
+            "random.Random(seed) protection has regressed. See multi_run.py:887."
+        )
 
 
 class TestMultiRunTrainerCallbacks:
@@ -1187,6 +1343,253 @@ class TestExperienceReplay:
         # by returning None or an empty dataset
         result = trainer._get_replay_samples(mock_ds, run_idx=1, count=20)
         # The function checks run_idx > 1, so for first run it returns None
+
+
+# =============================================================================
+# SB-T-005: SLAO replay strategy ALGORITHM tests
+#
+# The pre-existing TestExperienceReplay tests only assert config storage and
+# that `select` is called on a MagicMock — they don't exercise the strategy
+# branches at multi_run.py:848-874 or the local-Random determinism at
+# multi_run.py:887. A future refactor that swapped strategies or replaced
+# random.Random(seed) with random.sample(...) would silently regress the
+# anti-catastrophic-forgetting contract WITHOUT failing any test.
+#
+# These tests use a real HuggingFace Dataset.from_dict so we can read back
+# the actual selected indices and pin the strategy contract end-to-end.
+# =============================================================================
+
+class TestReplayStrategyAlgorithm:
+    """End-to-end strategy tests against the actual selection algorithm."""
+
+    @staticmethod
+    def _indices_from(chunk) -> list[int]:
+        """Decode 'sample_N' strings back to integer indices."""
+        return sorted(int(v.split("_")[1]) for v in chunk["text"])
+
+    def _build_trainer(self, **config_overrides):
+        defaults = {
+            "num_runs": 5,
+            "samples_per_run": 100,
+            "replay_fraction": 0.2,
+            "shuffle_data": False,
+        }
+        defaults.update(config_overrides)
+        return MultiRunTrainer(model="test-model", config=MultiRunConfig(**defaults))
+
+    def test_replay_strategy_recent_picks_most_recent_run(self):
+        """SB-T-005: 'recent' strategy draws ONLY from the previous run's chunk.
+
+        Pins the contract at multi_run.py:848-853 — replay for run_idx=3 must
+        sample inside [samples_per_run, 2*samples_per_run) (i.e. run 2's
+        indices). A future change that took 'recent' from the global window
+        would silently break the contract.
+        """
+        from datasets import Dataset
+
+        trainer = self._build_trainer(replay_strategy="recent", samples_per_run=100)
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        chunk = trainer._get_replay_samples(dataset, run_idx=3, count=20)
+        assert chunk is not None
+        indices = self._indices_from(chunk)
+
+        # Run 3's "recent" replay = previous run (run 2) = [100, 200)
+        for idx in indices:
+            assert 100 <= idx < 200, (
+                f"'recent' strategy for run_idx=3 returned index {idx} outside "
+                f"[100, 200) — the most recent prior chunk."
+            )
+        assert len(indices) == 20
+
+    def test_replay_strategy_random_is_deterministic_for_same_seed(self):
+        """SB-T-005: same (seed, run_idx) → identical replay indices.
+
+        Pins the random.Random(seed + run_idx + 1000) construction at
+        multi_run.py:887 — two calls with identical inputs MUST produce
+        identical outputs. Different run_idx must produce DIFFERENT outputs
+        (the + run_idx offset prevents per-run replay collisions).
+        """
+        from datasets import Dataset
+
+        trainer1 = self._build_trainer(replay_strategy="random", samples_per_run=100)
+        trainer2 = self._build_trainer(replay_strategy="random", samples_per_run=100)
+
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        # Same trainer config + same run_idx → identical results
+        first = self._indices_from(trainer1._get_replay_samples(dataset, run_idx=3, count=20))
+        second = self._indices_from(trainer2._get_replay_samples(dataset, run_idx=3, count=20))
+        assert first == second, (
+            "random.Random(seed) determinism contract violated: same "
+            "(seed, run_idx) returned different replay indices on a second call."
+        )
+
+        # Different run_idx → almost-certainly different indices
+        third = self._indices_from(trainer1._get_replay_samples(dataset, run_idx=4, count=20))
+        # We don't require complete disjointness (random sample with overlap is OK)
+        # but the sequences must not be identical with high confidence at count=20.
+        assert first != third, (
+            "Different run_idx values produced identical indices — the "
+            "+ run_idx offset at multi_run.py:887 may have regressed."
+        )
+
+    def test_replay_strategy_random_does_not_pollute_global_rng(self):
+        """SB-T-005: 'random' strategy MUST NOT mutate Python's global RNG state.
+
+        Wave 1's whole reason for the local random.Random() instance —
+        any other code in the process using random.* (datasketch MinHash
+        for dedup, custom_filter callbacks, transformers internals)
+        relies on deterministic state. A refactor back to random.sample(...)
+        would silently break that.
+        """
+        import random
+
+        from datasets import Dataset
+
+        trainer = self._build_trainer(replay_strategy="random", samples_per_run=100)
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        random.seed(42)
+        snapshot = random.getstate()
+
+        random.setstate(snapshot)
+        reference = [random.random() for _ in range(10)]
+
+        random.setstate(snapshot)
+        _ = trainer._get_replay_samples(dataset, run_idx=3, count=20)
+        post_replay = [random.random() for _ in range(10)]
+
+        assert post_replay == reference, (
+            "Global random state mutated by 'random' replay strategy — the "
+            "local random.Random(seed) protection (multi_run.py:887) regressed."
+        )
+
+    def test_replay_strategy_all_previous_includes_all_runs(self):
+        """SB-T-005: 'all_previous' draws from the union of every prior run's chunk.
+
+        Pins multi_run.py:864-867. With run_idx=5, every chunk from runs
+        1..4 (= [0, 4*samples_per_run)) must be represented in a
+        sufficiently large sample.
+        """
+        from datasets import Dataset
+
+        # Use small samples_per_run + large count so all 4 prior chunks are
+        # nearly certain to appear at least once.
+        trainer = self._build_trainer(
+            replay_strategy="all_previous",
+            samples_per_run=10,
+        )
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        # run_idx=5 → previously seen = [0, 4*10) = [0, 40)
+        # Take a count that exceeds the available pool so every prior index
+        # must appear (rng.sample(available, min(count, len(available)))).
+        chunk = trainer._get_replay_samples(dataset, run_idx=5, count=40)
+        assert chunk is not None
+        indices = set(self._indices_from(chunk))
+
+        # Expected pool: union of runs 1-4 chunks
+        for run_idx in range(1, 5):
+            chunk_start = (run_idx - 1) * 10
+            chunk_end = chunk_start + 10
+            chunk_indices = set(range(chunk_start, chunk_end))
+            assert chunk_indices & indices, (
+                f"'all_previous' replay for run 5 did not include any indices "
+                f"from run {run_idx} (expected at least one of {chunk_indices})."
+            )
+
+        # Every returned index must come from a prior run's chunk (here, [0, 40))
+        for idx in indices:
+            assert 0 <= idx < 40, (
+                f"'all_previous' returned index {idx} outside the union of "
+                f"prior chunks [0, 40)."
+            )
+
+    def test_replay_strategy_unknown_falls_back_to_recent(self):
+        """SB-T-005: unrecognised strategy values fall back to 'recent'.
+
+        Pins the default branch at multi_run.py:869-874. A typo in a config
+        or a renamed strategy must not silently produce a different
+        algorithm — it must behave identically to 'recent'.
+        """
+        from datasets import Dataset
+
+        trainer_recent = self._build_trainer(replay_strategy="recent", samples_per_run=100)
+        trainer_unknown = self._build_trainer(
+            replay_strategy="not-a-real-strategy",
+            samples_per_run=100,
+        )
+
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        # The fallback path uses identical math to 'recent', so for the same
+        # (seed, run_idx) the resulting indices must be identical.
+        recent_indices = self._indices_from(
+            trainer_recent._get_replay_samples(dataset, run_idx=3, count=20)
+        )
+        fallback_indices = self._indices_from(
+            trainer_unknown._get_replay_samples(dataset, run_idx=3, count=20)
+        )
+
+        assert recent_indices == fallback_indices, (
+            "Unknown strategy fallback did not behave identically to 'recent' — "
+            "the default branch at multi_run.py:869-874 may have regressed."
+        )
+
+    def test_replay_strategy_respects_train_pool_size_under_validation(self):
+        """SB-T-005: NO strategy may surface an index >= train_pool_size.
+
+        The single most important contract for SLAO: with
+        validate_every_run=True, replay must NEVER resurrect a validation-
+        holdout sample. The docstring at multi_run.py:832-838 explicitly
+        promises this. Tested across all 3 documented strategies.
+        """
+        from datasets import Dataset
+
+        total_samples = 200
+        train_pool_size = total_samples - max(int(total_samples * 0.10), 1)  # 180
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(total_samples)]})
+
+        for strategy in ("recent", "random", "all_previous"):
+            trainer = self._build_trainer(
+                replay_strategy=strategy,
+                samples_per_run=20,
+                validate_every_run=True,
+            )
+            for run_idx in (2, 4, 6):
+                chunk = trainer._get_replay_samples(dataset, run_idx=run_idx, count=10)
+                if chunk is None:
+                    continue
+                for idx in self._indices_from(chunk):
+                    assert 0 <= idx < train_pool_size, (
+                        f"strategy={strategy!r} run_idx={run_idx} returned "
+                        f"index {idx} >= train_pool_size {train_pool_size}. "
+                        f"Replay just leaked the validation holdout."
+                    )
+
+    def test_replay_sample_deterministic_across_invocations(self):
+        """SB-T-005: identical (seed, run_idx, count) → identical sample.
+
+        Stricter than the per-strategy determinism test — pins the entire
+        invocation to a byte-identical result. Catches any future change
+        that introduces non-determinism (e.g. iteration over a set with
+        a hash-randomized seed, or wall-clock seeding).
+        """
+        from datasets import Dataset
+
+        trainer = self._build_trainer(replay_strategy="all_previous", samples_per_run=50)
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        first = self._indices_from(trainer._get_replay_samples(dataset, run_idx=4, count=15))
+        second = self._indices_from(trainer._get_replay_samples(dataset, run_idx=4, count=15))
+        third = self._indices_from(trainer._get_replay_samples(dataset, run_idx=4, count=15))
+
+        assert first == second == third, (
+            "Same (run_idx=4, count=15) produced different replay indices "
+            "across three calls — non-determinism has crept into the "
+            "replay sampler."
+        )
 
 
 # =============================================================================

@@ -33,6 +33,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
+    BackpropagateError,
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
@@ -56,8 +58,108 @@ from .exceptions import (
 )
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
+from .logging_config import bind_run_context, unbind_run_context
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# B-017 HUGGINGFACE HUB TRANSIENT RETRY
+# =============================================================================
+# HF Hub has ~99.5% uptime with periodic 503/timeout spikes that last 30-60s.
+# A multi-hour training job that starts by loading a model + dataset will die
+# in the first 30s if HF blips during the load. tenacity wraps the call with
+# exponential backoff so a transient blip becomes a logged WARN instead of a
+# session-killing exception.
+#
+# Wrapped surfaces: model from_pretrained, dataset_load, snapshot_download.
+
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_SECONDS = 5
+_RETRY_MAX_SECONDS = 60
+_RETRY_MULTIPLIER = 2
+
+
+def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
+    """Return the exception classes tenacity should retry on for HF calls.
+
+    Imported lazily so the trainer module doesn't hard-require huggingface_hub
+    or requests at import time (they're transitively pulled by transformers,
+    but feature-flag style isolation is cheap and safer).
+    """
+    excs: list[type[BaseException]] = [ConnectionError, TimeoutError]
+    try:
+        import requests  # type: ignore
+
+        excs.extend([
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+        ])
+    except ImportError:
+        pass
+    try:
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+
+        excs.append(HfHubHTTPError)
+    except ImportError:
+        pass
+    return tuple(excs)
+
+
+def _retry_hf_call(
+    fn: Callable[..., Any],
+    *args: Any,
+    _label: str = "hf_call",
+    **kwargs: Any,
+) -> Any:
+    """B-017: invoke ``fn(*args, **kwargs)`` with tenacity-based retry.
+
+    Retries on transient HF Hub failures (5xx, 429, connection timeouts) up
+    to ``_RETRY_ATTEMPTS`` attempts with exponential backoff. Each retry is
+    logged at WARN with the URL hint, status (if available), and delay.
+    Non-transient exceptions and the final failure propagate to the caller
+    untouched.
+
+    Args:
+        fn: Callable to invoke (e.g. ``FastLanguageModel.from_pretrained``).
+        *args / **kwargs: Forwarded to ``fn``.
+        _label: Short string identifying the call site (used in retry logs).
+    """
+    from tenacity import (
+        before_sleep_log,
+        retry,
+        retry_if_exception_type,
+        stop_after_attempt,
+        wait_exponential,
+    )
+
+    transient_excs = _hf_transient_exceptions()
+
+    @retry(
+        stop=stop_after_attempt(_RETRY_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=_RETRY_MULTIPLIER,
+            min=_RETRY_BASE_SECONDS,
+            max=_RETRY_MAX_SECONDS,
+        ),
+        retry=retry_if_exception_type(transient_excs),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    def _call() -> Any:
+        return fn(*args, **kwargs)
+
+    try:
+        return _call()
+    except transient_excs as exc:
+        # Last attempt exhausted — log a structured failure line before
+        # re-raising so triage doesn't have to scroll back through retries.
+        logger.error(
+            f"HF transient retry exhausted: label={_label} "
+            f"err={type(exc).__name__}: {exc}"
+        )
+        raise
 
 __all__ = [
     "Trainer",
@@ -111,6 +213,9 @@ class Trainer:
         >>> trainer.save("./my-model")
     """
 
+    # B-002: OOM-recovery tuning constants (Trainer mirror of MultiRunTrainer).
+    _OOM_MAX_RETRIES_AT_MIN_BATCH = 3
+
     def __init__(
         self,
         model: str | None = None,
@@ -124,6 +229,13 @@ class Trainer:
         output_dir: str | None = None,
         use_unsloth: bool = True,
         train_on_responses: bool = True,  # Phase 1.1: Only compute loss on assistant responses
+        # B-002: opt out of OOM recovery (default ON for graceful degradation).
+        oom_recovery: bool = True,
+        # B-010: opt out of the Unsloth -> transformers fallback (default ON
+        # so an Unsloth nightly that breaks loading doesn't take a pipeline
+        # down; set False to make Unsloth failures hard-fail for operators
+        # who insist on Unsloth's speed).
+        unsloth_fallback: bool = True,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -147,6 +259,11 @@ class Trainer:
         # Phase 1.1: Train on responses only
         self._train_on_responses = train_on_responses
 
+        # B-002 / B-010: degradation knobs surfaced as instance attrs so the
+        # multi-run trainer (and operator callers) can introspect.
+        self.oom_recovery = oom_recovery
+        self.unsloth_fallback = unsloth_fallback
+
         # Internal state
         self._model: Any = None
         self._tokenizer: Any = None
@@ -160,6 +277,10 @@ class Trainer:
         logger.info(f"Trainer initialized: {self.model_name}")
         logger.info(f"  LoRA: r={self.lora_r}, alpha={self.lora_alpha}")
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
+        logger.info(
+            f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
+            f"unsloth_fallback={self.unsloth_fallback}"
+        )
 
     def _apply_windows_fixes(self) -> None:
         """Apply Windows-specific environment variables."""
@@ -220,6 +341,13 @@ class Trainer:
         """
         Load the model and tokenizer.
 
+        B-010: when ``use_unsloth=True`` and ``unsloth_fallback=True`` (the
+        defaults), an Unsloth load failure that is not a CUDA/network issue
+        falls through to the plain transformers + PEFT path. The fallback
+        produces a functionally equivalent (but slower) training setup so an
+        Unsloth nightly that breaks loading no longer takes the entire
+        pipeline down.
+
         Raises:
             ModelLoadError: If the model or tokenizer cannot be loaded
             GPUNotAvailableError: If CUDA is required but not available
@@ -231,7 +359,25 @@ class Trainer:
 
         try:
             if self.use_unsloth:
-                self._load_with_unsloth()
+                try:
+                    self._load_with_unsloth()
+                except (ImportError, RuntimeError):
+                    # Don't downgrade ImportError / RuntimeError — those are
+                    # the "your env is wrong" / "CUDA is wrong" signals the
+                    # surrounding except blocks rely on for accurate error
+                    # routing.
+                    raise
+                except Exception as unsloth_err:
+                    if not self.unsloth_fallback:
+                        raise
+                    # B-010: graceful degradation to plain transformers.
+                    logger.warning(
+                        f"Unsloth load failed ({type(unsloth_err).__name__}: "
+                        f"{unsloth_err}); falling back to transformers + PEFT. "
+                        "Set Trainer(unsloth_fallback=False) to disable."
+                    )
+                    self.use_unsloth = False
+                    self._load_with_transformers()
             else:
                 self._load_with_transformers()
         except ImportError as e:
@@ -262,16 +408,23 @@ class Trainer:
         logger.info("Model loaded successfully")
 
     def _load_with_unsloth(self) -> None:
-        """Load model using Unsloth for 2x faster training."""
+        """Load model using Unsloth for 2x faster training.
+
+        B-017: ``FastLanguageModel.from_pretrained`` is wrapped with the HF
+        Hub transient-retry decorator so a 5xx / 429 / connection timeout
+        from the Hub doesn't fail the load on the first blip.
+        """
         from unsloth import FastLanguageModel
 
         try:
-            self._model, self._tokenizer = FastLanguageModel.from_pretrained(
+            self._model, self._tokenizer = _retry_hf_call(
+                FastLanguageModel.from_pretrained,
                 model_name=self.model_name,
                 max_seq_length=self.max_seq_length,
                 dtype=None,  # Auto-detect
                 load_in_4bit=True,
                 trust_remote_code=settings.model.trust_remote_code,
+                _label=f"unsloth_from_pretrained:{self.model_name}",
             )
         except Exception as e:
             raise ModelLoadError(
@@ -299,7 +452,11 @@ class Trainer:
             ) from e
 
     def _load_with_transformers(self) -> None:
-        """Load model using standard transformers + PEFT."""
+        """Load model using standard transformers + PEFT.
+
+        B-017: model + tokenizer ``from_pretrained`` calls are wrapped in
+        the HF Hub transient-retry decorator.
+        """
         import torch
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -313,17 +470,21 @@ class Trainer:
         )
 
         # Load model
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._model = _retry_hf_call(
+            AutoModelForCausalLM.from_pretrained,
             self.model_name,
             quantization_config=bnb_config,
             device_map="auto",
             trust_remote_code=settings.model.trust_remote_code,
+            _label=f"transformers_from_pretrained:{self.model_name}",
         )
 
         # Load tokenizer
-        self._tokenizer = AutoTokenizer.from_pretrained(
+        self._tokenizer = _retry_hf_call(
+            AutoTokenizer.from_pretrained,
             self.model_name,
             trust_remote_code=settings.model.trust_remote_code,
+            _label=f"tokenizer_from_pretrained:{self.model_name}",
         )
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
@@ -454,16 +615,153 @@ class Trainer:
             )
 
         # Train
-        run_id = f"run_{len(self._training_runs) + 1}"
+        # B-001: each train() call gets a stable UUID4-derived correlation
+        # token. Pre-fix the run_id was f"run_{N}" which collided across
+        # Trainer instances (Wave 1 F-021). The token is bound into the
+        # structured-logger context, embedded in TrainingRun.metadata, and
+        # unbound in the finally block at the end of the method so it
+        # doesn't leak into the caller's thread.
+        run_id = uuid.uuid4().hex
+        legacy_run_label = f"run_{len(self._training_runs) + 1}"
+        bind_run_context(run_id=run_id, session_kind="single_run")
         start_time = time.time()
         loss_history: list[float] = []
+        status = "error"  # success path overwrites to "ok"
+        run: TrainingRun | None = None
 
-        logger.info(f"Starting training: {run_id}")
+        logger.info(f"run_started run_id={run_id} legacy_label={legacy_run_label}")
         logger.info(f"  Steps: {steps or settings.training.max_steps}")
         logger.info(f"  Samples: {len(train_dataset)}")
 
         try:
-            result = self._trainer.train()
+            # B-002: OOM-recovery loop. We re-instantiate the SFTTrainer on
+            # each retry so it picks up the halved batch / doubled accum.
+            oom_consecutive_at_min = 0
+            oom_retries = 0
+            result: Any = None
+
+            while True:
+                try:
+                    # Re-create SFTTrainer with current batch / accum on retry.
+                    # (The first iteration uses the trainer built above.)
+                    if oom_retries > 0:
+                        training_args = SFTConfig(
+                            output_dir=str(self.output_dir),
+                            per_device_train_batch_size=self.batch_size,
+                            gradient_accumulation_steps=self.gradient_accumulation,
+                            max_steps=steps or settings.training.max_steps,
+                            learning_rate=self.learning_rate,
+                            weight_decay=settings.training.weight_decay,
+                            warmup_steps=settings.training.warmup_steps,
+                            optim=settings.training.optim,
+                            lr_scheduler_type=settings.training.lr_scheduler_type,
+                            logging_steps=settings.training.logging_steps,
+                            save_steps=settings.training.save_steps,
+                            bf16=settings.training.bf16,
+                            fp16=settings.training.fp16,
+                            seed=settings.training.seed,
+                            overwrite_output_dir=True,
+                            dataloader_num_workers=0 if os.name == "nt" else 4,
+                            report_to="none",
+                            max_length=self.max_seq_length,
+                            packing=settings.data.packing,
+                        )
+                        self._trainer = SFTTrainer(
+                            model=self._model,
+                            processing_class=self._tokenizer,
+                            train_dataset=train_dataset,
+                            args=training_args,
+                        )
+
+                    result = self._trainer.train()
+                    break  # Success — exit retry loop
+
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except Exception as exc:
+                    # OOM detection (B-002): torch.cuda.OutOfMemoryError OR
+                    # RuntimeError whose message contains "out of memory".
+                    is_oom = False
+                    try:
+                        import torch as _torch
+
+                        if isinstance(exc, _torch.cuda.OutOfMemoryError):  # type: ignore[attr-defined]
+                            is_oom = True
+                    except (ImportError, AttributeError):
+                        pass
+                    if not is_oom and isinstance(exc, RuntimeError):
+                        is_oom = "out of memory" in str(exc).lower()
+
+                    if not self.oom_recovery or not is_oom:
+                        raise
+
+                    # OOM-specific recovery.
+                    import torch as _torch
+
+                    current_batch = self.batch_size
+                    current_accum = self.gradient_accumulation
+                    effective = current_batch * current_accum
+                    logger.warning(
+                        f"OOM detected (run_id={run_id}) batch={current_batch} "
+                        f"grad_accum={current_accum} effective={effective}: {exc}"
+                    )
+
+                    gc.collect()
+                    try:
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+
+                    if current_batch > 1:
+                        new_batch = max(1, current_batch // 2)
+                        new_accum = max(1, current_accum * 2)
+                        logger.warning(
+                            f"OOM recovery: halving batch {current_batch}->{new_batch}, "
+                            f"doubling grad_accum {current_accum}->{new_accum}"
+                        )
+                        self.batch_size = new_batch
+                        self.gradient_accumulation = new_accum
+                        oom_consecutive_at_min = 0
+                        oom_retries += 1
+                        continue
+
+                    # Already at floor.
+                    oom_consecutive_at_min += 1
+                    oom_retries += 1
+                    logger.error(
+                        f"OOM at batch=1 consecutive="
+                        f"{oom_consecutive_at_min}/{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
+                    )
+                    if oom_consecutive_at_min >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
+                        # B-002: surface as TrainingError (a BackpropagateError
+                        # subclass) so callers that catch TrainingError continue
+                        # to work; the code="RUNTIME_GPU_OOM" carries the
+                        # structured signal for programmatic handlers.
+                        err = TrainingError(
+                            f"GPU error during training: persistent CUDA OOM "
+                            f"at batch_size=1 ({oom_consecutive_at_min} "
+                            f"consecutive attempts); cannot recover automatically.",
+                            suggestion=(
+                                "Use a smaller model (e.g. 7B -> 3B), reduce "
+                                "max_seq_length, enable gradient_checkpointing, "
+                                "or apply quantization. Set "
+                                "Trainer(oom_recovery=False) to make OOMs "
+                                "hard-fail on the first attempt."
+                            ),
+                        )
+                        err.code = "RUNTIME_GPU_OOM"  # type: ignore[attr-defined]
+                        err.details = {  # type: ignore[attr-defined]
+                            "run_id": run_id,
+                            "consecutive_oom_at_min_batch": oom_consecutive_at_min,
+                        }
+                        raise err from exc
+
+                    # Below the threshold but at floor — retry once more
+                    # with the same args (transient OOM may clear after
+                    # empty_cache).
+                    continue
+
             duration = time.time() - start_time
 
             # Validate training result
@@ -487,6 +785,10 @@ class Trainer:
                 duration_seconds=duration,
                 samples_seen=len(train_dataset),
                 output_path=str(self.output_dir),
+                metadata={
+                    "legacy_run_label": legacy_run_label,
+                    "oom_retries": oom_retries,
+                },
             )
 
             self._training_runs.append(run)
@@ -498,6 +800,7 @@ class Trainer:
                     logger.warning(f"on_complete callback raised error: {cb_error}")
 
             logger.info(f"Training complete: loss={final_loss:.4f}, time={duration:.1f}s")
+            status = "ok"
             return run
 
         except KeyboardInterrupt:
@@ -506,6 +809,9 @@ class Trainer:
                 reason="User interrupted training",
                 steps_completed=getattr(self._trainer.state, 'global_step', 0) if self._trainer else 0,
             ) from None
+        except BackpropagateError:
+            # Already structured — propagate without re-wrapping (B-002 path).
+            raise
         except RuntimeError as e:
             error_msg = str(e).lower()
             if "out of memory" in error_msg or "cuda" in error_msg:
@@ -523,6 +829,13 @@ class Trainer:
             if callback and callback.on_error:
                 callback.on_error(e)
             raise TrainingError(f"Training failed: {e}") from e
+        finally:
+            # B-001: emit run_ended with status and release the context-var
+            # binding so the thread doesn't carry our run_id into the next
+            # caller. We deliberately do this in `finally` so the log line
+            # fires on both happy and error paths.
+            logger.info(f"run_ended run_id={run_id} status={status}")
+            unbind_run_context("run_id", "session_kind")
 
     def _load_dataset(
         self,
@@ -557,10 +870,12 @@ class Trainer:
 
         try:
             if dataset is None:
-                # Use default dataset from config
-                ds = load_dataset(
+                # Use default dataset from config (B-017: retry on transient HF Hub failures)
+                ds = _retry_hf_call(
+                    load_dataset,
                     settings.data.dataset_name,
                     split=settings.data.dataset_split,
+                    _label=f"load_dataset:{settings.data.dataset_name}",
                 )
             elif isinstance(dataset, DatasetLoader):
                 # DatasetLoader passed directly — use its validated output
@@ -607,8 +922,14 @@ class Trainer:
                     ds = loader.to_hf_dataset()
                 else:
                     # No file extension — assume HuggingFace dataset name
+                    # B-017: retry on transient HF Hub failures (5xx, 429, timeouts).
                     try:
-                        ds = load_dataset(dataset, split=settings.data.dataset_split)
+                        ds = _retry_hf_call(
+                            load_dataset,
+                            dataset,
+                            split=settings.data.dataset_split,
+                            _label=f"load_dataset:{dataset}",
+                        )
                     except Exception as e:
                         raise DatasetError(
                             f"Failed to load HuggingFace dataset '{dataset}': {e}",
@@ -670,55 +991,108 @@ class Trainer:
 
         return tokenized
 
-    def save(self, path: str | None = None, save_merged: bool = False) -> str:
+    def save(
+        self,
+        path: str | None = None,
+        save_merged: bool = False,
+        run_id: str | None = None,
+    ) -> str:
         """
-        Save the trained model.
+        Save the trained model atomically.
+
+        B-006: writes flow into ``<path>.partial`` first and ``shutil.move()``
+        promotes the directory to the final path on success. The partial
+        directory is cleaned up on any failure path so the operator never
+        sees a half-written PEFT directory (config.json present, weights
+        missing — which raises a cryptic 'state_dict missing keys' on the
+        next resume attempt).
 
         Args:
             path: Output path (default: output_dir/lora)
             save_merged: Whether to save merged weights (larger but standalone)
+            run_id: Optional correlation token (B-001) persisted into a
+                ``run_id`` file inside the saved checkpoint dir so operators
+                can grep by the same identifier across logs + manifests.
 
         Returns:
             Path to saved model
 
         Raises:
             TrainingError: If no model loaded or save fails
+            CheckpointError: If atomic promotion fails
         """
+        import shutil
+
         from .exceptions import CheckpointError
 
         if not self._is_loaded:
             raise TrainingError("No model loaded. Call load_model() or train() first.")
 
         output_path = Path(path or self.output_dir / "lora")
+        partial_path = output_path.with_name(output_path.name + ".partial")
 
+        # Ensure parent exists; the atomic promote at the end places the
+        # leaf directory.
         try:
-            output_path.mkdir(parents=True, exist_ok=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
         except PermissionError as e:
             raise CheckpointError(
                 "save", str(output_path),
-                f"Permission denied creating directory: {e}"
+                f"Permission denied creating parent directory: {e}"
             ) from e
         except OSError as e:
             raise CheckpointError(
                 "save", str(output_path),
-                f"Failed to create directory: {e}"
+                f"Failed to create parent directory: {e}"
+            ) from e
+
+        # Wipe any leftover .partial from a previous crash.
+        if partial_path.exists():
+            shutil.rmtree(partial_path, ignore_errors=True)
+
+        try:
+            partial_path.mkdir(parents=True, exist_ok=False)
+        except OSError as e:
+            raise CheckpointError(
+                "save", str(partial_path),
+                f"Failed to create partial directory: {e}"
             ) from e
 
         try:
             if save_merged and self.use_unsloth:
                 self._model.save_pretrained_merged(
-                    str(output_path),
+                    str(partial_path),
                     self._tokenizer,
                     save_method="merged_16bit",
                 )
             else:
-                self._model.save_pretrained(str(output_path))
-                self._tokenizer.save_pretrained(str(output_path))
+                self._model.save_pretrained(str(partial_path))
+                self._tokenizer.save_pretrained(str(partial_path))
+
+            # B-001: drop run_id into the checkpoint dir so an operator can
+            # match the on-disk artefact back to a log session without
+            # cross-referencing wall-clock timestamps.
+            if run_id is not None:
+                try:
+                    (partial_path / "run_id").write_text(run_id, encoding="utf-8")
+                except OSError as e:
+                    logger.warning(f"Failed to write run_id file: {e}")
+
+            # Atomic promote.
+            if output_path.exists():
+                shutil.rmtree(output_path)
+            shutil.move(str(partial_path), str(output_path))
+        except CheckpointError:
+            raise
         except Exception as e:
             raise CheckpointError(
                 "save", str(output_path),
                 str(e)
             ) from e
+        finally:
+            # Belt-and-braces: leave no .partial behind on any path.
+            if partial_path.exists():
+                shutil.rmtree(partial_path, ignore_errors=True)
 
         logger.info(f"Model saved to: {output_path}")
         return str(output_path)

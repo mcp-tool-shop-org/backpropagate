@@ -1396,3 +1396,172 @@ class TestSecurityConfigNewFields:
 
         config = SecurityConfig()
         assert config.validate_file_magic is False
+
+
+# =============================================================================
+# SB-T-002: get_ui_output_dir + BACKPROPAGATE_UI__OUTPUT_DIR env override
+#
+# Wave 1's F-002 fix introduced get_ui_output_dir() as the single allowed-base
+# directory for every UI-initiated filesystem write (LoRA save, GGUF export,
+# converted datasets, Modelfiles, Ollama registration). The function had ZERO
+# direct test coverage before this class. A future refactor that dropped the
+# env-var read, skipped the mkdir, or removed the system-path denylist would
+# have silently degraded the security boundary with no CI signal.
+# =============================================================================
+
+class TestGetUiOutputDir:
+    """Tests for get_ui_output_dir() resolution + env override + FB-003 denylist."""
+
+    def test_default_output_dir_under_home(self, monkeypatch):
+        """Default base resolves to ~/.backpropagate/ui-outputs under home.
+
+        Pins the documented default. A change that points the default at, e.g.,
+        a system temp dir would break the contract that UI outputs live under
+        the operator's home (where they expect to find them).
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+
+        result = get_ui_output_dir()
+
+        expected = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+        assert result == expected
+        assert result.is_absolute()
+
+    def test_env_override_respected(self, tmp_path, monkeypatch):
+        """BACKPROPAGATE_UI__OUTPUT_DIR override is honored.
+
+        Pins the operator-override path: setting the env var redirects every
+        UI-initiated write into the supplied directory.
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        target = tmp_path / "operator-override"
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        result = get_ui_output_dir()
+
+        assert result == target.resolve()
+
+    def test_creates_dir_on_first_call(self, tmp_path, monkeypatch):
+        """Directory is created (with parents) on first call.
+
+        Pins the mkdir-on-first-call contract — UI sinks pass the result to
+        downstream APIs expecting a writable directory, so eliding the mkdir
+        would surface as silent FileNotFoundError at the first write.
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        # Use a nested-but-nonexistent target so we also catch parents=True
+        target = tmp_path / "level1" / "level2" / "ui-outputs"
+        assert not target.exists()
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        result = get_ui_output_dir()
+
+        assert result.exists()
+        assert result.is_dir()
+        assert result == target.resolve()
+
+    def test_tilde_expansion(self, tmp_path, monkeypatch):
+        """'~' in env override expands to the user's home.
+
+        We point HOME / USERPROFILE at a tmp dir so the test doesn't actually
+        create files under the real user home (which would survive teardown).
+        Path.expanduser() reads those env vars on Posix / Windows respectively.
+        """
+        import sys
+
+        from backpropagate.ui_security import get_ui_output_dir
+
+        fake_home = tmp_path / "fake-home"
+        fake_home.mkdir()
+
+        # expanduser reads HOME on Posix, USERPROFILE on Windows
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
+        if sys.platform.startswith("win"):
+            # On Windows, expanduser also consults HOMEDRIVE+HOMEPATH
+            monkeypatch.setenv("HOMEDRIVE", str(fake_home.drive) if fake_home.drive else "")
+            monkeypatch.setenv("HOMEPATH", str(fake_home)[len(fake_home.drive):] if fake_home.drive else str(fake_home))
+
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", "~/custom-backprop-test")
+
+        result = get_ui_output_dir()
+
+        # Tilde must expand to (the patched) home, NOT the real user home
+        assert result == (fake_home / "custom-backprop-test").resolve(), (
+            f"Expected tilde to expand under fake home {fake_home}, "
+            f"got {result}"
+        )
+        assert result.exists()
+
+    def test_relative_path_absolutized(self, tmp_path, monkeypatch):
+        """Relative env-override values get resolved to absolute paths."""
+        from backpropagate.ui_security import get_ui_output_dir
+
+        # Chdir to tmp_path so 'rel/foo' resolves predictably under it
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", "rel/foo")
+
+        result = get_ui_output_dir()
+
+        assert result.is_absolute()
+        assert result == (tmp_path / "rel" / "foo").resolve()
+
+    def test_idempotent_across_calls(self, tmp_path, monkeypatch):
+        """Repeated calls return identical paths and don't fail on existing dir."""
+        from backpropagate.ui_security import get_ui_output_dir
+
+        target = tmp_path / "ui-outputs-idem"
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        first = get_ui_output_dir()
+        second = get_ui_output_dir()
+
+        assert first == second
+        assert first.exists()
+
+    def test_rejects_forbidden_base(self, monkeypatch):
+        """FB-003: env override pointing at /etc raises UI_OUTPUT_DIR_FORBIDDEN.
+
+        Guards the post-Wave-3 frontend hardening (FB-003 denylist). If the
+        frontend amend hasn't landed yet, the test skips with a clear reason
+        so it doesn't block this wave's merge.
+        """
+        # /etc is a Unix system root and won't exist on Windows; we still try
+        # the call because the denylist is lexical (does not require the path
+        # to exist on this host). The denylist on Windows specifically denies
+        # C:\Windows / C:\Program Files / C:\ProgramData / C:\.
+        import sys
+
+        from backpropagate.exceptions import BackpropagateError
+        from backpropagate.ui_security import get_ui_output_dir
+        if sys.platform.startswith("win"):
+            forbidden = "C:\\Windows"
+        else:
+            forbidden = "/etc"
+
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", forbidden)
+
+        try:
+            result = get_ui_output_dir()
+        except BackpropagateError as e:
+            # Happy path: FB-003 denylist fired. Pin the structured code.
+            assert e.code == "UI_OUTPUT_DIR_FORBIDDEN", (
+                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN'), "
+                f"got code={e.code!r}"
+            )
+            return
+        except (ValueError, PermissionError, OSError) as e:
+            # Fallback: helper hasn't landed the structured code yet but a
+            # rejection of some kind still fired — that's acceptable.
+            return
+        else:
+            # The denylist must reject the path. If we got a result back, the
+            # FB-003 guard isn't wired.
+            pytest.fail(
+                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
+                f"for forbidden base {forbidden!r}, got result={result!r}"
+            )

@@ -295,7 +295,7 @@ jobs:
       - name: TruffleHog Secret Scan
         # --only-verified means TruffleHog actively verified the secret against the live API
         # — these are the highest-confidence positives. Fail the job on any such finding.
-        uses: trufflesecurity/trufflehog@34e114876b0b11c390a56381ad16ebd13914f8d5  # v3.88.0
+        uses: trufflesecurity/trufflehog@37b77001d0174ebec2fcca2bd83ff83a6d45a3ab  # v3.95.3
         with:
           extra_args: --only-verified --fail --results=json
 
@@ -405,7 +405,7 @@ jobs:
         working-directory: site
         run: npm run build
 
-      - uses: actions/upload-pages-artifact@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v4
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
         with:
           path: site/dist
 
@@ -432,4 +432,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@ddc015e5ed99942b2253d8ea16a0586a01ef2ab1  # v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5

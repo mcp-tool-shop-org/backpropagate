@@ -214,6 +214,7 @@ class TestLaunchSecurity:
 
     def test_launch_raises_on_share_without_auth(self):
         """launch should raise ValueError when share=True without auth."""
+        pytest.importorskip("gradio")
         from backpropagate.ui_gradio_legacy import launch
 
         with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
@@ -225,6 +226,7 @@ class TestLaunchSecurity:
 
     def test_launch_no_error_with_auth(self):
         """launch should not raise when share=True with auth."""
+        pytest.importorskip("gradio")
         from backpropagate.ui_gradio_legacy import launch
 
         with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
@@ -236,6 +238,7 @@ class TestLaunchSecurity:
 
     def test_launch_passes_auth_to_gradio(self):
         """launch should pass auth credentials to Gradio."""
+        pytest.importorskip("gradio")
         from backpropagate.ui_gradio_legacy import launch
 
         with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:

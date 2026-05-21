@@ -236,7 +236,7 @@ def _extract_client_ip(request: gr.Request | None) -> str:
 #   - Windows system + program-files trees + ``ProgramData``
 #   - Windows per-user credential dirs (``%USERPROFILE%\.ssh``, AppData crypto)
 _FORBIDDEN_OUTPUT_BASE_CATEGORIES = (
-    "system roots (/, /etc, /usr, /var, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
+    "system trees (/etc, /usr, /var, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
     "root home (/root)",
     "user credential dirs (~/.ssh, ~/.aws, ~/.kube, ~/.docker, ~/.gnupg, ~/.config)",
     "Windows system roots (C:\\Windows, C:\\Program Files, C:\\Program Files (x86), C:\\ProgramData)",
@@ -254,8 +254,13 @@ def _forbidden_output_bases() -> list[Path]:
     works on lexical comparison after ``resolve()``, so a Linux denylist
     entry on a Windows host is harmless (just never matches).
     """
+    # Exact path roots ("/" and "C:\\") are intentionally NOT in this list:
+    # `is_relative_to` against the root matches every absolute path on the
+    # platform, which would also reject legitimate non-home bases like /tmp,
+    # /opt, /srv, C:\Temp, etc. The enumerated system trees below cover the
+    # actual dangerous surface — anything outside both home AND these trees
+    # is the operator's choice to make.
     raw: list[str] = [
-        "/",
         "/etc",
         "/proc",
         "/sys",
@@ -268,7 +273,6 @@ def _forbidden_output_bases() -> list[Path]:
         "/bin",
         "/sbin",
         "/root",
-        "C:\\",
         "C:\\Windows",
         "C:\\Program Files",
         "C:\\Program Files (x86)",

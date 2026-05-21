@@ -117,8 +117,14 @@ jobs:
 
       - name: Run Bandit scan (SARIF — all severities to Security tab)
         run: |
+          # --exit-zero: this step's job is to UPLOAD all findings to the
+          # GitHub Security tab as SARIF. The gating happens in the next
+          # step. Without --exit-zero, bandit exits non-zero on any LOW-
+          # severity finding (which we intentionally don't gate on), which
+          # silently fails the job before the gating step even runs.
           bandit -r backpropagate/ \
             -c pyproject.toml \
+            --exit-zero \
             -f sarif \
             -o bandit-results.sarif
 
@@ -280,6 +286,11 @@ jobs:
           severity: 'MEDIUM,HIGH,CRITICAL'
           exit-code: '1'
           ignore-unfixed: true
+          # The action doesn't auto-detect .trivyignore in cwd — pass the
+          # path explicitly. File documents the baseline of pre-existing
+          # transitive-dep CVEs (per baseline-before-enforce doctrine);
+          # remove entries as the dep-bump wave fixes them.
+          trivyignores: '.trivyignore'
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
@@ -301,14 +312,13 @@ jobs:
         # --only-verified means TruffleHog actively verified the secret against the live API
         # — these are the highest-confidence positives. Fail the job on any such finding.
         #
-        # base/head: scan the full repo on push-to-main or workflow_dispatch
-        # (BASE==HEAD if we don't override, which errors out per the action's
-        # documented behavior). On pull_request events the action defaults to
-        # base=PR base / head=PR head, which is what we want.
+        # On push-to-main: action uses github.event.before/after (different
+        # commits, so diff scan works). On pull_request: action uses PR base/
+        # head. Earlier attempt to override with base:main + head:HEAD broke
+        # the push case because both resolved to the current main commit
+        # (BASE==HEAD → action errors). Let the action use its defaults.
         uses: trufflesecurity/trufflehog@37b77001d0174ebec2fcca2bd83ff83a6d45a3ab  # v3.95.3
         with:
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
           extra_args: --only-verified --fail --results=json
 
   build:

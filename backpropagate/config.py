@@ -258,7 +258,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Authentication
         require_auth: bool = False  # Set True in production
         auth_username: str | None = None
-        auth_password: str | None = Field(default=None, json_schema_extra={"secret": True})
+        auth_password: str | None = Field(default=None, json_schema_extra={"secret": True})  # nosec B105 — Pydantic metadata flag (the value "True" is a boolean, not a password)
 
         # Path restrictions
         allowed_paths: list[str] | None = None  # None = no restriction
@@ -266,7 +266,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
 
         # Session management
         session_timeout_minutes: int = 30
-        jwt_secret: str | None = Field(default=None, json_schema_extra={"secret": True})
+        jwt_secret: str | None = Field(default=None, json_schema_extra={"secret": True})  # nosec B105 — Pydantic metadata flag (the value "True" is a boolean, not a password)
         jwt_algorithm: str = "HS256"
 
         # CSRF protection

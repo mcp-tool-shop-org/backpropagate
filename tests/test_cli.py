@@ -48,7 +48,9 @@ class TestParser:
         """Test train command has correct defaults."""
         args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
 
-        assert args.model == "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+        # Default aligned with config.py ModelConfig.name (F-018 cross-domain fix):
+        # non-quantized form works without bitsandbytes; bnb-4bit is opt-in via --model.
+        assert args.model == "Qwen/Qwen2.5-7B-Instruct"
         assert args.steps == 100
         assert args.samples is None
         assert args.batch_size == "auto"

@@ -151,6 +151,15 @@ class MultiRunConfig:
     checkpoint_max_total: int = 10  # Hard limit (0 = unlimited)
     checkpoint_auto_prune: bool = True  # Automatically prune after each run (set False to keep all)
 
+    # F-015: SLAO merge advanced scaling (data contract; fields land in v1.1.0,
+    # the SLAOMerger implementation backing them lands in v1.2). When either
+    # flag is True we thread it through to SLAOConfig so the corresponding
+    # use_adaptive_scaling / use_layer_scaling slot on the merger is
+    # populated; merge_history.json then records the operator's intent even
+    # if the underlying scaling logic is a no-op in the merge mechanic.
+    adaptive_scaling: bool = False  # If True, SLAO merger scales adapter contribution by recent loss trend
+    layer_scaling: bool = False     # If True, per-layer scaling factor learned from train/val curves
+
 
 # Backwards compatibility alias
 SpeedrunConfig = MultiRunConfig
@@ -253,11 +262,32 @@ class MultiRunTrainer:
                 triggers batch_size halving + gradient_accumulation doubling
                 (preserving effective batch size) and the run retries. After
                 3 consecutive OOMs at batch=1 the session aborts with a
-                structured error. Set False to make OOMs hard-fail the run.
+                structured error (code=RUNTIME_GPU_OOM). Set False to make
+                OOMs hard-fail the run.
             on_run_start: Callback when run starts
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)
             on_gpu_status: Callback for GPU status updates
+
+        Production features (Stage B / Stage C, May 2026):
+            - run_id correlation token: minted once per run() call and
+              attached to every log line, RunResult, MultiRunResult, SLAO
+              merge_history entry, and CheckpointManager manifest record
+              produced by the session. Use it to grep across logs and
+              artifacts when triaging a divergent run.
+            - PEFT API invariant check (B-005): SLAO mode fails loud at
+              startup if the installed PEFT version cannot expose
+              .lora_A. / .lora_B. parameters, preventing a silent no-op
+              merger across runs.
+            - Train/validation overlap guard: when validation is active,
+              the last 10% of the dataset is reserved and training never
+              draws from it even on wrap-around (see _get_data_chunk).
+            - Atomic checkpoint writes (B-006): per-run save() goes
+              through <path>.partial then shutil.move() into place.
+            - The underlying Trainer carries the ``unsloth_fallback``
+              knob (default True) — see Trainer.__init__. MultiRunTrainer
+              does not expose it directly but inherits the behaviour via
+              its internal Trainer instance.
         """
         # Build config
         self.config = config or MultiRunConfig()
@@ -337,12 +367,25 @@ class MultiRunTrainer:
         )
         logger.info(f"Merge mode: {self.config.merge_mode.value}, oom_recovery={self.oom_recovery}")
 
-    def run(self, dataset: str | Any = None) -> SpeedrunResult:
+    def run(self, dataset: DatasetLoader | str | Any = None) -> SpeedrunResult:
         """
         Execute all multi-run training runs.
 
         Args:
-            dataset: Dataset name/path or HuggingFace dataset object
+            dataset: One of:
+                - ``DatasetLoader`` instance (e.g. from a UI upload — passes
+                  through to ``_load_full_dataset`` for validation + ChatML
+                  conversion without a string round-trip).
+                - String path to a local file (.jsonl/.json/.csv/.parquet/.txt/.md)
+                  or a HuggingFace Hub dataset name.
+                - Pre-loaded ``datasets.Dataset`` object.
+                - ``None`` to use ``settings.data.dataset_name`` from config.
+
+            The ``DatasetLoader`` branch was added for F-016 so the UI no
+            longer has to stringify ``state.dataset_loader.source`` to round-
+            trip a user-uploaded file through this entrypoint. The body
+            dispatch lives in ``_load_full_dataset`` which already handles all
+            three concrete types.
 
         Returns:
             MultiRunResult with all run results and aggregate metrics. The
@@ -385,11 +428,19 @@ class MultiRunTrainer:
         logger.info(f"Checkpoint manager initialized: keep_best={checkpoint_policy.keep_best_n}, "
                     f"max_total={checkpoint_policy.max_total}, auto_prune={checkpoint_policy.auto_prune}")
 
-        # Initialize SLAO merger if using SLAO mode
+        # Initialize SLAO merger if using SLAO mode.
+        # F-015: thread MultiRunConfig.adaptive_scaling + layer_scaling through
+        # to SLAOConfig.use_adaptive_scaling + use_layer_scaling so the
+        # operator's intent reaches the merger. The SLAOMerger implementation
+        # may still treat these as no-ops in v1.1.0, but the data contract is
+        # now end-to-end and merge_history.json carries the flag values for
+        # post-hoc audit.
         if self.config.merge_mode == MergeMode.SLAO:
             self._slao_merger = SLAOMerger(SLAOConfig(
                 scaling_type="sqrt",
                 use_orthogonal_init=True,
+                use_adaptive_scaling=self.config.adaptive_scaling,
+                use_layer_scaling=self.config.layer_scaling,
             ))
 
         # Pre-flight GPU check
@@ -601,7 +652,7 @@ class MultiRunTrainer:
         merge_result = None
         checkpoint_path: str | None = None
         oom_retries = 0
-        trainer = None  # noqa: ignore — assigned inside the loop, referenced after
+        trainer = None  # noqa: F841 — assigned inside the loop, referenced after
         result: Any = None
 
         # B-002: per-run OOM retry. We keep retrying with halved batch until
@@ -985,7 +1036,13 @@ class MultiRunTrainer:
                         "holdout_size": total_samples - train_pool_size,
                     },
                     suggestion=(
-                        "Reduce --samples-per-run below "
+                        # F-017: align CLI flag name with the real argparse
+                        # surface in cli.py:1338 (--samples, NOT
+                        # --samples-per-run). The Python-API knob is still
+                        # called ``samples_per_run`` (see MultiRunConfig), so
+                        # we name both surfaces explicitly to avoid leading
+                        # the operator at the wrong layer.
+                        "Reduce --samples (Python: samples_per_run) below "
                         f"{train_pool_size}, increase dataset size, "
                         "or disable validation (validate_every_run=False, early_stopping=False)."
                     ),
@@ -993,7 +1050,11 @@ class MultiRunTrainer:
             raise ConfigurationError(
                 f"samples_per_run ({chunk_size}) exceeds total dataset size ({total_samples}).",
                 details={"samples_per_run": chunk_size, "total_samples": total_samples},
-                suggestion=f"Reduce --samples-per-run below {total_samples} or use a larger dataset.",
+                # F-017: see comment above — CLI flag is --samples in cli.py:1338.
+                suggestion=(
+                    f"Reduce --samples (Python: samples_per_run) below "
+                    f"{total_samples} or use a larger dataset."
+                ),
             )
 
         # Calculate how many new vs replay samples
@@ -1253,7 +1314,7 @@ class MultiRunTrainer:
             if name in model_state:
                 model_state[name].copy_(param)
 
-    def _load_full_dataset(self, dataset: str | Any) -> Any:
+    def _load_full_dataset(self, dataset: DatasetLoader | str | Any) -> Any:
         """
         Load the full dataset for chunking.
 

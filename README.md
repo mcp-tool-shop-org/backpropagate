@@ -290,11 +290,11 @@ All training happens locally on your GPU. Backpropagate makes no network request
 | Category | Score | Notes |
 |----------|-------|-------|
 | A. Security | 6/8 | SECURITY.md, trust model, no secrets/telemetry, safe_path(). MCP items skipped |
-| B. Error Handling | 3/7* | Structured exceptions + exit codes + no raw stacks. MCP/desktop/vscode skipped. *Re-audit pending — Stage B (May 2026) substantially extended the surface (stable code registry, `run_id` correlation, OOM auto-recovery, Unsloth fallback, redacted stderr, `--share`+`--auth` gating); the next coordinator pass will re-grade this row. |
+| B. Error Handling | 5/7 | Structured exception shape (`code`/`message`/`hint`/`cause`/`retryable`) via ERROR_CODES registry; CLI exit codes 0/1/2/3; no raw stack traces without `--verbose`; `run_id` correlation; redacted stderr; `--share`+`--auth` gating. MCP/desktop/vscode skipped. |
 | C. Operator Docs | 4/7 | README, CHANGELOG, LICENSE, --help. Logging/MCP/complex skipped |
 | D. Shipping Hygiene | 6/9 | verify.sh, version=tag, 5 scanners in CI, dependabot, python_requires, clean build |
 | E. Identity | 4/4 | Logo, translations, landing page, metadata |
-| **Total** | **23/31** | 14 items skipped with justification · `shipcheck audit` passes 100% · Audit date: 2026-02-27 (B-row re-audit queued for v1.0.6) |
+| **Total** | **25/31** | 14 items skipped with justification · `shipcheck audit` passes 100% · Audit date: 2026-05-21 (B-row re-graded after Stage B + Stage A CLI exit-code work) |
 
 Design history and what each line item maps to: see [ROADMAP.md](ROADMAP.md) — all Week 1–4 items are shipped in v1.0.5.
 

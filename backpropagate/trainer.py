@@ -183,6 +183,99 @@ def _retry_hf_call(
         )
         raise
 
+
+# =============================================================================
+# F-019 ModelLoadError CAUSE CLASSIFICATION
+# =============================================================================
+# exceptions.py:67 defines ModelLoadCauseCategory =
+#     Literal["auth", "not_found", "network", "version", "unknown"]
+# and exceptions.py:285 carries a per-category remediation hint table. The
+# raise sites below classify the underlying exception so the operator gets
+# the right hint instead of the generic "check model name + network" line.
+#
+# We are defensive about huggingface_hub / requests availability: both
+# imports are optional in the trainer's static dep set (the [unsloth] /
+# [validation] extras pull them in, but a headless trainer.py import must
+# survive without them). The classifier wraps each isinstance check in a
+# try/except ImportError and degrades gracefully to "unknown" rather than
+# raising at import-time when an upstream dep is missing.
+
+
+def _classify_model_load_cause(exc: BaseException) -> str:
+    """Best-effort classification of a model-load exception.
+
+    Returns one of the ``ModelLoadCauseCategory`` Literal values:
+    ``"auth"`` | ``"not_found"`` | ``"network"`` | ``"version"`` | ``"unknown"``.
+
+    Classification rules (in order — first match wins):
+    * ``HfHubHTTPError`` with status 401 → ``"auth"``
+    * ``HfHubHTTPError`` with status 403 → ``"auth"`` (gated repo)
+    * ``HfHubHTTPError`` with status 404 → ``"not_found"``
+    * ``requests.ConnectionError`` / ``Timeout`` / builtin
+      ``ConnectionError`` / ``TimeoutError`` → ``"network"``
+    * ``ImportError`` → ``"version"`` (transformers/peft/unsloth missing
+      or version mismatch)
+    * anything else → ``"unknown"``
+    """
+    # 1. HfHubHTTPError with HTTP status carries the most signal.
+    try:
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+
+        if isinstance(exc, HfHubHTTPError):
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            if status == 401:
+                return "auth"
+            if status == 403:
+                # Gated-repo failures (e.g. Llama 3 without acceptance)
+                # surface as 403; from the user's POV the remediation is
+                # still "fix your HF auth / request access" so we route
+                # to the auth hint.
+                return "auth"
+            if status == 404:
+                return "not_found"
+            # 5xx and unknown statuses fall through to network/unknown.
+            if status is not None and status >= 500:
+                return "network"
+    except ImportError:
+        pass
+
+    # 2. Generic requests-shaped network errors.
+    try:
+        import requests  # type: ignore
+
+        if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+            return "network"
+        # requests.HTTPError carries a response — try to peek at status.
+        if isinstance(exc, requests.HTTPError):
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            if status == 401 or status == 403:
+                return "auth"
+            if status == 404:
+                return "not_found"
+            if status is not None and status >= 500:
+                return "network"
+    except ImportError:
+        pass
+
+    # 3. Builtin connection / timeout (raised by lower-level sockets).
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return "network"
+
+    # 4. ImportError — typically a transformers/peft/unsloth version
+    # mismatch surfaced as a missing symbol on a deferred import. The
+    # remediation is "upgrade / reinstall the package" so we route to
+    # the version hint.
+    if isinstance(exc, ImportError):
+        return "version"
+
+    # 5. Default fall-through. The generic hint already covers
+    # "check the model name and your network" which is the right
+    # advice when we genuinely don't know.
+    return "unknown"
+
+
 __all__ = [
     "Trainer",
     "TrainingRun",
@@ -228,9 +321,34 @@ class Trainer:
         learning_rate: Learning rate (default: 2e-4)
         batch_size: Batch size per device (default: "auto")
         output_dir: Output directory (default: "./output")
+        oom_recovery: If True (default), retry on torch.cuda.OutOfMemoryError
+            by halving batch_size and doubling gradient_accumulation_steps
+            (preserves effective batch). Aborts with RUNTIME_GPU_OOM after
+            3 consecutive failures at batch=1. Set False to hard-fail.
+        unsloth_fallback: If True (default), fall back to
+            AutoModelForCausalLM + get_peft_model when
+            unsloth.FastLanguageModel.from_pretrained fails. Set False to
+            hard-fail.
+
+    Production features (Stage B / Stage C, May 2026):
+        - Stable error codes via the ERROR_CODES registry; every
+          BackpropagateError carries ``code`` / ``message`` / ``hint`` /
+          ``cause`` / ``retryable`` for machine-readable triage.
+        - Atomic checkpoint writes (B-006): ``save()`` writes into
+          ``<path>.partial`` then ``shutil.move()``s into place; crash-safe.
+        - HuggingFace Hub transient retry (B-017): from_pretrained calls
+          are wrapped with exponential backoff for 5xx / 429 / timeout.
+          Auth (401/403) and not-found (404) skip retry.
+        - run_id correlation token: every log line, checkpoint manifest,
+          and SLAO merge_history entry carries the same UUID4-derived ID
+          for cross-surface grep.
+        - ModelLoadError carries a ``cause_category`` (auth / not_found /
+          network / version / unknown) so the operator gets the right
+          remediation hint instead of the generic "check model + network"
+          line — see F-019 / the ``_classify_model_load_cause`` helper.
 
     Example:
-        >>> trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
+        >>> trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
         >>> trainer.train("data.jsonl", steps=100)
         >>> trainer.save("./my-model")
     """
@@ -403,10 +521,16 @@ class Trainer:
             else:
                 self._load_with_transformers()
         except ImportError as e:
+            # F-019: ImportError = missing/incompatible upstream package.
+            # We keep the explicit "pip install" suggestion (more specific
+            # than the generic version-category hint) and pass
+            # cause_category="version" so the cause tag still lands in
+            # details for downstream log scraping.
             raise ModelLoadError(
                 self.model_name,
                 f"Missing required package: {e.name if hasattr(e, 'name') else str(e)}",
-                suggestion="Install required packages: pip install unsloth transformers peft"
+                suggestion="Install required packages: pip install unsloth transformers peft",
+                cause_category="version",
             ) from e
         except RuntimeError as e:
             error_msg = str(e).lower()
@@ -414,16 +538,27 @@ class Trainer:
                 raise GPUNotAvailableError(
                     suggestion="Ensure CUDA is installed and GPU is available"
                 ) from e
+            # F-019: classify the underlying failure so the per-category hint
+            # table can fire. Dropping the explicit suggestion arg lets the
+            # ModelLoadError ctor pick the right line from
+            # exceptions._MODEL_LOAD_HINTS for auth / not_found / network /
+            # version / unknown. RuntimeErrors that aren't CUDA-shaped are
+            # rare here — usually a transformers internal — so most will
+            # land in "unknown" with the generic line, which is correct.
             raise ModelLoadError(
                 self.model_name,
                 str(e),
-                suggestion="Check model name, network connection, and HuggingFace Hub status",
+                cause_category=_classify_model_load_cause(e),
             ) from e
         except Exception as e:
+            # F-019: the catchall sees the largest population of
+            # interesting cases — HfHubHTTPError 401/403/404, requests
+            # connection errors, version-mismatch ImportErrors that slip
+            # past the explicit ImportError branch via a deferred import.
             raise ModelLoadError(
                 self.model_name,
                 str(e),
-                suggestion="Check model name, network connection, and HuggingFace Hub status",
+                cause_category=_classify_model_load_cause(e),
             ) from e
 
         self._is_loaded = True
@@ -449,10 +584,15 @@ class Trainer:
                 _label=f"unsloth_from_pretrained:{self.model_name}",
             )
         except Exception as e:
+            # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
+            # for the actual weight download, so 401/403/404/connection
+            # errors surface here too. Classify so the per-category hint
+            # fires instead of the previous generic "check model and
+            # network" line (which conflated auth and network failures).
             raise ModelLoadError(
                 self.model_name,
                 f"Unsloth model loading failed: {e}",
-                suggestion="Check model name and network connection"
+                cause_category=_classify_model_load_cause(e),
             ) from e
 
         # Apply LoRA
@@ -468,9 +608,14 @@ class Trainer:
                 random_state=settings.lora.random_state,
             )
         except Exception as e:
+            # F-019: post-download LoRA application — usually a PEFT
+            # version mismatch (peft renamed a kwarg) or an
+            # unsupported-target-module config error. ImportError ⇒
+            # "version", everything else ⇒ "unknown" via the classifier.
             raise ModelLoadError(
                 self.model_name,
                 f"Failed to apply LoRA: {e}",
+                cause_category=_classify_model_load_cause(e),
             ) from e
 
     def _load_with_transformers(self) -> None:

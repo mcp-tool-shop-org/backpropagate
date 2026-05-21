@@ -6,7 +6,7 @@ This module tests all callback systems in backpropagate:
 - MultiRunTrainer callbacks (multi_run.py)
 - GPUMonitor event callbacks (gpu_safety.py)
 
-See docs/EVENT_HANDLER_TEST_ROADMAP.md for the full testing plan.
+See tests/EVENT_HANDLER_ROADMAP.md for the full testing plan.
 """
 
 import threading

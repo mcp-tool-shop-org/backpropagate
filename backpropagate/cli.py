@@ -6,13 +6,13 @@ Command-line interface for LLM fine-tuning.
 
 Usage:
     # Train a model
-    backprop train --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit --data my_data.jsonl --steps 100
+    backprop train --model Qwen/Qwen2.5-7B-Instruct --data my_data.jsonl --steps 100
 
     # Export to GGUF
     backprop export ./output/lora --format gguf --quantization q4_k_m
 
     # Multi-run training
-    backprop multi-run --model unsloth/Qwen2.5-7B --data ultrachat --runs 5
+    backprop multi-run --model Qwen/Qwen2.5-7B-Instruct --data ultrachat --runs 5
 
     # Launch web UI
     backprop ui --port 7862
@@ -1250,8 +1250,15 @@ Exit codes (Ship Gate B2):
     )
     train_parser.add_argument(
         "--model", "-m",
-        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
-        help="Model name or path (default: unsloth/Qwen2.5-7B-Instruct-bnb-4bit)",
+        # F-018: default aligned with config.py's ModelConfig.name. Picking
+        # the non-quantized form (Qwen/Qwen2.5-7B-Instruct) over the
+        # unsloth-bnb-4bit form sidesteps the silent ImportError that fires
+        # when a user has [ui] installed but not [unsloth] (which carries
+        # bitsandbytes). Unsloth still picks up the 4-bit path at load time
+        # if it's available; users who explicitly want the pre-quantized
+        # variant can pass --model unsloth/Qwen2.5-7B-Instruct-bnb-4bit.
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="Model name or path (default: Qwen/Qwen2.5-7B-Instruct)",
     )
     train_parser.add_argument(
         "--data", "-d",
@@ -1312,8 +1319,10 @@ Exit codes (Ship Gate B2):
     )
     multi_parser.add_argument(
         "--model", "-m",
-        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
-        help="Model name or path",
+        # F-018: default aligned with config.py's ModelConfig.name; see the
+        # train_parser --model comment for the [ui]-vs-[unsloth] rationale.
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="Model name or path (default: Qwen/Qwen2.5-7B-Instruct)",
     )
     multi_parser.add_argument(
         "--data", "-d",

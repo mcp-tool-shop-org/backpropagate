@@ -7,7 +7,7 @@ Tests the full callback flow through:
 - GPUMonitor -> MultiRunTrainer integration
 - CLI -> callback display
 
-See docs/EVENT_HANDLER_TEST_ROADMAP.md for the full testing plan.
+See tests/EVENT_HANDLER_ROADMAP.md for the full testing plan.
 """
 
 import threading

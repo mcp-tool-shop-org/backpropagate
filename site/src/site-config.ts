@@ -116,11 +116,11 @@ export const config: SiteConfig = {
       kind: 'data-table',
       id: 'scorecard',
       title: 'Quality scorecard',
-      subtitle: 'Ship Gate audit — 23/31 checked, 14 skipped, 100% pass.',
+      subtitle: 'Ship Gate audit — 25/31 checked, 14 skipped, 100% pass.',
       columns: ['Category', 'Score', 'Notes'],
       rows: [
         ['A. Security', '6/8', 'SECURITY.md, trust model, no secrets/telemetry, safe_path()'],
-        ['B. Error Handling', '3/7*', 'Structured exceptions + exit codes + no raw stacks. Re-audit pending after Stage B (May 2026) extended this with stable code registry, run_id correlation, OOM auto-recovery, Unsloth fallback, and redacted stderr.'],
+        ['B. Error Handling', '5/7', 'Structured exception shape (code/message/hint/cause/retryable) via ERROR_CODES registry; CLI exit codes 0/1/2/3; no raw stack traces without --verbose; run_id correlation; redacted stderr; --share+--auth gating.'],
         ['C. Operator Docs', '4/7', 'README, CHANGELOG, LICENSE, --help'],
         ['D. Shipping Hygiene', '6/9', 'verify.sh, version=tag, 5 scanners in CI, dependabot'],
         ['E. Identity', '4/4', 'Logo, translations, landing page, metadata'],

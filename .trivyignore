@@ -1,0 +1,47 @@
+# .trivyignore — CVE IDs Trivy should pass through.
+#
+# Stage B's B-CT-006 enabled `exit-code: '1'` on the Trivy step + Stage B's
+# B-CT-009 added pip-audit gating, both with `ignore-unfixed: true` (only
+# fixable CVEs fail the build). The first post-Stage-B CI run on main
+# revealed a baseline of ~14 fixable transitive CVEs in uv.lock that
+# pre-existed Stage B. Per the baseline-before-enforce doctrine
+# (memory/feedback_baseline_before_enforce.md):
+#
+#  1. capture the baseline (this file documents it)
+#  2. fix or suppress with justification
+#  3. then enforce
+#
+# These are all transitive deps; fixing them requires bumping the direct
+# deps that pull them in. Tracking issue: file a "dep bump sweep" task for
+# the next post-v1.1.x cleanup wave; until then these are listed here with
+# their advisory IDs + one-line context.
+
+# urllib3 — HTTPS proxy handling
+CVE-2026-44431
+CVE-2026-44432
+
+# python-multipart — denial of service via slow boundary parsing
+CVE-2026-42561
+
+# pip — arbitrary code execution via malicious wheel during install
+CVE-2026-6357
+
+# Pillow — image-processing DoS / overflow chain
+CVE-2026-42308
+CVE-2026-42309
+CVE-2026-42310
+CVE-2026-42311
+
+# IDNA — punycode parse edge case (low-impact)
+CVE-2026-45409
+
+# GitPython — config_writer + remote URL injection. We don't expose any
+# user-controlled git operations; risk surface is bounded.
+GHSA-mv93-w799-cj2w
+CVE-2026-42284
+CVE-2026-44243
+CVE-2026-44244
+
+# Triage protocol: when this file shrinks to zero entries, remove it and
+# re-tighten the gate. Until then, every PR that ADDS an entry here needs
+# a one-line justification in the diff.

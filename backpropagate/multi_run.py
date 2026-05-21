@@ -1028,7 +1028,7 @@ class MultiRunTrainer:
                     try:
                         if _torch.cuda.is_available():
                             _torch.cuda.empty_cache()
-                    except Exception:
+                    except Exception:  # nosec B110 — best-effort GPU cache reclaim; failures are non-fatal
                         pass
 
                     if current_batch > 1:
@@ -1445,7 +1445,10 @@ class MultiRunTrainer:
         # etc.) and silently makes successive replay calls deterministically
         # identical within the same run. A local Random preserves reproducibility
         # without that footgun.
-        rng = random.Random(settings.training.seed + run_idx + 1000)  # Different seed for replay
+        # nosec B311 — random.Random is correct here: deterministic replay sampling, not crypto.
+        # Per B-002 doctrine: use local random.Random instance, NOT the global random.seed(),
+        # so we don't pollute the process-wide RNG state.
+        rng = random.Random(settings.training.seed + run_idx + 1000)  # nosec B311 — non-crypto replay seed; see comment above
         replay_indices = rng.sample(available_indices, min(count, len(available_indices)))
 
         return full_dataset.select(replay_indices)
@@ -1971,7 +1974,13 @@ class MultiRunTrainer:
             adapter_file = cp_path / "adapter_model.bin"
             if not adapter_file.exists():
                 raise
-            state_dict = torch.load(adapter_file, map_location="cpu")
+            # B614 + Ship Gate A: torch.load is unsafe by default (arbitrary
+            # code execution via crafted pickle). weights_only=True is the
+            # safe path and is what the rest of the codebase uses; this resume
+            # site missed it during F-002. Adapter files are user-trusted
+            # (the user produced them in a prior training run) but defense in
+            # depth costs nothing here.
+            state_dict = torch.load(adapter_file, map_location="cpu", weights_only=True)
 
         self._load_lora_state_dict(state_dict)
         logger.info(f"Resumed LoRA weights from {cp_path} via fallback state-dict load")

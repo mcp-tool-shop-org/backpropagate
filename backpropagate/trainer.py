@@ -81,11 +81,12 @@ _RETRY_MULTIPLIER = 2
 
 
 def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
-    """Return the exception classes tenacity should retry on for HF calls.
+    """Return the exception classes tenacity should consider for HF calls.
 
+    Note this returns the *candidate* set; status-code filtering happens in
+    ``_is_transient_hf_exception`` so we don't over-retry 401/403/404.
     Imported lazily so the trainer module doesn't hard-require huggingface_hub
-    or requests at import time (they're transitively pulled by transformers,
-    but feature-flag style isolation is cheap and safer).
+    or requests at import time.
     """
     excs: list[type[BaseException]] = [ConnectionError, TimeoutError]
     try:
@@ -105,6 +106,27 @@ def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
     except ImportError:
         pass
     return tuple(excs)
+
+
+def _is_transient_hf_exception(exc: BaseException) -> bool:
+    """Decide whether ``exc`` is worth retrying as a transient HF failure.
+
+    Connection / timeout errors → always retry. HTTPError-shaped exceptions
+    (requests.HTTPError, HfHubHTTPError) → retry ONLY on status 429 / 5xx /
+    unknown. Skips 4xx (401 auth, 403 gated repo, 404 typo'd model) so users
+    see the real error in <1s instead of waiting ~65s for the backoff to
+    exhaust.
+    """
+    transient_excs = _hf_transient_exceptions()
+    if not isinstance(exc, transient_excs):
+        return False
+    # If the exception carries an HTTP response, inspect its status code.
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        # No status code attached → connection/timeout/other → retry
+        return True
+    return status == 429 or status >= 500
 
 
 def _retry_hf_call(
@@ -129,7 +151,7 @@ def _retry_hf_call(
     from tenacity import (
         before_sleep_log,
         retry,
-        retry_if_exception_type,
+        retry_if_exception,
         stop_after_attempt,
         wait_exponential,
     )
@@ -143,7 +165,7 @@ def _retry_hf_call(
             min=_RETRY_BASE_SECONDS,
             max=_RETRY_MAX_SECONDS,
         ),
-        retry=retry_if_exception_type(transient_excs),
+        retry=retry_if_exception(_is_transient_hf_exception),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )

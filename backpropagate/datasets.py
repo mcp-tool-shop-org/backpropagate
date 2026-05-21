@@ -56,7 +56,8 @@ _HF_RETRY_MULTIPLIER = 2
 
 
 def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
-    """Return the exception classes worth retrying for HF Hub calls."""
+    """Candidate exception classes; status-code filtering in
+    ``_is_transient_hf_exception`` decides whether to actually retry."""
     excs: list[type[BaseException]] = [ConnectionError, TimeoutError]
     try:
         import requests  # type: ignore
@@ -77,6 +78,18 @@ def _hf_transient_exceptions() -> tuple[type[BaseException], ...]:
     return tuple(excs)
 
 
+def _is_transient_hf_exception(exc: BaseException) -> bool:
+    """Retry only on 429 / 5xx / connection / timeout — never on 401/403/404."""
+    transient_excs = _hf_transient_exceptions()
+    if not isinstance(exc, transient_excs):
+        return False
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        return True
+    return status == 429 or status >= 500
+
+
 def _retry_hf_call(
     fn: Callable[..., Any],
     *args: Any,
@@ -87,7 +100,7 @@ def _retry_hf_call(
     from tenacity import (
         before_sleep_log,
         retry,
-        retry_if_exception_type,
+        retry_if_exception,
         stop_after_attempt,
         wait_exponential,
     )
@@ -101,7 +114,7 @@ def _retry_hf_call(
             min=_HF_RETRY_BASE_SECONDS,
             max=_HF_RETRY_MAX_SECONDS,
         ),
-        retry=retry_if_exception_type(transient_excs),
+        retry=retry_if_exception(_is_transient_hf_exception),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )

@@ -1204,3 +1204,55 @@ class TestDatasetLoadingErrors:
 def temp_dir(tmp_path):
     """Create a temporary directory for tests."""
     return tmp_path
+
+
+# =============================================================================
+# B-017 + RE-001: HuggingFace transient retry status-code filter
+# =============================================================================
+
+class TestHfTransientRetryStatusCodeFilter:
+    """RE-001: retry must skip 401/403/404 (auth/gated/typo) and only fire on
+    429 / 5xx / connection / timeout. Without status-code filtering, a typo'd
+    model name would hang ~65s before showing the real error."""
+
+    def test_does_not_retry_401_403_404(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+        import requests
+
+        for code in (401, 403, 404, 400, 422):
+            exc = requests.exceptions.HTTPError(f"HTTP {code}")
+            exc.response = MagicMock(status_code=code)
+            assert not _is_transient_hf_exception(exc), \
+                f"HTTP {code} should NOT retry (not transient)"
+
+    def test_retries_429_and_5xx(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+        import requests
+
+        for code in (429, 500, 502, 503, 504):
+            exc = requests.exceptions.HTTPError(f"HTTP {code}")
+            exc.response = MagicMock(status_code=code)
+            assert _is_transient_hf_exception(exc), \
+                f"HTTP {code} should retry (transient)"
+
+    def test_retries_connection_and_timeout(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        assert _is_transient_hf_exception(ConnectionError("dropped"))
+        assert _is_transient_hf_exception(TimeoutError("timed out"))
+
+    def test_does_not_retry_unrelated_exception(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        assert not _is_transient_hf_exception(ValueError("bad arg"))
+        assert not _is_transient_hf_exception(KeyError("missing"))
+
+    def test_retries_http_error_with_no_response(self):
+        """If an HTTPError carries no .response attribute, retry conservatively
+        (we can't tell whether it was transient, but retrying is safer than
+        bailing on a genuine connection blip)."""
+        from backpropagate.trainer import _is_transient_hf_exception
+        import requests
+
+        exc = requests.exceptions.HTTPError("no response object")
+        assert _is_transient_hf_exception(exc)

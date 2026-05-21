@@ -236,7 +236,7 @@ def _extract_client_ip(request: gr.Request | None) -> str:
 #   - Windows system + program-files trees + ``ProgramData``
 #   - Windows per-user credential dirs (``%USERPROFILE%\.ssh``, AppData crypto)
 _FORBIDDEN_OUTPUT_BASE_CATEGORIES = (
-    "system trees (/etc, /usr, /var, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
+    "system trees (/etc, /usr, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
     "root home (/root)",
     "user credential dirs (~/.ssh, ~/.aws, ~/.kube, ~/.docker, ~/.gnupg, ~/.config)",
     "Windows system roots (C:\\Windows, C:\\Program Files, C:\\Program Files (x86), C:\\ProgramData)",
@@ -260,6 +260,14 @@ def _forbidden_output_bases() -> list[Path]:
     # /opt, /srv, C:\Temp, etc. The enumerated system trees below cover the
     # actual dangerous surface — anything outside both home AND these trees
     # is the operator's choice to make.
+    #
+    # Note: bare "/var" is intentionally absent. On macOS, /var resolves to
+    # /private/var (symlink), and the system per-user temp tree lives at
+    # /var/folders/<hash>/T/... — which is where pytest tmp_path, NSTemporaryDirectory,
+    # and most legitimate macOS tooling write. Blanket-denying /var blocks
+    # those. The dangerous subtrees we actually care about (/var/run for
+    # PID files and sockets, /var/lib for service state) are listed
+    # individually.
     raw: list[str] = [
         "/etc",
         "/proc",
@@ -268,7 +276,6 @@ def _forbidden_output_bases() -> list[Path]:
         "/boot",
         "/var/run",
         "/var/lib",
-        "/var",
         "/usr",
         "/bin",
         "/sbin",

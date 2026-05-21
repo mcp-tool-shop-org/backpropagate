@@ -81,10 +81,17 @@ class TestSafePath:
         assert result == test_file.resolve()
 
     def test_safe_path_logs_traversal_pattern(self, tmp_path, caplog):
-        """safe_path should log when path contains '..'."""
+        """safe_path should log AND raise when an absolute path contains '..'.
+
+        Under the new stricter default behavior (no ``allowed_base``), an
+        absolute path containing ``..`` is rejected outright via
+        :class:`PathTraversalError` AND a warning is logged. The legacy
+        warn-only branch only fires for relative ``..`` paths that normalize
+        back inside the current working directory.
+        """
         import logging
 
-        from backpropagate.security import safe_path
+        from backpropagate.security import PathTraversalError, safe_path
 
         caplog.set_level(logging.WARNING)
 
@@ -92,8 +99,9 @@ class TestSafePath:
         subdir = tmp_path / "subdir"
         subdir.mkdir()
 
-        # This should log a warning but not fail
-        safe_path(str(tmp_path / "subdir" / ".." / "other"), must_exist=False)
+        # Absolute path with ".." -> now raises AND warns.
+        with pytest.raises(PathTraversalError):
+            safe_path(str(tmp_path / "subdir" / ".." / "other"), must_exist=False)
 
         # Check warning was logged
         assert any("traversal pattern" in record.message.lower() for record in caplog.records)
@@ -186,19 +194,77 @@ class TestSafeTorchLoad:
             safe_torch_load(tmp_path / "nonexistent.pt")
 
     def test_safe_torch_load_prefers_safetensors(self, tmp_path):
-        """safe_torch_load should prefer safetensors format."""
+        """safe_torch_load should prefer safetensors format over torch.load.
 
-        # Create a mock safetensors file
+        Verifies the security-critical preference path: when a .safetensors
+        file is passed, safetensors.torch.load_file is invoked and torch.load
+        is NOT called (avoiding pickle deserialization of untrusted weights).
+        """
+        from backpropagate.security import safe_torch_load
+
+        # Create a fake safetensors file (contents irrelevant — load_file is mocked)
         st_file = tmp_path / "model.safetensors"
         st_file.write_bytes(b"mock safetensors")
 
-        # Mock safetensors import
         mock_load_file = MagicMock(return_value={"weight": "tensor"})
 
-        with patch.dict("sys.modules", {"safetensors": MagicMock(), "safetensors.torch": MagicMock(load_file=mock_load_file)}):
-            with patch("backpropagate.security.check_torch_security"):
-                # This would use safetensors if available
-                pass  # Just verify no crash
+        # Build a fake safetensors.torch module with load_file
+        fake_safetensors_torch = MagicMock()
+        fake_safetensors_torch.load_file = mock_load_file
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "safetensors": MagicMock(),
+                "safetensors.torch": fake_safetensors_torch,
+            },
+        ), patch("backpropagate.security.check_torch_security"), patch(
+            "torch.load"
+        ) as mock_torch_load:
+            result = safe_torch_load(st_file)
+
+        # safetensors path was taken: load_file called exactly once with the
+        # safetensors path; torch.load NOT called.
+        assert mock_load_file.call_count == 1, (
+            f"Expected safetensors.torch.load_file to be called once, "
+            f"got {mock_load_file.call_count}"
+        )
+        # load_file is called with str(path) — see security.py:208
+        called_arg = mock_load_file.call_args[0][0]
+        assert str(st_file) == called_arg, (
+            f"safetensors.torch.load_file called with {called_arg!r}, "
+            f"expected {str(st_file)!r}"
+        )
+        assert not mock_torch_load.called, (
+            "torch.load must NOT be invoked when a .safetensors file is "
+            "available — this is the CVE-mitigation contract"
+        )
+        assert result == {"weight": "tensor"}
+
+    def test_safe_torch_load_falls_back_to_torch_load_with_weights_only(self, tmp_path):
+        """safe_torch_load should call torch.load with weights_only=True on non-safetensors paths."""
+        from backpropagate.security import safe_torch_load
+
+        # A .pt/.bin file should fall through to torch.load
+        pt_file = tmp_path / "model.pt"
+        pt_file.write_bytes(b"mock pickle")
+
+        mock_state = {"weight": "tensor"}
+
+        with patch("backpropagate.security.check_torch_security"), patch(
+            "torch.load", return_value=mock_state
+        ) as mock_torch_load:
+            result = safe_torch_load(pt_file)
+
+        assert mock_torch_load.call_count == 1, (
+            f"Expected torch.load to be called once, got {mock_torch_load.call_count}"
+        )
+        # Verify weights_only=True was resolved as the kwarg passed to torch.load
+        call_kwargs = mock_torch_load.call_args.kwargs
+        assert call_kwargs.get("weights_only") is True, (
+            f"torch.load must be called with weights_only=True (got kwargs={call_kwargs})"
+        )
+        assert result == mock_state
 
     def test_safe_torch_load_with_weights_only(self, tmp_path):
         """safe_torch_load should pass weights_only to torch.load."""

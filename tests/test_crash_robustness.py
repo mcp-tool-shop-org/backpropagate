@@ -227,8 +227,12 @@ class TestSLAOCrashRobustness:
             result = merger.merge(state, run_index=2)
             assert isinstance(result, MergeResult)
         except Exception as e:
-            # If it raises, it should be a clear error, not a crash
-            assert "shape" in str(e).lower() or "mismatch" in str(e).lower() or True
+            # If it raises, the error message should clearly indicate the
+            # shape/size mismatch so operators know what went wrong.
+            err = str(e).lower()
+            assert "shape" in err or "mismatch" in err or "size" in err or "dim" in err, (
+                f"Expected a clear shape/mismatch error message, got: {e!r}"
+            )
 
     def test_slao_merger_handles_nan_tensors(self):
         """SLAO merger should handle tensors containing NaN."""

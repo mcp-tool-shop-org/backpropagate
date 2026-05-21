@@ -77,6 +77,8 @@ __all__ = [
     "sanitize_filename",
     "validate_numeric_input",
     "validate_string_input",
+    # UI output directory (F-002)
+    "get_ui_output_dir",
     # Security logging
     "SecurityLogger",
     "log_security_event",
@@ -112,6 +114,97 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 security_logger = logging.getLogger("backpropagate.security.ui")
+
+
+# =============================================================================
+# CLIENT IP EXTRACTION (F-001 fix)
+# =============================================================================
+
+def _extract_client_ip(request: gr.Request | None) -> str:
+    """
+    Robustly extract a client IP from a Gradio/Starlette request.
+
+    Handles all shapes that ``request.client`` can take in practice:
+
+    - ``Address`` namedtuple (Starlette/FastAPI's default — what Gradio passes
+      in production): exposes a ``host`` attribute (and a separate ``port``).
+      We deliberately use ONLY ``host`` so per-IP rate-limit buckets don't
+      degenerate into per-TCP-connection buckets (different source port per
+      connection = effectively no rate limiting).
+    - ``None`` (e.g. unit tests, some ASGI middleware): we return
+      ``"unknown"`` so rate limiting still applies as a single shared bucket
+      rather than failing open with a unique id per call.
+    - ``dict`` with a ``"host"`` key: preserved for legacy/test callers that
+      construct a plain dict.
+    - bare ``str``: treated as the host directly. Note: we do NOT honor
+      ``X-Forwarded-For`` headers by default; trusting them requires a
+      separate trusted-proxy configuration and is intentionally out of scope.
+
+    Default on unknown shape: ``"unknown"`` (fail-closed under a shared
+    bucket rather than fail-open with per-connection buckets).
+    """
+    if request is None:
+        return "unknown"
+
+    client = getattr(request, "client", None)
+    if client is None:
+        return "unknown"
+
+    # 1. Address-like namedtuple (the real Starlette/FastAPI shape).
+    host = getattr(client, "host", None)
+    if isinstance(host, str) and host:
+        return host
+
+    # 2. Dict (legacy/test shape).
+    if isinstance(client, dict):
+        dict_host = client.get("host")
+        if isinstance(dict_host, str) and dict_host:
+            return dict_host
+        return "unknown"
+
+    # 3. Bare string fallback.
+    if isinstance(client, str) and client:
+        return client
+
+    # 4. Unknown shape — single shared bucket.
+    return "unknown"
+
+
+# =============================================================================
+# UI OUTPUT DIRECTORY (F-002 fix)
+# =============================================================================
+
+def get_ui_output_dir() -> Path:
+    """
+    Return the single allowed-base directory for ALL UI-initiated filesystem
+    writes (saved LoRA adapters, GGUF exports, converted datasets, Modelfiles,
+    Ollama registrations, etc.).
+
+    Resolution order:
+
+    1. ``BACKPROPAGATE_UI__OUTPUT_DIR`` env var (operator override) — if set,
+       it is resolved to an absolute path and created on first use.
+    2. ``~/.backpropagate/ui-outputs`` (default) — created on first use.
+
+    Why this exists: ``validate_path_input`` previously called the underlying
+    ``safe_path`` without ``allowed_base``, which meant any absolute or
+    relative path was accepted (``safe_path`` only logged a warning for
+    literal ``..`` substrings without a base). Under the documented
+    ``--share + --auth`` flow that exposed filesystem-wide write access to
+    any authenticated remote user. Every UI sink now passes this directory
+    as ``allowed_base`` so user-supplied paths must resolve inside it.
+
+    The directory is created (with parents) on first call so the path is
+    immediately writable. The directory's permissions are NOT chmod'd —
+    that's the operator's responsibility.
+    """
+    override = os.environ.get("BACKPROPAGATE_UI__OUTPUT_DIR", "").strip()
+    if override:
+        base = Path(override).expanduser().resolve()
+    else:
+        base = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 # =============================================================================
@@ -309,15 +402,8 @@ class EnhancedRateLimiter:
         self._lock = Lock()
 
     def _get_client_id(self, request: gr.Request | None = None) -> str:
-        """Get client identifier (IP or fallback to 'anonymous')."""
-        if request is not None:
-            # Try to get IP from request
-            client_ip = getattr(request, "client", {})
-            if isinstance(client_ip, dict):
-                host: str = client_ip.get("host", "anonymous")
-                return host
-            return str(client_ip) if client_ip else "anonymous"
-        return "anonymous"
+        """Get client identifier (IP or fallback to 'unknown')."""
+        return _extract_client_ip(request)
 
     def _cleanup_old_entries(self) -> None:
         """Remove expired entries to prevent memory growth."""
@@ -822,11 +908,7 @@ def validate_and_log_request(
     if not DEFAULT_SECURITY_CONFIG.log_all_requests:
         return
 
-    client_id = "anonymous"
-    if request is not None:
-        client = getattr(request, "client", {})
-        if isinstance(client, dict):
-            client_id = client.get("host", "anonymous")
+    client_id = _extract_client_ip(request)
 
     # Sanitize params for logging (truncate long values)
     safe_params: dict[str, str | int | float | bool] = {}
@@ -1103,12 +1185,7 @@ class RequestContext:
     ) -> "RequestContext":
         """Create context from a Gradio request."""
         request_id = str(uuid.uuid4())[:8]
-        client_ip = "anonymous"
-
-        if request is not None:
-            client = getattr(request, "client", {})
-            if isinstance(client, dict):
-                client_ip = client.get("host", "anonymous")
+        client_ip = _extract_client_ip(request)
 
         return cls(
             request_id=request_id,
@@ -1411,12 +1488,7 @@ class ConcurrencyLimiter:
 
     def _get_client_id(self, request: gr.Request | None = None) -> str:
         """Get client identifier from request."""
-        if request is not None:
-            client = getattr(request, "client", {})
-            if isinstance(client, dict):
-                host: str = client.get("host", "anonymous")
-                return host
-        return "anonymous"
+        return _extract_client_ip(request)
 
     def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:
         """

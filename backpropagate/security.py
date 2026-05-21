@@ -61,22 +61,41 @@ def safe_path(
     """
     Safely resolve and validate a user-provided path.
 
-    Prevents path traversal attacks by ensuring the resolved path
-    stays within allowed boundaries.
+    Prevents path traversal attacks by ensuring the resolved path stays within
+    allowed boundaries.
+
+    Default behavior (no ``allowed_base``):
+        - Relative paths containing ``..`` that resolve **inside the current
+          working directory** are accepted with a WARNING log line. This is the
+          backward-compatible path for callers that just want normalization
+          (e.g. ``safe_path("subdir/../other")``).
+        - Any other ``..`` pattern — an absolute path containing ``..``, or a
+          relative path that resolves OUTSIDE the current working directory —
+          is REJECTED with :class:`PathTraversalError`. Callers that previously
+          relied on the warn-only behavior for these cases must now pass an
+          explicit ``allowed_base`` to declare the legitimate scope.
+
+    With ``allowed_base``:
+        The resolved path must be inside ``allowed_base``. Anything that escapes
+        raises :class:`PathTraversalError` (this behavior is unchanged).
 
     Args:
-        user_path: The user-provided path to validate
-        must_exist: If True, raise FileNotFoundError if path doesn't exist
-        allowed_base: If provided, ensure path is within this directory
-        allow_relative: If False, reject relative paths
+        user_path: The user-provided path to validate.
+        must_exist: If True, raise :class:`FileNotFoundError` if the resolved
+            path does not exist.
+        allowed_base: If provided, ensure the resolved path is within this
+            directory. Recommended at every sink that touches the filesystem.
+        allow_relative: If False, reject paths that are not absolute up front.
 
     Returns:
-        Resolved, validated Path object
+        Resolved, validated :class:`Path` object.
 
     Raises:
-        PathTraversalError: If path escapes allowed directory
-        FileNotFoundError: If must_exist=True and path doesn't exist
-        ValueError: If allow_relative=False and path is relative
+        PathTraversalError: If the path escapes ``allowed_base``, or — when
+            no ``allowed_base`` is supplied — if it contains ``..`` AND is
+            absolute, OR resolves outside the current working directory.
+        FileNotFoundError: If ``must_exist=True`` and the path does not exist.
+        ValueError: If ``allow_relative=False`` and the path is relative.
 
     Examples:
         >>> safe_path("/models/my_model", must_exist=True)
@@ -84,6 +103,9 @@ def safe_path(
 
         >>> safe_path("../../etc/passwd", allowed_base="/models")
         PathTraversalError: Path '../../etc/passwd' escapes allowed directory '/models'
+
+        >>> safe_path("/etc/../etc/passwd")
+        PathTraversalError: Path traversal detected in: /etc/../etc/passwd
     """
     path = Path(user_path)
 
@@ -104,11 +126,31 @@ def safe_path(
         except ValueError:
             raise PathTraversalError(str(user_path), str(allowed_base))
 
-    # Check for suspicious path components even without base restriction
-    # This catches obvious traversal attempts like "../../"
+    # When no allowed_base is supplied, defend at the sink for obvious
+    # traversal patterns. Previously this only warned, which made `safe_path`
+    # a paper tiger at every CLI call site that did not pass `allowed_base`
+    # (see F-002). Now: ".." in an absolute path, or in a relative path that
+    # resolves outside the current working directory, is rejected outright.
+    # Relative ".." that normalizes back inside cwd keeps the legacy
+    # warn-only behavior so simple normalization callers are unaffected.
     path_str = str(user_path)
-    if ".." in path_str:
-        # Log the attempt for security monitoring
+    if ".." in path_str and allowed_base is None:
+        cwd_resolved = Path.cwd().resolve()
+        is_absolute_input = path.is_absolute()
+
+        try:
+            resolved.relative_to(cwd_resolved)
+            resolves_inside_cwd = True
+        except ValueError:
+            resolves_inside_cwd = False
+
+        if is_absolute_input or not resolves_inside_cwd:
+            logger.warning(
+                f"Path traversal pattern detected and rejected: {user_path}"
+            )
+            raise PathTraversalError(str(user_path))
+
+        # Legacy warn-only path for relative cwd-bound normalization.
         logger.warning(f"Path traversal pattern detected in: {user_path}")
 
     # Check existence if required

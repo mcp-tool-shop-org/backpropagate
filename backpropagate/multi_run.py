@@ -663,6 +663,41 @@ class MultiRunTrainer:
 
         return run_result, val_loss
 
+    def _validation_active(self) -> bool:
+        """True if validation will be computed (so a holdout split is needed)."""
+        return bool(self.config.validate_every_run or self.config.early_stopping)
+
+    def _get_validation_holdout(self, total_samples: int) -> tuple[int, int]:
+        """
+        Compute the validation holdout split for a dataset.
+
+        Returns ``(holdout_size, val_start)`` where validation samples occupy
+        ``[val_start, total_samples)``. When validation is disabled the
+        holdout is zero and ``val_start == total_samples`` (no holdout).
+
+        Keeping this in one place lets the training-data chunker and the
+        validation-loss computer agree on the split boundary, which is the
+        precondition for ``no_overlap`` between train and validation indices.
+        """
+        if not self._validation_active():
+            return 0, total_samples
+        holdout_size = max(int(total_samples * 0.10), 1)
+        val_start = total_samples - holdout_size
+        return holdout_size, val_start
+
+    def _get_train_pool_size(self, total_samples: int) -> int:
+        """
+        Size of the indexable training pool ``[0, train_pool_size)``.
+
+        Equals ``total_samples - holdout_size`` when validation is active,
+        else ``total_samples``. Training chunks (and replay) must draw their
+        indices from this range to avoid silently leaking validation samples
+        into the train set when ``num_runs * samples_per_run`` exceeds the
+        train pool and wrap-around kicks in.
+        """
+        _, val_start = self._get_validation_holdout(total_samples)
+        return val_start
+
     def _get_data_chunk(self, full_dataset: Any, run_idx: int) -> Any:
         """
         Get data chunk for a specific run with optional experience replay.
@@ -676,11 +711,68 @@ class MultiRunTrainer:
 
         Returns:
             Dataset chunk with optional replay samples mixed in
+
+        Train/validation separation contract:
+            When validation is active (``validate_every_run`` or
+            ``early_stopping``), the last 10% of the dataset is reserved as
+            a held-out validation split and training NEVER reads from it,
+            even on wrap-around. Indices are drawn from the training pool
+            ``[0, total_samples - holdout_size)`` and wrap inside that range.
+            When validation is disabled, the full dataset is the training pool.
+
+        Raises:
+            ConfigurationError: if ``samples_per_run`` is larger than the
+                training pool (a single chunk would not fit). The fix is to
+                reduce ``samples_per_run`` or disable validation.
         """
         from datasets import concatenate_datasets
 
         total_samples = len(full_dataset)
+        train_pool_size = self._get_train_pool_size(total_samples)
         chunk_size = self.config.samples_per_run
+
+        # A chunk larger than the train pool cannot be drawn without spilling
+        # into validation. Fail loud rather than silently produce a polluted
+        # chunk. The strict-equality case (`>`) preserves the wrap-around
+        # behaviour when chunk_size == train_pool_size — every run pulls the
+        # same indices, but no validation overlap occurs.
+        if train_pool_size <= 0:
+            raise ConfigurationError(
+                f"Training pool is empty (total_samples={total_samples}, "
+                f"holdout_size={total_samples - train_pool_size}). Dataset is too small "
+                f"to leave room for both training and validation.",
+                details={
+                    "total_samples": total_samples,
+                    "train_pool_size": train_pool_size,
+                },
+                suggestion=(
+                    "Use a larger dataset, or disable validation "
+                    "(validate_every_run=False, early_stopping=False)."
+                ),
+            )
+        if chunk_size > train_pool_size:
+            if self._validation_active():
+                raise ConfigurationError(
+                    f"samples_per_run ({chunk_size}) exceeds the available training pool "
+                    f"({train_pool_size} = total_samples {total_samples} minus 10% validation holdout). "
+                    f"A training chunk cannot fit without overlapping the validation set.",
+                    details={
+                        "samples_per_run": chunk_size,
+                        "total_samples": total_samples,
+                        "train_pool_size": train_pool_size,
+                        "holdout_size": total_samples - train_pool_size,
+                    },
+                    suggestion=(
+                        "Reduce --samples-per-run below "
+                        f"{train_pool_size}, increase dataset size, "
+                        "or disable validation (validate_every_run=False, early_stopping=False)."
+                    ),
+                )
+            raise ConfigurationError(
+                f"samples_per_run ({chunk_size}) exceeds total dataset size ({total_samples}).",
+                details={"samples_per_run": chunk_size, "total_samples": total_samples},
+                suggestion=f"Reduce --samples-per-run below {total_samples} or use a larger dataset.",
+            )
 
         # Calculate how many new vs replay samples
         replay_fraction = min(self.config.replay_fraction, 0.5)  # Cap at 50%
@@ -692,13 +784,15 @@ class MultiRunTrainer:
             replay_count = int(chunk_size * replay_fraction)
             new_samples_count = chunk_size - replay_count
 
-        # Get new samples for this run
-        start_idx = ((run_idx - 1) * self.config.samples_per_run) % total_samples
+        # Get new samples for this run. We index into the TRAINING POOL only
+        # (`[0, train_pool_size)`) and wrap inside it, so wrap-around can never
+        # reach into the validation holdout `[train_pool_size, total_samples)`.
+        start_idx = ((run_idx - 1) * self.config.samples_per_run) % train_pool_size
         end_idx = start_idx + new_samples_count
 
-        # Handle wrap-around for new samples
-        if end_idx > total_samples:
-            new_indices = list(range(start_idx, total_samples)) + list(range(0, end_idx - total_samples))
+        # Handle wrap-around for new samples (inside the train pool only).
+        if end_idx > train_pool_size:
+            new_indices = list(range(start_idx, train_pool_size)) + list(range(0, end_idx - train_pool_size))
         else:
             new_indices = list(range(start_idx, end_idx))
 
@@ -732,47 +826,63 @@ class MultiRunTrainer:
 
         Returns:
             Dataset of replay samples
+
+        Note:
+            Replay indices are drawn from the same training pool used by
+            ``_get_data_chunk`` (i.e. ``[0, train_pool_size)``) so replay
+            cannot resurrect a sample from the validation holdout, which would
+            re-introduce the train/validation overlap that the chunker is
+            careful to avoid.
         """
         import random
 
         total_samples = len(full_dataset)
+        train_pool_size = self._get_train_pool_size(total_samples)
         samples_per_run = self.config.samples_per_run
 
-        # Calculate indices from previous runs
+        # Calculate indices from previous runs. All ranges are clamped to the
+        # training pool so we never pull validation samples into replay.
         if self.config.replay_strategy == "recent":
             # Get samples from the most recent previous run
             prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % total_samples
-            prev_end = min(prev_start + samples_per_run, total_samples)
+            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
+            prev_end = min(prev_start + samples_per_run, train_pool_size)
             available_indices = list(range(prev_start, prev_end))
 
         elif self.config.replay_strategy == "random":
             # Random samples from all previous runs
             all_prev_indices: list[int] = []
             for prev_run in range(1, run_idx):
-                prev_start = ((prev_run - 1) * samples_per_run) % total_samples
-                prev_end = min(prev_start + samples_per_run, total_samples)
+                prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
+                prev_end = min(prev_start + samples_per_run, train_pool_size)
                 all_prev_indices.extend(range(prev_start, prev_end))
             available_indices = list(set(all_prev_indices))  # Remove duplicates
 
         elif self.config.replay_strategy == "all_previous":
-            # Uniform sample from all data seen so far
-            total_seen = min((run_idx - 1) * samples_per_run, total_samples)
+            # Uniform sample from all data seen so far (within the train pool).
+            total_seen = min((run_idx - 1) * samples_per_run, train_pool_size)
             available_indices = list(range(total_seen))
 
         else:
             # Default to recent
             prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % total_samples
-            prev_end = min(prev_start + samples_per_run, total_samples)
+            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
+            prev_end = min(prev_start + samples_per_run, train_pool_size)
             available_indices = list(range(prev_start, prev_end))
 
         # Sample from available indices
         if len(available_indices) == 0:
             return None
 
-        random.seed(settings.training.seed + run_idx + 1000)  # Different seed for replay
-        replay_indices = random.sample(available_indices, min(count, len(available_indices)))
+        # Use a LOCAL Random instance so we don't mutate the global Python RNG.
+        # The global mutation pattern (`random.seed(...)`) pollutes any other
+        # code running in the same process that uses `random` (datasketch.MinHash
+        # for dedup, user-supplied custom_filter callbacks, transformers internals,
+        # etc.) and silently makes successive replay calls deterministically
+        # identical within the same run. A local Random preserves reproducibility
+        # without that footgun.
+        rng = random.Random(settings.training.seed + run_idx + 1000)  # Different seed for replay
+        replay_indices = rng.sample(available_indices, min(count, len(available_indices)))
 
         return full_dataset.select(replay_indices)
 
@@ -1032,12 +1142,13 @@ class MultiRunTrainer:
         model = self._trainer._model
         tokenizer = self._trainer._tokenizer
 
-        # Dedicated hold-out split: reserve the last 10% of the dataset for validation.
-        # Training data (_get_data_chunk) draws from the front of the dataset and wraps
-        # around, so keeping validation at the tail prevents overlap.
+        # Dedicated hold-out split: reserve the last 10% of the dataset for
+        # validation. Training data (_get_data_chunk) draws indices from
+        # [0, val_start) — wrap-around is constrained to the training pool by
+        # _get_train_pool_size, so the train/validation split is preserved
+        # regardless of how many runs cycle through the dataset.
         total_samples = len(full_dataset)
-        holdout_size = max(int(total_samples * 0.10), 1)
-        val_start = total_samples - holdout_size
+        holdout_size, val_start = self._get_validation_holdout(total_samples)
         val_count = min(self.config.validation_samples, holdout_size)
         val_indices = list(range(val_start, val_start + val_count))
 

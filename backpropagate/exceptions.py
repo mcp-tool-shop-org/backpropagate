@@ -6,6 +6,7 @@ Production-ready exception classes for clear error handling and debugging.
 
 Exception Hierarchy:
     BackpropagateError (base)
+    ├── UserInputError                 (user-actionable input/validation errors)
     ├── ConfigurationError
     │   └── InvalidSettingError
     ├── DatasetError
@@ -18,6 +19,7 @@ Exception Hierarchy:
     │   ├── TrainingAbortedError
     │   └── CheckpointError
     ├── ExportError
+    │   ├── LoRAExportError
     │   ├── GGUFExportError
     │   ├── MergeExportError
     │   └── OllamaRegistrationError
@@ -26,9 +28,18 @@ Exception Hierarchy:
     │   ├── GPUMemoryError
     │   ├── GPUTemperatureError
     │   └── GPUMonitoringError
-    └── SLAOError
-        ├── SLAOMergeError
-        └── SLAOCheckpointError
+    ├── SLAOError
+    │   ├── SLAOMergeError
+    │   └── SLAOCheckpointError
+    └── Utilities
+        ├── BatchOperationError        (aggregate of failures across N items)
+        └── PartialSuccess             (operation completed with some failures)
+
+Structured shape (Ship Gate B1):
+    Every exception carries optional ``code`` (machine-readable identifier),
+    ``cause`` (chained exception via ``__cause__``), and ``retryable`` (bool).
+    Defaults preserve existing call-site behavior; subclasses may set sensible
+    defaults (e.g. GPU temperature errors are retryable, auth errors are not).
 
 Usage:
     from backpropagate.exceptions import DatasetNotFoundError, TrainingError
@@ -36,7 +47,7 @@ Usage:
     try:
         trainer.train(dataset="missing.jsonl")
     except DatasetNotFoundError as e:
-        print(f"Dataset not found: {e.path}")
+        print(f"Dataset not found: {e.path}  [{e.code}]")
     except TrainingError as e:
         print(f"Training failed: {e}")
 """
@@ -46,6 +57,7 @@ from typing import Any
 __all__ = [
     # Base
     "BackpropagateError",
+    "UserInputError",
     # Configuration
     "ConfigurationError",
     "InvalidSettingError",
@@ -78,6 +90,7 @@ __all__ = [
     "SLAOCheckpointError",
     # Utilities
     "BatchOperationError",
+    "PartialSuccess",
 ]
 
 
@@ -93,9 +106,23 @@ class BackpropagateError(Exception):
     all library errors with a single except clause if desired.
 
     Attributes:
-        message: Human-readable error description
-        details: Optional dict with additional context for debugging
-        suggestion: Optional suggestion for how to fix the error
+        message: Human-readable error description.
+        details: Optional dict with additional context for debugging.
+        suggestion: Optional suggestion for how to fix the error.
+        code: Machine-readable identifier (Ship Gate B1). Stable across
+              class renames. Defaults to the upper-cased class name
+              (e.g. ``DATASETNOTFOUNDERROR``); subclasses may set a more
+              human-friendly value like ``DATASET_NOT_FOUND``.
+        cause: The underlying exception, if any. Also chained via
+               ``raise X from cause`` semantics (``self.__cause__``).
+        retryable: Whether a caller can retry the operation without user
+                   intervention (e.g. GPU temperature throttling -> True,
+                   missing dataset file -> False). Defaults to ``False``.
+
+    Backward compatibility:
+        ``code``, ``cause``, and ``retryable`` are optional keyword arguments
+        with defaults that preserve previous behavior. Existing callers that
+        only pass ``message`` / ``details`` / ``suggestion`` work unchanged.
     """
 
     def __init__(
@@ -103,10 +130,20 @@ class BackpropagateError(Exception):
         message: str,
         details: dict | None = None,
         suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
     ):
         self.message = message
         self.details = details or {}
         self.suggestion = suggestion
+        self.code = code if code is not None else self.__class__.__name__.upper()
+        self.cause = cause
+        self.retryable = retryable
+
+        # Chain the underlying cause so traceback machinery picks it up.
+        if cause is not None:
+            self.__cause__ = cause
 
         # Build full message
         full_message = message
@@ -120,6 +157,52 @@ class BackpropagateError(Exception):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.message!r})"
+
+    def to_dict(self) -> dict:
+        """Serialize the structured envelope for logging or transport."""
+        envelope: dict[str, Any] = {
+            "type": self.__class__.__name__,
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+        if self.suggestion:
+            envelope["suggestion"] = self.suggestion
+        if self.details:
+            envelope["details"] = self.details
+        if self.cause is not None:
+            envelope["cause"] = f"{type(self.cause).__name__}: {self.cause}"
+        return envelope
+
+
+# =============================================================================
+# USER INPUT ERROR (CLI exit code 1 — user-actionable)
+# =============================================================================
+
+class UserInputError(BackpropagateError):
+    """
+    Raised when a user-supplied argument, path, or value is invalid.
+
+    Maps to Ship Gate B2 exit code ``1`` (user error). Distinct from
+    ConfigurationError (which covers persisted settings) — UserInputError
+    represents per-invocation argument or flag problems that the user can
+    fix by adjusting their command line.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        hint: str | None = None,
+        details: dict | None = None,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=hint,
+            code=code or "USER_INPUT_ERROR",
+            retryable=False,
+        )
 
 
 # =============================================================================
@@ -171,6 +254,8 @@ class DatasetNotFoundError(DatasetError):
             f"Dataset not found: {path}",
             details={"path": str(path)},
             suggestion=suggestion or f"Check that the file exists at: {path}",
+            code="DATASET_NOT_FOUND",
+            retryable=False,
         )
 
 
@@ -450,6 +535,8 @@ class GPUMemoryError(GPUError):
             message,
             details={"required_gb": required_gb, "available_gb": available_gb},
             suggestion=suggestion or "Try reducing batch size, using gradient checkpointing, or a smaller model",
+            code="RUNTIME_GPU_OOM",
+            retryable=False,
         )
 
 
@@ -469,6 +556,9 @@ class GPUTemperatureError(GPUError):
             f"GPU temperature critical: {temperature}°C (threshold: {threshold}°C)",
             details={"temperature": temperature, "threshold": threshold},
             suggestion=suggestion or "Wait for GPU to cool down or improve cooling",
+            code="GPU_TEMPERATURE_CRITICAL",
+            # Retryable: temperature naturally recovers as the GPU cools.
+            retryable=True,
         )
 
 
@@ -590,3 +680,51 @@ class BatchOperationError(BackpropagateError):
     @property
     def success_rate(self) -> float:
         return (self.success_count / self.total_items * 100) if self.total_items > 0 else 0.0
+
+
+# =============================================================================
+# PARTIAL SUCCESS (Ship Gate B2 exit code 3)
+# =============================================================================
+
+class PartialSuccess(BackpropagateError):
+    """
+    Raised when an operation completed with both successes and failures.
+
+    Maps to Ship Gate B2 exit code ``3`` (partial success). Distinct from
+    :class:`BatchOperationError` in intent: ``BatchOperationError`` is the
+    raw aggregate from a per-item loop; ``PartialSuccess`` is the CLI-facing
+    signal that "the work ran to completion, but not every unit succeeded".
+
+    A handler that catches ``BatchOperationError`` may choose to re-raise as
+    ``PartialSuccess`` once it has decided the overall operation succeeded
+    enough to warrant exit code 3 instead of exit code 2.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        total_items: int,
+        succeeded: int,
+        failed: int,
+        suggestion: str | None = None,
+        details: dict | None = None,
+    ):
+        self.total_items = total_items
+        self.succeeded = succeeded
+        self.failed = failed
+
+        merged_details = {
+            "total_items": total_items,
+            "succeeded": succeeded,
+            "failed": failed,
+        }
+        if details:
+            merged_details.update(details)
+
+        super().__init__(
+            message,
+            details=merged_details,
+            suggestion=suggestion,
+            code="PARTIAL_SUCCESS",
+            retryable=False,
+        )

@@ -1747,9 +1747,17 @@ class DatasetLoader:
     def shuffle(self, seed: int | None = None) -> "DatasetLoader":
         """Return a new loader with shuffled samples."""
         shuffled = self._samples.copy()
+        # Use a local Random instance instead of mutating the global Python RNG;
+        # the global mutation pattern silently pollutes any other code that uses
+        # `random` later in the same process (e.g. MinHash dedup seeds, user
+        # callbacks). When no seed is provided, fall back to the module-level
+        # random.shuffle so we still get a non-deterministic shuffle without
+        # touching the global seed.
         if seed is not None:
-            random.seed(seed)
-        random.shuffle(shuffled)
+            rng = random.Random(seed)
+            rng.shuffle(shuffled)
+        else:
+            random.shuffle(shuffled)
         return DatasetLoader(shuffled, self._format, validate=False)
 
     def split(

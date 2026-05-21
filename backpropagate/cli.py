@@ -24,6 +24,7 @@ Usage:
 import argparse
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -32,13 +33,52 @@ from .exceptions import (
     BackpropagateError,
     DatasetError,
     ExportError,
+    PartialSuccess,
     TrainingError,
+    UserInputError,
 )
 from .security import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["main", "create_parser"]
+
+
+# =============================================================================
+# EXIT CODES (Ship Gate B2)
+# =============================================================================
+# 0 = success
+# 1 = user error          (bad args, missing input, validation failure)
+# 2 = runtime error       (unexpected crash, IO failure, internal bug)
+# 3 = partial success     (operation completed with some failures)
+# 130 = interrupted       (Ctrl+C / SIGINT — POSIX convention)
+
+EXIT_OK = 0
+EXIT_USER_ERROR = 1
+EXIT_RUNTIME_ERROR = 2
+EXIT_PARTIAL_SUCCESS = 3
+EXIT_INTERRUPTED = 130
+
+
+# Patterns used to redact common secret-bearing tokens from non-verbose
+# error output. Conservative on purpose: prefer false-positives (a redacted
+# string) over leaking. Use `_print_error_redacted` for unexpected-exception
+# paths where the exception message may quote a downstream library payload.
+_SECRET_PATTERNS = [
+    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
+    (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
+    (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
+    (re.compile(r"(password|passwd|pwd|token|api[_-]?key)\s*[=:]\s*\S+", re.IGNORECASE),
+     r"\1=<REDACTED>"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Best-effort redaction of common secret patterns in error output."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 # =============================================================================
@@ -93,6 +133,20 @@ def _print_success(text: str) -> None:
 def _print_error(text: str) -> None:
     """Print error message."""
     print(f"{Colors.RED}[ERROR]{Colors.RESET} {text}", file=sys.stderr)
+
+
+def _print_error_redacted(exc: BaseException, prefix: str = "") -> None:
+    """
+    Print an unexpected exception with secret-bearing strings redacted.
+
+    Use for ``except Exception`` paths in non-verbose mode, where the
+    exception message may quote a downstream library payload that happens
+    to embed credentials (HTTP Authorization headers, signed URLs, JWT,
+    etc.). Verbose mode is exempt — the user opted in to full output.
+    """
+    redacted = _redact_secrets(str(exc))
+    msg = f"{prefix}{type(exc).__name__}: {redacted}"
+    _print_error(msg)
 
 
 def _print_warning(text: str) -> None:
@@ -150,15 +204,24 @@ class ProgressBar:
 # =============================================================================
 
 def cmd_train(args: argparse.Namespace) -> int:
-    """Execute the train command."""
+    """
+    Execute the train command.
+
+    Exit codes (Ship Gate B2):
+        0   training completed successfully
+        1   user error (missing/invalid args, dataset validation failure)
+        2   runtime error (model load failure, GPU OOM, IO error, unexpected crash)
+        130 interrupted (Ctrl+C)
+    """
     from .trainer import Trainer, TrainingCallback
 
     _print_header("Backpropagate Training")
 
-    # Validate data argument
+    # argparse marks --data as required (see create_parser), so this only fires
+    # if cmd_train is called programmatically without going through the parser.
     if not args.data:
         _print_error("--data is required")
-        return 1
+        return EXIT_USER_ERROR
 
     _print_info(f"Model: {args.model}")
     _print_info(f"Dataset: {args.data}")
@@ -204,44 +267,65 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_success("Training complete!")
         _print_kv("Final loss", f"{result.final_loss:.4f}")
         _print_kv("Duration", f"{result.duration_seconds:.1f}s")
-        _print_kv("Saved to", save_path)
+        _print_kv("Saved to", str(save_path))
 
-        return 0
+        return EXIT_OK
 
     except KeyboardInterrupt:
         print()
         _print_warning("Training interrupted by user")
-        return 130
+        return EXIT_INTERRUPTED
+    except UserInputError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        if args.verbose:
+            logger.exception("User input error details")
+        return EXIT_USER_ERROR
     except DatasetError as e:
+        # DatasetError covers user-supplied dataset issues (missing file,
+        # parse failure, validation) — user-actionable.
         _print_error(f"Dataset error: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Dataset error details")
-        return 1
+        return EXIT_USER_ERROR
     except TrainingError as e:
+        # TrainingError covers model load failures, training aborts, checkpoint
+        # IO — runtime-level problems the user generally cannot pre-validate.
         _print_error(f"Training error: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Training error details")
-        return 1
+        return EXIT_RUNTIME_ERROR
+    except PartialSuccess as e:
+        _print_warning(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_PARTIAL_SUCCESS
     except BackpropagateError as e:
+        # Default for any other structured BackpropagateError subclass —
+        # treat as runtime error unless it is explicitly user-actionable.
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return EXIT_RUNTIME_ERROR
     except Exception as e:
-        msg = f"Training failed: {e}"
-        if not args.verbose:
-            msg += " (run with --verbose for full traceback)"
-        _print_error(msg)
+        # Unexpected — re-raise under --verbose so users can see the full
+        # traceback; otherwise emit a redacted single-line message and exit
+        # with the runtime-error code.
         if args.verbose:
+            _print_error(f"Training failed: {e}")
             import traceback
             traceback.print_exc()
-        return 1
+        else:
+            _print_error_redacted(e, prefix="Training failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
 
 
 # =============================================================================
@@ -249,14 +333,23 @@ def cmd_train(args: argparse.Namespace) -> int:
 # =============================================================================
 
 def cmd_multi_run(args: argparse.Namespace) -> int:
-    """Execute the multi-run command."""
+    """
+    Execute the multi-run command.
+
+    Exit codes (Ship Gate B2):
+        0   all runs completed successfully
+        1   user error (missing args, invalid merge mode)
+        2   runtime error (model load, GPU OOM, IO, unexpected crash)
+        3   partial success (some runs failed but the overall result is usable)
+        130 interrupted (Ctrl+C)
+    """
     from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer, RunResult
 
     _print_header("Backpropagate Multi-Run Training")
 
     if not args.data:
         _print_error("--data is required")
-        return 1
+        return EXIT_USER_ERROR
 
     _print_info(f"Model: {args.model}")
     _print_info(f"Dataset: {args.data}")
@@ -291,30 +384,61 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_kv("Total runs", str(result.total_runs))
         _print_kv("Final loss", f"{result.final_loss:.4f}")
         _print_kv("Total time", f"{result.total_duration_seconds:.1f}s")
-        _print_kv("Output", result.final_checkpoint_path or args.output)
+        _print_kv("Output", str(result.final_checkpoint_path or args.output))
 
-        return 0
+        # Some MultiRunResult shapes carry a ``failed_runs`` counter — if any
+        # runs failed but a final checkpoint exists, surface as partial success.
+        failed_runs = getattr(result, "failed_runs", 0) or 0
+        if failed_runs > 0:
+            _print_warning(
+                f"{failed_runs}/{result.total_runs} runs failed (partial success)"
+            )
+            return EXIT_PARTIAL_SUCCESS
+
+        return EXIT_OK
 
     except KeyboardInterrupt:
         print()
         _print_warning("Training interrupted by user")
-        return 130
+        return EXIT_INTERRUPTED
+    except UserInputError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_USER_ERROR
+    except DatasetError as e:
+        _print_error(f"Dataset error: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        if args.verbose:
+            logger.exception("Dataset error details")
+        return EXIT_USER_ERROR
+    except PartialSuccess as e:
+        _print_warning(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_PARTIAL_SUCCESS
+    except ValueError as e:
+        # Invalid merge_mode etc. — argparse choices=['slao','simple'] already
+        # guards the common case, so this catches programmatic mis-calls.
+        _print_error(f"Invalid argument: {e}")
+        return EXIT_USER_ERROR
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return EXIT_RUNTIME_ERROR
     except Exception as e:
-        msg = f"Multi-run failed: {e}"
-        if not args.verbose:
-            msg += " (run with --verbose for full traceback)"
-        _print_error(msg)
         if args.verbose:
+            _print_error(f"Multi-run failed: {e}")
             import traceback
             traceback.print_exc()
-        return 1
+        else:
+            _print_error_redacted(e, prefix="Multi-run failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
 
 
 # =============================================================================
@@ -322,7 +446,15 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
 # =============================================================================
 
 def cmd_export(args: argparse.Namespace) -> int:
-    """Execute the export command."""
+    """
+    Execute the export command.
+
+    Exit codes (Ship Gate B2):
+        0   export (and optional Ollama registration) succeeded
+        1   user error (path traversal, missing model, malformed path, unknown format)
+        2   runtime error (export failure, disk full, Ollama registration crash)
+        130 interrupted (Ctrl+C)
+    """
     from .export import (
         export_gguf,
         export_lora,
@@ -332,16 +464,66 @@ def cmd_export(args: argparse.Namespace) -> int:
 
     _print_header("Backpropagate Export")
 
+    # Null-byte rejection up front — Path.resolve on some platforms will raise
+    # a less-helpful OSError and obscure the real cause.
+    if "\x00" in str(args.model_path):
+        _print_error("Model path contains null byte")
+        return EXIT_USER_ERROR
+
+    # Resolve the input model path inside the parent directory it points at.
+    # This gives `safe_path` an explicit base to enforce traversal protection
+    # against, instead of relying on the (newly stricter) default behavior.
     try:
-        model_path = safe_path(args.model_path, must_exist=True)
+        input_base = Path(args.model_path).expanduser().parent.resolve()
+    except (OSError, ValueError) as e:
+        _print_error(f"Invalid model path: {e}")
+        return EXIT_USER_ERROR
+
+    try:
+        model_path = safe_path(
+            args.model_path,
+            must_exist=True,
+            allowed_base=input_base,
+        )
     except PathTraversalError as e:
         _print_error(f"Security error: {e}")
-        return 1
+        return EXIT_USER_ERROR
     except FileNotFoundError:
         _print_error(f"Model path not found: {args.model_path}")
-        return 1
+        return EXIT_USER_ERROR
+    except (OSError, ValueError) as e:
+        # Malformed path (null byte, invalid drive letter, bad UNC, etc.)
+        _print_error(f"Invalid model path: {e}")
+        return EXIT_USER_ERROR
 
-    output_dir = Path(args.output) if args.output else model_path.parent / args.format
+    # Validate / resolve the output directory inside the current working
+    # directory (the conventional "export-to-here" pattern). Users who want
+    # to write elsewhere can pass an absolute --output and we accept it.
+    cwd = Path.cwd()
+    raw_output: Path
+    if args.output:
+        raw_output = Path(args.output).expanduser()
+    else:
+        raw_output = model_path.parent / args.format
+
+    try:
+        if raw_output.is_absolute():
+            # Absolute output paths bypass the cwd-bound check but are still
+            # normalized; safe_path with no allowed_base will reject ".."
+            # patterns under the new default behavior.
+            output_dir = safe_path(str(raw_output), must_exist=False)
+        else:
+            output_dir = safe_path(
+                str(raw_output),
+                must_exist=False,
+                allowed_base=cwd,
+            )
+    except PathTraversalError as e:
+        _print_error(f"Security error: output path escapes its allowed base: {e}")
+        return EXIT_USER_ERROR
+    except (OSError, ValueError) as e:
+        _print_error(f"Invalid output path: {e}")
+        return EXIT_USER_ERROR
 
     _print_info(f"Model: {model_path}")
     _print_info(f"Format: {args.format}")
@@ -377,7 +559,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             )
         else:
             _print_error(f"Unknown format: {args.format}")
-            return 1
+            return EXIT_USER_ERROR
 
         _print_success("Export complete!")
         _print_kv("Path", str(result.path))
@@ -394,34 +576,48 @@ def cmd_export(args: argparse.Namespace) -> int:
                 _print_success(f"Registered with Ollama: {ollama_name}")
                 _print_info(f"Run with: ollama run {ollama_name}")
             else:
+                # Export succeeded; only the optional Ollama step failed.
+                # Treat as partial success so callers can distinguish from
+                # outright failure.
                 _print_error("Failed to register with Ollama")
-                return 1
+                return EXIT_PARTIAL_SUCCESS
 
-        return 0
+        return EXIT_OK
 
+    except UserInputError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_USER_ERROR
     except ExportError as e:
+        # ExportError covers GGUF / merge / Ollama failures — runtime-level.
         _print_error(f"Export error: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Export error details")
-        return 1
+        return EXIT_RUNTIME_ERROR
+    except PartialSuccess as e:
+        _print_warning(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_PARTIAL_SUCCESS
     except BackpropagateError as e:
         _print_error(f"{e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
             logger.exception("Error details")
-        return 1
+        return EXIT_RUNTIME_ERROR
     except Exception as e:
-        msg = f"Export failed: {e}"
-        if not args.verbose:
-            msg += " (run with --verbose for full traceback)"
-        _print_error(msg)
         if args.verbose:
+            _print_error(f"Export failed: {e}")
             import traceback
             traceback.print_exc()
-        return 1
+        else:
+            _print_error_redacted(e, prefix="Export failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
 
 
 # =============================================================================
@@ -488,8 +684,37 @@ def cmd_info(_args: argparse.Namespace) -> int:
 # COMMAND: config
 # =============================================================================
 
+def _env_flag(name: str, default: bool) -> bool:
+    """
+    Read a boolean-flavored environment variable.
+
+    Truthy values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
+    Falsy values:  ``0``, ``false``, ``no``, ``off``.
+    Anything else (or unset) returns ``default``.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
-    """Execute the ui command to launch Gradio interface."""
+    """
+    Execute the ui command to launch the Gradio interface.
+
+    Exit codes (Ship Gate B2):
+        0   UI launched and exited cleanly (including Ctrl+C)
+        1   user error — UI extra not installed, malformed --auth, OR
+            --share supplied without --auth while the
+            BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE setting is on
+            (default: on; set to ``false`` to explicitly opt out)
+        2   runtime error — Gradio launch failure
+    """
     try:
         from .ui import launch
     except ImportError:
@@ -497,12 +722,31 @@ def cmd_ui(args: argparse.Namespace) -> int:
         _print_info("Install with: pip install backpropagate[ui]")
         if args.verbose:
             logger.exception("Import error details")
-        return 1
+        return EXIT_USER_ERROR
 
     _print_header("Backpropagate UI")
     _print_info(f"Port: {args.port}")
     if args.share:
         _print_info("Share: enabled (public URL)")
+
+    # ------------------------------------------------------------------ #
+    # F-001 enforcement: --share must come with --auth unless the user
+    # explicitly opted out via env var.
+    # ------------------------------------------------------------------ #
+    require_auth_for_share = _env_flag(
+        "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE",
+        default=True,
+    )
+    if args.share and not args.auth and require_auth_for_share:
+        _print_error(
+            "[INPUT_AUTH_REQUIRED]: --share requires --auth for security."
+        )
+        _print_info(
+            "Hint: pass --auth user:password, OR set "
+            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false to "
+            "explicitly opt out."
+        )
+        return EXIT_USER_ERROR
 
     # Handle authentication
     auth = None
@@ -513,26 +757,48 @@ def cmd_ui(args: argparse.Namespace) -> int:
             _print_info(f"Auth: enabled (user: {username})")
         except ValueError:
             _print_error("Invalid auth format. Use --auth username:password")
-            return 1
+            return EXIT_USER_ERROR
+
+    # Loud warning if the user explicitly opted out of the auth requirement
+    # while sharing publicly. The frontend agent layers a Gradio-side warning
+    # too; this stderr line is the CLI signal.
+    if args.share and not args.auth and not require_auth_for_share:
+        _print_warning(
+            "Sharing publicly with NO authentication. "
+            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false was set "
+            "explicitly; anyone with the *.gradio.live URL can use this UI."
+        )
 
     try:
         print()
         _print_info("Launching Gradio interface...")
         launch(port=args.port, share=args.share, auth=auth)
-        return 0
+        return EXIT_OK
     except KeyboardInterrupt:
         print()
         _print_info("UI stopped")
-        return 0
-    except Exception as e:
-        msg = f"Failed to launch UI: {e}"
-        if not args.verbose:
-            msg += " (run with --verbose for full traceback)"
-        _print_error(msg)
+        return EXIT_OK
+    except UserInputError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_USER_ERROR
+    except BackpropagateError as e:
+        _print_error(f"{e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
+            logger.exception("Error details")
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:
+        if args.verbose:
+            _print_error(f"Failed to launch UI: {e}")
             import traceback
             traceback.print_exc()
-        return 1
+        else:
+            _print_error_redacted(e, prefix="Failed to launch UI: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -604,6 +870,13 @@ Examples:
   backprop export ./output/lora --format gguf
   backprop ui --port 7862
   backprop info
+
+Exit codes (Ship Gate B2):
+  0   success
+  1   user error  (bad args, missing input, validation, --share without --auth)
+  2   runtime error (model load, GPU OOM, IO, unexpected crash)
+  3   partial success (e.g. some multi-runs failed; export ok but Ollama register failed)
+  130 interrupted (Ctrl+C)
         """,
     )
 
@@ -810,7 +1083,12 @@ Examples:
     ui_parser.add_argument(
         "--share",
         action="store_true",
-        help="Create a public shareable link (requires --auth for security)",
+        help=(
+            "Create a public shareable link. REQUIRES --auth USER:PASS "
+            "(enforced — exit code 1 if omitted). Set the env var "
+            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false to "
+            "explicitly opt out (you will see a loud unauthenticated warning)."
+        ),
     )
     ui_parser.add_argument(
         "--auth",
@@ -827,13 +1105,16 @@ Examples:
 # =============================================================================
 
 def main(argv: list | None = None) -> int:
-    """Main entry point for the CLI."""
+    """Main entry point for the CLI.
+
+    See ``backprop --help`` for the documented Ship Gate B2 exit-code contract.
+    """
     parser = create_parser()
     args = parser.parse_args(argv)
 
     if not args.command:
-        print("No command specified. Run backprop --help for usage.")
-        return 1
+        _print_error("No command specified. Run backprop --help for usage.")
+        return EXIT_USER_ERROR
 
     # Execute the command
     result: int = args.func(args)

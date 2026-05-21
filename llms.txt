@@ -30,14 +30,15 @@ trainer.export("gguf", quantization="q4_k_m")
 - `backprop multi-run --data <file> --runs N --steps N`
 - `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
 - `backprop info` -- system info and feature detection
-- `backpropagate --ui` -- launch Gradio web UI
+- `backprop ui --port 7862` -- launch Gradio web UI
+- `backprop config` -- show resolved configuration
 
 ## Constraints
 - Requires CUDA GPU (8GB+ VRAM recommended); CPU-only not supported
 - Python 3.10+, PyTorch 2.0+
 - Modular installs: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[standard]`, `[full]`
 - Windows auto-fixes: pre-tokenization, xformers disable for RTX 40/50 series
-- Dataset format: JSONL with `text` field or HuggingFace dataset with `text` column
+- Dataset formats (auto-detected): ShareGPT (`conversations` with `from`/`value`), Alpaca (`instruction`/`output`), OpenAI chat (`messages`), ChatML, JSONL with `text` field, raw text, or any HuggingFace dataset name
 - Config via env vars (`BACKPROPAGATE_MODEL__NAME`, etc.) or `.env` file
 
 ## Links

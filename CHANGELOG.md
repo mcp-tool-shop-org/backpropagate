@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux binary build: replace CUDA torch (~870MB) with CPU-only torch (~200MB) after install to keep binary under 2GB GitHub release limit
 - Strip step SIGPIPE crash: `du | head -5` with `set -eo pipefail` caused false build failure
 
+## [1.0.3] - 2026-04-14
+
+### Added
+
+- `release-binaries.yml` workflow for standalone PyInstaller binaries on Windows + Linux
+
+### Fixed
+
+- PyInstaller build pipeline iteration: hidden-import handling for torch/transformers (recursion limit), `--collect-data` removed to stay under 4GB onefile cap, Linux binary size reduction via strip + module exclusion (lead-up fixes; the final size cut that actually landed under 2GB shipped in v1.0.4)
+- Full-install CUDA-torch override on Linux (uses CPU torch index instead)
+- `pywin32-ctypes` dependency for Windows PyInstaller builds
+- Forced uninstall of CUDA packages before PyInstaller to avoid CUDA torch contamination
+
 ## [1.0.2] - 2026-03-25
 
 ### Fixed
@@ -134,6 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.0.5 | 2026-04-15 | Release-binaries workflow re-cut after v1.0.4 Linux exclusion fix |
+| 1.0.4 | 2026-04-14 | Linux binary <2GB (CPU torch swap), strip SIGPIPE fix |
+| 1.0.3 | 2026-04-14 | Standalone PyInstaller binary workflow (Windows + Linux) |
 | 1.0.2 | 2026-03-25 | CLI version fix, regression tests |
 | 1.0.1 | 2026-02-27 | Ship Gate audit, verify.sh, proper exit codes |
 | 1.0.0 | 2026-02-27 | Stable release - production-ready |
@@ -144,7 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v0.1.7...v1.0.0

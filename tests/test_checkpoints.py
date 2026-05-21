@@ -800,7 +800,6 @@ class TestCleanupAll:
         assert removed == 1
         assert len(manager_no_auto_prune.list_checkpoints()) == 0
 
-    @pytest.mark.skip(reason="Temporary skip for mutation testing - force_prune_to_size logic needs review")
     def test_force_prune_to_size(self, temp_checkpoint_dir):
         """Force prune to fit within size limit."""
         policy = CheckpointPolicy(auto_prune=False)

@@ -549,12 +549,28 @@ class CheckpointManager:
         """
         Force prune checkpoints until total size is under limit.
 
+        The loop prunes the lowest-scored prunable checkpoint per iteration and
+        stops as soon as the total size fits ``max_size_gb`` OR no prunable
+        checkpoint remains. Protected checkpoints (``protected=True``), the
+        final checkpoint when ``keep_final=True``, run-boundary checkpoints
+        when ``keep_run_boundaries=True``, and the top-N by validation loss
+        when ``keep_best_n > 0`` are all skipped — even under force prune. So
+        an aggressive ``max_size_gb`` (e.g. 0.0) cannot delete the final
+        checkpoint or otherwise violate the retention policy; the loop simply
+        logs that it cannot prune further and exits cleanly.
+
         Args:
             max_size_gb: Maximum total size in gigabytes
 
         Returns:
-            List of pruned checkpoints
+            List of pruned checkpoints (may be smaller than needed if the
+            remaining checkpoints are all protected by policy).
         """
+        # Semantics verified during the v1.1.0 promotion swarm (Stage A) —
+        # force_prune_to_size correctly delegates to _get_prunable_checkpoints,
+        # which honors protected / keep_final / keep_run_boundaries / keep_best_n.
+        # The previously-skipped tests/test_checkpoints.py::test_force_prune_to_size
+        # passes against this implementation.
         max_bytes = max_size_gb * (1024**3)
         pruned = []
         max_iterations = 100

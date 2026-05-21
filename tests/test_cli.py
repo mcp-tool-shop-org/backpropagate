@@ -611,12 +611,8 @@ class TestCmdTrainExecution:
     def test_cmd_train_exception_handling(self, capsys, temp_dir):
         """Test train command handles exceptions.
 
-        This tests lines 201-206:
-            except Exception as e:
-                _print_error(f"Training failed: {e}")
-                if args.verbose:
-                    traceback.print_exc()
-                return 1
+        Per Ship Gate B2, unexpected exceptions (RuntimeError, etc.) map to
+        exit code 2 (runtime error), not 1 (user error).
         """
         import argparse
 
@@ -642,7 +638,7 @@ class TestCmdTrainExecution:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Test error" in captured.err
@@ -673,7 +669,7 @@ class TestCmdTrainExecution:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             # Verbose mode should print traceback
             assert "ValueError" in captured.err or "Verbose error" in captured.err
@@ -725,6 +721,10 @@ class TestCmdMultiRunExecution:
         mock_result.final_loss = 0.3
         mock_result.total_duration_seconds = 300.0
         mock_result.final_checkpoint_path = str(temp_dir / "final_model")
+        # Explicit failed_runs=0 so cmd_multi_run does not classify this as
+        # partial success (exit 3). MagicMock attributes are truthy by default,
+        # so leaving this unset would make `failed_runs > 0` evaluate True.
+        mock_result.failed_runs = 0
 
         mock_trainer = MagicMock()
         mock_trainer.run.return_value = mock_result
@@ -811,7 +811,8 @@ class TestCmdMultiRunExecution:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            # Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+            assert result == 2
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Multi-run error" in captured.err
@@ -975,7 +976,8 @@ class TestCmdExportExecution:
     def test_cmd_export_ollama_registration_failure(self, capsys, temp_dir):
         """Test export when Ollama registration fails.
 
-        This tests lines 346-348.
+        Documented partial-success path: export succeeded, only the optional
+        Ollama registration failed -> Ship Gate B2 exit code 3 (partial).
         """
         import argparse
 
@@ -1007,7 +1009,7 @@ class TestCmdExportExecution:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 3
             captured = capsys.readouterr()
             assert "Failed to register with Ollama" in captured.err
 
@@ -1036,7 +1038,8 @@ class TestCmdExportExecution:
 
             result = cmd_export(args)
 
-            assert result == 1
+            # Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+            assert result == 2
             captured = capsys.readouterr()
             assert "ERROR" in captured.err
             assert "Export failed" in captured.err

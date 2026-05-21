@@ -357,6 +357,30 @@ class TestEnhancedRateLimiter:
         assert limiter.is_allowed()  # Burst
         assert not limiter.is_allowed()
 
+    def test_rate_limiter_buckets_per_ip_not_per_port(self):
+        """Regression: same IP, different source ports must share a rate-limit bucket.
+
+        Previously ``_get_client_id`` used ``str(request.client)`` which
+        included the source port, giving every TCP connection its own
+        bucket — effectively bypassing rate limiting. The new
+        ``_extract_client_ip`` reads ``.host`` only.
+        """
+        from collections import namedtuple
+
+        from backpropagate.ui_security import EnhancedRateLimiter
+
+        Address = namedtuple("Address", ["host", "port"])
+        limiter = EnhancedRateLimiter(max_requests=1, window_seconds=60)
+
+        request1 = MagicMock()
+        request1.client = Address(host="1.2.3.4", port=54321)
+        assert limiter.is_allowed(request1)
+
+        request2 = MagicMock()
+        request2.client = Address(host="1.2.3.4", port=54322)  # same IP, different port
+        assert not limiter.is_allowed(request2), \
+            "Same IP must share bucket regardless of source port"
+
 
 class TestSecurityConfig:
     """Tests for SecurityConfig dataclass."""
@@ -471,11 +495,21 @@ class TestFileValidator:
                 assert path is not None, "Path must be returned for valid file"
 
     def test_rejects_file_too_large(self):
-        """Should reject files that exceed size limit."""
+        """Should reject files that exceed size limit.
+
+        Verifies the size-check upload boundary (DoS-relevant). A file whose
+        size exceeds FileValidator.max_size_bytes must be rejected with
+        (valid=False, size-related error, path=None).
+
+        Note: FileValidator.__init__ wires self.max_size_bytes from the
+        `max_size_mb` constructor argument (NOT from
+        config.max_upload_size_mb). The test passes max_size_mb=1 directly
+        so the 2MB fixture exceeds the limit.
+        """
         from backpropagate.ui_security import FileValidator, SecurityConfig
 
-        config = SecurityConfig(max_upload_size_mb=1)  # 1MB limit
-        validator = FileValidator(config=config)
+        config = SecurityConfig(max_upload_size_mb=1)  # config retained for parity
+        validator = FileValidator(config=config, max_size_mb=1)  # 1MB limit
 
         with patch.object(Path, 'exists', return_value=True):
             with patch.object(Path, 'stat') as mock_stat:
@@ -486,9 +520,17 @@ class TestFileValidator:
                 file_obj.name = "/tmp/large.jsonl"
 
                 valid, error, path = validator.validate(file_obj)
-                # The test documents the expected behavior for file size validation
-                # If implementation checks size, it should reject; otherwise pass
-                # This test ensures we don't crash on large files
+
+                assert valid is False, (
+                    f"Expected rejection of oversize file, got valid=True "
+                    f"(error={error!r}, path={path!r})"
+                )
+                err_lower = (error or "").lower()
+                assert error and any(
+                    needle in err_lower
+                    for needle in ("size", "large", "limit", "maximum")
+                ), f"Expected size-related error (size/large/limit/maximum), got: {error!r}"
+                assert path is None, f"Expected None path for rejected file, got: {path!r}"
 
 
 class TestDangerousExtensions:
@@ -728,13 +770,18 @@ class TestRequestContext:
     """Tests for request context and tracing."""
 
     def test_request_context_creation(self):
-        """RequestContext should be creatable from Gradio request."""
+        """RequestContext should be creatable from Gradio request.
+
+        Default-IP sentinel changed from "anonymous" to "unknown" so the
+        per-IP rate limiter fails CLOSED to a single shared bucket on
+        unknown request shapes instead of appearing per-client.
+        """
         from backpropagate.ui_security import RequestContext
 
         ctx = RequestContext.from_gradio_request(operation="test_op")
 
         assert len(ctx.request_id) == 8, "request_id must be 8 chars"
-        assert ctx.client_ip == "anonymous", "Default IP must be 'anonymous'"
+        assert ctx.client_ip == "unknown", "Default IP must be 'unknown'"
         assert ctx.operation == "test_op", "operation must match"
         assert ctx.timestamp > 0, "timestamp must be positive"
         assert ctx.user_id is None, "user_id must default to None"

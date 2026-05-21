@@ -9,6 +9,12 @@ env:
   TOOL_NAME: backpropagate
   ENTRYPOINT: backpropagate/__main__.py
 
+# Workflow-level least-privilege baseline. The `release` job below overrides
+# to `contents: write` (needed for softprops/action-gh-release to attach
+# binaries). All other jobs (build matrix) only need to read the repo.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -30,9 +36,9 @@ jobs:
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@7b1f4a764d45c48632c6b24a0339c27f5614fb0b  # v3
 
       - run: uv python install 3.12
 
@@ -106,7 +112,7 @@ jobs:
           mv "dist/${{ env.TOOL_NAME }}${{ matrix.ext }}" "dist/${OUTNAME}"
           echo "ASSET_NAME=${OUTNAME}" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: binary-${{ matrix.target }}
           path: dist/${{ env.ASSET_NAME }}
@@ -117,7 +123,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -130,6 +136,6 @@ jobs:
           sha256sum * > "checksums-${VERSION}.txt"
           cat "checksums-${VERSION}.txt"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: artifacts/*

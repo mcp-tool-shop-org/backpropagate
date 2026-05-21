@@ -36,6 +36,7 @@ Usage:
 
 import logging
 import secrets
+import sys
 import time
 from collections.abc import Generator
 from pathlib import Path
@@ -63,6 +64,7 @@ from .ui_security import (
     DEFAULT_SECURITY_CONFIG,
     EnhancedRateLimiter,
     FileValidator,
+    get_ui_output_dir,
     log_security_event,
     validate_numeric_input,
 )
@@ -512,8 +514,12 @@ def export_converted_dataset(output_path: str) -> str:
     if state.dataset_loader is None:
         return "No dataset loaded"
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write the converted dataset to
+    # arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid or validated_path is None:
         return f"Invalid output path: {error_msg}"
 
@@ -786,8 +792,12 @@ def save_model(output_path: str, save_merged: bool) -> str:
     if state.trainer is None:
         raise gr.Error("No model to save. Train a model first.", title="No Model")
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write the LoRA adapter or merged
+    # weights to arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid:
         raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
@@ -829,8 +839,12 @@ def export_model(
             title="Rate Limited",
         )
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write GGUF/merged exports to
+    # arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid:
         raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
@@ -850,8 +864,12 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
     """Register a GGUF model with Ollama."""
     from .export import register_with_ollama
 
-    # Validate GGUF path
-    is_valid, error_msg, validated_path = validate_path_input(gguf_path, must_exist=True)
+    # Validate GGUF path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can only register GGUFs that previously
+    # came out of the export pipeline. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        gguf_path, allowed_base=get_ui_output_dir(), must_exist=True
+    )
     if not is_valid or validated_path is None:
         return f"Invalid GGUF path: {error_msg}"
 
@@ -898,15 +916,25 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
     """Create an Ollama Modelfile."""
     from .export import create_modelfile
 
+    # Both the GGUF source and the Modelfile destination are constrained to the
+    # UI output base so authenticated remote users (share=True + --auth) can't
+    # read arbitrary disk locations or write Modelfiles to system paths.
+    # See ui_security.get_ui_output_dir.
+    ui_base = get_ui_output_dir()
+
     # Validate GGUF path
-    is_valid, error_msg, validated_gguf = validate_path_input(gguf_path, must_exist=True)
+    is_valid, error_msg, validated_gguf = validate_path_input(
+        gguf_path, allowed_base=ui_base, must_exist=True
+    )
     if not is_valid or validated_gguf is None:
         return f"Invalid GGUF path: {error_msg}"
 
     # Validate output path if provided
     validated_output = None
     if output_path and output_path.strip():
-        is_valid, error_msg, validated_output = validate_path_input(output_path)
+        is_valid, error_msg, validated_output = validate_path_input(
+            output_path, allowed_base=ui_base
+        )
         if not is_valid:
             return f"Invalid output path: {error_msg}"
 
@@ -2476,7 +2504,25 @@ def launch(
               Can be a tuple (username, password) or list of tuples for multiple users.
 
     Raises:
-        ValueError: If share=True but no auth is provided
+        ValueError: If share=True but no auth is provided AND
+            BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE is not explicitly
+            set to "false" (the default).
+
+    Security notes:
+        - The ``require_auth_for_share`` flag (config + env var
+          ``BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE``) gates the
+          ValueError above. If you set it to ``false`` AND launch with
+          ``share=True`` AND no ``auth``, the UI is publicly exposed with
+          no authentication. We emit a loud warning to stderr and the
+          structured logger, then sleep 5 seconds so you can Ctrl+C to
+          abort. There is no flag to suppress this warning — public
+          unauthenticated exposure of training/export controls is always
+          worth a five-second pause.
+        - UI-initiated filesystem writes (LoRA adapters, GGUF exports,
+          converted datasets, Modelfiles) are constrained to
+          ``~/.backpropagate/ui-outputs`` (override via
+          ``BACKPROPAGATE_UI__OUTPUT_DIR``). See
+          ``ui_security.get_ui_output_dir``.
 
     Examples:
         # Local only (no auth needed)
@@ -2494,6 +2540,31 @@ def launch(
             "Authentication required when share=True. "
             "Set auth parameter or disable require_auth_for_share in SecurityConfig."
         )
+
+    # Security warning: public share with no auth (the require_auth_for_share
+    # gate was disabled by env var or config). This is the ONE case where the
+    # validation above let us through but the UI is about to go up with no
+    # protection. Be loud — silently launching here was F-003 in the audit.
+    if share and auth is None:
+        warning_msg = (
+            "WARNING: launching public Gradio share with no authentication.\n"
+            "    Anyone with the share URL can train models, write files in\n"
+            "    ~/.backpropagate/ui-outputs (or BACKPROPAGATE_UI__OUTPUT_DIR),\n"
+            "    and call Ollama on this machine.\n"
+            "    Set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=true and\n"
+            "    pass auth=('user', 'password') to require authentication.\n"
+            "    Continuing in 5 seconds — Ctrl+C to abort."
+        )
+        # stderr first (always visible, even if logging is misconfigured).
+        print(f"\n{warning_msg}\n", file=sys.stderr, flush=True)
+        # Structured log so ops monitoring picks it up.
+        logger.warning(warning_msg)
+        log_security_event(
+            "public_share_without_auth",
+            port=port,
+            require_auth_for_share=DEFAULT_SECURITY_CONFIG.require_auth_for_share,
+        )
+        time.sleep(5)
 
     app = create_ui()
     theme = create_backpropagate_theme()

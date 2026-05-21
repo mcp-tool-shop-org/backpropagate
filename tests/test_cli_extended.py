@@ -153,7 +153,10 @@ class TestCmdTrainErrorHandling:
             assert "Try converting to JSONL format" in captured.out
 
     def test_training_error_with_suggestion(self, capsys, tmp_path):
-        """TrainingError with suggestion field displays it."""
+        """TrainingError with suggestion field displays it.
+
+        Ship Gate B2: TrainingError is a runtime-level failure -> exit 2.
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import TrainingError
 
@@ -180,13 +183,17 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Out of memory" in captured.err
             assert "reducing batch size" in captured.out
 
     def test_backpropagate_error_generic(self, capsys, tmp_path):
-        """BackpropagateError base class handling."""
+        """BackpropagateError base class handling.
+
+        Ship Gate B2: generic structured BackpropagateError -> exit 2
+        (runtime error) unless explicitly user-actionable.
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import BackpropagateError
 
@@ -213,7 +220,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Generic error" in captured.err
 
@@ -244,7 +251,10 @@ class TestCmdTrainErrorHandling:
             assert result == 1
 
     def test_training_error_verbose_traceback(self, capsys, tmp_path):
-        """TrainingError with verbose shows traceback."""
+        """TrainingError with verbose shows traceback.
+
+        Ship Gate B2: TrainingError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import TrainingError
 
@@ -267,7 +277,7 @@ class TestCmdTrainErrorHandling:
             )
 
             result = cmd_train(args)
-            assert result == 1
+            assert result == 2
 
 
 # =============================================================================
@@ -279,7 +289,10 @@ class TestCmdMultiRunErrorHandling:
     """Error handling tests for cmd_multi_run."""
 
     def test_backpropagate_error_with_suggestion(self, capsys, tmp_path):
-        """BackpropagateError with suggestion in multi-run."""
+        """BackpropagateError with suggestion in multi-run.
+
+        Ship Gate B2: BackpropagateError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_multi_run
         from backpropagate.exceptions import BackpropagateError
 
@@ -305,13 +318,16 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Config invalid" in captured.err
             assert "num_runs" in captured.out
 
     def test_generic_exception_handling(self, capsys, tmp_path):
-        """Generic exception in multi-run."""
+        """Generic exception in multi-run.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_multi_run
 
         mock_trainer = MagicMock()
@@ -333,7 +349,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Unexpected error" in captured.err
 
@@ -389,7 +405,13 @@ class TestCmdMultiRunErrorHandling:
             assert "interrupted" in captured.out.lower()
 
     def test_on_run_complete_callback_invoked(self, capsys, tmp_path):
-        """on_run_complete callback is invoked."""
+        """on_run_complete callback is invoked.
+
+        Preserves the happy-path intent of this test: explicitly set
+        failed_runs=0 so cmd_multi_run does not classify the result as
+        partial success (exit 3). MagicMock auto-attributes are truthy,
+        so leaving this unset triggers the `failed_runs > 0` branch.
+        """
         from backpropagate.cli import cmd_multi_run
 
         mock_result = MagicMock()
@@ -397,6 +419,7 @@ class TestCmdMultiRunErrorHandling:
         mock_result.final_loss = 0.25
         mock_result.total_duration_seconds = 180.0
         mock_result.final_checkpoint_path = str(tmp_path / "model")
+        mock_result.failed_runs = 0
 
         mock_trainer = MagicMock()
         mock_trainer.run.return_value = mock_result
@@ -487,7 +510,10 @@ class TestCmdExportErrorHandling:
         assert "Unknown format" in captured.err or "ERROR" in captured.err
 
     def test_export_error_with_suggestion(self, capsys, tmp_path):
-        """ExportError with suggestion displays it."""
+        """ExportError with suggestion displays it.
+
+        Ship Gate B2: ExportError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
         from backpropagate.exceptions import ExportError
 
@@ -513,12 +539,15 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Export failed" in captured.err or "Export error" in captured.err
 
     def test_backpropagate_error_in_export(self, capsys, tmp_path):
-        """BackpropagateError in export."""
+        """BackpropagateError in export.
+
+        Ship Gate B2: BackpropagateError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
         from backpropagate.exceptions import BackpropagateError
 
@@ -544,10 +573,13 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
 
     def test_generic_exception_in_export(self, capsys, tmp_path):
-        """Generic exception in export."""
+        """Generic exception in export.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -569,12 +601,15 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Disk full" in captured.err
 
     def test_verbose_traceback_in_export(self, capsys, tmp_path):
-        """Verbose mode shows traceback in export."""
+        """Verbose mode shows traceback in export.
+
+        Ship Gate B2: unexpected ValueError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -595,10 +630,14 @@ class TestCmdExportErrorHandling:
             )
 
             result = cmd_export(args)
-            assert result == 1
+            assert result == 2
 
     def test_ollama_registration_failure(self, capsys, tmp_path):
-        """Ollama registration failure handled."""
+        """Ollama registration failure handled.
+
+        Documented partial-success path: export succeeded, only the optional
+        Ollama registration failed -> Ship Gate B2 exit code 3 (partial).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -625,7 +664,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 3
             captured = capsys.readouterr()
             assert "Failed to register" in captured.err or "Ollama" in captured.err
 
@@ -838,7 +877,12 @@ class TestCmdUI:
             assert call_kwargs['auth'] == ("user", "pass:with:colons")
 
     def test_launch_success(self, capsys):
-        """Successful UI launch."""
+        """Successful UI launch.
+
+        Note: F-001 enforcement requires --auth when --share is on (unless
+        BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false is set). To keep
+        this test asserting the happy path, we supply --auth USER:PASS.
+        """
         from backpropagate.cli import cmd_ui
 
         mock_launch = MagicMock()
@@ -847,14 +891,16 @@ class TestCmdUI:
             args = argparse.Namespace(
                 port=7862,
                 share=True,
-                auth=None,
+                auth="user:password",
                 verbose=False,
             )
 
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once_with(port=7862, share=True, auth=None)
+            mock_launch.assert_called_once_with(
+                port=7862, share=True, auth=("user", "password")
+            )
 
     def test_launch_keyboard_interrupt(self, capsys):
         """KeyboardInterrupt during UI exits cleanly."""
@@ -875,7 +921,10 @@ class TestCmdUI:
             assert "stopped" in captured.out.lower()
 
     def test_launch_exception(self, capsys):
-        """Launch exception handled gracefully."""
+        """Launch exception handled gracefully.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_ui
 
         with patch("backpropagate.ui.launch", side_effect=RuntimeError("Port in use")):
@@ -888,12 +937,15 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Port in use" in captured.err
 
     def test_launch_exception_verbose(self, capsys):
-        """Launch exception with verbose shows traceback."""
+        """Launch exception with verbose shows traceback.
+
+        Ship Gate B2: unexpected ValueError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_ui
 
         with patch("backpropagate.ui.launch", side_effect=ValueError("Test error")):
@@ -906,7 +958,7 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 1
+            assert result == 2
 
 
 # =============================================================================

@@ -995,6 +995,7 @@ class TestGPUMonitorEventDispatch:
         ]
 
 
+@pytest.mark.integration
 class TestGPUMonitorThreadSafety:
     """Tests for GPUMonitor callback thread safety."""
 

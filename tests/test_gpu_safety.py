@@ -316,6 +316,7 @@ class TestWaitForSafeGPU:
             assert result is False
 
 
+@pytest.mark.integration
 class TestGPUMonitor:
     """Tests for the GPUMonitor class."""
 

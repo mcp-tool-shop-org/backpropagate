@@ -15,6 +15,8 @@ If you discover a security vulnerability, please report it responsibly:
 2. Open a private security advisory via GitHub's Security tab
 3. Or email the maintainer directly
 
+**Email:** 64996768+mcp-tool-shop@users.noreply.github.com
+
 ### Response Timeline
 
 - Acknowledgment: Within 48 hours

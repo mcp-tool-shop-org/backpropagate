@@ -201,6 +201,8 @@ Smart checkpoint pruning:
 
 ## Implementation Priority
 
+> **Status (2026-05-21):** All Week 1–4 items below are **shipped** in v1.0.5. The narrative sections above (Phases 1–5) are preserved as historical design rationale — they explain *why* each item exists. Treat checked items as "delivered, see linked module"; unchecked items would be net-new work beyond v1.0.5.
+
 ### Week 1: Quick Wins
 - [x] 1.1 Train on responses only (disabled on Windows due to multiprocessing)
 - [x] 1.2 Batch size presets

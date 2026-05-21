@@ -23,6 +23,8 @@ Based on Trail of Bits Gradio 5 Security Audit and OWASP Web Security Best
 Practices.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 import secrets
@@ -34,7 +36,25 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-import gradio as gr
+try:
+    import gradio as gr
+except ImportError:
+    # Gradio is opt-in (install with `backpropagate[ui]`). The module is kept
+    # importable so the framework-agnostic helpers below (validate_path_input,
+    # sanitize_*, generate_auth_token, sanitize_error_for_user, etc.) — and
+    # their test surface — remain reachable when gradio isn't installed.
+    # Any attribute access on `gr` raises a clear ImportError; combined with
+    # `from __future__ import annotations` above, `gr.Foo` in function
+    # signatures is never evaluated at module load.
+    class _MissingGradio:
+        def __getattr__(self, name: str) -> Any:
+            raise ImportError(
+                "gradio is required for the legacy Web UI. "
+                "Install with: pip install 'backpropagate[ui]'. "
+                "(The new Reflex UI in backpropagate.ui_app does not need gradio.)"
+            )
+
+    gr = _MissingGradio()  # type: ignore[assignment]
 
 from .config import settings
 from .datasets import (
@@ -829,7 +849,7 @@ def start_training(
     batch_size: int,
     lora_r: int,
     lora_alpha: int,
-    progress: Any = gr.Progress(),
+    progress: Any = None,
     request: gr.Request | None = None,
 ) -> Generator[tuple[Any, ...], None, None]:
     """
@@ -842,6 +862,8 @@ def start_training(
     - Path validation for custom datasets
     - Security event logging
     """
+    if progress is None:
+        progress = gr.Progress()
     from .trainer import Trainer, TrainingCallback
 
     # Rate limiting check with IP tracking
@@ -1310,10 +1332,12 @@ def start_multi_run(
     ckpt_max_total: int = 10,
     ckpt_keep_final: bool = True,
     ckpt_keep_boundaries: bool = False,
-    _progress: Any = gr.Progress(),
+    _progress: Any = None,
     _request: gr.Request | None = None,
 ) -> Any:
     """Start SLAO Multi-Run training with input validation."""
+    if _progress is None:
+        _progress = gr.Progress()
     from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
     # Rate limiting (same as start_training)

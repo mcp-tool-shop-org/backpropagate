@@ -17,8 +17,26 @@ This module is preserved as reference for:
 Do not import this module from new code. It will be removed in v1.2.
 """
 
-import gradio as gr
-from gradio.themes import colors, sizes
+from __future__ import annotations
+
+from typing import Any
+
+try:
+    import gradio as gr
+    from gradio.themes import colors, sizes
+except ImportError:
+    # Gradio is opt-in. Match the import shape of ui_gradio_legacy.py so this
+    # module loads under `pip install backpropagate` without `[ui]` extra.
+    class _MissingGradio:
+        def __getattr__(self, name: str) -> Any:
+            raise ImportError(
+                "gradio is required for the legacy Web UI theme. "
+                "Install with: pip install 'backpropagate[ui]'."
+            )
+
+    gr = _MissingGradio()  # type: ignore[assignment]
+    colors = _MissingGradio()  # type: ignore[assignment]
+    sizes = _MissingGradio()  # type: ignore[assignment]
 
 # =============================================================================
 # OCEAN MIST PASTEL COLORS

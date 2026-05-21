@@ -33,16 +33,28 @@ class TestMultiprocessingNoCrash:
             assert multiprocessing.get_start_method(allow_none=True) in (None, "spawn")
 
     def test_dataloader_num_workers_zero_safe(self):
-        """DataLoader with num_workers=0 should work on Windows."""
-        # This is the recommended setting for Windows
-        # Verifies our training uses this setting
+        """DataLoader with num_workers=0 should work on Windows.
 
+        The Windows-multiprocessing fix lives on settings.windows.
+        dataloader_num_workers, NOT settings.training. The training resolver
+        applies windows.dataloader_num_workers when os.name == 'nt' (see
+        config.py:616). Without this setting, Windows training crashes on the
+        fork-vs-spawn boundary.
+        """
         from backpropagate.config import settings
 
-        # Check training config recommends num_workers=0 on Windows
-        if sys.platform == "win32":
-            # The setting should be 0 or should be configurable to 0
-            assert hasattr(settings.training, "dataloader_num_workers") or True
+        assert hasattr(settings, "windows"), (
+            "settings.windows missing — Windows multiprocessing fix not wired"
+        )
+        assert hasattr(settings.windows, "dataloader_num_workers"), (
+            "settings.windows.dataloader_num_workers missing — Windows "
+            "multiprocessing fix not wired"
+        )
+        # Default must be 0 on Windows to prevent fork-based DataLoader crashes
+        assert settings.windows.dataloader_num_workers == 0, (
+            f"settings.windows.dataloader_num_workers must default to 0, "
+            f"got {settings.windows.dataloader_num_workers}"
+        )
 
     def test_freeze_support_not_required_for_import(self):
         """Importing backpropagate should not require freeze_support."""
@@ -66,17 +78,24 @@ class TestDataloaderZeroWorkers:
     """Tests for DataLoader worker configuration."""
 
     def test_training_uses_zero_workers_on_windows(self):
-        """Training should use num_workers=0 on Windows."""
-        from backpropagate.trainer import Trainer
+        """Training should use num_workers=0 on Windows.
 
-        with patch("torch.cuda.is_available", return_value=False):
-            trainer = Trainer(use_unsloth=False)
+        The trainer hard-codes `dataloader_num_workers=0 if os.name == "nt"
+        else 4` when constructing the SFTConfig (see trainer.py:415). This
+        test asserts the conditional remains intact by inspecting the
+        trainer.py source — runtime verification would require invoking
+        train(), which loads a real model.
+        """
+        import inspect
 
-            # On Windows, training config should specify 0 workers
-            # This prevents multiprocessing crashes
-            if sys.platform == "win32":
-                # The trainer should have the config accessible
-                assert hasattr(trainer, "_dataloader_workers") or True
+        from backpropagate import trainer as trainer_module
+
+        src = inspect.getsource(trainer_module)
+        assert 'dataloader_num_workers=0 if os.name == "nt"' in src, (
+            "Windows dataloader-workers guard missing from trainer.py — the "
+            "load-bearing 'os.name == nt else 4' conditional that prevents "
+            "Windows multiprocessing crashes has been removed or renamed."
+        )
 
     def test_sft_trainer_config_zero_workers(self):
         """SFTTrainer config should specify zero workers on Windows."""

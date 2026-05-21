@@ -1,8 +1,10 @@
-# Backpropagate Roadmap
+# Backpropagate Design History (v1.0.5: all items shipped)
 
-## Goal: Maximize Training Effectiveness with SLAO Multi-Run
+> **Status (2026-05-21):** Every item in this document is **shipped** in v1.0.5. The narrative sections below are preserved as historical design rationale — they explain *why* each feature exists. Treat this file as the design archive, not a forward-looking plan. No work is scheduled beyond v1.0.5 at this time; new ideas land via GitHub issues.
 
-Based on research from [SLAO paper](https://arxiv.org/abs/2512.23017), [LoRA Without Regret](https://huggingface.co/docs/trl/en/lora_without_regret), [Unsloth docs](https://unsloth.ai/docs/get-started/fine-tuning-llms-guide), and [Databricks guide](https://www.databricks.com/blog/efficient-fine-tuning-lora-guide-llms).
+## Goal (historical): Maximize Training Effectiveness with SLAO Multi-Run
+
+Based on research from [SLAO paper: Single LoRA Continual Learning via Asymmetric Merging](https://arxiv.org/abs/2512.23017), [LoRA Without Regret](https://huggingface.co/docs/trl/en/lora_without_regret), [Unsloth docs](https://unsloth.ai/docs/get-started/fine-tuning-llms-guide), and [Databricks guide](https://www.databricks.com/blog/efficient-fine-tuning-lora-guide-llms).
 
 ---
 
@@ -200,6 +202,8 @@ Smart checkpoint pruning:
 ---
 
 ## Implementation Priority
+
+> All Week 1–4 items below are **shipped** in v1.0.5 (see status banner at the top of this file).
 
 ### Week 1: Quick Wins
 - [x] 1.1 Train on responses only (disabled on Windows due to multiprocessing)

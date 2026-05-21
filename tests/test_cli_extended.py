@@ -153,7 +153,10 @@ class TestCmdTrainErrorHandling:
             assert "Try converting to JSONL format" in captured.out
 
     def test_training_error_with_suggestion(self, capsys, tmp_path):
-        """TrainingError with suggestion field displays it."""
+        """TrainingError with suggestion field displays it.
+
+        Ship Gate B2: TrainingError is a runtime-level failure -> exit 2.
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import TrainingError
 
@@ -180,13 +183,17 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Out of memory" in captured.err
             assert "reducing batch size" in captured.out
 
     def test_backpropagate_error_generic(self, capsys, tmp_path):
-        """BackpropagateError base class handling."""
+        """BackpropagateError base class handling.
+
+        Ship Gate B2: generic structured BackpropagateError -> exit 2
+        (runtime error) unless explicitly user-actionable.
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import BackpropagateError
 
@@ -213,7 +220,7 @@ class TestCmdTrainErrorHandling:
 
             result = cmd_train(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Generic error" in captured.err
 
@@ -244,7 +251,10 @@ class TestCmdTrainErrorHandling:
             assert result == 1
 
     def test_training_error_verbose_traceback(self, capsys, tmp_path):
-        """TrainingError with verbose shows traceback."""
+        """TrainingError with verbose shows traceback.
+
+        Ship Gate B2: TrainingError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_train
         from backpropagate.exceptions import TrainingError
 
@@ -267,7 +277,7 @@ class TestCmdTrainErrorHandling:
             )
 
             result = cmd_train(args)
-            assert result == 1
+            assert result == 2
 
 
 # =============================================================================
@@ -279,7 +289,10 @@ class TestCmdMultiRunErrorHandling:
     """Error handling tests for cmd_multi_run."""
 
     def test_backpropagate_error_with_suggestion(self, capsys, tmp_path):
-        """BackpropagateError with suggestion in multi-run."""
+        """BackpropagateError with suggestion in multi-run.
+
+        Ship Gate B2: BackpropagateError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_multi_run
         from backpropagate.exceptions import BackpropagateError
 
@@ -305,13 +318,16 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Config invalid" in captured.err
             assert "num_runs" in captured.out
 
     def test_generic_exception_handling(self, capsys, tmp_path):
-        """Generic exception in multi-run."""
+        """Generic exception in multi-run.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_multi_run
 
         mock_trainer = MagicMock()
@@ -333,7 +349,7 @@ class TestCmdMultiRunErrorHandling:
 
             result = cmd_multi_run(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Unexpected error" in captured.err
 
@@ -389,7 +405,13 @@ class TestCmdMultiRunErrorHandling:
             assert "interrupted" in captured.out.lower()
 
     def test_on_run_complete_callback_invoked(self, capsys, tmp_path):
-        """on_run_complete callback is invoked."""
+        """on_run_complete callback is invoked.
+
+        Preserves the happy-path intent of this test: explicitly set
+        failed_runs=0 so cmd_multi_run does not classify the result as
+        partial success (exit 3). MagicMock auto-attributes are truthy,
+        so leaving this unset triggers the `failed_runs > 0` branch.
+        """
         from backpropagate.cli import cmd_multi_run
 
         mock_result = MagicMock()
@@ -397,6 +419,7 @@ class TestCmdMultiRunErrorHandling:
         mock_result.final_loss = 0.25
         mock_result.total_duration_seconds = 180.0
         mock_result.final_checkpoint_path = str(tmp_path / "model")
+        mock_result.failed_runs = 0
 
         mock_trainer = MagicMock()
         mock_trainer.run.return_value = mock_result
@@ -487,7 +510,10 @@ class TestCmdExportErrorHandling:
         assert "Unknown format" in captured.err or "ERROR" in captured.err
 
     def test_export_error_with_suggestion(self, capsys, tmp_path):
-        """ExportError with suggestion displays it."""
+        """ExportError with suggestion displays it.
+
+        Ship Gate B2: ExportError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
         from backpropagate.exceptions import ExportError
 
@@ -513,12 +539,15 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Export failed" in captured.err or "Export error" in captured.err
 
     def test_backpropagate_error_in_export(self, capsys, tmp_path):
-        """BackpropagateError in export."""
+        """BackpropagateError in export.
+
+        Ship Gate B2: BackpropagateError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
         from backpropagate.exceptions import BackpropagateError
 
@@ -544,10 +573,13 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
 
     def test_generic_exception_in_export(self, capsys, tmp_path):
-        """Generic exception in export."""
+        """Generic exception in export.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -569,12 +601,15 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Disk full" in captured.err
 
     def test_verbose_traceback_in_export(self, capsys, tmp_path):
-        """Verbose mode shows traceback in export."""
+        """Verbose mode shows traceback in export.
+
+        Ship Gate B2: unexpected ValueError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -595,10 +630,14 @@ class TestCmdExportErrorHandling:
             )
 
             result = cmd_export(args)
-            assert result == 1
+            assert result == 2
 
     def test_ollama_registration_failure(self, capsys, tmp_path):
-        """Ollama registration failure handled."""
+        """Ollama registration failure handled.
+
+        Documented partial-success path: export succeeded, only the optional
+        Ollama registration failed -> Ship Gate B2 exit code 3 (partial).
+        """
         from backpropagate.cli import cmd_export
 
         model_dir = tmp_path / "model"
@@ -625,7 +664,7 @@ class TestCmdExportErrorHandling:
 
             result = cmd_export(args)
 
-            assert result == 1
+            assert result == 3
             captured = capsys.readouterr()
             assert "Failed to register" in captured.err or "Ollama" in captured.err
 
@@ -745,10 +784,24 @@ class TestCmdInfoExtended:
 
 
 class TestCmdUI:
-    """Tests for cmd_ui command."""
+    """Tests for cmd_ui command.
 
-    def test_ui_import_error(self, capsys):
-        """Missing gradio shows helpful error."""
+    v1.1.0 (2026-05-21): the Web UI migrated from Gradio (in-process launch)
+    to Reflex (subprocess via ``reflex run``). The CLI-layer share+auth gate
+    is preserved end-to-end — the tests below pin it through the new
+    subprocess boundary instead of the old in-process ``launch()`` call.
+    The mocking surface moved from ``backpropagate.ui.launch`` to
+    ``backpropagate.cli.subprocess.run``.
+    """
+
+    @staticmethod
+    def _mock_subprocess_result(returncode: int = 0) -> MagicMock:
+        result = MagicMock()
+        result.returncode = returncode
+        return result
+
+    def test_ui_import_error(self, capsys, monkeypatch):
+        """Missing Reflex (no [ui] extra) shows helpful error."""
         import builtins
 
         from backpropagate import cli as cli_module
@@ -760,29 +813,28 @@ class TestCmdUI:
             verbose=False,
         )
 
-        # Simulate ImportError when trying to import backpropagate.ui
+        # Simulate ImportError when cmd_ui tries to import reflex.
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
-            if name == 'backpropagate.ui' or (args and 'ui' in str(args)):
-                raise ImportError("No module named 'gradio'")
+            if name == "reflex":
+                raise ImportError("No module named 'reflex'")
             return original_import(name, *args, **kwargs)
 
-        with patch.object(builtins, '__import__', side_effect=mock_import):
-            # cmd_ui should catch the ImportError and return 1
+        with patch.object(builtins, "__import__", side_effect=mock_import):
             result = cli_module.cmd_ui(args)
 
-            # Verify it returns error code
-            assert result == 1
-            captured = capsys.readouterr()
-            # Should show error about missing gradio
-            assert "gradio" in captured.err.lower() or "ui" in captured.err.lower() or result == 1
+        assert result == 1
+        captured = capsys.readouterr()
+        combined = (captured.err + captured.out).lower()
+        assert "ui" in combined or "reflex" in combined or "install" in combined
 
     def test_auth_invalid_format(self, capsys):
         """Auth string without colon raises error."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch"):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -795,14 +847,14 @@ class TestCmdUI:
             assert result == 1
             captured = capsys.readouterr()
             assert "Invalid auth format" in captured.err
+            mock_run.assert_not_called()
 
     def test_auth_parsed_correctly(self, capsys):
-        """user:pass format parsed into tuple."""
+        """user:pass format parses into tuple AND exports BACKPROPAGATE_UI_AUTH."""
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -813,17 +865,16 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once()
-            call_kwargs = mock_launch.call_args[1]
-            assert call_kwargs['auth'] == ("testuser", "testpass")
+            mock_run.assert_called_once()
+            env = mock_run.call_args.kwargs["env"]
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "testuser:testpass"
 
     def test_auth_with_colon_in_password(self, capsys):
         """Password can contain colons."""
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -834,33 +885,46 @@ class TestCmdUI:
             result = cmd_ui(args)
 
             assert result == 0
-            call_kwargs = mock_launch.call_args[1]
-            assert call_kwargs['auth'] == ("user", "pass:with:colons")
+            env = mock_run.call_args.kwargs["env"]
+            # The password half includes the trailing colons; we preserve the
+            # original user:password shape in the env var (Reflex side parses).
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "user:pass:with:colons"
 
     def test_launch_success(self, capsys):
-        """Successful UI launch."""
+        """Successful UI launch via subprocess.
+
+        Note: F-001 enforcement requires --auth when --share is on. The
+        --share flag is preserved at the CLI layer but Reflex has no
+        built-in tunneling, so a warning prints and the subprocess still
+        launches locally.
+        """
         from backpropagate.cli import cmd_ui
 
-        mock_launch = MagicMock()
-
-        with patch("backpropagate.ui.launch", mock_launch):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7862,
                 share=True,
-                auth=None,
+                auth="user:password",
                 verbose=False,
             )
 
             result = cmd_ui(args)
 
             assert result == 0
-            mock_launch.assert_called_once_with(port=7862, share=True, auth=None)
+            mock_run.assert_called_once()
+            # Check the constructed command line passed to reflex.
+            cmd = mock_run.call_args.args[0]
+            assert "reflex" in cmd
+            assert "run" in cmd
+            assert "--frontend-port" in cmd
+            assert str(7862) in cmd
 
     def test_launch_keyboard_interrupt(self, capsys):
         """KeyboardInterrupt during UI exits cleanly."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=KeyboardInterrupt()):
+        with patch("backpropagate.cli.subprocess.run", side_effect=KeyboardInterrupt()):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -875,10 +939,13 @@ class TestCmdUI:
             assert "stopped" in captured.out.lower()
 
     def test_launch_exception(self, capsys):
-        """Launch exception handled gracefully."""
+        """Launch exception handled gracefully.
+
+        Ship Gate B2: unexpected RuntimeError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=RuntimeError("Port in use")):
+        with patch("backpropagate.cli.subprocess.run", side_effect=RuntimeError("Port in use")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -888,15 +955,18 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 1
+            assert result == 2
             captured = capsys.readouterr()
             assert "Port in use" in captured.err
 
     def test_launch_exception_verbose(self, capsys):
-        """Launch exception with verbose shows traceback."""
+        """Launch exception with verbose shows traceback.
+
+        Ship Gate B2: unexpected ValueError -> exit 2 (runtime error).
+        """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.ui.launch", side_effect=ValueError("Test error")):
+        with patch("backpropagate.cli.subprocess.run", side_effect=ValueError("Test error")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -906,7 +976,143 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
+            assert result == 2
+
+    # ------------------------------------------------------------------ #
+    # SB-T-001: --share + --auth gate at the CLI layer.
+    #
+    # These tests pin the CLI-layer F-001 contract — the [INPUT_AUTH_REQUIRED]
+    # structured prefix, the env-var opt-out, and the parsed-auth-string
+    # hand-off — that has SURVIVED the Gradio→Reflex migration unchanged.
+    # The mocking boundary moved from backpropagate.ui.launch to the
+    # ``backpropagate.cli.subprocess.run`` subprocess call site.
+    # ------------------------------------------------------------------ #
+
+    def test_cmd_ui_share_without_auth_blocked_by_default(self, capsys, monkeypatch):
+        """--share without --auth blocks with INPUT_AUTH_REQUIRED by default."""
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
             assert result == 1
+            captured = capsys.readouterr()
+            assert "[INPUT_AUTH_REQUIRED]" in captured.err
+            assert "--auth" in captured.err or "--auth" in captured.out
+            mock_run.assert_not_called()
+
+    def test_cmd_ui_share_with_auth_allowed(self, capsys):
+        """--share with --auth parses credentials and launches subprocess."""
+        from backpropagate.cli import cmd_ui
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth="alice:secret123",
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
+            env = mock_run.call_args.kwargs["env"]
+            assert env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
+
+    def test_cmd_ui_share_without_auth_opt_out_via_env(self, capsys, monkeypatch):
+        """Env opt-out lets --share through without --auth + emits a warning.
+
+        Operator override path: setting
+        BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false disables the
+        gate so --share without --auth proceeds, BUT the CLI must still
+        emit a loud unauthenticated-share warning AND honor the 5-second
+        grace period before subprocess launch.
+        """
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "false")
+
+        # Patch time.sleep so the grace period doesn't block the test
+        with (
+            patch("backpropagate.cli.subprocess.run") as mock_run,
+            patch("time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
+            # The 5s grace period must run.
+            mock_sleep.assert_called_once_with(5)
+
+            captured = capsys.readouterr()
+            combined = (captured.err + captured.out).lower()
+            assert (
+                "no authentication" in combined
+                or "publicly" in combined
+                or "anyone" in combined
+            ), f"Expected loud unauthenticated-share warning in output, got: {combined!r}"
+
+    def test_cmd_ui_share_without_auth_env_opt_in_explicit(self, capsys, monkeypatch):
+        """Setting env to 'true' explicitly is parity with the default."""
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "true")
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 1
+            captured = capsys.readouterr()
+            assert "[INPUT_AUTH_REQUIRED]" in captured.err
+            mock_run.assert_not_called()
+
+    def test_cmd_ui_local_without_share_no_auth_required(self, capsys, monkeypatch):
+        """Local UI (no --share) does NOT require --auth."""
+        from backpropagate.cli import cmd_ui
+
+        monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=False,
+                auth=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
 
 
 # =============================================================================
@@ -930,9 +1136,10 @@ class TestCmdConfigExtended:
 
         result = cmd_config(args)
 
-        assert result == 0
+        assert result == 1
         captured = capsys.readouterr()
-        assert "planned" in captured.out.lower() or "environment" in captured.out.lower()
+        msg = (captured.out + captured.err).lower()
+        assert "planned" in msg or "environment" in msg or "not implemented" in msg
 
     def test_windows_config_shown_on_windows(self, capsys):
         """Windows settings shown on Windows platform."""

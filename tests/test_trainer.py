@@ -666,7 +666,11 @@ class TestTrainerTrain:
                 assert isinstance(run, TrainingRun)
                 assert run.final_loss == 0.42
                 assert run.loss_history == [1.0, 0.7, 0.42]
-                assert run.run_id == "run_1"
+                import re
+                assert re.fullmatch(r"[a-f0-9]{32}", run.run_id), (
+                    f"run_id should be a UUID4 hex (32 chars), got {run.run_id!r}"
+                )
+                assert run.metadata.get("legacy_run_label") == "run_1"
 
     def test_train_appends_to_runs_list(self, temp_dir):
         """train() should append result to trainer.runs list."""
@@ -1200,3 +1204,147 @@ class TestDatasetLoadingErrors:
 def temp_dir(tmp_path):
     """Create a temporary directory for tests."""
     return tmp_path
+
+
+# =============================================================================
+# B-017 + RE-001: HuggingFace transient retry status-code filter
+# =============================================================================
+
+class TestHfTransientRetryStatusCodeFilter:
+    """RE-001: retry must skip 401/403/404 (auth/gated/typo) and only fire on
+    429 / 5xx / connection / timeout. Without status-code filtering, a typo'd
+    model name would hang ~65s before showing the real error."""
+
+    def test_does_not_retry_401_403_404(self):
+        import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        for code in (401, 403, 404, 400, 422):
+            exc = requests.exceptions.HTTPError(f"HTTP {code}")
+            exc.response = MagicMock(status_code=code)
+            assert not _is_transient_hf_exception(exc), \
+                f"HTTP {code} should NOT retry (not transient)"
+
+    def test_retries_429_and_5xx(self):
+        import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        for code in (429, 500, 502, 503, 504):
+            exc = requests.exceptions.HTTPError(f"HTTP {code}")
+            exc.response = MagicMock(status_code=code)
+            assert _is_transient_hf_exception(exc), \
+                f"HTTP {code} should retry (transient)"
+
+    def test_retries_connection_and_timeout(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        assert _is_transient_hf_exception(ConnectionError("dropped"))
+        assert _is_transient_hf_exception(TimeoutError("timed out"))
+
+    def test_does_not_retry_unrelated_exception(self):
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        assert not _is_transient_hf_exception(ValueError("bad arg"))
+        assert not _is_transient_hf_exception(KeyError("missing"))
+
+    def test_retries_http_error_with_no_response(self):
+        """If an HTTPError carries no .response attribute, retry conservatively
+        (we can't tell whether it was transient, but retrying is safer than
+        bailing on a genuine connection blip)."""
+        import requests
+
+        from backpropagate.trainer import _is_transient_hf_exception
+
+        exc = requests.exceptions.HTTPError("no response object")
+        assert _is_transient_hf_exception(exc)
+
+
+# =============================================================================
+# F-005 REPORT_TO RESOLUTION TESTS
+# =============================================================================
+
+class TestReportToResolution:
+    """Trainer._resolve_report_to behaviour for F-005 (W&B/TB/MLflow wiring)."""
+
+    @pytest.fixture
+    def trainer(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            return Trainer()
+
+    def _patch_features(self, **flags):
+        """Helper to temporarily flip the global FEATURES dict."""
+        from backpropagate import feature_flags
+
+        return patch.dict(feature_flags.FEATURES, flags, clear=False)
+
+    def test_default_intent_is_auto(self, trainer):
+        assert trainer._report_to_intent == "auto"
+
+    def test_auto_no_trackers_resolves_to_none(self, trainer):
+        with self._patch_features(wandb=False, tensorboard=False, mlflow=False):
+            assert trainer._resolve_report_to() == "none"
+
+    def test_auto_wandb_installed_returns_list_with_wandb(self, trainer):
+        with self._patch_features(wandb=True, tensorboard=False, mlflow=False):
+            assert trainer._resolve_report_to() == ["wandb"]
+
+    def test_auto_all_trackers_installed_returns_combined_list(self, trainer):
+        with self._patch_features(wandb=True, tensorboard=True, mlflow=True):
+            resolved = trainer._resolve_report_to()
+        assert isinstance(resolved, list)
+        assert set(resolved) == {"wandb", "tensorboard", "mlflow"}
+
+    def test_explicit_none_string(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to="none")
+        assert trainer._resolve_report_to() == "none"
+
+    def test_explicit_none_value(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=None)
+        assert trainer._resolve_report_to() == "none"
+
+    def test_explicit_list_passes_through(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=["wandb", "tensorboard"])
+        assert trainer._resolve_report_to() == ["wandb", "tensorboard"]
+
+    def test_explicit_single_string_wrapped_in_list(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to="wandb")
+        assert trainer._resolve_report_to() == ["wandb"]
+
+    def test_explicit_list_lowercased(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=["WANDB", "TensorBoard"])
+        assert trainer._resolve_report_to() == ["wandb", "tensorboard"]
+
+    def test_unexpected_intent_type_falls_back_to_none(self, trainer):
+        trainer._report_to_intent = 42  # type: ignore
+        assert trainer._resolve_report_to() == "none"
+
+
+class TestReportToFeatureFlags:
+    """Ensure feature_flags surfaces per-tracker flags (wandb / tensorboard / mlflow)."""
+
+    def test_features_dict_has_per_tracker_entries(self):
+        from backpropagate.feature_flags import FEATURES
+
+        assert "wandb" in FEATURES
+        assert "tensorboard" in FEATURES
+        assert "mlflow" in FEATURES
+
+    def test_install_hints_have_per_tracker_entries(self):
+        from backpropagate.feature_flags import INSTALL_HINTS
+
+        assert "wandb" in INSTALL_HINTS
+        assert "tensorboard" in INSTALL_HINTS
+        assert "mlflow" in INSTALL_HINTS

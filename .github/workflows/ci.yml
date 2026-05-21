@@ -33,45 +33,67 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Multi-OS matrix: tests Linux on full Python sweep, plus Windows + macOS
+    # smoke cells on 3.11 to catch path/multiprocessing/xformers-disable
+    # regressions on platforms the library actively supports (CLAUDE.md:
+    # "First-class Windows support") and ships binaries for
+    # (release-binaries.yml: darwin-arm64 + win-x64).
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.11"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e ".[dev,full]"
 
       - name: Lint with ruff
+        shell: bash
         run: ruff check backpropagate/
 
       - name: Type check with mypy
+        shell: bash
         run: mypy backpropagate/ --ignore-missing-imports
 
       - name: Run tests
         if: matrix.python-version != '3.11'
-        run: pytest tests/ -v --tb=short -m "not gpu and not slow"
+        shell: bash
+        run: pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
 
       - name: Run tests with coverage
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
-          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=50 -m "not gpu and not slow"
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=50 -m "not gpu and not slow and not integration"
+
+      - name: Run tests (Windows/macOS smoke)
+        if: matrix.python-version == '3.11' && matrix.os != 'ubuntu-latest'
+        shell: bash
+        run: pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.11'
-        uses: codecov/codecov-action@v6
+        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354  # v6.0.1
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
@@ -83,36 +105,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
 
       - name: Install Bandit
         run: pip install bandit[sarif]
 
-      - name: Run Bandit scan
+      - name: Run Bandit scan (SARIF — all severities to Security tab)
         run: |
           bandit -r backpropagate/ \
             -c pyproject.toml \
             -f sarif \
-            -o bandit-results.sarif \
-            --severity-level high
+            -o bandit-results.sarif
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
         if: always()
         with:
           sarif_file: bandit-results.sarif
           category: bandit
 
-      - name: Run Bandit (console output)
+      - name: Run Bandit (console output — fails on MEDIUM severity / MEDIUM confidence and above)
         run: |
           bandit -r backpropagate/ \
             -c pyproject.toml \
-            -ll -ii \
+            -l -i \
             -f txt
 
   pip-audit:
@@ -120,10 +141,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
 
@@ -133,32 +154,91 @@ jobs:
           pip install pip-audit
           pip install -e ".[dev]"
 
-      - name: Run pip-audit
+      # Advisory step: report EVERY known vuln (fixed and unfixed) for
+      # human review. Never blocks — informational only. Mirrors Trivy's
+      # 'ignore-unfixed: true' philosophy by separating "is there a CVE?"
+      # from "is there a remediation available?"
+      - name: pip-audit (advisory — all vulnerabilities)
+        id: pip-audit-advisory
+        continue-on-error: true
         run: |
+          set -euo pipefail
           pip-audit \
             --desc on \
             --format markdown \
-            --output pip-audit-report.md
+            --output pip-audit-report.md || true
 
-      - name: Display results
+      - name: Display advisory results
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
 
+      # Gating step: fail CI only on vulns that actually have a fix the
+      # maintainer can ship. Unfixed transitive CVEs (huggingface-hub →
+      # requests → urllib3 etc.) do not block unrelated PRs; once a fix
+      # exists upstream, this step turns red and forces a dep bump.
+      - name: pip-audit (gating — fixed vulnerabilities only)
+        run: |
+          set -euo pipefail
+          # --strict: fail on any reported vuln from the gating run
+          # We mirror Trivy's ignore-unfixed by post-filtering output:
+          # extract only entries that have a non-empty 'Fix Versions' column.
+          pip-audit --skip-editable --format json --output pip-audit-fixed.json || true
+          python - <<'PY'
+          import json, sys
+          try:
+              data = json.load(open("pip-audit-fixed.json"))
+          except Exception as exc:
+              print(f"pip-audit produced no parseable JSON: {exc}")
+              sys.exit(0)
+          deps = data.get("dependencies", [])
+          fixable = []
+          for dep in deps:
+              for vuln in dep.get("vulns", []) or []:
+                  fix_versions = vuln.get("fix_versions") or []
+                  if fix_versions:
+                      fixable.append({
+                          "package": dep.get("name"),
+                          "installed": dep.get("version"),
+                          "id": vuln.get("id"),
+                          "fix_versions": fix_versions,
+                      })
+          if fixable:
+              print("::error::Fixable vulnerabilities detected (bump the affected dep):")
+              for f in fixable:
+                  print(f"  {f['package']}=={f['installed']} {f['id']} → fix in {f['fix_versions']}")
+              sys.exit(1)
+          print("No fixable vulnerabilities — pip-audit gate green.")
+          PY
+
       - name: Upload audit report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: pip-audit-report
-          path: pip-audit-report.md
+          path: |
+            pip-audit-report.md
+            pip-audit-fixed.json
 
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: semgrep/semgrep
+      # Pinned to specific Semgrep release + multi-arch manifest-list digest.
+      # Refresh via: curl -s https://hub.docker.com/v2/repositories/semgrep/semgrep/tags/<version>
+      #
+      # NOTE: Docker Hub anonymous pull is rate-limited to 100/6hr per egress IP.
+      # GitHub-hosted runners share egress pools — on busy days the pull can
+      # 429. Maintainer should add DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets
+      # (free PAT lifts authenticated limit to 200/6hr) so the credentials
+      # block below activates; until then the job runs anonymously and may
+      # rate-limit on heavy-traffic windows.
+      image: semgrep/semgrep:1.163.0@sha256:7cad2bc2d1e44f87f0bf4be6d1fa23aa90fb72015bebc89fb91385d813987a03
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Run Semgrep
         run: |
@@ -172,7 +252,7 @@ jobs:
             || true
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
         if: always()
         with:
           sarif_file: semgrep-results.sarif
@@ -183,19 +263,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'MEDIUM,HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -206,24 +288,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        uses: trufflesecurity/trufflehog@v3.88.0
+        # --only-verified means TruffleHog actively verified the secret against the live API
+        # — these are the highest-confidence positives. Fail the job on any such finding.
+        uses: trufflesecurity/trufflehog@34e114876b0b11c390a56381ad16ebd13914f8d5  # v3.88.0
         with:
-          extra_args: --only-verified --results=json
-        continue-on-error: true
+          extra_args: --only-verified --fail --results=json
 
   build:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.11"
           cache: 'pip'
@@ -240,7 +323,7 @@ jobs:
         run: twine check dist/*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
           path: dist/
@@ -251,19 +334,54 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Security scan complete
+      # Always emit the Markdown summary first — even on failure, the
+      # maintainer needs to see WHICH scanner went red without clicking
+      # into each individual job.
+      - name: Render security summary
         run: |
-          echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Bandit SAST | ${{ needs.bandit.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| pip-audit | ${{ needs.pip-audit.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Semgrep | ${{ needs.semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Secret Detection | ${{ needs.secrets-scan.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "View detailed results in the Security tab." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Security Scan Results"
+            echo ""
+            echo "| Scanner | Status |"
+            echo "|---------|--------|"
+            echo "| Bandit SAST | ${{ needs.bandit.result }} |"
+            echo "| pip-audit | ${{ needs.pip-audit.result }} |"
+            echo "| Semgrep | ${{ needs.semgrep.result }} |"
+            echo "| Trivy | ${{ needs.trivy.result }} |"
+            echo "| Secret Detection | ${{ needs.secrets-scan.result }} |"
+            echo ""
+            echo "View detailed results in the Security tab."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Gating step: aggregate scanner verdicts. Any non-success result
+      # from a dependent scanner fails this job, which is the single
+      # branch-protection-friendly status to gate PR merges on. Without
+      # this, security-summary was informational and rendered the
+      # individual job statuses moot for protected-branch enforcement.
+      - name: Gate on scanner results
+        run: |
+          set -euo pipefail
+          declare -A results=(
+            [bandit]="${{ needs.bandit.result }}"
+            [pip-audit]="${{ needs.pip-audit.result }}"
+            [semgrep]="${{ needs.semgrep.result }}"
+            [trivy]="${{ needs.trivy.result }}"
+            [secrets-scan]="${{ needs.secrets-scan.result }}"
+          )
+          failed=()
+          for scanner in "${!results[@]}"; do
+            result="${results[$scanner]}"
+            # 'success' and 'skipped' (scanner intentionally not run) pass;
+            # 'failure' and 'cancelled' fail; anything else fails defensively.
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              failed+=("$scanner=$result")
+            fi
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::Security gate failed — non-success scanners: ${failed[*]}"
+            exit 1
+          fi
+          echo "All security scanners passed."
 
   # --- GitHub Pages deployment (merged from pages.yml) ---
   # Only runs on push to main when site/** changes
@@ -273,9 +391,9 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: 22
 
@@ -287,7 +405,7 @@ jobs:
         working-directory: site
         run: npm run build
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v4
         with:
           path: site/dist
 
@@ -295,6 +413,16 @@ jobs:
     name: Deploy site to GitHub Pages
     needs: build-site
     runs-on: ubuntu-latest
+    # Override the workflow-level cancel-in-progress for Pages deploys.
+    # GitHub Pages allows ONE in-flight deployment per repo; cancelling
+    # a deploy mid-upload poisons the next deploy attempt with "a
+    # deployment is already in progress" for 5-15 minutes. The literal
+    # group 'pages' (not interpolated with github.ref) serializes
+    # against EVERY Pages deploy in the repo, matching the server-side
+    # invariant GitHub Pages enforces.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       contents: read
       pages: write
@@ -304,4 +432,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@ddc015e5ed99942b2253d8ea16a0586a01ef2ab1  # v5

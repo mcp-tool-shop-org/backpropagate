@@ -21,6 +21,12 @@ We pledge to make participation in our project a harassment-free experience for 
 
 Project maintainers are responsible for clarifying standards and taking appropriate action in response to unacceptable behavior.
 
+Report conduct concerns via a private GitHub security advisory, or by email to:
+
+**Email:** 64996768+mcp-tool-shop@users.noreply.github.com
+
+All reports will be reviewed promptly and handled in confidence.
+
 ## Attribution
 
 This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org/).

@@ -85,6 +85,9 @@ class CheckpointInfo:
         is_final: True if this is the most recent checkpoint
         size_bytes: Size of the checkpoint in bytes
         protected: If True, this checkpoint won't be pruned
+        run_id: Optional correlation token (B-001) so manifest entries can
+            be grepped by the same identifier used in log lines + SLAO
+            merge_history.json.
     """
     run_index: int
     path: str
@@ -95,13 +98,17 @@ class CheckpointInfo:
     is_final: bool = False
     size_bytes: int = 0
     protected: bool = False
+    run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CheckpointInfo":
-        return cls(**data)
+        # Forward-compat: tolerate unknown keys from newer manifests by
+        # filtering down to the dataclass fields we know about.
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -229,6 +236,22 @@ class CheckpointManager:
                 total += f.stat().st_size
         return total
 
+    def find_latest_for_run_id(self, run_id: str) -> CheckpointInfo | None:
+        """F-002: return the most recent checkpoint tagged with ``run_id``.
+
+        Used by the resume path: the on-disk run-history entry's run_id
+        is the same correlation token written into the checkpoint
+        manifest (B-001), so we can recover the last good checkpoint for
+        a crashed multi-run by grepping the manifest.
+
+        Returns ``None`` when no matching checkpoint is found.
+        """
+        matched = [cp for cp in self._checkpoints if cp.run_id == run_id]
+        if not matched:
+            return None
+        # Highest run_index → most recent.
+        return max(matched, key=lambda cp: cp.run_index)
+
     def register(
         self,
         run_index: int,
@@ -237,6 +260,7 @@ class CheckpointManager:
         training_loss: float | None = None,
         is_run_boundary: bool = False,
         protected: bool = False,
+        run_id: str | None = None,
     ) -> CheckpointInfo:
         """
         Register a new checkpoint.
@@ -248,6 +272,9 @@ class CheckpointManager:
             training_loss: Training loss
             is_run_boundary: True if this is the start of a new run
             protected: If True, this checkpoint won't be pruned
+            run_id: Optional correlation token (B-001) persisted on the
+                manifest entry so triage can grep one identifier across logs
+                + checkpoints + SLAO history.
 
         Returns:
             CheckpointInfo for the registered checkpoint
@@ -267,6 +294,7 @@ class CheckpointManager:
             is_final=True,  # This is now the latest
             size_bytes=size,
             protected=protected,
+            run_id=run_id,
         )
 
         self._checkpoints.append(info)
@@ -549,12 +577,28 @@ class CheckpointManager:
         """
         Force prune checkpoints until total size is under limit.
 
+        The loop prunes the lowest-scored prunable checkpoint per iteration and
+        stops as soon as the total size fits ``max_size_gb`` OR no prunable
+        checkpoint remains. Protected checkpoints (``protected=True``), the
+        final checkpoint when ``keep_final=True``, run-boundary checkpoints
+        when ``keep_run_boundaries=True``, and the top-N by validation loss
+        when ``keep_best_n > 0`` are all skipped — even under force prune. So
+        an aggressive ``max_size_gb`` (e.g. 0.0) cannot delete the final
+        checkpoint or otherwise violate the retention policy; the loop simply
+        logs that it cannot prune further and exits cleanly.
+
         Args:
             max_size_gb: Maximum total size in gigabytes
 
         Returns:
-            List of pruned checkpoints
+            List of pruned checkpoints (may be smaller than needed if the
+            remaining checkpoints are all protected by policy).
         """
+        # Semantics verified during the v1.1.0 promotion swarm (Stage A) —
+        # force_prune_to_size correctly delegates to _get_prunable_checkpoints,
+        # which honors protected / keep_final / keep_run_boundaries / keep_best_n.
+        # The previously-skipped tests/test_checkpoints.py::test_force_prune_to_size
+        # passes against this implementation.
         max_bytes = max_size_gb * (1024**3)
         pruned = []
         max_iterations = 100
@@ -631,6 +675,12 @@ class RunHistoryManager:
 
     HISTORY_FILE = "run_history.json"
 
+    # F-003: status taxonomy for lifecycle queries (list-runs --status).
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+    VALID_STATUSES = frozenset({STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED})
+
     # Fields that a well-formed run entry should contain.
     _EXPECTED_FIELDS = frozenset({
         "run_id",
@@ -644,6 +694,16 @@ class RunHistoryManager:
         "duration_seconds",
         "gpu_max_temp",
         "checkpoint_path",
+        # F-003 lifecycle fields:
+        "status",            # running | completed | failed
+        "started_at",        # ISO timestamp at record_run_started
+        "completed_at",      # ISO timestamp at record_run_completed / record_run_failed
+        "session_kind",      # "single_run" | "multi_run"
+        "failure_reason",    # populated only on STATUS_FAILED
+        # F-004 model-card / provenance fields:
+        "dataset_hash",      # sha256 hex (first 16 chars) of the dataset, when available
+        "merge_history",     # list of SLAO merge_result dicts when multi_run mode
+        "export_paths",      # list of export directories (populated by export.py)
     })
 
     # Maximum loss-history samples stored per run to bound file size.
@@ -787,3 +847,331 @@ class RunHistoryManager:
         if not valid:
             return None
         return min(valid, key=lambda r: r["final_loss"])
+
+    # --------------------------------------------------------------------- #
+    # F-003 lifecycle API
+    # --------------------------------------------------------------------- #
+    # The lifecycle API was added to wire RunHistoryManager into Trainer +
+    # MultiRunTrainer so that every training session leaves a queryable record
+    # on disk. The flow is:
+    #
+    #   record_run_started(run_id, ...) -> entry with status="running"
+    #   record_run_completed(run_id, ...) -> updates status to "completed"
+    #   record_run_failed(run_id, reason) -> updates status to "failed"
+    #
+    # The lookup helpers (get_run / list_runs / delete_run) back the CLI
+    # ``backprop list-runs`` and ``backprop show-run`` subcommands.
+
+    def record_run_started(
+        self,
+        run_id: str,
+        model_name: str | None = None,
+        dataset_info: Any = None,
+        hyperparameters: dict[str, Any] | None = None,
+        session_kind: str = "single_run",
+        checkpoint_path: str | None = None,
+        dataset_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """Record the start of a training run (status="running").
+
+        Each entry is keyed by ``run_id``; calling ``record_run_started``
+        twice with the same run_id updates the existing entry in place
+        rather than creating a duplicate. This is the foundation for the
+        F-002 resume flow (an in-progress entry signals "this run can be
+        resumed from its checkpoint").
+        """
+        now = datetime.now().isoformat()
+        entry: dict[str, Any] = dict.fromkeys(self._EXPECTED_FIELDS)
+        entry.update({
+            "run_id": run_id,
+            "timestamp": now,
+            "started_at": now,
+            "status": self.STATUS_RUNNING,
+            "session_kind": session_kind,
+            "model_name": model_name,
+            "dataset_info": dataset_info,
+            "dataset_hash": dataset_hash,
+            "hyperparameters": hyperparameters or {},
+            "checkpoint_path": checkpoint_path,
+            "loss_history": [],
+            "merge_history": [],
+            "export_paths": [],
+        })
+
+        history = self._load()
+        # Replace any existing entry with the same run_id (idempotent start).
+        history = [r for r in history if r.get("run_id") != run_id]
+        history.append(entry)
+        if not self._save(history):
+            logger.warning("record_run_started: save failed")
+
+        logger.info(
+            f"Recorded run start: run_id={run_id} model={model_name} "
+            f"session_kind={session_kind}"
+        )
+        return entry
+
+    def record_run_completed(
+        self,
+        run_id: str,
+        final_loss: float | None = None,
+        loss_history: list[float] | None = None,
+        steps: int | None = None,
+        duration_seconds: float | None = None,
+        gpu_max_temp: float | None = None,
+        checkpoint_path: str | None = None,
+        merge_history: list[dict[str, Any]] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mark a previously-started run as completed and persist final metrics."""
+        history = self._load()
+        matched = False
+        now = datetime.now().isoformat()
+        for entry in history:
+            if entry.get("run_id") != run_id:
+                continue
+            matched = True
+            entry["status"] = self.STATUS_COMPLETED
+            entry["completed_at"] = now
+            if final_loss is not None:
+                entry["final_loss"] = final_loss
+            if loss_history is not None:
+                entry["loss_history"] = self._downsample_loss_history(
+                    loss_history,
+                    self.MAX_LOSS_HISTORY_POINTS,
+                )
+            if steps is not None:
+                entry["steps"] = steps
+            if duration_seconds is not None:
+                entry["duration_seconds"] = duration_seconds
+            if gpu_max_temp is not None:
+                entry["gpu_max_temp"] = gpu_max_temp
+            if checkpoint_path is not None:
+                entry["checkpoint_path"] = checkpoint_path
+            if merge_history is not None:
+                entry["merge_history"] = merge_history
+            if extra:
+                for key, value in extra.items():
+                    entry[key] = value
+            break
+
+        if not matched:
+            # No started-record found — synthesize one so we don't silently
+            # drop the completion signal. This can happen if the caller
+            # forgot record_run_started, or if record_run_started's save
+            # failed.
+            logger.warning(
+                f"record_run_completed: no started record for run_id={run_id}; "
+                "synthesizing entry"
+            )
+            entry = dict.fromkeys(self._EXPECTED_FIELDS)
+            entry.update({
+                "run_id": run_id,
+                "timestamp": now,
+                "completed_at": now,
+                "status": self.STATUS_COMPLETED,
+                "final_loss": final_loss,
+                "loss_history": self._downsample_loss_history(
+                    loss_history or [],
+                    self.MAX_LOSS_HISTORY_POINTS,
+                ),
+                "steps": steps,
+                "duration_seconds": duration_seconds,
+                "gpu_max_temp": gpu_max_temp,
+                "checkpoint_path": checkpoint_path,
+                "merge_history": merge_history or [],
+                "export_paths": [],
+            })
+            if extra:
+                entry.update(extra)
+            history.append(entry)
+
+        if not self._save(history):
+            logger.warning("record_run_completed: save failed")
+        logger.info(
+            f"Recorded run completed: run_id={run_id} final_loss={final_loss}"
+        )
+        return entry
+
+    def record_run_failed(
+        self,
+        run_id: str,
+        failure_reason: str,
+        loss_history: list[float] | None = None,
+        duration_seconds: float | None = None,
+        checkpoint_path: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mark a previously-started run as failed and persist the failure reason."""
+        history = self._load()
+        matched = False
+        now = datetime.now().isoformat()
+        for entry in history:
+            if entry.get("run_id") != run_id:
+                continue
+            matched = True
+            entry["status"] = self.STATUS_FAILED
+            entry["completed_at"] = now
+            entry["failure_reason"] = failure_reason
+            if loss_history is not None:
+                entry["loss_history"] = self._downsample_loss_history(
+                    loss_history,
+                    self.MAX_LOSS_HISTORY_POINTS,
+                )
+            if duration_seconds is not None:
+                entry["duration_seconds"] = duration_seconds
+            if checkpoint_path is not None:
+                entry["checkpoint_path"] = checkpoint_path
+            if extra:
+                for key, value in extra.items():
+                    entry[key] = value
+            break
+
+        if not matched:
+            logger.warning(
+                f"record_run_failed: no started record for run_id={run_id}; "
+                "synthesizing entry"
+            )
+            entry = dict.fromkeys(self._EXPECTED_FIELDS)
+            entry.update({
+                "run_id": run_id,
+                "timestamp": now,
+                "completed_at": now,
+                "status": self.STATUS_FAILED,
+                "failure_reason": failure_reason,
+                "loss_history": self._downsample_loss_history(
+                    loss_history or [],
+                    self.MAX_LOSS_HISTORY_POINTS,
+                ),
+                "duration_seconds": duration_seconds,
+                "checkpoint_path": checkpoint_path,
+                "merge_history": [],
+                "export_paths": [],
+            })
+            if extra:
+                entry.update(extra)
+            history.append(entry)
+
+        if not self._save(history):
+            logger.warning("record_run_failed: save failed")
+        logger.info(
+            f"Recorded run failed: run_id={run_id} reason={failure_reason}"
+        )
+        return entry
+
+    def update_run(
+        self,
+        run_id: str,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Patch fields on an existing run entry.
+
+        Returns the updated entry, or ``None`` if the run_id was not found.
+        Used by export.py to append to ``export_paths`` and by the resume
+        path to roll ``status`` from "failed" back to "running".
+        """
+        if not fields:
+            return self.get_run(run_id)
+
+        history = self._load()
+        updated: dict[str, Any] | None = None
+        for entry in history:
+            if entry.get("run_id") != run_id:
+                continue
+            for key, value in fields.items():
+                entry[key] = value
+            updated = entry
+            break
+
+        if updated is None:
+            logger.warning(f"update_run: run_id={run_id} not found")
+            return None
+
+        if not self._save(history):
+            logger.warning("update_run: save failed")
+        return updated
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        """Return the run entry for ``run_id`` or ``None`` if not present.
+
+        Supports partial-prefix matching for operator convenience: if no
+        exact match is found and ``run_id`` is a strict prefix of exactly
+        one entry's run_id, return that entry. (CLI users typically only
+        type the first 8-12 hex chars.)
+        """
+        history = self._load()
+        for entry in history:
+            if entry.get("run_id") == run_id:
+                return entry
+        # Partial-prefix fallback.
+        prefix_matches = [
+            entry for entry in history
+            if isinstance(entry.get("run_id"), str)
+            and entry["run_id"].startswith(run_id)
+        ]
+        if len(prefix_matches) == 1:
+            return prefix_matches[0]
+        return None
+
+    def list_runs(
+        self,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return all run entries, most recent first.
+
+        Args:
+            status: Optional filter — one of ``running`` / ``completed`` /
+                ``failed``. Invalid values raise ``ValueError``.
+            limit: Optional cap on the number of entries returned.
+
+        Returns:
+            List of run dicts, newest-first (by ``started_at`` / ``timestamp``).
+        """
+        if status is not None and status not in self.VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{status}'. Expected one of: "
+                f"{sorted(self.VALID_STATUSES)}"
+            )
+
+        history = self._load()
+        if status is not None:
+            history = [r for r in history if r.get("status") == status]
+
+        # Sort newest-first using the best timestamp we have. ``started_at``
+        # is the lifecycle-API field; pre-lifecycle entries only carry
+        # ``timestamp``. Use whichever is present.
+        def _sort_key(entry: dict[str, Any]) -> str:
+            return str(
+                entry.get("started_at")
+                or entry.get("timestamp")
+                or ""
+            )
+
+        history.sort(key=_sort_key, reverse=True)
+
+        if limit is not None and limit > 0:
+            history = history[:limit]
+        return history
+
+    def delete_run(self, run_id: str) -> bool:
+        """Remove a run entry by ``run_id``. Returns True on success."""
+        history = self._load()
+        before = len(history)
+        history = [r for r in history if r.get("run_id") != run_id]
+        if len(history) == before:
+            logger.warning(f"delete_run: run_id={run_id} not found")
+            return False
+        if not self._save(history):
+            logger.warning("delete_run: save failed")
+            return False
+        logger.info(f"Deleted run history entry: run_id={run_id}")
+        return True
+
+    def in_progress_runs(self) -> list[dict[str, Any]]:
+        """Return runs that are currently in the ``running`` state.
+
+        Used by the F-002 resume auto-detect path so a crashed multi-run
+        can be picked up without an explicit ``--resume <run-id>``.
+        """
+        return [r for r in self._load() if r.get("status") == self.STATUS_RUNNING]

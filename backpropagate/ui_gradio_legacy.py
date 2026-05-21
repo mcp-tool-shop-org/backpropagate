@@ -1,42 +1,35 @@
 """
-Backpropagate - Gradio 6 Web Interface
-=======================================
+DEPRECATED — Gradio implementation of the Web UI.
 
-A beautiful, Apple-inspired interface for LLM fine-tuning.
+The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This module
+is preserved as reference for the Stage B/C contract behaviors (event buffer,
+output_dir denylist, file-magic validator, auth-shape validation, error
+redaction). The framework-agnostic helpers moved to ui_security.py; the new
+Reflex implementation lives in ui_app/.
 
-Features:
-- Ocean Mist theme (brand consistent with Comfy Headless)
-- Live training progress with loss plots
-- GPU monitoring dashboard
-- Dataset preview and validation
-- Run history and comparison
-- One-click export to multiple formats
+Do not import this module from new code. It will be removed in v1.2.
 
-Security (Production-Hardened):
-- Authentication required when share=True (public URLs)
-- Path validation to prevent traversal attacks
-- Input sanitization for user-provided values
-- Rate limiting with IP tracking for training operations
-- File upload validation (CVE-2024-47872 mitigation)
-- CSRF protection (CVE-2024-1727 mitigation)
-- Security event logging for monitoring
-- Proper gr.Error/gr.Warning/gr.Info for user feedback
+Original docstring (preserved for context)
+==========================================
 
-Based on:
-- Trail of Bits Gradio 5 Security Audit
-- OWASP Web Security Best Practices
+Backpropagate - Gradio 6 Web Interface — Ocean Mist theme, live training
+progress with loss plots, GPU monitoring dashboard, dataset preview, run
+history, one-click export.
 
-Usage:
-    from backpropagate import launch
-    launch(port=7862)
+Security primitives (auth shape validation, file upload validation, rate
+limiting, CSRF protection, error sanitization) moved to ui_security.py.
 
-    # With authentication (required for public sharing)
-    launch(port=7862, share=True, auth=("admin", "password"))
+Based on Trail of Bits Gradio 5 Security Audit and OWASP Web Security Best
+Practices.
 """
 
 import logging
+import re
 import secrets
+import sys
+import threading
 import time
+from collections import deque
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -48,6 +41,7 @@ from .datasets import (
     DatasetLoader,
     ValidationResult,
 )
+from .exceptions import BackpropagateError
 from .feature_flags import (
     get_gpu_info,
     get_system_info,
@@ -55,7 +49,7 @@ from .feature_flags import (
 )
 from .gpu_safety import GPUCondition, get_gpu_status
 from .security import PathTraversalError, SecurityWarning, safe_path
-from .theme import create_backpropagate_theme, get_css
+from .theme_gradio_legacy import create_backpropagate_theme, get_css
 
 # Import production security utilities
 from .ui_security import (
@@ -63,6 +57,7 @@ from .ui_security import (
     DEFAULT_SECURITY_CONFIG,
     EnhancedRateLimiter,
     FileValidator,
+    get_ui_output_dir,
     log_security_event,
     validate_numeric_input,
 )
@@ -148,6 +143,124 @@ def sanitize_text_input(text: str, max_length: int = 1000) -> str:
     return text.strip()
 
 
+def safe_markdown_fence(content: str, language: str = "") -> str:
+    """Wrap user content in a fenced Markdown code block safely (C-UX-005).
+
+    Dataset / Modelfile / Ollama previews wrap user-supplied content in
+    triple-backtick fences for display in gr.Markdown. If the content
+    itself contains the literal sequence ``` (extremely common — ChatML
+    samples literally include code fences as training data, and Modelfile
+    bodies read from disk can contain arbitrary characters), the outer
+    fence terminates early. The rest renders as raw markdown / creates a
+    Markdown injection vector.
+
+    Defense: count the longest backtick run inside the content and use a
+    fence one tick longer. CommonMark explicitly allows this. We always
+    use at least three backticks so the output renders correctly in
+    historical viewers too.
+    """
+    if content is None:
+        content = ""
+    # Find the longest run of consecutive backticks in the content.
+    longest = 0
+    current = 0
+    for ch in content:
+        if ch == "`":
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    fence_len = max(3, longest + 1)
+    fence = "`" * fence_len
+    lang = language or ""
+    return f"{fence}{lang}\n{content}\n{fence}"
+
+
+# FB-011: user-facing error sanitization.
+# Raw exception messages from torch / transformers / huggingface_hub frequently
+# embed absolute filesystem paths (home directory, HF cache, internal model
+# layout). Surfacing those into the Gradio toast leaks both PII (the operator's
+# username) and an internal-map of the deployment that attackers shouldn't get
+# from a UI handler. The patterns below redact:
+#   - Unix-style absolute paths starting with /home/, /Users/, /root/
+#   - Windows-style absolute paths under C:\Users\<name>\, including UNC roots
+#   - The HF cache location (~/.cache/huggingface/...)
+#   - Whole tempdirs surfaced by tempfile / shutil
+# Truncate to a fixed limit so a 10 KB pyarrow traceback can't blow up the
+# toast component.
+_REDACTED = "<redacted-path>"
+_PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
+    re.compile(r"/tmp/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),
+    re.compile(r"~?/?\.cache/huggingface/[^\s'\":]*"),
+)
+
+
+def _redact_paths(text: str) -> str:
+    """
+    Replace absolute filesystem paths with ``<redacted-path>`` for UI display.
+
+    Used by ``sanitize_error_for_user`` so trainer / transformers errors that
+    embed the operator's home directory don't leak into the Gradio toast.
+    """
+    if not text:
+        return text
+    for pat in _PATH_REDACTION_PATTERNS:
+        text = pat.sub(_REDACTED, text)
+    return text
+
+
+def sanitize_error_for_user(
+    exc: BaseException,
+    operation: str,
+    max_length: int = 240,
+) -> tuple[str, str | None]:
+    """
+    Convert a backend exception into a user-safe display message (FB-011).
+
+    Returns a ``(message, suggestion)`` tuple:
+
+    - For ``BackpropagateError`` subclasses, return the structured
+      ``{code}: {message}`` plus the suggestion (already user-facing — these
+      are authored to be safe to display).
+    - For ``KeyboardInterrupt`` / ``RateLimitExceeded`` / other library
+      exceptions we let bubble up via ``gr.Error``, redact paths and trim.
+    - For any other exception type, return a generic "Internal error
+      (RUNTIME_UI). Check server logs for details." — the full traceback is
+      still logged server-side via ``logger.exception`` at the call site,
+      so operators see the real cause; users see something actionable
+      without internal paths leaking.
+
+    The ``operation`` argument is folded into the user-facing message
+    ("during training", "during export") so the toast tells the user which
+    handler failed even when the underlying exception is hidden.
+    """
+    # BackpropagateError: structured, user-authored — surface code + message.
+    if isinstance(exc, BackpropagateError):
+        code = exc.code or "BACKPROPAGATE_ERROR"
+        message = _redact_paths(exc.message or str(exc))
+        if len(message) > max_length:
+            message = message[: max_length - 1] + "…"
+        suggestion = exc.suggestion
+        if suggestion:
+            suggestion = _redact_paths(suggestion)
+            if len(suggestion) > max_length:
+                suggestion = suggestion[: max_length - 1] + "…"
+        return f"{code}: {message}", suggestion
+
+    # Anything else: hide the type + the full message; surface a stable
+    # operator-actionable string with the operation name only.
+    generic = (
+        f"Internal error during {operation} (RUNTIME_UI). "
+        "Check the server logs for full details."
+    )
+    return generic, None
+
+
 def generate_auth_token() -> str:
     """Generate a secure authentication token."""
     return secrets.token_urlsafe(32)
@@ -159,6 +272,11 @@ __all__ = ["create_ui", "launch", "SecurityWarning"]
 # MODEL PRESETS
 # =============================================================================
 
+# C-UX-001: "Custom / Other" sentinel makes the custom-model textbox reachable
+# from the dropdown. The start_training / start_multi_run handlers check
+# `model_preset in MODEL_PRESETS`; the sentinel maps to "" so the lookup falls
+# through to sanitize_model_name(custom_model), which is the documented HF path.
+CUSTOM_MODEL_CHOICE = "Custom / Other"
 MODEL_PRESETS = {
     "Qwen 2.5 7B (Recommended)": "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
     "Qwen 2.5 3B (Fast)": "unsloth/Qwen2.5-3B-Instruct-bnb-4bit",
@@ -167,6 +285,7 @@ MODEL_PRESETS = {
     "Llama 3.2 1B": "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",
     "Mistral 7B v0.3": "unsloth/mistral-7b-instruct-v0.3-bnb-4bit",
     "Phi-3 Mini": "unsloth/Phi-3-mini-4k-instruct-bnb-4bit",
+    CUSTOM_MODEL_CHOICE: "",
 }
 
 DATASET_PRESETS = {
@@ -203,11 +322,123 @@ class UIState:
         self.train_start_time: float = 0.0
         self.multi_run_start_time: float = 0.0
         # Stop signal for cooperative cancellation
-        import threading
         self.stop_requested: threading.Event = threading.Event()
 
 
 state = UIState()
+
+
+# =============================================================================
+# EVENT BUFFER (C-UX-002, C-UX-003)
+# =============================================================================
+#
+# Stage B added real backend retry / OOM-shrink / GPU-pause behavior, but those
+# events log to the server only. UI users running share=True + auth have no
+# access to server logs, so a 90-second cooldown pause looks like a freeze.
+#
+# Shape: a bounded thread-safe deque of timestamped strings. The training and
+# multi-run generators emit events into it via _push_event(); a gr.Timer
+# polls _format_event_log() on a 0.5-1s cadence to drive a status banner.
+#
+# We also attach a custom logging handler that mirrors the "hf_retry",
+# "oom_retry", "gpu_paused", "gpu_resumed" loglines from trainer.py /
+# multi_run.py / datasets.py into the deque so this works without requiring
+# the backend to publish a structured queue. The classifier is keyword-based;
+# it errs on the side of surfacing too much rather than too little.
+
+_EVENT_BUFFER_MAX = 100
+_event_buffer: deque[tuple[float, str]] = deque(maxlen=_EVENT_BUFFER_MAX)
+_event_buffer_lock = threading.Lock()
+
+
+def _push_event(message: str) -> None:
+    """Append a timestamped event to the shared UI event buffer.
+
+    Thread-safe. Used by training generators and the log-mirror handler to
+    surface backend events (HF retries, OOM batch-shrink, GPU pause/resume,
+    run lifecycle) into the UI status panel.
+    """
+    if not message:
+        return
+    # Trim a single very long line so a runaway traceback can't dominate the
+    # buffer. 200 chars is enough to convey the event without flooding.
+    message = message.replace("\n", " ").replace("\r", " ")[:200]
+    with _event_buffer_lock:
+        _event_buffer.append((time.time(), message))
+
+
+def _format_event_log(max_lines: int = 30) -> str:
+    """Format the event buffer as a newline-separated string for display."""
+    with _event_buffer_lock:
+        # Take the most-recent max_lines events
+        items = list(_event_buffer)[-max_lines:]
+    if not items:
+        return "(no events yet — run-time messages will appear here)"
+    lines = []
+    for ts, msg in items:
+        # HH:MM:SS local time
+        ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
+        lines.append(f"[{ts_str}] {msg}")
+    return "\n".join(lines)
+
+
+# Keyword tokens for the log-mirror handler. Keep narrow so we don't flood
+# the user with every routine log line — only the events Stage B made real.
+_EVENT_LOG_KEYWORDS = (
+    "Retrying",          # trainer.py HF retry
+    "retry",             # generic retry signal
+    "OOM",               # CUDA OOM
+    "out of memory",     # torch OutOfMemoryError text
+    "batch_size",        # batch-shrink retry surface
+    "GPU at",            # gpu_safety pause line "GPU at 92C, pausing"
+    "pausing",           # pause keyword
+    "resuming",          # resume keyword
+    "cooling",           # gpu cooling
+    "loaded model",      # load_model completion
+    "Loading model",     # load_model start
+    "Downloading",       # HF Hub download
+    "Resolving",         # HF Hub resolve
+)
+
+
+class _UIEventLogHandler(logging.Handler):
+    """Mirror selected log records into the UI event buffer.
+
+    This bridges the Stage B backend (which logs structured retry / pause /
+    resume events) to the Stage C UI (which needs to surface them to users
+    who have no access to server logs). Keyword-gated so we don't push
+    every INFO line to the UI.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+        except Exception:  # pragma: no cover - defensive against bad formatters
+            return
+        if not any(kw.lower() in msg.lower() for kw in _EVENT_LOG_KEYWORDS):
+            return
+        # Tag with the level so the user knows whether it's a warning
+        level = record.levelname
+        _push_event(f"{level}: {_redact_paths(msg)}")
+
+
+def _install_event_log_handler() -> None:
+    """Attach the UI event log handler to the package root logger.
+
+    Idempotent — calling twice doesn't duplicate the handler.
+    """
+    pkg_logger = logging.getLogger("backpropagate")
+    for h in pkg_logger.handlers:
+        if isinstance(h, _UIEventLogHandler):
+            return
+    handler = _UIEventLogHandler(level=logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    pkg_logger.addHandler(handler)
+
+
+def refresh_event_log() -> str:
+    """gr.Timer-bound poll function that returns the current event log."""
+    return _format_event_log()
 
 
 # =============================================================================
@@ -442,8 +673,13 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
         validation_text = loader.validation_report()
 
         # Get preview samples
+        # C-UX-005: safe_markdown_fence escapes user content so a sample
+        # containing ``` doesn't break the outer fence or inject markdown.
         previews = loader.preview(n=3, as_chatml=True)
-        preview_text = "\n\n---\n\n".join([f"**Sample {i+1}:**\n```\n{p}\n```" for i, p in enumerate(previews)])
+        preview_text = "\n\n---\n\n".join([
+            f"**Sample {i+1}:**\n{safe_markdown_fence(p)}"
+            for i, p in enumerate(previews)
+        ])
 
         # Format table data
         table_data = [
@@ -470,7 +706,7 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
         raise
     except FileNotFoundError as e:
         logger.error(f"Dataset file not found: {e}")
-        raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
+        raise gr.Error("File not found (path redacted). Check the server logs for details.", duration=10, title="File Not Found")
     except Exception as e:
         logger.exception("Failed to load dataset")
         log_security_event(
@@ -478,11 +714,12 @@ def load_dataset_file(file_obj: Any, request: gr.Request | None = None) -> tuple
             error=str(e)[:200],
             filename=getattr(file_obj, "name", "unknown"),
         )
-        raise gr.Error(
-            f"Failed to load dataset: {str(e)}",
-            duration=10,
-            title="Load Error",
-        )
+        # FB-011: don't leak the raw exception (may contain HF cache / home
+        # directory paths). Sanitize via the central helper.
+        user_msg, hint = sanitize_error_for_user(e, operation="dataset load")
+        if hint:
+            user_msg = f"{user_msg}\n\nHint: {hint}"
+        raise gr.Error(user_msg, duration=10, title="Load Error")
 
 
 def convert_dataset_format(target_format: str) -> tuple:
@@ -494,8 +731,9 @@ def convert_dataset_format(target_format: str) -> tuple:
         if target_format == "ChatML":
             samples = state.dataset_loader.to_chatml()
             # Show first 3 samples
+            # C-UX-005: safe_markdown_fence escapes converted ChatML text.
             preview = "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```\n{s['text']}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(s['text'])}"
                 for i, s in enumerate(samples[:3])
             ])
             return f"Converted {len(samples)} samples to ChatML format", preview
@@ -504,7 +742,11 @@ def convert_dataset_format(target_format: str) -> tuple:
 
     except Exception as e:
         logger.exception("Failed to convert dataset")
-        return f"Error: {str(e)}", ""
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="dataset conversion")
+        if suggestion:
+            return f"Error: {user_msg}\n\nHint: {suggestion}", ""
+        return f"Error: {user_msg}", ""
 
 
 def export_converted_dataset(output_path: str) -> str:
@@ -512,8 +754,12 @@ def export_converted_dataset(output_path: str) -> str:
     if state.dataset_loader is None:
         return "No dataset loaded"
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write the converted dataset to
+    # arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid or validated_path is None:
         return f"Invalid output path: {error_msg}"
 
@@ -532,7 +778,11 @@ def export_converted_dataset(output_path: str) -> str:
 
     except Exception as e:
         logger.exception("Failed to export dataset")
-        return f"Error: {str(e)}"
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="dataset export")
+        if suggestion:
+            return f"Error: {user_msg}\n\nHint: {suggestion}"
+        return f"Error: {user_msg}"
 
 
 def refresh_dataset_preview(show_raw: bool) -> str:
@@ -544,19 +794,24 @@ def refresh_dataset_preview(show_raw: bool) -> str:
         if show_raw:
             import json
             samples = state.dataset_loader.samples[:3]
+            # C-UX-005: safe fence for raw JSON dump.
             return "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```json\n{json.dumps(s, indent=2)}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(json.dumps(s, indent=2), language='json')}"
                 for i, s in enumerate(samples)
             ])
         else:
             previews = state.dataset_loader.preview(n=3, as_chatml=True)
+            # C-UX-005: safe fence for ChatML preview.
             return "\n\n---\n\n".join([
-                f"**Sample {i+1}:**\n```\n{p}\n```"
+                f"**Sample {i+1}:**\n{safe_markdown_fence(p)}"
                 for i, p in enumerate(previews)
             ])
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        logger.exception("Failed to refresh dataset preview")
+        # FB-011: sanitize before surfacing to the markdown component.
+        user_msg, _suggestion = sanitize_error_for_user(e, operation="dataset preview refresh")
+        return f"Error: {user_msg}"
 
 
 # =============================================================================
@@ -616,7 +871,10 @@ def start_training(
         raise gr.Error(f"Invalid parameter: {e}", duration=10)
 
     # Resolve and sanitize model name
-    if model_preset in MODEL_PRESETS:
+    # C-UX-001: the "Custom / Other" preset (CUSTOM_MODEL_CHOICE) maps to empty
+    # string, which signals "use the user's custom_model textbox"; fall through
+    # to the sanitize branch for that case.
+    if model_preset in MODEL_PRESETS and model_preset != CUSTOM_MODEL_CHOICE:
         model_name = MODEL_PRESETS[model_preset]
     else:
         model_name = sanitize_model_name(custom_model)
@@ -665,6 +923,10 @@ def start_training(
     state.train_start_time = time.time()
     state.stop_requested.clear()
 
+    # C-UX-002/003: surface run lifecycle into the UI event buffer so users
+    # see what's happening during the otherwise-silent load + train windows.
+    _push_event(f"run_started: model={model_name} samples={max_samples} steps={max_steps}")
+
     # Show info message
     gr.Info(f"Starting training with {model_name}...", duration=3)
 
@@ -687,6 +949,14 @@ def start_training(
         )
 
         status = "📦 Loading model (this may take several minutes for large models)..."
+        # C-UX-002: gr.Progress feedback during the 30s-5min load window so
+        # users don't think the UI is frozen. Granular phases come from
+        # the HF Hub log lines mirrored into the event buffer.
+        try:
+            progress(0.0, desc=f"Downloading and loading {model_name}...")
+        except Exception:  # gr.Progress is best-effort
+            pass
+        _push_event(f"load_model start: {model_name}")
         yield status, format_loss_plot([]), get_gpu_status_display()
 
         if state.stop_requested.is_set():
@@ -696,6 +966,12 @@ def start_training(
         load_start = time.time()
         state.trainer.load_model()
         load_elapsed = time.time() - load_start
+
+        try:
+            progress(1.0, desc=f"Model loaded in {load_elapsed:.0f}s")
+        except Exception:
+            pass
+        _push_event(f"load_model complete in {load_elapsed:.0f}s")
 
         status = f"📦 Model loaded in {load_elapsed:.0f}s"
         yield status, format_loss_plot([]), get_gpu_status_display()
@@ -740,12 +1016,15 @@ def start_training(
         # Show success info
         gr.Info(f"Training complete! Loss: {run.final_loss:.4f}", duration=5)
 
+        _push_event(f"run_completed: final_loss={run.final_loss:.4f} duration={run.duration_seconds:.1f}s")
+
         status = f"✅ Training complete! Final loss: {run.final_loss:.4f}"
         yield status, format_loss_plot(run.loss_history), get_gpu_status_display()
 
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
         gr.Warning("Training interrupted by user", duration=5)
+        _push_event("run_interrupted: stopped by user")
         yield "⚠️ Training interrupted", format_loss_plot(state.loss_history), get_gpu_status_display()
 
     except Exception as e:
@@ -755,14 +1034,18 @@ def start_training(
             model=model_name,
             error=str(e)[:200],
         )
-        error_msg = str(e)[:200]
-        suggestion = getattr(e, "suggestion", None)
+        # FB-011: sanitize through the central helper so raw torch / HF /
+        # transformers messages (which embed home directory + HF cache
+        # paths) never reach the user toast or the status text. The full
+        # exception stays in the server log via logger.exception above.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="training")
         if suggestion:
-            gr.Warning(f"Training failed: {error_msg}", duration=10)
-            status = f"❌ Training failed: {error_msg}\n\n💡 **Suggestion:** {suggestion}"
+            gr.Warning(f"Training failed: {user_msg}", duration=10)
+            status = f"❌ Training failed: {user_msg}\n\n💡 **Suggestion:** {suggestion}"
         else:
-            gr.Warning(f"Training failed: {error_msg}", duration=10)
-            status = f"❌ Training failed: {error_msg}"
+            gr.Warning(f"Training failed: {user_msg}", duration=10)
+            status = f"❌ Training failed: {user_msg}"
+        _push_event(f"run_failed: {user_msg}")
         yield status, format_loss_plot(state.loss_history), get_gpu_status_display()
 
     finally:
@@ -786,8 +1069,12 @@ def save_model(output_path: str, save_merged: bool) -> str:
     if state.trainer is None:
         raise gr.Error("No model to save. Train a model first.", title="No Model")
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write the LoRA adapter or merged
+    # weights to arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid:
         raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
@@ -795,7 +1082,13 @@ def save_model(output_path: str, save_merged: bool) -> str:
         path = state.trainer.save(str(validated_path), save_merged=save_merged)
         return f"Model saved to: {path}"
     except Exception as e:
-        raise gr.Error(f"Save failed: {str(e)[:200]}", title="Save Error")
+        logger.exception("Model save failed")
+        # FB-011: sanitize before surfacing — save paths can include the
+        # operator's home directory and HF cache layout.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="save")
+        if suggestion:
+            user_msg = f"{user_msg}\n\nHint: {suggestion}"
+        raise gr.Error(f"Save failed: {user_msg}", title="Save Error") from e
 
 
 def export_model(
@@ -829,8 +1122,12 @@ def export_model(
             title="Rate Limited",
         )
 
-    # Validate output path
-    is_valid, error_msg, validated_path = validate_path_input(output_path)
+    # Validate output path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can't write GGUF/merged exports to
+    # arbitrary filesystem locations. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        output_path, allowed_base=get_ui_output_dir()
+    )
     if not is_valid:
         raise gr.Error(f"Invalid output path: {error_msg}", title="Invalid Path")
 
@@ -843,15 +1140,25 @@ def export_model(
         summary: str = result.summary()
         return summary
     except Exception as e:
-        raise gr.Error(f"Export failed: {str(e)[:200]}", title="Export Error")
+        logger.exception("Model export failed")
+        # FB-011: sanitize export errors — these frequently embed the GGUF
+        # writer's internal temp paths and the HF cache layout.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="export")
+        if suggestion:
+            user_msg = f"{user_msg}\n\nHint: {suggestion}"
+        raise gr.Error(f"Export failed: {user_msg}", title="Export Error") from e
 
 
 def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
     """Register a GGUF model with Ollama."""
     from .export import register_with_ollama
 
-    # Validate GGUF path
-    is_valid, error_msg, validated_path = validate_path_input(gguf_path, must_exist=True)
+    # Validate GGUF path — constrained to the UI output base so authenticated
+    # remote users (share=True + --auth) can only register GGUFs that previously
+    # came out of the export pipeline. See ui_security.get_ui_output_dir.
+    is_valid, error_msg, validated_path = validate_path_input(
+        gguf_path, allowed_base=get_ui_output_dir(), must_exist=True
+    )
     if not is_valid or validated_path is None:
         return f"Invalid GGUF path: {error_msg}"
 
@@ -871,12 +1178,23 @@ def register_ollama(gguf_path: str, model_name: str, system_prompt: str) -> str:
         )
 
         if success:
-            return f"Successfully registered with Ollama!\n\nRun with:\n```\nollama run {safe_model_name}\n```"
+            # C-UX-005: safe_model_name has been sanitized but still wrap
+            # via safe_markdown_fence in case future validation widens.
+            run_cmd = f"ollama run {safe_model_name}"
+            return (
+                f"Successfully registered with Ollama!\n\nRun with:\n"
+                f"{safe_markdown_fence(run_cmd)}"
+            )
         else:
             return "Failed to register with Ollama. Check that Ollama is running."
 
     except Exception as e:
-        return f"Ollama registration failed: {str(e)}"
+        logger.exception("Ollama registration failed")
+        # FB-011: sanitize before returning the message to the UI markdown.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="Ollama registration")
+        if suggestion:
+            return f"Ollama registration failed: {user_msg}\n\nHint: {suggestion}"
+        return f"Ollama registration failed: {user_msg}"
 
 
 def list_ollama() -> str:
@@ -891,22 +1209,35 @@ def list_ollama() -> str:
         return "**Ollama Models:**\n" + "\n".join([f"- {m}" for m in models])
 
     except Exception as e:
-        return f"Error listing Ollama models: {str(e)}"
+        logger.exception("Failed to list Ollama models")
+        # FB-011: sanitize before surfacing.
+        user_msg, _suggestion = sanitize_error_for_user(e, operation="Ollama list")
+        return f"Error listing Ollama models: {user_msg}"
 
 
 def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str, temperature: float) -> str:
     """Create an Ollama Modelfile."""
     from .export import create_modelfile
 
+    # Both the GGUF source and the Modelfile destination are constrained to the
+    # UI output base so authenticated remote users (share=True + --auth) can't
+    # read arbitrary disk locations or write Modelfiles to system paths.
+    # See ui_security.get_ui_output_dir.
+    ui_base = get_ui_output_dir()
+
     # Validate GGUF path
-    is_valid, error_msg, validated_gguf = validate_path_input(gguf_path, must_exist=True)
+    is_valid, error_msg, validated_gguf = validate_path_input(
+        gguf_path, allowed_base=ui_base, must_exist=True
+    )
     if not is_valid or validated_gguf is None:
         return f"Invalid GGUF path: {error_msg}"
 
     # Validate output path if provided
     validated_output = None
     if output_path and output_path.strip():
-        is_valid, error_msg, validated_output = validate_path_input(output_path)
+        is_valid, error_msg, validated_output = validate_path_input(
+            output_path, allowed_base=ui_base
+        )
         if not is_valid:
             return f"Invalid output path: {error_msg}"
 
@@ -922,10 +1253,19 @@ def create_ollama_modelfile(gguf_path: str, output_path: str, system_prompt: str
         )
 
         content = modelfile.read_text()
-        return f"Modelfile created: {modelfile}\n\n```\n{content}\n```"
+        # C-UX-005: Modelfile body is read from disk and may contain
+        # arbitrary content (a malicious file could embed ``` markers to
+        # inject markdown into the operator's screen). safe_markdown_fence
+        # picks a fence longer than any backtick run in the content.
+        return f"Modelfile created: {modelfile}\n\n{safe_markdown_fence(content)}"
 
     except Exception as e:
-        return f"Failed to create Modelfile: {str(e)}"
+        logger.exception("Modelfile creation failed")
+        # FB-011: sanitize before returning the message to the UI markdown.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="Modelfile creation")
+        if suggestion:
+            return f"Failed to create Modelfile: {user_msg}\n\nHint: {suggestion}"
+        return f"Failed to create Modelfile: {user_msg}"
 
 
 def get_runs_table() -> list[list[Any]]:
@@ -1008,7 +1348,8 @@ def start_multi_run(
         )
 
     # Resolve and sanitize model name
-    if model_preset in MODEL_PRESETS:
+    # C-UX-001: same custom-preset fall-through as start_training.
+    if model_preset in MODEL_PRESETS and model_preset != CUSTOM_MODEL_CHOICE:
         model_name = MODEL_PRESETS[model_preset]
     else:
         model_name = sanitize_model_name(custom_model)
@@ -1020,11 +1361,26 @@ def start_multi_run(
             )
 
     # Resolve dataset with path validation for custom datasets
+    # C-UX-010: mirror the Train tab's pattern — if the user uploaded a
+    # dataset in the Dataset tab, use that DatasetLoader directly instead of
+    # forcing the user to retype a path that the Multi-Run tab has no
+    # uploader for. Falls back to the path-validation branch otherwise.
+    mr_dataset_loader_obj = None
     if dataset_preset == "Custom JSONL":
-        is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
-        if not is_valid:
-            raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
-        dataset_name = str(validated_path)
+        if state.dataset_loader is not None:
+            mr_dataset_loader_obj = state.dataset_loader
+            dataset_name = str(state.dataset_loader.source)
+        elif custom_dataset and custom_dataset.strip():
+            is_valid, error_msg, validated_path = validate_path_input(custom_dataset, must_exist=True)
+            if not is_valid:
+                raise gr.Error(f"Dataset error: {error_msg}", duration=10, title="Invalid Dataset")
+            dataset_name = str(validated_path)
+        else:
+            raise gr.Error(
+                "No custom dataset specified. Upload a file in the Dataset tab or enter a path.",
+                duration=10,
+                title="Missing Dataset",
+            )
     elif dataset_preset in DATASET_PRESETS:
         dataset_name = DATASET_PRESETS[dataset_preset]
     else:
@@ -1036,6 +1392,11 @@ def start_multi_run(
     state.multi_run_current_run = 0
     state.multi_run_start_time = time.time()
 
+    _push_event(
+        f"multi_run_started: model={model_name} runs={num_runs} "
+        f"steps_per_run={steps_per_run}"
+    )
+
     status = f"Initializing SLAO Multi-Run with {model_name}..."
     yield (
         status,
@@ -1043,6 +1404,37 @@ def start_multi_run(
         get_gpu_safety_status(),
         get_multi_run_progress_table(),
     )
+
+    # C-UX-011: adaptive_scaling and layer_scaling are wired in the UI
+    # (mr_adaptive_scaling, mr_layer_scaling checkboxes) but MultiRunConfig
+    # does not currently accept these fields. Adding fields is the backend
+    # team's responsibility (cross-domain). Until that lands, surface a
+    # gr.Warning when the user has enabled either checkbox so they're not
+    # silently no-op'd. TODO(backend): plumb adaptive_scaling and
+    # layer_scaling into MultiRunConfig + the SLAO merge implementation,
+    # then thread the values through the kwargs below.
+    if adaptive_scaling or layer_scaling:
+        enabled = []
+        if adaptive_scaling:
+            enabled.append("Adaptive Scaling")
+        if layer_scaling:
+            enabled.append("Layer Scaling")
+        gr.Warning(
+            f"{' and '.join(enabled)} not yet implemented in the merge "
+            "backend — this run will proceed with the default SLAO "
+            "merge. Tracking issue: backend MultiRunConfig field "
+            "addition.",
+            duration=8,
+        )
+        _push_event(
+            f"WARN: {' and '.join(enabled)} requested but no-op "
+            "(backend field missing). Run proceeds with default SLAO."
+        )
+        logger.warning(
+            "Advanced SLAO checkboxes set but MultiRunConfig has no "
+            "adaptive_scaling/layer_scaling fields: adaptive=%s layer=%s",
+            adaptive_scaling, layer_scaling,
+        )
 
     try:
         config = MultiRunConfig(
@@ -1059,6 +1451,10 @@ def start_multi_run(
             validation_samples=int(val_samples),
             early_stopping=early_stopping,
             early_stopping_patience=int(early_patience),
+            # TODO(backend, C-UX-011): once MultiRunConfig grows
+            # adaptive_scaling: bool and layer_scaling: bool fields, pass
+            # them here. The UI inputs already exist; only the backend
+            # plumbing is missing.
             # Phase 5.3 checkpoint options
             checkpoint_keep_best_n=int(ckpt_keep_best),
             checkpoint_keep_final=ckpt_keep_final,
@@ -1071,6 +1467,16 @@ def start_multi_run(
             state.multi_run_current_run = run_result.run_index
             state.multi_run_loss_history.extend(run_result.loss_history)
             state.multi_run_run_boundaries.append(len(state.multi_run_loss_history))
+            # C-UX-003: surface per-run completion so users see progress
+            # without watching the server log.
+            try:
+                _push_event(
+                    f"multi_run progress: run {run_result.run_index} "
+                    f"complete, loss={run_result.final_loss:.4f}"
+                )
+            except Exception:
+                # Be tolerant — UI event push should never break training
+                pass
 
         state.multi_run_trainer = MultiRunTrainer(
             model=model_name,
@@ -1087,7 +1493,21 @@ def start_multi_run(
         )
 
         # Run the multi-run training
-        result = state.multi_run_trainer.run(dataset_name)
+        # C-UX-010: prefer the in-memory DatasetLoader (uploaded via the
+        # Dataset tab) when available. If MultiRunTrainer.run() doesn't
+        # accept a DatasetLoader, fall back to the source string. This keeps
+        # the parity with the Train tab without forcing a backend change.
+        mr_dataset_arg: Any
+        if mr_dataset_loader_obj is not None:
+            try:
+                mr_dataset_arg = mr_dataset_loader_obj  # MultiRunTrainer may accept it directly
+                result = state.multi_run_trainer.run(mr_dataset_arg)
+            except TypeError:
+                # Older MultiRunTrainer signature only accepts a string path
+                logger.info("MultiRunTrainer.run did not accept DatasetLoader; falling back to source path")
+                result = state.multi_run_trainer.run(dataset_name)
+        else:
+            result = state.multi_run_trainer.run(dataset_name)
 
         state.multi_run_results = result
         state.multi_run_loss_history = result.aggregate_loss_history
@@ -1095,11 +1515,16 @@ def start_multi_run(
 
         if result.aborted:
             status = f"Multi-run aborted: {result.abort_reason}"
+            _push_event(f"multi_run aborted: {result.abort_reason}")
         else:
             status = (
                 f"Multi-run complete! {result.total_runs} runs, "
                 f"Final loss: {result.final_loss:.4f}, "
                 f"Time: {result.total_duration_seconds/60:.1f}min"
+            )
+            _push_event(
+                f"multi_run_completed: {result.total_runs} runs, "
+                f"final_loss={result.final_loss:.4f}"
             )
 
         yield (
@@ -1110,15 +1535,19 @@ def start_multi_run(
         )
 
     except Exception as e:
-        logger.error(f"Multi-run failed: {e}")
-        error_msg = str(e)
-        # Surface suggestion hints from BackpropagateError subtypes
-        suggestion = getattr(e, "suggestion", None)
+        logger.exception("Multi-run failed")
+        # FB-011: sanitize via the central helper. BackpropagateError
+        # subclasses still surface their code + suggestion; raw torch /
+        # transformers errors are collapsed to the generic message so
+        # absolute paths don't leak.
+        user_msg, suggestion = sanitize_error_for_user(e, operation="multi-run training")
         if suggestion:
-            error_msg = f"{error_msg}\n\nSuggestion: {suggestion}"
-            gr.Warning(f"Multi-run failed: {str(e)[:100]} — {suggestion}", duration=10)
+            error_msg = f"{user_msg}\n\nSuggestion: {suggestion}"
+            gr.Warning(f"Multi-run failed: {user_msg} — {suggestion}", duration=10)
         else:
-            gr.Warning(f"Multi-run failed: {str(e)[:100]}", duration=10)
+            error_msg = user_msg
+            gr.Warning(f"Multi-run failed: {user_msg}", duration=10)
+        _push_event(f"multi_run_failed: {user_msg}")
         status = f"Multi-run failed: {error_msg}"
         yield (
             status,
@@ -1425,6 +1854,11 @@ def refresh_train_sidebar() -> tuple:
 
 def create_ui() -> gr.Blocks:
     """Create the Gradio UI."""
+    # C-UX-002/003: install the log-mirror handler so Stage B backend
+    # events (HF retry, OOM batch-shrink, GPU pause/resume) end up in the
+    # UI event buffer. Idempotent.
+    _install_event_log_handler()
+
     # Note: In Gradio 6.x, theme and css are passed to launch() not Blocks()
     app: gr.Blocks
     with gr.Blocks(
@@ -1452,7 +1886,20 @@ def create_ui() -> gr.Blocks:
                         train_sidebar_vram = gr.Markdown("**VRAM:** -")
                         train_sidebar_power = gr.Markdown("**Power:** -")
 
-                    train_sidebar_refresh = gr.Button("🔄 Refresh", size="sm")
+                    # C-UX-002/003: Status log surfaces backend events
+                    # (load_model progress, HF retry, OOM batch-shrink,
+                    # GPU pause/resume) so the UI user sees what's
+                    # happening even without access to the server log.
+                    with gr.Accordion("📝 Status log", open=True):
+                        train_status_log = gr.Textbox(
+                            label="Recent events",
+                            value=_format_event_log(),
+                            lines=8,
+                            interactive=False,
+                            max_lines=8,
+                        )
+
+                    train_sidebar_refresh = gr.Button("🔄 Refresh Metrics", size="sm")
 
                     # Quick Start - below metrics for reference
                     with gr.Accordion("🚀 Quick Start", open=False):
@@ -1586,6 +2033,15 @@ def create_ui() -> gr.Blocks:
                     outputs=[custom_dataset],
                 )
 
+                # C-UX-001: toggle the custom-model textbox visible when
+                # the "Custom / Other" preset is selected. Without this the
+                # documented HF-path entry is unreachable from the UI.
+                model_preset.change(
+                    fn=lambda x: gr.update(visible=x == CUSTOM_MODEL_CHOICE),
+                    inputs=[model_preset],
+                    outputs=[custom_model],
+                )
+
                 train_btn.click(
                     fn=start_training,
                     inputs=[
@@ -1614,6 +2070,41 @@ def create_ui() -> gr.Blocks:
                         train_sidebar_power,
                     ],
                 )
+
+                # C-UX-006: auto-refresh the sidebar so 'Live Metrics' is
+                # actually live. 2s cadence is the typical training-dash
+                # value. gr.Timer is Gradio 5+; we try/except so an
+                # unusually old Gradio install degrades gracefully back to
+                # the manual Refresh button.
+                try:
+                    train_metrics_timer = gr.Timer(value=2.0, active=True)
+                    train_metrics_timer.tick(
+                        fn=refresh_train_sidebar,
+                        outputs=[
+                            train_sidebar_step,
+                            train_sidebar_loss,
+                            train_sidebar_speed,
+                            train_sidebar_temp,
+                            train_sidebar_vram,
+                            train_sidebar_power,
+                        ],
+                    )
+                    # C-UX-002/003: poll the event buffer on a snappier
+                    # 0.5s cadence so retry / OOM / pause events appear
+                    # near-immediately in the status log.
+                    train_status_timer = gr.Timer(value=0.5, active=True)
+                    train_status_timer.tick(
+                        fn=refresh_event_log,
+                        outputs=[train_status_log],
+                    )
+                except (AttributeError, TypeError) as _timer_err:
+                    # gr.Timer not available in this Gradio version — log
+                    # and rely on the manual Refresh button. Don't crash.
+                    logger.warning(
+                        "gr.Timer not available (%s); live metrics will "
+                        "require manual refresh.",
+                        _timer_err,
+                    )
 
             # =================================================================
             # MULTI-RUN TAB (SLAO Multi-Run Training)
@@ -1677,8 +2168,19 @@ def create_ui() -> gr.Blocks:
                         dashboard_ckpt_prunable = gr.Markdown("**Prunable:** -")
                         dashboard_ckpt_policy = gr.Markdown("**Policy:** -")
 
+                    # C-UX-002/003: Status log mirrored from the same global
+                    # event buffer that the Train tab sidebar uses.
+                    with gr.Accordion("📝 Status log", open=True):
+                        mr_status_log = gr.Textbox(
+                            label="Recent events",
+                            value=_format_event_log(),
+                            lines=8,
+                            interactive=False,
+                            max_lines=8,
+                        )
+
                     # Refresh button for manual updates
-                    dashboard_refresh_btn = gr.Button("🔄 Refresh", size="sm")
+                    dashboard_refresh_btn = gr.Button("🔄 Refresh Dashboard", size="sm")
 
                 with gr.Row():
                     # Left column - Configuration
@@ -1870,6 +2372,13 @@ def create_ui() -> gr.Blocks:
                     outputs=[mr_custom_dataset],
                 )
 
+                # C-UX-001: same custom-model toggle for the Multi-Run tab.
+                mr_model_preset.change(
+                    fn=lambda x: gr.update(visible=x == CUSTOM_MODEL_CHOICE),
+                    inputs=[mr_model_preset],
+                    outputs=[mr_custom_model],
+                )
+
                 mr_start_btn.click(
                     fn=start_multi_run,
                     inputs=[
@@ -1893,42 +2402,64 @@ def create_ui() -> gr.Blocks:
                 )
 
                 # Dashboard refresh event handler
+                _dashboard_outputs = [
+                    # Live Metrics
+                    dashboard_current_run,
+                    dashboard_current_step,
+                    dashboard_current_loss,
+                    dashboard_eta,
+                    # GPU Status
+                    dashboard_gpu_temp,
+                    dashboard_gpu_vram,
+                    dashboard_gpu_power,
+                    dashboard_gpu_condition,
+                    # SLAO Merge Stats
+                    dashboard_scale_factor,
+                    dashboard_a_matrices,
+                    dashboard_b_matrices,
+                    # Early Stopping
+                    dashboard_val_loss,
+                    dashboard_best_val,
+                    dashboard_patience,
+                    dashboard_early_stop_status,
+                    # Run Timeline
+                    dashboard_total_runs,
+                    dashboard_completed_runs,
+                    dashboard_total_steps,
+                    dashboard_total_samples,
+                    dashboard_total_time,
+                    # Phase 5.3: Checkpoints
+                    dashboard_ckpt_count,
+                    dashboard_ckpt_size,
+                    dashboard_ckpt_best,
+                    dashboard_ckpt_prunable,
+                    dashboard_ckpt_policy,
+                ]
                 dashboard_refresh_btn.click(
                     fn=refresh_dashboard,
-                    outputs=[
-                        # Live Metrics
-                        dashboard_current_run,
-                        dashboard_current_step,
-                        dashboard_current_loss,
-                        dashboard_eta,
-                        # GPU Status
-                        dashboard_gpu_temp,
-                        dashboard_gpu_vram,
-                        dashboard_gpu_power,
-                        dashboard_gpu_condition,
-                        # SLAO Merge Stats
-                        dashboard_scale_factor,
-                        dashboard_a_matrices,
-                        dashboard_b_matrices,
-                        # Early Stopping
-                        dashboard_val_loss,
-                        dashboard_best_val,
-                        dashboard_patience,
-                        dashboard_early_stop_status,
-                        # Run Timeline
-                        dashboard_total_runs,
-                        dashboard_completed_runs,
-                        dashboard_total_steps,
-                        dashboard_total_samples,
-                        dashboard_total_time,
-                        # Phase 5.3: Checkpoints
-                        dashboard_ckpt_count,
-                        dashboard_ckpt_size,
-                        dashboard_ckpt_best,
-                        dashboard_ckpt_prunable,
-                        dashboard_ckpt_policy,
-                    ],
+                    outputs=_dashboard_outputs,
                 )
+
+                # C-UX-006: auto-refresh dashboard so the 'Live Metrics'
+                # panel is actually live mid-training. Same try/except
+                # fallback as the Train tab.
+                try:
+                    mr_dashboard_timer = gr.Timer(value=2.0, active=True)
+                    mr_dashboard_timer.tick(
+                        fn=refresh_dashboard,
+                        outputs=_dashboard_outputs,
+                    )
+                    mr_status_timer = gr.Timer(value=0.5, active=True)
+                    mr_status_timer.tick(
+                        fn=refresh_event_log,
+                        outputs=[mr_status_log],
+                    )
+                except (AttributeError, TypeError) as _timer_err:
+                    logger.warning(
+                        "gr.Timer not available (%s); dashboard will "
+                        "require manual refresh.",
+                        _timer_err,
+                    )
 
             # =================================================================
             # RUNS TAB
@@ -1962,13 +2493,26 @@ def create_ui() -> gr.Blocks:
                     """
                 )
 
+                # C-UX-014: defaults must live under get_ui_output_dir()
+                # so they pass the safe_path validation that all UI sinks
+                # enforce. The old relative paths ('./output/lora' etc.)
+                # were theatrical — they showed a plausible filename but
+                # were guaranteed to fail validation, leaving the user with
+                # "Invalid output path" on a first-time export.
+                _ui_base = get_ui_output_dir()
+                _default_lora_path = str(_ui_base / "lora")
+                _default_gguf_dir = str(_ui_base / "gguf")
+                _default_gguf_file = str(_ui_base / "gguf" / "model-q4_k_m.gguf")
+                _default_modelfile_path = str(_ui_base / "Modelfile")
+
                 with gr.Row():
                     # Left column - Save and Export
                     with gr.Column(scale=1):
                         gr.Markdown("#### Save LoRA Adapter")
                         save_path = gr.Textbox(
                             label="Output Path",
-                            value="./output/lora",
+                            value=_default_lora_path,
+                            info="Default is your UI output directory; validated for safety.",
                         )
                         save_merged = gr.Checkbox(
                             label="Save merged weights (larger but standalone)",
@@ -1991,9 +2535,10 @@ def create_ui() -> gr.Blocks:
                         )
                         export_path = gr.Textbox(
                             label="Output Path",
-                            value="./output/gguf",
+                            value=_default_gguf_dir,
+                            info="Default is your UI output directory; validated for safety.",
                         )
-                        export_btn = gr.Button("Export", variant="primary")
+                        export_btn = gr.Button("Export Model", variant="primary")
                         export_status = gr.Markdown("")
 
                     # Right column - Ollama Integration
@@ -2007,7 +2552,7 @@ def create_ui() -> gr.Blocks:
 
                         ollama_gguf_path = gr.Textbox(
                             label="GGUF File Path",
-                            value="./output/gguf/model-q4_k_m.gguf",
+                            value=_default_gguf_file,
                             placeholder="Path to your exported GGUF file",
                         )
                         ollama_model_name = gr.Textbox(
@@ -2037,7 +2582,8 @@ def create_ui() -> gr.Blocks:
                         with gr.Accordion("Create Modelfile Only", open=False):
                             modelfile_output = gr.Textbox(
                                 label="Modelfile Output Path",
-                                value="./output/Modelfile",
+                                value=_default_modelfile_path,
+                                info="Default is your UI output directory; validated for safety.",
                             )
                             modelfile_btn = gr.Button("Create Modelfile")
                             modelfile_status = gr.Markdown("")
@@ -2134,9 +2680,12 @@ def create_ui() -> gr.Blocks:
 
                         ds_convert_status = gr.Markdown("")
 
+                        # C-UX-014: default into get_ui_output_dir() so the
+                        # path passes validate_path_input(allowed_base=...).
                         ds_export_path = gr.Textbox(
                             label="Export Path",
-                            value="./data/converted.jsonl",
+                            value=str(get_ui_output_dir() / "converted.jsonl"),
+                            info="Default is your UI output directory; validated for safety.",
                         )
                         ds_export_btn = gr.Button("Export Converted Dataset", variant="primary")
                         ds_export_status = gr.Markdown("")
@@ -2461,6 +3010,97 @@ backprop config""",
     return app
 
 
+def _validate_auth_shape(auth: Any) -> None:
+    """
+    FB-012: Validate the shape of the ``auth`` kwarg before passing it to
+    Gradio.
+
+    Gradio's own validation is permissive in ways that can grant unintended
+    access — e.g. an empty list silently disables auth, a one-element tuple
+    raises a confusing internal TypeError, and a list containing a non-tuple
+    element gets coerced. Validate at the launch boundary so misconfigured
+    auth fails loudly rather than degrading to "no auth" or "auth-but-not-
+    in-the-shape-you-think".
+
+    Accepts:
+        - ``None`` (caller's responsibility to enforce share+auth)
+        - A 2-element tuple ``(username, password)`` — both non-empty strings.
+        - A non-empty list of such 2-element tuples (multi-user).
+        - A ``callable`` (Gradio supports custom auth functions).
+
+    Rejects everything else with ``BackpropagateError(
+    code="INPUT_AUTH_INVALID_SHAPE")`` and a hint enumerating the accepted
+    shapes.
+    """
+    if auth is None:
+        return
+
+    if callable(auth):
+        # Gradio supports custom auth callables — defer their validation to
+        # Gradio itself. Don't introspect the callable's signature; that
+        # creates a cross-version-fragile contract.
+        return
+
+    def _is_credential_pair(value: Any) -> bool:
+        if not isinstance(value, tuple):
+            return False
+        if len(value) != 2:
+            return False
+        username, password = value
+        if not isinstance(username, str) or not isinstance(password, str):
+            return False
+        # Empty strings are accepted by Gradio but produce a silently-
+        # broken login flow. Reject them at the boundary.
+        return bool(username) and bool(password)
+
+    accepted_shapes_hint = (
+        "Accepted shapes: (username, password) tuple of non-empty strings; "
+        "list of such tuples; or a callable (username, password) -> bool. "
+        "Empty strings, empty lists, and non-tuple elements are rejected."
+    )
+
+    if isinstance(auth, tuple):
+        if not _is_credential_pair(auth):
+            raise BackpropagateError(
+                message="auth tuple must be (username, password) of non-empty strings.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "tuple", "length": len(auth)},
+            )
+        return
+
+    if isinstance(auth, list):
+        if not auth:
+            raise BackpropagateError(
+                message="auth list must contain at least one (username, password) tuple — empty lists silently disable auth in Gradio.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "list", "length": 0},
+            )
+        for index, entry in enumerate(auth):
+            if not _is_credential_pair(entry):
+                raise BackpropagateError(
+                    message=(
+                        f"auth[{index}] must be a (username, password) tuple of non-empty strings."
+                    ),
+                    code="INPUT_AUTH_INVALID_SHAPE",
+                    suggestion=accepted_shapes_hint,
+                    details={"shape": "list", "bad_index": index},
+                )
+        return
+
+    # Anything else (dict, str, int, ...) — reject.
+    raise BackpropagateError(
+        message=(
+            f"auth must be None, a (username, password) tuple, a list of such tuples, "
+            f"or a callable. Got: {type(auth).__name__}"
+        ),
+        code="INPUT_AUTH_INVALID_SHAPE",
+        suggestion=accepted_shapes_hint,
+        details={"shape": type(auth).__name__},
+    )
+
+
 def launch(
     port: int = 7862,
     share: bool = False,
@@ -2474,9 +3114,34 @@ def launch(
         share: Create a public shareable link (default: False)
         auth: Authentication credentials. Required when share=True for security.
               Can be a tuple (username, password) or list of tuples for multiple users.
+              May also be a callable (per Gradio); deferred to Gradio's validation.
 
     Raises:
-        ValueError: If share=True but no auth is provided
+        ValueError: If share=True but no auth is provided AND
+            BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE is not explicitly
+            set to "false" (the default).
+        BackpropagateError(code="INPUT_AUTH_INVALID_SHAPE"):
+            If ``auth`` is not None and does not match one of the accepted
+            shapes (FB-012). Empty lists, one-element tuples, and tuples
+            with empty username/password strings are rejected at the
+            launch boundary instead of degrading to silent no-auth /
+            broken-login behavior inside Gradio.
+
+    Security notes:
+        - The ``require_auth_for_share`` flag (config + env var
+          ``BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE``) gates the
+          ValueError above. If you set it to ``false`` AND launch with
+          ``share=True`` AND no ``auth``, the UI is publicly exposed with
+          no authentication. We emit a loud warning to stderr and the
+          structured logger, then sleep 5 seconds so you can Ctrl+C to
+          abort. There is no flag to suppress this warning — public
+          unauthenticated exposure of training/export controls is always
+          worth a five-second pause.
+        - UI-initiated filesystem writes (LoRA adapters, GGUF exports,
+          converted datasets, Modelfiles) are constrained to
+          ``~/.backpropagate/ui-outputs`` (override via
+          ``BACKPROPAGATE_UI__OUTPUT_DIR``). See
+          ``ui_security.get_ui_output_dir``.
 
     Examples:
         # Local only (no auth needed)
@@ -2488,12 +3153,42 @@ def launch(
         # Multiple users
         launch(share=True, auth=[("user1", "pass1"), ("user2", "pass2")])
     """
+    # FB-012: validate auth shape BEFORE the share+auth gate so a malformed
+    # auth=([],) or auth=('admin',) fails loudly rather than silently
+    # disabling auth or hitting a confusing internal TypeError.
+    _validate_auth_shape(auth)
+
     # Security check: require auth when sharing publicly
     if share and auth is None and DEFAULT_SECURITY_CONFIG.require_auth_for_share:
         raise ValueError(
             "Authentication required when share=True. "
             "Set auth parameter or disable require_auth_for_share in SecurityConfig."
         )
+
+    # Security warning: public share with no auth (the require_auth_for_share
+    # gate was disabled by env var or config). This is the ONE case where the
+    # validation above let us through but the UI is about to go up with no
+    # protection. Be loud — silently launching here was F-003 in the audit.
+    if share and auth is None:
+        warning_msg = (
+            "WARNING: launching public Gradio share with no authentication.\n"
+            "    Anyone with the share URL can train models, write files in\n"
+            "    ~/.backpropagate/ui-outputs (or BACKPROPAGATE_UI__OUTPUT_DIR),\n"
+            "    and call Ollama on this machine.\n"
+            "    Set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=true and\n"
+            "    pass auth=('user', 'password') to require authentication.\n"
+            "    Continuing in 5 seconds — Ctrl+C to abort."
+        )
+        # stderr first (always visible, even if logging is misconfigured).
+        print(f"\n{warning_msg}\n", file=sys.stderr, flush=True)
+        # Structured log so ops monitoring picks it up.
+        logger.warning(warning_msg)
+        log_security_event(
+            "public_share_without_auth",
+            port=port,
+            require_auth_for_share=DEFAULT_SECURITY_CONFIG.require_auth_for_share,
+        )
+        time.sleep(5)
 
     app = create_ui()
     theme = create_backpropagate_theme()

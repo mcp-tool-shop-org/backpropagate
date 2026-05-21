@@ -104,7 +104,7 @@ export const config: SiteConfig = {
         },
         {
           title: 'Multi-run SLAO',
-          desc: 'Smart Loss-Aware Ordering prevents catastrophic forgetting during extended fine-tuning campaigns. Checkpoint-and-resume keeps long runs recoverable after crashes.',
+          desc: 'Single LoRA Continual Learning via Asymmetric Merging (arXiv:2512.23017) prevents catastrophic forgetting during extended fine-tuning campaigns via orthogonal init, asymmetric A/B handling, and time-aware scaling. Checkpoint-and-resume keeps long runs recoverable after crashes.',
         },
         {
           title: 'LoRA + QLoRA + Unsloth',
@@ -116,11 +116,11 @@ export const config: SiteConfig = {
       kind: 'data-table',
       id: 'scorecard',
       title: 'Quality scorecard',
-      subtitle: 'Ship Gate audit — 23/35 checked, 12 skipped, 100% pass.',
+      subtitle: 'Ship Gate audit — 25/31 checked, 14 skipped, 100% pass.',
       columns: ['Category', 'Score', 'Notes'],
       rows: [
         ['A. Security', '6/8', 'SECURITY.md, trust model, no secrets/telemetry, safe_path()'],
-        ['B. Error Handling', '3/7', 'Structured exceptions + exit codes + no raw stacks'],
+        ['B. Error Handling', '5/7', 'Structured exception shape (code/message/hint/cause/retryable) via ERROR_CODES registry; CLI exit codes 0/1/2/3; no raw stack traces without --verbose; run_id correlation; redacted stderr; --share+--auth gating.'],
         ['C. Operator Docs', '4/7', 'README, CHANGELOG, LICENSE, --help'],
         ['D. Shipping Hygiene', '6/9', 'verify.sh, version=tag, 5 scanners in CI, dependabot'],
         ['E. Identity', '4/4', 'Logo, translations, landing page, metadata'],

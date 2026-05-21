@@ -717,7 +717,7 @@ class TestPermissionErrorOnOutputDir:
         from backpropagate.export import export_lora
 
         with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
-            with pytest.raises(ExportError, match="Cannot create output directory"):
+            with pytest.raises(ExportError, match="Cannot create (output|parent) directory"):
                 export_lora(model=mock_peft_model, output_dir=temp_dir / "locked")
 
     def test_export_merged_permission_error(self, temp_dir, mock_peft_model, mock_tokenizer):
@@ -726,7 +726,7 @@ class TestPermissionErrorOnOutputDir:
         from backpropagate.export import export_merged
 
         with patch.object(Path, "mkdir", side_effect=PermissionError("Permission denied")):
-            with pytest.raises(MergeExportError, match="Cannot create output directory"):
+            with pytest.raises(MergeExportError, match="Cannot create (output|parent) directory"):
                 export_merged(
                     model=mock_peft_model,
                     tokenizer=mock_tokenizer,
@@ -819,3 +819,380 @@ class TestEmptyGgufFile:
                     output_dir=temp_dir / "gguf_empty",
                     quantization="q4_k_m",
                 )
+
+
+# =============================================================================
+# F-004 MODEL CARD EMISSION TESTS
+# =============================================================================
+
+class TestExportLoraModelCard:
+    """Verify export_lora writes model_card.md when enabled."""
+
+    def test_emits_model_card_by_default(self, temp_dir):
+        from backpropagate.export import export_lora
+
+        # Create source adapter files
+        src_dir = temp_dir / "source"
+        src_dir.mkdir()
+        (src_dir / "adapter_config.json").write_text('{"test": true}')
+        (src_dir / "adapter_model.safetensors").write_bytes(b"mock")
+
+        output_dir = temp_dir / "output"
+        export_lora(model=src_dir, output_dir=output_dir)
+
+        card_path = output_dir / "model_card.md"
+        assert card_path.exists(), "Default emit_model_card=True must write a card"
+        content = card_path.read_text(encoding="utf-8")
+        assert "library_name: backpropagate" in content
+        assert "Trust signals" in content
+
+    def test_no_model_card_opts_out(self, temp_dir):
+        from backpropagate.export import export_lora
+
+        src_dir = temp_dir / "source"
+        src_dir.mkdir()
+        (src_dir / "adapter_config.json").write_text('{"test": true}')
+        (src_dir / "adapter_model.safetensors").write_bytes(b"mock")
+
+        output_dir = temp_dir / "output"
+        export_lora(
+            model=src_dir,
+            output_dir=output_dir,
+            emit_model_card=False,
+        )
+
+        assert not (output_dir / "model_card.md").exists()
+
+    def test_model_card_pulls_run_history(self, temp_dir):
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.export import export_lora
+
+        # Stage a RunHistoryManager record in the output root.
+        output_root = temp_dir / "output"
+        output_root.mkdir()
+        manager = RunHistoryManager(str(output_root))
+        manager.record_run_started(
+            run_id="testrun123",
+            model_name="Qwen/Qwen2.5-7B-Instruct",
+            dataset_info="data.jsonl",
+            hyperparameters={"lora_r": 32, "seed": 42},
+        )
+        manager.record_run_completed(
+            run_id="testrun123",
+            final_loss=0.125,
+            loss_history=[1.0, 0.5, 0.125],
+            steps=200,
+        )
+
+        # Source adapter.
+        src_dir = temp_dir / "source"
+        src_dir.mkdir()
+        (src_dir / "adapter_config.json").write_text('{}')
+        (src_dir / "adapter_model.safetensors").write_bytes(b"x")
+
+        export_dir = output_root / "lora"
+        export_lora(
+            model=src_dir,
+            output_dir=export_dir,
+            run_id="testrun123",
+            output_root=output_root,
+        )
+
+        card = (export_dir / "model_card.md").read_text(encoding="utf-8")
+        assert "testrun123" in card
+        assert "Qwen/Qwen2.5-7B-Instruct" in card
+        assert "0.1250" in card  # final loss
+        assert "| Steps | 200 |" in card
+        assert "| LoRA rank | 32 |" in card
+
+    def test_model_card_incomplete_provenance_without_history(self, temp_dir):
+        from backpropagate.export import export_lora
+
+        src_dir = temp_dir / "source"
+        src_dir.mkdir()
+        (src_dir / "adapter_config.json").write_text('{}')
+        (src_dir / "adapter_model.safetensors").write_bytes(b"x")
+
+        output_dir = temp_dir / "noprov"
+        export_lora(
+            model=src_dir,
+            output_dir=output_dir,
+            run_id="orphan",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+        )
+
+        card = (output_dir / "model_card.md").read_text(encoding="utf-8")
+        assert "Incomplete provenance" in card
+        # Base model still surfaces because we passed it explicitly.
+        assert "Qwen/Qwen2.5-7B-Instruct" in card
+
+
+class TestExportMergedModelCard:
+    """Verify export_merged writes model_card.md."""
+
+    def test_emits_model_card_after_merge(self, temp_dir, mock_peft_model, mock_tokenizer):
+        from backpropagate.export import export_merged
+
+        merged_model = MagicMock()
+        merged_model.save_pretrained = MagicMock()
+        mock_peft_model.merge_and_unload.return_value = merged_model
+
+        output_dir = temp_dir / "merged"
+        with patch("backpropagate.export._is_peft_model", return_value=True):
+            export_merged(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=output_dir,
+                base_model="Qwen/Qwen2.5-7B-Instruct",
+            )
+
+        card_path = output_dir / "model_card.md"
+        assert card_path.exists()
+        assert "Qwen/Qwen2.5-7B-Instruct" in card_path.read_text(encoding="utf-8")
+
+    def test_no_model_card_opts_out(self, temp_dir, mock_peft_model, mock_tokenizer):
+        from backpropagate.export import export_merged
+
+        merged_model = MagicMock()
+        merged_model.save_pretrained = MagicMock()
+        mock_peft_model.merge_and_unload.return_value = merged_model
+
+        output_dir = temp_dir / "merged_no_card"
+        with patch("backpropagate.export._is_peft_model", return_value=True):
+            export_merged(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=output_dir,
+                emit_model_card=False,
+            )
+
+        assert not (output_dir / "model_card.md").exists()
+
+
+class TestExportGgufModelCard:
+    """Verify export_gguf writes model_card.md next to the GGUF file."""
+
+    def test_emits_model_card_with_quantization_tag(self, temp_dir, mock_peft_model, mock_tokenizer):
+        from backpropagate.export import export_gguf
+
+        def mock_save_gguf(path, tokenizer, quantization_method):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "model-q4_k_m.gguf").write_bytes(b"x" * 1024)
+
+        mock_peft_model.save_pretrained_gguf = mock_save_gguf
+
+        output_dir = temp_dir / "gguf"
+        with patch("backpropagate.export._has_unsloth", return_value=True):
+            result = export_gguf(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=output_dir,
+                quantization="q4_k_m",
+            )
+
+        # The card lives in the same dir as the GGUF file.
+        card_path = result.path.parent / "model_card.md"
+        assert card_path.exists()
+        content = card_path.read_text(encoding="utf-8")
+        assert "q4_k_m" in content
+        assert "  - gguf" in content
+
+    def test_no_model_card_opts_out(self, temp_dir, mock_peft_model, mock_tokenizer):
+        from backpropagate.export import export_gguf
+
+        def mock_save_gguf(path, tokenizer, quantization_method):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "model-q4_k_m.gguf").write_bytes(b"x" * 1024)
+
+        mock_peft_model.save_pretrained_gguf = mock_save_gguf
+
+        output_dir = temp_dir / "gguf_no_card"
+        with patch("backpropagate.export._has_unsloth", return_value=True):
+            result = export_gguf(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=output_dir,
+                quantization="q4_k_m",
+                emit_model_card=False,
+            )
+
+        card_path = result.path.parent / "model_card.md"
+        assert not card_path.exists()
+
+
+# =============================================================================
+# F-001 HUB PUSH TESTS
+# =============================================================================
+
+class TestPushToHub:
+    """push_to_hub uploads + error wrapping."""
+
+    def test_missing_local_path_raises_export_error(self, tmp_path):
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import push_to_hub
+
+        with pytest.raises(ExportError, match="does not exist"):
+            push_to_hub(
+                local_path=tmp_path / "missing",
+                repo_id="alice/missing",
+            )
+
+    def test_directory_upload_calls_upload_folder(self, tmp_path):
+        from backpropagate.export import push_to_hub
+
+        local_dir = tmp_path / "adapter"
+        local_dir.mkdir()
+        (local_dir / "adapter_config.json").write_text("{}")
+        (local_dir / "adapter_model.safetensors").write_bytes(b"x")
+        (local_dir / "model_card.md").write_text("# Model card\n")
+
+        fake_api = MagicMock()
+        fake_api.upload_folder = MagicMock()
+        fake_create_repo = MagicMock()
+        fake_hf_module = MagicMock()
+        fake_hf_module.HfApi = MagicMock(return_value=fake_api)
+        fake_hf_module.create_repo = fake_create_repo
+        fake_utils = MagicMock()
+
+        class _DummyHTTPError(Exception):
+            pass
+
+        fake_utils.HfHubHTTPError = _DummyHTTPError
+
+        import sys
+
+        with patch.dict(sys.modules, {
+            "huggingface_hub": fake_hf_module,
+            "huggingface_hub.utils": fake_utils,
+        }):
+            url = push_to_hub(
+                local_path=local_dir,
+                repo_id="alice/adapter",
+                token="hf_test",
+            )
+
+        assert url == "https://huggingface.co/alice/adapter"
+        fake_create_repo.assert_called_once()
+        fake_api.upload_folder.assert_called_once()
+        kwargs = fake_api.upload_folder.call_args.kwargs
+        assert kwargs["repo_id"] == "alice/adapter"
+        # The model card was mirrored to README.md before upload.
+        assert (local_dir / "README.md").exists()
+
+    def test_single_file_upload(self, tmp_path):
+        from backpropagate.export import push_to_hub
+
+        local_file = tmp_path / "model.gguf"
+        local_file.write_bytes(b"x" * 1024)
+
+        fake_api = MagicMock()
+        fake_hf_module = MagicMock()
+        fake_hf_module.HfApi = MagicMock(return_value=fake_api)
+        fake_hf_module.create_repo = MagicMock()
+        fake_utils = MagicMock()
+
+        class _DummyHTTPError(Exception):
+            pass
+
+        fake_utils.HfHubHTTPError = _DummyHTTPError
+
+        import sys
+
+        with patch.dict(sys.modules, {
+            "huggingface_hub": fake_hf_module,
+            "huggingface_hub.utils": fake_utils,
+        }):
+            push_to_hub(
+                local_path=local_file,
+                repo_id="alice/gguf",
+            )
+
+        fake_api.upload_file.assert_called_once()
+        fake_api.upload_folder.assert_not_called()
+
+    def test_auth_401_wrapped_with_auth_code(self, tmp_path):
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import push_to_hub
+
+        local_dir = tmp_path / "adapter"
+        local_dir.mkdir()
+        (local_dir / "adapter_config.json").write_text("{}")
+
+        class _Resp:
+            status_code = 401
+
+        class _Err(Exception):
+            def __init__(self, msg):
+                super().__init__(msg)
+                self.response = _Resp()
+
+        fake_api = MagicMock()
+        fake_api.upload_folder = MagicMock(side_effect=_Err("unauthorized"))
+        fake_hf_module = MagicMock()
+        fake_hf_module.HfApi = MagicMock(return_value=fake_api)
+        fake_hf_module.create_repo = MagicMock()
+        fake_utils = MagicMock()
+        fake_utils.HfHubHTTPError = _Err
+
+        import sys
+
+        with patch.dict(sys.modules, {
+            "huggingface_hub": fake_hf_module,
+            "huggingface_hub.utils": fake_utils,
+        }):
+            with pytest.raises(ExportError) as excinfo:
+                push_to_hub(
+                    local_path=local_dir,
+                    repo_id="alice/adapter",
+                )
+
+        assert getattr(excinfo.value, "code", None) == "HUB_PUSH_AUTH"
+
+    def test_huggingface_hub_missing_emits_clear_export_error(self, tmp_path):
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import push_to_hub
+
+        local_dir = tmp_path / "adapter"
+        local_dir.mkdir()
+        (local_dir / "adapter_config.json").write_text("{}")
+
+        # Simulate `huggingface_hub` missing by intercepting the import.
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _import_blocker(name, *args, **kwargs):
+            if name.startswith("huggingface_hub"):
+                raise ImportError("missing")
+            return real_import(name, *args, **kwargs)
+
+        with patch.object(builtins, "__import__", side_effect=_import_blocker):
+            with pytest.raises(ExportError, match="huggingface_hub is not installed"):
+                push_to_hub(local_path=local_dir, repo_id="alice/adapter")
+
+    def test_resolve_hf_token_prefers_explicit(self, tmp_path, monkeypatch):
+        from backpropagate.export import _resolve_hf_token
+
+        monkeypatch.setenv("HF_TOKEN", "env_token")
+        assert _resolve_hf_token("explicit") == "explicit"
+
+    def test_resolve_hf_token_env_fallback(self, tmp_path, monkeypatch):
+        from backpropagate.export import _resolve_hf_token
+
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf-env")
+
+        # Avoid picking up a real ~/.cache/huggingface/token on this machine
+        # — patch Path.home to a clean tmp dir.
+        with patch("backpropagate.export.Path.home", return_value=tmp_path):
+            assert _resolve_hf_token(None) == "hf-env"
+
+    def test_resolve_hf_token_returns_none_when_unset(self, tmp_path, monkeypatch):
+        from backpropagate.export import _resolve_hf_token
+
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+        with patch("backpropagate.export.Path.home", return_value=tmp_path):
+            assert _resolve_hf_token(None) is None

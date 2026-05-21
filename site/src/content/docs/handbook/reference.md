@@ -31,12 +31,18 @@ backpropagate/
 
 ```bash
 backprop train --data <file> --model <model> --steps <n>
-backprop multi-run --data <file> --runs <n> --steps <n>
+backprop multi-run --data <file> --runs <n> --steps <n> --samples <n>
 backprop export <path> --format gguf --quantization <q> [--ollama] [--ollama-name <name>]
 backprop ui --port <port> [--share] [--auth user:pass]
 backprop info
 backprop config
 ```
+
+See [CLI reference](/backpropagate/handbook/cli-reference/) for every flag, every default, and the full exit-code contract.
+
+### `--share` requires `--auth`
+
+`backprop ui --share` exits with code `1` (`[INPUT_AUTH_REQUIRED]`) unless paired with `--auth USER:PASS`. The opt-out is `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`, which prints a loud warning at startup. The rationale is documented inline in the CLI help (`backprop ui --help`) and at greater length in [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-input_auth_required-mean) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
 
 ## Windows support
 
@@ -56,12 +62,14 @@ All training happens locally on your GPU. No network requests except to download
 All settings can be overridden via environment variables with the `BACKPROPAGATE_` prefix. Nested settings use double underscores as delimiters.
 
 ```bash
-BACKPROPAGATE_MODEL__NAME=unsloth/Qwen2.5-7B-Instruct-bnb-4bit
+BACKPROPAGATE_MODEL__NAME=Qwen/Qwen2.5-7B-Instruct
 BACKPROPAGATE_TRAINING__LEARNING_RATE=2e-4
 BACKPROPAGATE_LORA__R=32
 ```
 
 Backpropagate also reads from a `.env` file if present. Install the `[validation]` extra for full Pydantic-powered config with type checking.
+
+See [Environment variables](/backpropagate/handbook/env-vars/) for the complete catalog — every knob grouped by family (logging, security, UI sandbox, model, LoRA, training, data, Windows, multi-run).
 
 ## Training presets
 
@@ -130,19 +138,58 @@ Built for CI/CD pipelines, automated workflows, and programmatic execution. Full
 
 ## Error handling
 
-Backpropagate uses a structured exception hierarchy rooted at `BackpropagateError`. Every error includes a human-readable `message` and an optional `suggestion` field with a recommended fix. The CLI maps exceptions to standard exit codes:
+Backpropagate uses a structured exception hierarchy rooted at `BackpropagateError`. Every error carries a human-readable `message`, an optional `suggestion`, and a stable machine-readable `code` (Ship Gate B1) drawn from prefixes `INPUT_*` / `CONFIG_*` / `DEP_*` / `RUNTIME_*` / `STATE_*` / `PARTIAL_*`. Codes are stable across class renames — quote them in bug reports. See the [error code catalog](/backpropagate/handbook/error-codes/) for the full list and recommended fix per code.
+
+The structured envelope is also exposed programmatically:
+
+```python
+try:
+    trainer.train("data.jsonl", steps=100)
+except BackpropagateError as e:
+    envelope = e.to_dict()
+    # {"type": "...", "code": "RUNTIME_GPU_OOM", "message": "...",
+    #  "retryable": False, "suggestion": "...", "details": {...}, "cause": "..."}
+```
+
+The CLI maps exceptions to standard exit codes:
 
 | Exit code | Meaning | Exception types |
 |-----------|---------|-----------------|
 | 0 | Success | -- |
-| 1 | User error | `ConfigurationError`, `DatasetError` |
-| 2 | Runtime error | `TrainingError`, `GPUError`, `ExportError` |
-| 3 | Partial failure | `BatchOperationError` |
+| 1 | User error | `UserInputError`, `ConfigurationError`, `DatasetError` |
+| 2 | Runtime error | `TrainingError`, `GPUError`, `ExportError`, `SLAOError` |
+| 3 | Partial failure | `BatchOperationError`, `PartialSuccess` |
 
-Exception hierarchy:
+### Stderr redaction (B-006)
+
+In non-verbose mode, unhandled-exception stderr is automatically redacted before printing: Bearer tokens, `sk-*` (OpenAI), `hf_*` (HuggingFace), AWS access keys (`AKIA*`), and `password=` / `token=` / `api_key=` key-value pairs are scrubbed. This means stderr is **safe to paste** into a public bug report. For the full unredacted trace, re-run with `--verbose`, but review the output for any secrets first.
+
+## Reporting bugs
+
+When training fails, the first thing in your bug report should be the **`run_id`** — Backpropagate prints `run_started run_id=<uuid>` at startup and binds the same id to:
+
+- Every structured log line emitted during the run
+- Every checkpoint manifest under `output_dir/`
+- Every SLAO merge snapshot
+- The `TrainingRun.run_id` / `RunResult.run_id` field in the return value
+
+Quoting the run_id in an issue lets a maintainer correlate every log line, checkpoint, and merge for that exact run.
+
+A good bug report includes:
+
+1. The `run_id`
+2. The structured error code (e.g. `[RUNTIME_GPU_OOM]`)
+3. Output of `backprop info` (Python / PyTorch / CUDA / GPU / extras)
+4. Redacted stderr (re-run with `--verbose` for the full trace; review before posting)
+5. A minimal reproduction
+
+For security issues, do not open a public issue — see [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
+
+### Exception hierarchy
 
 ```
 BackpropagateError
+├── UserInputError
 ├── ConfigurationError
 │   └── InvalidSettingError
 ├── DatasetError
@@ -164,7 +211,9 @@ BackpropagateError
 │   ├── GPUMemoryError
 │   ├── GPUTemperatureError
 │   └── GPUMonitoringError
-└── SLAOError
-    ├── SLAOMergeError
-    └── SLAOCheckpointError
+├── SLAOError
+│   ├── SLAOMergeError
+│   └── SLAOCheckpointError
+├── BatchOperationError
+└── PartialSuccess
 ```

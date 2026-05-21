@@ -1,0 +1,54 @@
+# .npmignore — what to EXCLUDE from the npm tarball.
+#
+# The npm package is a thin Node wrapper that bootstraps the Python CLI
+# (via @mcptoolshop/npm-launcher). Only the launcher + READMEs + LICENSE
+# need to ship. Everything else stays on GitHub.
+#
+# KNOWN LIMITATION: npm has a hardcoded "always include" rule for files
+# matching ^(README|LICENSE|CHANGELOG|NOTICE|HISTORY)(\..*)?$ — listing them
+# here does NOT exclude them. Net effect: all 8 README files (English +
+# 7 translations) are bundled into the tarball (~60KB total).  Acceptable
+# for v1.1.0; iterate the shape in v1.1.x if the bloat becomes a concern.
+
+# Python source — not needed in the Node-side wrapper
+backpropagate/
+tests/
+docs/
+site/
+scripts/
+examples/
+assets/
+
+# Long-form ops docs (available via GitHub + PyPI)
+ROADMAP.md
+SHIP_GATE.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+PRODUCTION_READINESS_AUDIT.md
+SECURITY_AUDIT_REPORT.md
+SECURITY.md
+CLAUDE.md
+llms.txt
+logo.png
+
+# Python build / config artifacts
+pyproject.toml
+uv.lock
+verify.sh
+Dockerfile
+.dockerignore
+.pre-commit-config.yaml
+.secrets.baseline
+_config.yml
+
+# Workflow + dev hygiene
+.github/
+.gitignore
+.claude/
+
+# Reflex working dir + Python caches (also covered by .gitignore;
+# belt + suspenders for npm tarball)
+.web/
+.states
+__pycache__/
+*.py[cod]

@@ -1,0 +1,41 @@
+{
+  "name": "@mcptoolshop/backpropagate",
+  "version": "1.1.0",
+  "description": "Headless LLM fine-tuning CLI with smart defaults — train, export, serve. Reflex web UI, HF Hub push, resume-from-checkpoint, run history, model cards, multi-run SLAO.",
+  "type": "commonjs",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@mcptoolshop/npm-launcher": "^1.0.0"
+  },
+  "bin": {
+    "backpropagate": "bin/backpropagate.js"
+  },
+  "files": ["bin/", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcp-tool-shop-org/backpropagate.git"
+  },
+  "homepage": "https://github.com/mcp-tool-shop-org/backpropagate",
+  "bugs": {
+    "url": "https://github.com/mcp-tool-shop-org/backpropagate/issues"
+  },
+  "author": "mcp-tool-shop",
+  "keywords": [
+    "llm",
+    "fine-tuning",
+    "lora",
+    "qlora",
+    "training",
+    "machine-learning",
+    "backpropagate",
+    "unsloth",
+    "reflex",
+    "huggingface",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

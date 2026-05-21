@@ -50,7 +50,336 @@ __all__ = [
     "create_modelfile",
     "register_with_ollama",
     "list_ollama_models",
+    # F-001 / F-004
+    "push_to_hub",
+    "write_model_card",
 ]
+
+
+def _maybe_write_model_card(
+    output_dir: str | Path,
+    *,
+    enabled: bool,
+    run_id: str | None,
+    base_model: str | None,
+    output_root: str | Path | None,
+    extra_card_fields: dict[str, Any] | None = None,
+) -> Path | None:
+    """F-004 helper: write model_card.md alongside an export when enabled.
+
+    Pulls metadata from the on-disk RunHistoryManager record if available
+    so the card reflects what actually happened during training. Falls
+    back to the explicit ``extra_card_fields`` (and ``incomplete_provenance``)
+    when no run is found. Returns the path written, or None when disabled
+    or on failure (errors logged at WARN — model-card emission must never
+    kill a successful export).
+    """
+    if not enabled:
+        return None
+
+    from .model_card import load_run_history_for_card, write_model_card_for_export
+
+    output_dir_path = Path(output_dir)
+    # The card lives next to model artifacts when output_dir is a directory;
+    # for the GGUF single-file case the caller passes the parent directory.
+    if output_dir_path.is_file():
+        output_dir_path = output_dir_path.parent
+
+    run_record: dict[str, Any] | None = None
+    candidate_roots: list[str | Path] = []
+    if output_root is not None:
+        candidate_roots.append(output_root)
+    # Also try walking up from the export directory: typical layout is
+    # <output>/<format>/, so <output> sits one level up from output_dir_path.
+    candidate_roots.append(output_dir_path)
+    candidate_roots.append(output_dir_path.parent)
+
+    for root in candidate_roots:
+        run_record = load_run_history_for_card(root, run_id)
+        if run_record:
+            break
+
+    fields: dict[str, Any] = {
+        "run_id": run_id,
+        "base_model": base_model,
+        "incomplete_provenance": run_record is None,
+    }
+
+    if run_record:
+        hp = run_record.get("hyperparameters") or {}
+        fields.update({
+            "base_model": run_record.get("model_name") or base_model,
+            "dataset_path": run_record.get("dataset_info"),
+            "dataset_hash": run_record.get("dataset_hash"),
+            "final_loss": run_record.get("final_loss"),
+            "loss_history": run_record.get("loss_history") or [],
+            "steps": run_record.get("steps"),
+            "lora_r": hp.get("lora_r"),
+            "lora_alpha": hp.get("lora_alpha"),
+            "seed": hp.get("seed"),
+            "training_duration": run_record.get("duration_seconds"),
+        })
+
+    if extra_card_fields:
+        for key, value in extra_card_fields.items():
+            if value is not None:
+                fields[key] = value
+
+    try:
+        return write_model_card_for_export(output_dir_path, **fields)
+    except (OSError, PermissionError) as exc:
+        logger.warning(f"model card emission failed: {exc}")
+        return None
+
+
+def write_model_card(
+    output_dir: str | Path,
+    **kwargs: Any,
+) -> Path:
+    """F-004 thin wrapper around :func:`backpropagate.model_card.write_model_card_for_export`.
+
+    Re-exported here so operators using the export surface don't need to
+    cross the package boundary into ``backpropagate.model_card`` directly.
+    """
+    from .model_card import write_model_card_for_export
+
+    return write_model_card_for_export(output_dir, **kwargs)
+
+
+# =============================================================================
+# F-001 HUGGING FACE HUB PUSH
+# =============================================================================
+# Operators want a one-step "publish my adapter / merged model to the Hub"
+# command. We keep the surface narrow and explicit:
+#   * ``push_to_hub(local_path, repo_id, ...)`` uploads a directory or
+#     single file to ``repo_id`` via :class:`huggingface_hub.HfApi`.
+#   * The accompanying ``model_card.md`` (F-004) is renamed to ``README.md``
+#     inside the upload so HF's UI picks it up as the repo card.
+#   * Errors are wrapped with cause_category-aware messages so the operator
+#     sees the right hint (auth / not_found / network / version / unknown).
+
+
+def _resolve_hf_token(token: str | None) -> str | None:
+    """Resolve the HF token to pass to HfApi.
+
+    Resolution order: explicit arg → ``HF_TOKEN`` env var →
+    ``HUGGING_FACE_HUB_TOKEN`` env var → token cached by
+    ``huggingface-cli login`` at ``~/.cache/huggingface/token``. Returns
+    ``None`` when none of these are set; HfApi will then fall back to
+    whatever the underlying ``huggingface_hub`` session was configured
+    with (e.g. an active ``HF_HUB_TOKEN`` from a Colab integration).
+    """
+    import os
+
+    if token:
+        return token
+    env_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if env_token:
+        return env_token
+    cache_token_path = Path.home() / ".cache" / "huggingface" / "token"
+    if cache_token_path.exists():
+        try:
+            cached = cache_token_path.read_text(encoding="utf-8").strip()
+            if cached:
+                return cached
+        except OSError:
+            pass
+    return None
+
+
+def push_to_hub(
+    local_path: str | Path,
+    repo_id: str,
+    *,
+    token: str | None = None,
+    private: bool = False,
+    commit_message: str | None = None,
+    create_repo: bool = True,
+    repo_type: str = "model",
+    include_base: bool = False,
+) -> str:
+    """F-001: upload a local adapter / merged model to the Hugging Face Hub.
+
+    Args:
+        local_path: Directory (or single file) to upload.
+        repo_id: HF Hub repo identifier, e.g. ``"alice/qwen-finetune"``.
+        token: HF token. Falls back to ``HF_TOKEN``,
+            ``HUGGING_FACE_HUB_TOKEN``, or the cached
+            ``~/.cache/huggingface/token`` from ``huggingface-cli login``.
+        private: When True, create the repo as private.
+        commit_message: Commit message for this upload (default:
+            ``"Upload via backpropagate"``).
+        create_repo: When True (default), create the repo if it doesn't
+            yet exist. When False, expect the repo to be present and
+            error out with a clear hint if not.
+        repo_type: ``"model"`` (default) | ``"dataset"`` | ``"space"``.
+        include_base: When the upload directory is an adapter-only LoRA
+            export, default behaviour is to upload only the adapter
+            files. Set ``True`` to push every file in the directory
+            (including the base model if it happens to be there).
+
+    Returns:
+        The Hub URL for the published repo (``https://huggingface.co/<repo_id>``).
+
+    Raises:
+        ExportError: For auth / not_found / network / version failures.
+            ``ExportError.code`` is set to ``HUB_PUSH_AUTH`` /
+            ``HUB_PUSH_NOT_FOUND`` / ``HUB_PUSH_NETWORK`` /
+            ``HUB_PUSH_VERSION`` / ``HUB_PUSH_UNKNOWN`` so callers can
+            distinguish.
+    """
+    try:
+        from huggingface_hub import HfApi  # type: ignore
+        from huggingface_hub import create_repo as hf_create_repo  # type: ignore
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+    except ImportError as exc:
+        raise ExportError(
+            "huggingface_hub is not installed",
+            suggestion=(
+                "Install with `pip install huggingface_hub` (typically pulled "
+                "in by `pip install backpropagate[unsloth]`)."
+            ),
+        ) from exc
+
+    local_path_p = Path(local_path).expanduser().resolve()
+    if not local_path_p.exists():
+        raise ExportError(
+            f"Local path does not exist: {local_path_p}",
+            suggestion="Pass a directory produced by `backprop export` or `backprop train --output`.",
+        )
+
+    resolved_token = _resolve_hf_token(token)
+    api = HfApi(token=resolved_token)
+    commit_message = commit_message or "Upload via backpropagate"
+
+    # If a model_card.md sits next to the artifacts, mirror it as README.md
+    # so the HF web UI renders it as the repo's model card.
+    readme_copy_path: Path | None = None
+    if local_path_p.is_dir():
+        candidate_card = local_path_p / "model_card.md"
+        readme_target = local_path_p / "README.md"
+        if candidate_card.exists() and not readme_target.exists():
+            try:
+                readme_target.write_text(
+                    candidate_card.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+                readme_copy_path = readme_target
+                logger.info(
+                    f"Mirrored model_card.md to README.md for the Hub upload at {readme_target}"
+                )
+            except OSError as exc:
+                logger.warning(f"Could not mirror model_card.md to README.md: {exc}")
+
+    try:
+        if create_repo:
+            hf_create_repo(
+                repo_id,
+                token=resolved_token,
+                private=private,
+                exist_ok=True,
+                repo_type=repo_type,
+            )
+
+        # Filter set for adapter-only push. We default to uploading only
+        # ``adapter_*`` / ``model_card.md`` / ``README.md`` / config files
+        # so an export of a quantized base model doesn't accidentally get
+        # rebroadcast through the operator's Hub upload.
+        allow_patterns: list[str] | None = None
+        if local_path_p.is_dir() and not include_base:
+            adapter_files = list(local_path_p.glob("adapter_*"))
+            if adapter_files:
+                allow_patterns = [
+                    "adapter_*",
+                    "*.json",
+                    "*.md",
+                    "tokenizer*",
+                    "special_tokens_map.json",
+                    "vocab*",
+                    "merges*",
+                ]
+
+        if local_path_p.is_file():
+            api.upload_file(
+                path_or_fileobj=str(local_path_p),
+                path_in_repo=local_path_p.name,
+                repo_id=repo_id,
+                repo_type=repo_type,
+                commit_message=commit_message,
+                token=resolved_token,
+            )
+        else:
+            api.upload_folder(
+                folder_path=str(local_path_p),
+                repo_id=repo_id,
+                repo_type=repo_type,
+                commit_message=commit_message,
+                allow_patterns=allow_patterns,
+                token=resolved_token,
+            )
+
+    except HfHubHTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            err = ExportError(
+                f"Hugging Face authentication failed (HTTP {status}): {exc}",
+                suggestion=(
+                    "Pass --token or set HF_TOKEN to a token with write "
+                    "access to the target repo. Run `huggingface-cli login` "
+                    "for a stored token."
+                ),
+            )
+            err.code = "HUB_PUSH_AUTH"  # type: ignore[attr-defined]
+            raise err from exc
+        if status == 404:
+            err = ExportError(
+                f"Hugging Face repo not found (HTTP {status}): {exc}",
+                suggestion=(
+                    "Verify repo_id is spelled correctly. Pass "
+                    "--include-base or omit --create-repo=false to let "
+                    "backpropagate create the repo for you."
+                ),
+            )
+            err.code = "HUB_PUSH_NOT_FOUND"  # type: ignore[attr-defined]
+            raise err from exc
+        err = ExportError(
+            f"Hugging Face Hub push failed (HTTP {status}): {exc}",
+            suggestion=(
+                "Retry — the Hub occasionally returns 5xx for ~30s "
+                "during peak load. Verify your network if the error "
+                "persists."
+            ),
+        )
+        err.code = "HUB_PUSH_NETWORK" if status and status >= 500 else "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
+        raise err from exc
+    except (ConnectionError, TimeoutError) as exc:
+        err = ExportError(
+            f"Network error contacting Hugging Face Hub: {exc}",
+            suggestion="Check your network and retry.",
+        )
+        err.code = "HUB_PUSH_NETWORK"  # type: ignore[attr-defined]
+        raise err from exc
+    except ExportError:
+        raise
+    except Exception as exc:
+        err = ExportError(
+            f"Hugging Face Hub push failed: {exc}",
+            suggestion=(
+                "Retry. If the failure persists, run with --verbose to see "
+                "the full traceback."
+            ),
+        )
+        err.code = "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
+        raise err from exc
+    finally:
+        # Leave the mirrored README.md in place so the operator's local
+        # directory matches what's on the Hub; remove only if we created
+        # it and the upload itself failed.
+        if readme_copy_path is not None and not readme_copy_path.exists():
+            # Nothing to clean up.
+            pass
+
+    return f"https://huggingface.co/{repo_id}"
 
 
 class GGUFQuantization(Enum):
@@ -134,14 +463,38 @@ def export_lora(
     model: Any,
     output_dir: str | Path,
     adapter_name: str = "default",
+    *,
+    emit_model_card: bool = True,
+    run_id: str | None = None,
+    base_model: str | None = None,
+    output_root: str | Path | None = None,
 ) -> ExportResult:
     """
-    Export LoRA adapter only.
+    Export LoRA adapter only, atomically (B-006).
+
+    Writes flow into ``<output_dir>.partial`` first and ``shutil.move()``
+    promotes the directory to the final path on success. The partial
+    directory is removed on any failure so a disk-full crash mid-write
+    doesn't leave a half-populated adapter directory behind (which would
+    raise a cryptic 'state_dict missing keys' on the next resume).
+
+    F-004: when ``emit_model_card=True`` (the default) a ``model_card.md``
+    is written into ``output_dir`` after the atomic promote. Provenance is
+    pulled from the on-disk RunHistoryManager record at
+    ``output_root/run_history.json`` (defaults to ``output_dir.parent``
+    when not provided). Failures in model-card emission are logged but
+    never abort the export.
 
     Args:
         model: PeftModel or path to saved model
         output_dir: Directory to save adapter
         adapter_name: Name of adapter to save
+        emit_model_card: F-004 — emit a model_card.md alongside the export
+            (default True). Pass False to opt out.
+        run_id: Correlation token used to look up training metadata.
+        base_model: HF identifier of the base model (used as a frontmatter
+            field on the card when no RunHistoryManager record is found).
+        output_root: Root output directory to search for run_history.json.
 
     Returns:
         ExportResult with path and size info
@@ -151,16 +504,25 @@ def export_lora(
     """
     start_time = time.time()
     output_path = Path(output_dir)
+    partial_path = output_path.with_name(output_path.name + ".partial")
 
     try:
-        output_path.mkdir(parents=True, exist_ok=True)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
         raise ExportError(
-            f"Cannot create output directory: {e}",
+            f"Cannot create parent directory: {e}",
             suggestion=f"Check write permissions for {output_path.parent}"
         ) from e
     except OSError as e:
-        raise ExportError(f"Failed to create output directory: {e}") from e
+        raise ExportError(f"Failed to create parent directory: {e}") from e
+
+    if partial_path.exists():
+        shutil.rmtree(partial_path, ignore_errors=True)
+
+    try:
+        partial_path.mkdir(parents=True, exist_ok=False)
+    except OSError as e:
+        raise ExportError(f"Failed to create partial directory: {e}") from e
 
     try:
         if isinstance(model, (str, Path)):
@@ -176,7 +538,7 @@ def export_lora(
                 files_copied = 0
                 for pattern in ["adapter_*.safetensors", "adapter_*.bin", "adapter_config.json"]:
                     for f in src_path.glob(pattern):
-                        shutil.copy2(f, output_path / f.name)
+                        shutil.copy2(f, partial_path / f.name)
                         files_copied += 1
                 if files_copied == 0:
                     raise ExportError(
@@ -185,21 +547,40 @@ def export_lora(
                     )
         elif _is_peft_model(model):
             # Save from PeftModel
-            model.save_pretrained(output_path, adapter_name=adapter_name)
+            model.save_pretrained(partial_path, adapter_name=adapter_name)
         else:
             raise ExportError(
                 f"Cannot export LoRA from {type(model).__name__}",
                 suggestion="Expected PeftModel or path to saved adapter"
             )
+
+        # Atomic promote.
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        shutil.move(str(partial_path), str(output_path))
     except ExportError:
         raise
     except Exception as e:
         raise ExportError(f"LoRA export failed: {e}") from e
+    finally:
+        # Belt-and-braces cleanup on every path.
+        if partial_path.exists():
+            shutil.rmtree(partial_path, ignore_errors=True)
 
     export_time = time.time() - start_time
     size_mb = _get_dir_size_mb(output_path)
 
     logger.info(f"LoRA adapter exported to {output_path} ({size_mb:.1f} MB)")
+
+    # F-004: emit model card alongside the artifact.
+    _maybe_write_model_card(
+        output_path,
+        enabled=emit_model_card,
+        run_id=run_id,
+        base_model=base_model,
+        output_root=output_root,
+        extra_card_fields={"export_format": "lora"},
+    )
 
     return ExportResult(
         format=ExportFormat.LORA,
@@ -215,9 +596,17 @@ def export_merged(
     output_dir: str | Path,
     push_to_hub: bool = False,
     repo_id: str | None = None,
+    *,
+    emit_model_card: bool = True,
+    run_id: str | None = None,
+    base_model: str | None = None,
+    output_root: str | Path | None = None,
 ) -> ExportResult:
     """
     Merge adapter into base model and save.
+
+    F-004: emits ``model_card.md`` alongside the merged checkpoint when
+    ``emit_model_card=True`` (default).
 
     Args:
         model: PeftModel with adapter
@@ -225,6 +614,10 @@ def export_merged(
         output_dir: Directory to save merged model
         push_to_hub: Whether to push to Hugging Face Hub
         repo_id: Repository ID for Hub (required if push_to_hub=True)
+        emit_model_card: F-004 — emit model_card.md alongside the export.
+        run_id: Correlation token used to look up training metadata.
+        base_model: Base model HF identifier (frontmatter fallback).
+        output_root: Root output directory to search for run_history.json.
 
     Returns:
         ExportResult with path and size info
@@ -286,6 +679,16 @@ def export_merged(
 
     logger.info(f"Merged model exported to {output_path} ({size_mb:.1f} MB)")
 
+    # F-004: model_card.md
+    _maybe_write_model_card(
+        output_path,
+        enabled=emit_model_card,
+        run_id=run_id,
+        base_model=base_model,
+        output_root=output_root,
+        extra_card_fields={"export_format": "merged"},
+    )
+
     return ExportResult(
         format=ExportFormat.MERGED,
         path=output_path,
@@ -300,6 +703,11 @@ def export_gguf(
     output_dir: str | Path,
     quantization: str | GGUFQuantization = "q4_k_m",
     model_name: str | None = None,
+    *,
+    emit_model_card: bool = True,
+    run_id: str | None = None,
+    base_model: str | None = None,
+    output_root: str | Path | None = None,
 ) -> ExportResult:
     """
     Export to GGUF format.
@@ -356,26 +764,52 @@ def export_gguf(
     model_name = model_name or "model"
 
     # Try Unsloth first (fastest)
+    # B-006: write into a sibling .partial directory so a mid-conversion
+    # disk-full / crash doesn't leave a half-written .gguf file at the
+    # final path. On success we move the produced .gguf into output_path.
     if _has_unsloth():
+        unsloth_partial = output_path / "_unsloth_partial"
+        if unsloth_partial.exists():
+            shutil.rmtree(unsloth_partial, ignore_errors=True)
+        try:
+            unsloth_partial.mkdir(parents=True, exist_ok=False)
+        except OSError as e:
+            raise GGUFExportError(
+                f"Failed to create partial directory: {e}",
+                output_path=str(output_path),
+                quantization=quant_str,
+            ) from e
+
         try:
             print("Exporting to GGUF format... this may take several minutes for large models.")
-            # Unsloth handles everything
+            # Unsloth handles everything (writes into the partial dir)
             model.save_pretrained_gguf(
-                str(output_path),
+                str(unsloth_partial),
                 tokenizer,
                 quantization_method=quant_str,
             )
-            # Find the generated GGUF file
-            gguf_files = list(output_path.glob("*.gguf"))
-            if gguf_files:
-                gguf_path = gguf_files[0]
-            else:
-                gguf_path = output_path / f"{model_name}-{quant_str}.gguf"
 
-            # Validate output exists
+            # Find the generated GGUF file in the partial dir.
+            gguf_files = list(unsloth_partial.glob("*.gguf"))
+            if not gguf_files:
+                raise GGUFExportError(
+                    f"GGUF file was not created in partial directory: {unsloth_partial}",
+                    output_path=str(output_path),
+                    quantization=quant_str,
+                    suggestion="Check Unsloth logs for conversion errors"
+                )
+
+            # Atomic promote: move the final .gguf into output_path.
+            final_gguf_name = gguf_files[0].name
+            gguf_path = output_path / final_gguf_name
+            if gguf_path.exists():
+                gguf_path.unlink()
+            shutil.move(str(gguf_files[0]), str(gguf_path))
+
+            # Validate output exists at the final path
             if not gguf_path.exists():
                 raise GGUFExportError(
-                    f"GGUF file was not created at expected path: {gguf_path}",
+                    f"GGUF file was not promoted to expected path: {gguf_path}",
                     output_path=str(output_path),
                     quantization=quant_str,
                     suggestion="Check Unsloth logs for conversion errors"
@@ -393,6 +827,24 @@ def export_gguf(
 
             logger.info(f"GGUF exported via Unsloth to {gguf_path} ({size_mb:.1f} MB)")
 
+            # B-006: clean up the partial dir (any leftover Unsloth scratch
+            # files that we didn't promote) before returning.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
+
+            # F-004: model card next to the GGUF (single-file export).
+            _maybe_write_model_card(
+                gguf_path,
+                enabled=emit_model_card,
+                run_id=run_id,
+                base_model=base_model,
+                output_root=output_root,
+                extra_card_fields={
+                    "export_format": "gguf",
+                    "quantization": quant_str,
+                },
+            )
+
             return ExportResult(
                 format=ExportFormat.GGUF,
                 path=gguf_path,
@@ -401,9 +853,15 @@ def export_gguf(
                 export_time_seconds=export_time,
             )
         except GGUFExportError:
+            # Clean up the partial dir on a structured failure too.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
             raise
         except Exception as e:
-            # Fall through to manual conversion
+            # Fall through to manual conversion. The partial dir is removed
+            # so the next attempt has a clean slot.
+            if unsloth_partial.exists():
+                shutil.rmtree(unsloth_partial, ignore_errors=True)
             logger.warning(f"Unsloth GGUF export failed: {e}. Trying manual conversion...")
             print("WARNING: Unsloth GGUF export failed, falling back to llama.cpp conversion (slower)...")
 
@@ -521,6 +979,19 @@ def export_gguf(
     size_mb = _get_dir_size_mb(gguf_path)
 
     logger.info(f"GGUF exported via llama.cpp to {gguf_path} ({size_mb:.1f} MB)")
+
+    # F-004: model card next to the GGUF (llama.cpp fallback path).
+    _maybe_write_model_card(
+        gguf_path,
+        enabled=emit_model_card,
+        run_id=run_id,
+        base_model=base_model,
+        output_root=output_root,
+        extra_card_fields={
+            "export_format": "gguf",
+            "quantization": quant_str,
+        },
+    )
 
     return ExportResult(
         format=ExportFormat.GGUF,

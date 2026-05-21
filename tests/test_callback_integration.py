@@ -7,12 +7,14 @@ Tests the full callback flow through:
 - GPUMonitor -> MultiRunTrainer integration
 - CLI -> callback display
 
-See docs/EVENT_HANDLER_TEST_ROADMAP.md for the full testing plan.
+See tests/EVENT_HANDLER_ROADMAP.md for the full testing plan.
 """
 
 import threading
 import time
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # =============================================================================
 # E2E TRAINING CALLBACK TESTS
@@ -153,6 +155,7 @@ class TestE2EMultiRunCallbacks:
             assert recorded_losses[i] < recorded_losses[i - 1]
 
 
+@pytest.mark.integration
 class TestE2EGPUMonitoringCallbacks:
     """End-to-end tests for GPU monitoring callbacks."""
 
@@ -479,9 +482,17 @@ class TestCallbackMemoryManagement:
         import gc
         gc.collect()
 
-        # Object should be collectable (weak_ref should be dead)
-        # Note: This depends on callback not holding reference
-        assert weak_ref() is None or collected[0] or True  # Allow either outcome
+        # Object should be collectable (weak_ref should be dead) because the
+        # callback closure does NOT capture `heavy` — it only takes `obj` as a
+        # parameter and reads `obj.data[0]` into the captured `captured_value`
+        # list, releasing the obj reference on return.
+        assert weak_ref() is None, (
+            "HeavyObject was not garbage collected after del + gc.collect(). "
+            "The callback closure is leaking a reference to it."
+        )
+        assert collected[0] is True, (
+            "weakref finalizer mark_collected was not invoked"
+        )
 
     def test_callback_with_closure_cleanup(self):
         """Closures in callbacks should clean up properly."""
@@ -905,6 +916,7 @@ class TestMultiRunCallbackInvocationOrder:
 # GPU MONITOR PAUSE/RESUME CALLBACK TESTS
 # =============================================================================
 
+@pytest.mark.integration
 class TestGPUMonitorPauseResumeCallbacks:
     """Tests for callback behavior during pause/resume."""
 

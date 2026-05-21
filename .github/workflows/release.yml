@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write       # for GitHub Release creation
+  id-token: write       # for npm provenance via Sigstore OIDC
+
+jobs:
+  release:
+    name: Publish to npm + GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install npm >=11.5 in sandbox for OIDC trusted-publishing auth
+        run: |
+          # Node 22 ships npm 10.9, which signs Sigstore provenance fine but
+          # cannot negotiate the OIDC auth path for trusted publishing — the
+          # PUT returns a misleading 404 "not in this registry".
+          #
+          # An in-place `npm install -g npm@latest` races on Node 22's bundled
+          # npm 10.9 arborist rebuild and breaks irrecoverably (MODULE_NOT_FOUND:
+          # promise-retry). Sandbox install + PATH shadow avoids the race.
+          # See memory: npm-115-required-for-oidc
+          SANDBOX="$HOME/.npm-cli-sandbox"
+          mkdir -p "$SANDBOX"
+          pushd "$SANDBOX" >/dev/null
+          echo '{"name":"npm-cli-sandbox","version":"0.0.0","private":true}' > package.json
+          npm install --no-save --no-audit --no-fund --silent npm@latest
+          popd >/dev/null
+          echo "$SANDBOX/node_modules/.bin" >> "$GITHUB_PATH"
+          "$SANDBOX/node_modules/.bin/npm" --version
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Tag: ${GITHUB_REF_NAME} → ${TAG_VERSION}"
+          echo "Package: ${PKG_VERSION}"
+          if [ "${PKG_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::Tag ${TAG_VERSION} does not match package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          PY_VERSION=$(python3 -c "import tomllib; print(tomllib.loads(open('pyproject.toml').read())['project']['version'])")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "pyproject: ${PY_VERSION}"
+          if [ "${PY_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::Tag ${TAG_VERSION} does not match pyproject.toml version ${PY_VERSION}"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: npm pack dry-run (verify shape)
+        run: npm pack --dry-run
+
+      - name: Publish to npm with provenance (OIDC trusted publisher)
+        run: npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Extract the [<version>] section from CHANGELOG.md as the release notes.
+          # Falls back to the tag name if the section is missing or empty.
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES_FILE="$(mktemp)"
+          awk -v ver="${VERSION}" '
+            $0 ~ "^## \\[" ver "\\]" {capture=1; next}
+            capture && /^## \[/ {exit}
+            capture {print}
+          ' CHANGELOG.md > "${NOTES_FILE}"
+
+          if [ ! -s "${NOTES_FILE}" ]; then
+            echo "Backpropagate ${GITHUB_REF_NAME}" > "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+            echo "See CHANGELOG.md for details." >> "${NOTES_FILE}"
+          fi
+
+          # Create the release. publish.yml + release-binaries.yml fire on the
+          # `release: published` event this triggers — they'll upload PyPI +
+          # Docker + PyInstaller binaries as the chain reaction.
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Backpropagate ${GITHUB_REF_NAME}" \
+            --notes-file "${NOTES_FILE}" \
+            --verify-tag

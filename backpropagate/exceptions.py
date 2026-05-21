@@ -6,6 +6,7 @@ Production-ready exception classes for clear error handling and debugging.
 
 Exception Hierarchy:
     BackpropagateError (base)
+    ├── UserInputError                 (user-actionable input/validation errors)
     ├── ConfigurationError
     │   └── InvalidSettingError
     ├── DatasetError
@@ -18,6 +19,7 @@ Exception Hierarchy:
     │   ├── TrainingAbortedError
     │   └── CheckpointError
     ├── ExportError
+    │   ├── LoRAExportError
     │   ├── GGUFExportError
     │   ├── MergeExportError
     │   └── OllamaRegistrationError
@@ -26,9 +28,18 @@ Exception Hierarchy:
     │   ├── GPUMemoryError
     │   ├── GPUTemperatureError
     │   └── GPUMonitoringError
-    └── SLAOError
-        ├── SLAOMergeError
-        └── SLAOCheckpointError
+    ├── SLAOError
+    │   ├── SLAOMergeError
+    │   └── SLAOCheckpointError
+    └── Utilities
+        ├── BatchOperationError        (aggregate of failures across N items)
+        └── PartialSuccess             (operation completed with some failures)
+
+Structured shape (Ship Gate B1):
+    Every exception carries optional ``code`` (machine-readable identifier),
+    ``cause`` (chained exception via ``__cause__``), and ``retryable`` (bool).
+    Defaults preserve existing call-site behavior; subclasses may set sensible
+    defaults (e.g. GPU temperature errors are retryable, auth errors are not).
 
 Usage:
     from backpropagate.exceptions import DatasetNotFoundError, TrainingError
@@ -36,16 +47,31 @@ Usage:
     try:
         trainer.train(dataset="missing.jsonl")
     except DatasetNotFoundError as e:
-        print(f"Dataset not found: {e.path}")
+        print(f"Dataset not found: {e.path}  [{e.code}]")
     except TrainingError as e:
         print(f"Training failed: {e}")
 """
 
-from typing import Any
+import logging
+from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
+
+# Cause categories for ModelLoadError (C-CLI-006). When a caller knows the
+# nature of the underlying HF Hub failure it can pass ``cause_category`` so
+# the user gets a remediation hint tailored to the failure mode instead of
+# the generic "check model name + network" line. Backend raise sites in
+# ``trainer.py`` are expected to pattern-match HTTP status / exception text
+# and pass the appropriate category; today this is a forward-compatible
+# extension point (default behavior preserved when the kwarg is omitted).
+ModelLoadCauseCategory = Literal[
+    "auth", "not_found", "network", "version", "unknown"
+]
 
 __all__ = [
     # Base
     "BackpropagateError",
+    "UserInputError",
     # Configuration
     "ConfigurationError",
     "InvalidSettingError",
@@ -58,6 +84,7 @@ __all__ = [
     # Training
     "TrainingError",
     "ModelLoadError",
+    "ModelLoadCauseCategory",
     "TrainingAbortedError",
     "CheckpointError",
     # Export
@@ -78,7 +105,223 @@ __all__ = [
     "SLAOCheckpointError",
     # Utilities
     "BatchOperationError",
+    "PartialSuccess",
+    # Catalog
+    "ERROR_CODES",
+    "print_error_code_catalog",
 ]
+
+
+# =============================================================================
+# ERROR CODE CATALOG (C-CLI-005, C-CLI-014)
+# =============================================================================
+# Single source of truth for the machine-readable codes Ship Gate B1 introduced.
+# Each entry carries:
+#   description: one-liner explaining the failure category
+#   default_hint: fallback suggestion when the raise site does not pass an
+#                 explicit ``suggestion`` argument
+#   retryable:   "yes" / "no" / "sometimes" — operators automating retry loops
+#                can scrape this to decide whether backoff is meaningful
+#
+# Adding a new exception subclass? Add a row here FIRST so the discipline of
+# "central catalog → raise site" stays intact. Operators reading a code in
+# their terminal can run ``backprop info --error-codes`` to look it up.
+
+ERROR_CODES: dict[str, dict[str, str]] = {
+    # User input
+    "INPUT_VALIDATION_FAILED": {
+        "description": "A CLI argument failed validation (wrong type, out of range, malformed).",
+        "default_hint": "Re-read the relevant --help and pass a valid value.",
+        "retryable": "no",
+    },
+    "INPUT_AUTH_REQUIRED": {
+        "description": "An operation required --auth credentials but they were not supplied.",
+        "default_hint": "Pass --auth user:password OR set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false (warns).",
+        "retryable": "no",
+    },
+    # Dataset
+    "INPUT_DATASET_INVALID": {
+        "description": "A dataset reference is invalid in a way the loader cannot self-describe.",
+        "default_hint": "Inspect the dataset path and format; pass --verbose for the full traceback.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_NOT_FOUND": {
+        "description": "The dataset file or HuggingFace name could not be located.",
+        "default_hint": "Verify the path is reachable from the current working directory, or that the HuggingFace dataset exists.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_PARSE_FAILED": {
+        "description": "The dataset could not be parsed as JSONL / CSV / supported format.",
+        "default_hint": "Open the offending line in a text editor; check for unescaped quotes, BOM, or wrong encoding.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_VALIDATION_FAILED": {
+        "description": "Dataset structure failed semantic validation (missing fields, empty rows, etc.).",
+        "default_hint": "Run with --verbose to see the validation error list.",
+        "retryable": "no",
+    },
+    "INPUT_DATASET_FORMAT_UNSUPPORTED": {
+        "description": "Dataset format is unsupported or could not be auto-detected.",
+        "default_hint": "Convert to one of the supported formats (JSONL, ShareGPT, Alpaca, OpenAI).",
+        "retryable": "no",
+    },
+    # Configuration
+    "CONFIG_INVALID": {
+        "description": "Configuration object is invalid or malformed.",
+        "default_hint": "Re-check the BACKPROPAGATE_* env vars or your .env file.",
+        "retryable": "no",
+    },
+    "CONFIG_INVALID_SETTING": {
+        "description": "A specific configuration field has an invalid value.",
+        "default_hint": "Compare the value against the expected type described in the error.",
+        "retryable": "no",
+    },
+    # Training / runtime
+    "RUNTIME_TRAINING_FAILED": {
+        "description": "Training crashed for an internal reason (model bug, library mismatch, etc.).",
+        "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
+        "retryable": "sometimes",
+    },
+    "DEP_MODEL_LOAD_FAILED": {
+        "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
+        "default_hint": "Verify model name, HF token, and network access to huggingface.co.",
+        "retryable": "yes",
+    },
+    "RUNTIME_TRAINING_ABORTED": {
+        "description": "Training stopped early (user interrupt, GPU fault, watchdog).",
+        "default_hint": "Inspect the abort reason; the last checkpoint may be usable.",
+        "retryable": "sometimes",
+    },
+    "STATE_CHECKPOINT_INVALID": {
+        "description": "Checkpoint save or load failed (disk full, corrupt file, permission).",
+        "default_hint": "Verify free disk space and write permission on the output directory.",
+        "retryable": "sometimes",
+    },
+    # Export
+    "RUNTIME_EXPORT_FAILED": {
+        "description": "Generic export failure not covered by a more specific code.",
+        "default_hint": "Run with --verbose for the full traceback.",
+        "retryable": "no",
+    },
+    "RUNTIME_LORA_EXPORT_FAILED": {
+        "description": "LoRA adapter export failed.",
+        "default_hint": "Confirm the model has LoRA adapters attached and the output dir is writable.",
+        "retryable": "no",
+    },
+    "RUNTIME_GGUF_EXPORT_FAILED": {
+        "description": "GGUF quantization / export failed.",
+        "default_hint": "Ensure Unsloth is installed or llama.cpp convert script is on PATH.",
+        "retryable": "no",
+    },
+    "RUNTIME_MERGE_EXPORT_FAILED": {
+        "description": "Merge-and-export step failed.",
+        "default_hint": "Re-run with --verbose; verify enough VRAM for the merge.",
+        "retryable": "no",
+    },
+    "DEP_OLLAMA_REGISTRATION_FAILED": {
+        "description": "Failed to register the exported model with the local Ollama daemon.",
+        "default_hint": "Ensure Ollama is installed and running (`ollama --version`); see https://ollama.ai.",
+        "retryable": "yes",
+    },
+    # GPU
+    "RUNTIME_GPU_ERROR": {
+        "description": "Generic GPU failure not covered by a more specific code.",
+        "default_hint": "Check `nvidia-smi`; restart the process if VRAM is wedged.",
+        "retryable": "sometimes",
+    },
+    "DEP_GPU_NOT_AVAILABLE": {
+        "description": "No CUDA-capable GPU detected.",
+        "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
+        "retryable": "no",
+    },
+    "RUNTIME_GPU_OOM": {
+        "description": "GPU ran out of memory (VRAM).",
+        "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
+        "retryable": "no",
+    },
+    "RUNTIME_GPU_TEMPERATURE_CRITICAL": {
+        "description": "GPU temperature exceeded the safety threshold.",
+        "default_hint": "Wait for the GPU to cool; improve case airflow; lower --batch-size.",
+        "retryable": "yes",
+    },
+    "RUNTIME_GPU_MONITORING_FAILED": {
+        "description": "GPU monitoring (pynvml) probe failed.",
+        "default_hint": "Install pynvml: `pip install pynvml`.",
+        "retryable": "sometimes",
+    },
+    # SLAO
+    "RUNTIME_SLAO_ERROR": {
+        "description": "Generic SLAO multi-run merge error.",
+        "default_hint": "Run with --verbose; inspect the merge_history.json for the failing run.",
+        "retryable": "no",
+    },
+    "RUNTIME_SLAO_MERGE_FAILED": {
+        "description": "SLAO merge step failed for a specific run.",
+        "default_hint": "Check the run's LoRA dir for shape mismatches.",
+        "retryable": "no",
+    },
+    "STATE_SLAO_CHECKPOINT_INVALID": {
+        "description": "SLAO checkpoint save or load failed.",
+        "default_hint": "Verify free disk space and write permission on the checkpoint directory.",
+        "retryable": "sometimes",
+    },
+    # Aggregate / partial
+    "PARTIAL_BATCH_OPERATION": {
+        "description": "A batched operation completed with per-item failures (aggregate).",
+        "default_hint": "Inspect the error list in the exception details; retry only failed items.",
+        "retryable": "sometimes",
+    },
+    "PARTIAL_SUCCESS": {
+        "description": "Operation completed but some sub-steps failed (exit code 3).",
+        "default_hint": "Outputs may be usable; review the warning summary above.",
+        "retryable": "no",
+    },
+}
+
+
+# Cause-category specific hints for ModelLoadError (C-CLI-006). Each maps a
+# coarse failure category to a concrete next step. ``unknown`` falls back to
+# today's generic hint so behavior is preserved when the category is omitted.
+_MODEL_LOAD_HINTS: dict[str, str] = {
+    "auth": (
+        "Check your HuggingFace token: `huggingface-cli login`. If the model is "
+        "gated, accept the terms on its model page."
+    ),
+    "not_found": (
+        "Verify the model name spelling (HF model names are case-sensitive). "
+        "Common: 'unsloth/Qwen2.5-7B-Instruct-bnb-4bit'. Search: "
+        "https://huggingface.co/models"
+    ),
+    "network": (
+        "Check internet access to huggingface.co. If you are behind a proxy, "
+        "set HTTPS_PROXY and consider HF_HUB_DISABLE_TELEMETRY=1."
+    ),
+    "version": (
+        "Update transformers / unsloth / peft: "
+        "`pip install -U backpropagate[unsloth]`."
+    ),
+    "unknown": (
+        "Check that the model name is correct and you have network access"
+    ),
+}
+
+
+def print_error_code_catalog() -> None:
+    """Print the ``ERROR_CODES`` registry as a human-readable table.
+
+    Called from ``backprop info --error-codes`` for operator reference. The
+    output is tab-delimited so it composes with grep / awk in CI scripts but
+    stays readable in a terminal.
+    """
+    # Header
+    print("code\tretryable\tdescription")
+    print("----\t---------\t-----------")
+    for code in sorted(ERROR_CODES.keys()):
+        entry = ERROR_CODES[code]
+        print(f"{code}\t{entry['retryable']}\t{entry['description']}")
+        # Indent the default hint on a continuation line so the column shape
+        # stays scannable.
+        print(f"\t\t  hint: {entry['default_hint']}")
 
 
 # =============================================================================
@@ -93,9 +336,28 @@ class BackpropagateError(Exception):
     all library errors with a single except clause if desired.
 
     Attributes:
-        message: Human-readable error description
-        details: Optional dict with additional context for debugging
-        suggestion: Optional suggestion for how to fix the error
+        message: Human-readable error description.
+        details: Optional dict with additional context for debugging.
+        suggestion: Optional suggestion for how to fix the error.
+        code: Machine-readable identifier (Ship Gate B1). Intended to be
+              STABLE across class renames — every subclass sets an explicit
+              value drawn from the Ship Gate registry prefixes
+              (``IO_``, ``CONFIG_``, ``PERM_``, ``DEP_``, ``RUNTIME_``,
+              ``PARTIAL_``, ``INPUT_``, ``STATE_``). When ``code`` is left
+              ``None`` we emit a debug log so missing codes stay visible
+              (the previous auto-derived ``cls.__name__.upper()`` default
+              silently drifted on every class rename).
+        cause: The underlying exception, if any. Also chained via
+               ``raise X from cause`` semantics (``self.__cause__``).
+        retryable: Whether a caller can retry the operation without user
+                   intervention (e.g. GPU temperature throttling -> True,
+                   missing dataset file -> False). Defaults to ``False``.
+
+    Backward compatibility:
+        ``code``, ``cause``, and ``retryable`` are optional keyword arguments.
+        Existing callers that only pass ``message`` / ``details`` /
+        ``suggestion`` work unchanged; ``code`` will be ``None`` (with a
+        debug log line) instead of a derived upper-case class name.
     """
 
     def __init__(
@@ -103,10 +365,34 @@ class BackpropagateError(Exception):
         message: str,
         details: dict | None = None,
         suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
     ):
         self.message = message
         self.details = details or {}
         self.suggestion = suggestion
+        # B-004: drop the auto-derived `cls.__name__.upper()` default — it
+        # silently broke the documented "stable across renames" contract on
+        # every subclass rename. Subclasses now set an explicit code; a
+        # missing code stays visible as `None` (debug-logged) instead of
+        # invisibly drifting.
+        self.code = code
+        if code is None:
+            # Debug-level (not warn) — base BackpropagateError is intentionally
+            # constructed in many user-facing codepaths without a stable code.
+            logger.debug(
+                "BackpropagateError instance has no stable `code`: "
+                "class=%s message=%r",
+                self.__class__.__name__,
+                message,
+            )
+        self.cause = cause
+        self.retryable = retryable
+
+        # Chain the underlying cause so traceback machinery picks it up.
+        if cause is not None:
+            self.__cause__ = cause
 
         # Build full message
         full_message = message
@@ -121,6 +407,52 @@ class BackpropagateError(Exception):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.message!r})"
 
+    def to_dict(self) -> dict:
+        """Serialize the structured envelope for logging or transport."""
+        envelope: dict[str, Any] = {
+            "type": self.__class__.__name__,
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+        if self.suggestion:
+            envelope["suggestion"] = self.suggestion
+        if self.details:
+            envelope["details"] = self.details
+        if self.cause is not None:
+            envelope["cause"] = f"{type(self.cause).__name__}: {self.cause}"
+        return envelope
+
+
+# =============================================================================
+# USER INPUT ERROR (CLI exit code 1 — user-actionable)
+# =============================================================================
+
+class UserInputError(BackpropagateError):
+    """
+    Raised when a user-supplied argument, path, or value is invalid.
+
+    Maps to Ship Gate B2 exit code ``1`` (user error). Distinct from
+    ConfigurationError (which covers persisted settings) — UserInputError
+    represents per-invocation argument or flag problems that the user can
+    fix by adjusting their command line.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        hint: str | None = None,
+        details: dict | None = None,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=hint,
+            code=code or "INPUT_VALIDATION_FAILED",
+            retryable=False,
+        )
+
 
 # =============================================================================
 # CONFIGURATION ERRORS
@@ -128,7 +460,24 @@ class BackpropagateError(Exception):
 
 class ConfigurationError(BackpropagateError):
     """Invalid configuration or settings."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "CONFIG_INVALID",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class InvalidSettingError(ConfigurationError):
@@ -150,6 +499,7 @@ class InvalidSettingError(ConfigurationError):
             message,
             details={"setting": setting_name, "value": value, "expected": expected},
             suggestion=suggestion,
+            code="CONFIG_INVALID_SETTING",
         )
 
 
@@ -159,7 +509,24 @@ class InvalidSettingError(ConfigurationError):
 
 class DatasetError(BackpropagateError):
     """Base class for dataset-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "INPUT_DATASET_INVALID",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class DatasetNotFoundError(DatasetError):
@@ -171,6 +538,8 @@ class DatasetNotFoundError(DatasetError):
             f"Dataset not found: {path}",
             details={"path": str(path)},
             suggestion=suggestion or f"Check that the file exists at: {path}",
+            code="INPUT_DATASET_NOT_FOUND",
+            retryable=False,
         )
 
 
@@ -198,6 +567,7 @@ class DatasetParseError(DatasetError):
             message,
             details=details,
             suggestion=suggestion or "Check that the file contains valid JSON/CSV data",
+            code="INPUT_DATASET_PARSE_FAILED",
         )
 
 
@@ -222,6 +592,7 @@ class DatasetValidationError(DatasetError):
             full_message,
             details={"error_count": len(self.errors), "errors": self.errors[:20]},
             suggestion=suggestion,
+            code="INPUT_DATASET_VALIDATION_FAILED",
         )
 
 
@@ -248,6 +619,7 @@ class DatasetFormatError(DatasetError):
                 "supported_formats": supported_formats,
             },
             suggestion=suggestion,
+            code="INPUT_DATASET_FORMAT_UNSUPPORTED",
         )
 
 
@@ -257,25 +629,77 @@ class DatasetFormatError(DatasetError):
 
 class TrainingError(BackpropagateError):
     """Base class for training-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_TRAINING_FAILED",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class ModelLoadError(TrainingError):
-    """Failed to load model or tokenizer."""
+    """Failed to load model or tokenizer.
+
+    The optional ``cause_category`` argument lets the raise site classify the
+    underlying failure (auth / not_found / network / version / unknown). When
+    set, the default suggestion is drawn from the per-category remediation
+    table instead of the generic "check name + network" line — addresses the
+    Stage C audit gap that 401, 404, and network errors all got the same hint.
+
+    Backend raise sites in ``trainer.py`` are responsible for inspecting the
+    underlying transformers / HF Hub exception and passing the right category.
+    Today this is forward-compatible: callers that omit ``cause_category``
+    behave byte-identically to pre-Stage-C ModelLoadError.
+    """
 
     def __init__(
         self,
         model_name: str,
         reason: str,
         suggestion: str | None = None,
+        cause_category: ModelLoadCauseCategory | None = None,
     ):
         self.model_name = model_name
         self.reason = reason
+        self.cause_category = cause_category
+
+        # Hint precedence:
+        #   1. explicit ``suggestion`` arg wins (caller knows best)
+        #   2. otherwise, look up by cause_category if provided
+        #   3. otherwise, fall back to the pre-Stage-C generic line
+        if suggestion is None and cause_category is not None:
+            effective_hint = _MODEL_LOAD_HINTS.get(
+                cause_category, _MODEL_LOAD_HINTS["unknown"]
+            )
+        else:
+            effective_hint = suggestion or _MODEL_LOAD_HINTS["unknown"]
+
+        details = {"model_name": model_name, "reason": reason}
+        if cause_category is not None:
+            details["cause_category"] = cause_category
 
         super().__init__(
             f"Failed to load model '{model_name}': {reason}",
-            details={"model_name": model_name, "reason": reason},
-            suggestion=suggestion or "Check that the model name is correct and you have network access",
+            details=details,
+            suggestion=effective_hint,
+            code="DEP_MODEL_LOAD_FAILED",
+            # Most ModelLoadError instances come from transient network
+            # failures (HF Hub 503 / timeout). Callers may inspect
+            # ``details['reason']`` or ``cause_category`` to decide whether
+            # a retry is worth attempting (e.g. auth/not_found ⇒ don't retry).
+            retryable=True,
         )
 
 
@@ -305,6 +729,7 @@ class TrainingAbortedError(TrainingError):
                 "steps_completed": steps_completed,
                 "checkpoint_path": checkpoint_path,
             },
+            code="RUNTIME_TRAINING_ABORTED",
         )
 
 
@@ -324,6 +749,7 @@ class CheckpointError(TrainingError):
         super().__init__(
             f"Failed to {operation} checkpoint at '{path}': {reason}",
             details={"operation": operation, "path": path, "reason": reason},
+            code="STATE_CHECKPOINT_INVALID",
         )
 
 
@@ -333,7 +759,24 @@ class CheckpointError(TrainingError):
 
 class ExportError(BackpropagateError):
     """Base class for model export errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_EXPORT_FAILED",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class LoRAExportError(ExportError):
@@ -354,6 +797,7 @@ class LoRAExportError(ExportError):
             message,
             details={"output_path": output_path},
             suggestion=suggestion or "Check that the model has LoRA adapters attached",
+            code="RUNTIME_LORA_EXPORT_FAILED",
         )
 
 
@@ -380,6 +824,7 @@ class GGUFExportError(ExportError):
                 "quantization": quantization,
             },
             suggestion=suggestion or "Ensure Unsloth is installed or llama.cpp convert script is available",
+            code="RUNTIME_GGUF_EXPORT_FAILED",
         )
 
 
@@ -390,6 +835,7 @@ class MergeExportError(ExportError):
         super().__init__(
             f"Merge export failed: {reason}",
             suggestion=suggestion,
+            code="RUNTIME_MERGE_EXPORT_FAILED",
         )
 
 
@@ -408,6 +854,11 @@ class OllamaRegistrationError(ExportError):
             f"Failed to register '{model_name}' with Ollama: {reason}",
             details={"model_name": model_name},
             suggestion=suggestion or "Ensure Ollama is installed and running (https://ollama.ai)",
+            code="DEP_OLLAMA_REGISTRATION_FAILED",
+            # Ollama daemon failures are typically transient (service
+            # starting, restarting, or temporarily unreachable). Callers
+            # implementing backoff should treat this as retryable.
+            retryable=True,
         )
 
 
@@ -417,7 +868,24 @@ class OllamaRegistrationError(ExportError):
 
 class GPUError(BackpropagateError):
     """Base class for GPU-related errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_GPU_ERROR",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class GPUNotAvailableError(GPUError):
@@ -427,6 +895,7 @@ class GPUNotAvailableError(GPUError):
         super().__init__(
             "No CUDA GPU available",
             suggestion=suggestion or "Ensure CUDA is installed and a compatible GPU is present",
+            code="DEP_GPU_NOT_AVAILABLE",
         )
 
 
@@ -450,6 +919,12 @@ class GPUMemoryError(GPUError):
             message,
             details={"required_gb": required_gb, "available_gb": available_gb},
             suggestion=suggestion or "Try reducing batch size, using gradient checkpointing, or a smaller model",
+            code="RUNTIME_GPU_OOM",
+            # Not retryable by default — if the model literally won't fit, a
+            # retry just OOMs again. Callers who know they're dealing with a
+            # transient peak-allocation can construct a subclass or rebuild
+            # with retryable=True.
+            retryable=False,
         )
 
 
@@ -469,6 +944,9 @@ class GPUTemperatureError(GPUError):
             f"GPU temperature critical: {temperature}°C (threshold: {threshold}°C)",
             details={"temperature": temperature, "threshold": threshold},
             suggestion=suggestion or "Wait for GPU to cool down or improve cooling",
+            code="RUNTIME_GPU_TEMPERATURE_CRITICAL",
+            # Retryable: temperature naturally recovers as the GPU cools.
+            retryable=True,
         )
 
 
@@ -479,6 +957,7 @@ class GPUMonitoringError(GPUError):
         super().__init__(
             f"GPU monitoring failed: {reason}",
             suggestion=suggestion or "Install pynvml for GPU monitoring: pip install pynvml",
+            code="RUNTIME_GPU_MONITORING_FAILED",
         )
 
 
@@ -488,7 +967,24 @@ class GPUMonitoringError(GPUError):
 
 class SLAOError(BackpropagateError):
     """Base class for SLAO merging errors."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        details: dict | None = None,
+        suggestion: str | None = None,
+        code: str | None = None,
+        cause: Exception | None = None,
+        retryable: bool = False,
+    ):
+        super().__init__(
+            message,
+            details=details,
+            suggestion=suggestion,
+            code=code or "RUNTIME_SLAO_ERROR",
+            cause=cause,
+            retryable=retryable,
+        )
 
 
 class SLAOMergeError(SLAOError):
@@ -510,6 +1006,7 @@ class SLAOMergeError(SLAOError):
             message,
             details={"run_index": run_index},
             suggestion=suggestion,
+            code="RUNTIME_SLAO_MERGE_FAILED",
         )
 
 
@@ -528,6 +1025,7 @@ class SLAOCheckpointError(SLAOError):
         super().__init__(
             f"SLAO checkpoint {operation} failed at '{path}': {reason}",
             details={"operation": operation, "path": path},
+            code="STATE_SLAO_CHECKPOINT_INVALID",
         )
 
 
@@ -581,6 +1079,7 @@ class BatchOperationError(BackpropagateError):
                 "error_count": len(errors),
             },
             suggestion=suggestion,
+            code="PARTIAL_BATCH_OPERATION",
         )
 
     @property
@@ -590,3 +1089,51 @@ class BatchOperationError(BackpropagateError):
     @property
     def success_rate(self) -> float:
         return (self.success_count / self.total_items * 100) if self.total_items > 0 else 0.0
+
+
+# =============================================================================
+# PARTIAL SUCCESS (Ship Gate B2 exit code 3)
+# =============================================================================
+
+class PartialSuccess(BackpropagateError):
+    """
+    Raised when an operation completed with both successes and failures.
+
+    Maps to Ship Gate B2 exit code ``3`` (partial success). Distinct from
+    :class:`BatchOperationError` in intent: ``BatchOperationError`` is the
+    raw aggregate from a per-item loop; ``PartialSuccess`` is the CLI-facing
+    signal that "the work ran to completion, but not every unit succeeded".
+
+    A handler that catches ``BatchOperationError`` may choose to re-raise as
+    ``PartialSuccess`` once it has decided the overall operation succeeded
+    enough to warrant exit code 3 instead of exit code 2.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        total_items: int,
+        succeeded: int,
+        failed: int,
+        suggestion: str | None = None,
+        details: dict | None = None,
+    ):
+        self.total_items = total_items
+        self.succeeded = succeeded
+        self.failed = failed
+
+        merged_details = {
+            "total_items": total_items,
+            "succeeded": succeeded,
+            "failed": failed,
+        }
+        if details:
+            merged_details.update(details)
+
+        super().__init__(
+            message,
+            details=merged_details,
+            suggestion=suggestion,
+            code="PARTIAL_SUCCESS",
+            retryable=False,
+        )

@@ -5,9 +5,14 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Sister fix to release-binaries.yml: publish workflows must serialize,
+# not cancel. Cancelling a mid-flight twine upload leaves PyPI in a state
+# where the next retry fails with E409 ('File already exists') and needs
+# manual --skip-existing recovery. Group per release tag so distinct
+# tags run independently while same-tag re-fires queue safely.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -17,10 +22,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.11'
 
@@ -36,7 +41,7 @@ jobs:
         run: twine check dist/*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
           path: dist/
@@ -51,13 +56,48 @@ jobs:
 
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      # First attempt: the official OIDC trusted-publishing action.
+      # On transient E409 (packument-save race documented across
+      # mcp-tool-shop releases — see backprop-trace, ai-jam-sessions,
+      # vocal-synth-engine) the publish below is wrapped in a retry
+      # via the follow-up step. The action sets PYPI_API_TOKEN via OIDC
+      # so the fallback step inherits valid credentials within the same
+      # job execution context.
+      - name: Publish to PyPI (attempt 1)
+        id: publish-attempt-1
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        with:
+          # --skip-existing on the action side makes the publish idempotent
+          # if a previous attempt partially-uploaded one wheel — twine
+          # treats the existing file as success rather than E409.
+          skip-existing: true
+
+      # Retry on failure with 60s backoff (covers the typical 5-30 min
+      # packument-save race window with one retry; if it still fails the
+      # maintainer can re-run via workflow_dispatch — already enabled
+      # above). skip-existing again means previously-uploaded files are
+      # treated as success on the retry.
+      - name: Publish to PyPI (attempt 2 — retry after 60s on failure)
+        if: steps.publish-attempt-1.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          echo "::warning::PyPI publish attempt 1 failed (likely E409 packument race) — sleeping 60s and retrying via twine"
+          sleep 60
+        # Sleep step intentionally separated so the retry-publish step
+        # is the one that actually exits non-zero if the retry also fails.
+
+      - name: Publish to PyPI (attempt 2 — twine fallback)
+        if: steps.publish-attempt-1.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        with:
+          skip-existing: true
+          verbose: true
 
   docker:
     name: Publish to GHCR
@@ -68,10 +108,13 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -79,7 +122,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf  # v6.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -89,9 +132,11 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true

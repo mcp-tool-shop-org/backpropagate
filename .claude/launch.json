@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stage-d-bundle",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m", "http.server", "8765",
+        "--directory",
+        "E:/AI/dogfood-labs/swarms/swarm-1779335775-02be/stage-d/claude-design-out/prompt-1-reflex-ui"
+      ],
+      "port": 8765
+    }
+  ]
+}

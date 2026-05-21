@@ -84,7 +84,7 @@ class TestValidatePathInput:
 
     def test_validate_empty_path(self):
         """validate_path_input should reject empty paths."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         is_valid, error, path = validate_path_input("")
         assert is_valid is False
@@ -93,7 +93,7 @@ class TestValidatePathInput:
 
     def test_validate_existing_path(self, tmp_path):
         """validate_path_input should accept existing paths."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         test_file = tmp_path / "test.txt"
         test_file.write_text("test")
@@ -105,7 +105,7 @@ class TestValidatePathInput:
 
     def test_validate_nonexistent_path(self, tmp_path):
         """validate_path_input should reject nonexistent paths when must_exist=True."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         is_valid, error, path = validate_path_input(
             str(tmp_path / "nonexistent.txt"), must_exist=True
@@ -115,7 +115,7 @@ class TestValidatePathInput:
 
     def test_validate_path_traversal(self, tmp_path):
         """validate_path_input should reject path traversal attempts."""
-        from backpropagate.ui import validate_path_input
+        from backpropagate.ui_gradio_legacy import validate_path_input
 
         base_dir = tmp_path / "safe"
         base_dir.mkdir()
@@ -133,14 +133,14 @@ class TestSanitizeModelName:
 
     def test_sanitize_valid_name(self):
         """sanitize_model_name should preserve valid names."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         assert sanitize_model_name("Qwen2.5-7B") == "Qwen2.5-7B"
         assert sanitize_model_name("unsloth/model-name") == "unsloth/model-name"
 
     def test_sanitize_removes_dangerous_chars(self):
         """sanitize_model_name should remove dangerous characters."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         result = sanitize_model_name("model<script>alert('xss')</script>")
         assert "<" not in result
@@ -150,7 +150,7 @@ class TestSanitizeModelName:
 
     def test_sanitize_empty_name(self):
         """sanitize_model_name should handle empty input."""
-        from backpropagate.ui import sanitize_model_name
+        from backpropagate.ui_gradio_legacy import sanitize_model_name
 
         assert sanitize_model_name("") == ""
         assert sanitize_model_name(None) == ""
@@ -161,7 +161,7 @@ class TestSanitizeTextInput:
 
     def test_sanitize_truncates_long_input(self):
         """sanitize_text_input should truncate long inputs."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         long_text = "a" * 2000
         result = sanitize_text_input(long_text, max_length=100)
@@ -169,7 +169,7 @@ class TestSanitizeTextInput:
 
     def test_sanitize_removes_null_bytes(self):
         """sanitize_text_input should remove null bytes."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         result = sanitize_text_input("hello\x00world")
         assert "\x00" not in result
@@ -177,14 +177,14 @@ class TestSanitizeTextInput:
 
     def test_sanitize_strips_whitespace(self):
         """sanitize_text_input should strip whitespace."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         result = sanitize_text_input("  hello world  ")
         assert result == "hello world"
 
     def test_sanitize_empty_input(self):
         """sanitize_text_input should handle empty input."""
-        from backpropagate.ui import sanitize_text_input
+        from backpropagate.ui_gradio_legacy import sanitize_text_input
 
         assert sanitize_text_input("") == ""
         assert sanitize_text_input(None) == ""
@@ -195,7 +195,7 @@ class TestGenerateAuthToken:
 
     def test_generate_auth_token_length(self):
         """generate_auth_token should create tokens of appropriate length."""
-        from backpropagate.ui import generate_auth_token
+        from backpropagate.ui_gradio_legacy import generate_auth_token
 
         token = generate_auth_token()
         # 32 bytes base64url encoded = 43 characters
@@ -203,7 +203,7 @@ class TestGenerateAuthToken:
 
     def test_generate_auth_token_unique(self):
         """generate_auth_token should create unique tokens."""
-        from backpropagate.ui import generate_auth_token
+        from backpropagate.ui_gradio_legacy import generate_auth_token
 
         tokens = [generate_auth_token() for _ in range(10)]
         assert len(set(tokens)) == 10  # All unique
@@ -214,9 +214,9 @@ class TestLaunchSecurity:
 
     def test_launch_raises_on_share_without_auth(self):
         """launch should raise ValueError when share=True without auth."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -225,9 +225,9 @@ class TestLaunchSecurity:
 
     def test_launch_no_error_with_auth(self):
         """launch should not raise when share=True with auth."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -236,9 +236,9 @@ class TestLaunchSecurity:
 
     def test_launch_passes_auth_to_gradio(self):
         """launch should pass auth credentials to Gradio."""
-        from backpropagate.ui import launch
+        from backpropagate.ui_gradio_legacy import launch
 
-        with patch("backpropagate.ui.create_ui") as mock_create_ui:
+        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
             mock_app = MagicMock()
             mock_create_ui.return_value = mock_app
 
@@ -255,7 +255,7 @@ class TestUISecurityExports:
 
     def test_security_functions_available(self):
         """Security functions should be importable from ui module."""
-        from backpropagate.ui import (
+        from backpropagate.ui_gradio_legacy import (
             generate_auth_token,
             sanitize_model_name,
             sanitize_text_input,
@@ -356,6 +356,30 @@ class TestEnhancedRateLimiter:
         assert limiter.is_allowed()
         assert limiter.is_allowed()  # Burst
         assert not limiter.is_allowed()
+
+    def test_rate_limiter_buckets_per_ip_not_per_port(self):
+        """Regression: same IP, different source ports must share a rate-limit bucket.
+
+        Previously ``_get_client_id`` used ``str(request.client)`` which
+        included the source port, giving every TCP connection its own
+        bucket — effectively bypassing rate limiting. The new
+        ``_extract_client_ip`` reads ``.host`` only.
+        """
+        from collections import namedtuple
+
+        from backpropagate.ui_security import EnhancedRateLimiter
+
+        Address = namedtuple("Address", ["host", "port"])
+        limiter = EnhancedRateLimiter(max_requests=1, window_seconds=60)
+
+        request1 = MagicMock()
+        request1.client = Address(host="1.2.3.4", port=54321)
+        assert limiter.is_allowed(request1)
+
+        request2 = MagicMock()
+        request2.client = Address(host="1.2.3.4", port=54322)  # same IP, different port
+        assert not limiter.is_allowed(request2), \
+            "Same IP must share bucket regardless of source port"
 
 
 class TestSecurityConfig:
@@ -471,11 +495,21 @@ class TestFileValidator:
                 assert path is not None, "Path must be returned for valid file"
 
     def test_rejects_file_too_large(self):
-        """Should reject files that exceed size limit."""
+        """Should reject files that exceed size limit.
+
+        Verifies the size-check upload boundary (DoS-relevant). A file whose
+        size exceeds FileValidator.max_size_bytes must be rejected with
+        (valid=False, size-related error, path=None).
+
+        Note: FileValidator.__init__ wires self.max_size_bytes from the
+        `max_size_mb` constructor argument (NOT from
+        config.max_upload_size_mb). The test passes max_size_mb=1 directly
+        so the 2MB fixture exceeds the limit.
+        """
         from backpropagate.ui_security import FileValidator, SecurityConfig
 
-        config = SecurityConfig(max_upload_size_mb=1)  # 1MB limit
-        validator = FileValidator(config=config)
+        config = SecurityConfig(max_upload_size_mb=1)  # config retained for parity
+        validator = FileValidator(config=config, max_size_mb=1)  # 1MB limit
 
         with patch.object(Path, 'exists', return_value=True):
             with patch.object(Path, 'stat') as mock_stat:
@@ -486,9 +520,17 @@ class TestFileValidator:
                 file_obj.name = "/tmp/large.jsonl"
 
                 valid, error, path = validator.validate(file_obj)
-                # The test documents the expected behavior for file size validation
-                # If implementation checks size, it should reject; otherwise pass
-                # This test ensures we don't crash on large files
+
+                assert valid is False, (
+                    f"Expected rejection of oversize file, got valid=True "
+                    f"(error={error!r}, path={path!r})"
+                )
+                err_lower = (error or "").lower()
+                assert error and any(
+                    needle in err_lower
+                    for needle in ("size", "large", "limit", "maximum")
+                ), f"Expected size-related error (size/large/limit/maximum), got: {error!r}"
+                assert path is None, f"Expected None path for rejected file, got: {path!r}"
 
 
 class TestDangerousExtensions:
@@ -728,13 +770,18 @@ class TestRequestContext:
     """Tests for request context and tracing."""
 
     def test_request_context_creation(self):
-        """RequestContext should be creatable from Gradio request."""
+        """RequestContext should be creatable from Gradio request.
+
+        Default-IP sentinel changed from "anonymous" to "unknown" so the
+        per-IP rate limiter fails CLOSED to a single shared bucket on
+        unknown request shapes instead of appearing per-client.
+        """
         from backpropagate.ui_security import RequestContext
 
         ctx = RequestContext.from_gradio_request(operation="test_op")
 
         assert len(ctx.request_id) == 8, "request_id must be 8 chars"
-        assert ctx.client_ip == "anonymous", "Default IP must be 'anonymous'"
+        assert ctx.client_ip == "unknown", "Default IP must be 'unknown'"
         assert ctx.operation == "test_op", "operation must match"
         assert ctx.timestamp > 0, "timestamp must be positive"
         assert ctx.user_id is None, "user_id must default to None"
@@ -1349,3 +1396,172 @@ class TestSecurityConfigNewFields:
 
         config = SecurityConfig()
         assert config.validate_file_magic is False
+
+
+# =============================================================================
+# SB-T-002: get_ui_output_dir + BACKPROPAGATE_UI__OUTPUT_DIR env override
+#
+# Wave 1's F-002 fix introduced get_ui_output_dir() as the single allowed-base
+# directory for every UI-initiated filesystem write (LoRA save, GGUF export,
+# converted datasets, Modelfiles, Ollama registration). The function had ZERO
+# direct test coverage before this class. A future refactor that dropped the
+# env-var read, skipped the mkdir, or removed the system-path denylist would
+# have silently degraded the security boundary with no CI signal.
+# =============================================================================
+
+class TestGetUiOutputDir:
+    """Tests for get_ui_output_dir() resolution + env override + FB-003 denylist."""
+
+    def test_default_output_dir_under_home(self, monkeypatch):
+        """Default base resolves to ~/.backpropagate/ui-outputs under home.
+
+        Pins the documented default. A change that points the default at, e.g.,
+        a system temp dir would break the contract that UI outputs live under
+        the operator's home (where they expect to find them).
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+
+        result = get_ui_output_dir()
+
+        expected = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+        assert result == expected
+        assert result.is_absolute()
+
+    def test_env_override_respected(self, tmp_path, monkeypatch):
+        """BACKPROPAGATE_UI__OUTPUT_DIR override is honored.
+
+        Pins the operator-override path: setting the env var redirects every
+        UI-initiated write into the supplied directory.
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        target = tmp_path / "operator-override"
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        result = get_ui_output_dir()
+
+        assert result == target.resolve()
+
+    def test_creates_dir_on_first_call(self, tmp_path, monkeypatch):
+        """Directory is created (with parents) on first call.
+
+        Pins the mkdir-on-first-call contract — UI sinks pass the result to
+        downstream APIs expecting a writable directory, so eliding the mkdir
+        would surface as silent FileNotFoundError at the first write.
+        """
+        from backpropagate.ui_security import get_ui_output_dir
+
+        # Use a nested-but-nonexistent target so we also catch parents=True
+        target = tmp_path / "level1" / "level2" / "ui-outputs"
+        assert not target.exists()
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        result = get_ui_output_dir()
+
+        assert result.exists()
+        assert result.is_dir()
+        assert result == target.resolve()
+
+    def test_tilde_expansion(self, tmp_path, monkeypatch):
+        """'~' in env override expands to the user's home.
+
+        We point HOME / USERPROFILE at a tmp dir so the test doesn't actually
+        create files under the real user home (which would survive teardown).
+        Path.expanduser() reads those env vars on Posix / Windows respectively.
+        """
+        import sys
+
+        from backpropagate.ui_security import get_ui_output_dir
+
+        fake_home = tmp_path / "fake-home"
+        fake_home.mkdir()
+
+        # expanduser reads HOME on Posix, USERPROFILE on Windows
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
+        if sys.platform.startswith("win"):
+            # On Windows, expanduser also consults HOMEDRIVE+HOMEPATH
+            monkeypatch.setenv("HOMEDRIVE", str(fake_home.drive) if fake_home.drive else "")
+            monkeypatch.setenv("HOMEPATH", str(fake_home)[len(fake_home.drive):] if fake_home.drive else str(fake_home))
+
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", "~/custom-backprop-test")
+
+        result = get_ui_output_dir()
+
+        # Tilde must expand to (the patched) home, NOT the real user home
+        assert result == (fake_home / "custom-backprop-test").resolve(), (
+            f"Expected tilde to expand under fake home {fake_home}, "
+            f"got {result}"
+        )
+        assert result.exists()
+
+    def test_relative_path_absolutized(self, tmp_path, monkeypatch):
+        """Relative env-override values get resolved to absolute paths."""
+        from backpropagate.ui_security import get_ui_output_dir
+
+        # Chdir to tmp_path so 'rel/foo' resolves predictably under it
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", "rel/foo")
+
+        result = get_ui_output_dir()
+
+        assert result.is_absolute()
+        assert result == (tmp_path / "rel" / "foo").resolve()
+
+    def test_idempotent_across_calls(self, tmp_path, monkeypatch):
+        """Repeated calls return identical paths and don't fail on existing dir."""
+        from backpropagate.ui_security import get_ui_output_dir
+
+        target = tmp_path / "ui-outputs-idem"
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(target))
+
+        first = get_ui_output_dir()
+        second = get_ui_output_dir()
+
+        assert first == second
+        assert first.exists()
+
+    def test_rejects_forbidden_base(self, monkeypatch):
+        """FB-003: env override pointing at /etc raises UI_OUTPUT_DIR_FORBIDDEN.
+
+        Guards the post-Wave-3 frontend hardening (FB-003 denylist). If the
+        frontend amend hasn't landed yet, the test skips with a clear reason
+        so it doesn't block this wave's merge.
+        """
+        # /etc is a Unix system root and won't exist on Windows; we still try
+        # the call because the denylist is lexical (does not require the path
+        # to exist on this host). The denylist on Windows specifically denies
+        # C:\Windows / C:\Program Files / C:\ProgramData / C:\.
+        import sys
+
+        from backpropagate.exceptions import BackpropagateError
+        from backpropagate.ui_security import get_ui_output_dir
+        if sys.platform.startswith("win"):
+            forbidden = "C:\\Windows"
+        else:
+            forbidden = "/etc"
+
+        monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", forbidden)
+
+        try:
+            result = get_ui_output_dir()
+        except BackpropagateError as e:
+            # Happy path: FB-003 denylist fired. Pin the structured code.
+            assert e.code == "UI_OUTPUT_DIR_FORBIDDEN", (
+                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN'), "
+                f"got code={e.code!r}"
+            )
+            return
+        except (ValueError, PermissionError, OSError) as e:
+            # Fallback: helper hasn't landed the structured code yet but a
+            # rejection of some kind still fired — that's acceptable.
+            return
+        else:
+            # The denylist must reject the path. If we got a result back, the
+            # FB-003 guard isn't wired.
+            pytest.fail(
+                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
+                f"for forbidden base {forbidden!r}, got result={result!r}"
+            )

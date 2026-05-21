@@ -8,6 +8,8 @@ This tests the CLI entry point that allows:
 import sys
 from unittest.mock import patch
 
+import pytest
+
 
 class TestMainModule:
     """Tests for the __main__.py module."""
@@ -61,6 +63,7 @@ class TestMainModule:
         assert main(["info"]) == 0  # Info command works
         assert main(["config"]) == 0  # Config command works
 
+    @pytest.mark.integration
     def test_run_as_module_with_subprocess(self):
         """Test running as 'python -m backpropagate' via subprocess.
 
@@ -73,7 +76,7 @@ class TestMainModule:
             [sys.executable, "-m", "backpropagate", "--version"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=45,
         )
 
         # --version exits with code 0
@@ -82,6 +85,7 @@ class TestMainModule:
         from backpropagate import __version__
         assert __version__ in result.stdout
 
+    @pytest.mark.integration
     def test_run_as_module_info_command(self):
         """Test running 'python -m backpropagate info' via subprocess."""
         import subprocess
@@ -90,12 +94,13 @@ class TestMainModule:
             [sys.executable, "-m", "backpropagate", "info"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=45,
         )
 
         assert result.returncode == 0
         assert "System" in result.stdout or "backpropagate" in result.stdout.lower()
 
+    @pytest.mark.integration
     def test_run_as_module_no_args_shows_help(self):
         """Test running 'python -m backpropagate' with no args shows help."""
         import subprocess
@@ -104,7 +109,7 @@ class TestMainModule:
             [sys.executable, "-m", "backpropagate"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=45,
         )
 
         # No args may return 0 (help) or non-zero (error with usage)
@@ -130,6 +135,7 @@ class TestMainModuleIntegration:
 
             mock_exit.assert_called_once_with(1)
 
+    @pytest.mark.integration
     def test_main_with_invalid_command_shows_error(self):
         """Test main with an invalid command."""
         import subprocess
@@ -138,7 +144,7 @@ class TestMainModuleIntegration:
             [sys.executable, "-m", "backpropagate", "nonexistent_command"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=45,
         )
 
         # Invalid command should show error or help

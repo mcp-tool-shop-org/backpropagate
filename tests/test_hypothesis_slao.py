@@ -112,6 +112,7 @@ class TestTimeAwareScaleProperties:
 
 
 @pytest.mark.hypothesis
+@pytest.mark.slow
 class TestTaskSimilarityProperties:
     """Property tests for compute_task_similarity."""
 

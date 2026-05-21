@@ -46,6 +46,8 @@ __all__ = [
     "get_standard_logger",
     "add_request_context",
     "clear_request_context",
+    "bind_run_context",
+    "unbind_run_context",
     "LogContext",
     "STRUCTLOG_AVAILABLE",
 ]
@@ -379,6 +381,61 @@ def clear_request_context() -> None:
     """Clear all context vars."""
     if STRUCTLOG_AVAILABLE:
         structlog.contextvars.clear_contextvars()
+
+
+# =============================================================================
+# RUN CORRELATION CONTEXT (B-001)
+# =============================================================================
+
+def bind_run_context(run_id: str, **kwargs: Any) -> None:
+    """
+    Bind a stable ``run_id`` (and optional session_id / extra fields) to the
+    structured-logger context so every log line emitted by this thread carries
+    a single correlation token.
+
+    This is the load-bearing primitive behind B-001: an operator triaging a
+    multi-hour overnight job can grep one identifier across logs, checkpoint
+    manifests, run_history.json, and SLAO merge_history.json without
+    cross-referencing wall-clock timestamps across machines.
+
+    Safe to call even when structlog is not installed — becomes a no-op so
+    callers don't need a structlog-availability check at every site.
+
+    Args:
+        run_id: UUID4-derived (or otherwise stable) correlation token. Should
+            be persisted into any artefact saved during this run.
+        **kwargs: Optional additional context (e.g. ``session_id``,
+            ``model_name``) bound alongside ``run_id``.
+
+    Example:
+        >>> import uuid
+        >>> run_id = uuid.uuid4().hex
+        >>> bind_run_context(run_id=run_id, model="qwen2.5-7b")
+        >>> get_logger(__name__).info("run_started run_id=%s" % run_id)
+    """
+    if not STRUCTLOG_AVAILABLE:
+        return
+    payload: dict[str, Any] = {"run_id": run_id}
+    payload.update(kwargs)
+    structlog.contextvars.bind_contextvars(**payload)
+
+
+def unbind_run_context(*keys: str) -> None:
+    """
+    Unbind run-correlation context fields previously set by
+    :func:`bind_run_context`.
+
+    When called with no arguments, removes the default ``run_id`` key only —
+    use :func:`clear_request_context` to wipe the entire context. Safe when
+    structlog is unavailable (no-op).
+
+    Args:
+        *keys: Names of context fields to unbind. Defaults to ``("run_id",)``.
+    """
+    if not STRUCTLOG_AVAILABLE:
+        return
+    target_keys = keys or ("run_id",)
+    structlog.contextvars.unbind_contextvars(*target_keys)
 
 
 # =============================================================================

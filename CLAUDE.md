@@ -1,30 +1,42 @@
 # backpropagate
 
-## What This Does (Prototype)
+## What This Does
 
-⚠️ **Prototype Status** — Gradient and backpropagation analysis tool.
+Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Analyzes gradient flows, backpropagation behavior, and neural network
-training dynamics for debugging and optimization.
-
-## Features
-
-- Gradient flow analysis
-- Backpropagation visualization
-- Loss landscape analysis
-- Training dynamics
-- Optimization debugging
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.0.5 on PyPI; full Ship Gate passing).
 
 ## Architecture
 
-- Gradient tracker
-- Flow analyzer
-- Visualization engine
-- Debugging tools
+- `trainer.py` — core `Trainer` class (load, train, save, export)
+- `multi_run.py` + `slao.py` — multi-run SLAO LoRA-merge training (anti-catastrophic-forgetting)
+- `datasets.py` — JSONL/ShareGPT/Alpaca/OpenAI format auto-detect + filtering + dedupe + curriculum
+- `export.py` — LoRA/merged/GGUF export, Ollama Modelfile + registration
+- `config.py` — Pydantic settings, presets (Qwen 2.5 7B/3B, Llama 3.2 3B/1B, Mistral 7B)
+- `gpu_safety.py` — temp/VRAM/utilization monitoring, auto-pause
+- `cli.py` + `__main__.py` — `backprop` / `backpropagate` entry points
+- `ui.py` + `theme.py` + `ui_security.py` — Gradio UI (optional, requires `[ui]` extra)
+- `security.py` — path traversal + safe torch loading
+- `checkpoints.py` — checkpoint policies + cleanup
+- `exceptions.py` — structured exception hierarchy (Ship Gate B1)
+- `feature_flags.py` — lazy optional-dep detection
 
 ## Key Notes
 
-- Prototype analysis tool
-- Deep learning focused
-- PyTorch compatible
-- Early-stage implementation
+- Headless-first; UI is opt-in via `pip install backpropagate[ui]`
+- Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[observability]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
+- First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
+- Tested on RTX 5080 (16GB VRAM)
+- 1805 tests in `tests/`, 50% coverage floor (`fail_under = 50` in coverage config)
+- All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
+
+## User-facing docs surface
+
+- Canonical handbook lives under `site/src/content/docs/handbook/` (Astro/Starlight). The Jekyll tree at `docs/` is legacy — `docs/index.md` now redirects to the handbook.
+- Stage B contracts documented (added 2026-05-21 by docs swarm agent):
+  - `handbook/error-codes.md` — full catalog of stable codes (INPUT_/CONFIG_/DEP_/RUNTIME_/STATE_/PARTIAL_)
+  - `handbook/troubleshooting.md` — symptoms-first reverse index
+  - `handbook/env-vars.md` — every `BACKPROPAGATE_*` knob
+  - `handbook/cli-reference.md` — every subcommand + flag
+  - README "Troubleshooting" + "Reporting bugs" + "Web UI" + "Platform prerequisites" subsections cover the load-bearing user-facing contracts (run_id correlation, --share+--auth gating, redacted stderr, sandbox env var).
+- `examples/quickstart.jsonl` is a 5-line ShareGPT-format starter dataset referenced by the README Quick Start.

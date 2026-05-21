@@ -12,6 +12,8 @@ Tests cover:
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # =============================================================================
 # END-TO-END TRAINING TESTS
 # =============================================================================
@@ -275,11 +277,10 @@ class TestE2EExportAndInference:
         output_path = temp_dir / "exported"
 
         mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
 
         with patch("backpropagate.export._is_peft_model", return_value=True), \
              patch("peft.PeftModel.from_pretrained", return_value=mock_model):
-            result = export_lora(mock_model, mock_tokenizer, str(output_path))
+            result = export_lora(mock_model, str(output_path))
 
             assert result is not None
             mock_model.save_pretrained.assert_called_once()
@@ -310,8 +311,20 @@ class TestE2EExportAndInference:
 # UI INTEGRATION TESTS
 # =============================================================================
 
+@pytest.mark.skip(
+    reason=(
+        "Gradio-era module-level ``backpropagate.ui.state`` global removed in "
+        "v1.1.0 (Reflex migration). The Reflex equivalent — rx.State classes "
+        "in backpropagate.ui_state — gets fresh integration tests in Phase 3."
+    )
+)
 class TestUITrainAndMonitor:
-    """Tests for UI training and monitoring integration."""
+    """Tests for UI training and monitoring integration.
+
+    DEPRECATED — see class-level pytest.mark.skip. The Reflex state model is
+    fundamentally different (rx.State subclasses, WebSocket coupling); these
+    tests will be rewritten as Reflex test-client assertions in Phase 3.
+    """
 
     def test_ui_train_updates_state(self):
         """Training through UI should update state."""
@@ -418,10 +431,9 @@ class TestTrainExportWorkflow:
 
         # Export phase
         mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
 
         with patch("backpropagate.export._is_peft_model", return_value=True):
-            result = export_lora(mock_model, mock_tokenizer, str(temp_dir / "exported"))
+            result = export_lora(mock_model, str(temp_dir / "exported"))
             assert result is not None
 
     def test_multi_run_then_export_merged(self, temp_dir):

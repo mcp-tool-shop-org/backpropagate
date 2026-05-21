@@ -1,16 +1,24 @@
 """
-Tests for UI Component functionality.
+DEPRECATED — Gradio UI component tests.
 
-Tests cover:
-- Train Tab (rendering, controls, handlers)
-- Multi-Run Tab (dashboard, loss chart, checkpoint controls)
-- Train Tab Sidebar (live metrics, GPU status, refresh)
-- Help Tab (rendering, CLI reference)
+The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). These tests
+target the legacy Gradio Blocks tree at ``backpropagate.ui_gradio_legacy``
+and remain here as preserved release-note traceability. All tests are
+skipped at collection time; the Reflex equivalent component-tree tests will
+land in Phase 3 of the migration plan.
 """
 
 from unittest.mock import MagicMock, patch
 
-import gradio as gr
+import pytest
+
+pytestmark = pytest.mark.skip(reason="Gradio UI removed in v1.1.0 (Reflex migration)")
+
+# These imports are gated by the module skip above so they don't crash collection.
+try:
+    import gradio as gr  # noqa: F401
+except ImportError:  # pragma: no cover
+    gr = None  # type: ignore[assignment]
 
 # =============================================================================
 # TRAIN TAB TESTS

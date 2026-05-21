@@ -50,7 +50,49 @@ from threading import Lock
 from typing import Any, Optional, TypeVar
 from urllib.parse import urlparse
 
-import gradio as gr
+# Gradio import is conditional. The Web UI migrated from Gradio to Reflex in
+# v1.1.0; many helpers in this module are framework-agnostic (rate limiter,
+# file validator, auth-shape, error sanitization, path/IP extraction) and
+# should stay importable when neither Gradio nor Reflex is installed.
+# Gradio-specific surfaces (gr.Error wrappers, gr.Request type hints) check
+# GRADIO_AVAILABLE before use; type-hint references to ``gr.Request`` resolve
+# to the lightweight stub below when Gradio is absent so the module body still
+# evaluates without ImportError under [ui] = reflex-only.
+try:
+    import gradio as gr
+    GRADIO_AVAILABLE = True
+except ImportError:  # pragma: no cover — exercised when [ui] uses reflex only
+    GRADIO_AVAILABLE = False
+
+    class _GradioShim:
+        """Stand-in for the ``gradio`` module when it isn't installed.
+
+        Provides a ``Request`` placeholder type for annotations and an
+        ``Error`` subclass that mirrors Gradio's user-facing exception so
+        ``raise gr.Error(...)`` keeps working in unit tests / mocks. The
+        ``Warning`` / ``Info`` shims are no-ops.
+        """
+
+        class Request:  # type: ignore[no-redef]
+            pass
+
+        class Error(Exception):  # type: ignore[no-redef]
+            def __init__(self, message: str, *, duration: int = 10, title: str = "Error") -> None:
+                super().__init__(message)
+                self.duration = duration
+                self.title = title
+
+        @staticmethod
+        def Warning(message: str, *, duration: int = 5, title: str = "Warning") -> None:  # noqa: N802, ARG004
+            _ = (message, duration, title)
+            return None
+
+        @staticmethod
+        def Info(message: str, *, duration: int = 5, title: str = "Info") -> None:  # noqa: N802, ARG004
+            _ = (message, duration, title)
+            return None
+
+    gr = _GradioShim()  # type: ignore[assignment]
 
 __all__ = [
     # Configuration
@@ -77,6 +119,8 @@ __all__ = [
     "sanitize_filename",
     "validate_numeric_input",
     "validate_string_input",
+    # UI output directory (F-002)
+    "get_ui_output_dir",
     # Security logging
     "SecurityLogger",
     "log_security_event",
@@ -108,10 +152,305 @@ __all__ = [
     "DEFAULT_GRADIO_CSP",
     "get_gradio_csp",
     "apply_security_headers",
+    # Framework-agnostic helpers (moved from ui.py during Reflex migration v1.1.0)
+    "safe_markdown_fence",
+    "sanitize_error_for_user",
+    "validate_auth_shape",
 ]
 
 logger = logging.getLogger(__name__)
 security_logger = logging.getLogger("backpropagate.security.ui")
+
+
+# =============================================================================
+# CLIENT IP EXTRACTION (F-001 fix)
+# =============================================================================
+
+def _extract_client_ip(request: gr.Request | None) -> str:
+    """
+    Robustly extract a client IP from a Gradio/Starlette request.
+
+    Handles all shapes that ``request.client`` can take in practice:
+
+    - ``Address`` namedtuple (Starlette/FastAPI's default — what Gradio passes
+      in production): exposes a ``host`` attribute (and a separate ``port``).
+      We deliberately use ONLY ``host`` so per-IP rate-limit buckets don't
+      degenerate into per-TCP-connection buckets (different source port per
+      connection = effectively no rate limiting).
+    - ``None`` (e.g. unit tests, some ASGI middleware): we return
+      ``"unknown"`` so rate limiting still applies as a single shared bucket
+      rather than failing open with a unique id per call.
+    - ``dict`` with a ``"host"`` key: preserved for legacy/test callers that
+      construct a plain dict.
+    - bare ``str``: treated as the host directly. Note: we do NOT honor
+      ``X-Forwarded-For`` headers by default; trusting them requires a
+      separate trusted-proxy configuration and is intentionally out of scope.
+
+    Default on unknown shape: ``"unknown"`` (fail-closed under a shared
+    bucket rather than fail-open with per-connection buckets).
+    """
+    if request is None:
+        return "unknown"
+
+    client = getattr(request, "client", None)
+    if client is None:
+        return "unknown"
+
+    # 1. Address-like namedtuple (the real Starlette/FastAPI shape).
+    host = getattr(client, "host", None)
+    if isinstance(host, str) and host:
+        return host
+
+    # 2. Dict (legacy/test shape).
+    if isinstance(client, dict):
+        dict_host = client.get("host")
+        if isinstance(dict_host, str) and dict_host:
+            return dict_host
+        return "unknown"
+
+    # 3. Bare string fallback.
+    if isinstance(client, str) and client:
+        return client
+
+    # 4. Unknown shape — single shared bucket.
+    return "unknown"
+
+
+# =============================================================================
+# UI OUTPUT DIRECTORY (F-002 fix)
+# =============================================================================
+
+# Categories of system / credential paths an operator should never accidentally
+# point ``BACKPROPAGATE_UI__OUTPUT_DIR`` at. We err on the side of "obviously
+# dangerous" rather than enumerating every plausible-but-unusual path. Each
+# entry is expanded with ``~`` resolution and ``Path.resolve()`` before being
+# compared with ``Path.is_relative_to``.
+#
+# Categories (used by the hint surfaced on rejection):
+#   - System root + system bin/lib trees (Linux/macOS)
+#   - Boot / kernel / device pseudo-filesystems (Linux)
+#   - Per-host runtime/state trees (``/var/run``, ``/var/lib``)
+#   - Root user's home (``/root``)
+#   - User credential directories under any home (``~/.ssh``, ``~/.aws``,
+#     ``~/.kube``, ``~/.docker``, ``~/.gnupg``, ``~/.config``)
+#   - Windows system + program-files trees + ``ProgramData``
+#   - Windows per-user credential dirs (``%USERPROFILE%\.ssh``, AppData crypto)
+_FORBIDDEN_OUTPUT_BASE_CATEGORIES = (
+    "system roots (/, /etc, /usr, /var, /bin, /sbin, /boot, /sys, /proc, /dev, /var/run, /var/lib)",
+    "root home (/root)",
+    "user credential dirs (~/.ssh, ~/.aws, ~/.kube, ~/.docker, ~/.gnupg, ~/.config)",
+    "Windows system roots (C:\\Windows, C:\\Program Files, C:\\Program Files (x86), C:\\ProgramData)",
+    "Windows per-user credential dirs (%USERPROFILE%\\.ssh, %APPDATA%\\Microsoft\\Crypto)",
+)
+
+
+def _forbidden_output_bases() -> list[Path]:
+    """
+    Build the resolved list of forbidden output bases for the current host.
+
+    Resolved at call time (not module import) so test code can monkeypatch
+    ``Path.home`` / ``os.environ`` and see the result reflected. Paths that
+    don't exist on this host are still included — ``Path.is_relative_to``
+    works on lexical comparison after ``resolve()``, so a Linux denylist
+    entry on a Windows host is harmless (just never matches).
+    """
+    raw: list[str] = [
+        "/",
+        "/etc",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/boot",
+        "/var/run",
+        "/var/lib",
+        "/var",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/root",
+        "C:\\",
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\ProgramData",
+    ]
+    # Per-user credential directories — expand to the current user's home.
+    home = Path.home()
+    home_credential_subdirs = (
+        ".ssh",
+        ".aws",
+        ".kube",
+        ".docker",
+        ".gnupg",
+        ".config",
+    )
+    for sub in home_credential_subdirs:
+        raw.append(str(home / sub))
+
+    # Windows-specific per-user credential roots.
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        raw.append(str(Path(appdata) / "Microsoft" / "Crypto"))
+
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for entry in raw:
+        try:
+            p = Path(entry).expanduser().resolve()
+        except (OSError, RuntimeError):
+            # Resolving a non-existent Windows drive on Linux (or vice versa)
+            # can raise; that just means this entry can't apply here.
+            continue
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(p)
+    return resolved
+
+
+def _is_forbidden_output_base(path: Path) -> bool:
+    """
+    Return True if ``path`` resolves to (or under) any denylisted category.
+
+    The check uses ``Path.is_relative_to`` (Python 3.9+) for ancestor
+    matching, plus an exact-equality check so that, e.g., ``Path('/etc')``
+    itself is rejected. ``path`` is expected to already be resolved by the
+    caller; we resolve defensively in case it isn't.
+
+    Liberal-by-design: when the candidate is strictly inside the current
+    user's home directory, system-tree rejections (``/var``, ``/usr``,
+    etc.) are skipped — a service account whose home happens to be
+    ``/var/lib/jenkins`` should still be allowed to use the default
+    ``~/.backpropagate/ui-outputs``. Credential-dir matches (``~/.ssh``,
+    ``%APPDATA%\\Microsoft\\Crypto``, etc.) are still enforced even
+    inside the home, because those are the actual foot-guns we care
+    about.
+    """
+    try:
+        candidate = path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        # If we can't even resolve it, treat as forbidden (fail-closed).
+        return True
+
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        home = None
+
+    # Set of "credential" forbidden roots, computed identically here to the
+    # main list so we can selectively enforce them inside the home directory.
+    credential_subdirs = (".ssh", ".aws", ".kube", ".docker", ".gnupg", ".config")
+    credential_roots: set[Path] = set()
+    if home is not None:
+        for sub in credential_subdirs:
+            try:
+                credential_roots.add((home / sub).resolve())
+            except (OSError, RuntimeError):
+                continue
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        try:
+            credential_roots.add((Path(appdata) / "Microsoft" / "Crypto").resolve())
+        except (OSError, RuntimeError):
+            pass
+
+    # If the candidate is strictly under the home directory and is NOT under
+    # one of the credential roots, allow it — covers /var/lib/jenkins/.* and
+    # similar service-account homes that happen to live under a system root.
+    if home is not None:
+        try:
+            if candidate.is_relative_to(home) and candidate != home:
+                for cred in credential_roots:
+                    try:
+                        if candidate == cred or candidate.is_relative_to(cred):
+                            return True
+                    except (ValueError, OSError):
+                        continue
+                return False
+        except (ValueError, OSError):
+            pass
+
+    for forbidden in _forbidden_output_bases():
+        try:
+            if candidate == forbidden or candidate.is_relative_to(forbidden):
+                return True
+        except (ValueError, OSError):
+            # Cross-drive comparison on Windows can raise ValueError; that
+            # just means this entry can't match.
+            continue
+    return False
+
+
+def get_ui_output_dir() -> Path:
+    """
+    Return the single allowed-base directory for ALL UI-initiated filesystem
+    writes (saved LoRA adapters, GGUF exports, converted datasets, Modelfiles,
+    Ollama registrations, etc.).
+
+    Resolution order:
+
+    1. ``BACKPROPAGATE_UI__OUTPUT_DIR`` env var (operator override) — if set,
+       it is resolved to an absolute path and created on first use.
+    2. ``~/.backpropagate/ui-outputs`` (default) — created on first use.
+
+    Why this exists: ``validate_path_input`` previously called the underlying
+    ``safe_path`` without ``allowed_base``, which meant any absolute or
+    relative path was accepted (``safe_path`` only logged a warning for
+    literal ``..`` substrings without a base). Under the documented
+    ``--share + --auth`` flow that exposed filesystem-wide write access to
+    any authenticated remote user. Every UI sink now passes this directory
+    as ``allowed_base`` so user-supplied paths must resolve inside it.
+
+    System-path guard (FB-003):
+        After resolving the override (or the default), the path is checked
+        against a small denylist of obviously dangerous bases — system
+        roots, credential directories, etc. — and rejected with a
+        ``BackpropagateError(code="UI_OUTPUT_DIR_FORBIDDEN")`` if it
+        matches. The denylist is intentionally conservative (system trees
+        and well-known credential directories only); operators with niche
+        legitimate use cases should pick a non-system directory and the
+        guard will pass.
+
+    The directory is created (with parents) on first call so the path is
+    immediately writable. The directory's permissions are NOT chmod'd —
+    that's the operator's responsibility.
+    """
+    override = os.environ.get("BACKPROPAGATE_UI__OUTPUT_DIR", "").strip()
+    if override:
+        base = Path(override).expanduser().resolve()
+    else:
+        base = (Path.home() / ".backpropagate" / "ui-outputs").resolve()
+
+    # FB-003: refuse to mkdir into a system / credential directory.
+    if _is_forbidden_output_base(base):
+        from .exceptions import BackpropagateError
+
+        categories_hint = "; ".join(_FORBIDDEN_OUTPUT_BASE_CATEGORIES)
+        log_security_event(
+            "ui_output_dir_forbidden",
+            requested=str(base),
+            source="env" if override else "default",
+        )
+        raise BackpropagateError(
+            message=(
+                f"BACKPROPAGATE_UI__OUTPUT_DIR resolves to a forbidden system "
+                f"or credential path: {base}"
+            ),
+            code="UI_OUTPUT_DIR_FORBIDDEN",
+            suggestion=(
+                "Pick a non-system directory under your home (e.g. "
+                "~/.backpropagate/ui-outputs or ~/work/backprop-out). The "
+                f"following categories are refused: {categories_hint}."
+            ),
+            details={
+                "requested": str(base),
+                "source": "env" if override else "default",
+            },
+        )
+
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 # =============================================================================
@@ -309,15 +648,8 @@ class EnhancedRateLimiter:
         self._lock = Lock()
 
     def _get_client_id(self, request: gr.Request | None = None) -> str:
-        """Get client identifier (IP or fallback to 'anonymous')."""
-        if request is not None:
-            # Try to get IP from request
-            client_ip = getattr(request, "client", {})
-            if isinstance(client_ip, dict):
-                host: str = client_ip.get("host", "anonymous")
-                return host
-            return str(client_ip) if client_ip else "anonymous"
-        return "anonymous"
+        """Get client identifier (IP or fallback to 'unknown')."""
+        return _extract_client_ip(request)
 
     def _cleanup_old_entries(self) -> None:
         """Remove expired entries to prevent memory growth."""
@@ -497,6 +829,34 @@ class FileValidator:
                 max_mb = self.max_size_bytes / (1024 * 1024)
                 actual_mb = size / (1024 * 1024)
                 return False, f"File too large ({actual_mb:.1f}MB). Maximum: {max_mb:.0f}MB", None
+
+        # FB-010: Magic-bytes validation — wire the config flag end-to-end.
+        # When BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=true (or the
+        # SecurityConfig is constructed with validate_file_magic=True), every
+        # accepted-extension upload is also content-sniffed. This catches the
+        # "rename .html → .jsonl" extension-spoof case Trail of Bits flagged
+        # against Gradio 5 (CVE-2024-47872 family). For extensions with no
+        # canonical signature (.csv/.txt/.safetensors), validate_file_magic
+        # still runs the suspicious-starts heuristic (HTML / shell / PHP),
+        # so even no-signature types get a minimum defense.
+        if self.config.validate_file_magic and file_path.exists():
+            is_ok, magic_msg = validate_file_magic(file_path, expected_extension=ext)
+            if not is_ok:
+                log_security_event(
+                    "file_magic_rejected",
+                    file_name=file_path.name,
+                    extension=ext,
+                    purpose=purpose,
+                    reason=magic_msg,
+                )
+                return (
+                    False,
+                    (
+                        f"File content does not match {ext} (magic-bytes check failed): "
+                        f"{magic_msg}"
+                    ),
+                    None,
+                )
 
         # Sanitize filename (remove path components)
         safe_name = sanitize_filename(file_path.name)
@@ -822,11 +1182,7 @@ def validate_and_log_request(
     if not DEFAULT_SECURITY_CONFIG.log_all_requests:
         return
 
-    client_id = "anonymous"
-    if request is not None:
-        client = getattr(request, "client", {})
-        if isinstance(client, dict):
-            client_id = client.get("host", "anonymous")
+    client_id = _extract_client_ip(request)
 
     # Sanitize params for logging (truncate long values)
     safe_params: dict[str, str | int | float | bool] = {}
@@ -1103,12 +1459,7 @@ class RequestContext:
     ) -> "RequestContext":
         """Create context from a Gradio request."""
         request_id = str(uuid.uuid4())[:8]
-        client_ip = "anonymous"
-
-        if request is not None:
-            client = getattr(request, "client", {})
-            if isinstance(client, dict):
-                client_ip = client.get("host", "anonymous")
+        client_ip = _extract_client_ip(request)
 
         return cls(
             request_id=request_id,
@@ -1411,12 +1762,7 @@ class ConcurrencyLimiter:
 
     def _get_client_id(self, request: gr.Request | None = None) -> str:
         """Get client identifier from request."""
-        if request is not None:
-            client = getattr(request, "client", {})
-            if isinstance(client, dict):
-                host: str = client.get("host", "anonymous")
-                return host
-        return "anonymous"
+        return _extract_client_ip(request)
 
     def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:
         """
@@ -1519,6 +1865,27 @@ FILE_SIGNATURES: dict[str, list[bytes]] = {
 }
 
 
+# Hand-rolled "this is HTML/PHP/shell, not data" header heuristic. Used both
+# inside the signature-positive path (signature present but not matched) and
+# the signature-absent path (.csv/.txt/.safetensors have no canonical magic
+# bytes but should still never start with these). Kept module-level so other
+# callers (e.g. a future trainer-side upload sink) can reuse it.
+_SUSPICIOUS_FILE_HEADERS: tuple[bytes, ...] = (
+    b"<!DOCTYPE",
+    b"<html",
+    b"<HTML",
+    b"<script",
+    b"<SCRIPT",
+    b"<?php",
+    b"<?PHP",
+    b"#!/",
+    b"MZ",            # Windows PE/DOS executable
+    b"\x7fELF",       # Linux ELF executable
+    b"\xca\xfe\xba\xbe",  # macOS Mach-O fat binary (also Java class — both bad here)
+    b"PK\x03\x04",    # ZIP/JAR/DOCX — never a legitimate dataset format here
+)
+
+
 def validate_file_magic(
     file_path: Path,
     expected_extension: str | None = None,
@@ -1528,6 +1895,15 @@ def validate_file_magic(
 
     This helps prevent extension spoofing attacks where malicious files
     are renamed to bypass extension checks.
+
+    Behavior by extension category:
+        - Signature-defined (``.json``, ``.jsonl``, ``.parquet``, ``.gguf``):
+          must match a known signature, otherwise we check the suspicious-
+          headers list and reject on match (HTML/PHP/shell/binary).
+        - Signature-absent (``.csv``, ``.txt``, ``.safetensors``): no
+          positive signature exists, but we still apply the suspicious-
+          headers heuristic so a renamed ``index.html`` cannot slide in
+          as a ``.csv`` upload (FB-010).
 
     Args:
         file_path: Path to file to validate
@@ -1544,38 +1920,60 @@ def validate_file_magic(
     # Get expected signatures for this extension
     signatures = FILE_SIGNATURES.get(ext, [])
 
-    if not signatures:
-        # No signature check for this type
-        return True, "No signature check available"
-
     try:
         with open(file_path, "rb") as f:
             # Read enough bytes to check signature
             header = f.read(16)
-
-        for sig in signatures:
-            if header.startswith(sig):
-                return True, "Signature valid"
-
-        # Check if it might be HTML/script masquerading as data
-        suspicious_starts = [
-            b"<!DOCTYPE", b"<html", b"<HTML", b"<script", b"<SCRIPT",
-            b"<?php", b"<?PHP", b"#!/",
-        ]
-        for suspicious in suspicious_starts:
-            if header.startswith(suspicious):
-                log_security_event(
-                    "suspicious_file_content",
-                    file=file_path.name,
-                    expected_extension=ext,
-                    found_signature=header[:20].decode("utf-8", errors="replace"),
-                )
-                return False, f"File content appears to be HTML/script, not {ext}"
-
-        return True, "Content check passed"
-
     except Exception as e:
         return False, f"Failed to read file: {e}"
+
+    # First: always run the suspicious-headers heuristic so no-signature
+    # extensions (.csv/.txt/.safetensors) still get a minimum defense.
+    # Categorize the rejection so the message stays useful while remaining
+    # backward-compatible with existing "HTML/script" assertions.
+    html_script_signatures = (
+        b"<!DOCTYPE", b"<html", b"<HTML", b"<script", b"<SCRIPT",
+        b"<?php", b"<?PHP", b"#!/",
+    )
+    binary_signatures = (
+        b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe", b"PK\x03\x04",
+    )
+    for suspicious in html_script_signatures:
+        if header.startswith(suspicious):
+            log_security_event(
+                "suspicious_file_content",
+                file=file_path.name,
+                expected_extension=ext,
+                found_signature=header[:20].decode("utf-8", errors="replace"),
+            )
+            return False, f"File content appears to be HTML/script, not {ext}"
+    for suspicious in binary_signatures:
+        if header.startswith(suspicious):
+            log_security_event(
+                "suspicious_file_content",
+                file=file_path.name,
+                expected_extension=ext,
+                found_signature=header[:20].hex(),
+            )
+            return False, (
+                f"File content appears to be a binary executable or archive, not {ext}"
+            )
+
+    if not signatures:
+        # No positive signature for this extension; the suspicious-headers
+        # check above is the only defense available. Message preserves the
+        # legacy "No signature check available" wording so downstream
+        # tooling that grep'd that string still matches.
+        return True, "No signature check available"
+
+    # Positive signature defined — at least one must match.
+    for sig in signatures:
+        if header.startswith(sig):
+            return True, "Signature valid"
+
+    # Reaches here when a signature is defined but none match AND no
+    # suspicious header tripped — flag as content mismatch.
+    return False, f"File content does not match expected {ext} signature"
 
 
 # =============================================================================
@@ -2309,3 +2707,227 @@ def apply_security_headers(
     elif hasattr(response, "set_header"):
         for name, value in headers.items():
             response.set_header(name, value)
+
+
+# =============================================================================
+# FRAMEWORK-AGNOSTIC HELPERS (moved from ui.py during Reflex migration v1.1.0)
+#
+# These helpers were authored against the Gradio surface in Stage B/C but their
+# logic is framework-independent — pure string/path/auth manipulation that the
+# Reflex pages call the same way. The moves preserve them as a stable surface
+# across the UI framework migration.
+# =============================================================================
+
+
+def safe_markdown_fence(content: str, language: str = "") -> str:
+    """Wrap user content in a fenced Markdown code block safely (C-UX-005).
+
+    Dataset / Modelfile / Ollama previews wrap user-supplied content in
+    triple-backtick fences for display. If the content itself contains the
+    literal sequence ``` (extremely common — ChatML samples literally include
+    code fences as training data, and Modelfile bodies read from disk can
+    contain arbitrary characters), the outer fence terminates early. The rest
+    renders as raw markdown / creates a Markdown injection vector.
+
+    Defense: count the longest backtick run inside the content and use a
+    fence one tick longer. CommonMark explicitly allows this. We always
+    use at least three backticks so the output renders correctly in
+    historical viewers too.
+    """
+    if content is None:
+        content = ""
+    # Find the longest run of consecutive backticks in the content.
+    longest = 0
+    current = 0
+    for ch in content:
+        if ch == "`":
+            current += 1
+            if current > longest:
+                longest = current
+        else:
+            current = 0
+    fence_len = max(3, longest + 1)
+    fence = "`" * fence_len
+    lang = language or ""
+    return f"{fence}{lang}\n{content}\n{fence}"
+
+
+# FB-011: user-facing error sanitization.
+# Raw exception messages from torch / transformers / huggingface_hub frequently
+# embed absolute filesystem paths (home directory, HF cache, internal model
+# layout). Surfacing those into the UI toast leaks both PII (the operator's
+# username) and an internal-map of the deployment that attackers shouldn't get
+# from a UI handler. The patterns below redact:
+#   - Unix-style absolute paths starting with /home/, /Users/, /root/
+#   - Windows-style absolute paths under C:\Users\<name>\, including UNC roots
+#   - The HF cache location (~/.cache/huggingface/...)
+#   - Whole tempdirs surfaced by tempfile / shutil
+# Truncate to a fixed limit so a 10 KB pyarrow traceback can't blow up the
+# toast component.
+_REDACTED = "<redacted-path>"
+_PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
+    re.compile(r"/tmp/[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),
+    re.compile(r"~?/?\.cache/huggingface/[^\s'\":]*"),
+)
+
+
+def _redact_paths(text: str) -> str:
+    """
+    Replace absolute filesystem paths with ``<redacted-path>`` for UI display.
+
+    Used by ``sanitize_error_for_user`` so trainer / transformers errors that
+    embed the operator's home directory don't leak into the UI toast.
+    """
+    if not text:
+        return text
+    for pat in _PATH_REDACTION_PATTERNS:
+        text = pat.sub(_REDACTED, text)
+    return text
+
+
+def sanitize_error_for_user(
+    exc: BaseException,
+    operation: str,
+    max_length: int = 240,
+) -> tuple[str, str | None]:
+    """
+    Convert a backend exception into a user-safe display message (FB-011).
+
+    Returns a ``(message, suggestion)`` tuple:
+
+    - For ``BackpropagateError`` subclasses, return the structured
+      ``{code}: {message}`` plus the suggestion (already user-facing — these
+      are authored to be safe to display).
+    - For any other exception type, return a generic "Internal error
+      (RUNTIME_UI). Check server logs for details." — the full traceback is
+      still logged server-side via ``logger.exception`` at the call site,
+      so operators see the real cause; users see something actionable
+      without internal paths leaking.
+
+    The ``operation`` argument is folded into the user-facing message
+    ("during training", "during export") so the toast tells the user which
+    handler failed even when the underlying exception is hidden.
+    """
+    from .exceptions import BackpropagateError
+
+    # BackpropagateError: structured, user-authored — surface code + message.
+    if isinstance(exc, BackpropagateError):
+        code = exc.code or "BACKPROPAGATE_ERROR"
+        message = _redact_paths(exc.message or str(exc))
+        if len(message) > max_length:
+            message = message[: max_length - 1] + "…"
+        suggestion = exc.suggestion
+        if suggestion:
+            suggestion = _redact_paths(suggestion)
+            if len(suggestion) > max_length:
+                suggestion = suggestion[: max_length - 1] + "…"
+        return f"{code}: {message}", suggestion
+
+    # Anything else: hide the type + the full message; surface a stable
+    # operator-actionable string with the operation name only.
+    generic = (
+        f"Internal error during {operation} (RUNTIME_UI). "
+        "Check the server logs for full details."
+    )
+    return generic, None
+
+
+def validate_auth_shape(auth: Any) -> None:
+    """
+    FB-012: Validate the shape of the ``auth`` kwarg before passing it to the
+    UI server (Gradio originally; Reflex/FastAPI in v1.1.0+).
+
+    Frameworks' own validation is permissive in ways that can grant
+    unintended access — e.g. an empty list silently disables auth, a
+    one-element tuple raises a confusing internal TypeError, and a list
+    containing a non-tuple element gets coerced. Validate at the launch
+    boundary so misconfigured auth fails loudly rather than degrading to "no
+    auth" or "auth-but-not-in-the-shape-you-think".
+
+    Accepts:
+        - ``None`` (caller's responsibility to enforce share+auth)
+        - A 2-element tuple ``(username, password)`` — both non-empty strings.
+        - A non-empty list of such 2-element tuples (multi-user).
+        - A ``callable`` (Gradio supports custom auth functions; preserved
+          for backward compat though Reflex doesn't use it).
+
+    Rejects everything else with ``BackpropagateError(
+    code="INPUT_AUTH_INVALID_SHAPE")`` and a hint enumerating the accepted
+    shapes.
+    """
+    from .exceptions import BackpropagateError
+
+    if auth is None:
+        return
+
+    if callable(auth):
+        # Callable auth (legacy Gradio) — defer validation to the framework.
+        return
+
+    def _is_credential_pair(value: Any) -> bool:
+        if not isinstance(value, tuple):
+            return False
+        if len(value) != 2:
+            return False
+        username, password = value
+        if not isinstance(username, str) or not isinstance(password, str):
+            return False
+        # Empty strings produce a silently-broken login flow.
+        return bool(username) and bool(password)
+
+    accepted_shapes_hint = (
+        "Accepted shapes: (username, password) tuple of non-empty strings; "
+        "list of such tuples; or a callable (username, password) -> bool. "
+        "Empty strings, empty lists, and non-tuple elements are rejected."
+    )
+
+    if isinstance(auth, tuple):
+        if not _is_credential_pair(auth):
+            raise BackpropagateError(
+                message="auth tuple must be (username, password) of non-empty strings.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "tuple", "length": len(auth)},
+            )
+        return
+
+    if isinstance(auth, list):
+        if not auth:
+            raise BackpropagateError(
+                message="auth list must contain at least one (username, password) tuple — empty lists silently disable auth.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+                suggestion=accepted_shapes_hint,
+                details={"shape": "list", "length": 0},
+            )
+        for index, entry in enumerate(auth):
+            if not _is_credential_pair(entry):
+                raise BackpropagateError(
+                    message=(
+                        f"auth[{index}] must be a (username, password) tuple of non-empty strings."
+                    ),
+                    code="INPUT_AUTH_INVALID_SHAPE",
+                    suggestion=accepted_shapes_hint,
+                    details={"shape": "list", "bad_index": index},
+                )
+        return
+
+    # Anything else (dict, str, int, ...) — reject.
+    raise BackpropagateError(
+        message=(
+            f"auth must be None, a (username, password) tuple, a list of such tuples, "
+            f"or a callable. Got: {type(auth).__name__}"
+        ),
+        code="INPUT_AUTH_INVALID_SHAPE",
+        suggestion=accepted_shapes_hint,
+        details={"shape": type(auth).__name__},
+    )
+
+
+# Internal alias preserved for any code that imported the leading-underscore
+# name from ui.py — those imports will be updated, but the alias prevents
+# transient breakage during the migration.
+_validate_auth_shape = validate_auth_shape

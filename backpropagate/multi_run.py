@@ -46,7 +46,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .checkpoints import CheckpointInfo, CheckpointManager, CheckpointPolicy, CheckpointStats
+from .checkpoints import (
+    CheckpointInfo,
+    CheckpointManager,
+    CheckpointPolicy,
+    CheckpointStats,
+    RunHistoryManager,
+)
 from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
@@ -241,6 +247,15 @@ class MultiRunTrainer:
         # B-002: opt out of OOM recovery (default ON — backward-compatible
         # because preserves prior observable surface for non-OOM runs).
         oom_recovery: bool = True,
+        # F-005: experiment-tracker wiring forwarded to the inner Trainer.
+        report_to: str | list[str] | None = "auto",
+        # F-002: resume-from-checkpoint hint.
+        #   * None (default) → auto-detect any in-progress run in the same
+        #     output dir and resume it; if no in-progress run is found,
+        #     start a fresh session.
+        #   * <run_id> str → resume that specific run.
+        #   * "off" → never resume; always start a fresh session.
+        resume_from: str | None = None,
         # Callbacks
         on_run_start: Callable[[int], None] | None = None,
         on_run_complete: Callable[[RunResult], None] | None = None,
@@ -316,6 +331,20 @@ class MultiRunTrainer:
         # B-002: OOM recovery flag (default True for graceful degradation).
         self.oom_recovery = oom_recovery
 
+        # F-005: persist the operator's report_to intent; threaded into the
+        # inner Trainer instance at run() time.
+        self._report_to_intent = report_to
+
+        # F-002: resume hint. Resolved at run() entry by inspecting the
+        # on-disk run history.
+        self._resume_from = resume_from
+        # Populated by _maybe_resume() once we know which run we're picking
+        # up — used by _execute_run to skip already-completed run indices
+        # and to load the SLAO merger from the persisted state.
+        self._resume_start_run_idx: int = 1
+        self._resume_checkpoint_path: str | None = None
+        self._resumed_from_run_id: str | None = None
+
         # Callbacks
         self.on_run_start = on_run_start
         self.on_run_complete = on_run_complete
@@ -333,6 +362,11 @@ class MultiRunTrainer:
         # B-001: session-wide correlation token. Minted lazily at run() entry
         # so a re-used MultiRunTrainer instance gets a fresh ID per session.
         self._run_id: str | None = None
+
+        # F-003: RunHistoryManager bound at run() entry once the checkpoint
+        # directory is known. Set here so other methods can defensively
+        # check ``self._run_history is not None`` without an AttributeError.
+        self._run_history: RunHistoryManager | None = None
 
         # Results
         self._runs: list[RunResult] = []
@@ -367,6 +401,99 @@ class MultiRunTrainer:
         )
         logger.info(f"Merge mode: {self.config.merge_mode.value}, oom_recovery={self.oom_recovery}")
 
+    def _maybe_resume(self, checkpoint_dir: Path) -> str | None:
+        """F-002: resolve the resume hint into a concrete run_id (or None).
+
+        Returns the run_id of a previous session to resume, or ``None`` if
+        we should start fresh.
+        """
+        if self._resume_from is not None and self._resume_from.lower() == "off":
+            return None
+
+        history = RunHistoryManager(str(checkpoint_dir))
+
+        # Explicit run_id requested.
+        if self._resume_from:
+            record = history.get_run(self._resume_from)
+            if record is None:
+                logger.warning(
+                    f"resume_from={self._resume_from!r} not found in run history; "
+                    "starting fresh."
+                )
+                return None
+            return str(record.get("run_id"))
+
+        # Default: auto-detect an in-progress entry.
+        in_progress = history.in_progress_runs()
+        # Only auto-resume multi-run sessions; single-run resume is a different
+        # workflow handled by the Trainer directly.
+        in_progress = [r for r in in_progress if r.get("session_kind") == "multi_run"]
+        if not in_progress:
+            return None
+        # Pick the most recent.
+        in_progress.sort(
+            key=lambda r: str(r.get("started_at") or r.get("timestamp") or ""),
+            reverse=True,
+        )
+        candidate = in_progress[0]
+        run_id = str(candidate.get("run_id"))
+        logger.info(
+            f"Auto-detected in-progress multi-run {run_id} — resuming. "
+            "Pass resume_from='off' to start fresh."
+        )
+        return run_id
+
+    def _restore_session_state(
+        self,
+        checkpoint_dir: Path,  # noqa: ARG002 — reserved for future use (verify checkpoint files on disk match the manifest)
+        run_id: str,
+    ) -> bool:
+        """F-002: rehydrate session state from disk for a resumed run_id.
+
+        Returns True when at least the checkpoint manager identified a
+        prior checkpoint we can load from; False when nothing useful was
+        found (the caller falls back to a fresh start).
+        """
+        assert self._checkpoint_manager is not None
+
+        last_cp = self._checkpoint_manager.find_latest_for_run_id(run_id)
+        if last_cp is None:
+            logger.warning(
+                f"No checkpoint found for run_id={run_id}; cannot resume — "
+                "starting from run 1."
+            )
+            return False
+
+        self._resume_checkpoint_path = last_cp.path
+        # The next run we execute starts AFTER the last completed run.
+        self._resume_start_run_idx = last_cp.run_index + 1
+        self._resumed_from_run_id = run_id
+        logger.info(
+            f"Resuming run_id={run_id} from checkpoint {last_cp.path} "
+            f"(run_index={last_cp.run_index}); next run = "
+            f"{self._resume_start_run_idx}/{self.config.num_runs}."
+        )
+
+        # Restore SLAO merger state if a merger directory exists alongside
+        # the checkpoint and we're in SLAO mode.
+        if self._slao_merger is not None:
+            slao_path = Path(last_cp.path).parent / "slao"
+            if slao_path.exists():
+                try:
+                    # SLAOMerger.load is the symmetric counterpart of
+                    # SLAOMerger.save (used in _execute_run after every
+                    # successful merge).
+                    self._slao_merger.load(str(slao_path))
+                    logger.info(f"Restored SLAO merger state from {slao_path}")
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to restore SLAO state from {slao_path}: {exc}. "
+                        "Continuing without it — the first resumed run will "
+                        "re-initialize the merger."
+                    )
+
+        return True
+
     def run(self, dataset: DatasetLoader | str | Any = None) -> SpeedrunResult:
         """
         Execute all multi-run training runs.
@@ -400,18 +527,85 @@ class MultiRunTrainer:
         self._should_abort = False
         self._abort_reason = None
 
+        # Setup checkpoint directory first so the resume detector can read
+        # the on-disk run history before we mint a new run_id.
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # F-002: probe for a resume candidate before minting a new run_id.
+        resume_run_id = self._maybe_resume(checkpoint_dir)
+
         # B-001: mint a session-wide correlation token and bind it to the
         # structured-logger context so every log line emitted from this point
         # forward carries `run_id=<id>`. The unbind happens in the finally
         # block at the bottom of this method so the context doesn't leak into
         # callers that reuse the same thread.
-        self._run_id = uuid.uuid4().hex
+        # F-002: when resuming, re-use the prior run_id so the on-disk history
+        # entry / checkpoint manifest / SLAO merge_history all stay grouped
+        # under the same correlation token.
+        self._run_id = resume_run_id or uuid.uuid4().hex
         bind_run_context(run_id=self._run_id, session_kind="multi_run")
-        logger.info(f"run_started run_id={self._run_id}")
+        if resume_run_id:
+            logger.info(f"run_resumed run_id={self._run_id}")
+        else:
+            logger.info(f"run_started run_id={self._run_id}")
 
-        # Setup checkpoint directory
-        checkpoint_dir = Path(self.config.checkpoint_dir)
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        # F-003: record the multi-run session start in the on-disk run history.
+        # Errors here never kill the run — we never want history persistence
+        # to gate training.
+        run_history = RunHistoryManager(str(checkpoint_dir))
+        dataset_info = (
+            dataset if isinstance(dataset, str) else type(dataset).__name__
+        )
+        hyperparameters = {
+            "num_runs": self.config.num_runs,
+            "steps_per_run": self.config.steps_per_run,
+            "samples_per_run": self.config.samples_per_run,
+            "merge_mode": self.config.merge_mode.value,
+            "initial_lr": self.config.initial_lr,
+            "final_lr": self.config.final_lr,
+            "lr_decay": self.config.lr_decay,
+            "warmup_steps_per_run": self.config.warmup_steps_per_run,
+            "shuffle_data": self.config.shuffle_data,
+            "replay_fraction": self.config.replay_fraction,
+            "replay_strategy": self.config.replay_strategy,
+            "validation_samples": self.config.validation_samples,
+            "validate_every_run": self.config.validate_every_run,
+            "early_stopping": self.config.early_stopping,
+            "early_stopping_patience": self.config.early_stopping_patience,
+            "adaptive_scaling": self.config.adaptive_scaling,
+            "layer_scaling": self.config.layer_scaling,
+            "seed": settings.training.seed,
+        }
+        # F-004: deferred import to avoid circular dependency with trainer.py
+        # (multi_run is imported by trainer.py at runtime via __getattr__).
+        try:
+            from .trainer import _compute_dataset_hash
+
+            dataset_hash = _compute_dataset_hash(dataset)
+        except Exception:
+            dataset_hash = None
+        try:
+            if resume_run_id is None:
+                run_history.record_run_started(
+                    run_id=self._run_id,
+                    model_name=self.model_name,
+                    dataset_info=dataset_info,
+                    hyperparameters=hyperparameters,
+                    session_kind="multi_run",
+                    checkpoint_path=str(checkpoint_dir),
+                    dataset_hash=dataset_hash,
+                )
+            else:
+                # F-002: keep the original run record but flip its status
+                # back to "running" so list-runs --status running shows it
+                # while the resume is live.
+                run_history.update_run(self._run_id, status="running")
+        except Exception as hist_err:
+            logger.warning(
+                f"RunHistoryManager.record_run_started failed: {hist_err}"
+            )
+        self._run_history = run_history
 
         # Phase 5.3: Initialize checkpoint manager
         checkpoint_policy = CheckpointPolicy(
@@ -427,6 +621,16 @@ class MultiRunTrainer:
         )
         logger.info(f"Checkpoint manager initialized: keep_best={checkpoint_policy.keep_best_n}, "
                     f"max_total={checkpoint_policy.max_total}, auto_prune={checkpoint_policy.auto_prune}")
+
+        # F-002: if we're resuming, rehydrate the start index + checkpoint
+        # path from the persisted state. This MUST happen after the
+        # checkpoint manager is initialised so the manifest has been loaded.
+        if resume_run_id is not None:
+            if not self._restore_session_state(checkpoint_dir, resume_run_id):
+                # Couldn't rehydrate — fall back to a fresh session for this
+                # run_id (the existing history record gets re-used; we just
+                # don't skip any run indices).
+                self._resume_start_run_idx = 1
 
         # Initialize SLAO merger if using SLAO mode.
         # F-015: thread MultiRunConfig.adaptive_scaling + layer_scaling through
@@ -448,6 +652,18 @@ class MultiRunTrainer:
             # B-001: emit run_ended and unbind context on this early-exit path
             # so the correlation token doesn't leak into the next caller.
             logger.info(f"run_ended run_id={self._run_id} status=aborted")
+            # F-003: record GPU-safety-abort as a failed run.
+            try:
+                self._run_history.record_run_failed(
+                    run_id=self._run_id,
+                    failure_reason="GPU safety check failed",
+                    duration_seconds=time.time() - start_time,
+                    checkpoint_path=str(checkpoint_dir),
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             unbind_run_context("run_id", "session_kind")
             return self._create_abort_result("GPU safety check failed")
 
@@ -476,6 +692,7 @@ class MultiRunTrainer:
                 model=self.model_name,
                 learning_rate=self.config.initial_lr,
                 train_on_responses=True,  # FT-010: same quality optimization as single-run
+                report_to=self._report_to_intent,  # F-005
             )
             self._trainer.load_model()
 
@@ -487,7 +704,27 @@ class MultiRunTrainer:
                 self._verify_peft_api()
 
             # Execute runs
-            for run_idx in range(1, self.config.num_runs + 1):
+            # F-002: when resuming, start from where the prior session left off.
+            # _resume_start_run_idx defaults to 1 for fresh sessions.
+            start_idx = max(1, self._resume_start_run_idx)
+            if start_idx > 1:
+                logger.info(
+                    f"Resuming multi-run from run {start_idx}/{self.config.num_runs}"
+                )
+                # F-002: when resuming, hydrate the model with the last
+                # checkpoint so the SLAO accumulator + LoRA weights pick up
+                # where they left off.
+                if self._resume_checkpoint_path:
+                    try:
+                        self._load_resume_checkpoint(self._resume_checkpoint_path)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Failed to load resume checkpoint "
+                            f"{self._resume_checkpoint_path}: {exc}. "
+                            "Continuing with the freshly loaded base model — "
+                            "results may diverge from the original run."
+                        )
+            for run_idx in range(start_idx, self.config.num_runs + 1):
                 if self._should_abort:
                     break
 
@@ -535,6 +772,20 @@ class MultiRunTrainer:
             # B-001: emit run_ended with status before re-raising so the
             # operator sees both endpoints of the correlation window.
             logger.info(f"run_ended run_id={self._run_id} status=error")
+            # F-003: persist the failure in run history before re-raising so
+            # `backprop list-runs --status failed` surfaces this session.
+            try:
+                self._run_history.record_run_failed(
+                    run_id=self._run_id,
+                    failure_reason=f"{type(e).__name__}: {e}",
+                    duration_seconds=time.time() - start_time,
+                    checkpoint_path=str(checkpoint_dir),
+                    extra={"merge_history": self._collect_merge_history()},
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             raise
 
         finally:
@@ -551,7 +802,25 @@ class MultiRunTrainer:
 
         # Create final result
         total_duration = time.time() - start_time
-        return self._create_result(total_duration)
+        result = self._create_result(total_duration)
+
+        # F-003: record successful completion of the multi-run session.
+        try:
+            self._run_history.record_run_completed(
+                run_id=self._run_id,
+                final_loss=result.final_loss,
+                loss_history=list(self._aggregate_loss),
+                steps=result.total_steps,
+                duration_seconds=total_duration,
+                gpu_max_temp=self._gpu_max_temp or None,
+                checkpoint_path=result.final_checkpoint_path,
+                merge_history=self._collect_merge_history(),
+            )
+        except Exception as hist_err:
+            logger.warning(
+                f"RunHistoryManager.record_run_completed failed: {hist_err}"
+            )
+        return result
 
     def abort(self, reason: str = "User requested abort") -> None:
         """Request abort of current multi-run session."""
@@ -655,6 +924,17 @@ class MultiRunTrainer:
         trainer = None  # noqa: F841 — assigned inside the loop, referenced after
         result: Any = None
 
+        # F-005: resolve report_to from the inner Trainer instance (carries
+        # the operator's intent). MultiRun inherits the same wiring policy,
+        # so a single multi-run session emits a single W&B project with a
+        # per-run name like ``backprop-<run_id_prefix>-run-<run_idx>``.
+        report_to_resolved = self._trainer._resolve_report_to()
+        run_name = (
+            f"backprop-{self._run_id[:12]}-run-{run_idx:03d}"
+            if (self._run_id and report_to_resolved != "none")
+            else None
+        )
+
         # B-002: per-run OOM retry. We keep retrying with halved batch until
         # batch_size hits 1 (the floor). At the floor, _OOM_MAX_RETRIES_AT_MIN_BATCH
         # consecutive OOMs trigger session abort.
@@ -675,7 +955,8 @@ class MultiRunTrainer:
                 fp16=settings.training.fp16,
                 overwrite_output_dir=True,
                 dataloader_num_workers=0 if os.name == "nt" else 4,
-                report_to="none",
+                report_to=report_to_resolved,  # F-005
+                run_name=run_name,
                 seed=settings.training.seed + run_idx,  # Different seed each run
                 # SFT-specific args (TRL 0.24+)
                 max_length=self._trainer.max_seq_length,
@@ -1645,6 +1926,86 @@ class MultiRunTrainer:
                 return True
 
         return False
+
+    def _load_resume_checkpoint(self, checkpoint_path: str) -> None:
+        """F-002: load LoRA adapter weights from a previous run's checkpoint.
+
+        ``checkpoint_path`` points at a directory created by
+        ``Trainer.save()`` — a PEFT adapter directory with
+        ``adapter_config.json`` + ``adapter_model.safetensors``. We
+        re-attach those weights onto the current trainer's model via
+        PEFT's ``load_adapter`` (when available) or by feeding the
+        state dict through :meth:`_load_lora_state_dict`.
+        """
+        from pathlib import Path as _P
+
+        cp_path = _P(checkpoint_path)
+        if not cp_path.exists():
+            raise FileNotFoundError(f"Resume checkpoint not found: {cp_path}")
+
+        model = self._trainer._model
+        if hasattr(model, "load_adapter"):
+            # PEFT >= 0.7 provides load_adapter on PeftModel instances.
+            try:
+                model.load_adapter(str(cp_path), adapter_name="default", is_trainable=True)
+                logger.info(f"Resumed LoRA weights from {cp_path} via PeftModel.load_adapter")
+                return
+            except Exception as exc:
+                logger.debug(f"load_adapter path failed: {exc}; falling back to state-dict load")
+
+        # Fallback: read the state dict and apply via existing helper.
+        try:
+            from safetensors.torch import load_file  # type: ignore
+
+            adapter_file = cp_path / "adapter_model.safetensors"
+            if not adapter_file.exists():
+                adapter_file = cp_path / "adapter_model.bin"
+            if not adapter_file.exists():
+                raise FileNotFoundError(
+                    f"No adapter weights at {adapter_file.parent}"
+                )
+            state_dict = load_file(str(adapter_file))
+        except ImportError:
+            import torch
+
+            adapter_file = cp_path / "adapter_model.bin"
+            if not adapter_file.exists():
+                raise
+            state_dict = torch.load(adapter_file, map_location="cpu")
+
+        self._load_lora_state_dict(state_dict)
+        logger.info(f"Resumed LoRA weights from {cp_path} via fallback state-dict load")
+
+    def _collect_merge_history(self) -> list[dict[str, Any]]:
+        """F-003 / F-004: collect serialisable SLAO merge_result dicts.
+
+        Each ``RunResult.merge_result`` is a :class:`MergeResult` (or
+        ``None``). We collapse the populated ones into dicts so they
+        survive the JSON round-trip into ``run_history.json`` and the
+        model card.
+        """
+        out: list[dict[str, Any]] = []
+        for run in self._runs:
+            mr = getattr(run, "merge_result", None)
+            if mr is None:
+                continue
+            entry: dict[str, Any] = {"run_index": run.run_index}
+            # MergeResult is a dataclass — defensively turn it into a dict
+            # via asdict() if available, else iterate its public attrs.
+            try:
+                from dataclasses import asdict, is_dataclass
+
+                if is_dataclass(mr):
+                    entry["result"] = asdict(mr)
+                else:
+                    entry["result"] = {
+                        k: v for k, v in vars(mr).items()
+                        if not k.startswith("_")
+                    }
+            except Exception:
+                entry["result"] = str(mr)
+            out.append(entry)
+        return out
 
     def _create_result(self, total_duration: float) -> SpeedrunResult:
         """Create final SpeedrunResult."""

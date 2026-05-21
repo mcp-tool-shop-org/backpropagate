@@ -88,3 +88,39 @@ for model in list_ollama_models():
 ```
 
 This calls `ollama list` under the hood and returns the model names.
+
+## Model cards (v1.1.0)
+
+Every export now writes a `model_card.md` alongside the artifact. The card follows the [Hugging Face model card schema](https://huggingface.co/docs/hub/model-cards), so when you push to the Hub it's picked up as the repo's landing page automatically.
+
+The card includes:
+
+- Frontmatter (`base_model`, `library_name: backpropagate`, `tags`)
+- Property table (run_id, dataset, sha256, steps, final loss, LoRA rank/alpha, seed, duration, GPU, library version)
+- Loss curve (unicode sparkline)
+- Trust signals (Stage B/C/D + Ship Gate)
+- Reproduce-this-run command
+
+Disable card emission with `backprop export ... --no-model-card`.
+
+## Hub push (v1.1.0)
+
+Backpropagate ships first-class Hugging Face Hub push from the CLI:
+
+```bash
+# adapter-only push (default — smaller, faster, more useful for LoRA finetunes)
+backprop push ./output/lora --repo alice/qwen-finetune
+
+# private repo
+backprop push ./output/lora --repo alice/qwen-finetune --private
+
+# include the base model
+backprop push ./output/merged --repo alice/qwen-finetune --include-base
+
+# one-shot export + push
+backprop export ./output/lora --format lora --push-to-hub alice/qwen-finetune
+```
+
+Token resolution order: `--token` flag → `HF_TOKEN` env var → `HUGGING_FACE_HUB_TOKEN` env var → `~/.cache/huggingface/token` (from `huggingface-cli login`).
+
+The `model_card.md` next to the local export is mirrored as `README.md` inside the upload so the HF UI renders it as the repo's model card. Errors carry structured codes (`HUB_PUSH_AUTH` / `HUB_PUSH_NOT_FOUND` / `HUB_PUSH_NETWORK` / `HUB_PUSH_VERSION` / `HUB_PUSH_UNKNOWN`) for programmatic triage.

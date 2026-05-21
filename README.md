@@ -93,7 +93,7 @@ pip install backpropagate[full]        # Everything
 | `ui` | Gradio web interface | gradio>=5.6.0 |
 | `validation` | Pydantic config validation | pydantic, pydantic-settings |
 | `export` | GGUF export for Ollama | llama-cpp-python |
-| `monitoring` | WandB + system monitoring | wandb, psutil |
+| `monitoring` | WandB + system monitoring (auto-wired into trainer in v1.1.0) | wandb, psutil |
 | `observability` | OpenTelemetry tracing | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Structured logging | structlog |
 | `security` | JWT auth + token generation | PyJWT, cryptography |
@@ -185,9 +185,52 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
 backprop info
+backprop list-runs                              # v1.1.0: query past training runs
+backprop show-run <run-id>                      # v1.1.0: detail view
+backprop resume <run-id>                        # v1.1.0: resume a crashed multi-run
+backprop push ./output/lora --repo me/my-model  # v1.1.0: push adapter to HF Hub
 ```
 
 See the [CLI reference](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/) for every subcommand and flag, or run `backprop <subcommand> --help`.
+
+### Resume from checkpoint (v1.1.0)
+
+A 5-run multi-run that crashes at run 4 is now recoverable. Every multi-run session writes its run_id into both `run_history.json` and the on-disk checkpoint manifest, so picking up where you left off is one command:
+
+```bash
+backprop resume <run-id>                       # picks up the in-progress session
+backprop multi-run --data ... --resume <run-id> # explicit form
+backprop train --data ... --resume <run-id>    # single-run resume (continues run_id)
+```
+
+The default behavior of `backprop multi-run` (no `--resume`) auto-detects an in-progress entry for the same output directory and continues it. Pass `resume_from="off"` (Python API) or omit `--resume` and start in a fresh output dir to force a clean session.
+
+When a multi-run resumes, the latest checkpoint for that run_id is loaded into the model, the SLAO merger state is restored from `slao/` next to the checkpoint, and the run loop continues from `last_completed_run + 1`. The history entry's `status` flips back to `running` so `backprop list-runs --status running` shows the live session.
+
+### Experiment tracking (v1.1.0)
+
+`Trainer` auto-detects installed experiment trackers (`wandb`, `tensorboard`, `mlflow`) and wires them into the underlying `transformers.TrainingArguments`. The default `report_to="auto"` picks up whatever's importable:
+
+```bash
+pip install backpropagate[monitoring]  # installs wandb + psutil
+wandb login                            # one-time
+backprop train --data my_data.jsonl    # W&B run gets the same run_id prefix as the on-disk history
+```
+
+Override with `Trainer(report_to=["wandb"])`, `Trainer(report_to=["tensorboard"])`, or `Trainer(report_to="none")` to opt out explicitly. For MLflow add `pip install mlflow`; for TensorBoard add `pip install tensorboard`. The W&B run name is `backprop-<run_id_prefix>` so an operator can grep across W&B, our logs, and `run_history.json` by the same identifier.
+
+### Training history
+
+Every `backprop train` and `backprop multi-run` invocation records a row in `<output>/run_history.json` with the run_id, model, dataset, hyperparameters, status, final loss, loss history, and (for multi-run) the SLAO merge timeline. List recent runs:
+
+```bash
+backprop list-runs                         # most recent 20 runs, all statuses
+backprop list-runs --status failed         # filter
+backprop list-runs --json --limit 100      # machine-readable
+backprop show-run abcd1234                 # detail view (partial run_id ok)
+```
+
+Run history survives across processes — the `Runs` tab in the web UI is a separate, in-memory view; the on-disk history is the source of truth for `list-runs` / `show-run` / `resume`.
 
 ### Web UI
 

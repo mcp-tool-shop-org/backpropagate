@@ -1,7 +1,13 @@
 """``BpSparkline`` — inline SVG mini-chart for a numeric series.
 
-Phase 1: static SVG polyline. The end-dot halo + 1.6s counter dim from the
-design digest interaction pattern lands in Phase 2.
+Per design digest §4b:
+
+- 1.5px polyline in ``var(--bp-teal)``
+- Subtle 8% area fill below the line — presence at small sizes
+- End dot: 2px solid + 4.5px halo — catches the eye without screaming
+- Optional ``caption`` eyebrow ("Loss · last 80 steps") + right-aligned ``meta``
+  ("min 0.398")
+- ``viewBox`` + ``preserveAspectRatio`` for crispness at any size
 """
 
 from __future__ import annotations
@@ -9,39 +15,125 @@ from __future__ import annotations
 import reflex as rx
 
 
-def _build_polyline_points(data: list[float], w: int, h: int) -> str:
-    """Compute the SVG ``points`` attribute for a list of values."""
+def _build_polyline_points(data: list[float], w: int, h: int, pad: float = 2.0) -> tuple[str, str, tuple[float, float] | None]:
+    """Compute the polyline + closed-area paths and the end-dot coords.
+
+    Returns
+    -------
+    (line_points, area_path, end_xy)
+        ``line_points``: space-separated "x,y" pairs for ``<polyline points>``.
+        ``area_path``: SVG ``<path d>`` that traces the same shape and closes
+        to the baseline (for the 8% area fill).
+        ``end_xy``: ``(x, y)`` of the last point, or ``None`` if no data.
+    """
     if not data:
-        return ""
+        return "", "", None
     if len(data) == 1:
-        return f"0,{h / 2:.1f} {w},{h / 2:.1f}"
+        y = h - pad
+        x = w / 2
+        line = f"{pad},{y:.1f} {w - pad:.1f},{y:.1f}"
+        area = f"M{pad},{y:.1f} L{w - pad:.1f},{y:.1f} L{w - pad:.1f},{h - pad:.1f} L{pad},{h - pad:.1f} Z"
+        return line, area, (x, y)
+
     lo, hi = min(data), max(data)
     span = (hi - lo) or 1.0
-    step = w / (len(data) - 1)
-    return " ".join(
-        f"{i * step:.1f},{h - ((v - lo) / span) * h:.1f}"
+    plot_w = w - 2 * pad
+    plot_h = h - 2 * pad
+    step = plot_w / (len(data) - 1)
+
+    pts: list[tuple[float, float]] = [
+        (pad + i * step, pad + plot_h - ((v - lo) / span) * plot_h)
         for i, v in enumerate(data)
-    )
+    ]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    # Area path: trace the line, drop to baseline at the right edge, walk back
+    # to the left baseline, close. This is the 8% fill region.
+    baseline = h - pad
+    area_segments = [f"M{pts[0][0]:.1f},{pts[0][1]:.1f}"]
+    area_segments.extend(f"L{x:.1f},{y:.1f}" for x, y in pts[1:])
+    area_segments.append(f"L{pts[-1][0]:.1f},{baseline:.1f}")
+    area_segments.append(f"L{pts[0][0]:.1f},{baseline:.1f}")
+    area_segments.append("Z")
+    area = " ".join(area_segments)
+    return line, area, pts[-1]
 
 
 def BpSparkline(
     data: list[float] | None = None,
     w: int = 220,
     h: int = 48,
+    caption: str = "",
+    meta: str = "",
 ) -> rx.Component:
-    """Return an inline-SVG sparkline.
+    """Return a sparkline card with an inline SVG chart.
 
-    Phase 1 caveat: ``data`` is resolved at build time. For a state.var-backed
-    series the rendering will fall back to a placeholder line until Phase 2
-    swaps in a reactive ``rx.html`` builder via ``rx.foreach``.
+    Phase 2 caveat: ``data`` is still resolved at build time. State.var-backed
+    rendering would require a reactive SVG builder; the cheaper path for now is
+    to recompute the markup on the server when ``data`` changes. That mirrors
+    how the side rail re-renders when ``TrainState.loss_history`` updates.
     """
     series = data or []
-    points = _build_polyline_points(series, w, h)
+    line_points, area_path, end_xy = _build_polyline_points(series, w, h)
+
+    svg_body: list[str] = []
+    if area_path:
+        svg_body.append(
+            f'<path d="{area_path}" fill="var(--bp-teal)" fill-opacity="0.08" '
+            f'stroke="none" />'
+        )
+    if line_points:
+        svg_body.append(
+            f'<polyline fill="none" stroke="var(--bp-teal)" stroke-width="1.5" '
+            f'stroke-linejoin="round" stroke-linecap="round" '
+            f'points="{line_points}" />'
+        )
+    if end_xy is not None:
+        ex, ey = end_xy
+        # Halo first (drawn under), then solid dot on top.
+        svg_body.append(
+            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="4.5" '
+            f'fill="var(--bp-teal)" fill-opacity="0.25" />'
+        )
+        svg_body.append(
+            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="2" '
+            f'fill="var(--bp-teal)" stroke="none" />'
+        )
+
     svg = (
-        f'<svg viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
-        f'xmlns="http://www.w3.org/2000/svg" aria-label="loss sparkline">'
-        f'<polyline fill="none" stroke="var(--bp-teal)" stroke-width="1.5" '
-        f'points="{points}" />'
-        f'</svg>'
+        f'<svg viewBox="0 0 {w} {h}" width="100%" height="{h}" '
+        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" '
+        f'role="img" aria-label="loss sparkline · last {len(series)} steps">'
+        + "".join(svg_body)
+        + "</svg>"
     )
-    return rx.html(svg)
+
+    header_row = rx.flex(
+        rx.text(
+            caption,
+            size="1",
+            style={
+                "color": "var(--bp-text-2)",
+                "text_transform": "uppercase",
+                "letter_spacing": "0.06em",
+                "font_size": "10px",
+            },
+        ) if caption else rx.fragment(),
+        rx.spacer(),
+        rx.text(
+            meta,
+            size="1",
+            class_name="bp-num",
+            style={"color": "var(--bp-muted)", "font_size": "11px"},
+        ) if meta else rx.fragment(),
+        direction="row",
+        align="baseline",
+        width="100%",
+    ) if (caption or meta) else rx.fragment()
+
+    return rx.flex(
+        header_row,
+        rx.html(svg),
+        direction="column",
+        gap="1",
+        width="100%",
+    )

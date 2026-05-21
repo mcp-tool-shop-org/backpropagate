@@ -1268,3 +1268,198 @@ class TestDiskFullHandling:
         finally:
             # Restore permissions for cleanup
             readonly_dir.chmod(0o755)
+
+
+# =============================================================================
+# F-003 RUN HISTORY MANAGER LIFECYCLE TESTS
+# =============================================================================
+
+class TestRunHistoryManagerLifecycle:
+    """Lifecycle API: record_run_started / record_run_completed / record_run_failed."""
+
+    def _manager(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        return RunHistoryManager(str(tmp_path))
+
+    def test_record_run_started_creates_running_entry(self, tmp_path):
+        manager = self._manager(tmp_path)
+        entry = manager.record_run_started(
+            run_id="abc123",
+            model_name="Qwen/Qwen2.5-7B-Instruct",
+            dataset_info="data.jsonl",
+            hyperparameters={"lr": 2e-4},
+        )
+        assert entry["run_id"] == "abc123"
+        assert entry["status"] == "running"
+        assert entry["model_name"] == "Qwen/Qwen2.5-7B-Instruct"
+        assert entry["hyperparameters"] == {"lr": 2e-4}
+
+        # Round-trip via list_runs.
+        runs = manager.list_runs()
+        assert len(runs) == 1
+        assert runs[0]["run_id"] == "abc123"
+
+    def test_record_run_started_is_idempotent_on_same_run_id(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="dup", model_name="m1")
+        manager.record_run_started(run_id="dup", model_name="m2")
+        runs = manager.list_runs()
+        assert len(runs) == 1
+        assert runs[0]["model_name"] == "m2"  # Second call wins.
+
+    def test_record_run_completed_updates_status_and_metrics(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="cc", model_name="m")
+        manager.record_run_completed(
+            run_id="cc",
+            final_loss=0.42,
+            loss_history=[1.0, 0.5, 0.42],
+            steps=100,
+            duration_seconds=33.5,
+        )
+        run = manager.get_run("cc")
+        assert run is not None
+        assert run["status"] == "completed"
+        assert run["final_loss"] == 0.42
+        assert run["steps"] == 100
+        assert run["duration_seconds"] == 33.5
+        assert run["loss_history"] == [1.0, 0.5, 0.42]
+
+    def test_record_run_failed_marks_failure_reason(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="ff", model_name="m")
+        manager.record_run_failed(
+            run_id="ff",
+            failure_reason="RuntimeError: out of memory",
+            duration_seconds=5.0,
+        )
+        run = manager.get_run("ff")
+        assert run is not None
+        assert run["status"] == "failed"
+        assert run["failure_reason"] == "RuntimeError: out of memory"
+
+    def test_record_run_completed_synthesizes_when_no_started(self, tmp_path):
+        manager = self._manager(tmp_path)
+        # Skip the started call.
+        manager.record_run_completed(
+            run_id="orphan",
+            final_loss=0.1,
+            steps=10,
+        )
+        run = manager.get_run("orphan")
+        assert run is not None
+        assert run["status"] == "completed"
+        assert run["final_loss"] == 0.1
+
+    def test_record_run_failed_synthesizes_when_no_started(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_failed(run_id="lost", failure_reason="boom")
+        run = manager.get_run("lost")
+        assert run is not None
+        assert run["status"] == "failed"
+        assert run["failure_reason"] == "boom"
+
+    def test_list_runs_sorted_most_recent_first(self, tmp_path):
+        import time as _time
+
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="r1", model_name="m")
+        _time.sleep(0.01)
+        manager.record_run_started(run_id="r2", model_name="m")
+        _time.sleep(0.01)
+        manager.record_run_started(run_id="r3", model_name="m")
+        ids = [r["run_id"] for r in manager.list_runs()]
+        assert ids[0] == "r3"  # newest first
+        assert ids[-1] == "r1"
+
+    def test_list_runs_filter_by_status(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="a", model_name="m")
+        manager.record_run_started(run_id="b", model_name="m")
+        manager.record_run_completed(run_id="b", final_loss=0.1)
+        manager.record_run_started(run_id="c", model_name="m")
+        manager.record_run_failed(run_id="c", failure_reason="x")
+
+        running = manager.list_runs(status="running")
+        assert [r["run_id"] for r in running] == ["a"]
+        completed = manager.list_runs(status="completed")
+        assert [r["run_id"] for r in completed] == ["b"]
+        failed = manager.list_runs(status="failed")
+        assert [r["run_id"] for r in failed] == ["c"]
+
+    def test_list_runs_status_rejects_unknown(self, tmp_path):
+        manager = self._manager(tmp_path)
+        with pytest.raises(ValueError):
+            manager.list_runs(status="unknown")
+
+    def test_list_runs_limit_caps_results(self, tmp_path):
+        manager = self._manager(tmp_path)
+        for i in range(5):
+            manager.record_run_started(run_id=f"r{i}", model_name="m")
+        assert len(manager.list_runs(limit=2)) == 2
+
+    def test_get_run_partial_prefix_match(self, tmp_path):
+        manager = self._manager(tmp_path)
+        full_id = "abcdef0123456789"
+        manager.record_run_started(run_id=full_id, model_name="m")
+        # Unique prefix resolves to the entry.
+        assert manager.get_run("abcdef")["run_id"] == full_id
+        # Non-matching prefix returns None.
+        assert manager.get_run("zzz") is None
+
+    def test_get_run_ambiguous_prefix_returns_none(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="abc111", model_name="m")
+        manager.record_run_started(run_id="abc222", model_name="m")
+        # Multiple prefix matches => ambiguous, return None.
+        assert manager.get_run("abc") is None
+
+    def test_delete_run_removes_entry(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="del", model_name="m")
+        assert manager.delete_run("del") is True
+        assert manager.get_run("del") is None
+        # Idempotent: second delete returns False.
+        assert manager.delete_run("del") is False
+
+    def test_update_run_patches_fields(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="up", model_name="m")
+        manager.update_run("up", export_paths=["/tmp/lora1", "/tmp/lora2"])
+        run = manager.get_run("up")
+        assert run["export_paths"] == ["/tmp/lora1", "/tmp/lora2"]
+
+    def test_update_run_missing_returns_none(self, tmp_path):
+        manager = self._manager(tmp_path)
+        assert manager.update_run("ghost", model_name="x") is None
+
+    def test_in_progress_runs(self, tmp_path):
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="x", model_name="m")
+        manager.record_run_started(run_id="y", model_name="m")
+        manager.record_run_completed(run_id="y", final_loss=0.0)
+        in_progress = manager.in_progress_runs()
+        assert [r["run_id"] for r in in_progress] == ["x"]
+
+
+# =============================================================================
+# F-003 TRAINER + MULTI-RUN INTEGRATION HOOKS
+# =============================================================================
+
+class TestRunHistoryIntegrationHooks:
+    """Ensure RunHistoryManager is wired into Trainer / MultiRunTrainer."""
+
+    def test_run_history_manager_reexported_from_package(self):
+        import backpropagate
+
+        assert hasattr(backpropagate, "RunHistoryManager")
+        assert (
+            backpropagate.RunHistoryManager
+            .__module__.startswith("backpropagate.checkpoints")
+        )
+
+    def test_run_history_manager_in_dunder_all(self):
+        import backpropagate
+
+        assert "RunHistoryManager" in backpropagate.__all__

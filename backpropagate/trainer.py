@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from .export import ExportResult
     from .multi_run import MultiRunResult
 
+from .checkpoints import RunHistoryManager
 from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
@@ -287,6 +288,38 @@ __all__ = [
 ]
 
 
+def _compute_dataset_hash(dataset: Any) -> str | None:
+    """Best-effort sha256-prefix of a dataset, if it's a local file.
+
+    F-003 / F-004: the model card and run-history layer both want a
+    stable identifier for the training data. When the dataset is a path
+    to a local file we hash the bytes; for HF dataset names / in-memory
+    Dataset objects / DatasetLoader instances we return ``None`` and let
+    the model card mark the provenance as "remote dataset" rather than
+    making up a hash.
+
+    Returns the first 16 hex chars of sha256(file_bytes) on success,
+    ``None`` if the dataset is not a hashable local artefact or the hash
+    fails for any reason (best-effort — never raises).
+    """
+    import hashlib
+
+    if not isinstance(dataset, (str, Path)):
+        return None
+    path = Path(dataset)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        sha = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                sha.update(chunk)
+        return sha.hexdigest()[:16]
+    except (OSError, PermissionError) as exc:
+        logger.debug(f"_compute_dataset_hash failed for {path}: {exc}")
+        return None
+
+
 @dataclass
 class TrainingRun:
     """Container for training run results."""
@@ -376,6 +409,13 @@ class Trainer:
         # down; set False to make Unsloth failures hard-fail for operators
         # who insist on Unsloth's speed).
         unsloth_fallback: bool = True,
+        # F-005: experiment-tracker wiring. Default "auto" detects installed
+        # trackers via feature_flags (wandb / tensorboard / mlflow) and wires
+        # them all. Pass "none" or None to disable. Pass a list of strings
+        # (e.g. ["wandb"]) to force a specific tracker set; we DO NOT
+        # validate that the tracker is installed in that branch — TRL will
+        # raise a clear ImportError if it isn't.
+        report_to: str | list[str] | None = "auto",
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -404,6 +444,11 @@ class Trainer:
         self.oom_recovery = oom_recovery
         self.unsloth_fallback = unsloth_fallback
 
+        # F-005: store the operator's report_to intent; the resolver is
+        # invoked lazily at train()-time so feature detection picks up
+        # late-installed trackers (e.g. tracker installed after import).
+        self._report_to_intent: str | list[str] | None = report_to
+
         # Internal state
         self._model: Any = None
         self._tokenizer: Any = None
@@ -421,6 +466,57 @@ class Trainer:
             f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
             f"unsloth_fallback={self.unsloth_fallback}"
         )
+
+    def _resolve_report_to(self) -> str | list[str]:
+        """F-005: resolve the user's report_to intent to a TRL-compatible value.
+
+        Returns whatever TRL's :class:`SFTConfig` will accept on the
+        ``report_to`` field:
+
+        * ``"none"`` → no tracker (string accepted by SFTConfig).
+        * ``["wandb"]`` / ``["tensorboard"]`` / etc — list of tracker names.
+
+        Resolution rules (in order):
+
+        1. ``self._report_to_intent`` is ``None`` or the string ``"none"`` →
+           ``"none"`` (explicit opt-out).
+        2. The intent is a list → return as-is (operator override; TRL
+           will raise a clean error if a name is bogus).
+        3. The intent is the string ``"auto"`` (the default) → detect
+           installed trackers via feature_flags; return a list of the
+           ones present, or ``"none"`` if none are.
+        4. Otherwise the intent is a single tracker name as a string
+           → wrap it in a list.
+        """
+        intent = self._report_to_intent
+        if intent is None:
+            return "none"
+        if isinstance(intent, str):
+            normalized = intent.strip().lower()
+            if normalized in {"none", ""}:
+                return "none"
+            if normalized != "auto":
+                # Single named tracker (e.g. "wandb").
+                return [normalized]
+            # Auto-resolve: pick up everything that's installed.
+            trackers: list[str] = []
+            if check_feature("wandb"):
+                trackers.append("wandb")
+            if check_feature("tensorboard"):
+                trackers.append("tensorboard")
+            if check_feature("mlflow"):
+                trackers.append("mlflow")
+            return trackers if trackers else "none"
+        if isinstance(intent, list):
+            # Operator-supplied list — pass through unchanged. Lower-case
+            # names so trivial case mismatches don't make TRL choke.
+            return [str(t).strip().lower() for t in intent if t]
+        # Unknown type — fall back to "none" defensively.
+        logger.warning(
+            f"Trainer.report_to has unexpected type {type(intent).__name__}; "
+            "falling back to 'none'."
+        )
+        return "none"
 
     def _apply_windows_fixes(self) -> None:
         """Apply Windows-specific environment variables."""
@@ -676,6 +772,7 @@ class Trainer:
         steps: int | None = None,
         samples: int | None = None,
         callback: TrainingCallback | None = None,
+        resume_from: str | None = None,
     ) -> TrainingRun:
         """
         Train the model on a dataset.
@@ -685,6 +782,12 @@ class Trainer:
             steps: Number of training steps (overrides config)
             samples: Number of samples to use (overrides config)
             callback: Optional callback for training events
+            resume_from: F-002 — when set, look up the run_id in the on-disk
+                run history and reuse its run_id + last checkpoint path. When
+                ``None`` (default), start a fresh run. Multi-run resume lives
+                on ``MultiRunTrainer``; the Trainer-level resume hook is a
+                lighter "pick up the existing run_id and let the SFTTrainer
+                resume from the latest HF checkpoint in output_dir" path.
 
         Returns:
             TrainingRun with results
@@ -723,6 +826,33 @@ class Trainer:
         if os.name == "nt" and settings.windows.pre_tokenize:
             train_dataset = self._pre_tokenize(train_dataset)
 
+        # F-005: resolve report_to once for this train() call. The auto-mode
+        # picks up wandb / tensorboard / mlflow if their packages are installed
+        # (which the [monitoring] extra installs by default), so a user who
+        # ran ``pip install backpropagate[monitoring]`` AND ``wandb login``
+        # gets W&B wiring for free without re-passing it on every call.
+        # We pre-mint the run_id so the W&B run_name can correlate with our
+        # internal correlation token (see B-001 below).
+        report_to = self._resolve_report_to()
+        # F-002: reuse the run_id when resuming so the on-disk history record
+        # is updated in place rather than producing a duplicate row.
+        run_id_for_resume: str | None = None
+        if resume_from:
+            try:
+                resume_manager = RunHistoryManager(str(self.output_dir))
+                record = resume_manager.get_run(resume_from)
+                if record is not None:
+                    run_id_for_resume = str(record.get("run_id"))
+                else:
+                    logger.warning(
+                        f"resume_from={resume_from!r} not found in run history; "
+                        "starting fresh."
+                    )
+            except Exception as exc:
+                logger.warning(f"Resume lookup failed: {exc}")
+        run_id = run_id_for_resume or uuid.uuid4().hex
+        run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
+
         # Training arguments (TRL 0.27+ uses SFTConfig)
         training_args = SFTConfig(
             output_dir=str(self.output_dir),
@@ -741,7 +871,8 @@ class Trainer:
             seed=settings.training.seed,
             overwrite_output_dir=True,
             dataloader_num_workers=0 if os.name == "nt" else 4,
-            report_to="none",  # Disable default reporting
+            report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
+            run_name=run_name,
             # SFT-specific args (moved from SFTTrainer in TRL 0.27+)
             max_length=self.max_seq_length,
             packing=settings.data.packing,
@@ -782,19 +913,54 @@ class Trainer:
             )
 
         # Train
-        # B-001: each train() call gets a stable UUID4-derived correlation
-        # token. Pre-fix the run_id was f"run_{N}" which collided across
-        # Trainer instances (Wave 1 F-021). The token is bound into the
-        # structured-logger context, embedded in TrainingRun.metadata, and
-        # unbound in the finally block at the end of the method so it
-        # doesn't leak into the caller's thread.
-        run_id = uuid.uuid4().hex
+        # B-001: ``run_id`` (the UUID4 correlation token) was minted above
+        # so we could thread it into the SFTConfig.run_name for W&B (F-005).
+        # The token is bound into the structured-logger context here,
+        # embedded in TrainingRun.metadata, and unbound in the finally
+        # block at the end of the method so it doesn't leak into the
+        # caller's thread.
         legacy_run_label = f"run_{len(self._training_runs) + 1}"
         bind_run_context(run_id=run_id, session_kind="single_run")
         start_time = time.time()
         loss_history: list[float] = []
         status = "error"  # success path overwrites to "ok"
         run: TrainingRun | None = None
+
+        # F-003: record the run start in the on-disk run history so
+        # ``backprop list-runs`` / ``backprop show-run`` can surface it.
+        run_history = RunHistoryManager(str(self.output_dir))
+        dataset_info = dataset if isinstance(dataset, str) else type(dataset).__name__
+        hyperparameters = {
+            "lora_r": self.lora_r,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "gradient_accumulation": self.gradient_accumulation,
+            "max_seq_length": self.max_seq_length,
+            "max_steps": steps or settings.training.max_steps,
+            "max_samples": samples or settings.data.max_samples,
+            "use_unsloth": self.use_unsloth,
+            "seed": settings.training.seed,
+        }
+        try:
+            if run_id_for_resume:
+                # F-002 resume: flip status back to "running" without
+                # clobbering the existing hyperparameters / dataset record.
+                run_history.update_run(run_id, status="running")
+            else:
+                run_history.record_run_started(
+                    run_id=run_id,
+                    model_name=self.model_name,
+                    dataset_info=dataset_info,
+                    hyperparameters=hyperparameters,
+                    session_kind="single_run",
+                    checkpoint_path=str(self.output_dir / "lora"),
+                    dataset_hash=_compute_dataset_hash(dataset),
+                )
+        except Exception as hist_err:
+            # Never let history persistence kill a training session.
+            logger.warning(f"RunHistoryManager.record_run_started failed: {hist_err}")
 
         logger.info(f"run_started run_id={run_id} legacy_label={legacy_run_label}")
         logger.info(f"  Steps: {steps or settings.training.max_steps}")
@@ -829,7 +995,8 @@ class Trainer:
                             seed=settings.training.seed,
                             overwrite_output_dir=True,
                             dataloader_num_workers=0 if os.name == "nt" else 4,
-                            report_to="none",
+                            report_to=report_to,  # F-005: same resolution on retry.
+                            run_name=run_name,
                             max_length=self.max_seq_length,
                             packing=settings.data.packing,
                         )
@@ -968,18 +1135,69 @@ class Trainer:
 
             logger.info(f"Training complete: loss={final_loss:.4f}, time={duration:.1f}s")
             status = "ok"
+
+            # F-003: record successful completion in run history.
+            try:
+                run_history.record_run_completed(
+                    run_id=run_id,
+                    final_loss=final_loss,
+                    loss_history=loss_history,
+                    steps=run.steps,
+                    duration_seconds=duration,
+                    checkpoint_path=run.output_path,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_completed failed: {hist_err}"
+                )
             return run
 
         except KeyboardInterrupt:
             duration = time.time() - start_time
+            # F-003: best-effort failure recording on interrupt.
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason="KeyboardInterrupt: user interrupted training",
+                    loss_history=loss_history,
+                    duration_seconds=duration,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             raise TrainingAbortedError(
                 reason="User interrupted training",
                 steps_completed=getattr(self._trainer.state, 'global_step', 0) if self._trainer else 0,
             ) from None
-        except BackpropagateError:
+        except BackpropagateError as exc:
+            # F-003: record failure before re-raising.
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                    loss_history=loss_history,
+                    duration_seconds=time.time() - start_time,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             # Already structured — propagate without re-wrapping (B-002 path).
             raise
         except RuntimeError as e:
+            duration = time.time() - start_time
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(e).__name__}: {e}",
+                    loss_history=loss_history,
+                    duration_seconds=duration,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             error_msg = str(e).lower()
             if "out of memory" in error_msg or "cuda" in error_msg:
                 raise TrainingError(
@@ -993,6 +1211,18 @@ class Trainer:
                 suggestion="Check model/dataset compatibility and package versions (trl, transformers, peft). Run with --verbose for full traceback.",
             ) from e
         except Exception as e:
+            duration = time.time() - start_time
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(e).__name__}: {e}",
+                    loss_history=loss_history,
+                    duration_seconds=duration,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
             if callback and callback.on_error:
                 callback.on_error(e)
             raise TrainingError(f"Training failed: {e}") from e
@@ -1373,6 +1603,7 @@ class Trainer:
         merge_mode: str = "slao",
         checkpoint_dir: str | None = None,
         on_run_complete: Callable[..., Any] | None = None,
+        resume_from: str | None = None,
     ) -> MultiRunResult:
         """
         Execute SLAO Multi-Run training (multiple short runs with LoRA merging).
@@ -1423,6 +1654,7 @@ class Trainer:
             model=self.model_name,
             config=config,
             on_run_complete=on_run_complete,
+            resume_from=resume_from,
         )
 
         return multi_run_trainer.run(dataset)

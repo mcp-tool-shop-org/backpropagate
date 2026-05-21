@@ -1195,3 +1195,500 @@ class TestProgressBarSuffix:
         captured = capsys.readouterr()
         # Should end with newline when complete
         assert progress.current == 100
+
+
+# =============================================================================
+# F-003 list-runs / show-run TESTS
+# =============================================================================
+
+class TestListRunsParser:
+    """Tests for the ``backprop list-runs`` parser surface."""
+
+    def test_list_runs_command_basic(self, cli_parser):
+        args = cli_parser.parse_args(["list-runs"])
+        assert args.command == "list-runs"
+        assert args.output == "./output"
+        assert args.status is None
+        assert args.limit == 20
+        assert args.json is False
+
+    def test_list_runs_command_with_filters(self, cli_parser):
+        args = cli_parser.parse_args([
+            "list-runs",
+            "-o", "/tmp/runs",
+            "--status", "failed",
+            "--limit", "5",
+            "--json",
+        ])
+        assert args.output == "/tmp/runs"
+        assert args.status == "failed"
+        assert args.limit == 5
+        assert args.json is True
+
+    def test_show_run_requires_run_id(self, cli_parser):
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["show-run"])
+
+    def test_show_run_command_basic(self, cli_parser):
+        args = cli_parser.parse_args(["show-run", "abc123"])
+        assert args.command == "show-run"
+        assert args.run_id == "abc123"
+        assert args.output == "./output"
+        assert args.json is False
+
+
+class TestCmdListRuns:
+    """Tests for cmd_list_runs handler."""
+
+    def test_list_runs_empty_history_dir_returns_ok(self, tmp_path, capsys):
+        from backpropagate.cli import cmd_list_runs
+
+        args = MagicMock()
+        args.output = str(tmp_path / "does-not-exist")
+        args.status = None
+        args.limit = 20
+        args.json = False
+
+        rc = cmd_list_runs(args)
+        assert rc == 0
+
+    def test_list_runs_with_no_runs(self, tmp_path, capsys):
+        from backpropagate.cli import cmd_list_runs
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = None
+        args.limit = 20
+        args.json = False
+
+        rc = cmd_list_runs(args)
+        assert rc == 0
+
+    def test_list_runs_renders_entries(self, tmp_path, capsys):
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_list_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(
+            run_id="aaaa1111bbbb2222",
+            model_name="Qwen/Qwen2.5-7B-Instruct",
+            dataset_info="data.jsonl",
+        )
+        mgr.record_run_completed(run_id="aaaa1111bbbb2222", final_loss=0.42)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = None
+        args.limit = 20
+        args.json = False
+
+        rc = cmd_list_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "aaaa1111bbbb" in out  # short run_id
+        assert "0.4200" in out  # rendered loss
+        assert "completed" in out
+
+    def test_list_runs_json_emits_json_array(self, tmp_path, capsys):
+        import json as _json
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_list_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="jsonid", model_name="m")
+        mgr.record_run_completed(run_id="jsonid", final_loss=0.1)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = None
+        args.limit = 20
+        args.json = True
+
+        rc = cmd_list_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert isinstance(payload, list)
+        assert payload[0]["run_id"] == "jsonid"
+
+    def test_list_runs_status_filter(self, tmp_path, capsys):
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_list_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="r-fail", model_name="m")
+        mgr.record_run_failed(run_id="r-fail", failure_reason="x")
+        mgr.record_run_started(run_id="r-ok", model_name="m")
+        mgr.record_run_completed(run_id="r-ok", final_loss=0.1)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = "failed"
+        args.limit = 20
+        args.json = False
+
+        rc = cmd_list_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "r-fail" in out
+        assert "r-ok" not in out
+
+
+class TestCmdShowRun:
+    """Tests for cmd_show_run handler."""
+
+    def test_show_run_missing_history_dir(self, tmp_path):
+        from backpropagate.cli import cmd_show_run
+
+        args = MagicMock()
+        args.output = str(tmp_path / "missing")
+        args.run_id = "abc"
+        args.json = False
+
+        rc = cmd_show_run(args)
+        assert rc == 1  # EXIT_USER_ERROR
+
+    def test_show_run_missing_id(self, tmp_path):
+        from backpropagate.cli import cmd_show_run
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "notarealid"
+        args.json = False
+
+        rc = cmd_show_run(args)
+        assert rc == 1  # EXIT_USER_ERROR
+
+    def test_show_run_renders_entry(self, tmp_path, capsys):
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_show_run
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(
+            run_id="showid12345",
+            model_name="m",
+            hyperparameters={"lora_r": 16},
+        )
+        mgr.record_run_completed(run_id="showid12345", final_loss=0.25)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "showid"  # partial prefix
+        args.json = False
+
+        rc = cmd_show_run(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "showid12345" in out
+        assert "completed" in out
+        assert "0.2500" in out
+
+    def test_show_run_json_round_trips(self, tmp_path, capsys):
+        import json as _json
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_show_run
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="jx", model_name="m")
+        mgr.record_run_completed(run_id="jx", final_loss=0.3)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "jx"
+        args.json = True
+
+        rc = cmd_show_run(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload["run_id"] == "jx"
+        assert payload["final_loss"] == 0.3
+
+
+# =============================================================================
+# F-001 push CLI TESTS
+# =============================================================================
+
+class TestPushParser:
+
+    def test_push_command_requires_repo(self, cli_parser):
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["push", "./somewhere"])
+
+    def test_push_command_basic(self, cli_parser):
+        args = cli_parser.parse_args(["push", "./out", "--repo", "alice/m"])
+        assert args.command == "push"
+        assert args.local_path == "./out"
+        assert args.repo == "alice/m"
+        assert args.token is None
+        assert args.private is False
+        assert args.include_base is False
+
+    def test_push_command_all_options(self, cli_parser):
+        args = cli_parser.parse_args([
+            "push", "./out",
+            "--repo", "alice/m",
+            "--token", "hf_token",
+            "--private",
+            "--include-base",
+        ])
+        assert args.token == "hf_token"
+        assert args.private is True
+        assert args.include_base is True
+
+    def test_export_push_flags(self, cli_parser):
+        args = cli_parser.parse_args([
+            "export", "./out",
+            "--push-to-hub", "alice/m",
+            "--hub-token", "tk",
+            "--hub-private",
+        ])
+        assert args.push_to_hub == "alice/m"
+        assert args.hub_token == "tk"
+        assert args.hub_private is True
+
+
+class TestCmdPush:
+
+    def test_push_missing_local_path_returns_user_error(self, tmp_path):
+        from backpropagate.cli import cmd_push
+
+        args = MagicMock()
+        args.local_path = str(tmp_path / "missing")
+        args.repo = "alice/m"
+        args.token = None
+        args.private = False
+        args.include_base = False
+        args.verbose = False
+
+        rc = cmd_push(args)
+        assert rc == 1
+
+    def test_push_missing_repo_returns_user_error(self, tmp_path):
+        from backpropagate.cli import cmd_push
+
+        local = tmp_path / "lora"
+        local.mkdir()
+
+        args = MagicMock()
+        args.local_path = str(local)
+        args.repo = None
+        args.token = None
+        args.private = False
+        args.include_base = False
+        args.verbose = False
+
+        rc = cmd_push(args)
+        assert rc == 1
+
+    def test_push_calls_push_to_hub_and_reports_url(self, tmp_path, capsys):
+        from backpropagate.cli import cmd_push
+
+        local = tmp_path / "lora"
+        local.mkdir()
+
+        args = MagicMock()
+        args.local_path = str(local)
+        args.repo = "alice/m"
+        args.token = None
+        args.private = False
+        args.include_base = False
+        args.verbose = False
+
+        with patch("backpropagate.export.push_to_hub", return_value="https://huggingface.co/alice/m") as push_mock:
+            rc = cmd_push(args)
+
+        assert rc == 0
+        push_mock.assert_called_once()
+        out = capsys.readouterr().out
+        assert "https://huggingface.co/alice/m" in out
+
+    def test_push_wraps_auth_error_with_user_exit_code(self, tmp_path):
+        from backpropagate.cli import cmd_push
+        from backpropagate.exceptions import ExportError
+
+        local = tmp_path / "lora"
+        local.mkdir()
+
+        err = ExportError("authentication failed")
+        err.code = "HUB_PUSH_AUTH"  # type: ignore[attr-defined]
+
+        args = MagicMock()
+        args.local_path = str(local)
+        args.repo = "alice/m"
+        args.token = None
+        args.private = False
+        args.include_base = False
+        args.verbose = False
+
+        with patch("backpropagate.export.push_to_hub", side_effect=err):
+            rc = cmd_push(args)
+
+        assert rc == 1
+
+    def test_push_wraps_runtime_error_with_runtime_exit_code(self, tmp_path):
+        from backpropagate.cli import cmd_push
+        from backpropagate.exceptions import ExportError
+
+        local = tmp_path / "lora"
+        local.mkdir()
+
+        err = ExportError("server 500")
+        err.code = "HUB_PUSH_NETWORK"  # type: ignore[attr-defined]
+
+        args = MagicMock()
+        args.local_path = str(local)
+        args.repo = "alice/m"
+        args.token = None
+        args.private = False
+        args.include_base = False
+        args.verbose = False
+
+        with patch("backpropagate.export.push_to_hub", side_effect=err):
+            rc = cmd_push(args)
+
+        assert rc == 2
+
+
+# =============================================================================
+# F-002 resume CLI TESTS
+# =============================================================================
+
+class TestResumeParser:
+
+    def test_resume_command_requires_run_id(self, cli_parser):
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["resume"])
+
+    def test_resume_command_basic(self, cli_parser):
+        args = cli_parser.parse_args(["resume", "abc123"])
+        assert args.command == "resume"
+        assert args.run_id == "abc123"
+        assert args.output == "./output"
+        assert args.data is None
+
+    def test_resume_with_data_override(self, cli_parser):
+        args = cli_parser.parse_args([
+            "resume", "abc123",
+            "--output", "./out",
+            "--data", "my.jsonl",
+        ])
+        assert args.data == "my.jsonl"
+        assert args.output == "./out"
+
+    def test_train_command_accepts_resume(self, cli_parser):
+        args = cli_parser.parse_args([
+            "train", "-d", "data.jsonl", "--resume", "abc",
+        ])
+        assert args.resume == "abc"
+
+    def test_multi_run_command_accepts_resume(self, cli_parser):
+        args = cli_parser.parse_args([
+            "multi-run", "-d", "data.jsonl", "--resume", "abc",
+        ])
+        assert args.resume == "abc"
+
+
+class TestCmdResume:
+
+    def test_resume_missing_output_returns_user_error(self, tmp_path):
+        from backpropagate.cli import cmd_resume
+
+        args = MagicMock()
+        args.output = str(tmp_path / "missing")
+        args.run_id = "abc"
+        args.data = None
+        args.verbose = False
+
+        rc = cmd_resume(args)
+        assert rc == 1
+
+    def test_resume_unknown_run_id_returns_user_error(self, tmp_path):
+        from backpropagate.cli import cmd_resume
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "missing"
+        args.data = None
+        args.verbose = False
+
+        rc = cmd_resume(args)
+        assert rc == 1
+
+    def test_resume_dispatches_multi_run(self, tmp_path):
+        """A multi_run record should reconstruct MultiRunTrainer + .run()."""
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_resume
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="mres",
+            model_name="m",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "num_runs": 3,
+                "steps_per_run": 50,
+                "samples_per_run": 100,
+                "merge_mode": "slao",
+            },
+            session_kind="multi_run",
+        )
+
+        fake_trainer = MagicMock()
+        fake_trainer.run.return_value = MagicMock(total_runs=3, final_loss=0.1)
+
+        with patch(
+            "backpropagate.multi_run.MultiRunTrainer",
+            return_value=fake_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "mres"
+            args.data = None
+            args.verbose = False
+            rc = cmd_resume(args)
+
+        assert rc == 0
+        # MultiRunTrainer was invoked with resume_from=mres.
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs.get("resume_from") == "mres"
+        fake_trainer.run.assert_called_once()
+
+    def test_resume_dispatches_single_run(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import cmd_resume
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="sres",
+            model_name="m",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "max_steps": 50,
+                "lora_r": 8,
+                "learning_rate": 1e-4,
+            },
+            session_kind="single_run",
+        )
+
+        fake_trainer = MagicMock()
+        fake_run = MagicMock(final_loss=0.05)
+        fake_trainer.train.return_value = fake_run
+
+        with patch(
+            "backpropagate.trainer.Trainer",
+            return_value=fake_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "sres"
+            args.data = None
+            args.verbose = False
+            rc = cmd_resume(args)
+
+        assert rc == 0
+        # Trainer.train called with resume_from=sres.
+        train_kwargs = fake_trainer.train.call_args.kwargs
+        assert train_kwargs.get("resume_from") == "sres"

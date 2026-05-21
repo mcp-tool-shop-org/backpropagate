@@ -125,6 +125,7 @@ from .checkpoints import (
     CheckpointManager,
     CheckpointPolicy,
     CheckpointStats,
+    RunHistoryManager,
 )
 
 # Configuration
@@ -189,7 +190,9 @@ from .export import (
     export_lora,
     export_merged,
     list_ollama_models,
+    push_to_hub,
     register_with_ollama,
+    write_model_card,
 )
 from .feature_flags import (
     FEATURES,
@@ -213,6 +216,9 @@ from .gpu_safety import (
     format_gpu_status,
     get_gpu_status,
     wait_for_safe_gpu,
+)
+from .model_card import (
+    generate_model_card,
 )
 
 # Multi-Run (SLAO training)
@@ -406,6 +412,7 @@ __all__ = [
     "CheckpointPolicy",
     "CheckpointInfo",
     "CheckpointStats",
+    "RunHistoryManager",
 
     # GPU safety
     "GPUMonitor",
@@ -427,6 +434,9 @@ __all__ = [
     "create_modelfile",
     "register_with_ollama",
     "list_ollama_models",
+    "push_to_hub",
+    "write_model_card",
+    "generate_model_card",
 
     # Datasets - Core
     "DatasetLoader",

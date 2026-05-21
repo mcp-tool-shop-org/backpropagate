@@ -363,6 +363,8 @@ def cmd_train(args: argparse.Namespace) -> int:
             output_dir=args.output,
             use_unsloth=not args.no_unsloth,
         )
+        # F-002: pass resume hint through to trainer.train() once we get there.
+        resume_hint = getattr(args, "resume", None)
 
         # Progress callback
         progress = ProgressBar(args.steps, prefix="Training: ")
@@ -385,6 +387,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             steps=args.steps,
             samples=args.samples,
             callback=callback,
+            resume_from=resume_hint,
         )
 
         progress.finish()
@@ -529,6 +532,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             model=args.model,
             config=config,
             on_run_complete=on_run_complete,
+            resume_from=getattr(args, "resume", None),  # F-002
         )
 
         print()
@@ -735,6 +739,9 @@ def cmd_export(args: argparse.Namespace) -> int:
     try:
         print()
 
+        # F-004: --no-model-card opts out; default (omitting the flag) emits.
+        emit_card = not getattr(args, "no_model_card", False)
+
         if args.format == "lora":
             # C-CLI-002 phase banner — LoRA-only export is fast (no model
             # load) but the banner still adds a "we're exporting" signal.
@@ -742,6 +749,8 @@ def cmd_export(args: argparse.Namespace) -> int:
             result = export_lora(
                 model=model_path,
                 output_dir=output_dir,
+                emit_model_card=emit_card,
+                output_root=output_dir.parent,
             )
         elif args.format == "merged":
             # C-CLI-002 phase banner — merged export loads the full model.
@@ -753,6 +762,8 @@ def cmd_export(args: argparse.Namespace) -> int:
                 model=model,
                 tokenizer=tokenizer,
                 output_dir=output_dir,
+                emit_model_card=emit_card,
+                output_root=output_dir.parent,
             )
         elif args.format == "gguf":
             # C-CLI-002 phase banner — GGUF export does model load AND
@@ -769,6 +780,8 @@ def cmd_export(args: argparse.Namespace) -> int:
                 tokenizer=tokenizer,
                 output_dir=output_dir,
                 quantization=args.quantization,
+                emit_model_card=emit_card,
+                output_root=output_dir.parent,
             )
         else:
             _print_error(f"Unknown format: {args.format}")
@@ -793,6 +806,31 @@ def cmd_export(args: argparse.Namespace) -> int:
                 # Treat as partial success so callers can distinguish from
                 # outright failure.
                 _print_error("Failed to register with Ollama")
+                return EXIT_PARTIAL_SUCCESS
+
+        # F-001: one-shot export + Hub push.
+        if getattr(args, "push_to_hub", None):
+            from .export import push_to_hub as _hub_push
+
+            print()
+            _print_info(f"==> Pushing to Hugging Face Hub: {args.push_to_hub}")
+            # For directory exports the local upload root is output_dir; for
+            # the single-file GGUF case it's the GGUF's parent.
+            local_root = (
+                result.path if result.path.is_dir() else result.path.parent
+            )
+            try:
+                url = _hub_push(
+                    local_path=local_root,
+                    repo_id=args.push_to_hub,
+                    token=getattr(args, "hub_token", None),
+                    private=getattr(args, "hub_private", False),
+                )
+                _print_success(f"Pushed to Hub: {url}")
+            except BackpropagateError as e:
+                _print_error(f"Hub push failed: {e.message}")
+                if e.suggestion:
+                    _print_info(f"Suggestion: {e.suggestion}")
                 return EXIT_PARTIAL_SUCCESS
 
         return EXIT_OK
@@ -1303,6 +1341,346 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# COMMAND: resume (F-002)
+# =============================================================================
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Execute the ``backprop resume <run_id>`` subcommand (F-002)."""
+    from .checkpoints import RunHistoryManager
+    from .multi_run import MultiRunTrainer
+    from .trainer import Trainer, TrainingCallback
+
+    _print_header("Backpropagate Resume")
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_error(f"No history directory: {history_dir}")
+        _print_info(
+            "Pass --output <dir> to point at the output directory used by the original session."
+        )
+        return EXIT_USER_ERROR
+
+    manager = RunHistoryManager(str(history_dir))
+    record = manager.get_run(args.run_id)
+    if record is None:
+        _print_error(f"No run matching '{args.run_id}' in {history_dir}")
+        return EXIT_USER_ERROR
+
+    run_id = str(record.get("run_id"))
+    session_kind = record.get("session_kind") or "single_run"
+    model = record.get("model_name") or "Qwen/Qwen2.5-7B-Instruct"
+    dataset = args.data or record.get("dataset_info")
+    hp = record.get("hyperparameters") or {}
+
+    _print_info(f"Run ID: {run_id}")
+    _print_info(f"Session: {session_kind}")
+    _print_info(f"Model: {model}")
+    _print_info(f"Dataset: {dataset}")
+    if record.get("status") == "completed":
+        _print_warning(
+            "This run is already marked as completed — resuming will continue it."
+        )
+
+    try:
+        if session_kind == "multi_run":
+            from .multi_run import MergeMode, MultiRunConfig
+
+            config = MultiRunConfig(
+                num_runs=int(hp.get("num_runs") or 5),
+                steps_per_run=int(hp.get("steps_per_run") or 100),
+                samples_per_run=int(hp.get("samples_per_run") or 1000),
+                merge_mode=MergeMode(hp.get("merge_mode") or "slao"),
+                checkpoint_dir=str(history_dir),
+            )
+            trainer = MultiRunTrainer(
+                model=model,
+                config=config,
+                resume_from=run_id,
+            )
+            result = trainer.run(dataset)
+            _print_success("Multi-run resume complete!")
+            _print_kv("Total runs", str(result.total_runs))
+            _print_kv("Final loss", f"{result.final_loss:.4f}")
+            return EXIT_OK
+
+        # Single-run resume.
+        trainer = Trainer(
+            model=model,
+            lora_r=int(hp.get("lora_r") or 16),
+            learning_rate=float(hp.get("learning_rate") or 2e-4),
+            output_dir=str(history_dir),
+        )
+        callback = TrainingCallback()
+        run = trainer.train(
+            dataset=dataset,
+            steps=int(hp.get("max_steps") or 100),
+            samples=hp.get("max_samples"),
+            callback=callback,
+            resume_from=run_id,
+        )
+        trainer.save(args.output)
+        _print_success("Resume complete!")
+        _print_kv("Final loss", f"{run.final_loss:.4f}")
+        return EXIT_OK
+
+    except KeyboardInterrupt:
+        print()
+        _print_warning("Resume interrupted by user")
+        return EXIT_INTERRUPTED
+    except BackpropagateError as e:
+        _print_error(f"Resume failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:
+        if args.verbose:
+            _print_error(f"Resume failed: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Resume failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
+
+
+# =============================================================================
+# COMMAND: push (F-001)
+# =============================================================================
+
+def cmd_push(args: argparse.Namespace) -> int:
+    """Execute the ``backprop push`` subcommand (F-001).
+
+    Uploads a local export directory to the Hugging Face Hub.
+    """
+    from .export import push_to_hub
+
+    _print_header("Backpropagate Hub Push")
+
+    local_path = Path(args.local_path).expanduser()
+    if not local_path.exists():
+        _print_error(f"Local path does not exist: {local_path}")
+        _print_info(
+            "Pass a directory created by `backprop export` "
+            "or `backprop train --output <dir>`."
+        )
+        return EXIT_USER_ERROR
+
+    if not args.repo:
+        _print_error("No target repo specified.")
+        _print_info("Pass --repo username/model-name.")
+        return EXIT_USER_ERROR
+
+    _print_info(f"Local path: {local_path}")
+    _print_info(f"Repo: {args.repo}")
+    if args.private:
+        _print_info("Visibility: private")
+    if args.include_base:
+        _print_info("Including base model files (--include-base)")
+
+    try:
+        url = push_to_hub(
+            local_path=local_path,
+            repo_id=args.repo,
+            token=args.token,
+            private=args.private,
+            include_base=args.include_base,
+        )
+    except ExportError as e:
+        code = getattr(e, "code", None)
+        _print_error(f"Push failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        if code == "HUB_PUSH_AUTH":
+            return EXIT_USER_ERROR
+        if code == "HUB_PUSH_NOT_FOUND":
+            return EXIT_USER_ERROR
+        return EXIT_RUNTIME_ERROR
+    except BackpropagateError as e:
+        _print_error(f"Push failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:
+        if args.verbose:
+            _print_error(f"Push failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Push failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
+
+    _print_success(f"Pushed to Hub: {url}")
+    return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: list-runs (F-003)
+# =============================================================================
+
+def _humanize_timestamp(value: Any) -> str:
+    """Return a short, human-readable timestamp string."""
+    if not value:
+        return "-"
+    text = str(value)
+    # Trim subsecond precision for display: 2026-05-21T13:42:18.123456 -> 2026-05-21 13:42
+    text = text.replace("T", " ")
+    if "." in text:
+        text = text.split(".", 1)[0]
+    return text[:16]  # YYYY-MM-DD HH:MM
+
+
+def _format_run_row(run: dict[str, Any]) -> dict[str, str]:
+    """Produce a row of display strings for one run history entry."""
+    run_id = str(run.get("run_id") or "-")
+    return {
+        "run_id": run_id[:12],
+        "started_at": _humanize_timestamp(run.get("started_at") or run.get("timestamp")),
+        "model": str(run.get("model_name") or "-")[:32],
+        "dataset": str(run.get("dataset_info") or "-")[:32],
+        "status": str(run.get("status") or "-"),
+        "final_loss": (
+            f"{run['final_loss']:.4f}"
+            if isinstance(run.get("final_loss"), (int, float))
+            else "-"
+        ),
+    }
+
+
+def cmd_list_runs(args: argparse.Namespace) -> int:
+    """Execute the ``backprop list-runs`` subcommand (F-003)."""
+    from .checkpoints import RunHistoryManager
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_warning(f"No history found at {history_dir}")
+        return EXIT_OK
+
+    manager = RunHistoryManager(str(history_dir))
+    try:
+        runs = manager.list_runs(status=args.status, limit=args.limit)
+    except ValueError as e:
+        _print_error(str(e))
+        return EXIT_USER_ERROR
+
+    if args.json:
+        import json
+        print(json.dumps(runs, indent=2, default=str))
+        return EXIT_OK
+
+    if not runs:
+        _print_info("No training runs recorded.")
+        if args.status:
+            _print_info(f"(Filter: status={args.status})")
+        return EXIT_OK
+
+    # Aligned-column display.
+    rows = [_format_run_row(r) for r in runs]
+    headers = ["RUN_ID", "STARTED", "MODEL", "DATASET", "STATUS", "FINAL_LOSS"]
+    keys = ["run_id", "started_at", "model", "dataset", "status", "final_loss"]
+    widths = [
+        max(len(headers[i]), *(len(row[keys[i]]) for row in rows))
+        for i in range(len(headers))
+    ]
+
+    _print_header("Training runs")
+    header_line = "  ".join(headers[i].ljust(widths[i]) for i in range(len(headers)))
+    print(f"{Colors.BOLD}{header_line}{Colors.RESET}")
+    print(Colors.DIM + "  ".join("-" * widths[i] for i in range(len(headers))) + Colors.RESET)
+    for row in rows:
+        line = "  ".join(row[keys[i]].ljust(widths[i]) for i in range(len(headers)))
+        print(line)
+    print()
+    _print_info(f"Listed {len(rows)} run(s) from {history_dir}")
+    return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: show-run (F-003)
+# =============================================================================
+
+def cmd_show_run(args: argparse.Namespace) -> int:
+    """Execute the ``backprop show-run <run_id>`` subcommand (F-003)."""
+    from .checkpoints import RunHistoryManager
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_error(f"No history directory: {history_dir}")
+        _print_info("Pass --output <dir> to point at the output directory used during training.")
+        return EXIT_USER_ERROR
+
+    manager = RunHistoryManager(str(history_dir))
+    run = manager.get_run(args.run_id)
+    if run is None:
+        _print_error(f"No run matching '{args.run_id}' in {history_dir}")
+        return EXIT_USER_ERROR
+
+    if args.json:
+        import json
+        print(json.dumps(run, indent=2, default=str))
+        return EXIT_OK
+
+    _print_header(f"Run {str(run.get('run_id') or '-')[:12]}")
+    _print_kv("Run ID", str(run.get("run_id") or "-"))
+    _print_kv("Status", str(run.get("status") or "-"))
+    _print_kv("Session kind", str(run.get("session_kind") or "-"))
+    _print_kv("Started", _humanize_timestamp(run.get("started_at")))
+    _print_kv("Completed", _humanize_timestamp(run.get("completed_at")))
+    _print_kv("Model", str(run.get("model_name") or "-"))
+    _print_kv("Dataset", str(run.get("dataset_info") or "-"))
+    dh = run.get("dataset_hash")
+    if dh:
+        _print_kv("Dataset sha256 (16)", str(dh))
+    if isinstance(run.get("final_loss"), (int, float)):
+        _print_kv("Final loss", f"{run['final_loss']:.4f}")
+    if isinstance(run.get("steps"), int):
+        _print_kv("Steps", str(run["steps"]))
+    if isinstance(run.get("duration_seconds"), (int, float)):
+        _print_kv("Duration", f"{run['duration_seconds']:.1f}s")
+    if run.get("checkpoint_path"):
+        _print_kv("Checkpoint", str(run["checkpoint_path"]))
+
+    if run.get("failure_reason"):
+        _print_kv("Failure reason", str(run["failure_reason"]))
+
+    # Hyperparameters
+    hp = run.get("hyperparameters") or {}
+    if hp:
+        print(f"\n{Colors.BOLD}Hyperparameters{Colors.RESET}")
+        for key, value in hp.items():
+            _print_kv(key, str(value))
+
+    # Loss history
+    losses = run.get("loss_history") or []
+    if losses:
+        head = losses[:5]
+        tail = losses[-3:] if len(losses) > 8 else []
+        sample = ", ".join(f"{x:.4f}" for x in head)
+        if tail:
+            sample += ", ..., " + ", ".join(f"{x:.4f}" for x in tail)
+        print(f"\n{Colors.BOLD}Loss history{Colors.RESET}  ({len(losses)} points)")
+        _print_kv("samples", sample)
+
+    # Merge history (multi-run only)
+    merge_history = run.get("merge_history") or []
+    if merge_history:
+        print(f"\n{Colors.BOLD}SLAO merge history{Colors.RESET}")
+        for entry in merge_history:
+            idx = entry.get("run_index", "?")
+            _print_kv(f"run_{idx}", str(entry.get("result"))[:80])
+
+    # Export paths
+    exports = run.get("export_paths") or []
+    if exports:
+        print(f"\n{Colors.BOLD}Exports{Colors.RESET}")
+        for path in exports:
+            _print_kv("path", str(path))
+
+    return EXIT_OK
+
+
+# =============================================================================
 # PARSER
 # =============================================================================
 
@@ -1410,6 +1788,19 @@ Exit codes (Ship Gate B2):
         action="store_true",
         help="Disable Unsloth even if available",
     )
+    # F-002: resume hint — reuses the same run_id and updates the on-disk
+    # history record in place. Accepts a partial run_id prefix.
+    train_parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Resume an existing run by run_id (or partial prefix). The run "
+            "is recorded under the same run_id in run_history.json so "
+            "downstream queries (`backprop show-run`) see one continuous "
+            "session instead of two."
+        ),
+    )
     train_parser.set_defaults(func=cmd_train)
 
     # multi-run command
@@ -1462,6 +1853,18 @@ Exit codes (Ship Gate B2):
         default="./output",
         help="Output directory (default: ./output)",
     )
+    # F-002: resume hint — when set, picks up the latest checkpoint for the
+    # matching run_id (or partial prefix) and continues from the next run.
+    multi_parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Resume an existing multi-run by run_id (or partial prefix). The "
+            "session re-uses the prior run_id and skips the runs that "
+            "already completed."
+        ),
+    )
     multi_parser.set_defaults(func=cmd_multi_run)
 
     # export command
@@ -1505,6 +1908,42 @@ Exit codes (Ship Gate B2):
         "--ollama-name",
         default=None,
         help="Name for Ollama model",
+    )
+    # F-004: model card is emitted next to every export by default; this
+    # flag is the explicit opt-out for users who'd rather author a card by
+    # hand or who are exporting into a directory already covered by one.
+    export_parser.add_argument(
+        "--no-model-card",
+        action="store_true",
+        help=(
+            "Do not emit model_card.md next to the export (default: emit). "
+            "The card carries run_id / hyperparameters / loss curve / "
+            "training duration / Ship Gate trust signals."
+        ),
+    )
+    # F-001: one-shot export + Hub push. Equivalent to running
+    # ``backprop export ... && backprop push ./output/... --repo <repo>``
+    # but the export-and-push uses the freshly written model_card.md
+    # without a second walk of the directory.
+    export_parser.add_argument(
+        "--push-to-hub",
+        metavar="REPO_ID",
+        default=None,
+        help=(
+            "After a successful export, push the artifact to the Hugging "
+            "Face Hub as REPO_ID (e.g. alice/qwen-finetune). Uses $HF_TOKEN "
+            "or ~/.cache/huggingface/token unless --hub-token is passed."
+        ),
+    )
+    export_parser.add_argument(
+        "--hub-token",
+        default=None,
+        help="HF token override for --push-to-hub (default: env / cached login).",
+    )
+    export_parser.add_argument(
+        "--hub-private",
+        action="store_true",
+        help="When pairing --push-to-hub, create the repo as private.",
     )
     export_parser.set_defaults(func=cmd_export)
 
@@ -1560,6 +1999,144 @@ Exit codes (Ship Gate B2):
         help="Reset configuration to defaults",
     )
     config_parser.set_defaults(func=cmd_config)
+
+    # resume command (F-002)
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Resume a crashed or interrupted training run",
+        description=(
+            "Re-run the train / multi-run command associated with a "
+            "RunHistoryManager entry, continuing from the latest checkpoint "
+            "tagged with the run_id."
+        ),
+    )
+    resume_parser.add_argument(
+        "run_id",
+        help="The run_id to resume (or any unambiguous prefix).",
+    )
+    resume_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory used by the original run (default: ./output)",
+    )
+    resume_parser.add_argument(
+        "--data", "-d",
+        default=None,
+        help=(
+            "Override the dataset path. By default the dataset is read from "
+            "the recorded run history entry. Pass --data if you've moved the "
+            "dataset file or want to point at a HF dataset name."
+        ),
+    )
+    resume_parser.set_defaults(func=cmd_resume)
+
+    # push command (F-001)
+    push_parser = subparsers.add_parser(
+        "push",
+        help="Push a local export to the Hugging Face Hub",
+        description=(
+            "Upload a directory produced by `backprop export` (or "
+            "`backprop train --output <dir>`) to a Hugging Face Hub repo. "
+            "Mirrors the local model_card.md as the repo's README.md so the "
+            "HF UI picks it up as the model card. Defaults to adapter-only "
+            "uploads — pass --include-base to also push the base model."
+        ),
+    )
+    push_parser.add_argument(
+        "local_path",
+        nargs="?",
+        default=".",
+        help="Local directory to upload (default: current directory)",
+    )
+    push_parser.add_argument(
+        "--repo",
+        required=True,
+        help="Hugging Face Hub repo identifier, e.g. alice/qwen-finetune",
+    )
+    push_parser.add_argument(
+        "--token",
+        default=None,
+        help=(
+            "HF token (defaults to $HF_TOKEN, $HUGGING_FACE_HUB_TOKEN, or "
+            "~/.cache/huggingface/token from `huggingface-cli login`)."
+        ),
+    )
+    push_parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Create the repo as private (default: public).",
+    )
+    push_parser.add_argument(
+        "--include-base",
+        action="store_true",
+        help=(
+            "Push the entire directory (base model + adapter). Default: "
+            "adapter-only upload (smaller, faster, more useful)."
+        ),
+    )
+    push_parser.set_defaults(func=cmd_push)
+
+    # list-runs command (F-003)
+    list_runs_parser = subparsers.add_parser(
+        "list-runs",
+        help="List recorded training runs",
+        description=(
+            "List runs from the on-disk run_history.json (populated by every "
+            "`backprop train` / `backprop multi-run` invocation since v1.1.0)."
+        ),
+    )
+    list_runs_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    list_runs_parser.add_argument(
+        "--status",
+        choices=["running", "completed", "failed"],
+        default=None,
+        help="Filter by status (default: show all)",
+    )
+    list_runs_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=20,
+        help="Maximum runs to display, most-recent first (default: 20)",
+    )
+    list_runs_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the aligned table",
+    )
+    list_runs_parser.set_defaults(func=cmd_list_runs)
+
+    # show-run command (F-003)
+    show_run_parser = subparsers.add_parser(
+        "show-run",
+        help="Show detail for a single training run",
+        description=(
+            "Print the full record for a single training run, including "
+            "hyperparameters, loss history, SLAO merge history, and any "
+            "exports recorded against the run."
+        ),
+    )
+    show_run_parser.add_argument(
+        "run_id",
+        help=(
+            "The run_id to show. Partial-prefix matches are accepted as long "
+            "as the prefix is unambiguous (typically 8-12 hex chars)."
+        ),
+    )
+    show_run_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    show_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human view",
+    )
+    show_run_parser.set_defaults(func=cmd_show_run)
 
     # ui command
     ui_parser = subparsers.add_parser(

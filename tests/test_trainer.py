@@ -1259,3 +1259,92 @@ class TestHfTransientRetryStatusCodeFilter:
 
         exc = requests.exceptions.HTTPError("no response object")
         assert _is_transient_hf_exception(exc)
+
+
+# =============================================================================
+# F-005 REPORT_TO RESOLUTION TESTS
+# =============================================================================
+
+class TestReportToResolution:
+    """Trainer._resolve_report_to behaviour for F-005 (W&B/TB/MLflow wiring)."""
+
+    @pytest.fixture
+    def trainer(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            return Trainer()
+
+    def _patch_features(self, **flags):
+        """Helper to temporarily flip the global FEATURES dict."""
+        from backpropagate import feature_flags
+
+        return patch.dict(feature_flags.FEATURES, flags, clear=False)
+
+    def test_default_intent_is_auto(self, trainer):
+        assert trainer._report_to_intent == "auto"
+
+    def test_auto_no_trackers_resolves_to_none(self, trainer):
+        with self._patch_features(wandb=False, tensorboard=False, mlflow=False):
+            assert trainer._resolve_report_to() == "none"
+
+    def test_auto_wandb_installed_returns_list_with_wandb(self, trainer):
+        with self._patch_features(wandb=True, tensorboard=False, mlflow=False):
+            assert trainer._resolve_report_to() == ["wandb"]
+
+    def test_auto_all_trackers_installed_returns_combined_list(self, trainer):
+        with self._patch_features(wandb=True, tensorboard=True, mlflow=True):
+            resolved = trainer._resolve_report_to()
+        assert isinstance(resolved, list)
+        assert set(resolved) == {"wandb", "tensorboard", "mlflow"}
+
+    def test_explicit_none_string(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to="none")
+        assert trainer._resolve_report_to() == "none"
+
+    def test_explicit_none_value(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=None)
+        assert trainer._resolve_report_to() == "none"
+
+    def test_explicit_list_passes_through(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=["wandb", "tensorboard"])
+        assert trainer._resolve_report_to() == ["wandb", "tensorboard"]
+
+    def test_explicit_single_string_wrapped_in_list(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to="wandb")
+        assert trainer._resolve_report_to() == ["wandb"]
+
+    def test_explicit_list_lowercased(self):
+        from backpropagate.trainer import Trainer
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(report_to=["WANDB", "TensorBoard"])
+        assert trainer._resolve_report_to() == ["wandb", "tensorboard"]
+
+    def test_unexpected_intent_type_falls_back_to_none(self, trainer):
+        trainer._report_to_intent = 42  # type: ignore
+        assert trainer._resolve_report_to() == "none"
+
+
+class TestReportToFeatureFlags:
+    """Ensure feature_flags surfaces per-tracker flags (wandb / tensorboard / mlflow)."""
+
+    def test_features_dict_has_per_tracker_entries(self):
+        from backpropagate.feature_flags import FEATURES
+
+        assert "wandb" in FEATURES
+        assert "tensorboard" in FEATURES
+        assert "mlflow" in FEATURES
+
+    def test_install_hints_have_per_tracker_entries(self):
+        from backpropagate.feature_flags import INSTALL_HINTS
+
+        assert "wandb" in INSTALL_HINTS
+        assert "tensorboard" in INSTALL_HINTS
+        assert "mlflow" in INSTALL_HINTS

@@ -60,6 +60,13 @@ FEATURES: dict[str, bool] = {
     "observability": False,
     "flash_attention": False,
     "triton": False,
+    # F-005: per-tracker availability so the trainer's report_to resolver can
+    # decide whether to wire wandb / tensorboard / mlflow into SFTConfig.
+    # ``monitoring`` is the [monitoring] extra (covers wandb + psutil); the
+    # entries below give fine-grained per-tracker visibility.
+    "wandb": False,
+    "tensorboard": False,
+    "mlflow": False,
 }
 
 # Installation hints for each feature
@@ -72,6 +79,10 @@ INSTALL_HINTS: dict[str, str] = {
     "observability": "pip install backpropagate[observability]",
     "flash_attention": "pip install flash-attn --no-build-isolation",
     "triton": "pip install triton",
+    # F-005 per-tracker hints.
+    "wandb": "pip install backpropagate[monitoring]  # bundles wandb + psutil",
+    "tensorboard": "pip install tensorboard",
+    "mlflow": "pip install mlflow",
 }
 
 # Feature descriptions
@@ -84,6 +95,10 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
     "observability": "OpenTelemetry distributed tracing",
     "flash_attention": "Flash Attention 2 for faster attention",
     "triton": "Triton kernels for optimized operations",
+    # F-005 per-tracker descriptions.
+    "wandb": "Weights & Biases experiment tracking",
+    "tensorboard": "TensorBoard local experiment logs",
+    "mlflow": "MLflow experiment tracking and model registry",
 }
 
 
@@ -194,6 +209,28 @@ def _detect_features() -> None:
         logger.debug("Feature 'triton' available")
     else:
         logger.debug("Feature 'triton' unavailable")
+
+    # F-005: per-tracker detection — each one toggles a different report_to
+    # branch in the trainer's auto-resolver. Detect via find_spec only so we
+    # don't trigger wandb's network probe or mlflow's import side effects.
+    if _has_module("wandb"):
+        FEATURES["wandb"] = True
+        logger.debug("Feature 'wandb' available")
+    else:
+        logger.debug("Feature 'wandb' unavailable: wandb not installed")
+
+    # TensorBoard ships as either `tensorboard` (full) or via `tensorboardX`.
+    if _has_module("tensorboard") or _has_module("tensorboardX"):
+        FEATURES["tensorboard"] = True
+        logger.debug("Feature 'tensorboard' available")
+    else:
+        logger.debug("Feature 'tensorboard' unavailable")
+
+    if _has_module("mlflow"):
+        FEATURES["mlflow"] = True
+        logger.debug("Feature 'mlflow' available")
+    else:
+        logger.debug("Feature 'mlflow' unavailable")
 
     # Log summary of detected features
     available = [name for name, enabled in FEATURES.items() if enabled]

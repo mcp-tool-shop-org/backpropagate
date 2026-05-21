@@ -154,6 +154,62 @@ code, pre, .mono {
     outline: 3px solid CanvasText;
     box-shadow: none;
   }
+}
+
+@media (prefers-contrast: more) {
+  :focus-visible {
+    outline: 3px solid var(--bp-text);
+    box-shadow: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Animation keyframes — the load-bearing "alive AND healthy" signals.
+
+   - bp-heartbeat / .bp-heartbeat-2400: 2.4s active-state pulse on the
+     status dot. Slow on purpose; faster reads as nervous.
+   - .bp-pulse-1600: 1.6s pulse, used for the paused state.
+   - bp-tick / .bp-tick: dim 100% → 45% for 80ms every 1.6s on the live
+     step counter. Imperceptible unless watched — the "data is still
+     arriving" signal. (Per design digest §4b.)
+   - .bp-num: tabular numerals for live-metrics (loss, step count, etc.).
+
+   Respect prefers-reduced-motion: silence the animations rather than
+   removing them, so the layout stays stable for vestibular-sensitive
+   users.
+   ───────────────────────────────────────────────────────────────────── */
+@keyframes bp-heartbeat {
+  0%, 100% { opacity: 1.0; }
+  50%      { opacity: 0.55; }
+}
+
+.bp-heartbeat-2400 {
+  animation: bp-heartbeat 2.4s cubic-bezier(0.4, 0.0, 0.6, 1.0) infinite;
+}
+
+.bp-pulse-1600 {
+  animation: bp-heartbeat 1.6s ease-in-out infinite;
+}
+
+@keyframes bp-tick {
+  0%, 95%, 100% { opacity: 1.0; }
+  97.5%         { opacity: 0.45; }
+}
+
+.bp-tick {
+  animation: bp-tick 1.6s linear infinite;
+}
+
+.bp-num {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bp-heartbeat-2400,
+  .bp-pulse-1600,
+  .bp-tick {
+    animation: none;
+  }
 }""",
 ])
 

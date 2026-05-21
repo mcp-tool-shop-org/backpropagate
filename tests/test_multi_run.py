@@ -1943,3 +1943,169 @@ class TestValidationConfig:
         assert trainer.config.validate_every_run is False
 
 
+# =============================================================================
+# F-002 RESUME-FROM-CHECKPOINT TESTS
+# =============================================================================
+
+from pathlib import Path as _Path  # noqa: E402 (placed here for locality)
+
+
+class TestMultiRunResume:
+    """Resume detection + start-index calculation (F-002)."""
+
+    def test_resume_from_default_is_none(self, tmp_path):
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._resume_from is None
+
+    def test_resume_from_off_skips_autodetect(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="active1",
+            model_name="m",
+            session_kind="multi_run",
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(
+            model="m", config=config, resume_from="off"
+        )
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None
+
+    def test_resume_from_autodetect_picks_in_progress_multi_run(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="autoresume1",
+            model_name="m",
+            session_kind="multi_run",
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        resolved = trainer._maybe_resume(_Path(str(tmp_path)))
+        assert resolved == "autoresume1"
+
+    def test_resume_from_ignores_single_runs(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="singleone",
+            model_name="m",
+            session_kind="single_run",
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None
+
+    def test_explicit_resume_from_resolves_partial_prefix(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="aabbccddeeff",
+            model_name="m",
+            session_kind="multi_run",
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(
+            model="m", config=config, resume_from="aabb"
+        )
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "aabbccddeeff"
+
+    def test_explicit_resume_from_missing_returns_none(self, tmp_path):
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(
+            model="m", config=config, resume_from="ghost"
+        )
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None
+
+
+class TestRestoreSessionState:
+
+    def test_restore_skips_when_no_checkpoint(self, tmp_path):
+        from backpropagate.checkpoints import CheckpointManager
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        trainer._checkpoint_manager = CheckpointManager(str(tmp_path))
+        assert (
+            trainer._restore_session_state(_Path(str(tmp_path)), "nope") is False
+        )
+        assert trainer._resume_start_run_idx == 1
+
+    def test_restore_finds_latest_run_index(self, tmp_path):
+        from backpropagate.checkpoints import CheckpointManager, CheckpointPolicy
+
+        manager = CheckpointManager(
+            str(tmp_path), CheckpointPolicy(auto_prune=False)
+        )
+        cp1 = tmp_path / "run_001"
+        cp1.mkdir()
+        (cp1 / "adapter_config.json").write_text("{}")
+        manager.register(
+            run_index=1,
+            checkpoint_path=str(cp1),
+            run_id="resumeme",
+            validation_loss=0.5,
+        )
+        cp2 = tmp_path / "run_002"
+        cp2.mkdir()
+        (cp2 / "adapter_config.json").write_text("{}")
+        manager.register(
+            run_index=2,
+            checkpoint_path=str(cp2),
+            run_id="resumeme",
+            validation_loss=0.3,
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        # Reuse the manager so registrations are visible.
+        trainer._checkpoint_manager = manager
+        assert trainer._restore_session_state(_Path(str(tmp_path)), "resumeme") is True
+        assert trainer._resume_start_run_idx == 3  # next run after run 2
+        assert trainer._resume_checkpoint_path == str(cp2)
+
+
+class TestCheckpointManagerFindLatestForRunId:
+
+    def test_returns_none_when_unmatched(self, tmp_path):
+        from backpropagate.checkpoints import CheckpointManager
+
+        manager = CheckpointManager(str(tmp_path))
+        assert manager.find_latest_for_run_id("missing") is None
+
+    def test_returns_highest_run_index(self, tmp_path):
+        from backpropagate.checkpoints import CheckpointManager, CheckpointPolicy
+
+        manager = CheckpointManager(
+            str(tmp_path), CheckpointPolicy(auto_prune=False)
+        )
+        for idx in (1, 2, 3):
+            cp = tmp_path / f"cp{idx}"
+            cp.mkdir()
+            (cp / "data.json").write_text("{}")
+            manager.register(
+                run_index=idx, checkpoint_path=str(cp), run_id="hit",
+                validation_loss=1.0 - idx * 0.1,
+            )
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "data.json").write_text("{}")
+        manager.register(
+            run_index=99, checkpoint_path=str(other), run_id="miss",
+            validation_loss=0.05,
+        )
+
+        latest = manager.find_latest_for_run_id("hit")
+        assert latest is not None
+        assert latest.run_index == 3
+
+

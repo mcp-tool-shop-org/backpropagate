@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-05-21
+
+### Fixed
+
+- CI workflow action SHAs (4 broken pins from the Stage A Wave 1 / Wave 3 SHA-pin sweep): `trufflesecurity/trufflehog` (34e114876b → 37b77001d0 / v3.95.3), `actions/upload-pages-artifact` (cd2ce8fc → 56afc609 / v3 — the previous SHA was actually `deploy-pages@v5` on the wrong action), `actions/deploy-pages` (ddc015e5 → cd2ce8fc / v5 — previous SHA didn't exist), `astral-sh/setup-uv` (7b1f4a76 → caf0cab7 / v3 — previous SHA didn't exist).
+- v1.1.0 release-binaries workflow failed at `Getting action download info` because of the broken setup-uv pin; this patch lets the next release-binaries run actually build and upload the PyInstaller binaries for Windows + macOS.
+
+### Notes
+
+- **No user-facing changes vs v1.1.0** — pure CI hygiene. PyPI / npm packages are byte-identical except for the version string. v1.1.0 remains valid and installable.
+- v1.1.0 GitHub Release page has the release notes; v1.1.0 PyInstaller binaries are unshipped — they ship attached to the v1.1.1 release once `release-binaries.yml` succeeds with the fixed setup-uv SHA.
+
 ## [1.1.0] - 2026-05-21
 
 A minor release that takes the project from "polished v1" to "real v1" via a 10-wave dogfood swarm. Bug + security pass, proactive health pass, UX humanization, full UI redesign (Gradio → Reflex), 5 P0 features.
@@ -191,6 +203,7 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.1.1 | 2026-05-21 | CI hotfix — 4 broken action SHAs from the v1.1.0 SHA-pin sweep (no user-facing changes) |
 | 1.1.0 | 2026-05-21 | Reflex UI, HF Hub push, resume-from-checkpoint, run history, model cards, W&B wiring (10-wave dogfood swarm) |
 | 1.0.5 | 2026-04-15 | Release-binaries workflow re-cut after v1.0.4 Linux exclusion fix |
 | 1.0.4 | 2026-04-14 | Linux binary <2GB (CPU torch swap), strip SIGPIPE fix |
@@ -205,7 +218,8 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.3...v1.0.4

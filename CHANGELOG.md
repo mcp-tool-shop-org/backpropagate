@@ -11,7 +11,14 @@ A dogfood-swarm release closing the **v1.1.x auth-bypass advisory** and a truth-
 
 ### Fixed
 
-- **CRITICAL: Web UI authentication contract not enforced (GHSA-pending)** — v1.1.0 and v1.1.1 advertised `--share + --auth` enforcement but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth` or `backprop ui --share --auth` was unauthenticated. v1.2.0 makes `cmd_ui` refuse to start when `--auth` or `--share` is set until middleware enforcement lands. See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories (pending publication).
+- **CRITICAL: Web UI authentication contract not enforced (GHSA-pending)** — v1.1.0 and v1.1.1 advertised `--share + --auth` enforcement but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth` or `backprop ui --share --auth` was unauthenticated. v1.2.0 lands a **4-layer defense in depth** that refuses to start the UI when auth is requested but enforcement is not actually wired:
+  1. `cli.py:cmd_ui` refuses-to-start with `RUNTIME_UI_AUTH_NOT_ENFORCED` when `--auth` or `--share` is set.
+  2. `cli.py:cmd_ui` strips ambient `BACKPROPAGATE_UI_AUTH` from the subprocess env when `--auth` is not passed (closes BRIDGE-B-001 ambient-env bypass: an operator-set env var would otherwise reach the Reflex subprocess and create the illusion of auth coverage).
+  3. `ui_app/app.py` refuses-to-construct at module import time when `BACKPROPAGATE_UI_AUTH` is set and `ENFORCEMENT_AVAILABLE=False`.
+  4. `rxconfig.py` has the same module-import guard (catches `python -m reflex run` direct invocations that bypass `cli.py`).
+
+  All four layers key off the `backpropagate/ui_app/auth.py::ENFORCEMENT_AVAILABLE` flag — when the middleware lands, flipping that single boolean re-enables every layer. See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories (pending publication).
+- **BACKEND-B-001 silent eval-mode-stuck after CUDA OOM** — `multi_run.py:_compute_validation_loss` left the model stuck in `eval()` mode after a CUDA OOM (or any exception escaping the validation loop). The next training run silently produced no gradient updates with no operator-visible signal — operators saw "training completed" but the model didn't learn. Fixed by wrapping the validation body in `try / finally: model.train()` so the train-mode invariant is restored even on exception. Originally classified Stage A MEDIUM (BACKEND-A-002) and deferred; Stage B re-audit escalated to CRITICAL on impact.
 - F-002 multi-run resume: safetensors loader was being called on `.bin` adapter files, raising silently. Now dispatched by extension.
 - export.py `register_with_ollama` UnboundLocalError in finally-block masking the real OllamaRegistrationError.
 - export.py subprocess SIGINT propagation: ollama-create and llama.cpp child processes now receive proper termination on Ctrl+C.
@@ -21,17 +28,26 @@ A dogfood-swarm release closing the **v1.1.x auth-bypass advisory** and a truth-
 
 - **CI gates re-tightened.** v1.1.0 claimed pip-audit + Trivy + Bandit + Semgrep + TruffleHog all gated on findings; v1.1.x rolled most of them back to advisory. v1.2.0 restores hard floor gates: mypy hard (or `ui_app/` override), pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer `continue-on-error`. TruffleHog confirmed retired (delegated to Trivy built-in secret scanner).
 - Web UI `--share` flag is now a hard refusal (was a no-op + 5-second warning). Use SSH port-forwarding until middleware lands.
-- Test count re-pinned to actual `pytest --collect-only`: 2012 (was 1957 in the abandoned v1.1.2 entry; the pin was wrong by 55 — Wave 1 dropped `test_init_lazy_loading.py` and Waves 2/3/3.5/4 added regression coverage).
+- Test count re-pinned to actual `pytest --collect-only`: 1837 (was 1957 in the abandoned v1.1.2 entry; Wave 1 dropped `test_init_lazy_loading.py`, Waves 2/3/3.5/4 added regression coverage, and Wave 4.5 removed the Gradio-legacy test surface alongside the source modules).
 - Validation tightening: `ollama create` model_name and `huggingface push` repo_id are validated against allowlist regexes.
 - `scripts/repin_test_count.sh` added so future maintainers can re-pin the count consistently (run after any `tests/` change; canonical pin sites listed in the script header).
 
 ### Removed
 
+- **`backpropagate.ui_gradio_legacy` + `backpropagate.theme_gradio_legacy`** — the v1.0 Gradio implementation, preserved through v1.1.x as reference. The Reflex UI (canonical from v1.1.0) is now the only Web UI surface. Package-level `backpropagate.launch` / `create_backpropagate_theme` / `get_theme_info` / `get_css` continue to raise `ImportError` via `__init__.py.__getattr__` with migration messages pointing at `backprop ui`.
 - tests/test_init_lazy_loading.py — fully skipped legacy file; replacement coverage already lives in test_init_imports.py.
+- tests/test_ui_gradio_legacy_components.py + tests/test_theme_gradio_legacy.py — exclusively tested the removed legacy modules.
+- The legacy-import test classes (`TestValidatePathInput`, `TestSanitizeModelName`, `TestSanitizeTextInput`, `TestGenerateAuthToken`, `TestLaunchSecurity`, `TestUISecurityExports`) inside `tests/test_ui_security.py` — they imported helpers from `ui_gradio_legacy` at test-body level and could not gracefully degrade after the module's removal. Equivalent surface for the Reflex UI is covered by `tests/test_ui_app_*.py` plus the `EnhancedRateLimiter` / `FileValidator` suites that remain in `test_ui_security.py`.
 
 ### Tests
 
-1957 → 2012 (+55 net): 55 new tests across Wave 1 + Wave 3.5 + Stage C — validator regression coverage, GHSA-pending auth-bypass test suite, ENFORCEMENT_AVAILABLE-flipped path, unsloth_fallback + pause_on_overheat wiring, HF retry loop timing, SLAO_MERGE_DIVERGED layer-name assertions, TrainingLogger capsys coverage, run_id correlation chain. Coverage threshold holds at 50%.
+1957 → 1837 (-120 net, re-pinned 2026-05-23 via `pytest --collect-only`): tests added across Wave 1 + Wave 3.5 + Stage C — validator regression coverage, GHSA-pending auth-bypass test suite, ENFORCEMENT_AVAILABLE-flipped path, unsloth_fallback + pause_on_overheat wiring, HF retry loop timing, SLAO_MERGE_DIVERGED layer-name assertions, TrainingLogger capsys coverage, run_id correlation chain. The net drop is from the Wave 4.5 Gradio-legacy removal (2 deleted test files + 6 hard-import classes inside test_ui_security.py + previously-counted legacy fixtures that no longer collect). Coverage threshold holds at 50%.
+
+- **TESTS-B-001 off-rig CI would have failed silently** — `test_register_with_ollama_failure` patched `subprocess.run`, but Wave 1's `register_with_ollama` had migrated to `_run_subprocess_interruptible` (Popen-based). The patch never fired; the test passed only because the `ollama` binary happened to be installed on this rig. CI runners without `ollama` installed would have failed the test. The patch target was corrected to the new subprocess helper.
+
+### Known issues / tech debt
+
+- **8 emitted error codes are documented in `cli.py:_BRIDGE_LOCAL_ERROR_CODES` instead of `exceptions.ERROR_CODES`** — the 4 `HUB_PUSH_*` codes plus `SLAO_MERGE_DIVERGED`, `PEFT_API_INCOMPATIBLE`, `UI_OUTPUT_DIR_FORBIDDEN`, and `INPUT_AUTH_INVALID_SHAPE`. They are emitted at runtime via `code=...` literals, but `backprop info --error-codes` (the canonical operator surface) does not yet enumerate them. They will be promoted to the canonical catalog in v1.3.
 
 ## [1.1.1] - 2026-05-21
 
@@ -83,7 +99,7 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ### Removed
 
-- **Gradio web UI** — moved to `backpropagate/ui_gradio_legacy.py` with a DEPRECATED docstring. Preserved for v1.1 reference; will be removed in v1.2. `backpropagate.launch` / `create_backpropagate_theme` / `get_theme_info` / `get_css` now raise `ImportError` with the migration message
+- **Gradio web UI** — moved to `backpropagate/ui_gradio_legacy.py` with a DEPRECATED docstring; preserved through v1.1.x as reference and fully removed in v1.2.0. `backpropagate.launch` / `create_backpropagate_theme` / `get_theme_info` / `get_css` now raise `ImportError` with the migration message
 
 ### Tests
 

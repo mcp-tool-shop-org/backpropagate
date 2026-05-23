@@ -299,10 +299,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
 
 ## Troubleshooting
 

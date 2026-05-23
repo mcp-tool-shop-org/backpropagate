@@ -174,8 +174,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]    # unused imports in __init__
-"ui_gradio_legacy.py" = ["ARG001", "ARG002", "B007", "E712"]  # Legacy Gradio UI module — preserved as reference
-"theme_gradio_legacy.py" = ["E501"]  # Legacy Gradio theme module — preserved as reference
 "cli.py" = ["ARG001"]       # argparse handlers require namespace param
 "trainer.py" = ["ARG001"]   # API compatibility params
 "tests/*" = ["ARG"]               # unused arguments in tests
@@ -227,16 +225,6 @@ disable_error_code = ["attr-defined"]
 module = "backpropagate.rxconfig"
 ignore_errors = true
 
-# The legacy Gradio implementation is preserved as v1.0 reference; we don't
-# enforce v1.1's stricter type config on it. Removed in v1.2.
-[[tool.mypy.overrides]]
-module = "backpropagate.ui_gradio_legacy"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "backpropagate.theme_gradio_legacy"
-ignore_errors = true
-
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = [
@@ -281,16 +269,13 @@ exclude_lines = [
 ]
 
 [tool.bandit]
-# exclude_dirs is substring-matched against every scanned path, so listing
-# the v1.0 Gradio legacy modules by basename suffices to skip them. They're
-# preserved as v1.0 reference until v1.2; findings inside them are already
-# documented and shouldn't re-gate v1.1.x. .web/ is Reflex's working dir.
+# exclude_dirs is substring-matched against every scanned path. .web/ is
+# Reflex's working dir. (The v1.0 Gradio legacy modules were removed in v1.2.0
+# and no longer need an exclusion.)
 exclude_dirs = [
     "tests",
     "venv",
     ".venv",
-    "ui_gradio_legacy.py",
-    "theme_gradio_legacy.py",
     ".web",
 ]
 skips = [

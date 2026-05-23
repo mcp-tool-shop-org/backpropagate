@@ -30,12 +30,10 @@ backpropagate/
 │   └── components/      #   Sparkline, GPU ring, event log, callouts
 ├── rxconfig.py          # Reflex Config (app_name, ports, refuse-to-start guard)
 ├── ui_state.py          # rx.State subclasses driving the four surfaces
-├── ui_security.py       # Path-sandbox + file validation + denylist for UI writes
-├── theme_gradio_legacy.py  # v1.0 Gradio theme — reference only; removed in v1.2
-└── ui_gradio_legacy.py     # v1.0 Gradio interface — reference only; removed in v1.2
+└── ui_security.py       # Path-sandbox + file validation + denylist for UI writes
 ```
 
-The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pulls in Reflex `>= 0.9.2`. The v1.0 Gradio implementation is kept as `*_gradio_legacy.py` until v1.2 lands.
+The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pulls in Reflex `>= 0.9.2`. The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
 
 ## CLI commands
 

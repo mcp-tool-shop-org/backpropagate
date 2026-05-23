@@ -208,7 +208,14 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         packing: bool = False
 
     class UIConfig(BaseSettings):
-        """Gradio UI configuration."""
+        """Reflex (Radix UI) web interface configuration.
+
+        Migrated from Gradio in v1.1.0. The host / port / share / auto_open
+        knobs continue to apply — `cmd_ui` forwards them to the Reflex
+        subprocess launch. ``host`` defaults to ``127.0.0.1`` (localhost
+        only) for security; expose externally via SSH port-forwarding or a
+        Cloudflare Tunnel rather than ``host=0.0.0.0``.
+        """
         model_config = SettingsConfigDict(
             env_prefix="BACKPROPAGATE_UI__",
             env_ignore_empty=True,
@@ -307,7 +314,13 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         csp_report_only: bool = False  # Set False to enforce
 
         def get_auth_tuple(self) -> tuple | None:
-            """Get auth tuple for Gradio if credentials are set."""
+            """Return ``(username, password)`` if both auth credentials are set, else ``None``.
+
+            Originally fed Gradio's basic-auth tuple; in v1.1.0+ the Reflex
+            UI consumes the same shape via ``ui_app/auth.py``. The format is
+            preserved so existing BACKPROPAGATE_SECURITY__AUTH_USERNAME /
+            AUTH_PASSWORD env vars stay valid across the migration.
+            """
             if self.auth_username and self.auth_password:
                 return (self.auth_username, self.auth_password)
             return None

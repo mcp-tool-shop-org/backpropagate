@@ -27,7 +27,6 @@ Other install options:
 | `[validation]` | Pydantic config validation |
 | `[export]` | GGUF export for Ollama |
 | `[monitoring]` | WandB + system monitoring |
-| `[observability]` | OpenTelemetry tracing |
 | `[logging]` | Structured logging via structlog |
 | `[security]` | JWT auth + token generation |
 | `[standard]` | unsloth + ui (recommended) |
@@ -110,3 +109,11 @@ To verify the adapter loaded cleanly, run `backprop info` — it lists which opt
 ## Troubleshooting
 
 If something failed during installation or first run, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's a symptoms-first reverse index keyed by what you actually saw in stderr.
+
+## Upgrading from v1.1.x
+
+If you are coming from v1.1.0 / v1.1.1, see the [migration page](/backpropagate/handbook/migrations/) for the breaking changes (notably the `--share` refuse-to-start contract and the removed `[observability]` extra) and the behavioural fixes that may surface bugs in your callback code.
+
+## Exposing the UI to the network
+
+For SSH port-forwarding, host/origin allowlists, the v1.1.x GHSA advisory, and the four-layer auth defense — see the [security page](/backpropagate/handbook/security/).

@@ -72,10 +72,6 @@ monitoring = [
     "psutil>=5.9.0",  # System monitoring
     "wandb>=0.15.0",  # Weights & Biases logging
 ]
-observability = [
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-]
 logging = [
     "structlog>=24.1.0",  # Structured logging (2026 best practices)
 ]
@@ -89,7 +85,7 @@ standard = [
     "backpropagate[unsloth,ui]",  # Recommended for most users
 ]
 full = [
-    "backpropagate[unsloth,ui,validation,export,monitoring,observability,logging,security]",  # Everything
+    "backpropagate[unsloth,ui,validation,export,monitoring,logging,security]",  # Everything
 ]
 production = [
     "backpropagate[unsloth,ui,validation,logging,security]",  # Production deployment
@@ -113,6 +109,7 @@ dev = [
     "pip-audit>=2.7.0",        # Dependency vulnerability scanner
     "safety>=2.3.0",           # Dependency security checker
     "packaging>=21.0",         # Version parsing for security checks
+    "httpx>=0.27.0",           # ASGI test client (auth middleware tests)
 ]
 
 [project.urls]
@@ -175,7 +172,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]    # unused imports in __init__
 "cli.py" = ["ARG001"]       # argparse handlers require namespace param
-"trainer.py" = ["ARG001"]   # API compatibility params
+"trainer.py" = ["ARG001", "ARG002"]   # API compatibility params + HF TrainerCallback method signature (parent class args we don't use)
 "tests/*" = ["ARG"]               # unused arguments in tests
 
 [tool.ruff.lint.isort]
@@ -215,7 +212,20 @@ check_untyped_defs = false
 # v1.2.0 Stage C: silence attr-defined for Reflex Var methods (.length(), .to_string())
 # that mypy can't see because the State field's declared type is plain int / list,
 # not rx.Var[int] / rx.Var[list]. Re-evaluate when Reflex ships proper Var generics.
-disable_error_code = ["attr-defined"]
+# v1.2.0 Wave 6: also silence "operator" — Reflex's @rx.event decorator wraps
+# handlers in EventNamespace which mypy sees as non-callable when called from
+# inside another event handler. Same root cause class as the Var generics gap.
+disable_error_code = ["attr-defined", "operator"]
+
+# Same Reflex Var/EventNamespace typing gap applies to backpropagate.ui_state
+# (the State classes live there, not under ui_app/). Mirror the override.
+[[tool.mypy.overrides]]
+module = "backpropagate.ui_state"
+warn_return_any = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+disable_error_code = ["attr-defined", "operator"]
 
 # rxconfig.py uses the `backend_only` kwarg which Reflex 0.9 removed from
 # rx.Config — mypy flags it as a call-arg error even though Reflex still

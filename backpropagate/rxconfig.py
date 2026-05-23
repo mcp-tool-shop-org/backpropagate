@@ -39,6 +39,46 @@ if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
         "ssh -L 7860:localhost:7860 <host>"
     )
 
+# FRONTEND-F-CORS-ORIGINS-LOCK (Wave 6, FRONTEND-B-011 closed):
+# Reflex's default cors_allowed_origins is ['*'], which lets any browser /
+# any origin open the backend WebSocket. The Wave 6 auth middleware
+# (ui_app/auth.py::basic_auth_transformer) adds Origin allowlist validation
+# on WS upgrade as the load-bearing CSWSH defense (per Schneider 2013 /
+# CWE-1385); cors_allowed_origins is the FastAPI-CORSMiddleware layer that
+# runs at a different level (HTTP response Access-Control-Allow-Origin) and
+# is the FIRST gate browsers consult for cross-origin XHR/fetch. Lock both
+# layers as defense-in-depth.
+#
+# The default allowlist covers loopback at the two Reflex ports (frontend +
+# backend). When the auth middleware lands and runs in --share / --host
+# modes, the operator-supplied tunnel/LAN host is added DYNAMICALLY by the
+# middleware on a per-request basis (Host-header allowlist there); CORS is
+# the static fallback for the common loopback case.
+_DEFAULT_CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:7860",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:7860",
+]
+
+# Honor the operator port if they override BACKPROPAGATE_UI_PORT.
+_ui_port = os.environ.get("BACKPROPAGATE_UI_PORT", "").strip()
+if _ui_port and _ui_port.isdigit():
+    for host in ("localhost", "127.0.0.1"):
+        candidate = f"http://{host}:{_ui_port}"
+        if candidate not in _DEFAULT_CORS_ALLOWED_ORIGINS:
+            _DEFAULT_CORS_ALLOWED_ORIGINS.append(candidate)
+
+# Operator escape hatch (env var, comma-separated) — additive, never replaces
+# the loopback defaults. Documented in handbook/env-vars.md.
+_extra_cors = os.environ.get("BACKPROPAGATE_UI_CORS_EXTRA_ORIGINS", "").strip()
+if _extra_cors:
+    for raw in _extra_cors.split(","):
+        origin = raw.strip()
+        if origin and origin not in _DEFAULT_CORS_ALLOWED_ORIGINS:
+            _DEFAULT_CORS_ALLOWED_ORIGINS.append(origin)
+
+
 config = rx.Config(
     app_name="ui_app",
     # Override Reflex's default ``<app_name>/<app_name>.py`` convention so the
@@ -46,4 +86,5 @@ config = rx.Config(
     app_module_import="ui_app.app",
     db_url=None,
     backend_only=False,
+    cors_allowed_origins=_DEFAULT_CORS_ALLOWED_ORIGINS,
 )

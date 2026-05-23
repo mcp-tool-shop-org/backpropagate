@@ -624,7 +624,7 @@ def callback_spy():
         trainer.train(callback=TrainingCallback(on_step=spy))
         spy.assert_called(times=10)
     """
-    from tests.test_helpers import CallbackSpy
+    from tests.helpers import CallbackSpy
     return CallbackSpy()
 
 
@@ -641,7 +641,7 @@ def callback_spy_factory():
         error_spy = callback_spy_factory()
         callback = TrainingCallback(on_step=step_spy, on_error=error_spy)
     """
-    from tests.test_helpers import CallbackSpy
+    from tests.helpers import CallbackSpy
 
     def _create_spy(return_value=None, side_effect=None):
         return CallbackSpy(return_value=return_value, side_effect=side_effect)
@@ -666,7 +666,7 @@ def callback_tracker():
         trainer.train(callback=callback)
         tracker.assert_sequence(["step", "step", "complete"])
     """
-    from tests.test_helpers import CallbackTracker
+    from tests.helpers import CallbackTracker
     return CallbackTracker()
 
 
@@ -684,7 +684,7 @@ def async_callback_collector():
         monitor.start()
         collector.wait(timeout=10.0)
     """
-    from tests.test_helpers import AsyncCallbackCollector
+    from tests.helpers import AsyncCallbackCollector
 
     def _create_collector(expected_count: int = 1):
         return AsyncCallbackCollector(expected_count=expected_count)

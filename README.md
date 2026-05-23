@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Pydantic config validation | pydantic, pydantic-settings |
 | `export` | GGUF export for Ollama | llama-cpp-python |
 | `monitoring` | WandB + system monitoring (auto-wired into trainer in v1.1.0) | wandb, psutil |
-| `observability` | OpenTelemetry tracing | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Structured logging | structlog |
 | `security` | JWT auth + token generation | PyJWT, cryptography |
 | `production` | unsloth + ui + validation + logging + security | (bundle) |

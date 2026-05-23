@@ -132,7 +132,7 @@ All user-provided paths now validated:
 
 **Total Test Results:**
 ```
-~1,796 passed at v1.0.2; v1.2.0 collects 1837 tests, 0 warnings (verified 2026-05-23 post-Gradio-legacy removal)
+~1,796 passed at v1.0.2; v1.2.0 collects 1865 tests, 0 warnings (verified 2026-05-23 post-Wave-6)
 ```
 
 ---

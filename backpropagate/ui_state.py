@@ -857,6 +857,156 @@ class DatasetState(rx.State):
             self.detected_format = "alpaca"
 
 
+# ---------------------------------------------------------------------------
+# RunsState — backs the /runs page (FRONTEND-F-RUN-HISTORY-PAGE, Wave 6)
+# ---------------------------------------------------------------------------
+#
+# Loads the recent training-run history via the CLI's RunHistoryManager so the
+# UI shows the same data ``backprop list-runs`` shows. The implementation
+# imports RunHistoryManager directly rather than shelling out to the CLI —
+# subprocess-shelling from a Reflex state handler would block the WS event
+# loop and the CLI prints decorated text, not the clean dicts the UI needs.
+#
+# Drill-down to a per-run page is INTENTIONALLY OUT OF SCOPE for v1.2.0 (the
+# user narrowed the brief). Each table row is a read-only summary; v1.3 adds
+# a /runs/<id> route that mirrors ``backprop show-run``.
+
+
+class RunsState(rx.State):
+    """Run-history surface state — populates the /runs page table."""
+
+    runs: list[dict] = []
+    loading: bool = False
+    error: str = ""
+    status_filter: str = ""  # "" / running / completed / failed
+    output_dir_override: str = ""
+    last_loaded_at: str = ""
+
+    # Hard cap on rows rendered at once. The CLI defaults to 50; the table can
+    # comfortably render this many without pagination. v1.3 will add a
+    # "Load more" affordance + per-status filter pills.
+    _DEFAULT_LIMIT: int = 50
+
+    @rx.event
+    def load_runs(self) -> None:
+        """Populate ``self.runs`` from the on-disk run history.
+
+        The default output directory is ``~/.backpropagate/ui-outputs`` (the
+        same directory the UI writes adapters/exports into). Operators who
+        train from the CLI to a different ``--output`` directory can set the
+        ``output_dir_override`` field on this state before calling
+        ``load_runs``; the UI's settings surface will wire that in v1.3.
+        """
+        from datetime import datetime, timezone
+        from pathlib import Path as _Path
+
+        self.loading = True
+        self.error = ""
+        try:
+            # Resolve the history directory. Use the override if set, otherwise
+            # fall back to the UI's own output dir (the default training sink).
+            if self.output_dir_override.strip():
+                history_dir = _Path(self.output_dir_override).expanduser()
+            else:
+                try:
+                    from .ui_security import get_ui_output_dir
+
+                    history_dir = get_ui_output_dir()
+                except Exception:
+                    # Final fallback: the documented default.
+                    history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
+
+            if not history_dir.exists():
+                self.runs = []
+                self.error = (
+                    f"No run history at {history_dir}. Train a model from the "
+                    "UI or CLI; runs will appear here automatically."
+                )
+                return
+
+            try:
+                from .checkpoints import RunHistoryManager
+            except ImportError as exc:
+                self.error = f"checkpoints module unavailable: {exc}"
+                self.runs = []
+                return
+
+            manager = RunHistoryManager(str(history_dir))
+            status = self.status_filter.strip() or None
+            try:
+                rows = manager.list_runs(status=status, limit=self._DEFAULT_LIMIT)
+            except ValueError as exc:
+                self.error = f"Invalid filter: {exc}"
+                self.runs = []
+                return
+            except Exception as exc:  # noqa: BLE001 — surface as operator string
+                self.error = f"Could not load runs: {exc}"
+                self.runs = []
+                return
+
+            # Normalize to a small, JSON-serializable shape for Reflex's WS
+            # bundle. The CLI emits dicts already; we just trim fields the
+            # table doesn't use so the bundle stays small. We also pre-format
+            # the run_id to its short 8-char form to avoid an f-string in
+            # the template (Reflex template f-strings get awkward fast).
+            trimmed: list[dict] = []
+            for raw in rows:
+                run_id = str(raw.get("run_id") or "")
+                short_id = run_id[:8] if run_id else "-"
+                started = str(raw.get("started_at") or "-")
+                duration = raw.get("duration_seconds")
+                if duration is None:
+                    duration_str = "-"
+                else:
+                    try:
+                        duration_str = f"{float(duration):.0f}s"
+                    except (TypeError, ValueError):
+                        duration_str = "-"
+                final_loss = raw.get("final_loss")
+                if final_loss is None:
+                    final_loss_str = "-"
+                else:
+                    try:
+                        final_loss_str = f"{float(final_loss):.4f}"
+                    except (TypeError, ValueError):
+                        final_loss_str = "-"
+                trimmed.append({
+                    "run_id": run_id,
+                    "run_id_short": short_id,
+                    "started_at": started,
+                    "model": str(raw.get("model") or "-"),
+                    "dataset": str(raw.get("dataset") or "-"),
+                    "status": str(raw.get("status") or "-"),
+                    "duration": duration_str,
+                    "final_loss": final_loss_str,
+                })
+            self.runs = trimmed
+            self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        finally:
+            self.loading = False
+
+    @rx.event
+    def set_status_filter(self, value: str) -> None:
+        """Update the status filter and reload."""
+        if value in ("", "running", "completed", "failed", "interrupted"):
+            self.status_filter = value
+        self.load_runs()
+
+    @rx.event
+    def set_output_dir_override(self, value: str) -> None:
+        """Operator-supplied output directory (validated lightly)."""
+        cleaned, err = _validate_ui_path(value)
+        if err:
+            self.error = err
+            return
+        self.output_dir_override = cleaned
+
+    @rx.event
+    def clear_error(self) -> None:
+        """Dismiss the error banner."""
+        self.error = ""
+
+
 __all__ = [
     "RunState",
     "Theme",
@@ -871,4 +1021,5 @@ __all__ = [
     "MultiRunState",
     "ExportState",
     "DatasetState",
+    "RunsState",
 ]

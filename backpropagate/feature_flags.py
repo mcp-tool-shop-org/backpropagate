@@ -20,7 +20,7 @@ Usage:
 Installation commands for each feature:
     pip install backpropagate              # Core only
     pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-    pip install backpropagate[ui]          # + Gradio web UI
+    pip install backpropagate[ui]          # + Reflex web UI (migrated from Gradio in v1.1.0)
     pip install backpropagate[validation]  # + Pydantic config validation
     pip install backpropagate[export]      # + GGUF export
     pip install backpropagate[monitoring]  # + WandB & system monitoring
@@ -57,7 +57,6 @@ FEATURES: dict[str, bool] = {
     "validation": False,
     "export": False,
     "monitoring": False,
-    "observability": False,
     "flash_attention": False,
     "triton": False,
     # F-005: per-tracker availability so the trainer's report_to resolver can
@@ -76,7 +75,6 @@ INSTALL_HINTS: dict[str, str] = {
     "validation": "pip install backpropagate[validation]",
     "export": "pip install backpropagate[export]",
     "monitoring": "pip install backpropagate[monitoring]",
-    "observability": "pip install backpropagate[observability]",
     "flash_attention": "pip install flash-attn --no-build-isolation",
     "triton": "pip install triton",
     # F-005 per-tracker hints.
@@ -88,11 +86,10 @@ INSTALL_HINTS: dict[str, str] = {
 # Feature descriptions
 FEATURE_DESCRIPTIONS: dict[str, str] = {
     "unsloth": "Unsloth for 2x faster training with 50% less VRAM",
-    "ui": "Gradio web interface for training management",
+    "ui": "Reflex (Radix UI) web interface for training management",
     "validation": "Pydantic configuration validation",
     "export": "GGUF export for Ollama/llama.cpp deployment",
     "monitoring": "WandB logging and system monitoring (psutil)",
-    "observability": "OpenTelemetry distributed tracing",
     "flash_attention": "Flash Attention 2 for faster attention",
     "triton": "Triton kernels for optimized operations",
     # F-005 per-tracker descriptions.
@@ -115,7 +112,6 @@ def _has_module(name: str) -> bool:
 
     * ``unsloth`` registers ``torch.compile`` hooks and emits warnings
     * ``wandb`` may probe network on import (rare, but observed in some envs)
-    * ``opentelemetry`` registers a global tracer provider
     * ``flash_attn`` triggers a multi-second CUDA capability probe
 
     ``find_spec`` returns a :class:`ModuleSpec` or ``None`` and is roughly
@@ -161,12 +157,14 @@ def _detect_features() -> None:
         else:
             logger.debug("Feature 'unsloth' unavailable: unsloth not installed")
 
-    # UI feature (Gradio)
-    if _has_module("gradio"):
+    # UI feature (Reflex; migrated from Gradio in v1.1.0). The probe stays
+    # importlib.util.find_spec-only so detection costs ~0ms even though Reflex
+    # itself has a non-trivial import-time cost (FastAPI + WebSocket stack).
+    if _has_module("reflex"):
         FEATURES["ui"] = True
-        logger.debug("Feature 'ui' available: gradio installed")
+        logger.debug("Feature 'ui' available: reflex installed")
     else:
-        logger.debug("Feature 'ui' unavailable: gradio not installed")
+        logger.debug("Feature 'ui' unavailable: reflex not installed")
 
     # Validation feature (Pydantic) — needs BOTH pydantic and pydantic_settings
     if _has_module("pydantic") and _has_module("pydantic_settings"):
@@ -188,13 +186,6 @@ def _detect_features() -> None:
         logger.debug("Feature 'monitoring' available: wandb and psutil installed")
     else:
         logger.debug("Feature 'monitoring' unavailable")
-
-    # Observability feature (OpenTelemetry)
-    if _has_module("opentelemetry"):
-        FEATURES["observability"] = True
-        logger.debug("Feature 'observability' available: opentelemetry installed")
-    else:
-        logger.debug("Feature 'observability' unavailable")
 
     # Flash Attention feature
     if _has_module("flash_attn"):

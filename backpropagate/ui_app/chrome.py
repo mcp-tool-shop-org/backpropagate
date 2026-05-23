@@ -30,11 +30,17 @@ _BRAND_VERSION = f"v{__version__}"
 
 # Surface key → (label, href, icon URL). The icons live under
 # ``backpropagate/assets/icons/`` so Reflex serves them at ``/icons/<name>.svg``.
+#
+# Wave 6 added the ``runs`` entry (FRONTEND-F-RUN-HISTORY-PAGE) — closes the
+# CLI/UI parity gap created when F-003 shipped ``backprop list-runs`` /
+# ``backprop show-run``. The icon reuses the train.svg asset until a
+# dedicated history glyph lands (cheap polish item for v1.3).
 _NAV_ITEMS = (
     ("train",     "Single run", "/",          "/icons/train.svg"),
     ("multi-run", "Multi-run",  "/multi-run", "/icons/multi-run.svg"),
     ("export",    "Export",     "/export",    "/icons/export.svg"),
     ("dataset",   "Dataset",    "/dataset",   "/icons/dataset.svg"),
+    ("runs",      "Runs",       "/runs",      "/icons/train.svg"),
 )
 
 

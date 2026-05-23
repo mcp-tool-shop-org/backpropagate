@@ -63,47 +63,6 @@ EXIT_INTERRUPTED = 130
 
 
 # =============================================================================
-# BRIDGE-LOCAL ERROR CODE DOCUMENTATION (BRIDGE-B-003 catalog drift mitigation)
-# =============================================================================
-# Codes emitted by export.py / cli.py that the canonical ERROR_CODES catalog in
-# exceptions.py does NOT yet enumerate. The catalog lives in backend domain;
-# rather than reach across the domain boundary, we document the bridge-side
-# codes here so:
-#   (a) operators grepping cli.py for a code they saw in stderr have a
-#       central reference inside the bridge surface;
-#   (b) a future test ``test_error_code_catalog_completeness`` can scan BOTH
-#       exceptions.ERROR_CODES AND _BRIDGE_LOCAL_ERROR_CODES when checking
-#       that every emitted ``code=...`` literal is defined somewhere.
-# These entries are CANDIDATES for promotion into exceptions.ERROR_CODES;
-# the backend agent owns the actual catalog. The bridge audit (BRIDGE-B-003)
-# flagged 8 missing codes total — the 4 below are bridge-domain; the other 4
-# (SLAO_MERGE_DIVERGED, PEFT_API_INCOMPATIBLE, UI_OUTPUT_DIR_FORBIDDEN,
-# INPUT_AUTH_INVALID_SHAPE) are flagged to backend / frontend agents.
-_BRIDGE_LOCAL_ERROR_CODES: dict[str, dict[str, str]] = {
-    "HUB_PUSH_INVALID_REPO": {
-        "description": "Hugging Face repo_id failed pre-network validation (shape, control chars, '..' segment).",
-        "default_hint": "Pass --repo owner/name with only [A-Za-z0-9._-] in each segment.",
-        "retryable": "no",
-    },
-    "HUB_PUSH_NOT_FOUND": {
-        "description": "Hugging Face Hub returned 404 for the target repo.",
-        "default_hint": "Verify the repo_id spelling. Omit --create-repo=false to let backpropagate create it.",
-        "retryable": "no",
-    },
-    "HUB_PUSH_NETWORK": {
-        "description": "Hub upload failed due to network / 5xx / connection issue.",
-        "default_hint": "Retry — Hub 5xx clears in ~30s. Check connectivity if persistent.",
-        "retryable": "yes",
-    },
-    "HUB_PUSH_UNKNOWN": {
-        "description": "Hub upload failed for a reason backpropagate could not categorise.",
-        "default_hint": "Re-run with --verbose for the full traceback; check huggingface_hub version.",
-        "retryable": "sometimes",
-    },
-}
-
-
-# =============================================================================
 # ARGPARSE TYPE VALIDATORS
 # =============================================================================
 # Defensive-coding helpers used by `create_parser` to reject obviously wrong
@@ -998,12 +957,146 @@ def _detect_installed_versions() -> dict[str, str]:
     return out
 
 
+def _enumerate_env_vars() -> list[dict[str, str]]:
+    """Walk the pydantic-settings models in :mod:`backpropagate.config` and
+    return one dict per ``BACKPROPAGATE_*`` env var the runtime honours.
+
+    Each dict has ``env_var`` / ``default`` / ``type`` / ``description``
+    keys. The walk skips secret-flagged fields' default values (replaced
+    with ``"<secret>"``) so a leaked ``BACKPROPAGATE_SECURITY__AUTH_PASSWORD``
+    default never reaches stdout. When pydantic-settings is not installed
+    we fall back to a small hand-curated list of the load-bearing env
+    vars from the dataclass fallback in :mod:`backpropagate.config`.
+
+    Returns:
+        Sorted list of env-var descriptors, alphabetical by ``env_var``.
+        Deterministic so snapshot-tests are stable across Python versions.
+    """
+    from .config import PYDANTIC_SETTINGS_AVAILABLE, Settings
+
+    rows: list[dict[str, str]] = []
+
+    if PYDANTIC_SETTINGS_AVAILABLE:
+        # Walk every nested sub-config on Settings(). Each sub-config carries
+        # an ``env_prefix`` in its model_config that defines the BACKPROPAGATE_*
+        # namespace. We construct the env-var name by concatenating the prefix
+        # with the field name UPPERCASED.
+        for sub_field_name, sub_field_info in Settings.model_fields.items():
+            sub_cls = sub_field_info.annotation
+            # Only nested-config classes have model_fields; primitive fields
+            # (e.g. Settings.version, Settings.name) are at the top level and
+            # use BACKPROPAGATE_<NAME> directly.
+            if not hasattr(sub_cls, "model_fields"):
+                env_name = f"BACKPROPAGATE_{sub_field_name.upper()}"
+                rows.append({
+                    "env_var": env_name,
+                    "default": _safe_default(sub_field_info),
+                    "type": _type_name(sub_field_info.annotation),
+                    "description": (sub_field_info.description or "").strip(),
+                })
+                continue
+
+            if sub_cls is None:
+                continue
+            sub_cfg = getattr(sub_cls, "model_config", {})
+            env_prefix = sub_cfg.get("env_prefix") if isinstance(sub_cfg, dict) else getattr(sub_cfg, "env_prefix", None)
+            env_prefix = env_prefix or f"BACKPROPAGATE_{sub_field_name.upper()}__"
+
+            for field_name, field_info in sub_cls.model_fields.items():
+                env_name = f"{env_prefix}{field_name.upper()}"
+                # Redact any field flagged as secret via Field(json_schema_extra={"secret": True}).
+                is_secret = bool(
+                    getattr(field_info, "json_schema_extra", None)
+                    and isinstance(field_info.json_schema_extra, dict)
+                    and field_info.json_schema_extra.get("secret")
+                )
+                default = "<secret>" if is_secret else _safe_default(field_info)
+                rows.append({
+                    "env_var": env_name,
+                    "default": default,
+                    "type": _type_name(field_info.annotation),
+                    "description": (field_info.description or "").strip(),
+                })
+    else:
+        # pydantic-settings missing — fall back to the hand-curated list of
+        # env vars the dataclass branch in config.py honours. Keep this list
+        # in sync if the fallback grows.
+        rows.append({
+            "env_var": "BACKPROPAGATE_DEFER_FEATURE_DETECTION",
+            "default": "",
+            "type": "bool",
+            "description": "Skip feature detection at import time; call refresh_features() manually.",
+        })
+
+    # Always include the structured-logging env vars from logging_config.py
+    # (these are read via os.environ.get, not via pydantic-settings, so the
+    # introspection above won't pick them up).
+    logging_envs = [
+        ("BACKPROPAGATE_LOG_LEVEL", "INFO", "str", "Structured-logger level: DEBUG / INFO / WARNING / ERROR."),
+        ("BACKPROPAGATE_LOG_JSON", "0", "bool", "Emit JSON-formatted log lines instead of pretty console output."),
+        ("BACKPROPAGATE_LOG_FILE", "", "path", "File path for log output; appended to in addition to stderr."),
+        ("BACKPROPAGATE_DEFER_FEATURE_DETECTION", "", "bool", "Skip optional-feature detection at import time."),
+    ]
+    seen = {row["env_var"] for row in rows}
+    for env_name, default, type_name, description in logging_envs:
+        if env_name not in seen:
+            rows.append({
+                "env_var": env_name,
+                "default": default,
+                "type": type_name,
+                "description": description,
+            })
+
+    rows.sort(key=lambda r: r["env_var"])
+    return rows
+
+
+def _safe_default(field_info: Any) -> str:
+    """Return a printable representation of a pydantic FieldInfo default.
+
+    Falls back to ``"<factory>"`` for default_factory fields (whose
+    construction can be expensive or non-deterministic) and ``""`` for
+    PydanticUndefined sentinels.
+    """
+    try:
+        from pydantic_core import PydanticUndefined
+    except ImportError:
+        PydanticUndefined = object()  # type: ignore[assignment]
+
+    default = getattr(field_info, "default", PydanticUndefined)
+    if default is PydanticUndefined or default is Ellipsis:
+        if getattr(field_info, "default_factory", None) is not None:
+            return "<factory>"
+        return ""
+    if default is None:
+        return "None"
+    if isinstance(default, bool):
+        # Lowercase bool default matches the BACKPROPAGATE_*=true/false convention.
+        return "true" if default else "false"
+    if isinstance(default, (list, tuple, dict)):
+        # Avoid dumping a multi-line repr into a single table row.
+        return str(default)
+    return str(default)
+
+
+def _type_name(annotation: Any) -> str:
+    """Return a human-readable type name for a pydantic field annotation."""
+    if annotation is None:
+        return "any"
+    name = getattr(annotation, "__name__", None)
+    if name:
+        return str(name)
+    # Generic aliases like ``list[str]`` / ``str | None`` use __repr__.
+    return str(annotation).replace("typing.", "")
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     """Execute the info command.
 
-    Supported flags (C-CLI-005, C-CLI-008):
+    Supported flags (C-CLI-005, C-CLI-008, BRIDGE-F-003):
         --error-codes     dump the ERROR_CODES catalog (machine-readable)
-        --json            emit the system info as JSON (for support payloads)
+        --env-vars        enumerate every BACKPROPAGATE_* env var with defaults
+        --json            emit the system info OR env-vars list as JSON
     """
     from .config import settings
     from .feature_flags import (
@@ -1023,6 +1116,44 @@ def cmd_info(args: argparse.Namespace) -> int:
         from .exceptions import print_error_code_catalog
 
         print_error_code_catalog()
+        return EXIT_OK
+
+    # BRIDGE-F-003: ``backprop info --env-vars`` enumerates every
+    # BACKPROPAGATE_* env var the runtime reads, with defaults + descriptions.
+    # The data is introspected from the pydantic-settings models in
+    # config.py + the structured-logging knobs in logging_config.py, so the
+    # output stays in sync with the runtime automatically — no separate
+    # markdown reference to maintain. Pipe-friendly for grep / awk.
+    if getattr(args, "env_vars", False):
+        rows = _enumerate_env_vars()
+        if getattr(args, "json", False):
+            import json
+            print(json.dumps(rows, indent=2, default=str))
+            return EXIT_OK
+
+        # Compute aligned column widths so the table stays scannable.
+        if not rows:
+            _print_info("No environment variables enumerated (config introspection unavailable).")
+            return EXIT_OK
+        env_w = max(len("ENV_VAR"), max(len(r["env_var"]) for r in rows))
+        default_w = max(len("DEFAULT"), max(len(r["default"]) for r in rows))
+        type_w = max(len("TYPE"), max(len(r["type"]) for r in rows))
+
+        _print_header("Backpropagate Environment Variables")
+        header = f"{'ENV_VAR':<{env_w}}  {'DEFAULT':<{default_w}}  {'TYPE':<{type_w}}  DESCRIPTION"
+        print(f"{Colors.BOLD}{header}{Colors.RESET}")
+        sep = "  ".join(["-" * env_w, "-" * default_w, "-" * type_w, "-----------"])
+        print(f"{Colors.DIM}{sep}{Colors.RESET}")
+        for row in rows:
+            line = (
+                f"{row['env_var']:<{env_w}}  "
+                f"{row['default']:<{default_w}}  "
+                f"{row['type']:<{type_w}}  "
+                f"{row['description']}"
+            )
+            print(line)
+        print()
+        _print_info(f"Listed {len(rows)} environment variable(s). Override any of these by exporting them before running backprop.")
         return EXIT_OK
 
     # Collect everything once so --json and the human view stay in sync.
@@ -1174,21 +1305,27 @@ def cmd_ui(args: argparse.Namespace) -> int:
     The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This
     handler subprocess-launches ``reflex run`` from the directory containing
     ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
-    shape, --auth/--share refuse-to-start — so misconfigured launches fail
-    loudly on the CLI side regardless of what the UI framework does.
+    shape, share-without-auth refuse-to-start, host-without-auth refuse-to-
+    start — so misconfigured launches fail loudly on the CLI side regardless
+    of what the UI framework does.
 
-    FRONTEND-A-001: until the Reflex UI's auth middleware lands (Phase 3
-    of the migration), the handler REFUSES to start when ``--auth`` or
-    ``--share`` is set. Both flags advertise a contract the runtime cannot
-    deliver; running them would falsely imply the UI was protected. Until
-    the gap closes, operators should use SSH port-forwarding for remote
-    access.
+    Post-Wave-6 (v1.2.0): with ``ENFORCEMENT_AVAILABLE=True`` the Reflex UI
+    enforces the auth contract via FastAPI middleware. ``--auth`` is now a
+    normal flag that flows through ``validate_auth_shape`` and into the
+    subprocess via ``BACKPROPAGATE_UI_AUTH``. What remains gated:
+
+    * ``--share`` without ``--auth`` — a public URL with no auth is the bug
+      v1.2 closed; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
+    * ``--host`` with a non-loopback bind without ``--auth`` — DNS-rebinding
+      defense per DESIGN_BRIEF; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
 
     Exit codes (Ship Gate B2):
         0   UI launched and exited cleanly (including Ctrl+C)
         1   user error — UI extra not installed OR malformed --auth shape
         2   runtime error — Reflex subprocess failure OR
-            RUNTIME_UI_AUTH_NOT_ENFORCED when --auth/--share were passed
+            RUNTIME_UI_AUTH_NOT_ENFORCED when --share / non-loopback --host
+            were passed without --auth (or when ENFORCEMENT_AVAILABLE is
+            False at runtime and --auth was requested).
     """
     # Verify Reflex is installed before we do anything else.
     try:
@@ -1227,39 +1364,60 @@ def cmd_ui(args: argparse.Namespace) -> int:
     _print_info(f"Port: {args.port}")
 
     # ------------------------------------------------------------------ #
-    # FRONTEND-A-001: refuse-to-start when --auth is requested but the
-    # Reflex UI does not yet enforce it. Pre-fix, the CLI printed
-    # "Auth: enabled (user: ...)" then launched a UI that ignored the
-    # credentials — advertising a contract the runtime didn't deliver.
-    # The honest fix is to fail loudly until middleware lands.
+    # Post-Wave-6 (ENFORCEMENT_AVAILABLE=True): the auth middleware now
+    # honors the --auth contract per request, so the Wave 3.5 refuse-to-start
+    # block on `args.auth is not None` is no longer correct — --auth flows
+    # through validate_auth_shape and into the Reflex subprocess via the
+    # BACKPROPAGATE_UI_AUTH env var. What remains gated:
+    #   * --share without --auth — a public URL with no auth is the bug
+    #     v1.2 closed; preserve as a hard error.
+    #   * --host with a non-loopback bind without --auth — same threat
+    #     (DNS-rebinding / LAN-discovery) per DESIGN_BRIEF; require --auth.
+    # ENFORCEMENT_AVAILABLE is still read so a downgrade (test stubs, missing
+    # ui_app, etc.) trips the auth-required gates even when --auth was passed.
     # ------------------------------------------------------------------ #
-    if args.auth is not None and not ENFORCEMENT_AVAILABLE:
+    if args.share and args.auth is None:
         raise BackpropagateError(
-            "--auth was requested but the Reflex UI does not yet enforce "
-            "authentication; running with --auth would advertise a contract "
-            "the runtime does not deliver.",
+            "--share requires --auth user:pass; the auth middleware enforces "
+            "requests post-v1.2.0.",
             suggestion=(
-                "Until UI middleware lands, do not pass --auth. For remote "
-                "access, use SSH port-forwarding: "
-                "ssh -L 7860:localhost:7860 <host>. "
-                "See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories"
+                "Pass --auth user:pass with a non-empty username and password. "
+                "Without --auth a public --share URL would expose the UI "
+                "anonymously, which is the bug v1.2 closed."
             ),
             code="RUNTIME_UI_AUTH_NOT_ENFORCED",
         )
 
-    # FRONTEND-A-001 (companion): --share has no first-class Reflex equivalent
-    # AND no enforcement of the auth contract above. Refusing both flags keeps
-    # the CLI honest: an operator who passed --share/--auth and saw "launching"
-    # has historically assumed the contract was honored. We convert the prior
-    # warn-and-sleep block into a hard refuse-to-start.
-    if args.share:
+    _LOOPBACK_BINDS = ("127.0.0.1", "localhost", "::1")
+    requested_host = getattr(args, "host", None)
+    if (
+        requested_host is not None
+        and requested_host not in _LOOPBACK_BINDS
+        and args.auth is None
+    ):
         raise BackpropagateError(
-            "--share is not supported by the Reflex UI: there is no built-in "
-            "tunnel AND no enforcement of the public-URL auth contract.",
+            f"--host {requested_host!r} binds beyond loopback and requires "
+            "--auth user:pass; the auth middleware enforces requests "
+            "post-v1.2.0.",
             suggestion=(
-                "Use SSH port-forwarding (ssh -L 7860:localhost:7860 <host>), "
-                "Cloudflare Tunnel, or ngrok to expose the local port. The "
-                "--share flag is retained in argparse for future re-enablement."
+                "Pass --auth user:pass to protect the non-loopback bind, or "
+                "drop --host to keep the UI on 127.0.0.1. DNS-rebinding "
+                "defense requires the middleware to be live."
+            ),
+            code="RUNTIME_UI_AUTH_NOT_ENFORCED",
+        )
+
+    # If the runtime claims enforcement is unavailable (e.g. ui_app.auth
+    # import failed) but auth was requested, refuse rather than silently
+    # launching an unprotected UI with a "Auth: enabled" log line.
+    if args.auth is not None and not ENFORCEMENT_AVAILABLE:
+        raise BackpropagateError(
+            "--auth was requested but the Reflex UI's auth middleware is not "
+            "available at runtime; refusing to launch an unprotected UI.",
+            suggestion=(
+                "Reinstall the [ui] extra to restore backpropagate.ui_app.auth, "
+                "or drop --auth and use SSH port-forwarding for remote access: "
+                "ssh -L 7860:localhost:7860 <host>."
             ),
             code="RUNTIME_UI_AUTH_NOT_ENFORCED",
         )
@@ -1318,6 +1476,16 @@ def cmd_ui(args: argparse.Namespace) -> int:
     if auth:
         env["BACKPROPAGATE_UI_AUTH"] = f"{auth[0]}:{auth[1]}"
     env["BACKPROPAGATE_UI_PORT"] = str(args.port)
+    # Communicate the bind address so the middleware can enforce a
+    # Host-header allow-list (DNS-rebinding defense). When --host is omitted
+    # we still set the var explicitly to '127.0.0.1' so the middleware
+    # never has to guess.
+    env["BACKPROPAGATE_UI_HOST_BIND"] = requested_host or "127.0.0.1"
+    # When --share is active the middleware also accepts the tunnel host.
+    # No --share-host flag yet, so pass an empty string for now; a future
+    # CLI knob can populate this with the operator-provided tunnel domain.
+    if args.share:
+        env["BACKPROPAGATE_UI_SHARE_HOST"] = ""
 
     # Reflex's port convention: the frontend serves on --frontend-port and
     # the backend on --backend-port. We map --port to the frontend (what
@@ -1609,13 +1777,13 @@ def cmd_push(args: argparse.Namespace) -> int:
         _print_error(f"Push failed: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
-        # BRIDGE-A-007 (catalog drift fix): branch on the canonical
-        # ERROR_CODES entries when they exist (INPUT_AUTH_REQUIRED,
-        # HUB_PUSH_INVALID_REPO) and fall back to the legacy HUB_PUSH_*
-        # strings for the codes that backend still needs to register.
-        if code in ("INPUT_AUTH_REQUIRED", "HUB_PUSH_AUTH"):
-            return EXIT_USER_ERROR
-        if code in ("HUB_PUSH_NOT_FOUND", "HUB_PUSH_INVALID_REPO"):
+        # BRIDGE-F-002 (catalog cleanup): branch on the canonical ERROR_CODES
+        # entries only. Wave 5 backend agent promoted HUB_PUSH_INVALID_REPO /
+        # HUB_PUSH_NOT_FOUND / HUB_PUSH_NETWORK / HUB_PUSH_UNKNOWN into
+        # exceptions.ERROR_CODES, so the bridge no longer needs the legacy
+        # HUB_PUSH_AUTH fallback or the local catalog. User-error codes
+        # (operator-fixable) exit 1; everything else exits 2.
+        if code in ("INPUT_AUTH_REQUIRED", "HUB_PUSH_INVALID_REPO", "HUB_PUSH_NOT_FOUND"):
             return EXIT_USER_ERROR
         return EXIT_RUNTIME_ERROR
     except BackpropagateError as e:
@@ -1716,6 +1884,163 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
         print(line)
     print()
     _print_info(f"Listed {len(rows)} run(s) from {history_dir}")
+    return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: runs (BRIDGE-F-001 — versioned run-history data API for the UI)
+# =============================================================================
+
+# Schema version for ``backprop runs --json`` output. Bump on breaking
+# changes to the dict shape — additive field additions stay at "1".
+RUNS_JSON_SCHEMA_VERSION = "1"
+
+
+def _build_runs_payload(
+    runs: list[dict[str, Any]],
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Project run-history entries into the BRIDGE-F-001 versioned payload.
+
+    The Reflex UI consumes this via ``subprocess.run(['backprop', 'runs',
+    '--json'])`` (or directly via this helper in-process; both routes must
+    produce byte-identical output to support snapshot tests).
+
+    Field renames in the underlying RunHistoryManager entries are
+    intentionally NOT propagated to the payload: every payload field is
+    explicitly projected from the source dict so a schema bump is visible
+    in this function rather than silently breaking the UI.
+
+    Args:
+        runs: Raw run-history entries (newest first), as returned by
+            ``RunHistoryManager.list_runs(...)``.
+        output_dir: Resolved output directory, included in the payload so
+            consumers can correlate runs back to a checkpoint root.
+
+    Returns:
+        ``{"schema_version": "1", "generated_at": <iso8601>,
+        "output_dir": <str>, "runs": [...]}`` where each run dict has a
+        stable set of fields suitable for table rendering.
+    """
+    from datetime import datetime, timezone
+
+    projected: list[dict[str, Any]] = []
+    for entry in runs:
+        # Pull loss summary from final_loss + optional loss_history.
+        final_loss = entry.get("final_loss")
+        loss_history = entry.get("loss_history") or []
+        min_loss: float | None = None
+        if isinstance(loss_history, list) and loss_history:
+            try:
+                numeric = [float(x) for x in loss_history if isinstance(x, (int, float))]
+                if numeric:
+                    min_loss = min(numeric)
+            except (TypeError, ValueError):
+                min_loss = None
+
+        # Duration: explicit field wins; otherwise compute from timestamps.
+        duration = entry.get("duration_seconds")
+        if duration is None:
+            started = entry.get("started_at")
+            completed = entry.get("completed_at")
+            if started and completed:
+                try:
+                    s = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+                    c = datetime.fromisoformat(str(completed).replace("Z", "+00:00"))
+                    duration = (c - s).total_seconds()
+                except (ValueError, TypeError):
+                    duration = None
+
+        projected.append({
+            "run_id": entry.get("run_id"),
+            "status": entry.get("status"),
+            "session_kind": entry.get("session_kind"),
+            "model": entry.get("model_name"),
+            "dataset": entry.get("dataset_info"),
+            "duration_seconds": duration,
+            "started_at": entry.get("started_at") or entry.get("timestamp"),
+            "completed_at": entry.get("completed_at"),
+            "checkpoint_path": entry.get("checkpoint_path"),
+            "loss": {
+                "final": float(final_loss) if isinstance(final_loss, (int, float)) else None,
+                "min": min_loss,
+            },
+        })
+
+    return {
+        "schema_version": RUNS_JSON_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "output_dir": str(output_dir),
+        "runs": projected,
+    }
+
+
+def cmd_runs(args: argparse.Namespace) -> int:
+    """Execute ``backprop runs`` — versioned run-history data API (BRIDGE-F-001).
+
+    Emits a JSON payload with a ``schema_version`` field so consumers (the
+    Reflex UI today; future operator dashboards) can detect breaking
+    changes. The human-readable form delegates to the same projection so
+    operators eyeballing the output and CI scripts parsing the JSON see
+    identical data.
+
+    Flags:
+        --status {running,completed,failed}  filter by lifecycle state
+        --limit N                            cap to N most-recent runs
+        --json                               emit the full payload as JSON
+        --output DIR                         override the output directory
+    """
+    from .checkpoints import RunHistoryManager
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        if getattr(args, "json", False):
+            # Even when the directory is missing, emit a well-formed empty
+            # payload so the UI doesn't have to special-case "no runs yet".
+            import json
+            empty = _build_runs_payload([], history_dir)
+            print(json.dumps(empty, indent=2, default=str))
+            return EXIT_OK
+        _print_warning(f"No history found at {history_dir}")
+        return EXIT_OK
+
+    manager = RunHistoryManager(str(history_dir))
+    try:
+        runs = manager.list_runs(status=args.status, limit=args.limit)
+    except ValueError as e:
+        _print_error(str(e))
+        return EXIT_USER_ERROR
+
+    payload = _build_runs_payload(runs, history_dir)
+
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps(payload, indent=2, default=str))
+        return EXIT_OK
+
+    if not payload["runs"]:
+        _print_info("No training runs recorded.")
+        if args.status:
+            _print_info(f"(Filter: status={args.status})")
+        return EXIT_OK
+
+    # Human view: brief summary + pointer to list-runs for the legacy aligned
+    # table. ``runs`` is intentionally JSON-first; the existing ``list-runs``
+    # subcommand stays the canonical pretty-printer.
+    _print_header(f"Training runs (schema v{payload['schema_version']})")
+    _print_kv("Generated", payload["generated_at"])
+    _print_kv("Output dir", payload["output_dir"])
+    _print_kv("Run count", str(len(payload["runs"])))
+    print()
+    for run in payload["runs"]:
+        run_id = str(run.get("run_id") or "-")[:12]
+        status = str(run.get("status") or "-")
+        model = str(run.get("model") or "-")
+        final_loss = run.get("loss", {}).get("final")
+        loss_str = f"{final_loss:.4f}" if isinstance(final_loss, (int, float)) else "-"
+        print(f"  {run_id:<14}  {status:<10}  {model:<32}  loss={loss_str}")
+    print()
+    _print_info("For the full payload, pass --json. For the aligned legacy table, run `backprop list-runs`.")
     return EXIT_OK
 
 
@@ -2091,11 +2416,21 @@ Exit codes (Ship Gate B2):
         ),
     )
     info_parser.add_argument(
+        "--env-vars",
+        action="store_true",
+        help=(
+            "Enumerate every BACKPROPAGATE_* environment variable the runtime "
+            "honours, with default value + type + description. Introspected "
+            "from the pydantic-settings models so the output stays in sync "
+            "with the runtime. Combine with --json for machine-readable form."
+        ),
+    )
+    info_parser.add_argument(
         "--json",
         action="store_true",
         help=(
-            "Emit the system info as JSON (machine-readable; suitable for "
-            "sharing in support tickets)."
+            "Emit the system info (or --env-vars list) as JSON. Suitable for "
+            "sharing in support tickets or feeding to grep / jq in CI scripts."
         ),
     )
     info_parser.set_defaults(func=cmd_info)
@@ -2232,6 +2567,50 @@ Exit codes (Ship Gate B2):
     )
     list_runs_parser.set_defaults(func=cmd_list_runs)
 
+    # runs command (BRIDGE-F-001) — versioned JSON data API consumed by the
+    # Reflex UI's run-history page. Exposes the same data as `list-runs`
+    # under a stable schema_version contract so frontend renames don't break
+    # on field additions / removals.
+    runs_parser = subparsers.add_parser(
+        "runs",
+        help="Emit run history as a versioned JSON payload (UI data API)",
+        description=(
+            "Emit the run history under a schema_version contract suitable "
+            "for the Reflex Web UI and any external dashboard. The payload "
+            "shape is documented in handbook/cli-reference.md. For the "
+            "human-readable aligned table, use `backprop list-runs` instead."
+        ),
+    )
+    runs_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    runs_parser.add_argument(
+        "--status",
+        choices=["running", "completed", "failed"],
+        default=None,
+        help="Filter by status (default: show all)",
+    )
+    runs_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Maximum runs to include in the payload, most-recent first. "
+            "Default: no cap (UI consumers typically paginate client-side)."
+        ),
+    )
+    runs_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the full versioned payload as JSON. Required for "
+            "machine consumption (Reflex UI, CI scripts, jq pipelines)."
+        ),
+    )
+    runs_parser.set_defaults(func=cmd_runs)
+
     # show-run command (F-003)
     show_run_parser = subparsers.add_parser(
         "show-run",
@@ -2275,21 +2654,29 @@ Exit codes (Ship Gate B2):
         help="Port to run the server on (default: 7862; must be in range 1..65535)",
     )
     ui_parser.add_argument(
+        "--host",
+        default=None,
+        help=(
+            "Interface to bind (default: 127.0.0.1). Non-loopback values "
+            "(e.g. 0.0.0.0, a LAN IP) require --auth — DNS-rebinding defense."
+        ),
+    )
+    ui_parser.add_argument(
         "--share",
         action="store_true",
         help=(
-            "REFUSED until the Reflex UI's tunneling + auth middleware lands. "
-            "Use SSH port-forwarding / Cloudflare Tunnel / ngrok instead. "
-            "Passing --share today exits with RUNTIME_UI_AUTH_NOT_ENFORCED."
+            "Expose the UI via a public tunnel. Requires --auth user:pass; "
+            "passing --share without --auth exits with "
+            "RUNTIME_UI_AUTH_NOT_ENFORCED."
         ),
     )
     ui_parser.add_argument(
         "--auth",
         metavar="USER:PASS",
         help=(
-            "REFUSED until the Reflex UI enforces authentication. Passing "
-            "--auth today exits with RUNTIME_UI_AUTH_NOT_ENFORCED instead of "
-            "advertising an unverified contract."
+            "Enable HTTP basic auth on the Reflex UI. Required when --share "
+            "or a non-loopback --host is passed. Credentials are forwarded "
+            "to the subprocess via BACKPROPAGATE_UI_AUTH."
         ),
     )
     ui_parser.set_defaults(func=cmd_ui)

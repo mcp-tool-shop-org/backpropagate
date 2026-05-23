@@ -22,16 +22,25 @@ class TestFeaturesDict:
     """Tests for FEATURES dict detection."""
 
     def test_features_dict_exists(self):
-        """FEATURES dict should exist and contain expected keys."""
+        """FEATURES dict should exist and contain expected keys.
+
+        Wave 6.5 (2026-05-23): ``observability`` was removed when the
+        OpenTelemetry detection probe was retired. The CHANGELOG for
+        v1.2.0 notes the removal; ``opentelemetry``-using deployments
+        wire their own tracer rather than relying on a backpropagate
+        feature flag.
+        """
         from backpropagate.feature_flags import FEATURES
 
         assert isinstance(FEATURES, dict)
         expected_keys = [
             "unsloth", "ui", "validation", "export",
-            "monitoring", "observability", "flash_attention", "triton"
+            "monitoring", "flash_attention", "triton"
         ]
         for key in expected_keys:
             assert key in FEATURES
+        # Symmetric: the retired observability key must NOT be present.
+        assert "observability" not in FEATURES
 
     def test_features_values_are_bool(self):
         """All FEATURES values should be booleans."""

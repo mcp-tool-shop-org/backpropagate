@@ -1512,8 +1512,13 @@ class TestCmdPush:
         local = tmp_path / "lora"
         local.mkdir()
 
+        # Wave 6 BRIDGE-F-002 cleanup removed the local _BRIDGE_LOCAL_ERROR_CODES
+        # fallback table; cmd_push now branches on the canonical ERROR_CODES
+        # entries only. The auth-error route is INPUT_AUTH_REQUIRED (the code
+        # push_to_hub raises today when the token is missing or rejected). The
+        # legacy HUB_PUSH_AUTH code is no longer in the catalog.
         err = ExportError("authentication failed")
-        err.code = "HUB_PUSH_AUTH"  # type: ignore[attr-defined]
+        err.code = "INPUT_AUTH_REQUIRED"  # type: ignore[attr-defined]
 
         args = MagicMock()
         args.local_path = str(local)

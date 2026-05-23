@@ -107,7 +107,8 @@ def _format_group() -> rx.Component:
                 gap="4",
                 wrap="wrap",
             ),
-            default_value=ExportState.format,
+            value=ExportState.format,
+            on_change=ExportState.set_format,
         ),
         title="Format",
     )
@@ -141,7 +142,8 @@ def _quant_grid() -> rx.Component:
                 gap="3",
                 width="100%",
             ),
-            default_value=ExportState.gguf_quant,
+            value=ExportState.gguf_quant,
+            on_change=ExportState.set_gguf_quant,
         ),
         title="GGUF quantization",
     )
@@ -152,7 +154,8 @@ def _ollama_group() -> rx.Component:
         rx.flex(
             rx.checkbox(
                 "Register with Ollama",
-                default_checked=ExportState.ollama_register,
+                checked=ExportState.ollama_register,
+                on_change=ExportState.set_ollama_register,
             ),
             direction="row",
             gap="2",
@@ -230,14 +233,27 @@ def export_page() -> rx.Component:
                     _output_group(),
                     rx.flex(
                         rx.button(
-                            "Export",
+                            rx.cond(
+                                ExportState.export_state == "loading",
+                                rx.spinner(size="2"),
+                                rx.fragment(),
+                            ),
+                            rx.cond(
+                                ExportState.export_state == "loading",
+                                rx.text("Exporting…"),
+                                rx.text("Export"),
+                            ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
+                            # FRONTEND-B-003: disable while an export is in flight.
+                            disabled=(ExportState.export_state == "loading")
+                            | (ExportState.export_state == "active"),
                             on_click=ExportState.start_export,
                         ),
                         gap="3",
                         margin_top="2",
+                        align="center",
                     ),
                     direction="column",
                     gap="4",

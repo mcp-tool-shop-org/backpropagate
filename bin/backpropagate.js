@@ -19,7 +19,7 @@ const os = require("os");
 // ---------------------------------------------------------------------------
 
 const TOOL = "backpropagate";
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 
 if (process.platform === "linux") {
   // XDG-compliant install root

@@ -3,8 +3,19 @@
 Each function with doctests becomes a conversation:
 - User asks to write a function with tests
 - Assistant provides the documented function
+
+This is a reference / one-off script — replace the paths via CLI args before
+running. The previous version hardcoded `F:/AI/...` paths from the maintainer's
+original rig, which broke on every other machine.
+
+Usage
+-----
+    python scripts/convert_validated_pairs.py \\
+        --input ./output/validated/validated_pairs.jsonl \\
+        --output ./output/validated/perfect_pairs_chat.jsonl
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -52,9 +63,30 @@ This function includes doctest examples that demonstrate its behavior."""
     }
 
 
-def main():
-    input_path = Path("F:/AI/checkpoints/validated/validated_pairs.jsonl")
-    output_path = Path("F:/AI/checkpoints/validated/perfect_pairs_chat.jsonl")
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Convert validated_pairs.jsonl into ShareGPT-format chat conversations.",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("./output/validated/validated_pairs.jsonl"),
+        help="JSONL of validated function/doctest pairs (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("./output/validated/perfect_pairs_chat.jsonl"),
+        help="Where to write the ShareGPT-format conversations (default: %(default)s)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    input_path = args.input
+    output_path = args.output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     items = []
     with open(input_path, encoding="utf-8") as f:

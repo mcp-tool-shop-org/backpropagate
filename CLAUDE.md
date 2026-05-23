@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.1.1 on PyPI; full Ship Gate passing).
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.2.0 on PyPI; full Ship Gate passing).
 
 ## Architecture
 
@@ -29,7 +29,7 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[observability]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
 - First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
 - Tested on RTX 5080 (16GB VRAM)
-- 1957 tests in tests/ (pinned 2026-05-22), 50% coverage floor (`fail_under = 50` in coverage config)
+- 2012 tests in tests/ (pinned 2026-05-23), 50% coverage floor (`fail_under = 50` in coverage config)
 - All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
 
 ## User-facing docs surface

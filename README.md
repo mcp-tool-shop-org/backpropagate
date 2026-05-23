@@ -145,7 +145,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` is the canonical default — the value `Trainer()` resolves when called with no model argument (see [`config.py`](backpropagate/config.py) `ModelConfig.name`). Older examples pinned the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; we switched the default to the official Qwen weights for better reliability ([CHANGELOG v0.1.3](CHANGELOG.md)). Either model works.
+`Qwen/Qwen2.5-7B-Instruct` is the canonical default — the value `Trainer()` resolves when called with no model argument (see [`config.py`](backpropagate/config.py) `ModelConfig.name`). Older examples pinned the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; we switched the default to the official Qwen weights for better reliability ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Either model works.
 
 ### Multi-Run SLAO Training
 

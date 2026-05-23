@@ -98,13 +98,22 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 **Symptom:** Same as *samples_per_run exceeds training pool* above. Stage A's backend B-001 fix raises a clean `ConfigurationError` instead of silently overlapping train/val. The CLI flag drift (`--samples-per-run` in the suggestion vs `--samples` on argparse) is a known doc-code mismatch — docs say the real flag.
 
-## "What does `[INPUT_AUTH_REQUIRED]` mean?"
+## "What does `[RUNTIME_UI_AUTH_NOT_ENFORCED]` mean?"
 
-You ran `backprop ui --share` without `--auth user:password`. The default is to refuse this combination because `--share` publishes a `*.gradio.live` URL anyone on the internet can hit, and without auth that means anyone can drive your training pipeline.
+You passed `--share` or `--auth` to `backprop ui`. Starting with v1.1.0 (the Gradio → Reflex migration), the runtime refuses to start when either flag is present, because the Reflex port landed ahead of the auth middleware and a `--share`-published URL would be unauthenticated. Refusing to start is the correct behavior until the middleware ships.
 
-**Fix (recommended):** add `--auth alice:hunter2`.
+**Fix (recommended): SSH port-forwarding for remote access.**
 
-**Fix (escape hatch):** `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false backprop ui --share`. The CLI will print a loud warning every time you do this.
+```bash
+ssh -L 7860:localhost:7860 you@gpu-host
+# Then on your laptop: http://localhost:7860
+```
+
+SSH already handles auth, encryption, and audit. The UI stays bound to `127.0.0.1` on the remote box; only your forwarded tunnel can reach it. No middleware required.
+
+**There is no escape hatch.** The old `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` flag from the Gradio era is now a no-op — the refuse-to-start contract is enforced at both the CLI layer (`cli.py:cmd_ui`) and the app layer (`ui_app/app.py` + `rxconfig.py`), so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var. This intentional, until the middleware lands in a future release.
+
+The tracking issue is the GHSA at <https://github.com/mcp-tool-shop-org/backpropagate/security/advisories>.
 
 ## "What does the `Run ID:` line at startup mean?"
 

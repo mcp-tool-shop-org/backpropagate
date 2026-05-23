@@ -5,9 +5,16 @@ Uses Hypothesis to generate random inputs and verify invariants.
 TESTS-A-015 (v1.1.2 amend wave): Windows + cold imports + tensor ops
 push some property tests past Hypothesis's 200ms default deadline. The
 tests are correctness checks, not perf benchmarks, so we register a
-"no_deadline" profile at module load and use it for every test in this
-file. The profile also suppresses the "too_slow" health-check that
-Hypothesis would otherwise fire on the same shape of slowness.
+"no_deadline" profile that turns the deadline off and suppresses the
+``too_slow`` health-check.
+
+TESTS-B-010 (Stage C amend wave): the profile registration + load moved
+to ``tests/conftest.py`` so EVERY hypothesis-using test in the suite
+inherits the same settings (previously only this file loaded the
+profile, leaving ``test_fuzz_checkpoints.py`` flaky on slow runners).
+The block below is preserved as a defensive fallback for running this
+file directly (``pytest tests/test_hypothesis_slao.py``) without
+conftest hooking the profile first.
 """
 
 import pytest
@@ -22,11 +29,10 @@ from backpropagate.slao import (
     time_aware_scale,
 )
 
-# Register and load a deadline-free profile so the merge / similarity /
-# orthogonal-init property tests don't go flaky on slow Windows runners.
-# Hypothesis allows multiple register_profile calls for the same name as
-# long as parallel test workers don't race, so guarding with try/except is
-# the safe pattern when this module is reloaded inside a single session.
+# Defensive: conftest.py already registers + loads "no_deadline" for the
+# whole session. Re-register here so the file can run standalone without
+# the conftest hook (e.g. when an operator invokes a single test path
+# directly during triage).
 try:
     settings.register_profile(
         "no_deadline",

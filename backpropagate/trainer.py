@@ -390,6 +390,21 @@ class Trainer:
     # B-002: OOM-recovery tuning constants (Trainer mirror of MultiRunTrainer).
     _OOM_MAX_RETRIES_AT_MIN_BATCH = 3
 
+    # Stage C BACKEND-B-002: substrings PyTorch (2.0-2.6) and CUDA libraries
+    # surface for OOM-adjacent failures. Matching these widens the recovery
+    # net beyond strict ``torch.cuda.OutOfMemoryError`` so a CUBLAS alloc
+    # failure or a CUDNN init failure (which is almost always a downstream
+    # symptom of VRAM exhaustion) routes through the same halve-batch loop
+    # instead of falling through as an opaque generic failure.
+    _OOM_ADJACENT_SUBSTRINGS: tuple[str, ...] = (
+        "out of memory",
+        "cublas_status_alloc_failed",
+        "cudnn_status_not_initialized",
+        "cuda error: out of memory",
+        "memory_allocator",
+        "cuda out of memory",
+    )
+
     def __init__(
         self,
         model: str | None = None,
@@ -436,6 +451,72 @@ class Trainer:
             self.batch_size: int = self._detect_batch_size()
         else:
             self.batch_size = int(batch_size)
+
+        # Stage C BACKEND-B (constructor validation): catch obviously-broken
+        # hyperparameter combinations at construction time with structured
+        # errors. Pre-fix these would fail deep inside TRL with opaque error
+        # messages (e.g. ``ValueError: batch_size must be positive`` thrown
+        # from a SFTConfig field validator several frames deep). Surfacing
+        # the problem at ``Trainer(...)`` lets the operator see WHICH knob
+        # they got wrong before training spins up the model and tokenizer.
+        if self.batch_size <= 0:
+            raise InvalidSettingError(
+                setting_name="batch_size",
+                value=self.batch_size,
+                expected="a positive integer (>= 1)",
+                suggestion=(
+                    "Pass batch_size=1 for tightest VRAM, or omit the "
+                    "argument to let _detect_batch_size pick a value."
+                ),
+            )
+        if self.gradient_accumulation <= 0:
+            raise InvalidSettingError(
+                setting_name="gradient_accumulation",
+                value=self.gradient_accumulation,
+                expected="a positive integer (>= 1)",
+                suggestion="Use gradient_accumulation=1 for no accumulation.",
+            )
+        if self.learning_rate <= 0:
+            raise InvalidSettingError(
+                setting_name="learning_rate",
+                value=self.learning_rate,
+                expected="a positive float (> 0.0)",
+                suggestion=(
+                    "Try learning_rate=2e-4 (LoRA default) or 5e-5 "
+                    "(full-finetune-style)."
+                ),
+            )
+        if self.lora_r <= 0:
+            raise InvalidSettingError(
+                setting_name="lora_r",
+                value=self.lora_r,
+                expected="a positive integer (>= 1)",
+                suggestion="LoRA rank 8/16/32 is typical; 16 is a good default.",
+            )
+        if self.lora_alpha <= 0:
+            raise InvalidSettingError(
+                setting_name="lora_alpha",
+                value=self.lora_alpha,
+                expected="a positive integer (>= 1)",
+                suggestion="Pair lora_alpha with lora_r (e.g. r=16, alpha=32).",
+            )
+        if not (0.0 <= self.lora_dropout <= 1.0):
+            raise InvalidSettingError(
+                setting_name="lora_dropout",
+                value=self.lora_dropout,
+                expected="a float in [0.0, 1.0]",
+                suggestion="LoRA dropout 0.0-0.1 is typical; default is 0.05.",
+            )
+        if self.max_seq_length <= 0:
+            raise InvalidSettingError(
+                setting_name="max_seq_length",
+                value=self.max_seq_length,
+                expected="a positive integer (>= 1)",
+                suggestion=(
+                    "Try max_seq_length=2048 for typical chat data; smaller "
+                    "for tighter VRAM."
+                ),
+            )
 
         # Phase 1.1: Train on responses only
         self._train_on_responses = train_on_responses
@@ -1027,6 +1108,29 @@ class Trainer:
                     if not is_oom and isinstance(exc, RuntimeError):
                         is_oom = "out of memory" in str(exc).lower()
 
+                    # Stage C BACKEND-B-002: widen OOM detection to include
+                    # CUDA library / driver errors that almost always indicate
+                    # VRAM exhaustion (CUBLAS alloc fail, CUDNN init fail,
+                    # NCCL post-OOM). When matched via the widened net, emit a
+                    # structured WARN so operators see which signature fired —
+                    # the matcher catalog lives in :data:`_OOM_ADJACENT_SUBSTRINGS`
+                    # for a single-edit-site update when PyTorch wording shifts.
+                    adjacent_marker: str | None = None
+                    if not is_oom and isinstance(exc, RuntimeError):
+                        msg_lower = str(exc).lower()
+                        for marker in self._OOM_ADJACENT_SUBSTRINGS:
+                            if marker in msg_lower:
+                                is_oom = True
+                                adjacent_marker = marker
+                                logger.warning(
+                                    f"oom-adjacent error intercepted by recovery "
+                                    f"path: type={type(exc).__name__} "
+                                    f"marker={marker!r} run_id={run_id} "
+                                    f"code=RUNTIME_OOM_ADJACENT "
+                                    f"message={str(exc)[:240]!r}"
+                                )
+                                break
+
                     if not self.oom_recovery or not is_oom:
                         raise
 
@@ -1069,14 +1173,27 @@ class Trainer:
                         f"{oom_consecutive_at_min}/{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
                     )
                     if oom_consecutive_at_min >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
-                        # B-002: surface as TrainingError (a BackpropagateError
-                        # subclass) so callers that catch TrainingError continue
-                        # to work; the code="RUNTIME_GPU_OOM" carries the
-                        # structured signal for programmatic handlers.
-                        err = TrainingError(
+                        # Stage C BACKEND-B-005: pass code/details/cause via
+                        # constructor kwargs (TrainingError already supports
+                        # them) instead of assigning to instance attributes
+                        # after the fact. The post-construction err.code= form
+                        # circumvents the structured-error contract and is a
+                        # template future contributors will copy from the most-
+                        # debugged path in the codebase. Use the more specific
+                        # RUNTIME_OOM_RECOVERY_EXHAUSTED code so triage can
+                        # distinguish "the recovery loop ran and lost" from
+                        # "a single one-shot OOM hit the wall".
+                        raise TrainingError(
                             f"GPU error during training: persistent CUDA OOM "
                             f"at batch_size=1 ({oom_consecutive_at_min} "
                             f"consecutive attempts); cannot recover automatically.",
+                            code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+                            details={
+                                "run_id": run_id,
+                                "consecutive_oom_at_min_batch": oom_consecutive_at_min,
+                                "oom_retries": oom_retries,
+                                "adjacent_marker": adjacent_marker,
+                            },
                             suggestion=(
                                 "Use a smaller model (e.g. 7B -> 3B), reduce "
                                 "max_seq_length, enable gradient_checkpointing, "
@@ -1084,13 +1201,8 @@ class Trainer:
                                 "Trainer(oom_recovery=False) to make OOMs "
                                 "hard-fail on the first attempt."
                             ),
-                        )
-                        err.code = "RUNTIME_GPU_OOM"  # type: ignore[attr-defined]
-                        err.details = {  # type: ignore[attr-defined]
-                            "run_id": run_id,
-                            "consecutive_oom_at_min_batch": oom_consecutive_at_min,
-                        }
-                        raise err from exc
+                            cause=exc,
+                        ) from exc
 
                     # Below the threshold but at floor — retry once more
                     # with the same args (transient OOM may clear after

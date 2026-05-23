@@ -483,23 +483,69 @@ def push_to_hub(
 
     # If a model_card.md sits next to the artifacts, mirror it as README.md
     # so the HF web UI renders it as the repo's model card.
+    # BRIDGE-A-008 (Stage C amend): defensive checks BEFORE read_text.
+    #   1. Refuse to mirror a symlinked model_card.md — on POSIX a malicious
+    #      or accidental symlink to ``~/.ssh/id_rsa`` / ``/etc/passwd`` would
+    #      otherwise be uploaded verbatim to the public HF repo as README.md.
+    #      The check is a no-op on Windows where regular symlinks require
+    #      admin to create.
+    #   2. Cap the mirrored file at 1 MB. HF model cards are typically
+    #      <50 KB; a 50 MB tampered or accidentally-bloated card would
+    #      otherwise balloon the upload and push the operator's HF storage
+    #      quota for no usability benefit.
+    # Failures here log + skip the mirror — the export itself continues.
+    _MAX_MODEL_CARD_BYTES = 1_000_000
     readme_copy_path: Path | None = None
     if local_path_p.is_dir():
         candidate_card = local_path_p / "model_card.md"
         readme_target = local_path_p / "README.md"
         if candidate_card.exists() and not readme_target.exists():
-            try:
-                readme_target.write_text(
-                    candidate_card.read_text(encoding="utf-8"),
-                    encoding="utf-8",
+            if candidate_card.is_symlink():
+                logger.warning(
+                    "Refusing to mirror symlinked model_card.md to README.md: "
+                    f"{candidate_card} (would leak the symlink target to the Hub)"
                 )
-                readme_copy_path = readme_target
-                logger.info(
-                    f"Mirrored model_card.md to README.md for the Hub upload at {readme_target}"
-                )
-            except OSError as exc:
-                logger.warning(f"Could not mirror model_card.md to README.md: {exc}")
+            else:
+                try:
+                    card_size = candidate_card.stat().st_size
+                except OSError as exc:
+                    logger.warning(
+                        f"Could not stat model_card.md at {candidate_card}: {exc}"
+                    )
+                    card_size = None
+                if card_size is not None and card_size > _MAX_MODEL_CARD_BYTES:
+                    logger.warning(
+                        f"Refusing to mirror model_card.md to README.md: "
+                        f"file is {card_size} bytes (cap "
+                        f"{_MAX_MODEL_CARD_BYTES}). HF model cards are "
+                        "typically <50 KB."
+                    )
+                elif card_size is not None:
+                    try:
+                        readme_target.write_text(
+                            candidate_card.read_text(encoding="utf-8"),
+                            encoding="utf-8",
+                        )
+                        readme_copy_path = readme_target
+                        logger.info(
+                            "Mirrored model_card.md to README.md for the Hub upload "
+                            f"at {readme_target}"
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            f"Could not mirror model_card.md to README.md: {exc}"
+                        )
 
+    # BRIDGE-A-010 (Stage C amend): track whether the upload itself failed so
+    # the finally block can actually act on the docstring promise ("remove
+    # only if we created it and the upload itself failed"). Pre-fix, the
+    # finally's body was a no-op tested-for-non-existence — meaning a failed
+    # push left the local README.md mirror in place with stale content, and
+    # the next attempt found it (via the `and not readme_target.exists()`
+    # guard above) and skipped re-creation. The new flag is set in every
+    # exception branch; on success it stays False and the mirror is kept
+    # (the documented "keep so local matches Hub" behavior).
+    upload_failed = False
     try:
         if create_repo:
             hf_create_repo(
@@ -548,6 +594,11 @@ def push_to_hub(
             )
 
     except HfHubHTTPError as exc:
+        # BRIDGE-A-010 (Stage C amend): mark upload_failed once at the top of
+        # the HfHubHTTPError branch — every sub-status (401/403/404/5xx)
+        # represents a failed upload, so the README mirror should be rolled
+        # back uniformly via the finally clause below.
+        upload_failed = True
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status in (401, 403):
             # BRIDGE-A-007 (catalog drift fix): use the canonical
@@ -586,6 +637,7 @@ def push_to_hub(
         err.code = "HUB_PUSH_NETWORK" if status and status >= 500 else "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
         raise err from exc
     except (ConnectionError, TimeoutError) as exc:
+        upload_failed = True
         err = ExportError(
             f"Network error contacting Hugging Face Hub: {exc}",
             suggestion="Check your network and retry.",
@@ -593,8 +645,13 @@ def push_to_hub(
         err.code = "HUB_PUSH_NETWORK"  # type: ignore[attr-defined]
         raise err from exc
     except ExportError:
+        # Pre-upload validation errors (e.g. _validate_repo_id) reach here.
+        # We did NOT touch the network and the README mirror — if any — was
+        # written above, so don't mark upload_failed (keep the mirror so the
+        # operator can inspect it). Re-raise unchanged.
         raise
     except Exception as exc:
+        upload_failed = True
         err = ExportError(
             f"Hugging Face Hub push failed: {exc}",
             suggestion=(
@@ -605,12 +662,28 @@ def push_to_hub(
         err.code = "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
         raise err from exc
     finally:
-        # Leave the mirrored README.md in place so the operator's local
-        # directory matches what's on the Hub; remove only if we created
-        # it and the upload itself failed.
-        if readme_copy_path is not None and not readme_copy_path.exists():
-            # Nothing to clean up.
-            pass
+        # BRIDGE-A-010 (Stage C amend): the docstring promises "remove only
+        # if we created it and the upload itself failed". Pre-fix this was a
+        # no-op (tested for NON-existence and did nothing). Now: when we
+        # actually created the README mirror AND the upload failed, unlink
+        # so the next attempt re-mirrors fresh model_card.md content instead
+        # of finding the stale mirror and skipping. On success the mirror is
+        # kept so the operator's local dir matches the Hub.
+        if upload_failed and readme_copy_path is not None:
+            try:
+                readme_copy_path.unlink(missing_ok=True)
+                logger.debug(
+                    f"Rolled back mirrored README.md at {readme_copy_path} "
+                    "after upload failure"
+                )
+            except OSError as cleanup_exc:
+                # Cleanup failure must not mask the real exception from the
+                # except branches above — log + swallow so the original
+                # HfHubHTTPError / ConnectionError surfaces unchanged.
+                logger.debug(
+                    f"README rollback cleanup failed at {readme_copy_path}: "
+                    f"{cleanup_exc}"
+                )
 
     return f"https://huggingface.co/{repo_id}"
 

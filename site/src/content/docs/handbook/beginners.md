@@ -30,7 +30,7 @@ Install Backpropagate with the recommended extras:
 pip install backpropagate[standard]
 ```
 
-This gives you the core library plus Unsloth (2x faster training) and the Gradio web UI. If you only want the Python API with no extras:
+This gives you the core library plus Unsloth (2x faster training) and the Reflex (Radix UI) web interface. If you only want the Python API with no extras:
 
 ```bash
 pip install backpropagate

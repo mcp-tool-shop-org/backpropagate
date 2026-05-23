@@ -1,0 +1,66 @@
+---
+import '../styles/global.css';
+import BaseLayout from '@mcptoolshop/site-theme/components/BaseLayout.astro';
+import { config } from '../site-config';
+---
+
+<BaseLayout
+  title={`Page not found — ${config.title}`}
+  description="That URL doesn't exist on backpropagate.dev. The handbook is the canonical docs surface — start there."
+  logoBadge={config.logoBadge}
+  brandName={config.brandName}
+  repoUrl={config.repoUrl}
+  npmUrl={config.npmUrl}
+  footerText={config.footerText}
+  nav={config.sections.map((s) => ({ href: `/#${s.id}`, label: s.title }))}
+>
+  <section
+    style="max-width: 720px; margin: 96px auto 144px; padding: 0 24px; text-align: center;"
+  >
+    <p
+      style="color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px; margin: 0 0 12px;"
+    >
+      404 — page not found
+    </p>
+    <h1
+      style="font-size: clamp(32px, 5vw, 48px); font-weight: 500; line-height: 1.1; margin: 0 0 16px;"
+    >
+      That URL isn't here.
+    </h1>
+    <p
+      style="color: var(--color-muted); font-size: 18px; line-height: 1.5; margin: 0 0 32px;"
+    >
+      The page you tried to open doesn't exist on this site (or moved). The
+      handbook covers every CLI flag, environment variable, and error code —
+      that's the most likely place to find what you came for.
+    </p>
+    <div
+      style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;"
+    >
+      <a
+        href="/backpropagate/handbook/"
+        style="display: inline-block; padding: 12px 24px; border-radius: 8px; background: var(--color-accent); color: var(--color-bg); font-weight: 500; text-decoration: none;"
+      >
+        Open the handbook
+      </a>
+      <a
+        href="/backpropagate/"
+        style="display: inline-block; padding: 12px 24px; border-radius: 8px; border: 1px solid var(--color-border); color: var(--color-text); text-decoration: none;"
+      >
+        Back to home
+      </a>
+    </div>
+    <p
+      style="color: var(--color-muted); font-size: 13px; margin: 48px 0 0; line-height: 1.6;"
+    >
+      Still missing something?{" "}
+      <a
+        href={`${config.repoUrl}/issues/new`}
+        style="color: var(--color-text); text-decoration: underline;"
+      >
+        Open an issue on GitHub
+      </a>{" "}
+      — link the URL you came from and we'll fix the redirect.
+    </p>
+  </section>
+</BaseLayout>

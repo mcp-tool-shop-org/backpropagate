@@ -860,51 +860,46 @@ class TestRequestContext:
 
 
 class TestEnvConfigOverride:
-    """Tests for environment variable configuration."""
+    """Tests for environment variable configuration.
 
-    def test_load_config_from_env_int_values(self):
+    TESTS-B-003 (Stage C amend wave): converted from the raw
+    ``os.environ[X] = ...; del os.environ[X]`` pattern to
+    ``monkeypatch.setenv`` so cleanup happens on assertion failure too.
+    The leak surface here is unusually load-bearing because
+    ``BACKPROPAGATE_SECURITY__*`` env vars are read by ``SecurityConfig()``
+    at construction time — a leaked value silently mutates every
+    downstream test's SecurityConfig defaults.
+    """
+
+    def test_load_config_from_env_int_values(self, monkeypatch):
         """Should load integer values from environment."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        # Set env var
-        os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "10"
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT", "10")
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            assert config.training_rate_limit == 10
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"]
+        config = load_config_from_env(SecurityConfig())
+        assert config.training_rate_limit == 10
 
-    def test_load_config_from_env_bool_values(self):
+    def test_load_config_from_env_bool_values(self, monkeypatch):
         """Should load boolean values from environment."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        os.environ["BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON"] = "true"
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON", "true")
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            assert config.log_format_json is True
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON"]
+        config = load_config_from_env(SecurityConfig())
+        assert config.log_format_json is True
 
-    def test_load_config_ignores_invalid_env_vars(self):
+    def test_load_config_ignores_invalid_env_vars(self, monkeypatch):
         """Should ignore environment variables with invalid values."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "not_a_number"
+        monkeypatch.setenv(
+            "BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT", "not_a_number"
+        )
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            # Should use default, not crash
-            assert config.training_rate_limit == 3
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"]
+        config = load_config_from_env(SecurityConfig())
+        # Should use default, not crash
+        assert config.training_rate_limit == 3
 
 
 class TestSessionManager:

@@ -68,7 +68,8 @@ def _model_group() -> rx.Component:
                         rx.select.item("8-bit", value="8-bit"),
                         rx.select.item("16-bit", value="16-bit"),
                     ),
-                    default_value=TrainState.quantization,
+                    value=TrainState.quantization,
+                    on_change=TrainState.set_quantization,
                 ),
                 direction="column",
                 width="100%",
@@ -81,6 +82,19 @@ def _model_group() -> rx.Component:
     )
 
 
+def _err_text(error_var) -> rx.Component:
+    """Inline error label — peach text, 11px, only renders when non-empty."""
+    return rx.cond(
+        error_var != "",
+        rx.text(
+            error_var,
+            size="1",
+            style={"color": "var(--bp-peach)", "font_size": "11px"},
+        ),
+        rx.fragment(),
+    )
+
+
 def _training_shape_group() -> rx.Component:
     return Group(
         rx.grid(
@@ -88,11 +102,13 @@ def _training_shape_group() -> rx.Component:
                 _label("Steps"),
                 rx.input(
                     placeholder="100",
-                    default_value="100",
+                    value=TrainState.steps.to_string(),
+                    on_change=TrainState.set_steps,
                     type="number",
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.steps_error),
                 direction="column",
                 width="100%",
             ),
@@ -100,10 +116,12 @@ def _training_shape_group() -> rx.Component:
                 _label("Batch size"),
                 rx.input(
                     placeholder="auto",
-                    default_value=TrainState.batch_size,
+                    value=TrainState.batch_size,
+                    on_change=TrainState.set_batch_size,
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.batch_size_error),
                 direction="column",
                 width="100%",
             ),
@@ -111,10 +129,12 @@ def _training_shape_group() -> rx.Component:
                 _label("Learning rate"),
                 rx.input(
                     placeholder="2e-4",
-                    default_value="2e-4",
+                    value=TrainState.learning_rate.to_string(),
+                    on_change=TrainState.set_learning_rate,
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.learning_rate_error),
                 direction="column",
                 width="100%",
             ),
@@ -133,11 +153,13 @@ def _lora_group() -> rx.Component:
                 _label("LoRA rank"),
                 rx.input(
                     placeholder="16",
-                    default_value="16",
+                    value=TrainState.lora_r.to_string(),
+                    on_change=TrainState.set_lora_r,
                     type="number",
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.lora_r_error),
                 direction="column",
                 width="100%",
             ),
@@ -145,10 +167,12 @@ def _lora_group() -> rx.Component:
                 _label("LoRA alpha"),
                 rx.input(
                     placeholder="32",
-                    default_value="32",
+                    value=TrainState.lora_alpha.to_string(),
+                    on_change=TrainState.set_lora_alpha,
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.lora_alpha_error),
                 direction="column",
                 width="100%",
             ),
@@ -156,10 +180,12 @@ def _lora_group() -> rx.Component:
                 _label("Dropout"),
                 rx.input(
                     placeholder="0.05",
-                    default_value="0.05",
+                    value=TrainState.lora_dropout.to_string(),
+                    on_change=TrainState.set_lora_dropout,
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.lora_dropout_error),
                 direction="column",
                 width="100%",
             ),
@@ -171,10 +197,12 @@ def _lora_group() -> rx.Component:
             _label("Target modules (comma-separated)"),
             rx.input(
                 placeholder="q_proj, k_proj, v_proj, o_proj",
-                default_value="q_proj, k_proj, v_proj, o_proj",
+                value=TrainState.target_modules,
+                on_change=TrainState.set_target_modules,
                 size="2",
                 style={"width": "100%"},
             ),
+            _err_text(TrainState.target_modules_error),
             direction="column",
             width="100%",
         ),
@@ -221,10 +249,12 @@ def _advanced_group() -> rx.Component:
                 _label("GPU temp threshold (°C)"),
                 rx.input(
                     placeholder="85",
-                    default_value="85",
+                    value=TrainState.gpu_temp_threshold.to_string(),
+                    on_change=TrainState.set_gpu_temp_threshold,
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(TrainState.gpu_temp_threshold_error),
                 direction="column",
                 width="100%",
             ),
@@ -232,8 +262,11 @@ def _advanced_group() -> rx.Component:
                 _label("W&B run name"),
                 rx.input(
                     placeholder="(optional)",
+                    value=TrainState.wandb_run_name,
+                    on_change=TrainState.set_wandb_run_name,
                     size="2",
                 ),
+                _err_text(TrainState.wandb_run_name_error),
                 direction="column",
                 width="100%",
             ),
@@ -244,11 +277,13 @@ def _advanced_group() -> rx.Component:
         rx.flex(
             rx.checkbox(
                 "Gradient checkpointing",
-                default_checked=True,
+                checked=TrainState.gradient_checkpointing,
+                on_change=TrainState.set_gradient_checkpointing,
             ),
             rx.checkbox(
                 "Flash attention",
-                default_checked=True,
+                checked=TrainState.flash_attention,
+                on_change=TrainState.set_flash_attention,
             ),
             direction="row",
             gap="4",
@@ -285,10 +320,23 @@ def train_page() -> rx.Component:
                     _advanced_group(),
                     rx.flex(
                         rx.button(
-                            "Start training",
+                            rx.cond(
+                                TrainState.run_state == "loading",
+                                rx.spinner(size="2"),
+                                rx.fragment(),
+                            ),
+                            rx.cond(
+                                TrainState.run_state == "loading",
+                                rx.text("Starting…"),
+                                rx.text("Start training"),
+                            ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
+                            # FRONTEND-B-003: disable while a run is in flight so
+                            # double-clicks don't queue duplicate trainer jobs.
+                            disabled=(TrainState.run_state == "loading")
+                            | (TrainState.run_state == "active"),
                             on_click=TrainState.start_training,
                         ),
                         rx.button(
@@ -296,10 +344,15 @@ def train_page() -> rx.Component:
                             variant="soft",
                             color_scheme="gray",
                             size="3",
+                            # Stop is meaningless when nothing is running.
+                            disabled=(TrainState.run_state == "idle")
+                            | (TrainState.run_state == "done")
+                            | (TrainState.run_state == "error"),
                             on_click=TrainState.stop_training,
                         ),
                         gap="3",
                         margin_top="2",
+                        align="center",
                     ),
                     direction="column",
                     gap="4",

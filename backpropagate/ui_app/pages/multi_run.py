@@ -29,6 +29,19 @@ def _label(text: str) -> rx.Component:
     )
 
 
+def _err_text(error_var) -> rx.Component:
+    """Inline error label — peach text, 11px, only renders when non-empty."""
+    return rx.cond(
+        error_var != "",
+        rx.text(
+            error_var,
+            size="1",
+            style={"color": "var(--bp-peach)", "font_size": "11px"},
+        ),
+        rx.fragment(),
+    )
+
+
 def _model_group() -> rx.Component:
     return Group(
         rx.grid(
@@ -61,7 +74,8 @@ def _model_group() -> rx.Component:
                         rx.select.item("8-bit", value="8-bit"),
                         rx.select.item("16-bit", value="16-bit"),
                     ),
-                    default_value="4-bit",
+                    value=MultiRunState.quantization,
+                    on_change=MultiRunState.set_quantization,
                 ),
                 direction="column",
                 width="100%",
@@ -81,11 +95,13 @@ def _sweep_shape_group() -> rx.Component:
                 _label("Num runs"),
                 rx.input(
                     placeholder="3",
-                    default_value="3",
+                    value=MultiRunState.num_runs.to_string(),
+                    on_change=MultiRunState.set_num_runs,
                     type="number",
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(MultiRunState.num_runs_error),
                 direction="column",
                 width="100%",
             ),
@@ -93,11 +109,13 @@ def _sweep_shape_group() -> rx.Component:
                 _label("Samples per run"),
                 rx.input(
                     placeholder="500",
-                    default_value="500",
+                    value=MultiRunState.samples_per_run.to_string(),
+                    on_change=MultiRunState.set_samples_per_run,
                     type="number",
                     size="2",
                     class_name="bp-num",
                 ),
+                _err_text(MultiRunState.samples_per_run_error),
                 direction="column",
                 width="100%",
             ),
@@ -110,7 +128,8 @@ def _sweep_shape_group() -> rx.Component:
                         rx.select.item("Weighted", value="weighted"),
                         rx.select.item("TIES", value="ties"),
                     ),
-                    default_value="slao",
+                    value=MultiRunState.merge_mode,
+                    on_change=MultiRunState.set_merge_mode,
                 ),
                 direction="column",
                 width="100%",
@@ -258,14 +277,27 @@ def multi_run_page() -> rx.Component:
                     _cross_run_group(),
                     rx.flex(
                         rx.button(
-                            "Start multi-run",
+                            rx.cond(
+                                MultiRunState.run_state == "loading",
+                                rx.spinner(size="2"),
+                                rx.fragment(),
+                            ),
+                            rx.cond(
+                                MultiRunState.run_state == "loading",
+                                rx.text("Starting…"),
+                                rx.text("Start multi-run"),
+                            ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
+                            # FRONTEND-B-003: disable while a sweep is in flight.
+                            disabled=(MultiRunState.run_state == "loading")
+                            | (MultiRunState.run_state == "active"),
                             on_click=MultiRunState.start_multi_run,
                         ),
                         gap="3",
                         margin_top="2",
+                        align="center",
                     ),
                     direction="column",
                     gap="4",

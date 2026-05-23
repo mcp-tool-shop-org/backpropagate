@@ -1226,6 +1226,148 @@ class TestCmdUI:
 
 
 # =============================================================================
+# TESTS-B-006 — ENFORCEMENT_AVAILABLE flipped path (post-middleware contract)
+# =============================================================================
+#
+# The refuse-to-start tests above pin behavior while
+# ``backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE`` is False (today's state
+# — Reflex middleware hasn't landed yet). Stage B audit flagged that nothing
+# pins the symmetric post-middleware contract: when the middleware DOES land
+# and the flag flips True, ``--auth`` MUST flow through to subprocess launch
+# instead of falsely refusing.
+#
+# Without these tests, a future commit that lands middleware + flips the flag
+# has nothing telling it the refuse-to-start guard is now wrong. The guard
+# becomes accidentally-permanent and operators stay locked out of auth even
+# after the underlying contract is honoured. Pinning the True path now
+# guarantees the flip will trip a failing test that someone has to look at.
+
+
+class TestCmdUiEnforcementFlipped:
+    """TESTS-B-006: post-middleware behaviour pinned in advance.
+
+    Each test monkeypatches ``ENFORCEMENT_AVAILABLE = True`` on the
+    ``backpropagate.ui_app.auth`` module and asserts ``cmd_ui`` no longer
+    raises ``RUNTIME_UI_AUTH_NOT_ENFORCED`` for ``--auth``-bearing
+    invocations. The ``--share`` gate is a separate guard with its own
+    rationale (no Reflex tunnel) and stays refusing even when middleware
+    enforces auth — pinned independently below.
+    """
+
+    @staticmethod
+    def _mock_subprocess_result(returncode: int = 0) -> MagicMock:
+        result = MagicMock()
+        result.returncode = returncode
+        return result
+
+    def test_auth_proceeds_when_enforcement_available(self, monkeypatch):
+        """--auth alone proceeds to subprocess launch once the flag flips.
+
+        The middleware landing flips ``ENFORCEMENT_AVAILABLE = True``. From
+        that point on, ``--auth user:pass`` must reach subprocess.run with
+        the credentials handed to the Reflex child via
+        ``BACKPROPAGATE_UI_AUTH``. The pre-fix test surface only covered
+        the False path; this is the symmetric assertion.
+        """
+        from backpropagate.cli import cmd_ui
+
+        # Flip the load-bearing flag on the source module — ``cmd_ui`` does
+        # ``from .ui_app.auth import ENFORCEMENT_AVAILABLE`` lazily inside
+        # the function body, so patching the *module attribute* (not a
+        # snapshot inside cli.py) is what the import re-reads.
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=False,
+                auth="alice:hunter2",
+                verbose=False,
+            )
+
+            # Must NOT raise — the refuse-to-start guard is gated on
+            # ENFORCEMENT_AVAILABLE being False.
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
+
+            # The credentials must reach the Reflex child via env-var.
+            # subprocess.run is called as run(cmd, env=..., cwd=...).
+            kwargs = mock_run.call_args.kwargs
+            child_env = kwargs.get("env", {})
+            assert child_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2", (
+                "When ENFORCEMENT_AVAILABLE flips True, --auth must export "
+                "BACKPROPAGATE_UI_AUTH to the Reflex subprocess so the "
+                "middleware can read it. Got env={!r}".format(
+                    {k: v for k, v in child_env.items()
+                     if k.startswith("BACKPROPAGATE_")}
+                )
+            )
+
+    def test_share_still_refuses_even_when_enforcement_available(self, monkeypatch):
+        """--share is gated independently of ENFORCEMENT_AVAILABLE.
+
+        FRONTEND-A-001 split into two guards: ``--auth`` blocks because
+        middleware isn't wired; ``--share`` blocks because Reflex has no
+        first-class tunnel equivalent. Flipping ENFORCEMENT_AVAILABLE only
+        addresses the first gate. This test pins that ``--share`` keeps
+        refusing post-middleware — operators must reach for SSH port-forwards
+        or Cloudflare Tunnel either way.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            # Same code as the no-middleware path — the gate's rationale
+            # differs but the error envelope operators see is identical.
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            mock_run.assert_not_called()
+
+    def test_share_with_auth_still_refuses_when_enforcement_available(self, monkeypatch):
+        """--share + --auth together still refuse, because --share is the blocker."""
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth="alice:hunter2",
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            mock_run.assert_not_called()
+
+
+# =============================================================================
 # CONFIG COMMAND TESTS
 # =============================================================================
 

@@ -244,6 +244,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
         "retryable": "no",
     },
+    "RUNTIME_OOM_RECOVERY_EXHAUSTED": {
+        "description": "OOM auto-recovery ran out of options (hit batch_size=1 with no further degradation path, or the effective-batch ceiling has been reached).",
+        "default_hint": "Use a smaller model, reduce max_seq_length, enable gradient_checkpointing, or quantize. Set oom_recovery=False to make OOMs hard-fail immediately.",
+        "retryable": "no",
+    },
+    "RUNTIME_OOM_ADJACENT": {
+        "description": "A CUDA error that looks adjacent to OOM (CUBLAS_STATUS_ALLOC_FAILED / CUDNN_STATUS_NOT_INITIALIZED / NCCL post-VRAM-exhaustion) bypassed the strict OOM matcher.",
+        "default_hint": "Same remediation as RUNTIME_GPU_OOM. If this signature appears frequently, file a bug so the OOM matcher can learn it.",
+        "retryable": "sometimes",
+    },
     "RUNTIME_GPU_TEMPERATURE_CRITICAL": {
         "description": "GPU temperature exceeded the safety threshold.",
         "default_hint": "Wait for the GPU to cool; improve case airflow; lower --batch-size.",
@@ -263,6 +273,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "RUNTIME_SLAO_MERGE_FAILED": {
         "description": "SLAO merge step failed for a specific run.",
         "default_hint": "Check the run's LoRA dir for shape mismatches.",
+        "retryable": "no",
+    },
+    "SLAO_MERGE_DIVERGED": {
+        "description": "SLAO merge produced non-finite (NaN/inf) weights — accumulator corrupted, likely bf16 underflow or exploding gradients in the upstream run.",
+        "default_hint": "Rewind to the previous healthy checkpoint; inspect the latest run for bf16 underflow, exploding gradients, or LR-too-high. Lower learning_rate or switch optim to AdamW.",
         "retryable": "no",
     },
     "STATE_SLAO_CHECKPOINT_INVALID": {

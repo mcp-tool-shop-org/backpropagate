@@ -101,25 +101,36 @@ backprop config --reset
 
 ## `backprop ui`
 
-Launch the Gradio web interface.
+Launch the Reflex (Radix UI) web interface.
 
 ```bash
-backprop ui --port 7862 --auth alice:hunter2
+backprop ui --port 7862
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port`, `-p` | `7862` | Port to bind (1..65535). |
-| `--share` | off | Create a public `*.gradio.live` URL. **Requires `--auth USER:PASS`** unless `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. |
-| `--auth USER:PASS` | unset | Authentication credentials in `username:password` format. |
+| `--share` | off | **Currently rejected.** Reflex has no built-in tunnel and v1.1+ has no auth middleware yet, so the runtime refuses to start when this flag is passed. Use SSH port-forwarding instead — see below. |
+| `--auth USER:PASS` | unset | **Currently rejected.** Same reason — no middleware to consume the credential. Tracked for a future release. |
 
-### `--share` + `--auth` security contract (F-001 / FB-003)
+### `--share` / `--auth` refuse-to-start contract (Wave 1)
 
-Backpropagate refuses `--share` without `--auth` by default. The rationale: `--share` publishes a public-internet URL that exposes the entire training pipeline, including filesystem write access (sandboxed to `BACKPROPAGATE_UI__OUTPUT_DIR`, but still a real attack surface).
+Starting with v1.1.0 (Gradio → Reflex migration), passing either `--share` or `--auth` makes the runtime exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The reason: the Reflex port of the UI lands ahead of the auth middleware, so any `--share`-published URL would be unauthenticated. Refusing to start is the correct behavior until the middleware ships.
 
-- Default: `backprop ui --share` exits `1` with `[INPUT_AUTH_REQUIRED]` if `--auth` is missing.
-- Opt-out: set `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. A loud warning prints on every launch.
-- Filesystem sandbox: see [Environment variables → UI sandbox](/backpropagate/handbook/env-vars/#ui-sandbox-fb-003) for the `BACKPROPAGATE_UI__OUTPUT_DIR` denylist (refuses `/etc`, `~/.ssh`, etc. with `UI_OUTPUT_DIR_FORBIDDEN`).
+- `backprop ui --share` → exits `1`.
+- `backprop ui --auth alice:hunter2` → exits `1` (even without `--share`).
+- The same refuse-to-start contract is enforced one layer deeper inside `ui_app/app.py` and `rxconfig.py`, so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var.
+
+**For remote access right now, use SSH port-forwarding:**
+
+```bash
+ssh -L 7860:localhost:7860 you@gpu-host
+# Then on your laptop, visit http://localhost:7860
+```
+
+SSH already handles auth, encryption, and audit — the runtime stays bound to `127.0.0.1` on the remote box and only your forwarded tunnel can reach it.
+
+The proper middleware fix is tracked for a future release; the GHSA at <https://github.com/mcp-tool-shop-org/backpropagate/security/advisories> covers the gap. Filesystem writes are still sandboxed to `BACKPROPAGATE_UI__OUTPUT_DIR` — see [Environment variables → UI sandbox](/backpropagate/handbook/env-vars/#ui-sandbox-fb-003) for the denylist (refuses `/etc`, `~/.ssh`, etc. with `UI_OUTPUT_DIR_FORBIDDEN`).
 
 ## See also
 

@@ -5,6 +5,41 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # =============================================================================
+# HYPOTHESIS PROFILE (TESTS-B-010)
+# =============================================================================
+#
+# Property-based tests in this suite intermittently bumped against the default
+# 200 ms Hypothesis deadline on slow Windows runners and inside CI containers
+# where the first import of torch / structlog can push a single example past
+# the limit even though the assertion itself is correctness-only (not perf).
+# Wave 1 registered a "no_deadline" profile at the top of
+# ``test_hypothesis_slao.py`` but only loaded it there — Hypothesis-using
+# tests in ``test_fuzz_checkpoints.py`` kept hitting the same flake.
+#
+# Loading the profile from conftest applies it to the whole test session so
+# every Hypothesis test inherits the deadline-free + too_slow-suppressed
+# settings. Loading happens at import time (before any test or fixture runs)
+# because Hypothesis caches the active profile per-process. The
+# ``test_hypothesis_slao.py`` module still re-registers + loads the profile
+# defensively to support running that file directly without conftest.
+try:
+    from hypothesis import HealthCheck
+    from hypothesis import settings as _hyp_settings
+
+    try:
+        _hyp_settings.register_profile(
+            "no_deadline",
+            deadline=None,
+            suppress_health_check=[HealthCheck.too_slow],
+        )
+    except Exception:  # pragma: no cover — profile already registered
+        pass
+    _hyp_settings.load_profile("no_deadline")
+except ImportError:  # pragma: no cover — hypothesis is a test-only dep
+    pass
+
+
+# =============================================================================
 # CUDA/GPU FIXTURES
 # =============================================================================
 

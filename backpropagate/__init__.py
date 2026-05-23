@@ -117,6 +117,7 @@ except ImportError:
     log_security_event = None  # type: ignore
 
 # Feature flags (detect available optional features)
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 # Checkpoint management (Phase 5.3)
@@ -257,7 +258,15 @@ from .trainer import (
     load_model,
 )
 
-__version__ = _pkg_version("backpropagate")
+# BRIDGE-A-015 (Stage C amend): wrap _pkg_version in a try/except so importing
+# the package from a source tree without `pip install -e .` (CI checkouts,
+# container builds, dev rebases) does NOT raise PackageNotFoundError at import
+# time. Falling back to a PEP 440 +local sentinel keeps __version__ a string
+# so callers that do ``backpropagate.__version__`` never AttributeError.
+try:
+    __version__ = _pkg_version("backpropagate")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 
 # =============================================================================

@@ -8,6 +8,14 @@ Per design digest §4b:
 - Optional ``caption`` eyebrow ("Loss · last 80 steps") + right-aligned ``meta``
   ("min 0.398")
 - ``viewBox`` + ``preserveAspectRatio`` for crispness at any size
+
+Implementation note (FRONTEND-B-012 fix): the SVG body is built with native
+Reflex SVG primitives (``rx.el.svg`` + children) rather than a hand-rolled
+HTML string fed to ``rx.html``. That keeps every attribute on the Reflex
+diffing path (so a 1px movement of the end-dot ships ~60 bytes instead of
+the full 2KB body) AND removes the raw-HTML surface that an f-string
+interpolation could otherwise turn into an XSS vector if someone later
+embeds an operator-controlled ``caption`` into an aria-label.
 """
 
 from __future__ import annotations
@@ -15,7 +23,9 @@ from __future__ import annotations
 import reflex as rx
 
 
-def _build_polyline_points(data: list[float], w: int, h: int, pad: float = 2.0) -> tuple[str, str, tuple[float, float] | None]:
+def _build_polyline_points(
+    data: list[float], w: int, h: int, pad: float = 2.0
+) -> tuple[str, str, tuple[float, float] | None]:
     """Compute the polyline + closed-area paths and the end-dot coords.
 
     Returns
@@ -32,7 +42,10 @@ def _build_polyline_points(data: list[float], w: int, h: int, pad: float = 2.0) 
         y = h - pad
         x = w / 2
         line = f"{pad},{y:.1f} {w - pad:.1f},{y:.1f}"
-        area = f"M{pad},{y:.1f} L{w - pad:.1f},{y:.1f} L{w - pad:.1f},{h - pad:.1f} L{pad},{h - pad:.1f} Z"
+        area = (
+            f"M{pad},{y:.1f} L{w - pad:.1f},{y:.1f} "
+            f"L{w - pad:.1f},{h - pad:.1f} L{pad},{h - pad:.1f} Z"
+        )
         return line, area, (x, y)
 
     lo, hi = min(data), max(data)
@@ -75,36 +88,67 @@ def BpSparkline(
     series = data or []
     line_points, area_path, end_xy = _build_polyline_points(series, w, h)
 
-    svg_body: list[str] = []
+    # FRONTEND-B-012: native Reflex SVG primitives instead of ``rx.html``.
+    # ``rx.el.svg`` accepts arbitrary SVG children; each attribute on a child
+    # is a normal Reflex prop so the diffing path is the same as any other
+    # component. The view_box / preserveAspectRatio props keep the chart
+    # crisp at any container width.
+    svg_children: list[rx.Component] = []
     if area_path:
-        svg_body.append(
-            f'<path d="{area_path}" fill="var(--bp-teal)" fill-opacity="0.08" '
-            f'stroke="none" />'
+        svg_children.append(
+            rx.el.svg.path(
+                d=area_path,
+                fill="var(--bp-teal)",
+                fill_opacity="0.08",
+                stroke="none",
+            )
         )
     if line_points:
-        svg_body.append(
-            f'<polyline fill="none" stroke="var(--bp-teal)" stroke-width="1.5" '
-            f'stroke-linejoin="round" stroke-linecap="round" '
-            f'points="{line_points}" />'
+        svg_children.append(
+            rx.el.svg.polyline(
+                fill="none",
+                stroke="var(--bp-teal)",
+                stroke_width="1.5",
+                stroke_linejoin="round",
+                stroke_linecap="round",
+                points=line_points,
+            )
         )
     if end_xy is not None:
         ex, ey = end_xy
         # Halo first (drawn under), then solid dot on top.
-        svg_body.append(
-            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="4.5" '
-            f'fill="var(--bp-teal)" fill-opacity="0.25" />'
+        svg_children.append(
+            rx.el.svg.circle(
+                cx=f"{ex:.1f}",
+                cy=f"{ey:.1f}",
+                r="4.5",
+                fill="var(--bp-teal)",
+                fill_opacity="0.25",
+            )
         )
-        svg_body.append(
-            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="2" '
-            f'fill="var(--bp-teal)" stroke="none" />'
+        svg_children.append(
+            rx.el.svg.circle(
+                cx=f"{ex:.1f}",
+                cy=f"{ey:.1f}",
+                r="2",
+                fill="var(--bp-teal)",
+                stroke="none",
+            )
         )
 
-    svg = (
-        f'<svg viewBox="0 0 {w} {h}" width="100%" height="{h}" '
-        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" '
-        f'role="img" aria-label="loss sparkline · last {len(series)} steps">'
-        + "".join(svg_body)
-        + "</svg>"
+    svg = rx.el.svg(
+        *svg_children,
+        view_box=f"0 0 {w} {h}",
+        width="100%",
+        height=f"{h}",
+        preserveAspectRatio="none",
+        xmlns="http://www.w3.org/2000/svg",
+        role="img",
+        # Aria-label uses len() which is an int — safe to interpolate. We
+        # deliberately do NOT thread ``caption`` into the aria-label here; if a
+        # future caller wants that, route it through the React-side text node
+        # rather than concatenating into this attribute.
+        aria_label=f"loss sparkline · last {len(series)} steps",
     )
 
     header_row = rx.flex(
@@ -132,7 +176,7 @@ def BpSparkline(
 
     return rx.flex(
         header_row,
-        rx.html(svg),
+        svg,
         direction="column",
         gap="1",
         width="100%",

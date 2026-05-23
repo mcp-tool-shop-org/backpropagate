@@ -5,11 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.2] - 2026-05-22
+## [1.2.0] - 2026-05-23
+
+A dogfood-swarm release closing the **v1.1.x auth-bypass advisory** and a truth-in-advertising sweep across CI gates, docs, and pinned numbers. No feature regressions; full backward compatibility with v1.1.x.
 
 ### Fixed
 
-- **CRITICAL: Web UI authentication contract not enforced (GHSA-pending)** — v1.1.0 and v1.1.1 advertised `--share + --auth` enforcement but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth` or `backprop ui --share --auth` was unauthenticated. v1.1.2 makes `cmd_ui` refuse to start when `--auth` or `--share` is set until middleware enforcement lands. See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories (pending publication).
+- **CRITICAL: Web UI authentication contract not enforced (GHSA-pending)** — v1.1.0 and v1.1.1 advertised `--share + --auth` enforcement but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth` or `backprop ui --share --auth` was unauthenticated. v1.2.0 makes `cmd_ui` refuse to start when `--auth` or `--share` is set until middleware enforcement lands. See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories (pending publication).
 - F-002 multi-run resume: safetensors loader was being called on `.bin` adapter files, raising silently. Now dispatched by extension.
 - export.py `register_with_ollama` UnboundLocalError in finally-block masking the real OllamaRegistrationError.
 - export.py subprocess SIGINT propagation: ollama-create and llama.cpp child processes now receive proper termination on Ctrl+C.
@@ -17,10 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CI gates re-tightened.** v1.1.0 claimed pip-audit + Trivy + Bandit + Semgrep + TruffleHog all gated on findings; v1.1.x rolled most of them back to advisory. v1.1.2 restores hard floor gates: mypy hard (or `ui_app/` override), pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer `continue-on-error`. TruffleHog confirmed retired (delegated to Trivy built-in secret scanner).
+- **CI gates re-tightened.** v1.1.0 claimed pip-audit + Trivy + Bandit + Semgrep + TruffleHog all gated on findings; v1.1.x rolled most of them back to advisory. v1.2.0 restores hard floor gates: mypy hard (or `ui_app/` override), pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer `continue-on-error`. TruffleHog confirmed retired (delegated to Trivy built-in secret scanner).
 - Web UI `--share` flag is now a hard refusal (was a no-op + 5-second warning). Use SSH port-forwarding until middleware lands.
-- Test count pinned to actual `pytest --collect-only`: 1957 (was variously claimed as 1654/1766/1805).
+- Test count re-pinned to actual `pytest --collect-only`: 2012 (was 1957 in the abandoned v1.1.2 entry; the pin was wrong by 55 — Wave 1 dropped `test_init_lazy_loading.py` and Waves 2/3/3.5/4 added regression coverage).
 - Validation tightening: `ollama create` model_name and `huggingface push` repo_id are validated against allowlist regexes.
+- `scripts/repin_test_count.sh` added so future maintainers can re-pin the count consistently (run after any `tests/` change; canonical pin sites listed in the script header).
 
 ### Removed
 
@@ -28,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-1957 (count pinned; was 1766 in v1.1.0 CHANGELOG and 1805 in CLAUDE.md/AUDIT). New regression tests for OOM auto-recovery contract and atomic checkpoint writes — both v1.1.0 headline features that had zero coverage.
+1957 → 2012 (+55 net): 55 new tests across Wave 1 + Wave 3.5 + Stage C — validator regression coverage, GHSA-pending auth-bypass test suite, ENFORCEMENT_AVAILABLE-flipped path, unsloth_fallback + pause_on_overheat wiring, HF retry loop timing, SLAO_MERGE_DIVERGED layer-name assertions, TrainingLogger capsys coverage, run_id correlation chain. Coverage threshold holds at 50%.
 
 ## [1.1.1] - 2026-05-21
 
@@ -228,6 +231,7 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.2.0 | 2026-05-23 | GHSA-pending auth-bypass closed (`backprop ui --auth/--share` now refuses to start until middleware lands); CI hard-gate restoration; truth-in-advertising test-count + version sweep |
 | 1.1.1 | 2026-05-21 | CI hotfix — 4 broken action SHAs from the v1.1.0 SHA-pin sweep (no user-facing changes) |
 | 1.1.0 | 2026-05-21 | Reflex UI, HF Hub push, resume-from-checkpoint, run history, model cards, W&B wiring (10-wave dogfood swarm) |
 | 1.0.5 | 2026-04-15 | Release-binaries workflow re-cut after v1.0.4 Linux exclusion fix |
@@ -243,7 +247,8 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.0.4...v1.0.5

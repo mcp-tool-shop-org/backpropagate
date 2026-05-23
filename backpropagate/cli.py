@@ -63,6 +63,47 @@ EXIT_INTERRUPTED = 130
 
 
 # =============================================================================
+# BRIDGE-LOCAL ERROR CODE DOCUMENTATION (BRIDGE-B-003 catalog drift mitigation)
+# =============================================================================
+# Codes emitted by export.py / cli.py that the canonical ERROR_CODES catalog in
+# exceptions.py does NOT yet enumerate. The catalog lives in backend domain;
+# rather than reach across the domain boundary, we document the bridge-side
+# codes here so:
+#   (a) operators grepping cli.py for a code they saw in stderr have a
+#       central reference inside the bridge surface;
+#   (b) a future test ``test_error_code_catalog_completeness`` can scan BOTH
+#       exceptions.ERROR_CODES AND _BRIDGE_LOCAL_ERROR_CODES when checking
+#       that every emitted ``code=...`` literal is defined somewhere.
+# These entries are CANDIDATES for promotion into exceptions.ERROR_CODES;
+# the backend agent owns the actual catalog. The bridge audit (BRIDGE-B-003)
+# flagged 8 missing codes total — the 4 below are bridge-domain; the other 4
+# (SLAO_MERGE_DIVERGED, PEFT_API_INCOMPATIBLE, UI_OUTPUT_DIR_FORBIDDEN,
+# INPUT_AUTH_INVALID_SHAPE) are flagged to backend / frontend agents.
+_BRIDGE_LOCAL_ERROR_CODES: dict[str, dict[str, str]] = {
+    "HUB_PUSH_INVALID_REPO": {
+        "description": "Hugging Face repo_id failed pre-network validation (shape, control chars, '..' segment).",
+        "default_hint": "Pass --repo owner/name with only [A-Za-z0-9._-] in each segment.",
+        "retryable": "no",
+    },
+    "HUB_PUSH_NOT_FOUND": {
+        "description": "Hugging Face Hub returned 404 for the target repo.",
+        "default_hint": "Verify the repo_id spelling. Omit --create-repo=false to let backpropagate create it.",
+        "retryable": "no",
+    },
+    "HUB_PUSH_NETWORK": {
+        "description": "Hub upload failed due to network / 5xx / connection issue.",
+        "default_hint": "Retry — Hub 5xx clears in ~30s. Check connectivity if persistent.",
+        "retryable": "yes",
+    },
+    "HUB_PUSH_UNKNOWN": {
+        "description": "Hub upload failed for a reason backpropagate could not categorise.",
+        "default_hint": "Re-run with --verbose for the full traceback; check huggingface_hub version.",
+        "retryable": "sometimes",
+    },
+}
+
+
+# =============================================================================
 # ARGPARSE TYPE VALIDATORS
 # =============================================================================
 # Defensive-coding helpers used by `create_parser` to reject obviously wrong
@@ -315,6 +356,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     """
     import uuid
 
+    from .logging_config import bind_run_context, get_logger
     from .trainer import Trainer, TrainingCallback
 
     _print_header("Backpropagate Training")
@@ -330,12 +372,30 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_info("See `backprop train --help` for all options.")
         return EXIT_USER_ERROR
 
-    # C-CLI-007 run_id correlation token: emit ONE line to stderr at the top
-    # of the command so the operator can quote it when asking for help. The
-    # trainer also generates its own UUID-based run_id internally; this CLI-
-    # level token is for cross-process correlation (logs vs terminal vs
-    # support bug report). 12 hex chars is plenty for human use.
-    cli_run_id = uuid.uuid4().hex[:12]
+    # BRIDGE-B-002: reuse the CLI-level run_id minted by main() (stashed on
+    # args.cli_run_id). The short 12-char form is preserved for the stderr
+    # banner because operators were already trained on it; the FULL run_id
+    # is bound to structlog so JSON consumers see the long form. Falling
+    # back to a fresh UUID keeps the handler robust when called directly
+    # from tests that bypass main().
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    # Re-bind in case the handler is called directly without main()'s setup.
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="train")
+    except Exception:  # noqa: BLE001
+        pass
+    # Structured log line — routes to JSON when BACKPROPAGATE_LOG_JSON=1,
+    # pretty console otherwise. Replaces the legacy stderr-only print().
+    try:
+        get_logger(__name__).info(
+            "train_invoked",
+            cli_run_id=cli_run_id_full,
+            model=args.model,
+            dataset=str(args.data),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
         file=sys.stderr,
@@ -482,6 +542,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
     """
     import uuid
 
+    from .logging_config import bind_run_context, get_logger
     from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer, RunResult
 
     _print_header("Backpropagate Multi-Run Training")
@@ -495,8 +556,23 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_info("See `backprop multi-run --help` for all options.")
         return EXIT_USER_ERROR
 
-    # C-CLI-007 run_id correlation token to stderr at top of long command.
-    cli_run_id = uuid.uuid4().hex[:12]
+    # BRIDGE-B-002: reuse main()'s cli_run_id so trainer / multi_run logs
+    # carry the same correlation token operators see at the top of stderr.
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="multi-run")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        get_logger(__name__).info(
+            "multi_run_invoked",
+            cli_run_id=cli_run_id_full,
+            model=args.model,
+            runs=args.runs,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
         file=sys.stderr,
@@ -622,6 +698,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         export_merged,
         register_with_ollama,
     )
+    from .logging_config import bind_run_context, get_logger
 
     _print_header("Backpropagate Export")
 
@@ -646,8 +723,22 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_error("Model path contains null byte")
         return EXIT_USER_ERROR
 
-    # C-CLI-007 run_id correlation token to stderr at top of long command.
-    cli_run_id = uuid.uuid4().hex[:12]
+    # BRIDGE-B-002: reuse main()'s cli_run_id so a single token correlates
+    # CLI output / structured logs / model_card.md / Hub push metadata.
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="export")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        get_logger(__name__).info(
+            "export_invoked",
+            cli_run_id=cli_run_id_full,
+            format=args.format,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
         file=sys.stderr,
@@ -1282,69 +1373,90 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
-    """Execute the config command."""
+    """Execute the config command.
+
+    Exit codes (Ship Gate B2):
+        0   show / dump succeeded
+        1   --set or --reset (not implemented) was passed
+        130 interrupted (Ctrl+C)
+    """
 
     from .config import settings
 
-    _print_header("Backpropagate Configuration")
+    try:
+        _print_header("Backpropagate Configuration")
 
-    # C-CLI-003: ``--set`` and ``--reset`` previously printed an INFO line
-    # ("planned") and returned exit code 0 — silently succeeding a feature
-    # that did nothing. A CI script chaining
-    # ``backprop config --set foo=bar && next_step`` would advance unchanged.
-    # Surface the unimplemented state as an error + EXIT_USER_ERROR so
-    # automation can detect it. The words "planned" and "environment" are
-    # preserved so the existing test assertions (which check for those
-    # substrings, not exit code) keep matching when we update them.
-    if args.reset:
-        _print_error(
-            "Config reset via CLI is not implemented (planned). "
-            "Reset by removing BACKPROPAGATE_* environment variables or your "
-            ".env file, then re-run."
-        )
-        return EXIT_USER_ERROR
+        # C-CLI-003: ``--set`` and ``--reset`` previously printed an INFO line
+        # ("planned") and returned exit code 0 — silently succeeding a feature
+        # that did nothing. A CI script chaining
+        # ``backprop config --set foo=bar && next_step`` would advance unchanged.
+        # Surface the unimplemented state as an error + EXIT_USER_ERROR so
+        # automation can detect it. The words "planned" and "environment" are
+        # preserved so the existing test assertions (which check for those
+        # substrings, not exit code) keep matching when we update them.
+        if args.reset:
+            _print_error(
+                "Config reset via CLI is not implemented (planned). "
+                "Reset by removing BACKPROPAGATE_* environment variables or your "
+                ".env file, then re-run."
+            )
+            return EXIT_USER_ERROR
 
-    if args.set:
-        _print_error(
-            "Config editing via --set is not implemented (planned). "
-            "Set BACKPROPAGATE_* environment variables or edit your .env "
-            "file directly."
-        )
-        return EXIT_USER_ERROR
+        if args.set:
+            _print_error(
+                "Config editing via --set is not implemented (planned). "
+                "Set BACKPROPAGATE_* environment variables or edit your .env "
+                "file directly."
+            )
+            return EXIT_USER_ERROR
 
-    # Show current config
-    print(f"\n{Colors.BOLD}Model{Colors.RESET}")
-    _print_kv("name", settings.model.name)
-    _print_kv("max_seq_length", str(settings.model.max_seq_length))
-    _print_kv("trust_remote_code", str(settings.model.trust_remote_code))
+        # Show current config
+        print(f"\n{Colors.BOLD}Model{Colors.RESET}")
+        _print_kv("name", settings.model.name)
+        _print_kv("max_seq_length", str(settings.model.max_seq_length))
+        _print_kv("trust_remote_code", str(settings.model.trust_remote_code))
 
-    print(f"\n{Colors.BOLD}LoRA{Colors.RESET}")
-    _print_kv("r", str(settings.lora.r))
-    _print_kv("lora_alpha", str(settings.lora.lora_alpha))
-    _print_kv("lora_dropout", str(settings.lora.lora_dropout))
-    _print_kv("target_modules", str(settings.lora.target_modules))
+        print(f"\n{Colors.BOLD}LoRA{Colors.RESET}")
+        _print_kv("r", str(settings.lora.r))
+        _print_kv("lora_alpha", str(settings.lora.lora_alpha))
+        _print_kv("lora_dropout", str(settings.lora.lora_dropout))
+        _print_kv("target_modules", str(settings.lora.target_modules))
 
-    print(f"\n{Colors.BOLD}Training{Colors.RESET}")
-    _print_kv("learning_rate", str(settings.training.learning_rate))
-    _print_kv("max_steps", str(settings.training.max_steps))
-    _print_kv("batch_size", str(settings.training.per_device_train_batch_size))
-    _print_kv("gradient_accumulation", str(settings.training.gradient_accumulation_steps))
-    _print_kv("warmup_steps", str(settings.training.warmup_steps))
-    _print_kv("output_dir", settings.training.output_dir)
+        print(f"\n{Colors.BOLD}Training{Colors.RESET}")
+        _print_kv("learning_rate", str(settings.training.learning_rate))
+        _print_kv("max_steps", str(settings.training.max_steps))
+        _print_kv("batch_size", str(settings.training.per_device_train_batch_size))
+        _print_kv("gradient_accumulation", str(settings.training.gradient_accumulation_steps))
+        _print_kv("warmup_steps", str(settings.training.warmup_steps))
+        _print_kv("output_dir", settings.training.output_dir)
 
-    print(f"\n{Colors.BOLD}Data{Colors.RESET}")
-    _print_kv("dataset_name", settings.data.dataset_name)
-    _print_kv("dataset_split", settings.data.dataset_split)
-    _print_kv("max_samples", str(settings.data.max_samples))
-    _print_kv("text_column", settings.data.text_column)
+        print(f"\n{Colors.BOLD}Data{Colors.RESET}")
+        _print_kv("dataset_name", settings.data.dataset_name)
+        _print_kv("dataset_split", settings.data.dataset_split)
+        _print_kv("max_samples", str(settings.data.max_samples))
+        _print_kv("text_column", settings.data.text_column)
 
-    if os.name == "nt":
-        print(f"\n{Colors.BOLD}Windows{Colors.RESET}")
-        _print_kv("pre_tokenize", str(settings.windows.pre_tokenize))
-        _print_kv("xformers_disabled", str(settings.windows.xformers_disabled))
-        _print_kv("dataloader_workers", str(settings.windows.dataloader_num_workers))
+        if os.name == "nt":
+            print(f"\n{Colors.BOLD}Windows{Colors.RESET}")
+            _print_kv("pre_tokenize", str(settings.windows.pre_tokenize))
+            _print_kv("xformers_disabled", str(settings.windows.xformers_disabled))
+            _print_kv("dataloader_workers", str(settings.windows.dataloader_num_workers))
 
-    return 0
+        # BRIDGE-A-012 (Stage C amend): return the EXIT_OK constant so a
+        # future renumber of the exit codes propagates uniformly. Previously
+        # this returned the bare integer literal 0, which would silently
+        # disagree with EXIT_OK after such a renumber.
+        return EXIT_OK
+    except KeyboardInterrupt:
+        # BRIDGE-A-012 (Stage C amend): every other subcommand handler maps
+        # Ctrl+C to EXIT_INTERRUPTED (130) per the Ship Gate B2 contract; the
+        # config handler was the lone outlier exiting 1 because it had no
+        # KeyboardInterrupt branch. The body is fast in practice but the
+        # symmetry matters — operators wiring `backprop config --show` into a
+        # CI watchdog rely on the same exit code shape across subcommands.
+        print()
+        _print_warning("Config display interrupted by user")
+        return EXIT_INTERRUPTED
 
 
 # =============================================================================
@@ -2200,7 +2312,27 @@ def main(argv: list[str] | None = None) -> int:
     default exit code 1. Subcommand-level handlers still run first for
     friendly per-command messages; this catch-all only fires when something
     escapes them.
+
+    BRIDGE-B-002: wires the structured-logging scaffolding into the CLI.
+    Pre-fix, ``configure_logging()`` was never called and ``cli_run_id`` was
+    never bound to structlog's contextvars — so ``BACKPROPAGATE_LOG_*`` env
+    vars were no-ops and operators could not correlate the CLI's run_id with
+    the Trainer's run_id across logs. Now ``main()``:
+
+      1. Generates a single ``cli_run_id`` UUID at the top.
+      2. Calls ``configure_logging()`` honouring
+         ``BACKPROPAGATE_LOG_LEVEL`` / ``BACKPROPAGATE_LOG_JSON`` /
+         ``BACKPROPAGATE_LOG_FILE`` env vars (and bumping level to ``DEBUG``
+         when ``--verbose`` is set).
+      3. Calls ``bind_run_context(run_id=cli_run_id)`` so every structured
+         log line in the process carries the same correlation token.
+      4. Stashes the CLI-level run_id on ``args.cli_run_id`` so subcommand
+         handlers can re-emit / re-bind it without minting a second UUID.
     """
+    import uuid
+
+    from .logging_config import bind_run_context, configure_logging, get_logger
+
     try:
         parser = create_parser()
         args = parser.parse_args(argv)
@@ -2209,6 +2341,44 @@ def main(argv: list[str] | None = None) -> int:
         # validator does I/O) should still exit 130 per the Ship Gate contract.
         print("Interrupted.", file=sys.stderr)
         return EXIT_INTERRUPTED
+
+    # BRIDGE-B-002: configure structured logging before ANY subcommand runs.
+    # ``--verbose`` bumps the level to DEBUG so structlog emits the full
+    # event stream; otherwise honour BACKPROPAGATE_LOG_LEVEL (default INFO).
+    verbose = bool(getattr(args, "verbose", False))
+    try:
+        configure_logging(level="DEBUG" if verbose else None, force=True)
+    except Exception:  # noqa: BLE001 — logging setup must not abort the CLI
+        # If logging setup itself fails (extremely rare — bad log file path,
+        # permission denied), fall back silently so the subcommand still runs.
+        # The traceback is intentionally swallowed so a misconfigured
+        # BACKPROPAGATE_LOG_FILE can't crash the CLI on startup.
+        pass
+
+    # BRIDGE-B-002: mint one CLI-level run_id and bind it so every structured
+    # log line emitted from this process carries it. Subcommand handlers
+    # re-emit the same id to stderr (replacing the prior 12-char-only print)
+    # so operators triaging a multi-hour overnight job can grep ONE token
+    # across CLI output, trainer logs, and run_history.json.
+    cli_run_id = uuid.uuid4().hex
+    try:
+        bind_run_context(run_id=cli_run_id, subcommand=getattr(args, "command", None))
+    except Exception:  # noqa: BLE001 — context binding must not abort the CLI
+        pass
+    args.cli_run_id = cli_run_id
+
+    # Emit the CLI-level run_id once via the structured logger (auto-routed
+    # to JSON when BACKPROPAGATE_LOG_JSON=1, pretty console otherwise). This
+    # replaces the prior per-handler print("[INFO] Run ID:") lines so a JSON
+    # consumer sees the id in a real event instead of as bare stderr text.
+    try:
+        get_logger(__name__).info(
+            "cli_invoked",
+            cli_run_id=cli_run_id,
+            subcommand=getattr(args, "command", None),
+        )
+    except Exception:  # noqa: BLE001 — logging must not abort the CLI
+        pass
 
     if not args.command:
         # First-time-user friendliness (C-CLI-001): bare ``backprop`` invocation

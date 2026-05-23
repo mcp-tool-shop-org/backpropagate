@@ -22,8 +22,29 @@ import os
 import threading
 from dataclasses import dataclass as dc_dataclass
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+
+def _safe_pkg_version() -> str:
+    """Return the installed backpropagate version, or a sentinel fallback.
+
+    BRIDGE-A-015 (Stage C amend): the prior ``_pkg_version("backpropagate")``
+    call ran at class-body evaluation time, so loading the package from a
+    source tree without ``pip install -e .`` (common in CI checkouts,
+    container builds, dev rebases) raised ``PackageNotFoundError`` and
+    crashed module import BEFORE pytest had a chance to collect tests.
+
+    The fallback string ``"0.0.0+unknown"`` is the PEP 440 ``+local``
+    suffix convention for "we know this is a dev build but cannot resolve
+    the canonical version" — distinct from any real release so downstream
+    parsers don't confuse it with a tagged ``0.0.0``.
+    """
+    try:
+        return _pkg_version("backpropagate")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
 
 __all__ = [
     "Settings",
@@ -343,7 +364,15 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         security: SecurityConfig = Field(default_factory=SecurityConfig)
 
         # Package info
-        version: str = _pkg_version("backpropagate")
+        # BRIDGE-A-015 (Stage C amend): wrap in default_factory so the version
+        # lookup is deferred until Settings() is actually instantiated, AND
+        # routed through _safe_pkg_version which returns "0.0.0+unknown" when
+        # the package metadata is missing. Pre-fix this was
+        # ``version: str = _pkg_version("backpropagate")`` evaluated at class-
+        # body time — a fresh CI checkout without `pip install -e .` would
+        # raise PackageNotFoundError and crash module import before any test
+        # collection.
+        version: str = Field(default_factory=_safe_pkg_version)
         name: str = "backpropagate"
 
         def to_dict(self) -> dict:

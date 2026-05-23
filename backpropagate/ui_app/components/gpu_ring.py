@@ -8,6 +8,13 @@ Color thresholds (per design digest §4 sidebar):
 
 Center text shows the integer temperature in tabular-num so it doesn't
 jiggle as digits change.
+
+Implementation note (FRONTEND-B-012 fix): the SVG body is built with native
+Reflex SVG primitives (``rx.el.svg`` + children) rather than a hand-rolled
+HTML string fed to ``rx.html``. Same reasoning as ``BpSparkline``: keeps the
+diffing path narrow AND removes the raw-HTML surface that could otherwise
+turn into an XSS vector if a future caller threaded a caption / aria-label
+through an f-string.
 """
 
 from __future__ import annotations
@@ -47,23 +54,39 @@ def BpGpuRing(temp_c: float = 0.0, max_c: int = 95, size: int = 60) -> rx.Compon
     gap = circumference - dash
     color = _temp_color(temp_c)
 
-    svg = (
-        f'<svg viewBox="0 0 {size} {size}" width="{size}" height="{size}" '
-        f'xmlns="http://www.w3.org/2000/svg" role="img" '
-        f'aria-label="gpu temperature {temp_c:.0f} degrees celsius">'
-        # Background track
-        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" '
-        f'stroke="var(--bp-border)" stroke-width="4" />'
-        # Fill arc — rotates -90deg so 0% starts at 12 o'clock
-        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" '
-        f'stroke="{color}" stroke-width="4" stroke-linecap="round" '
-        f'stroke-dasharray="{dash:.1f} {gap:.1f}" '
-        f'transform="rotate(-90 {cx} {cy})" />'
-        "</svg>"
+    # FRONTEND-B-012: native Reflex SVG primitives instead of ``rx.html``.
+    svg = rx.el.svg(
+        # Background track.
+        rx.el.svg.circle(
+            cx=f"{cx}",
+            cy=f"{cy}",
+            r=f"{r}",
+            fill="none",
+            stroke="var(--bp-border)",
+            stroke_width="4",
+        ),
+        # Fill arc — rotates -90deg so 0% starts at 12 o'clock.
+        rx.el.svg.circle(
+            cx=f"{cx}",
+            cy=f"{cy}",
+            r=f"{r}",
+            fill="none",
+            stroke=color,
+            stroke_width="4",
+            stroke_linecap="round",
+            stroke_dasharray=f"{dash:.1f} {gap:.1f}",
+            transform=f"rotate(-90 {cx} {cy})",
+        ),
+        view_box=f"0 0 {size} {size}",
+        width=f"{size}",
+        height=f"{size}",
+        xmlns="http://www.w3.org/2000/svg",
+        role="img",
+        aria_label=f"gpu temperature {temp_c:.0f} degrees celsius",
     )
 
     return rx.box(
-        rx.html(svg),
+        svg,
         rx.flex(
             rx.text(
                 f"{temp_c:.0f}",

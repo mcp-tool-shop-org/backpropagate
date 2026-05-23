@@ -1,6 +1,6 @@
 # Backpropagate Design History (v1.0.5: all items shipped)
 
-> **Status (2026-05-21):** Every item in this document is **shipped** in v1.0.5. The narrative sections below are preserved as historical design rationale — they explain *why* each feature exists. Treat this file as the design archive, not a forward-looking plan. No work is scheduled beyond v1.0.5 at this time; new ideas land via GitHub issues.
+> **Status (2026-05-23):** Every item in this document is **shipped**. The original Week 1–4 list (Phases 1–5 below) landed in **v1.0.5**; **v1.1.0** added the Reflex web UI + HF Hub push + resume-from-checkpoint + run history + model cards + OOM auto-recovery + atomic checkpoint writes + experiment-tracking auto-wiring (12 P0 features in one minor); **v1.1.1** was a CI-only hotfix; **v1.2.0** closed the GHSA-pending Web UI auth-bypass advisory and ran a CI-gate + truth-in-advertising sweep via a 10-wave dogfood swarm. The narrative sections below are preserved as historical design rationale — they explain *why* each feature exists. Treat this file as the design archive, not a forward-looking plan. No future work is scheduled here; new ideas land via [GitHub issues](https://github.com/mcp-tool-shop-org/backpropagate/issues).
 
 ## Goal (historical): Maximize Training Effectiveness with SLAO Multi-Run
 

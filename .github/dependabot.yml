@@ -48,7 +48,6 @@ updates:
         patterns:
           - "@astrojs/*"
           - "astro"
-          - "@starlight/*"
       site-dev:
         dependency-type: "development"
     labels:

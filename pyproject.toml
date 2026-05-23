@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "1.1.1"
+version = "1.2.0"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
@@ -214,6 +214,10 @@ warn_return_any = false
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = false
+# v1.2.0 Stage C: silence attr-defined for Reflex Var methods (.length(), .to_string())
+# that mypy can't see because the State field's declared type is plain int / list,
+# not rx.Var[int] / rx.Var[list]. Re-evaluate when Reflex ships proper Var generics.
+disable_error_code = ["attr-defined"]
 
 # rxconfig.py uses the `backend_only` kwarg which Reflex 0.9 removed from
 # rx.Config — mypy flags it as a call-arg error even though Reflex still

@@ -79,196 +79,15 @@ class TestRateLimiter:
         assert limiter.is_allowed() is False  # Still blocked
 
 
-class TestValidatePathInput:
-    """Tests for validate_path_input function."""
-
-    def test_validate_empty_path(self):
-        """validate_path_input should reject empty paths."""
-        from backpropagate.ui_gradio_legacy import validate_path_input
-
-        is_valid, error, path = validate_path_input("")
-        assert is_valid is False
-        assert "empty" in error.lower()
-        assert path is None
-
-    def test_validate_existing_path(self, tmp_path):
-        """validate_path_input should accept existing paths."""
-        from backpropagate.ui_gradio_legacy import validate_path_input
-
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test")
-
-        is_valid, error, path = validate_path_input(str(test_file), must_exist=True)
-        assert is_valid is True
-        assert error == ""
-        assert path == test_file.resolve()
-
-    def test_validate_nonexistent_path(self, tmp_path):
-        """validate_path_input should reject nonexistent paths when must_exist=True."""
-        from backpropagate.ui_gradio_legacy import validate_path_input
-
-        is_valid, error, path = validate_path_input(
-            str(tmp_path / "nonexistent.txt"), must_exist=True
-        )
-        assert is_valid is False
-        assert "not found" in error.lower()
-
-    def test_validate_path_traversal(self, tmp_path):
-        """validate_path_input should reject path traversal attempts."""
-        from backpropagate.ui_gradio_legacy import validate_path_input
-
-        base_dir = tmp_path / "safe"
-        base_dir.mkdir()
-
-        is_valid, error, path = validate_path_input(
-            "../../../etc/passwd",
-            allowed_base=base_dir,
-        )
-        assert is_valid is False
-        assert "security" in error.lower() or "escapes" in error.lower()
-
-
-class TestSanitizeModelName:
-    """Tests for sanitize_model_name function."""
-
-    def test_sanitize_valid_name(self):
-        """sanitize_model_name should preserve valid names."""
-        from backpropagate.ui_gradio_legacy import sanitize_model_name
-
-        assert sanitize_model_name("Qwen2.5-7B") == "Qwen2.5-7B"
-        assert sanitize_model_name("unsloth/model-name") == "unsloth/model-name"
-
-    def test_sanitize_removes_dangerous_chars(self):
-        """sanitize_model_name should remove dangerous characters."""
-        from backpropagate.ui_gradio_legacy import sanitize_model_name
-
-        result = sanitize_model_name("model<script>alert('xss')</script>")
-        assert "<" not in result
-        assert ">" not in result
-        assert "'" not in result
-        assert "(" not in result
-
-    def test_sanitize_empty_name(self):
-        """sanitize_model_name should handle empty input."""
-        from backpropagate.ui_gradio_legacy import sanitize_model_name
-
-        assert sanitize_model_name("") == ""
-        assert sanitize_model_name(None) == ""
-
-
-class TestSanitizeTextInput:
-    """Tests for sanitize_text_input function."""
-
-    def test_sanitize_truncates_long_input(self):
-        """sanitize_text_input should truncate long inputs."""
-        from backpropagate.ui_gradio_legacy import sanitize_text_input
-
-        long_text = "a" * 2000
-        result = sanitize_text_input(long_text, max_length=100)
-        assert len(result) == 100
-
-    def test_sanitize_removes_null_bytes(self):
-        """sanitize_text_input should remove null bytes."""
-        from backpropagate.ui_gradio_legacy import sanitize_text_input
-
-        result = sanitize_text_input("hello\x00world")
-        assert "\x00" not in result
-        assert result == "helloworld"
-
-    def test_sanitize_strips_whitespace(self):
-        """sanitize_text_input should strip whitespace."""
-        from backpropagate.ui_gradio_legacy import sanitize_text_input
-
-        result = sanitize_text_input("  hello world  ")
-        assert result == "hello world"
-
-    def test_sanitize_empty_input(self):
-        """sanitize_text_input should handle empty input."""
-        from backpropagate.ui_gradio_legacy import sanitize_text_input
-
-        assert sanitize_text_input("") == ""
-        assert sanitize_text_input(None) == ""
-
-
-class TestGenerateAuthToken:
-    """Tests for generate_auth_token function."""
-
-    def test_generate_auth_token_length(self):
-        """generate_auth_token should create tokens of appropriate length."""
-        from backpropagate.ui_gradio_legacy import generate_auth_token
-
-        token = generate_auth_token()
-        # 32 bytes base64url encoded = 43 characters
-        assert len(token) >= 32
-
-    def test_generate_auth_token_unique(self):
-        """generate_auth_token should create unique tokens."""
-        from backpropagate.ui_gradio_legacy import generate_auth_token
-
-        tokens = [generate_auth_token() for _ in range(10)]
-        assert len(set(tokens)) == 10  # All unique
-
-
-class TestLaunchSecurity:
-    """Tests for launch function security features."""
-
-    def test_launch_raises_on_share_without_auth(self):
-        """launch should raise ValueError when share=True without auth."""
-        pytest.importorskip("gradio")
-        from backpropagate.ui_gradio_legacy import launch
-
-        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
-            mock_app = MagicMock()
-            mock_create_ui.return_value = mock_app
-
-            with pytest.raises(ValueError, match="Authentication required"):
-                launch(share=True, auth=None)
-
-    def test_launch_no_error_with_auth(self):
-        """launch should not raise when share=True with auth."""
-        pytest.importorskip("gradio")
-        from backpropagate.ui_gradio_legacy import launch
-
-        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
-            mock_app = MagicMock()
-            mock_create_ui.return_value = mock_app
-
-            # Should not raise ValueError when auth is provided
-            launch(share=True, auth=("admin", "password"))
-
-    def test_launch_passes_auth_to_gradio(self):
-        """launch should pass auth credentials to Gradio."""
-        pytest.importorskip("gradio")
-        from backpropagate.ui_gradio_legacy import launch
-
-        with patch("backpropagate.ui_gradio_legacy.create_ui") as mock_create_ui:
-            mock_app = MagicMock()
-            mock_create_ui.return_value = mock_app
-
-            launch(share=True, auth=("admin", "secret"))
-
-            # Check that auth was passed to launch
-            mock_app.launch.assert_called_once()
-            call_kwargs = mock_app.launch.call_args.kwargs
-            assert call_kwargs.get("auth") == ("admin", "secret")
-
-
-class TestUISecurityExports:
-    """Tests for UI security module exports."""
-
-    def test_security_functions_available(self):
-        """Security functions should be importable from ui module."""
-        from backpropagate.ui_gradio_legacy import (
-            generate_auth_token,
-            sanitize_model_name,
-            sanitize_text_input,
-            validate_path_input,
-        )
-
-        assert callable(validate_path_input)
-        assert callable(sanitize_model_name)
-        assert callable(sanitize_text_input)
-        assert callable(generate_auth_token)
+# =============================================================================
+# v1.2 cleanup: TestValidatePathInput / TestSanitizeModelName /
+# TestSanitizeTextInput / TestGenerateAuthToken / TestLaunchSecurity /
+# TestUISecurityExports were removed alongside backpropagate.ui_gradio_legacy
+# (the source module they tested). The Reflex UI (canonical from v1.1.0) uses
+# ui_app/auth.py + ui_security.py for the equivalent surfaces; coverage there
+# lives in tests/test_ui_app_*.py and the EnhancedRateLimiter / FileValidator
+# classes below.
+# =============================================================================
 
 
 # =============================================================================
@@ -630,6 +449,16 @@ class TestSanitizeFilenameEnhanced:
 class TestSecurityLogger:
     """Tests for SecurityLogger."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_security_logger(self):
+        """Reset SecurityLogger singleton before AND after each test so
+        previous-test instances cannot leak into ordering-sensitive runs.
+        """
+        from backpropagate.ui_security import SecurityLogger
+        SecurityLogger._instance = None
+        yield
+        SecurityLogger._instance = None
+
     def test_singleton_pattern(self):
         """SecurityLogger should be a singleton."""
         from backpropagate.ui_security import SecurityLogger
@@ -850,62 +679,67 @@ class TestRequestContext:
 
 
 class TestEnvConfigOverride:
-    """Tests for environment variable configuration."""
+    """Tests for environment variable configuration.
 
-    def test_load_config_from_env_int_values(self):
+    TESTS-B-003 (Stage C amend wave): converted from the raw
+    ``os.environ[X] = ...; del os.environ[X]`` pattern to
+    ``monkeypatch.setenv`` so cleanup happens on assertion failure too.
+    The leak surface here is unusually load-bearing because
+    ``BACKPROPAGATE_SECURITY__*`` env vars are read by ``SecurityConfig()``
+    at construction time — a leaked value silently mutates every
+    downstream test's SecurityConfig defaults.
+    """
+
+    def test_load_config_from_env_int_values(self, monkeypatch):
         """Should load integer values from environment."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        # Set env var
-        os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "10"
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT", "10")
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            assert config.training_rate_limit == 10
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"]
+        config = load_config_from_env(SecurityConfig())
+        assert config.training_rate_limit == 10
 
-    def test_load_config_from_env_bool_values(self):
+    def test_load_config_from_env_bool_values(self, monkeypatch):
         """Should load boolean values from environment."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        os.environ["BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON"] = "true"
+        monkeypatch.setenv("BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON", "true")
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            assert config.log_format_json is True
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__LOG_FORMAT_JSON"]
+        config = load_config_from_env(SecurityConfig())
+        assert config.log_format_json is True
 
-    def test_load_config_ignores_invalid_env_vars(self):
+    def test_load_config_ignores_invalid_env_vars(self, monkeypatch):
         """Should ignore environment variables with invalid values."""
-        import os
-
         from backpropagate.ui_security import SecurityConfig, load_config_from_env
 
-        os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"] = "not_a_number"
+        monkeypatch.setenv(
+            "BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT", "not_a_number"
+        )
 
-        try:
-            config = load_config_from_env(SecurityConfig())
-            # Should use default, not crash
-            assert config.training_rate_limit == 3
-        finally:
-            del os.environ["BACKPROPAGATE_SECURITY__TRAINING_RATE_LIMIT"]
+        config = load_config_from_env(SecurityConfig())
+        # Should use default, not crash
+        assert config.training_rate_limit == 3
 
 
 class TestSessionManager:
     """Tests for session management."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_session_manager(self):
+        """Reset SessionManager singleton before AND after each test.
+
+        Previously each test did ``SessionManager._instance = None`` inline
+        without a post-reset, so the post-test instance leaked into whichever
+        test ran next (a real risk under ``--lf`` / random ordering / xdist).
+        """
+        from backpropagate.ui_security import SessionManager
+        SessionManager._instance = None
+        yield
+        SessionManager._instance = None
+
     def test_create_session(self):
         """Should create a session successfully."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
-
-        # Reset singleton for testing
-        SessionManager._instance = None
 
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=5)
@@ -924,9 +758,6 @@ class TestSessionManager:
     def test_session_limit_per_ip(self):
         """Should enforce session limit per IP."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
-
-        # Reset singleton for testing
-        SessionManager._instance = None
 
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=2)
@@ -954,9 +785,6 @@ class TestSessionManager:
         """Should validate and timeout sessions."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        # Reset singleton for testing
-        SessionManager._instance = None
-
         manager = SessionManager()
         config = SecurityConfig(session_timeout_minutes=1)
 
@@ -980,7 +808,6 @@ class TestSessionManager:
         """Should properly end sessions."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        SessionManager._instance = None
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=5)
 
@@ -1002,7 +829,6 @@ class TestSessionManager:
         """Should track active session count."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        SessionManager._instance = None
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=10)
 
@@ -1548,23 +1374,13 @@ class TestGetUiOutputDir:
 
         monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", forbidden)
 
-        try:
-            result = get_ui_output_dir()
-        except BackpropagateError as e:
-            # Happy path: FB-003 denylist fired. Pin the structured code.
-            assert e.code == "UI_OUTPUT_DIR_FORBIDDEN", (
-                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN'), "
-                f"got code={e.code!r}"
-            )
-            return
-        except (ValueError, PermissionError, OSError) as e:
-            # Fallback: helper hasn't landed the structured code yet but a
-            # rejection of some kind still fired — that's acceptable.
-            return
-        else:
-            # The denylist must reject the path. If we got a result back, the
-            # FB-003 guard isn't wired.
-            pytest.fail(
-                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
-                f"for forbidden base {forbidden!r}, got result={result!r}"
-            )
+        # FB-003 contract: denylisted bases MUST raise BackpropagateError with
+        # the structured code='UI_OUTPUT_DIR_FORBIDDEN'. Anything looser (plain
+        # ValueError, OSError, etc.) is a regression — the user-facing error
+        # surface depends on the code for programmatic handling.
+        with pytest.raises(BackpropagateError) as exc_info:
+            get_ui_output_dir()
+        assert exc_info.value.code == "UI_OUTPUT_DIR_FORBIDDEN", (
+            f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
+            f"for forbidden base {forbidden!r}, got code={exc_info.value.code!r}"
+        )

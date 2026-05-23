@@ -1,10 +1,19 @@
-"""
-Test helper utilities for callback and event handler testing.
+"""Callback test helpers: spies, trackers, collectors.
 
 Provides:
-- CallbackSpy: Records all callback invocations with metadata
-- wait_for_callback: Wait for async/threaded callbacks
-- assert_callback_sequence: Verify callback ordering
+
+- ``CallbackSpy``: thread-safe spy that records every invocation with
+  args, kwargs, timestamp, and originating thread.
+- ``CallbackTracker``: tracks multiple named callbacks and their relative
+  ordering (for sequence assertions).
+- ``AsyncCallbackCollector``: waits on a threading.Event until N callbacks
+  have fired (for testing threaded callback systems like GPUMonitor).
+- ``wait_for_callback`` / ``assert_callback_sequence``: free-function
+  helpers for the simpler patterns.
+
+These were previously in ``tests/test_helpers.py`` — moved here as part of
+TESTS-F-003 (Wave 6) so the helpers no longer match the ``test_*``
+collection pattern.
 """
 
 import threading

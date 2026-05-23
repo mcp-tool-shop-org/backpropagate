@@ -615,6 +615,18 @@ class SLAOMerger:
             if rep_a_key is not None and rep_b_key is not None:
                 break
 
+        # Stage C BACKEND-B-008: full-scan divergence detection. The Stage A
+        # implementation only checked the FIRST matched A and B keys (the
+        # representative sample). A NaN that lands in layer 27 of a 32-layer
+        # model would pass the check and silently propagate. Folding a
+        # ``torch.isfinite(...).all()`` probe into the existing per-key
+        # iteration costs ~one extra reduction per parameter (microseconds
+        # per layer; ~10ms total for a 7B LoRA) — defense-in-depth without
+        # sampling. We capture the FIRST non-finite key so the error envelope
+        # carries a precise diagnostic instead of "a NaN appeared somewhere."
+        first_bad_key: str | None = None
+        first_bad_kind: str | None = None  # "lora_A" / "lora_B" / "other"
+
         # Merge each parameter
         for key, new_value in new_lora_state.items():
             if not isinstance(new_value, torch.Tensor):
@@ -644,22 +656,46 @@ class SLAOMerger:
                 # A matrix: direct replacement
                 self._merged_state[key] = merge_A_matrices(new_value)
                 a_count += 1
+                kind = "lora_A"
             elif ".lora_B." in key:
                 # B matrix: time-aware merge with layer-specific scale
                 self._merged_state[key] = merge_B_matrices(
                     merged_value, new_value, effective_scale
                 )
                 b_count += 1
+                kind = "lora_B"
             else:
                 # Other parameters (e.g., scaling): use weighted average
                 self._merged_state[key] = merge_B_matrices(
                     merged_value, new_value, effective_scale
                 )
+                kind = "other"
+
+            # Stage C BACKEND-B-008: fold the finite-check into the same loop
+            # iteration so we don't pay for a second pass over the state dict.
+            # ``torch.isfinite(x).all()`` is a single reduction kernel call.
+            if first_bad_key is None:
+                merged_after = self._merged_state[key]
+                if isinstance(merged_after, torch.Tensor):
+                    try:
+                        if not torch.isfinite(merged_after).all().item():
+                            first_bad_key = key
+                            first_bad_kind = kind
+                    except RuntimeError as probe_err:
+                        # An OOM or dtype mismatch on the probe itself
+                        # shouldn't take the merge down; record it and move
+                        # on. The error gets logged but the merge succeeds.
+                        logger.debug(
+                            f"finite-probe failed for {key}: {probe_err}"
+                        )
 
             total_params += new_value.numel()
 
         # B-008: sample after-norms on the same representative keys so the
-        # before/after pair is comparable across the merge step.
+        # before/after pair is comparable across the merge step. (Preserved
+        # for MergeResult.{a,b}_norm_after observability — the divergence
+        # check is now full-scan above; the sampled norms remain for
+        # post-mortem trend analysis on a representative layer.)
         a_norm_after: float | None = None
         b_norm_after: float | None = None
         if rep_a_key is not None and rep_a_key in self._merged_state:
@@ -671,33 +707,46 @@ class SLAOMerger:
             if isinstance(tensor, torch.Tensor):
                 b_norm_after = float(tensor.detach().float().norm().item())
 
-        # B-008: invariant — both representative norms must be finite. If
-        # either is NaN or inf the merger has silently corrupted the
-        # accumulator (bf16 underflow, prior-merge corruption, etc.).
-        # Raise SLAO_MERGE_DIVERGED with run_id + run_index + offending key
-        # so triage doesn't require re-running the failed merge.
+        # Stage C BACKEND-B-008: invariant — EVERY merged parameter must be
+        # finite. The previous implementation only checked the representative
+        # A/B keys; a non-finite weight in a non-sampled layer would silently
+        # propagate to the next run. We now use the full-scan result from the
+        # merge loop above. The representative-norm sampling is kept for the
+        # MergeResult observability surface (operators inspecting the trend
+        # of norms across runs).
         def _is_finite(x: float | None) -> bool:
             if x is None:
                 return True  # nothing was sampled — neutral
             return math.isfinite(x)
 
-        if not _is_finite(a_norm_after) or not _is_finite(b_norm_after):
-            bad_key = rep_a_key if not _is_finite(a_norm_after) else rep_b_key
+        # Promote a representative-norm non-finite to the loop-detected one if
+        # the loop missed it (e.g. probe RuntimeError raced ahead of detection).
+        if first_bad_key is None and (
+            not _is_finite(a_norm_after) or not _is_finite(b_norm_after)
+        ):
+            first_bad_key = rep_a_key if not _is_finite(a_norm_after) else rep_b_key
+            first_bad_kind = "lora_A" if not _is_finite(a_norm_after) else "lora_B"
+
+        if first_bad_key is not None:
             logger.warning(
                 f"SLAO merge diverged: run_index={self._run_index} "
-                f"run_id={run_id} layer={bad_key} "
-                f"a_norm_after={a_norm_after} b_norm_after={b_norm_after}"
+                f"run_id={run_id} layer={first_bad_key} "
+                f"kind={first_bad_kind} "
+                f"a_norm_after={a_norm_after} b_norm_after={b_norm_after} "
+                f"(full-scan; first non-finite key reported)"
             )
             raise BackpropagateError(
                 f"SLAO merge produced non-finite weights at run {self._run_index} "
-                f"(layer={bad_key})",
+                f"(layer={first_bad_key})",
                 code="SLAO_MERGE_DIVERGED",
                 details={
                     "run_index": self._run_index,
                     "run_id": run_id,
-                    "layer": bad_key,
+                    "layer": first_bad_key,
+                    "kind": first_bad_kind,
                     "a_norm_after": a_norm_after,
                     "b_norm_after": b_norm_after,
+                    "scan_mode": "full",
                 },
                 suggestion=(
                     "Rewind to the previous healthy checkpoint and inspect "

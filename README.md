@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Pydantic config validation | pydantic, pydantic-settings |
 | `export` | GGUF export for Ollama | llama-cpp-python |
 | `monitoring` | WandB + system monitoring (auto-wired into trainer in v1.1.0) | wandb, psutil |
-| `observability` | OpenTelemetry tracing | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Structured logging | structlog |
 | `security` | JWT auth + token generation | PyJWT, cryptography |
 | `production` | unsloth + ui + validation + logging + security | (bundle) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` is the canonical default — the value `Trainer()` resolves when called with no model argument (see [`config.py`](backpropagate/config.py) `ModelConfig.name`). Older examples pinned the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; we switched the default to the official Qwen weights for better reliability ([CHANGELOG v0.1.3](CHANGELOG.md)). Either model works.
+`Qwen/Qwen2.5-7B-Instruct` is the canonical default — the value `Trainer()` resolves when called with no model argument (see [`config.py`](backpropagate/config.py) `ModelConfig.name`). Older examples pinned the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; we switched the default to the official Qwen weights for better reliability ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Either model works.
 
 ### Multi-Run SLAO Training
 
@@ -246,9 +245,7 @@ To expose a public-internet URL, you must pair `--share` with `--auth`:
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` without `--auth` exits with code `1` and the structured error `[INPUT_AUTH_REQUIRED]`. The rationale: `--share` publishes a `*.gradio.live` URL that anyone on the internet can hit, and without auth that means anyone can drive your training pipeline.
-
-To explicitly opt out (e.g. an internal dev environment), set the env var `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. A loud warning will print on every launch — and there's a 5-second grace period before the unauth'd UI binds, so you can `Ctrl-C` if it looks wrong.
+`backprop ui --share` without `--auth` exits with code `1` and the structured error `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The rationale: `--share` publishes a public URL that anyone on the internet can hit, and without auth that means anyone can drive your training pipeline. There is no opt-out — if you don't want to set credentials, use SSH port-forwarding instead: `ssh -L 7860:localhost:7860 <host>` then open `http://localhost:7860` locally. See [handbook/security.md](site/src/content/docs/handbook/security.md) for the full threat model.
 
 Filesystem writes from the UI are sandboxed to a single directory:
 
@@ -299,10 +296,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
 
 ## Troubleshooting
 

@@ -1,7 +1,7 @@
 {
   "name": "@mcptoolshop/backpropagate",
-  "version": "1.1.1",
-  "description": "Headless LLM fine-tuning CLI with smart defaults — train, export, serve. Reflex web UI, HF Hub push, resume-from-checkpoint, run history, model cards, multi-run SLAO.",
+  "version": "1.2.0",
+  "description": "Headless LLM fine-tuning CLI with smart defaults — train, export, serve. Reflex web UI (auth-gated), HF Hub push, resume-from-checkpoint, run history, model cards, multi-run SLAO. v1.2.0: auth-bypass closed + truth-in-advertising sweep.",
   "type": "commonjs",
   "license": "MIT",
   "engines": { "node": ">=20" },

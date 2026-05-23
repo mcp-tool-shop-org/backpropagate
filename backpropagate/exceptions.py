@@ -139,6 +139,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Pass --auth user:password OR set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false (warns).",
         "retryable": "no",
     },
+    "INPUT_AUTH_INVALID_SHAPE": {
+        "description": "BACKPROPAGATE_UI_AUTH credentials malformed (expected user:pass).",
+        "default_hint": "Pass --auth user:pass with a non-empty username and password separated by a single colon.",
+        "retryable": "no",
+    },
+    "INPUT_PATH_TRAVERSAL": {
+        "description": "A user-supplied path escaped the allowed base directory or contained a rejected '..' pattern.",
+        "default_hint": "Pass an absolute path inside the sandbox base, or remove the '..' segments.",
+        "retryable": "no",
+    },
     # Dataset
     "INPUT_DATASET_INVALID": {
         "description": "A dataset reference is invalid in a way the loader cannot self-describe.",
@@ -182,6 +192,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
         "retryable": "sometimes",
     },
+    "RUNTIME_UI_AUTH_NOT_ENFORCED": {
+        "description": "Web UI authentication was requested but the runtime does not yet enforce it.",
+        "default_hint": "Until middleware lands, do not pass --auth or --share. Use SSH port-forwarding for remote access: ssh -L 7860:localhost:7860 <host>",
+        "retryable": "no",
+    },
+    "UI_OUTPUT_DIR_FORBIDDEN": {
+        "description": "BACKPROPAGATE_UI__OUTPUT_DIR points at a forbidden base path (e.g., /etc, ~/.ssh).",
+        "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
+        "retryable": "no",
+    },
     "DEP_MODEL_LOAD_FAILED": {
         "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
         "default_hint": "Verify model name, HF token, and network access to huggingface.co.",
@@ -196,6 +216,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "description": "Checkpoint save or load failed (disk full, corrupt file, permission).",
         "default_hint": "Verify free disk space and write permission on the output directory.",
         "retryable": "sometimes",
+    },
+    "PEFT_API_INCOMPATIBLE": {
+        "description": "Installed peft version does not expose the API Backpropagate needs (lora_A/lora_B parameter access OR get_adapter_state_dict/load_adapter_state_dict) — SLAO startup invariant failed.",
+        "default_hint": "Upgrade peft: `pip install -U 'peft>=0.7.0'`. Verify with `python -c 'import peft; print(peft.__version__)'`.",
+        "retryable": "no",
     },
     # Export
     "RUNTIME_EXPORT_FAILED": {
@@ -223,6 +248,26 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Ensure Ollama is installed and running (`ollama --version`); see https://ollama.ai.",
         "retryable": "yes",
     },
+    "HUB_PUSH_INVALID_REPO": {
+        "description": "Hugging Face repo_id failed pre-network validation (shape, control chars, '..' segment, length > 96).",
+        "default_hint": "Pass --repo owner/name with only [A-Za-z0-9._-] in each segment; total length <= 96.",
+        "retryable": "no",
+    },
+    "HUB_PUSH_NOT_FOUND": {
+        "description": "Hugging Face Hub returned 404 for the push target — repo does not exist or token cannot see it.",
+        "default_hint": "Verify the repo_id spelling, OR pass --create-repo so backpropagate creates it, OR confirm the token has write scope.",
+        "retryable": "no",
+    },
+    "HUB_PUSH_NETWORK": {
+        "description": "Hub upload failed due to a network or 5xx error (transient).",
+        "default_hint": "Retry in a few minutes; check https://status.huggingface.co. If persistent, set HTTPS_PROXY for corporate proxies.",
+        "retryable": "yes",
+    },
+    "HUB_PUSH_UNKNOWN": {
+        "description": "Hub upload failed for a reason backpropagate could not categorise.",
+        "default_hint": "Re-run with --verbose for the full traceback; check huggingface_hub version; file a bug if the signature repeats.",
+        "retryable": "sometimes",
+    },
     # GPU
     "RUNTIME_GPU_ERROR": {
         "description": "Generic GPU failure not covered by a more specific code.",
@@ -238,6 +283,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "description": "GPU ran out of memory (VRAM).",
         "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
         "retryable": "no",
+    },
+    "RUNTIME_OOM_RECOVERY_EXHAUSTED": {
+        "description": "OOM auto-recovery ran out of options (hit batch_size=1 with no further degradation path, or the effective-batch ceiling has been reached).",
+        "default_hint": "Use a smaller model, reduce max_seq_length, enable gradient_checkpointing, or quantize. Set oom_recovery=False to make OOMs hard-fail immediately.",
+        "retryable": "no",
+    },
+    "RUNTIME_OOM_ADJACENT": {
+        "description": "A CUDA error that looks adjacent to OOM (CUBLAS_STATUS_ALLOC_FAILED / CUDNN_STATUS_NOT_INITIALIZED / NCCL post-VRAM-exhaustion) bypassed the strict OOM matcher.",
+        "default_hint": "Same remediation as RUNTIME_GPU_OOM. If this signature appears frequently, file a bug so the OOM matcher can learn it.",
+        "retryable": "sometimes",
     },
     "RUNTIME_GPU_TEMPERATURE_CRITICAL": {
         "description": "GPU temperature exceeded the safety threshold.",
@@ -258,6 +313,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "RUNTIME_SLAO_MERGE_FAILED": {
         "description": "SLAO merge step failed for a specific run.",
         "default_hint": "Check the run's LoRA dir for shape mismatches.",
+        "retryable": "no",
+    },
+    "SLAO_MERGE_DIVERGED": {
+        "description": "SLAO merge produced non-finite (NaN/inf) weights — accumulator corrupted, likely bf16 underflow or exploding gradients in the upstream run.",
+        "default_hint": "Rewind to the previous healthy checkpoint; inspect the latest run for bf16 underflow, exploding gradients, or LR-too-high. Lower learning_rate or switch optim to AdamW.",
         "retryable": "no",
     },
     "STATE_SLAO_CHECKPOINT_INVALID": {

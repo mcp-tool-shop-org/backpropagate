@@ -375,7 +375,7 @@ def wait_for_safe_gpu(
 
     .. warning::
         This function blocks with ``time.sleep()``. Call it from a background
-        thread, never from a Gradio handler or an async event loop directly.
+        thread, never from a UI event handler or an async event loop directly.
 
     Args:
         device_index: GPU device index

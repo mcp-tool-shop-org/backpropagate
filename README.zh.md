@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Pydantic 配置验证 | pydantic, pydantic-settings |
 | `export` | 用于 Ollama 的 GGUF 导出 | llama-cpp-python |
 | `monitoring` | WandB + 系统监控（在 v1.1.0 中自动集成到训练器中） | wandb, psutil |
-| `observability` | OpenTelemetry 追踪 | opentelemetry-api, opentelemetry-sdk |
 | `logging` | 结构化日志记录 | structlog |
 | `security` | JWT 身份验证 + 令牌生成 | PyJWT, cryptography |
 | `production` | unsloth + ui + validation + logging + security | (捆绑) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` 是默认值——当使用没有模型参数的 `Trainer()` 时，该值会被解析（请参阅 `[config.py](backpropagate/config.py)` 中的 `ModelConfig.name`）。较早的示例中固定了预量化的 `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`；我们已将默认值更改为官方的 Qwen 模型权重，以提高可靠性（[CHANGELOG v0.1.3](CHANGELOG.md)）。可以使用任一模型。
+`Qwen/Qwen2.5-7B-Instruct` 是默认的、标准的配置。当 `Trainer()` 函数在没有指定模型参数的情况下被调用时，该值会被解析（参见 `config.py` 文件的 `ModelConfig.name`）。 较早的示例使用了预量化的 `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` 模型；我们已将默认配置更改为官方的 Qwen 模型权重，以提高可靠性（[CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)）。 两种模型都可以使用。
 
 ### 多轮 SLAO 训练
 
@@ -246,9 +245,7 @@ backprop ui --port 7862
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` 命令，如果未指定 `--auth` 参数，将以错误代码 `1` 退出，并显示结构化错误信息 `[INPUT_AUTH_REQUIRED]`。 原因是：`--share` 会生成一个 `*.gradio.live` 的 URL，任何人都可以访问它。 如果没有身份验证，这意味着任何人都可以控制您的训练流水线。
-
-为了明确禁用身份验证（例如，在内部开发环境中），请设置环境变量 `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`。每次启动时，系统会发出明显的警告。此外，在未授权的界面加载之前，会有一个 5 秒的缓冲期，如果界面显示不正确，您可以按 `Ctrl-C` 停止。
+`backprop ui --share` 命令，如果未指定 `--auth` 参数，将以错误代码 `1` 退出，并显示结构化错误信息 `[RUNTIME_UI_AUTH_NOT_ENFORCED]`。 原因是：`--share` 会发布一个公开的 URL，任何人都可以访问。 如果没有身份验证，这意味着任何人都可以控制您的训练流水线。 如果您不想设置凭据，请使用 SSH 端口转发：`ssh -L 7860:localhost:7860 <host>`，然后在本地打开 `http://localhost:7860`。 请参阅 [handbook/security.md](site/src/content/docs/handbook/security.md) 以获取完整的安全风险评估。
 
 用户界面中的文件写入操作会被限制在一个单独的目录中，以提高安全性。
 
@@ -299,10 +296,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+v1.0 的 Gradio 实现（`ui_gradio_legacy.py` + `theme_gradio_legacy.py`）在 v1.1.x 版本中被保留，仅作为参考，并在 v1.2.0 版本中被移除。
 
 ## 故障排除
 

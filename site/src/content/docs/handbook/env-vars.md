@@ -28,17 +28,17 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Single allowed-base directory for **all** UI-initiated filesystem writes (saved adapters, GGUF exports, converted datasets, Modelfiles). Every UI sink passes this as `allowed_base` to `safe_path` so user-supplied paths cannot escape the sandbox. **Denylist-validated** — resolves against a small set of forbidden bases (`/etc`, `/var`, `~/.ssh`, `~/.aws`, `C:\Windows\System32`, etc.); if the override resolves into one of those, startup fails with `UI_OUTPUT_DIR_FORBIDDEN`. Pick a non-system directory. |
-| `BACKPROPAGATE_UI__PORT` | `7862` | Port the Gradio app binds. |
-| `BACKPROPAGATE_UI__HOST` | `127.0.0.1` | Bind host. Localhost-only by default for security. |
-| `BACKPROPAGATE_UI__SHARE` | `false` | Whether to enable Gradio's public-URL feature. Equivalent to the CLI `--share` flag. |
+| `BACKPROPAGATE_UI__PORT` | `7862` | Port the Reflex frontend binds. (Reflex also binds a backend WebSocket on `port + 1` by default.) |
+| `BACKPROPAGATE_UI__HOST` | `127.0.0.1` | Bind host. Localhost-only by default for security; for remote access use SSH port-forwarding instead of changing this. |
+| `BACKPROPAGATE_UI__SHARE` | `false` | **No-op under Reflex.** Setting this true is equivalent to passing `--share`, which the runtime currently refuses (see [the CLI reference](/backpropagate/handbook/cli-reference/#share--auth-refuse-to-start-contract-wave-1)). |
 | `BACKPROPAGATE_UI__AUTO_OPEN` | `true` | Open the browser automatically when the UI starts. |
 
 ## Security (F-001 / FB-003)
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | When `true` (the default), `backprop ui --share` refuses to launch without `--auth user:password`. Set to `false` to explicitly opt out — the CLI will print a loud warning every time it launches share without auth. |
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH` | `false` | Top-level "this is a production deployment" toggle; when `true`, the UI requires auth for every endpoint. |
+| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | **No-op under the v1.1+ Reflex UI.** Held for forward-compat with the Gradio era; `--share` is now refused outright (see [the CLI reference](/backpropagate/handbook/cli-reference/#share--auth-refuse-to-start-contract-wave-1)) so the gate this variable used to relax never fires. The opt-out the variable used to provide is intentionally unavailable. |
+| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH` | `false` | Top-level "this is a production deployment" toggle. Reserved for the upcoming Reflex auth middleware; today it has no effect on the UI runtime. |
 | `BACKPROPAGATE_SECURITY__AUTH_USERNAME` | unset | Auth username for the UI (used by `SecurityConfig.get_auth_tuple()`). |
 | `BACKPROPAGATE_SECURITY__AUTH_PASSWORD` | unset | Auth password for the UI. Stored as a secret in the structured config. |
 | `BACKPROPAGATE_SECURITY__ALLOWED_PATHS` | unset (no restriction) | Comma-separated list of directories the UI is allowed to read/write. |

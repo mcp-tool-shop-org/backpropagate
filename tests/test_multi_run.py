@@ -308,24 +308,80 @@ class TestMultiRunTrainerDataChunking:
         mock_dataset.select.assert_called()
 
     def test_data_chunks_non_overlapping(self, trainer):
-        """Data chunks should not overlap."""
-        # With 500 samples, 5 runs of 100 each
-        # Run 1: 0-99, Run 2: 100-199, etc.
+        """Data chunks across runs must not overlap (when chunks fit one pass).
 
-        samples_per_run = trainer.config.samples_per_run
+        TESTS-B-004 escalation fix: the previous body only computed
+        ``start_idx`` / ``end_idx`` inside the test and asserted on those
+        synthetic ranges — it never called ``_get_data_chunk`` at all, so
+        a broken implementation would still pass. The test was a false
+        positive that gave zero coverage of the actual function under test.
+
+        The rewrite mirrors the shape of ``test_data_chunk_wraparound``
+        below (which is correctly invoked per the Stage A audit): build a
+        deterministic dataset with one identifiable string per index, call
+        ``_get_data_chunk`` for each run, decode the returned strings back
+        to indices, and assert (a) every run returns the right size, (b)
+        union of indices across runs == expected range, and (c) no index
+        appears in two different runs.
+
+        Configuration: 5 runs * 100 samples = 500 indices needed, against
+        a 500-sample dataset. With validation OFF the train pool is the
+        full dataset and there is no wrap-around — each run gets a
+        disjoint window. (Wrap-around is covered by
+        ``test_data_chunk_wraparound``.)
+        """
+        from datasets import Dataset
+
+        # Mirror the trainer fixture's config (num_runs=5, samples_per_run=100,
+        # shuffle_data=False). Validation OFF so the train pool == full dataset.
         total_samples = 500
+        samples_per_run = trainer.config.samples_per_run
+        num_runs = trainer.config.num_runs
+        trainer.config.replay_fraction = 0.0  # isolate the new-samples path
+        trainer.config.validate_every_run = False
+        trainer.config.early_stopping = False
 
-        seen_indices = set()
-        for run_idx in range(1, 6):
-            start_idx = ((run_idx - 1) * samples_per_run) % total_samples
-            end_idx = min(start_idx + samples_per_run, total_samples)
+        dataset = Dataset.from_dict(
+            {"text": [f"sample_{i}" for i in range(total_samples)]}
+        )
 
-            indices = set(range(start_idx, end_idx))
+        seen_indices: set[int] = set()
 
-            # No overlap with previously seen indices
-            assert len(seen_indices & indices) == 0
+        for run_idx in range(1, num_runs + 1):
+            chunk = trainer._get_data_chunk(dataset, run_idx)
 
-            seen_indices.update(indices)
+            assert chunk is not None
+            assert len(chunk) == samples_per_run, (
+                f"Run {run_idx}: expected {samples_per_run} samples, got "
+                f"{len(chunk)}"
+            )
+
+            # Decode the deterministic 'sample_N' strings back to indices.
+            chunk_indices = {int(value.split("_")[1]) for value in chunk["text"]}
+            assert len(chunk_indices) == samples_per_run, (
+                f"Run {run_idx}: _get_data_chunk returned duplicate indices "
+                f"within the same chunk ({samples_per_run - len(chunk_indices)} dupes)"
+            )
+
+            # The load-bearing assertion: this run's indices must not overlap
+            # any previously returned run's indices.
+            overlap = seen_indices & chunk_indices
+            assert not overlap, (
+                f"Run {run_idx} returned indices already seen in earlier "
+                f"runs: {sorted(overlap)[:10]}... "
+                f"(total overlap size {len(overlap)}). _get_data_chunk must "
+                f"partition the dataset across runs when chunks fit one pass."
+            )
+
+            seen_indices.update(chunk_indices)
+
+        # End-state contract: union covers exactly [0, total_samples).
+        expected = set(range(total_samples))
+        assert seen_indices == expected, (
+            f"Union of all run chunks ({len(seen_indices)} indices) does not "
+            f"equal the full dataset range ({total_samples} indices). "
+            f"Missing: {sorted(expected - seen_indices)[:10]}..."
+        )
 
     def test_data_chunk_wraparound(self, trainer):
         """Wraparound (samples_per_run * num_runs > dataset) cycles inside the train pool.
@@ -2109,3 +2165,170 @@ class TestCheckpointManagerFindLatestForRunId:
         assert latest.run_index == 3
 
 
+# =============================================================================
+# TESTS-B-008 — pause_on_overheat wiring (CRITICAL → pause / SAFE → resume)
+# =============================================================================
+#
+# CHANGELOG v1.1.0 (B-003): ``pause_on_overheat=True`` was a no-op in v1.0 —
+# the flag was documented but ``_on_gpu_critical`` only logged the warning
+# without arming ``_gpu_pause_event``. v1.1.0 wired the actual pause: a
+# CRITICAL status sets the event, the run loop polls it at the top of each
+# new run, and ``_on_gpu_status`` clears it when the GPU recovers to
+# SAFE/WARM. The existing tests in this file (L80, L85, L1876,
+# test_multi_run_extended.py:90) only check the dataclass default — they
+# never call ``_on_gpu_critical`` or ``_on_gpu_status``, so a regression
+# that re-broke the wiring would silently pass.
+#
+# These tests drive the callback methods directly (no GPU monitor thread,
+# no real CUDA touched) and assert the pause-event edges fire in both
+# directions. The whole-run integration test is intentionally out of scope:
+# spinning up a real Trainer with the SFTTrainer-mock + GPU-monitor scaffolding
+# is owned by ``test_callback_integration.py``. The Stage C contract being
+# pinned here is "the v1.1.0 wiring exists" — that's the regression surface
+# the audit called out.
+
+
+class TestPauseOnOverheatWiring:
+    """B-003: ``_on_gpu_critical`` / ``_on_gpu_status`` actually toggle the event."""
+
+    @pytest.fixture
+    def trainer_with_pause(self):
+        """Build a MultiRunTrainer without launching the GPU monitor.
+
+        We bypass the heavy ``run()`` orchestration by constructing the
+        trainer with pause_on_overheat=True and inspecting / driving the
+        two callback hooks directly. The instance ships with a real
+        ``threading.Event`` for ``_gpu_pause_event`` (multi_run.py:390).
+        """
+        trainer = MultiRunTrainer(
+            model="test-model",
+            config=MultiRunConfig(
+                num_runs=2,
+                steps_per_run=10,
+                samples_per_run=50,
+                pause_on_overheat=True,
+            ),
+        )
+        # Sanity: the wiring under test depends on these invariants.
+        assert trainer.config.pause_on_overheat is True
+        assert not trainer._gpu_pause_event.is_set(), (
+            "Fresh trainer must start with the pause event cleared"
+        )
+        return trainer
+
+    def test_critical_status_arms_pause_event(self, trainer_with_pause):
+        """``_on_gpu_critical`` sets ``_gpu_pause_event`` when pause_on_overheat=True.
+
+        Pre-fix this method only logged a warning. The wiring promise is
+        that the next run-loop iteration will block until the GPU
+        recovers — that block depends on the event being set.
+        """
+        critical_status = GPUStatus(
+            available=True,
+            device_name="Test GPU",
+            temperature_c=92.0,
+            vram_total_gb=16.0,
+            vram_used_gb=15.2,
+            vram_percent=95.0,
+            condition=GPUCondition.CRITICAL,
+            condition_reason="Temperature CRITICAL: 92.0C",
+        )
+
+        trainer_with_pause._on_gpu_critical(critical_status)
+
+        assert trainer_with_pause._gpu_pause_event.is_set(), (
+            "CRITICAL status must arm the pause event so the run loop "
+            "blocks before starting the next run. Pre-fix this was a "
+            "logged no-op — the regression surface this test pins."
+        )
+
+    def test_recovery_to_safe_clears_pause_event(self, trainer_with_pause):
+        """``_on_gpu_status`` with SAFE/WARM clears a previously-armed event.
+
+        Complementary half of the wiring: without this clear, the run
+        loop's ``while self._gpu_pause_event.is_set(): time.sleep(1.0)``
+        would hang forever after the first CRITICAL event.
+        """
+        # Pre-arm the event as the prior CRITICAL callback would have.
+        trainer_with_pause._gpu_pause_event.set()
+
+        safe_status = GPUStatus(
+            available=True,
+            device_name="Test GPU",
+            temperature_c=65.0,
+            vram_total_gb=16.0,
+            vram_used_gb=8.0,
+            vram_percent=50.0,
+            condition=GPUCondition.SAFE,
+            condition_reason="All metrics normal",
+        )
+
+        trainer_with_pause._on_gpu_status(safe_status)
+
+        assert not trainer_with_pause._gpu_pause_event.is_set(), (
+            "SAFE/WARM status after a pause MUST clear the event so the "
+            "run loop can resume scheduling. A regression here turns the "
+            "pause feature into a permanent hang on the first overheat."
+        )
+
+    def test_recovery_to_warm_also_clears_pause_event(self, trainer_with_pause):
+        """WARM (not just SAFE) also satisfies the recovery condition.
+
+        ``_on_gpu_status`` clears on ``SAFE`` or ``WARM`` (multi_run.py:1821).
+        WARM is the in-between state; treating only SAFE as recovery
+        would leave the trainer paused on a still-elevated-but-acceptable
+        GPU and that's not the documented contract.
+        """
+        trainer_with_pause._gpu_pause_event.set()
+
+        warm_status = GPUStatus(
+            available=True,
+            device_name="Test GPU",
+            temperature_c=78.0,
+            vram_total_gb=16.0,
+            vram_used_gb=10.0,
+            vram_percent=62.5,
+            condition=GPUCondition.WARM,
+            condition_reason="Warm but acceptable",
+        )
+
+        trainer_with_pause._on_gpu_status(warm_status)
+
+        assert not trainer_with_pause._gpu_pause_event.is_set(), (
+            "WARM status must satisfy the recovery condition; otherwise "
+            "the trainer stays paused on any temperature above SAFE."
+        )
+
+    def test_pause_disabled_critical_does_not_arm_event(self):
+        """``pause_on_overheat=False`` makes ``_on_gpu_critical`` a logged no-op.
+
+        Operators who opt out keep the pre-v1.1.0 behaviour: warnings
+        log but the event stays clear and the run loop never blocks.
+        """
+        trainer = MultiRunTrainer(
+            model="test-model",
+            config=MultiRunConfig(
+                num_runs=2,
+                steps_per_run=10,
+                samples_per_run=50,
+                pause_on_overheat=False,
+            ),
+        )
+
+        critical_status = GPUStatus(
+            available=True,
+            device_name="Test GPU",
+            temperature_c=92.0,
+            vram_total_gb=16.0,
+            vram_used_gb=15.2,
+            vram_percent=95.0,
+            condition=GPUCondition.CRITICAL,
+            condition_reason="Temperature CRITICAL: 92.0C",
+        )
+
+        trainer._on_gpu_critical(critical_status)
+
+        assert not trainer._gpu_pause_event.is_set(), (
+            "pause_on_overheat=False MUST keep the event clear even on "
+            "CRITICAL; the operator chose hard-fail-on-overheat semantics."
+        )

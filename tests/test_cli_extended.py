@@ -14,6 +14,8 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # =============================================================================
 # COLOR SUPPORT DETECTION TESTS
 # =============================================================================
@@ -830,33 +832,53 @@ class TestCmdUI:
         assert "ui" in combined or "reflex" in combined or "install" in combined
 
     def test_auth_invalid_format(self, capsys):
-        """Auth string without colon raises error."""
-        from backpropagate.cli import cmd_ui
+        """``--auth user`` without a colon is rejected by validate_auth_shape.
+
+        Post-Wave-6 (ENFORCEMENT_AVAILABLE=True): --auth is no longer a
+        blanket refuse-to-start. The shape validator still rejects malformed
+        credentials at the CLI boundary, but the error path is now
+        EXIT_USER_ERROR rather than a raised BackpropagateError, because
+        cmd_ui catches BackpropagateError around validate_auth_shape and
+        returns EXIT_USER_ERROR.
+        """
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_ui
 
         with patch("backpropagate.cli.subprocess.run") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
+                host=None,
                 share=False,
                 auth="invalid_no_colon",  # Missing colon
                 verbose=False,
             )
 
+            # cmd_ui catches the malformed-auth error and prints "Invalid
+            # auth format" via the early ValueError branch (before
+            # validate_auth_shape ever runs), then returns EXIT_USER_ERROR.
             result = cmd_ui(args)
 
-            assert result == 1
-            captured = capsys.readouterr()
-            assert "Invalid auth format" in captured.err
+            assert result == EXIT_USER_ERROR
             mock_run.assert_not_called()
+            captured = capsys.readouterr()
+            combined = (captured.err + captured.out).lower()
+            assert "invalid auth format" in combined
 
     def test_auth_parsed_correctly(self, capsys):
-        """user:pass format parses into tuple AND exports BACKPROPAGATE_UI_AUTH."""
-        from backpropagate.cli import cmd_ui
+        """Well-formed ``user:pass`` launches Reflex with the env var set.
+
+        Post-Wave-6: ENFORCEMENT_AVAILABLE=True means --auth flows through
+        validate_auth_shape, gets stored in BACKPROPAGATE_UI_AUTH on the
+        subprocess env, and the launch returns EXIT_OK. This is the
+        contract that was unreachable under the Wave 3.5 refuse-to-start.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_ui
 
         with patch("backpropagate.cli.subprocess.run") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
+                host=None,
                 share=False,
                 auth="testuser:testpass",
                 verbose=False,
@@ -864,19 +886,27 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 0
+            assert result == EXIT_OK
             mock_run.assert_called_once()
-            env = mock_run.call_args.kwargs["env"]
-            assert env.get("BACKPROPAGATE_UI_AUTH") == "testuser:testpass"
+            call_env = mock_run.call_args.kwargs.get("env", {})
+            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "testuser:testpass"
+            # Bind address is communicated to the middleware via env.
+            assert call_env.get("BACKPROPAGATE_UI_HOST_BIND") == "127.0.0.1"
 
     def test_auth_with_colon_in_password(self, capsys):
-        """Password can contain colons."""
-        from backpropagate.cli import cmd_ui
+        """Colons in the password are preserved (split on first colon only).
+
+        Post-Wave-6: ``--auth user:pass:word`` parses as user="user" and
+        password="pass:word"; the colon-in-password is preserved verbatim
+        in BACKPROPAGATE_UI_AUTH on the subprocess env.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_ui
 
         with patch("backpropagate.cli.subprocess.run") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
+                host=None,
                 share=False,
                 auth="user:pass:with:colons",
                 verbose=False,
@@ -884,19 +914,19 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 0
-            env = mock_run.call_args.kwargs["env"]
-            # The password half includes the trailing colons; we preserve the
-            # original user:password shape in the env var (Reflex side parses).
-            assert env.get("BACKPROPAGATE_UI_AUTH") == "user:pass:with:colons"
+            assert result == EXIT_OK
+            mock_run.assert_called_once()
+            call_env = mock_run.call_args.kwargs.get("env", {})
+            # Split on first colon: user="user", password="pass:with:colons"
+            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "user:pass:with:colons"
 
     def test_launch_success(self, capsys):
-        """Successful UI launch via subprocess.
+        """Successful UI launch via subprocess (no --auth, no --share).
 
-        Note: F-001 enforcement requires --auth when --share is on. The
-        --share flag is preserved at the CLI layer but Reflex has no
-        built-in tunneling, so a warning prints and the subprocess still
-        launches locally.
+        Post-Wave-6 happy path: a plain local UI launch with no share /
+        no auth still proceeds (loopback bind is the default; no auth
+        gate fires). The subprocess command-line construction assertion
+        is preserved.
         """
         from backpropagate.cli import cmd_ui
 
@@ -904,8 +934,9 @@ class TestCmdUI:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7862,
-                share=True,
-                auth="user:password",
+                host=None,
+                share=False,
+                auth=None,
                 verbose=False,
             )
 
@@ -919,6 +950,116 @@ class TestCmdUI:
             assert "run" in cmd
             assert "--frontend-port" in cmd
             assert str(7862) in cmd
+
+    # ------------------------------------------------------------------ #
+    # Post-Wave-6 contract (v1.2.0): with ENFORCEMENT_AVAILABLE=True the
+    # auth middleware honors --auth, so --auth no longer triggers
+    # refuse-to-start by itself. What remains gated:
+    #   * --share without --auth — public URL without auth is the bug
+    #     v1.2 closed; preserved as a hard error.
+    #   * --host with a non-loopback bind without --auth — DNS-rebinding
+    #     defense per DESIGN_BRIEF.
+    # The companion happy-path test pins --auth user:pass launching the
+    # Reflex subprocess with BACKPROPAGATE_UI_AUTH set on the env.
+    # ------------------------------------------------------------------ #
+
+    def test_cmd_ui_auth_proceeds_with_enforcement_available(self):
+        """--auth user:pass launches the subprocess with the env var set.
+
+        Replaces the deleted ``test_cmd_ui_auth_refuses_to_start_with_runtime_code``
+        which pinned the Wave 3.5 refuse-to-start (no longer the contract).
+        """
+        from backpropagate.cli import EXIT_OK, cmd_ui
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=False,
+                auth="user:pass",
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == EXIT_OK
+            mock_run.assert_called_once()
+            call_env = mock_run.call_args.kwargs.get("env", {})
+            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "user:pass"
+
+    def test_cmd_ui_share_without_auth_still_refuses(self):
+        """--share without --auth still hard-errors post-Wave-6.
+
+        Pins the v1.2 contract: a public --share URL requires --auth so the
+        middleware can enforce per-request auth on the tunnel.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            assert "--share" in str(excinfo.value)
+            mock_run.assert_not_called()
+
+    def test_cmd_ui_share_refuses_to_start(self):
+        """Alias for the v1.2 --share + missing --auth refuse-to-start.
+
+        Kept under the original name so any external CI or doc reference
+        continues to resolve; behavior matches
+        ``test_cmd_ui_share_without_auth_still_refuses``.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            assert "--share" in str(excinfo.value)
+            mock_run.assert_not_called()
+
+    def test_cmd_ui_no_auth_no_share_proceeds(self):
+        """Without --auth or --share, cmd_ui proceeds and launches Reflex."""
+        from backpropagate.cli import cmd_ui
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=False,
+                auth=None,
+                verbose=False,
+            )
+
+            # Should NOT raise; should reach the subprocess launch.
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
 
     def test_launch_keyboard_interrupt(self, capsys):
         """KeyboardInterrupt during UI exits cleanly."""
@@ -989,8 +1130,18 @@ class TestCmdUI:
     # ------------------------------------------------------------------ #
 
     def test_cmd_ui_share_without_auth_blocked_by_default(self, capsys, monkeypatch):
-        """--share without --auth blocks with INPUT_AUTH_REQUIRED by default."""
+        """--share without --auth refuses to start with RUNTIME_UI_AUTH_NOT_ENFORCED.
+
+        FRONTEND-A-001 (v1.1.2 amend wave): the SB-T-001 INPUT_AUTH_REQUIRED
+        gate was upgraded to a hard refuse-to-start so both ``--share`` and
+        ``--auth`` raise a structured BackpropagateError before any
+        subprocess is spawned. The pre-fix exit-code-1 + stderr-prefix
+        contract is preserved at the ``main()`` boundary (still surfaces a
+        non-zero exit and a structured-prefix line) but the underlying
+        ``cmd_ui`` raise is what tests now pin.
+        """
         from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
 
         monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
 
@@ -1003,22 +1154,27 @@ class TestCmdUI:
                 verbose=False,
             )
 
-            result = cmd_ui(args)
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
 
-            assert result == 1
-            captured = capsys.readouterr()
-            assert "[INPUT_AUTH_REQUIRED]" in captured.err
-            assert "--auth" in captured.err or "--auth" in captured.out
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
             mock_run.assert_not_called()
 
     def test_cmd_ui_share_with_auth_allowed(self, capsys):
-        """--share with --auth parses credentials and launches subprocess."""
-        from backpropagate.cli import cmd_ui
+        """--share + --auth proceeds; the middleware enforces per-request auth.
+
+        Post-Wave-6 (ENFORCEMENT_AVAILABLE=True): the v1.2 contract is that
+        a public --share URL requires --auth so the middleware can enforce
+        per-request basic auth. With both flags supplied, the launch
+        proceeds and BACKPROPAGATE_UI_AUTH is exported to the Reflex child.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_ui
 
         with patch("backpropagate.cli.subprocess.run") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
+                host=None,
                 share=True,
                 auth="alice:secret123",
                 verbose=False,
@@ -1026,29 +1182,30 @@ class TestCmdUI:
 
             result = cmd_ui(args)
 
-            assert result == 0
+            assert result == EXIT_OK
             mock_run.assert_called_once()
-            env = mock_run.call_args.kwargs["env"]
-            assert env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
+            call_env = mock_run.call_args.kwargs.get("env", {})
+            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
+            # The --share branch should also set BACKPROPAGATE_UI_SHARE_HOST
+            # (empty string placeholder until --share-host lands).
+            assert "BACKPROPAGATE_UI_SHARE_HOST" in call_env
 
-    def test_cmd_ui_share_without_auth_opt_out_via_env(self, capsys, monkeypatch):
-        """Env opt-out lets --share through without --auth + emits a warning.
+    def test_cmd_ui_share_env_opt_out_no_longer_respected(self, capsys, monkeypatch):
+        """BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false is now ignored.
 
-        Operator override path: setting
-        BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false disables the
-        gate so --share without --auth proceeds, BUT the CLI must still
-        emit a loud unauthenticated-share warning AND honor the 5-second
-        grace period before subprocess launch.
+        FRONTEND-A-001 (v1.1.2 amend wave): the env-var operator opt-out
+        was deleted because the Reflex UI cannot enforce the auth contract
+        even when the operator acknowledges the risk — the unauthenticated
+        public URL would still serve every request without checking
+        credentials. Setting the env-var to "false" no longer disables
+        the gate; --share refuses to start regardless.
         """
         from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "false")
 
-        # Patch time.sleep so the grace period doesn't block the test
-        with (
-            patch("backpropagate.cli.subprocess.run") as mock_run,
-            patch("time.sleep") as mock_sleep,
-        ):
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1057,24 +1214,21 @@ class TestCmdUI:
                 verbose=False,
             )
 
-            result = cmd_ui(args)
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
 
-            assert result == 0
-            mock_run.assert_called_once()
-            # The 5s grace period must run.
-            mock_sleep.assert_called_once_with(5)
+            # Env opt-out used to flip this to exit-0; now it must still raise.
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            mock_run.assert_not_called()
 
-            captured = capsys.readouterr()
-            combined = (captured.err + captured.out).lower()
-            assert (
-                "no authentication" in combined
-                or "publicly" in combined
-                or "anyone" in combined
-            ), f"Expected loud unauthenticated-share warning in output, got: {combined!r}"
+    def test_cmd_ui_share_env_opt_in_explicit_refuses(self, capsys, monkeypatch):
+        """Env-var set to 'true' is the default behaviour — --share refuses.
 
-    def test_cmd_ui_share_without_auth_env_opt_in_explicit(self, capsys, monkeypatch):
-        """Setting env to 'true' explicitly is parity with the default."""
+        Parity with the env-unset case: --share triggers refuse-to-start
+        regardless of the env-var value.
+        """
         from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "true")
 
@@ -1087,11 +1241,10 @@ class TestCmdUI:
                 verbose=False,
             )
 
-            result = cmd_ui(args)
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
 
-            assert result == 1
-            captured = capsys.readouterr()
-            assert "[INPUT_AUTH_REQUIRED]" in captured.err
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
             mock_run.assert_not_called()
 
     def test_cmd_ui_local_without_share_no_auth_required(self, capsys, monkeypatch):
@@ -1113,6 +1266,159 @@ class TestCmdUI:
 
             assert result == 0
             mock_run.assert_called_once()
+
+
+# =============================================================================
+# TESTS-B-006 — ENFORCEMENT_AVAILABLE flipped path (post-middleware contract)
+# =============================================================================
+#
+# The refuse-to-start tests above pin behavior while
+# ``backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE`` is False (today's state
+# — Reflex middleware hasn't landed yet). Stage B audit flagged that nothing
+# pins the symmetric post-middleware contract: when the middleware DOES land
+# and the flag flips True, ``--auth`` MUST flow through to subprocess launch
+# instead of falsely refusing.
+#
+# Without these tests, a future commit that lands middleware + flips the flag
+# has nothing telling it the refuse-to-start guard is now wrong. The guard
+# becomes accidentally-permanent and operators stay locked out of auth even
+# after the underlying contract is honoured. Pinning the True path now
+# guarantees the flip will trip a failing test that someone has to look at.
+
+
+class TestCmdUiEnforcementFlipped:
+    """TESTS-B-006: post-middleware behaviour pinned in advance.
+
+    Each test monkeypatches ``ENFORCEMENT_AVAILABLE = True`` on the
+    ``backpropagate.ui_app.auth`` module and asserts ``cmd_ui`` no longer
+    raises ``RUNTIME_UI_AUTH_NOT_ENFORCED`` for ``--auth``-bearing
+    invocations. The ``--share`` gate is a separate guard with its own
+    rationale (no Reflex tunnel) and stays refusing even when middleware
+    enforces auth — pinned independently below.
+    """
+
+    @staticmethod
+    def _mock_subprocess_result(returncode: int = 0) -> MagicMock:
+        result = MagicMock()
+        result.returncode = returncode
+        return result
+
+    def test_auth_proceeds_when_enforcement_available(self, monkeypatch):
+        """--auth alone proceeds to subprocess launch once the flag flips.
+
+        The middleware landing flips ``ENFORCEMENT_AVAILABLE = True``. From
+        that point on, ``--auth user:pass`` must reach subprocess.run with
+        the credentials handed to the Reflex child via
+        ``BACKPROPAGATE_UI_AUTH``. The pre-fix test surface only covered
+        the False path; this is the symmetric assertion.
+        """
+        from backpropagate.cli import cmd_ui
+
+        # Flip the load-bearing flag on the source module — ``cmd_ui`` does
+        # ``from .ui_app.auth import ENFORCEMENT_AVAILABLE`` lazily inside
+        # the function body, so patching the *module attribute* (not a
+        # snapshot inside cli.py) is what the import re-reads.
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=False,
+                auth="alice:hunter2",
+                verbose=False,
+            )
+
+            # Must NOT raise — the refuse-to-start guard is gated on
+            # ENFORCEMENT_AVAILABLE being False.
+            result = cmd_ui(args)
+
+            assert result == 0
+            mock_run.assert_called_once()
+
+            # The credentials must reach the Reflex child via env-var.
+            # subprocess.run is called as run(cmd, env=..., cwd=...).
+            kwargs = mock_run.call_args.kwargs
+            child_env = kwargs.get("env", {})
+            assert child_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2", (
+                "When ENFORCEMENT_AVAILABLE flips True, --auth must export "
+                "BACKPROPAGATE_UI_AUTH to the Reflex subprocess so the "
+                "middleware can read it. Got env={!r}".format(
+                    {k: v for k, v in child_env.items()
+                     if k.startswith("BACKPROPAGATE_")}
+                )
+            )
+
+    def test_share_still_refuses_even_when_enforcement_available(self, monkeypatch):
+        """--share is gated independently of ENFORCEMENT_AVAILABLE.
+
+        FRONTEND-A-001 split into two guards: ``--auth`` blocks because
+        middleware isn't wired; ``--share`` blocks because Reflex has no
+        first-class tunnel equivalent. Flipping ENFORCEMENT_AVAILABLE only
+        addresses the first gate. This test pins that ``--share`` keeps
+        refusing post-middleware — operators must reach for SSH port-forwards
+        or Cloudflare Tunnel either way.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                share=True,
+                auth=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            # Same code as the no-middleware path — the gate's rationale
+            # differs but the error envelope operators see is identical.
+            assert excinfo.value.code == "RUNTIME_UI_AUTH_NOT_ENFORCED"
+            mock_run.assert_not_called()
+
+    def test_share_with_auth_proceeds_when_enforcement_available(self, monkeypatch):
+        """--share + --auth proceeds once the middleware is wired.
+
+        Post-Wave-6 (v1.2.0) inverted the Wave 3.5 contract: the v1.2
+        rule is "--share REQUIRES --auth so the middleware can enforce
+        per-request basic auth on the public tunnel". Both flags supplied
+        means the gate is satisfied; cmd_ui launches the Reflex subprocess
+        with BACKPROPAGATE_UI_AUTH and BACKPROPAGATE_UI_SHARE_HOST set.
+        Renamed from ``test_share_with_auth_still_refuses_when_enforcement_available``
+        because that contract no longer holds.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_ui
+
+        monkeypatch.setattr(
+            "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:hunter2",
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+            assert result == EXIT_OK
+            mock_run.assert_called_once()
+            call_env = mock_run.call_args.kwargs.get("env", {})
+            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2"
+            assert "BACKPROPAGATE_UI_SHARE_HOST" in call_env
 
 
 # =============================================================================

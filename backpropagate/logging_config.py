@@ -146,6 +146,20 @@ def _configure_structlog(
     # already exist, which would silently skip our format/stream/level settings.
     log_level = getattr(logging, level, logging.INFO)
     root = logging.getLogger()
+    # BRIDGE-A-016 (Stage C amend): explicitly .close() each handler BEFORE
+    # dropping the reference. The previous root.handlers.clear() left every
+    # FileHandler open (its OS file descriptor pinned), so a long-running
+    # test session calling configure_logging(..., force=True) repeatedly
+    # leaked one fd per call — eventually hitting EMFILE on POSIX. The
+    # try/except guards against handlers whose close() raises (rare; the
+    # debug log keeps the diagnostic visible without aborting setup).
+    for h in list(root.handlers):
+        try:
+            h.close()
+        except Exception:  # noqa: BLE001 — best-effort handler cleanup
+            logging.getLogger(__name__).debug(
+                "configure_logging: handler.close() raised", exc_info=True
+            )
     root.handlers.clear()
     logging.basicConfig(
         format="%(message)s",
@@ -217,6 +231,16 @@ def _configure_standard_logging(
 
     # Clear existing handlers
     root = logging.getLogger()
+    # BRIDGE-A-016 (Stage C amend): close each handler explicitly before
+    # dropping it. Same fd-leak rationale as the structlog branch above.
+    for h in list(root.handlers):
+        try:
+            h.close()
+        except Exception:  # noqa: BLE001 — best-effort handler cleanup
+            logging.getLogger(__name__).debug(
+                "_configure_standard_logging: handler.close() raised",
+                exc_info=True,
+            )
     root.handlers.clear()
     root.setLevel(log_level)
 

@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | पायडैंटिक का कॉन्फ़िगरेशन सत्यापन। | pydantic, pydantic-सेटिंग्स |
 | `export` | ओलामा के लिए जीजीयूएफ प्रारूप में डेटा का निर्यात। | llama-cpp-python |
 | `monitoring` | वैंडबी (WandB) और सिस्टम मॉनिटरिंग (संस्करण 1.1.0 में ट्रेनर में स्वचालित रूप से एकीकृत)। | wandb, psutil |
-| `observability` | ओपनटेलमेट्री ट्रेसिंग। | opentelemetry-api, opentelemetry-sdk |
 | `logging` | संरचित लॉगिंग। | स्ट्रक्टलॉग (structlog) एक ऐसा उपकरण है। |
 | `security` | JWT प्रमाणीकरण (ऑथेंटिकेशन) और टोकन निर्माण। | PyJWT, क्रिप्टोग्राफी। |
 | `production` | अनस्लोथ + यूआई (यूजर इंटरफेस) + सत्यापन + लॉगिंग + सुरक्षा। | (गुच्छा) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` डिफ़ॉल्ट है - जब किसी मॉडल तर्क के बिना `Trainer()` को कॉल किया जाता है तो यह मान लागू होता है (देखें [`config.py`](backpropagate/config.py) `ModelConfig.name`)। पुराने उदाहरणों में प्री-क्वांटाइज्ड `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` का उपयोग किया गया था; हमने बेहतर विश्वसनीयता के लिए डिफ़ॉल्ट को आधिकारिक Qwen वेट पर बदल दिया है ([CHANGELOG v0.1.3](CHANGELOG.md))। दोनों मॉडल काम करते हैं।
+`Qwen/Qwen2.5-7B-Instruct` डिफ़ॉल्ट विकल्प है — `Trainer()` फ़ंक्शन को बिना किसी मॉडल तर्क के कॉल करने पर यही मान निर्धारित होता है (देखें [`config.py`](backpropagate/config.py) में `ModelConfig.name`)। पुराने उदाहरणों में पहले से क्वांटाइज किया गया `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` उपयोग किया गया था; हमने बेहतर विश्वसनीयता के लिए डिफ़ॉल्ट को आधिकारिक Qwen मॉडल भार में बदल दिया ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21))। दोनों मॉडल काम करते हैं।
 
 ### मल्टी-रन SLAO प्रशिक्षण
 
@@ -246,9 +245,7 @@ backprop ui --port 7862
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` बिना `--auth` के कोड `1` के साथ समाप्त होता है और एक संरचित त्रुटि `[INPUT_AUTH_REQUIRED]` प्रदर्शित होती है। इसका कारण यह है कि `--share` एक `*.gradio.live` URL प्रकाशित करता है जिसे इंटरनेट पर कोई भी एक्सेस कर सकता है, और बिना प्रमाणीकरण के, इसका मतलब है कि कोई भी आपके प्रशिक्षण पाइपलाइन को चला सकता है।
-
-स्पष्ट रूप से बाहर निकलने के लिए (उदाहरण के लिए, एक आंतरिक विकास वातावरण में), पर्यावरण चर `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` सेट करें। प्रत्येक लॉन्च पर एक चेतावनी प्रदर्शित होगी - और अनधिकृत UI के बाइंड होने से पहले 5 सेकंड का अनुग्रह काल होता है, इसलिए यदि यह गलत दिखता है तो आप `Ctrl-C` दबा सकते हैं।
+`backprop ui --share` कमांड, `--auth` विकल्प के बिना चलाने पर, कोड `1` के साथ और एक संरचित त्रुटि संदेश `[RUNTIME_UI_AUTH_NOT_ENFORCED]` प्रदर्शित करता है। इसका कारण यह है कि `--share` एक सार्वजनिक यूआरएल प्रकाशित करता है, जिसे इंटरनेट पर कोई भी व्यक्ति एक्सेस कर सकता है। प्रमाणीकरण (ऑथ) के बिना, इसका मतलब है कि कोई भी व्यक्ति आपके प्रशिक्षण प्रक्रिया को नियंत्रित कर सकता है। यदि आप प्रमाणीकरण सेट नहीं करना चाहते हैं, तो एसएसएच पोर्ट-फॉरवर्डिंग का उपयोग करें: `ssh -L 7860:localhost:7860 <होस्ट>` और फिर `http://localhost:7860` को स्थानीय रूप से खोलें। पूर्ण खतरे के मॉडल के लिए, [handbook/security.md](site/src/content/docs/handbook/security.md) देखें।
 
 UI से किए गए फ़ाइल सिस्टम लेखन को एक ही डायरेक्टरी तक सीमित कर दिया गया है:
 
@@ -299,10 +296,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+v1.0 Gradio कार्यान्वयन (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) को v1.1.x तक संदर्भ के रूप में रखा गया था और v1.2.0 में हटा दिया गया।
 
 ## समस्या निवारण
 

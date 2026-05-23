@@ -128,7 +128,7 @@ def _is_transient_hf_exception(exc: BaseException) -> bool:
     if status is None:
         # No status code attached → connection/timeout/other → retry
         return True
-    return status == 429 or status >= 500
+    return bool(status == 429 or status >= 500)
 
 
 def _retry_hf_call(
@@ -321,6 +321,158 @@ def _compute_dataset_hash(dataset: Any) -> str | None:
         return None
 
 
+# F-014: chat-template marker detection for ``train_on_responses_only``.
+# Unsloth's masker needs literal substrings that uniquely tag the start of the
+# user turn (``instruction_part``) and the start of the assistant turn
+# (``response_part``). Hardcoding ChatML (`<|im_start|>user` / `<|im_start|>assistant`)
+# silently no-ops on Llama 3 / Gemma / Llama 4, where loss then leaks back onto
+# the user prompt — opposite of what the operator asked for.
+#
+# Detection strategy (family-name table primary, ChatML probe secondary —
+# chosen over a probe-and-slice design because each chat template has its own
+# quirks; a single slicer that handles all of them within 2 hours of work
+# proved fragile in the F-014 implementation pass):
+#
+# 1. Match tokenizer.name_or_path / class name against a curated family
+#    table verified against upstream chat templates.
+# 2. If no family match, run a quick apply_chat_template render and check
+#    for canonical ChatML tokens around the probe sentinels — catches small
+#    fine-tunes that ship a ChatML template under an unbranded name.
+# 3. Final fallback: ChatML markers + a WARN log.
+#
+# Operators always have an authoritative override via
+# ``Trainer(response_markers=(instr, resp))`` that bypasses detection.
+
+# Probe sentinels chosen to be (a) ASCII letters only so no tokenizer
+# tokenizes them away and (b) long enough that they're unlikely to collide
+# with any literal text inside a real chat template.
+_CHAT_MARKER_PROBE_USER = "ZZZUSERPROBE"
+_CHAT_MARKER_PROBE_ASST = "ZZZASSISTANTPROBE"
+
+# Family table — PRIMARY detection path. Keys are lowercase substrings to
+# match against tokenizer.name_or_path / class name. Order matters: more
+# specific families before less specific (``llama-3`` before ``llama``).
+# Marker pairs were verified against the upstream chat_template on
+# Hugging Face as of 2026-05; new families should be added here.
+_CHAT_MARKER_FAMILY_TABLE: tuple[tuple[str, tuple[str, str]], ...] = (
+    # Llama 3 / 3.1 / 3.2 — header-id format.
+    ("llama-3", ("<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>")),
+    ("llama3", ("<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>")),
+    # Gemma 1/2/3 — start-of-turn format; assistant turn labelled ``model``.
+    ("gemma", ("<start_of_turn>user", "<start_of_turn>model")),
+    # Qwen 2 / 2.5 / 3 — ChatML.
+    ("qwen", ("<|im_start|>user", "<|im_start|>assistant")),
+    # Mistral / Mixtral — ``[INST]`` instruction wrapping; see WARN at detect
+    # time (Unsloth's matcher does not mask Mistral templates reliably).
+    ("mistral", ("[INST]", "[/INST]")),
+    # Phi 3 — ChatML-adjacent format used by Microsoft.
+    ("phi-3", ("<|user|>", "<|assistant|>")),
+    ("phi3", ("<|user|>", "<|assistant|>")),
+    # Generic ChatML hint for fine-tunes that explicitly label themselves
+    # as ChatML in the model name. Most ChatML tokenizers ship under a
+    # vendor name (e.g. ``qwen``) and hit one of the entries above first.
+    ("chatml", ("<|im_start|>user", "<|im_start|>assistant")),
+)
+
+# ChatML fallback when nothing else matches. Logged at WARN so the operator
+# sees the situation and can supply an explicit override via the new kwarg.
+_CHAT_MARKER_DEFAULT = ("<|im_start|>user", "<|im_start|>assistant")
+
+
+def _detect_chat_markers(tokenizer: Any) -> tuple[str, str]:
+    """Return ``(instruction_marker, response_marker)`` for the tokenizer.
+
+    Strategy (family-name primary; ChatML-shape probe secondary):
+
+        1. **Primary** — match the tokenizer's ``name_or_path`` / class name
+           against :data:`_CHAT_MARKER_FAMILY_TABLE`. Marker pairs were
+           verified against the upstream chat templates. Order in the table
+           matters: more-specific keys first (``llama-3`` before ``llama``).
+        2. **Secondary** — render a known-shaped dummy conversation through
+           ``apply_chat_template`` and check for canonical ChatML tokens.
+           This catches small fine-tunes shipping a ChatML template under an
+           unbranded name.
+        3. **Final fallback** — ChatML markers with a WARN log so the
+           operator can supply ``Trainer(response_markers=(instr, resp))``
+           if their model uses something else.
+
+    Chosen over a probe-and-slice design because each chat template has
+    quirks (Llama 3's lack of newlines, Gemma's ``<start_of_turn>`` non-pipe
+    tokens, Mistral's bracket pairs) and a single slicer that handles all of
+    them within the F-014 time budget proved fragile. The family table is
+    safer + auditable; the probe handles the long tail of ChatML clones.
+
+    The function never raises; failure paths log at WARN/DEBUG and return
+    the best available default.
+    """
+    # --- 1. Family-name detection (primary path) ---
+    name = ""
+    for attr in ("name_or_path", "init_kwargs"):
+        try:
+            value = getattr(tokenizer, attr, None)
+            if isinstance(value, str):
+                name = value
+                break
+            if isinstance(value, dict):
+                name = str(value.get("name_or_path", "")) or str(value.get("_name_or_path", ""))
+                if name:
+                    break
+        except Exception:  # nosec B112 — best-effort tokenizer name probe; next candidate is the right behavior
+            continue
+    cls_name = type(tokenizer).__name__.lower()
+    haystack = f"{name.lower()} {cls_name}"
+    for needle, markers in _CHAT_MARKER_FAMILY_TABLE:
+        if needle in haystack:
+            logger.info(
+                f"_detect_chat_markers: family-table match {needle!r} -> {markers}"
+            )
+            if needle == "mistral":
+                logger.warning(
+                    "_detect_chat_markers: Mistral [INST]/[/INST] template "
+                    "may not mask responses reliably under Unsloth (no "
+                    "explicit assistant-turn marker). Consider passing "
+                    "Trainer(response_markers=(...)) explicitly or "
+                    "train_on_responses=False for Mistral fine-tunes."
+                )
+            return markers
+
+    # --- 2. ChatML-shape probe (secondary path) ---
+    try:
+        rendered = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": _CHAT_MARKER_PROBE_USER},
+                {"role": "assistant", "content": _CHAT_MARKER_PROBE_ASST},
+            ],
+            tokenize=False,
+        )
+    except Exception as exc:
+        logger.debug(
+            f"_detect_chat_markers: apply_chat_template probe failed ({exc!r})"
+        )
+        rendered = None
+
+    if rendered and isinstance(rendered, str):
+        user_idx = rendered.find(_CHAT_MARKER_PROBE_USER)
+        asst_idx = rendered.find(_CHAT_MARKER_PROBE_ASST)
+        if (
+            0 < user_idx < asst_idx
+            and "<|im_start|>user" in rendered[:user_idx]
+            and "<|im_start|>assistant" in rendered[user_idx:asst_idx]
+        ):
+            logger.info("_detect_chat_markers: probe matched ChatML-shaped template")
+            return _CHAT_MARKER_DEFAULT
+
+    # --- 3. Final ChatML fallback ---
+    logger.warning(
+        f"_detect_chat_markers: could not detect chat markers for tokenizer "
+        f"{cls_name!r} (name={name!r}); falling back to ChatML "
+        f"({_CHAT_MARKER_DEFAULT}). If your model uses a different chat "
+        "template, train_on_responses_only will silently no-op. Pass "
+        "Trainer(response_markers=(instr, resp)) to override."
+    )
+    return _CHAT_MARKER_DEFAULT
+
+
 @dataclass
 class TrainingRun:
     """Container for training run results."""
@@ -336,12 +488,138 @@ class TrainingRun:
 
 @dataclass
 class TrainingCallback:
-    """Callback hooks for training events."""
+    """Callback hooks for training events.
+
+    Wired into the underlying TRL/HF Trainer lifecycle via
+    :func:`_build_trl_bridge_callback`:
+
+    * ``on_step(step: int, loss: float)`` fires from HF ``on_log`` whenever a
+      new loss value lands in ``state.log_history``. The pre-F-003 build
+      defined this field but never invoked it.
+    * ``on_epoch(epoch: int)`` fires from HF ``on_epoch_end``.
+    * ``on_save(checkpoint_path: str)`` fires from HF ``on_save`` with the
+      latest ``checkpoint-<step>`` directory.
+    * ``on_complete(run: TrainingRun)`` fires from ``Trainer.train`` after the
+      result is built. (Already wired pre-F-003.)
+    * ``on_error(exc: Exception)`` fires from ``Trainer.train`` exception
+      handlers. (Already wired pre-F-003.)
+
+    Each hook is invoked inside its own try/except so a buggy user callback
+    cannot poison training — the v1.1.0 callback isolation contract.
+    """
     on_step: Callable[[int, float], None] | None = None
     on_epoch: Callable[[int], None] | None = None
     on_save: Callable[[str], None] | None = None
     on_complete: Callable[[TrainingRun], None] | None = None
     on_error: Callable[[Exception], None] | None = None
+
+
+def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
+    """F-003: bridge our :class:`TrainingCallback` onto HF's TrainerCallback API.
+
+    Returns an instance of a private ``TrainerCallback`` subclass that forwards
+    ``on_log`` / ``on_epoch_end`` / ``on_save`` events into the user's
+    ``on_step`` / ``on_epoch`` / ``on_save`` hooks. Each forward is wrapped in
+    a try/except that logs at WARN — a buggy user callback must never abort
+    training (v1.1.0 contract).
+
+    Returns ``None`` when transformers is unavailable; the caller should skip
+    bridge installation in that case (defensive — transformers is a hard dep
+    of TRL so this branch should never fire in practice).
+
+    Built lazily so the trainer module doesn't hard-import transformers at top
+    of file (matches the project's general lazy-import convention for heavy
+    optional/runtime deps).
+    """
+    try:
+        from transformers import TrainerCallback as _HFTrainerCallback
+    except Exception as exc:
+        logger.debug(
+            f"_build_trl_bridge_callback: transformers TrainerCallback "
+            f"unavailable ({exc!r}); on_step/on_epoch/on_save will not fire."
+        )
+        return None
+
+    class _BackpropCallbackAdapter(_HFTrainerCallback):  # type: ignore[misc, valid-type]
+        """Adapter wiring TrainingCallback.{on_step, on_epoch, on_save} into HF."""
+
+        def __init__(self, cb: TrainingCallback) -> None:
+            super().__init__()
+            self._cb = cb
+            # Track the last log entry index we forwarded so on_log can
+            # synthesise on_step from log_history. ``on_log`` fires roughly
+            # once per logging_steps; the latest entry holds the freshest loss.
+            self._last_log_index: int = -1
+
+        # ---- HF lifecycle hooks ----
+        def on_log(self, args: Any, state: Any, control: Any, logs: dict | None = None, **kwargs: Any) -> None:  # noqa: D401, ANN401
+            if self._cb.on_step is None:
+                return
+            # Prefer the explicit ``logs`` dict (current HF API); fall back to
+            # the tail of ``state.log_history`` for older transformers builds
+            # that still populate that path.
+            loss_val: float | None = None
+            if isinstance(logs, dict) and "loss" in logs:
+                try:
+                    loss_val = float(logs["loss"])
+                except (TypeError, ValueError):
+                    loss_val = None
+            if loss_val is None:
+                history = getattr(state, "log_history", None) or []
+                # Walk back from the tail for the most recent entry with a loss.
+                for entry in reversed(history[-5:]):
+                    if isinstance(entry, dict) and "loss" in entry:
+                        try:
+                            loss_val = float(entry["loss"])
+                            break
+                        except (TypeError, ValueError):
+                            continue
+            if loss_val is None:
+                # No usable loss in this log batch (e.g. an eval-only log
+                # entry). Skip — on_step semantics require a loss value.
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            try:
+                self._cb.on_step(step, loss_val)
+            except Exception as cb_error:  # noqa: BLE001 — user callback isolation
+                logger.warning(
+                    f"on_step callback raised error (step={step} loss={loss_val:.4f}): {cb_error}"
+                )
+
+        def on_epoch_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if self._cb.on_epoch is None:
+                return
+            # ``state.epoch`` is a float (e.g. 1.0); cast to int for the
+            # documented signature.
+            try:
+                epoch = int(getattr(state, "epoch", 0) or 0)
+            except (TypeError, ValueError):
+                epoch = 0
+            try:
+                self._cb.on_epoch(epoch)
+            except Exception as cb_error:  # noqa: BLE001
+                logger.warning(f"on_epoch callback raised error (epoch={epoch}): {cb_error}")
+
+        def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            if self._cb.on_save is None:
+                return
+            # HF writes checkpoints under output_dir/checkpoint-<step>.
+            checkpoint_path = ""
+            try:
+                output_dir = getattr(args, "output_dir", None)
+                step = int(getattr(state, "global_step", 0) or 0)
+                if output_dir:
+                    checkpoint_path = str(Path(output_dir) / f"checkpoint-{step}")
+            except Exception:
+                checkpoint_path = ""
+            try:
+                self._cb.on_save(checkpoint_path)
+            except Exception as cb_error:  # noqa: BLE001
+                logger.warning(
+                    f"on_save callback raised error (path={checkpoint_path!r}): {cb_error}"
+                )
+
+    return _BackpropCallbackAdapter(user_callback)
 
 
 class Trainer:
@@ -390,6 +668,21 @@ class Trainer:
     # B-002: OOM-recovery tuning constants (Trainer mirror of MultiRunTrainer).
     _OOM_MAX_RETRIES_AT_MIN_BATCH = 3
 
+    # Stage C BACKEND-B-002: substrings PyTorch (2.0-2.6) and CUDA libraries
+    # surface for OOM-adjacent failures. Matching these widens the recovery
+    # net beyond strict ``torch.cuda.OutOfMemoryError`` so a CUBLAS alloc
+    # failure or a CUDNN init failure (which is almost always a downstream
+    # symptom of VRAM exhaustion) routes through the same halve-batch loop
+    # instead of falling through as an opaque generic failure.
+    _OOM_ADJACENT_SUBSTRINGS: tuple[str, ...] = (
+        "out of memory",
+        "cublas_status_alloc_failed",
+        "cudnn_status_not_initialized",
+        "cuda error: out of memory",
+        "memory_allocator",
+        "cuda out of memory",
+    )
+
     def __init__(
         self,
         model: str | None = None,
@@ -415,8 +708,14 @@ class Trainer:
         # them all. Pass "none" or None to disable. Pass a list of strings
         # (e.g. ["wandb"]) to force a specific tracker set; we DO NOT
         # validate that the tracker is installed in that branch — TRL will
-        # raise a clear ImportError if it isn't.
+        # raise a clean ImportError if it isn't.
         report_to: str | list[str] | None = "auto",
+        # F-014: explicit override for the (instruction_marker, response_marker)
+        # pair fed into Unsloth's train_on_responses_only. Default ``None`` ⇒
+        # auto-detect via the tokenizer's chat template. Supply a 2-tuple to
+        # short-circuit the probe — useful when the detection misfires on an
+        # exotic model or when an operator wants to mask a custom turn label.
+        response_markers: tuple[str, str] | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -437,8 +736,79 @@ class Trainer:
         else:
             self.batch_size = int(batch_size)
 
+        # Stage C BACKEND-B (constructor validation): catch obviously-broken
+        # hyperparameter combinations at construction time with structured
+        # errors. Pre-fix these would fail deep inside TRL with opaque error
+        # messages (e.g. ``ValueError: batch_size must be positive`` thrown
+        # from a SFTConfig field validator several frames deep). Surfacing
+        # the problem at ``Trainer(...)`` lets the operator see WHICH knob
+        # they got wrong before training spins up the model and tokenizer.
+        if self.batch_size <= 0:
+            raise InvalidSettingError(
+                setting_name="batch_size",
+                value=self.batch_size,
+                expected="a positive integer (>= 1)",
+                suggestion=(
+                    "Pass batch_size=1 for tightest VRAM, or omit the "
+                    "argument to let _detect_batch_size pick a value."
+                ),
+            )
+        if self.gradient_accumulation <= 0:
+            raise InvalidSettingError(
+                setting_name="gradient_accumulation",
+                value=self.gradient_accumulation,
+                expected="a positive integer (>= 1)",
+                suggestion="Use gradient_accumulation=1 for no accumulation.",
+            )
+        if self.learning_rate <= 0:
+            raise InvalidSettingError(
+                setting_name="learning_rate",
+                value=self.learning_rate,
+                expected="a positive float (> 0.0)",
+                suggestion=(
+                    "Try learning_rate=2e-4 (LoRA default) or 5e-5 "
+                    "(full-finetune-style)."
+                ),
+            )
+        if self.lora_r <= 0:
+            raise InvalidSettingError(
+                setting_name="lora_r",
+                value=self.lora_r,
+                expected="a positive integer (>= 1)",
+                suggestion="LoRA rank 8/16/32 is typical; 16 is a good default.",
+            )
+        if self.lora_alpha <= 0:
+            raise InvalidSettingError(
+                setting_name="lora_alpha",
+                value=self.lora_alpha,
+                expected="a positive integer (>= 1)",
+                suggestion="Pair lora_alpha with lora_r (e.g. r=16, alpha=32).",
+            )
+        if not (0.0 <= self.lora_dropout <= 1.0):
+            raise InvalidSettingError(
+                setting_name="lora_dropout",
+                value=self.lora_dropout,
+                expected="a float in [0.0, 1.0]",
+                suggestion="LoRA dropout 0.0-0.1 is typical; default is 0.05.",
+            )
+        if self.max_seq_length <= 0:
+            raise InvalidSettingError(
+                setting_name="max_seq_length",
+                value=self.max_seq_length,
+                expected="a positive integer (>= 1)",
+                suggestion=(
+                    "Try max_seq_length=2048 for typical chat data; smaller "
+                    "for tighter VRAM."
+                ),
+            )
+
         # Phase 1.1: Train on responses only
         self._train_on_responses = train_on_responses
+
+        # F-014: explicit override for the markers Unsloth uses to mask user
+        # tokens. None ⇒ auto-detect at train()-time so the tokenizer has
+        # been loaded by then.
+        self._response_markers_override = response_markers
 
         # B-002 / B-010: degradation knobs surfaced as instance attrs so the
         # multi-run trainer (and operator callers) can introspect.
@@ -837,13 +1207,29 @@ class Trainer:
         report_to = self._resolve_report_to()
         # F-002: reuse the run_id when resuming so the on-disk history record
         # is updated in place rather than producing a duplicate row.
+        # F-017: ALSO recover the checkpoint path so the inner SFTTrainer can
+        # actually pick up where the prior run left off. Pre-F-017 the
+        # resume path reused run_id + appended to history but never threaded
+        # ``resume_from_checkpoint`` into ``self._trainer.train()`` — the
+        # inner training started fresh from step 0, silently invalidating
+        # the operator's "resume" intent.
         run_id_for_resume: str | None = None
+        resume_checkpoint_path: str | None = None
         if resume_from:
             try:
                 resume_manager = RunHistoryManager(str(self.output_dir))
                 record = resume_manager.get_run(resume_from)
                 if record is not None:
                     run_id_for_resume = str(record.get("run_id"))
+                    # The prior run's checkpoint_path is the directory we
+                    # told HF to write to. HF's own resume detection scans
+                    # that dir for ``checkpoint-<N>`` subfolders and picks
+                    # the latest, so we hand it the directory (not a
+                    # specific checkpoint-N path) — same convention TRL
+                    # uses when you pass ``resume_from_checkpoint=True``.
+                    record_cp = record.get("checkpoint_path")
+                    if record_cp:
+                        resume_checkpoint_path = str(record_cp)
                 else:
                     logger.warning(
                         f"resume_from={resume_from!r} not found in run history; "
@@ -879,26 +1265,54 @@ class Trainer:
             packing=settings.data.packing,
         )
 
+        # F-003: build the HF-TrainerCallback bridge ONCE for this train()
+        # call. None when no user callback or when transformers is unavailable
+        # (the second branch should never fire in practice — transformers is a
+        # hard dep of TRL — but guard so a malformed env doesn't crash).
+        _bridge_cb = (
+            _build_trl_bridge_callback(callback) if callback is not None else None
+        )
+        sft_callbacks = [_bridge_cb] if _bridge_cb is not None else None
+
         # Create trainer (TRL 0.27+ uses processing_class instead of tokenizer)
         self._trainer = SFTTrainer(
             model=self._model,
             processing_class=self._tokenizer,
             train_dataset=train_dataset,
             args=training_args,
+            callbacks=sft_callbacks,
         )
 
         # Apply train_on_responses_only if using Unsloth (Phase 1.1 optimization)
         # This focuses loss only on assistant responses, not user prompts
         # NOTE: Disabled on Windows due to multiprocessing issues that can crash the system
+        #
+        # F-014: track the resolved (instruction, response) marker pair so the
+        # hyperparameters dict built further down can persist it into run
+        # history (auditable post-mortem when a probe falls back to ChatML on
+        # a non-ChatML tokenizer).
+        resolved_response_markers: tuple[str, str] | None = None
         if self.use_unsloth and self._train_on_responses and os.name != "nt":
             try:
                 from unsloth.chat_templates import train_on_responses_only
-                # Unsloth 2026+ API: train_on_responses_only(trainer, instruction_part, response_part, ...)
-                # For ChatML format (Qwen): <|im_start|>user and <|im_start|>assistant
+                # F-014: derive markers from the tokenizer's chat template so
+                # Llama 3 / Gemma / Qwen / ChatML all work; explicit operator
+                # override wins. Pre-fix this hardcoded ChatML markers, which
+                # silently no-op'd on every non-Qwen-family tokenizer (loss
+                # then leaked back onto the user prompt — opposite of intent).
+                if self._response_markers_override is not None:
+                    instruction_part, response_part = self._response_markers_override
+                    logger.info(
+                        f"train_on_responses_only: using operator override "
+                        f"instruction={instruction_part!r} response={response_part!r}"
+                    )
+                else:
+                    instruction_part, response_part = _detect_chat_markers(self._tokenizer)
+                resolved_response_markers = (instruction_part, response_part)
                 self._trainer = train_on_responses_only(
                     self._trainer,
-                    instruction_part="<|im_start|>user",
-                    response_part="<|im_start|>assistant",
+                    instruction_part=instruction_part,
+                    response_part=response_part,
                     num_proc=1,  # Single process to avoid Windows issues
                 )
                 logger.info("Applied train_on_responses_only optimization")
@@ -931,7 +1345,7 @@ class Trainer:
         # ``backprop list-runs`` / ``backprop show-run`` can surface it.
         run_history = RunHistoryManager(str(self.output_dir))
         dataset_info = dataset if isinstance(dataset, str) else type(dataset).__name__
-        hyperparameters = {
+        hyperparameters: dict[str, Any] = {
             "lora_r": self.lora_r,
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
@@ -944,6 +1358,10 @@ class Trainer:
             "use_unsloth": self.use_unsloth,
             "seed": settings.training.seed,
         }
+        # F-014: auditable per-run record of the chat markers actually used by
+        # train_on_responses_only. Absent when the mode is disabled.
+        if resolved_response_markers is not None:
+            hyperparameters["response_markers"] = list(resolved_response_markers)
         try:
             if run_id_for_resume:
                 # F-002 resume: flip status back to "running" without
@@ -1001,14 +1419,47 @@ class Trainer:
                             max_length=self.max_seq_length,
                             packing=settings.data.packing,
                         )
+                        # F-003: rebuild the bridge for each OOM retry so the
+                        # adapter is bound to the fresh SFTTrainer instance.
+                        # ``callback`` is captured from the enclosing train()
+                        # call; if None, sft_callbacks stays None.
+                        _bridge_cb_retry = (
+                            _build_trl_bridge_callback(callback) if callback is not None else None
+                        )
+                        sft_callbacks_retry = (
+                            [_bridge_cb_retry] if _bridge_cb_retry is not None else None
+                        )
                         self._trainer = SFTTrainer(
                             model=self._model,
                             processing_class=self._tokenizer,
                             train_dataset=train_dataset,
                             args=training_args,
+                            callbacks=sft_callbacks_retry,
                         )
 
-                    result = self._trainer.train()
+                    # F-017: thread resume_from_checkpoint into the inner
+                    # SFTTrainer.train so the operator's ``resume_from`` kwarg
+                    # actually resumes step count + optimizer state + LR
+                    # scheduler position. None ⇒ fresh start (TRL default).
+                    # An explicit path that no longer exists on disk: WARN +
+                    # fall back to fresh start so the resume kwarg never
+                    # crashes a session.
+                    _resume_arg: str | None = None
+                    if resume_checkpoint_path:
+                        if Path(resume_checkpoint_path).exists():
+                            _resume_arg = resume_checkpoint_path
+                            logger.info(
+                                f"Resuming single-run training from {_resume_arg}"
+                            )
+                        else:
+                            logger.warning(
+                                f"resume_from checkpoint path {resume_checkpoint_path!r} "
+                                "no longer exists on disk; starting fresh."
+                            )
+                    if _resume_arg is not None:
+                        result = self._trainer.train(resume_from_checkpoint=_resume_arg)
+                    else:
+                        result = self._trainer.train()
                     break  # Success — exit retry loop
 
                 except (KeyboardInterrupt, SystemExit):
@@ -1026,6 +1477,29 @@ class Trainer:
                         pass
                     if not is_oom and isinstance(exc, RuntimeError):
                         is_oom = "out of memory" in str(exc).lower()
+
+                    # Stage C BACKEND-B-002: widen OOM detection to include
+                    # CUDA library / driver errors that almost always indicate
+                    # VRAM exhaustion (CUBLAS alloc fail, CUDNN init fail,
+                    # NCCL post-OOM). When matched via the widened net, emit a
+                    # structured WARN so operators see which signature fired —
+                    # the matcher catalog lives in :data:`_OOM_ADJACENT_SUBSTRINGS`
+                    # for a single-edit-site update when PyTorch wording shifts.
+                    adjacent_marker: str | None = None
+                    if not is_oom and isinstance(exc, RuntimeError):
+                        msg_lower = str(exc).lower()
+                        for marker in self._OOM_ADJACENT_SUBSTRINGS:
+                            if marker in msg_lower:
+                                is_oom = True
+                                adjacent_marker = marker
+                                logger.warning(
+                                    f"oom-adjacent error intercepted by recovery "
+                                    f"path: type={type(exc).__name__} "
+                                    f"marker={marker!r} run_id={run_id} "
+                                    f"code=RUNTIME_OOM_ADJACENT "
+                                    f"message={str(exc)[:240]!r}"
+                                )
+                                break
 
                     if not self.oom_recovery or not is_oom:
                         raise
@@ -1069,14 +1543,27 @@ class Trainer:
                         f"{oom_consecutive_at_min}/{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
                     )
                     if oom_consecutive_at_min >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
-                        # B-002: surface as TrainingError (a BackpropagateError
-                        # subclass) so callers that catch TrainingError continue
-                        # to work; the code="RUNTIME_GPU_OOM" carries the
-                        # structured signal for programmatic handlers.
-                        err = TrainingError(
+                        # Stage C BACKEND-B-005: pass code/details/cause via
+                        # constructor kwargs (TrainingError already supports
+                        # them) instead of assigning to instance attributes
+                        # after the fact. The post-construction err.code= form
+                        # circumvents the structured-error contract and is a
+                        # template future contributors will copy from the most-
+                        # debugged path in the codebase. Use the more specific
+                        # RUNTIME_OOM_RECOVERY_EXHAUSTED code so triage can
+                        # distinguish "the recovery loop ran and lost" from
+                        # "a single one-shot OOM hit the wall".
+                        raise TrainingError(
                             f"GPU error during training: persistent CUDA OOM "
                             f"at batch_size=1 ({oom_consecutive_at_min} "
                             f"consecutive attempts); cannot recover automatically.",
+                            code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+                            details={
+                                "run_id": run_id,
+                                "consecutive_oom_at_min_batch": oom_consecutive_at_min,
+                                "oom_retries": oom_retries,
+                                "adjacent_marker": adjacent_marker,
+                            },
                             suggestion=(
                                 "Use a smaller model (e.g. 7B -> 3B), reduce "
                                 "max_seq_length, enable gradient_checkpointing, "
@@ -1084,13 +1571,8 @@ class Trainer:
                                 "Trainer(oom_recovery=False) to make OOMs "
                                 "hard-fail on the first attempt."
                             ),
-                        )
-                        err.code = "RUNTIME_GPU_OOM"  # type: ignore[attr-defined]
-                        err.details = {  # type: ignore[attr-defined]
-                            "run_id": run_id,
-                            "consecutive_oom_at_min_batch": oom_consecutive_at_min,
-                        }
-                        raise err from exc
+                            cause=exc,
+                        ) from exc
 
                     # Below the threshold but at floor — retry once more
                     # with the same args (transient OOM may clear after

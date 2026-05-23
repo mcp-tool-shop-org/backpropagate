@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Validação de configuração Pydantic | pydantic, pydantic-settings |
 | `export` | Exportação GGUF para Ollama | llama-cpp-python |
 | `monitoring` | WandB + monitoramento do sistema (integrado automaticamente ao treinador na versão 1.1.0) | wandb, psutil |
-| `observability` | Rastreamento OpenTelemetry | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Registro estruturado | structlog |
 | `security` | Autenticação JWT + geração de tokens | PyJWT, cryptography |
 | `production` | unsloth + ui + validação + registro + segurança | (pacote) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` é o padrão canônico — o valor que `Trainer()` resolve quando chamado sem um argumento de modelo (veja [`config.py`](backpropagate/config.py) `ModelConfig.name`). Exemplos mais antigos usavam a versão pré-quantizada `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; mudamos o padrão para os pesos oficiais do Qwen para melhor confiabilidade ([CHANGELOG v0.1.3](CHANGELOG.md)). Qualquer um dos modelos funciona.
+`Qwen/Qwen2.5-7B-Instruct` é a opção padrão e canônica — o valor `Trainer()` é retornado quando chamado sem um argumento de modelo (veja [`config.py`](backpropagate/config.py) `ModelConfig.name`). Exemplos mais antigos utilizavam a versão pré-quantizada `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; mudamos a opção padrão para os pesos oficiais do Qwen para maior confiabilidade ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Qualquer um dos modelos funciona.
 
 ### Treinamento Multi-Run SLAO
 
@@ -246,9 +245,7 @@ Para expor um URL acessível pela internet, você deve combinar `--share` com `-
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` sem `--auth` retorna um código de erro `1` e uma mensagem de erro estruturada `[INPUT_AUTH_REQUIRED]`. A razão: `--share` publica um URL `*.gradio.live` que qualquer pessoa na internet pode acessar, e sem autenticação, isso significa que qualquer pessoa pode controlar seu pipeline de treinamento.
-
-Para desativar explicitamente (por exemplo, em um ambiente de desenvolvimento interno), defina a variável de ambiente `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. Um aviso será exibido a cada execução — e há um período de carência de 5 segundos antes que a interface não autenticada seja carregada, para que você possa usar `Ctrl-C` se algo parecer errado.
+O comando `backprop ui --share` sem a opção `--auth` retorna o código de erro `1` e a mensagem de erro estruturada `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A razão para isso é que a opção `--share` publica um URL público que qualquer pessoa na internet pode acessar, e sem autenticação, isso significa que qualquer pessoa pode controlar o seu processo de treinamento. Não há como desativar essa proteção; se você não quiser definir credenciais, use o encaminhamento de porta SSH: `ssh -L 7860:localhost:7860 <host>` e, em seguida, abra `http://localhost:7860` localmente. Consulte o documento [handbook/security.md](site/src/content/docs/handbook/security.md) para obter informações detalhadas sobre o modelo de ameaças.
 
 As operações de escrita no sistema de arquivos a partir da interface são restritas a um único diretório:
 
@@ -299,10 +296,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+A implementação v1.0 do Gradio (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) foi mantida nas versões v1.1.x como referência e removida na v1.2.0.
 
 ## Solução de problemas
 

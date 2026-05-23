@@ -8,7 +8,7 @@
 #   ./scripts/run_mutmut.sh results      # View results
 #   ./scripts/run_mutmut.sh html         # Generate HTML report
 
-set -e
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 

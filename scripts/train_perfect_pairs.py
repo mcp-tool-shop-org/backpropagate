@@ -5,8 +5,19 @@ Perfect Pairs = Python functions with validated doctest examples.
 
 Uses SLAO (Smooth LoRA Aggregation with Orthogonal initialization)
 for stable multi-run training.
+
+This is a reference / one-off script — pass `--dataset` and `--checkpoint-dir`
+on the command line. The previous version hardcoded `F:/AI/...` paths from the
+maintainer's original rig.
+
+Usage
+-----
+    python scripts/train_perfect_pairs.py \\
+        --dataset ./output/validated/perfect_pairs_chat.jsonl \\
+        --checkpoint-dir ./output/models/perfect_pairs
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -23,8 +34,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from multiprocessing import freeze_support
 
 
-def main():
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Multi-run SLAO training on the Perfect Pairs dataset.",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("./output/validated/perfect_pairs_chat.jsonl"),
+        help="ShareGPT-format JSONL dataset (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=Path("./output/models/perfect_pairs"),
+        help="Where to write multi-run checkpoints (default: %(default)s)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
     """Run multi-run training on perfect pairs."""
+    args = _parse_args(argv)
+    dataset_path = args.dataset
+    checkpoint_dir = args.checkpoint_dir
+
     from backpropagate.gpu_safety import GPUCondition, get_gpu_status, wait_for_safe_gpu
     from backpropagate.multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
 
@@ -40,9 +74,6 @@ def main():
         if status.condition != GPUCondition.SAFE:
             print("Waiting for GPU to cool down...")
             wait_for_safe_gpu(max_wait=120)
-
-    # Dataset path
-    dataset_path = Path("F:/AI/checkpoints/validated/perfect_pairs_chat.jsonl")
 
     if not dataset_path.exists():
         print(f"Dataset not found: {dataset_path}")
@@ -66,7 +97,7 @@ def main():
         lr_decay="cosine",
         initial_lr=2e-4,
         final_lr=5e-5,
-        checkpoint_dir="F:/AI/models/perfect_pairs",
+        checkpoint_dir=str(checkpoint_dir),
         enable_gpu_monitoring=True,
         pause_on_overheat=True,
         max_temp_c=80.0,  # Conservative for laptop

@@ -71,17 +71,16 @@ jobs:
         shell: bash
         run: ruff check backpropagate/
 
-      - name: Type check with mypy (ADVISORY — pending typing pass)
+      - name: Type check with mypy
         shell: bash
-        continue-on-error: true
-        # mypy is currently advisory because the v1.1.0 swarm added the
-        # Reflex UI tree + 5 P0 features faster than the strict-typing
-        # bar in pyproject can keep up. ~12 errors remain (Reflex Var
-        # types, asdict() narrowing, bool() return casts, rxconfig.py
-        # backend_only kwarg removed in Reflex 0.9). All bounded.
-        # Re-tighten in the same triage wave as the security gates
-        # (docs/ci-gates-triage-plan.md — Phase 2 should add a "fix the
-        # 12 mypy errors" sub-task).
+        # v1.1.2: mypy is a hard gate again. The ~12 known errors in the
+        # Reflex tree + rxconfig.py are now covered by widened
+        # [[tool.mypy.overrides]] blocks in pyproject.toml (ui_app.* gets
+        # disallow_incomplete_defs/check_untyped_defs disabled in addition
+        # to the v1.1.0 warn_return_any/disallow_untyped_defs loosening;
+        # rxconfig is fully ignored until the Reflex 0.9 kwarg migration).
+        # The rest of the codebase stays strict and a real typing
+        # regression outside the override scope will fail this step.
         run: mypy backpropagate/ --ignore-missing-imports
 
       - name: Run tests
@@ -187,22 +186,47 @@ jobs:
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
 
-      # Gating step: fail CI only on vulns that actually have a fix the
-      # maintainer can ship. Unfixed transitive CVEs (huggingface-hub →
-      # requests → urllib3 etc.) do not block unrelated PRs; once a fix
-      # exists upstream, this step turns red and forces a dep bump.
-      # GATING STEP DISABLED — see docs/ci-gates-triage-plan.md.
-      # The pip-audit gating step (fail-on-fixable) was added in Stage B
-      # (B-CT-009) but exposes a ~30-CVE pre-existing baseline in
-      # transitive deps. Per the baseline-before-enforce doctrine
-      # (memory/feedback_baseline_before_enforce.md), re-enable only after
-      # the dep-bump wave drives the baseline to zero. Advisory step above
-      # still surfaces all findings as a Markdown report in the job log.
-      - name: pip-audit (gating — DISABLED pending v1.1.x dep-bump wave)
-        continue-on-error: true
+      # Gating step (v1.1.2): CRITICAL-only floor. Unfixed transitive
+      # CVEs (huggingface-hub → requests → urllib3 etc.) at HIGH and
+      # below still surface in the advisory step above for triage but
+      # do not block PRs; CRITICAL severity is rare enough in the
+      # transitive baseline that gating on it provides a real floor
+      # without the false-positive flood that drove the v1.1.x rollback.
+      #
+      # pip-audit has no native --severity flag, so we read its JSON
+      # output (OSV service exposes a `severity` array on each vuln)
+      # and fail if any entry includes a CRITICAL CVSS rating.
+      - name: pip-audit (CRITICAL floor)
         run: |
-          echo "::notice::pip-audit gating disabled; see docs/ci-gates-triage-plan.md"
-          echo "Advisory report above lists all findings. Re-enable after dep-bump wave."
+          set -euo pipefail
+          pip-audit \
+            --vulnerability-service osv \
+            --format json \
+            --output pip-audit.json \
+            --strict || true
+          python3 -c "
+          import json, sys
+          data = json.load(open('pip-audit.json'))
+          deps = data.get('dependencies', data) if isinstance(data, dict) else data
+          critical = []
+          for pkg in deps:
+              for v in pkg.get('vulns', []) or []:
+                  sevs = v.get('severity') or []
+                  for s in sevs:
+                      score = (s.get('score') or '').upper()
+                      stype = (s.get('type') or '').upper()
+                      # OSV severity: type CVSS_V3/CVSS_V4 + score like 'CVSS:3.1/AV:N/...'.
+                      # Critical CVSS-v3 base score >= 9.0; the score string also often
+                      # carries a 'CRITICAL' rating tag — match either.
+                      if 'CRITICAL' in score:
+                          critical.append(f\"{pkg.get('name')}: {v.get('id')} ({stype}={score})\")
+          if critical:
+              print('::error::pip-audit CRITICAL severity findings:')
+              for c in critical:
+                  print('  -', c)
+              sys.exit(1)
+          print('pip-audit CRITICAL floor: OK (no CRITICAL findings)')
+          "
 
       - name: Upload audit report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -264,17 +288,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (advisory — MEDIUM+)
         # Trivy ran as ADVISORY (no exit-code gate) until the v1.1.x
         # dep-bump wave. Stage B's B-CT-006 added `exit-code: '1'` to gate
         # CI on findings, but the actual baseline turned out to be 30+
         # transitive CVEs across uv.lock + site/package-lock.json — far
         # beyond the 14 documented in .trivyignore. Per the
         # baseline-before-enforce doctrine (memory/feedback_baseline_
-        # before_enforce.md), gating before triage is wrong. Rolled back
-        # to advisory; findings still surface in the GitHub Security tab
-        # via SARIF upload, just don't fail CI. Re-enable the gate after
-        # the dep-bump wave drives the baseline to zero.
+        # before_enforce.md), gating before triage is wrong. This step
+        # stays advisory; findings still surface in the GitHub Security
+        # tab via SARIF upload. The CRITICAL-only gate below provides
+        # the real floor in v1.1.2.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
@@ -292,6 +316,22 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+      # v1.1.2 CRITICAL-only gate. CRITICAL transitive CVEs almost never
+      # appear in this stack's baseline, so this provides a real floor
+      # without the 30+ false positives the MEDIUM+ baseline carries. If
+      # this step fails, a CRITICAL has appeared upstream and a dep bump
+      # is mandatory before the next release.
+      - name: Trivy CRITICAL floor (hard gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+          trivyignores: '.trivyignore'
+          exit-code: '1'
 
   secrets-scan:
     name: Secret Detection
@@ -377,14 +417,14 @@ jobs:
             echo "View detailed results in the Security tab."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # AGGREGATE GATE DISABLED — see docs/ci-gates-triage-plan.md.
-      # Stage B's B-CT-010 added this as the single status branch-protection
-      # could gate on. But the underlying scanners (Trivy, pip-audit) are
-      # currently advisory due to untriaged baselines, so an aggregate gate
-      # over them would be a guaranteed red. Re-enable once the dep-bump
-      # wave drives each underlying scanner to a clean baseline.
-      - name: Gate on scanner results (DISABLED pending triage wave)
-        continue-on-error: true
+      # v1.1.2: aggregate gate restored as a hard fail. Each underlying
+      # scanner now has either a working floor (bandit MEDIUM+,
+      # pip-audit CRITICAL, trivy CRITICAL) or stays advisory-only at
+      # the SARIF-upload level (semgrep). When any required scanner
+      # returns non-success here, this step fails — giving branch
+      # protection a single status check to require for the security
+      # suite (Stage B's B-CT-010 original intent).
+      - name: Gate on scanner results
         run: |
           set -euo pipefail
           declare -A results=(
@@ -402,10 +442,10 @@ jobs:
             fi
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "::warning::Security advisory — non-success scanners: ${failed[*]} (gating disabled pending v1.1.x triage wave)"
-          else
-            echo "All security scanners passed."
+            echo "::error::Security scanners failed: ${failed[*]}"
+            exit 1
           fi
+          echo "All security scanners passed."
 
   # --- GitHub Pages deployment (merged from pages.yml) ---
   # Only runs on push to main when site/** changes

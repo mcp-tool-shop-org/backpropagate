@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: backpropagate
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - name: mcp-tool-shop
+    email: 64996768+mcp-tool-shop@users.noreply.github.com
+repository-code: "https://github.com/mcp-tool-shop-org/backpropagate"
+url: "https://github.com/mcp-tool-shop-org/backpropagate"
+version: 1.2.0
+date-released: 2026-05-23
+license: MIT
+keywords:
+  - llm
+  - fine-tuning
+  - lora
+  - qlora
+  - unsloth
+  - slao
+  - peft
+  - transformers
+  - gguf
+  - ollama
+  - huggingface
+references:
+  - type: article
+    title: "Single LoRA Continual Learning via Asymmetric Merging"
+    authors:
+      - name: "(see arXiv listing)"
+    url: "https://arxiv.org/abs/2512.23017"
+    year: 2025
+    notes: "SLAO — the merge-between-runs technique that backpropagate's multi_run.py + slao.py implement to prevent catastrophic forgetting during extended fine-tuning campaigns."

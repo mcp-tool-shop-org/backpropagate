@@ -275,6 +275,78 @@ class TestSLAOCrashRobustness:
         with pytest.raises(BackpropagateError, match="non-finite|SLAO_MERGE_DIVERGED"):
             merger.merge(state, run_index=2)
 
+    def test_slao_merger_diverged_message_carries_layer_and_run_id(self):
+        """SLAO_MERGE_DIVERGED must name the offending layer + thread the run_id.
+
+        TESTS-B-019 (Stage C amend wave): the v1.1.0 CHANGELOG promises
+        ``SLAOMerger.merge`` raises ``SLAO_MERGE_DIVERGED`` with
+        ``run_index + run_id + offending layer`` so an operator can rewind to
+        the last healthy checkpoint without re-running the merge to find out
+        which layer corrupted. The existing tests above check the *exception*
+        fires but never look at the structured payload — a regression that
+        dropped the layer name (e.g. raised "NaN in merge" instead of
+        "NaN in layer1.lora_B.weight") would silently pass.
+
+        Pins three things at once: (a) the message body names the layer,
+        (b) ``details['layer']`` carries the exact key, and (c) the supplied
+        ``run_id`` round-trips into ``details['run_id']`` so cross-surface
+        grep against the same UUID works.
+        """
+        from backpropagate.exceptions import BackpropagateError
+
+        merger = SLAOMerger(SLAOConfig())
+        # Use multi-layer state so a regression can't accidentally match by
+        # naming the only-layer-present.
+        init_state = {
+            "layer0.lora_A.weight": torch.randn(16, 256),
+            "layer0.lora_B.weight": torch.randn(32, 16),
+            "layer1.lora_A.weight": torch.randn(16, 256),
+            "layer1.lora_B.weight": torch.randn(32, 16),
+        }
+        merger.initialize(init_state)
+
+        # Corrupt the B matrix on layer1 specifically — the assertion below
+        # depends on this exact layer surfacing in the structured payload.
+        bad_b = torch.randn(32, 16)
+        bad_b[1, 1] = float("nan")
+        state = {
+            "layer0.lora_A.weight": torch.randn(16, 256),
+            "layer0.lora_B.weight": torch.randn(32, 16),
+            "layer1.lora_A.weight": torch.randn(16, 256),
+            "layer1.lora_B.weight": bad_b,
+        }
+
+        # Supply a deterministic run_id so we can assert it threads into
+        # the structured envelope (not a synthetic UUID4 the caller can't see).
+        provided_run_id = "stage-c-run-id-deadbeef0123"
+
+        with pytest.raises(BackpropagateError) as excinfo:
+            merger.merge(state, run_index=7, run_id=provided_run_id)
+
+        err = excinfo.value
+        # Stable code, not a regex match on prose.
+        assert err.code == "SLAO_MERGE_DIVERGED"
+
+        # Layer name MUST be present in the human message so a stderr-only
+        # operator sees it without parsing JSON.
+        msg = str(err)
+        assert "lora_B.weight" in msg, (
+            f"Expected layer-name substring in error message, got: {msg!r}"
+        )
+
+        # Structured payload carries the precise layer key + the run_id
+        # the caller passed in. ``details`` is the load-bearing field for
+        # log-scraping triage.
+        details = getattr(err, "details", None) or {}
+        assert details.get("layer", "").endswith("lora_B.weight"), (
+            f"details['layer'] should name a lora_B layer, got: {details!r}"
+        )
+        assert details.get("run_index") == 7
+        assert details.get("run_id") == provided_run_id, (
+            "run_id supplied to merge() must round-trip into the SLAO_MERGE_DIVERGED "
+            f"details envelope; got details={details!r}"
+        )
+
     def test_slao_merger_handles_zero_tensors(self):
         """SLAO merger should handle all-zero tensors."""
         merger = SLAOMerger(SLAOConfig())

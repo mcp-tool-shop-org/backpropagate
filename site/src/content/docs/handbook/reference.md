@@ -22,10 +22,18 @@ backpropagate/
 ├── feature_flags.py     # Optional feature detection
 ├── security.py          # Path traversal & torch security
 ├── logging_config.py    # Structured logging setup
-├── theme.py             # Gradio theme customization
-├── ui.py                # Gradio interface
-└── ui_security.py       # Rate limiting, CSRF, file validation
+├── ui_app/              # Reflex (Radix UI) interface — v1.1.0+
+│   ├── app.py           #   App entry + Reflex Page wiring
+│   ├── auth.py          #   ENFORCEMENT_AVAILABLE flag + refuse-to-start guard
+│   ├── chrome.py        #   Header / left nav / side rail / footer
+│   ├── pages/           #   Train / Multi-Run / Export / Dataset surfaces
+│   └── components/      #   Sparkline, GPU ring, event log, callouts
+├── rxconfig.py          # Reflex Config (app_name, ports, refuse-to-start guard)
+├── ui_state.py          # rx.State subclasses driving the four surfaces
+└── ui_security.py       # Path-sandbox + file validation + denylist for UI writes
 ```
+
+The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pulls in Reflex `>= 0.9.2`. The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
 
 ## CLI commands
 
@@ -33,16 +41,18 @@ backpropagate/
 backprop train --data <file> --model <model> --steps <n>
 backprop multi-run --data <file> --runs <n> --steps <n> --samples <n>
 backprop export <path> --format gguf --quantization <q> [--ollama] [--ollama-name <name>]
-backprop ui --port <port> [--share] [--auth user:pass]
+backprop ui --port <port>   # --share / --auth currently refuse-to-start (Reflex middleware pending)
 backprop info
 backprop config
 ```
 
 See [CLI reference](/backpropagate/handbook/cli-reference/) for every flag, every default, and the full exit-code contract.
 
-### `--share` requires `--auth`
+### `--share` and `--auth` currently refuse-to-start
 
-`backprop ui --share` exits with code `1` (`[INPUT_AUTH_REQUIRED]`) unless paired with `--auth USER:PASS`. The opt-out is `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`, which prints a loud warning at startup. The rationale is documented inline in the CLI help (`backprop ui --help`) and at greater length in [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-input_auth_required-mean) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
+`backprop ui --share` and `backprop ui --auth USER:PASS` both exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The v1.1+ Reflex UI lands ahead of its auth middleware, so the runtime refuses either flag rather than expose an unauthenticated public URL. The refuse-to-start contract is enforced one layer deeper too — `python -m reflex run` from the package directory refuses unless the legitimate `backprop ui` bridge sets its bypass env var.
+
+For remote access right now, use SSH port-forwarding (`ssh -L 7860:localhost:7860 <host>`). The longer rationale, the tracking GHSA, and the middleware roadmap are in [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-runtime_ui_auth_not_enforced-mean) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
 
 ## Windows support
 

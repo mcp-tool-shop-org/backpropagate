@@ -166,6 +166,15 @@ class MultiRunConfig:
     adaptive_scaling: bool = False  # If True, SLAO merger scales adapter contribution by recent loss trend
     layer_scaling: bool = False     # If True, per-layer scaling factor learned from train/val curves
 
+    # Stage C BACKEND-B-003: OOM-recovery ceiling on gradient_accumulation.
+    # The recovery loop halves batch_size and doubles gradient_accumulation to
+    # preserve the effective batch size across an OOM retry. Without a ceiling,
+    # an operator who pinned a specific accum value (because their LR schedule
+    # or token-budget assumes accum<=N) has it silently overridden. When set
+    # (>0), the recovery aborts with RUNTIME_OOM_RECOVERY_EXHAUSTED instead of
+    # exceeding the ceiling. Default 0 = "no ceiling, current behavior."
+    max_grad_accumulation: int = 0
+
 
 # Backwards compatibility alias
 SpeedrunConfig = MultiRunConfig
@@ -838,6 +847,21 @@ class MultiRunTrainer:
             return self._checkpoint_manager.get_stats()
         return None
 
+    # Stage C BACKEND-B-002: substrings PyTorch (2.0-2.6) and CUDA libraries
+    # surface for OOM-adjacent failures. Matching these widens the recovery
+    # net beyond strict ``torch.cuda.OutOfMemoryError`` so a CUBLAS alloc
+    # failure or a CUDNN init failure (which is almost always a downstream
+    # symptom of VRAM exhaustion) routes through the same halve-batch loop
+    # instead of falling through as an opaque generic failure.
+    _OOM_ADJACENT_SUBSTRINGS: tuple[str, ...] = (
+        "out of memory",
+        "cublas_status_alloc_failed",
+        "cudnn_status_not_initialized",
+        "cuda error: out of memory",
+        "memory_allocator",
+        "cuda out of memory",
+    )
+
     @staticmethod
     def _is_oom_error(exc: BaseException) -> bool:
         """B-002: identify CUDA OOMs across torch + RuntimeError variants.
@@ -855,6 +879,32 @@ class MultiRunTrainer:
         if isinstance(exc, RuntimeError):
             return "out of memory" in str(exc).lower()
         return False
+
+    @classmethod
+    def _is_oom_adjacent(cls, exc: BaseException) -> tuple[bool, str | None]:
+        """Stage C BACKEND-B-002: widened OOM detection.
+
+        Returns ``(matched, substring_that_matched)``. Matches:
+        - any ``torch.cuda.OutOfMemoryError`` (delegates to strict matcher)
+        - any ``RuntimeError`` whose ``str(exc)`` contains a known OOM-adjacent
+          marker (CUBLAS_STATUS_ALLOC_FAILED, CUDNN_STATUS_NOT_INITIALIZED,
+          NCCL communication failures that follow VRAM exhaustion, etc.)
+
+        This is the **observability + recovery** lens on top of ``_is_oom_error``.
+        Callers route adjacent matches through the same halve-batch recovery
+        path AND emit a structured WARN log so operators can see which
+        signature triggered. If a future PyTorch release changes the wording,
+        the catalog at :data:`_OOM_ADJACENT_SUBSTRINGS` is the single edit
+        site — no scattered if/elif chains to chase.
+        """
+        if cls._is_oom_error(exc):
+            return True, "out of memory"
+        if isinstance(exc, RuntimeError):
+            msg_lower = str(exc).lower()
+            for marker in cls._OOM_ADJACENT_SUBSTRINGS:
+                if marker in msg_lower:
+                    return True, marker
+        return False, None
 
     def _execute_run(
         self,
@@ -957,7 +1007,15 @@ class MultiRunTrainer:
                 dataloader_num_workers=0 if os.name == "nt" else 4,
                 report_to=report_to_resolved,  # F-005
                 run_name=run_name,
-                seed=settings.training.seed + run_idx,  # Different seed each run
+                # Stage C BACKEND-B-003: per-retry seed offset. When an OOM
+                # retry fires, ``oom_retries > 0`` and the seed shifts so the
+                # per-batch shuffle order changes — an outlier-long sample that
+                # triggered the OOM at position N no longer lands at position N
+                # on the next attempt. We keep the global ``settings.training.seed``
+                # untouched so reproducibility for clean runs is preserved; the
+                # offset is deterministic given (run_idx, oom_retries) so the
+                # retry is itself reproducible.
+                seed=settings.training.seed + run_idx + oom_retries * 1000,
                 # SFT-specific args (TRL 0.24+)
                 max_length=self._trainer.max_seq_length,
                 packing=settings.data.packing,
@@ -1005,7 +1063,23 @@ class MultiRunTrainer:
                 # Never swallow these — let them propagate.
                 raise
             except Exception as exc:
-                if self.oom_recovery and self._is_oom_error(exc):
+                # Stage C BACKEND-B-002: widen OOM detection beyond the strict
+                # ``torch.cuda.OutOfMemoryError`` matcher. CUBLAS_STATUS_ALLOC_FAILED
+                # and CUDNN_STATUS_NOT_INITIALIZED are almost always downstream
+                # symptoms of VRAM exhaustion — route them through the same
+                # halve-batch recovery and emit a structured WARN so operators
+                # can see which signature fired (and so we can grow the matcher
+                # when PyTorch changes wording in a future release).
+                adjacent_matched, adjacent_marker = self._is_oom_adjacent(exc)
+                strict_oom = self._is_oom_error(exc)
+                if adjacent_matched and not strict_oom:
+                    logger.warning(
+                        f"oom-adjacent error intercepted by recovery path: "
+                        f"type={type(exc).__name__} marker={adjacent_marker!r} "
+                        f"run_id={self._run_id} run_index={run_idx} "
+                        f"code=RUNTIME_OOM_ADJACENT message={str(exc)[:240]!r}"
+                    )
+                if self.oom_recovery and adjacent_matched:
                     # B-002: OOM-specific recovery path.
                     import torch as _torch
 
@@ -1037,6 +1111,45 @@ class MultiRunTrainer:
                         # we're not at the floor yet.
                         new_batch = max(1, current_batch // 2)
                         new_accum = max(1, current_accum * 2)
+
+                        # Stage C BACKEND-B-003: honor max_grad_accumulation
+                        # ceiling. If the new combination would exceed the
+                        # operator's pinned ceiling, abort cleanly instead of
+                        # silently overriding (which can wreck an LR schedule
+                        # that depends on token-budget assumptions).
+                        ceiling = getattr(self.config, "max_grad_accumulation", 0) or 0
+                        if ceiling > 0 and new_accum > ceiling:
+                            logger.error(
+                                f"OOM recovery: would set grad_accumulation to "
+                                f"{new_accum} but max_grad_accumulation ceiling "
+                                f"is {ceiling}. Aborting cleanly."
+                            )
+                            raise BackpropagateError(
+                                f"OOM recovery exhausted: halving would exceed "
+                                f"max_grad_accumulation={ceiling} (next step "
+                                f"would be {new_accum}); preserving the operator's "
+                                f"pinned ceiling.",
+                                code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+                                details={
+                                    "run_index": run_idx,
+                                    "run_id": self._run_id,
+                                    "attempted_grad_accumulation": new_accum,
+                                    "max_grad_accumulation": ceiling,
+                                    "current_batch_size": current_batch,
+                                    "current_grad_accumulation": current_accum,
+                                    "oom_retries": oom_retries,
+                                },
+                                suggestion=(
+                                    "Raise max_grad_accumulation in MultiRunConfig "
+                                    "if your LR schedule tolerates a larger "
+                                    "effective batch, OR use a smaller model / "
+                                    "shorter max_seq_length / 4-bit quantization "
+                                    "so the original batch_size fits in VRAM."
+                                ),
+                                retryable=False,
+                                cause=exc,
+                            ) from exc
+
                         logger.warning(
                             f"OOM recovery: halving batch_size {current_batch}->{new_batch}, "
                             f"doubling gradient_accumulation {current_accum}->{new_accum} "
@@ -1057,15 +1170,22 @@ class MultiRunTrainer:
                         f"{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
                     )
                     if self._oom_consecutive_at_min_batch >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
+                        # Stage C BACKEND-B-003: use RUNTIME_OOM_RECOVERY_EXHAUSTED
+                        # to distinguish "we hit our recovery limit" from a single
+                        # one-shot OOM that the strict matcher caught. The
+                        # operator action is the same (smaller model / shorter
+                        # seq) but the code carries the semantic signal that
+                        # the recovery loop ran and lost.
                         raise BackpropagateError(
                             f"Persistent CUDA OOM at batch_size=1 "
                             f"({self._oom_consecutive_at_min_batch} consecutive "
                             f"OOMs across runs); cannot recover automatically.",
-                            code="RUNTIME_GPU_OOM",
+                            code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
                             details={
                                 "run_index": run_idx,
                                 "run_id": self._run_id,
                                 "consecutive_oom_at_min_batch": self._oom_consecutive_at_min_batch,
+                                "oom_retries": oom_retries,
                             },
                             suggestion=(
                                 "Use a smaller model (3B → 1B), reduce "
@@ -1836,54 +1956,87 @@ class MultiRunTrainer:
 
         # Compute loss on validation set
         model.eval()
-        total_loss = 0.0
-        count = 0
-        skipped = 0
+        try:
+            total_loss = 0.0
+            count = 0
+            skipped = 0
+            # Stage C BACKEND-B-012: track samples skipped because they lack a
+            # recognized text field (silent-skip path; pre-fix this was
+            # invisible). Operators tuning early_stopping_threshold need to
+            # know if half their holdout is being silently dropped — otherwise
+            # the early-stop signal is based on a shrinking sample of
+            # compatible rows rather than the configured holdout.
+            silent_skipped = 0
 
-        with torch.no_grad():
-            for sample in val_dataset:
-                try:
-                    # Get text
-                    if 'text' in sample:
-                        text = sample['text']
-                    elif 'messages' in sample:
-                        text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
-                    elif 'conversations' in sample:
-                        # ShareGPT format
-                        text = '\n'.join([c.get('value', '') for c in sample['conversations']])
-                    else:
-                        continue
+            with torch.no_grad():
+                for sample in val_dataset:
+                    try:
+                        # Get text
+                        if 'text' in sample:
+                            text = sample['text']
+                        elif 'messages' in sample:
+                            text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
+                        elif 'conversations' in sample:
+                            # ShareGPT format
+                            text = '\n'.join([c.get('value', '') for c in sample['conversations']])
+                        else:
+                            # Stage C BACKEND-B-012: count silent-skip alongside
+                            # exception-skip so the operator sees the true
+                            # validation sample count.
+                            silent_skipped += 1
+                            continue
 
-                    # Tokenize
-                    inputs = tokenizer(
-                        text,
-                        return_tensors='pt',
-                        truncation=True,
-                        max_length=self._trainer.max_seq_length,
-                    )
+                        # Tokenize
+                        inputs = tokenizer(
+                            text,
+                            return_tensors='pt',
+                            truncation=True,
+                            max_length=self._trainer.max_seq_length,
+                        )
 
-                    # Move to device
-                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                        # Move to device
+                        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-                    # Forward pass
-                    outputs = model(**inputs, labels=inputs['input_ids'])
-                    total_loss += outputs.loss.item()
-                    count += 1
+                        # Forward pass
+                        outputs = model(**inputs, labels=inputs['input_ids'])
+                        total_loss += outputs.loss.item()
+                        count += 1
 
-                    # Limit to prevent slow validation
-                    if count >= self.config.validation_samples:
-                        break
-                except Exception as e:
-                    skipped += 1
-                    logger.warning(f"Skipped validation sample (error: {e})")
-
-        model.train()
+                        # Limit to prevent slow validation
+                        if count >= self.config.validation_samples:
+                            break
+                    except Exception as e:
+                        skipped += 1
+                        logger.warning(f"Skipped validation sample (error: {e})")
+        finally:
+            # Ensure model is restored to training mode on ANY exit path
+            # (normal completion, exception, KeyboardInterrupt, etc.)
+            model.train()
 
         if skipped > 0:
             logger.warning(f"Skipped {skipped} validation samples due to errors")
 
+        # Stage C BACKEND-B-012: warn when silent-skip is material (>10% of
+        # the holdout). The silent-skip path is the common one when a dataset
+        # schema drifts mid-session (e.g. a streaming dataset where later
+        # samples don't carry text/messages/conversations). Without this
+        # warning, the operator's early-stopping decisions are based on a
+        # silently-shrinking sample.
+        if silent_skipped > 0:
+            total_attempted = count + skipped + silent_skipped
+            pct = (silent_skipped / total_attempted * 100.0) if total_attempted else 0.0
+            log_fn = logger.warning if pct > 10.0 else logger.info
+            log_fn(
+                f"_compute_validation_loss: silently skipped {silent_skipped} "
+                f"samples ({pct:.1f}% of {total_attempted}) lacking "
+                f"text/messages/conversations field (run {run_idx})"
+            )
+
         if count == 0:
-            logger.warning("No validation samples were successfully evaluated")
+            logger.warning(
+                f"No validation samples were successfully evaluated "
+                f"(skipped={skipped} silent_skipped={silent_skipped})"
+            )
             return float('inf')
 
         avg_loss = total_loss / count
@@ -1957,23 +2110,45 @@ class MultiRunTrainer:
                 logger.debug(f"load_adapter path failed: {exc}; falling back to state-dict load")
 
         # Fallback: read the state dict and apply via existing helper.
+        # BACKEND-A-001 fix: dispatch the loader by file extension. The prior
+        # code called `safetensors.load_file()` on a .bin path whenever only
+        # the .bin existed, which raises (safetensors loader cannot parse
+        # torch pickles). Now we resolve which file exists first, then pick
+        # the loader. The `except ImportError` clause is scoped to the
+        # safetensors import line ONLY — it must not function as a generic
+        # fallback for unrelated errors inside the loader call.
         try:
             from safetensors.torch import load_file  # type: ignore
 
-            adapter_file = cp_path / "adapter_model.safetensors"
-            if not adapter_file.exists():
-                adapter_file = cp_path / "adapter_model.bin"
-            if not adapter_file.exists():
-                raise FileNotFoundError(
-                    f"No adapter weights at {adapter_file.parent}"
-                )
-            state_dict = load_file(str(adapter_file))
+            safetensors_available = True
         except ImportError:
+            safetensors_available = False
+            load_file = None  # type: ignore[assignment]
+
+        adapter_file = cp_path / "adapter_model.safetensors"
+        if not adapter_file.exists():
+            adapter_file = cp_path / "adapter_model.bin"
+        if not adapter_file.exists():
+            raise FileNotFoundError(
+                f"No adapter weights at {adapter_file.parent}"
+            )
+
+        if adapter_file.suffix == ".safetensors":
+            if not safetensors_available:
+                # Caller saved a .safetensors checkpoint but the resuming
+                # environment does not have safetensors installed. We cannot
+                # silently fall back to torch.load — the formats are not
+                # interchangeable. Surface a clear error.
+                raise ImportError(
+                    "safetensors is required to load "
+                    f"{adapter_file.name}; install with: pip install safetensors"
+                )
+            state_dict = load_file(str(adapter_file))  # type: ignore[misc]
+        else:
+            # .bin checkpoint — use torch.load regardless of whether
+            # safetensors is installed.
             import torch
 
-            adapter_file = cp_path / "adapter_model.bin"
-            if not adapter_file.exists():
-                raise
             # B614 + Ship Gate A: torch.load is unsafe by default (arbitrary
             # code execution via crafted pickle). weights_only=True is the
             # safe path and is what the rest of the codebase uses; this resume
@@ -2005,7 +2180,7 @@ class MultiRunTrainer:
                 from dataclasses import asdict, is_dataclass
 
                 if is_dataclass(mr):
-                    entry["result"] = asdict(mr)
+                    entry["result"] = asdict(mr)  # type: ignore[arg-type]
                 else:
                     entry["result"] = {
                         k: v for k, v in vars(mr).items()

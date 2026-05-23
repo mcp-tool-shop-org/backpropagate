@@ -23,11 +23,10 @@ Other install options:
 |-------|-------------|
 | `backpropagate` | Core API only — minimal footprint |
 | `[unsloth]` | 2x faster training, 50% less VRAM |
-| `[ui]` | Gradio web interface |
+| `[ui]` | Reflex (Radix UI) web interface |
 | `[validation]` | Pydantic config validation |
 | `[export]` | GGUF export for Ollama |
 | `[monitoring]` | WandB + system monitoring |
-| `[observability]` | OpenTelemetry tracing |
 | `[logging]` | Structured logging via structlog |
 | `[security]` | JWT auth + token generation |
 | `[standard]` | unsloth + ui (recommended) |
@@ -69,13 +68,14 @@ This prints your Python version, PyTorch version, CUDA status, GPU name and VRAM
 backprop ui --port 7862
 ```
 
-If you want a public-internet URL via Gradio's `--share`, you must also pass `--auth`:
+For remote access, use SSH port-forwarding rather than `--share`:
 
 ```bash
-backprop ui --share --auth alice:hunter2
+ssh -L 7860:localhost:7860 you@gpu-host
+# Then on your laptop: http://localhost:7860
 ```
 
-`backprop ui --share` without `--auth` exits with code `1` and `[INPUT_AUTH_REQUIRED]`. Without auth, anyone on the internet could drive your training pipeline. To opt out for an internal-only dev environment, set `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` (loud warning prints at startup).
+`backprop ui --share` and `backprop ui --auth USER:PASS` both exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` — the v1.1+ Reflex UI ships ahead of its auth middleware, so the runtime refuses to start either flag rather than expose an unauthenticated public URL. The refuse-to-start contract is enforced one layer deeper as well, so `python -m reflex run` from the package directory also refuses. See [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-runtime_ui_auth_not_enforced-mean) for the long version and the tracking GHSA.
 
 ## What success looks like
 
@@ -109,3 +109,11 @@ To verify the adapter loaded cleanly, run `backprop info` — it lists which opt
 ## Troubleshooting
 
 If something failed during installation or first run, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's a symptoms-first reverse index keyed by what you actually saw in stderr.
+
+## Upgrading from v1.1.x
+
+If you are coming from v1.1.0 / v1.1.1, see the [migration page](/backpropagate/handbook/migrations/) for the breaking changes (notably the `--share` refuse-to-start contract and the removed `[observability]` extra) and the behavioural fixes that may surface bugs in your callback code.
+
+## Exposing the UI to the network
+
+For SSH port-forwarding, host/origin allowlists, the v1.1.x GHSA advisory, and the four-layer auth defense — see the [security page](/backpropagate/handbook/security/).

@@ -291,32 +291,32 @@ class TestSettings:
             assert "lora" in d
             assert "data" in d
 
-    def test_settings_apply_windows_fixes_on_windows(self):
+    def test_settings_apply_windows_fixes_on_windows(self, monkeypatch):
         """Test Settings.apply_windows_fixes() on Windows.
 
         This tests lines 293-300 (pydantic) or 410-414 (dataclass):
             def apply_windows_fixes(self) -> None:
                 if os.name == "nt":
                     os.environ["TOKENIZERS_PARALLELISM"] = ...
+
+        Uses monkeypatch so the env vars set by apply_windows_fixes (which
+        mutates os.environ directly) cannot leak past the test boundary —
+        monkeypatch.delenv on teardown reverts to the captured prior value.
         """
         from backpropagate.config import Settings
 
         s = Settings()
 
         with patch("os.name", "nt"):
-            # Store original values
-            orig_tokenizers = os.environ.get("TOKENIZERS_PARALLELISM")
+            # monkeypatch captures pre-test value; teardown restores it.
+            monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
 
             s.apply_windows_fixes()
 
             # Check environment variables were set
             assert os.environ.get("TOKENIZERS_PARALLELISM") == "false"
 
-            # Restore
-            if orig_tokenizers is not None:
-                os.environ["TOKENIZERS_PARALLELISM"] = orig_tokenizers
-
-    def test_settings_apply_windows_fixes_xformers_disabled(self):
+    def test_settings_apply_windows_fixes_xformers_disabled(self, monkeypatch):
         """Test that xformers is disabled on Windows."""
         from backpropagate.config import Settings
 
@@ -325,37 +325,29 @@ class TestSettings:
         s.windows.xformers_disabled = True
 
         with patch("os.name", "nt"):
-            orig_xformers = os.environ.get("XFORMERS_DISABLED")
+            monkeypatch.delenv("XFORMERS_DISABLED", raising=False)
 
             s.apply_windows_fixes()
 
             assert os.environ.get("XFORMERS_DISABLED") == "1"
 
-            # Restore
-            if orig_xformers is not None:
-                os.environ["XFORMERS_DISABLED"] = orig_xformers
-            else:
-                os.environ.pop("XFORMERS_DISABLED", None)
-
-    def test_settings_apply_windows_fixes_not_on_linux(self):
+    def test_settings_apply_windows_fixes_not_on_linux(self, monkeypatch):
         """Test that Windows fixes don't apply on Linux."""
         from backpropagate.config import Settings
 
         s = Settings()
 
         with patch("os.name", "posix"):
-            orig_tokenizers = os.environ.get("TOKENIZERS_PARALLELISM")
-            # Clear the variable
-            os.environ.pop("TOKENIZERS_PARALLELISM", None)
+            # Use monkeypatch.delenv to clear safely — teardown restores.
+            monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
 
             s.apply_windows_fixes()
 
-            # Should not have set anything (or it should still be None)
-            # Note: this test may not work perfectly because we can't unset during the test
-
-            # Restore
-            if orig_tokenizers is not None:
-                os.environ["TOKENIZERS_PARALLELISM"] = orig_tokenizers
+            # On non-Windows the helper must not set TOKENIZERS_PARALLELISM.
+            assert "TOKENIZERS_PARALLELISM" not in os.environ, (
+                "apply_windows_fixes() set TOKENIZERS_PARALLELISM on a non-nt "
+                "platform — the os.name == 'nt' guard regressed."
+            )
 
 
 # =============================================================================
@@ -890,7 +882,7 @@ class TestWarmupScaling:
 class TestWindowsConfigAdvanced:
     """Additional tests for WindowsConfig settings."""
 
-    def test_apply_windows_fixes_cuda_launch_blocking(self):
+    def test_apply_windows_fixes_cuda_launch_blocking(self, monkeypatch):
         """Test cuda_launch_blocking is applied when True."""
         from backpropagate.config import Settings
 
@@ -898,19 +890,13 @@ class TestWindowsConfigAdvanced:
         s.windows.cuda_launch_blocking = True
 
         with patch("os.name", "nt"):
-            orig_cuda = os.environ.get("CUDA_LAUNCH_BLOCKING")
+            monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
 
             s.apply_windows_fixes()
 
             assert os.environ.get("CUDA_LAUNCH_BLOCKING") == "1"
 
-            # Restore
-            if orig_cuda is not None:
-                os.environ["CUDA_LAUNCH_BLOCKING"] = orig_cuda
-            else:
-                os.environ.pop("CUDA_LAUNCH_BLOCKING", None)
-
-    def test_apply_windows_fixes_xformers_not_disabled(self):
+    def test_apply_windows_fixes_xformers_not_disabled(self, monkeypatch):
         """Test xformers is not disabled when setting is False."""
         from backpropagate.config import Settings
 
@@ -918,17 +904,17 @@ class TestWindowsConfigAdvanced:
         s.windows.xformers_disabled = False
 
         with patch("os.name", "nt"):
-            orig_xformers = os.environ.get("XFORMERS_DISABLED")
-            os.environ.pop("XFORMERS_DISABLED", None)
+            monkeypatch.delenv("XFORMERS_DISABLED", raising=False)
 
             s.apply_windows_fixes()
 
-            # Should NOT set XFORMERS_DISABLED when xformers_disabled is False
-            # Note: The code only sets it when True, doesn't unset when False
-
-            # Restore
-            if orig_xformers is not None:
-                os.environ["XFORMERS_DISABLED"] = orig_xformers
+            # Should NOT set XFORMERS_DISABLED when xformers_disabled is False.
+            # The code only sets it when True, never unsets when False — so a
+            # cleared env at the call site must remain cleared after.
+            assert "XFORMERS_DISABLED" not in os.environ, (
+                "apply_windows_fixes() set XFORMERS_DISABLED even though "
+                "settings.windows.xformers_disabled is False — regression."
+            )
 
 
 class TestMultiRunConfigSettings:

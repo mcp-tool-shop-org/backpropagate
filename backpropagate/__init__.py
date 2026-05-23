@@ -93,7 +93,13 @@ from .security import (
     safe_path,
 )
 
-# UI Security utilities (production-hardened) - requires gradio
+# UI Security utilities (production-hardened). Authored against the v1.0
+# Gradio surface; in v1.1.0+ the Reflex UI consumes the same helpers via
+# subprocess. The module body imports gradio at type-hint level but the
+# import is conditional (see ui_security.py top), so this try/except guards
+# against the [ui] extra being absent rather than against gradio specifically.
+# The ``safe_gradio_handler`` symbol name is preserved for back-compat with
+# any downstream code that imported it pre-migration.
 try:
     from .ui_security import (
         ALLOWED_DATASET_EXTENSIONS,
@@ -106,7 +112,9 @@ try:
         safe_gradio_handler,
     )
 except ImportError:
-    # Gradio not installed - UI security features unavailable
+    # UI extra not installed — UI security helpers unavailable. Set every
+    # exported name to None so downstream ``from backpropagate import X``
+    # still resolves (caller must None-check) instead of AttributeError.
     SecurityConfig = None  # type: ignore
     DEFAULT_SECURITY_CONFIG = None  # type: ignore
     EnhancedRateLimiter = None  # type: ignore
@@ -117,6 +125,7 @@ except ImportError:
     log_security_event = None  # type: ignore
 
 # Feature flags (detect available optional features)
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 # Checkpoint management (Phase 5.3)
@@ -257,7 +266,15 @@ from .trainer import (
     load_model,
 )
 
-__version__ = _pkg_version("backpropagate")
+# BRIDGE-A-015 (Stage C amend): wrap _pkg_version in a try/except so importing
+# the package from a source tree without `pip install -e .` (CI checkouts,
+# container builds, dev rebases) does NOT raise PackageNotFoundError at import
+# time. Falling back to a PEP 440 +local sentinel keeps __version__ a string
+# so callers that do ``backpropagate.__version__`` never AttributeError.
+try:
+    __version__ = _pkg_version("backpropagate")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 
 # =============================================================================

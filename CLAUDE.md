@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.0.5 on PyPI; full Ship Gate passing).
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.1.1 on PyPI; v1.2.0 in preparation; full Ship Gate passing).
 
 ## Architecture
 
@@ -15,7 +15,8 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - `config.py` — Pydantic settings, presets (Qwen 2.5 7B/3B, Llama 3.2 3B/1B, Mistral 7B)
 - `gpu_safety.py` — temp/VRAM/utilization monitoring, auto-pause
 - `cli.py` + `__main__.py` — `backprop` / `backpropagate` entry points
-- `ui.py` + `theme.py` + `ui_security.py` — Gradio UI (optional, requires `[ui]` extra)
+- `ui_app/` + `rxconfig.py` — Reflex (Radix UI) web UI shipped in v1.1.0 (canonical; optional, requires `[ui]` extra). The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
+- `ui_security.py` — shared UI auth + path-sandbox helpers
 - `security.py` — path traversal + safe torch loading
 - `checkpoints.py` — checkpoint policies + cleanup
 - `exceptions.py` — structured exception hierarchy (Ship Gate B1)
@@ -27,7 +28,7 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[observability]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
 - First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
 - Tested on RTX 5080 (16GB VRAM)
-- 1805 tests in `tests/`, 50% coverage floor (`fail_under = 50` in coverage config)
+- 1865 tests in tests/ (1856 passed + 10 skipped; pinned 2026-05-23 post-Wave-6), 50% coverage floor (`fail_under = 50` in coverage config)
 - All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
 
 ## User-facing docs surface

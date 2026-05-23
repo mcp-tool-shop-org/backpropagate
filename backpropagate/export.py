@@ -17,8 +17,12 @@ GGUF Quantizations (fastest → smallest):
 """
 
 import logging
+import os
+import re
 import shutil
+import signal
 import subprocess
+import sys
 import time
 import warnings
 from dataclasses import dataclass
@@ -33,6 +37,228 @@ from .exceptions import (
     MergeExportError,
     OllamaRegistrationError,
 )
+
+# =============================================================================
+# INPUT VALIDATORS (BRIDGE-A-001, BRIDGE-A-002)
+# =============================================================================
+# Both ``register_with_ollama`` and ``push_to_hub`` previously forwarded
+# operator-supplied strings (the Ollama model name, the HF repo_id) into
+# subprocess argv / network calls without validation. While ``shell=False``
+# prevented shell-metachar injection on the ollama path, a leading ``-`` or
+# embedded newline can still confuse the downstream CLI / HTTP library and
+# produce option-injection or malformed-request surprises. We tighten the
+# input contract here so the error message is structured (``ExportError`` with
+# a stable ``code``) instead of leaking out of a downstream library.
+
+# Ollama model name: typical shape is "user/name:tag" but we accept any name
+# made up of alphanumerics + ``.``, ``_``, ``-``, ``:``. We disallow leading
+# ``-`` (option injection) and any whitespace / control char (newline,
+# carriage return, NUL would otherwise produce a malformed Modelfile or
+# truncate the ``ollama create`` argv). Length cap 128 chars matches Ollama's
+# own internal limit comfortably.
+_OLLAMA_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$")
+
+# Hugging Face Hub repo_id: spec is ``<owner>/<name>`` where each segment
+# matches ``[A-Za-z0-9][A-Za-z0-9._-]{0,95}``. We additionally reject any
+# ``..`` segment (path traversal in cached README mirroring on Windows) and
+# any control character.
+_HF_REPO_ID_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,95}/[A-Za-z0-9][A-Za-z0-9._\-]{0,95}$"
+)
+
+
+def _validate_model_name(model_name: str) -> None:
+    """Reject Ollama model names that could confuse the ollama CLI parser.
+
+    Raises:
+        ExportError: with ``code='INPUT_VALIDATION_FAILED'`` when the name
+            contains a control char, leading dash, whitespace, or otherwise
+            fails the allowlist. The message is structured so the operator
+            sees a clean CLI error instead of an obscure ``ollama create``
+            failure.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        err = ExportError(
+            "Ollama model name must be a non-empty string",
+            suggestion="Pass --ollama-name <name> with a name like 'my-finetune' or 'org/model:tag'.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    # Reject NUL, newline, carriage return explicitly so the error message
+    # names the offending character class (the regex below would catch them
+    # via the allowlist, but the operator gets a clearer hint here).
+    if any(ch in model_name for ch in ("\x00", "\n", "\r")):
+        err = ExportError(
+            "Ollama model name contains a control character (NUL / newline / CR)",
+            suggestion="Strip the embedded control char from --ollama-name.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    if model_name.startswith("-"):
+        err = ExportError(
+            f"Ollama model name '{model_name}' starts with '-' — refusing to pass to ollama CLI",
+            suggestion="A leading dash is interpreted as a flag by argv parsers. Rename without the dash.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    if not _OLLAMA_MODEL_NAME_RE.match(model_name):
+        err = ExportError(
+            f"Ollama model name '{model_name}' contains invalid characters",
+            suggestion=(
+                "Allowed: ASCII letters, digits, '.', '_', '-', ':' "
+                "(first char must be alphanumeric); max 128 chars."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    # Defense in depth: reject if Path(model_name).name differs (catches a
+    # path separator that slipped past the regex on a future relax).
+    if Path(model_name).name != model_name:
+        err = ExportError(
+            f"Ollama model name '{model_name}' contains path separators",
+            suggestion="Model names cannot contain '/' or '\\'.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+
+def _validate_repo_id(repo_id: str) -> None:
+    """Reject malformed HF Hub repo identifiers BEFORE the network call.
+
+    Raises:
+        ExportError: with ``code='HUB_PUSH_INVALID_REPO'`` when the value is
+            empty, missing the ``owner/name`` shape, contains ``..``
+            segments, leading dash on either segment, or control chars.
+    """
+    if not isinstance(repo_id, str) or not repo_id:
+        err = ExportError(
+            "Hugging Face repo_id must be a non-empty string",
+            suggestion="Pass --repo owner/name (e.g. 'alice/qwen-finetune').",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    if any(ch in repo_id for ch in ("\x00", "\n", "\r", "\\")):
+        err = ExportError(
+            f"repo_id '{repo_id}' contains a control character or backslash",
+            suggestion="Strip embedded control chars / backslashes from --repo.",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    # Explicit '..' check before the regex so the message can name traversal.
+    segments = repo_id.split("/")
+    if any(seg == ".." or seg == "." for seg in segments):
+        err = ExportError(
+            f"repo_id '{repo_id}' contains a '..' or '.' segment",
+            suggestion="Use the 'owner/name' shape with no relative-path segments.",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    if not _HF_REPO_ID_RE.match(repo_id):
+        err = ExportError(
+            f"repo_id '{repo_id}' is not in the 'owner/name' shape required by Hugging Face",
+            suggestion=(
+                "Each segment must start alphanumeric and use only "
+                "[A-Za-z0-9._-]; max 96 chars per segment."
+            ),
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+
+def _run_subprocess_interruptible(
+    cmd: list[str],
+    *,
+    timeout: float,
+    capture_output: bool = True,
+    text: bool = True,
+    check: bool = True,
+    **popen_kwargs: Any,
+) -> "subprocess.CompletedProcess[str]":
+    """Run ``cmd`` with KeyboardInterrupt that actually propagates to the child.
+
+    BRIDGE-A-004: ``subprocess.run(cmd, timeout=N)`` does NOT reliably forward
+    SIGINT / Ctrl+C to the spawned child on Windows (a console-CTRL_C is
+    multiplexed across the whole process group; the child may swallow it) or
+    on POSIX (the child may be re-parented before the parent's KeyboardInterrupt
+    handler fires). The result is zombie quantization processes that hold
+    GPU + disk for many minutes after the operator pressed Ctrl+C.
+
+    We replace ``subprocess.run`` with an explicit ``Popen`` whose child runs
+    in its OWN process group / session, then ``.wait(timeout=...)`` on the
+    parent side. KeyboardInterrupt at the parent terminates the child first
+    (SIGTERM on POSIX, CTRL_BREAK_EVENT on Windows), waits up to 10s for
+    cleanup, then re-raises so the caller's ``except KeyboardInterrupt``
+    branch can run as before.
+
+    Returns a ``CompletedProcess`` shaped exactly like ``subprocess.run`` for
+    drop-in replacement at the existing raise-site.
+    """
+    # sys.platform-based check (mypy narrows these as platform-conditional;
+    # os.name == "nt" does NOT narrow, so we'd hit attr-defined errors on
+    # Linux/macOS mypy runs even though the branch never executes there).
+    if sys.platform == "win32":
+        popen_kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        popen_kwargs.setdefault("start_new_session", True)
+
+    stdout_dest = subprocess.PIPE if capture_output else None
+    stderr_dest = subprocess.PIPE if capture_output else None
+
+    proc = subprocess.Popen(  # noqa: S603 — argv is callee-controlled here
+        cmd,
+        stdout=stdout_dest,
+        stderr=stderr_dest,
+        text=text,
+        **popen_kwargs,
+    )
+
+    try:
+        stdout_data, stderr_data = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Tear down the child explicitly so it doesn't outlive the parent.
+        try:
+            if sys.platform == "win32":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            proc.kill()
+        raise
+    except KeyboardInterrupt:
+        # Propagate Ctrl+C to the child (it didn't get its own console signal
+        # because we put it in a separate group/session) so it actually stops
+        # writing instead of leaving a zombie.
+        try:
+            if sys.platform == "win32":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            proc.kill()
+        raise
+
+    completed: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout=stdout_data if capture_output else None,
+        stderr=stderr_data if capture_output else None,
+    )
+
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd, output=stdout_data, stderr=stderr_data
+        )
+
+    return completed
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer
@@ -169,7 +395,6 @@ def _resolve_hf_token(token: str | None) -> str | None:
     whatever the underlying ``huggingface_hub`` session was configured
     with (e.g. an active ``HF_HUB_TOKEN`` from a Colab integration).
     """
-    import os
 
     if token:
         return token
@@ -228,6 +453,11 @@ def push_to_hub(
             ``HUB_PUSH_VERSION`` / ``HUB_PUSH_UNKNOWN`` so callers can
             distinguish.
     """
+    # BRIDGE-A-002: validate repo_id BEFORE the imports so a malformed value
+    # produces a structured error even when huggingface_hub isn't installed.
+    # ExportError.code='HUB_PUSH_INVALID_REPO' makes the failure scrapeable.
+    _validate_repo_id(repo_id)
+
     try:
         from huggingface_hub import HfApi  # type: ignore
         from huggingface_hub import create_repo as hf_create_repo  # type: ignore
@@ -254,23 +484,69 @@ def push_to_hub(
 
     # If a model_card.md sits next to the artifacts, mirror it as README.md
     # so the HF web UI renders it as the repo's model card.
+    # BRIDGE-A-008 (Stage C amend): defensive checks BEFORE read_text.
+    #   1. Refuse to mirror a symlinked model_card.md — on POSIX a malicious
+    #      or accidental symlink to ``~/.ssh/id_rsa`` / ``/etc/passwd`` would
+    #      otherwise be uploaded verbatim to the public HF repo as README.md.
+    #      The check is a no-op on Windows where regular symlinks require
+    #      admin to create.
+    #   2. Cap the mirrored file at 1 MB. HF model cards are typically
+    #      <50 KB; a 50 MB tampered or accidentally-bloated card would
+    #      otherwise balloon the upload and push the operator's HF storage
+    #      quota for no usability benefit.
+    # Failures here log + skip the mirror — the export itself continues.
+    _MAX_MODEL_CARD_BYTES = 1_000_000
     readme_copy_path: Path | None = None
     if local_path_p.is_dir():
         candidate_card = local_path_p / "model_card.md"
         readme_target = local_path_p / "README.md"
         if candidate_card.exists() and not readme_target.exists():
-            try:
-                readme_target.write_text(
-                    candidate_card.read_text(encoding="utf-8"),
-                    encoding="utf-8",
+            if candidate_card.is_symlink():
+                logger.warning(
+                    "Refusing to mirror symlinked model_card.md to README.md: "
+                    f"{candidate_card} (would leak the symlink target to the Hub)"
                 )
-                readme_copy_path = readme_target
-                logger.info(
-                    f"Mirrored model_card.md to README.md for the Hub upload at {readme_target}"
-                )
-            except OSError as exc:
-                logger.warning(f"Could not mirror model_card.md to README.md: {exc}")
+            else:
+                try:
+                    card_size = candidate_card.stat().st_size
+                except OSError as exc:
+                    logger.warning(
+                        f"Could not stat model_card.md at {candidate_card}: {exc}"
+                    )
+                    card_size = None
+                if card_size is not None and card_size > _MAX_MODEL_CARD_BYTES:
+                    logger.warning(
+                        f"Refusing to mirror model_card.md to README.md: "
+                        f"file is {card_size} bytes (cap "
+                        f"{_MAX_MODEL_CARD_BYTES}). HF model cards are "
+                        "typically <50 KB."
+                    )
+                elif card_size is not None:
+                    try:
+                        readme_target.write_text(
+                            candidate_card.read_text(encoding="utf-8"),
+                            encoding="utf-8",
+                        )
+                        readme_copy_path = readme_target
+                        logger.info(
+                            "Mirrored model_card.md to README.md for the Hub upload "
+                            f"at {readme_target}"
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            f"Could not mirror model_card.md to README.md: {exc}"
+                        )
 
+    # BRIDGE-A-010 (Stage C amend): track whether the upload itself failed so
+    # the finally block can actually act on the docstring promise ("remove
+    # only if we created it and the upload itself failed"). Pre-fix, the
+    # finally's body was a no-op tested-for-non-existence — meaning a failed
+    # push left the local README.md mirror in place with stale content, and
+    # the next attempt found it (via the `and not readme_target.exists()`
+    # guard above) and skipped re-creation. The new flag is set in every
+    # exception branch; on success it stays False and the mirror is kept
+    # (the documented "keep so local matches Hub" behavior).
+    upload_failed = False
     try:
         if create_repo:
             hf_create_repo(
@@ -319,8 +595,17 @@ def push_to_hub(
             )
 
     except HfHubHTTPError as exc:
+        # BRIDGE-A-010 (Stage C amend): mark upload_failed once at the top of
+        # the HfHubHTTPError branch — every sub-status (401/403/404/5xx)
+        # represents a failed upload, so the README mirror should be rolled
+        # back uniformly via the finally clause below.
+        upload_failed = True
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status in (401, 403):
+            # BRIDGE-A-007 (catalog drift fix): use the canonical
+            # INPUT_AUTH_REQUIRED code that already exists in ERROR_CODES
+            # rather than the orphaned HUB_PUSH_AUTH string. The CLI branch
+            # below tests both for back-compat during the rename.
             err = ExportError(
                 f"Hugging Face authentication failed (HTTP {status}): {exc}",
                 suggestion=(
@@ -329,7 +614,7 @@ def push_to_hub(
                     "for a stored token."
                 ),
             )
-            err.code = "HUB_PUSH_AUTH"  # type: ignore[attr-defined]
+            err.code = "INPUT_AUTH_REQUIRED"  # type: ignore[attr-defined]
             raise err from exc
         if status == 404:
             err = ExportError(
@@ -353,6 +638,7 @@ def push_to_hub(
         err.code = "HUB_PUSH_NETWORK" if status and status >= 500 else "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
         raise err from exc
     except (ConnectionError, TimeoutError) as exc:
+        upload_failed = True
         err = ExportError(
             f"Network error contacting Hugging Face Hub: {exc}",
             suggestion="Check your network and retry.",
@@ -360,8 +646,13 @@ def push_to_hub(
         err.code = "HUB_PUSH_NETWORK"  # type: ignore[attr-defined]
         raise err from exc
     except ExportError:
+        # Pre-upload validation errors (e.g. _validate_repo_id) reach here.
+        # We did NOT touch the network and the README mirror — if any — was
+        # written above, so don't mark upload_failed (keep the mirror so the
+        # operator can inspect it). Re-raise unchanged.
         raise
     except Exception as exc:
+        upload_failed = True
         err = ExportError(
             f"Hugging Face Hub push failed: {exc}",
             suggestion=(
@@ -372,12 +663,28 @@ def push_to_hub(
         err.code = "HUB_PUSH_UNKNOWN"  # type: ignore[attr-defined]
         raise err from exc
     finally:
-        # Leave the mirrored README.md in place so the operator's local
-        # directory matches what's on the Hub; remove only if we created
-        # it and the upload itself failed.
-        if readme_copy_path is not None and not readme_copy_path.exists():
-            # Nothing to clean up.
-            pass
+        # BRIDGE-A-010 (Stage C amend): the docstring promises "remove only
+        # if we created it and the upload itself failed". Pre-fix this was a
+        # no-op (tested for NON-existence and did nothing). Now: when we
+        # actually created the README mirror AND the upload failed, unlink
+        # so the next attempt re-mirrors fresh model_card.md content instead
+        # of finding the stale mirror and skipping. On success the mirror is
+        # kept so the operator's local dir matches the Hub.
+        if upload_failed and readme_copy_path is not None:
+            try:
+                readme_copy_path.unlink(missing_ok=True)
+                logger.debug(
+                    f"Rolled back mirrored README.md at {readme_copy_path} "
+                    "after upload failure"
+                )
+            except OSError as cleanup_exc:
+                # Cleanup failure must not mask the real exception from the
+                # except branches above — log + swallow so the original
+                # HfHubHTTPError / ConnectionError surfaces unchanged.
+                logger.debug(
+                    f"README rollback cleanup failed at {readme_copy_path}: "
+                    f"{cleanup_exc}"
+                )
 
     return f"https://huggingface.co/{repo_id}"
 
@@ -923,7 +1230,10 @@ def export_gguf(
             quant_str,
         ]
         try:
-            result = subprocess.run(
+            # BRIDGE-A-004: Popen-based runner so Ctrl+C during a 30-min
+            # quantization actually stops the child instead of leaving a
+            # zombie that holds VRAM + disk for the rest of the timeout.
+            result = _run_subprocess_interruptible(
                 cmd,
                 check=True,
                 capture_output=True,
@@ -1029,16 +1339,23 @@ def create_modelfile(
     else:
         modelfile_path = gguf_path.parent / "Modelfile"
 
+    # BRIDGE-A-001: escape backslash and double-quote in the FROM path so a
+    # gguf_path containing either character (rare on POSIX, common on Windows
+    # via UNC paths) produces a well-formed Modelfile. Order matters: escape
+    # backslashes FIRST, otherwise the inserted escape-backslashes are
+    # themselves doubled by the quote escape.
+    gguf_path_str = str(gguf_path).replace("\\", "\\\\").replace('"', '\\"')
+
     lines = [
-        f'FROM "{gguf_path}"',
+        f'FROM "{gguf_path_str}"',
         "",
         f"PARAMETER temperature {temperature}",
         f"PARAMETER num_ctx {context_length}",
     ]
 
     if system_prompt:
-        # Escape quotes in system prompt
-        escaped_prompt = system_prompt.replace('"', '\\"')
+        # Escape backslashes then quotes in system prompt for the same reason.
+        escaped_prompt = system_prompt.replace("\\", "\\\\").replace('"', '\\"')
         lines.extend(
             [
                 "",
@@ -1071,6 +1388,12 @@ def register_with_ollama(
     Raises:
         OllamaRegistrationError: If registration fails
     """
+    # BRIDGE-A-001: refuse option-injection / control-char model names BEFORE
+    # we hand the argv to the ollama CLI. ExportError (with INPUT_VALIDATION_FAILED
+    # code) is the right surface — the operator gets a structured error instead
+    # of a confusing "ollama: unknown option -h" or worse.
+    _validate_model_name(model_name)
+
     gguf_path = Path(gguf_path).resolve()
 
     if not gguf_path.exists():
@@ -1088,6 +1411,12 @@ def register_with_ollama(
             suggestion="Install Ollama from https://ollama.ai and ensure it's in your PATH"
         )
 
+    # BRIDGE-A-003: initialize before the inner try so the finally clause can
+    # safely test it. Previously, if create_modelfile() raised, the finally
+    # would reference an unbound local and the user saw an UnboundLocalError
+    # instead of the real OllamaRegistrationError.
+    modelfile_path: Path | None = None
+
     # Create Modelfile
     try:
         modelfile_path = create_modelfile(gguf_path, system_prompt=system_prompt)
@@ -1098,8 +1427,9 @@ def register_with_ollama(
         ) from e
 
     try:
-        # Run ollama create
-        result = subprocess.run(
+        # BRIDGE-A-004: Popen-based runner so Ctrl+C actually propagates to
+        # the ollama child instead of leaving a zombie quantization process.
+        result = _run_subprocess_interruptible(
             ["ollama", "create", model_name, "-f", str(modelfile_path)],
             capture_output=True,
             text=True,
@@ -1122,12 +1452,18 @@ def register_with_ollama(
             suggestion="Ensure Ollama is running (ollama serve) and try again"
         ) from e
     finally:
-        # Clean up Modelfile
-        try:
-            if modelfile_path.exists():
-                modelfile_path.unlink()
-        except Exception as e:
-            logger.warning(f"Failed to clean up Modelfile: {e}")
+        # BRIDGE-A-003: guard against the modelfile_path = None path (which
+        # only triggers when create_modelfile() raised above — but the `raise`
+        # in the except branch already short-circuits before we reach here.
+        # We still guard defensively because future refactors may move the
+        # raise inside a wider try.). Also tolerate transient OSErrors during
+        # cleanup so they don't mask the real OllamaRegistrationError.
+        if modelfile_path is not None:
+            try:
+                if modelfile_path.exists():
+                    modelfile_path.unlink()
+            except OSError as e:
+                logger.warning(f"Failed to clean up Modelfile at {modelfile_path}: {e}")
 
 
 def list_ollama_models() -> list[str]:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import reflex as rx
 
+from backpropagate import __version__
 from backpropagate.ui_state import AppState, TrainState
 
 from .components.event_log import BpEventLog
@@ -24,13 +25,22 @@ from .components.sparkline import BpSparkline
 from .components.status_pill import BpStatusPill
 from .components.vram_bar import BpVramBar
 
+# FRONTEND-A-015: shared dynamic version label so header + footer cannot drift.
+_BRAND_VERSION = f"v{__version__}"
+
 # Surface key → (label, href, icon URL). The icons live under
 # ``backpropagate/assets/icons/`` so Reflex serves them at ``/icons/<name>.svg``.
+#
+# Wave 6 added the ``runs`` entry (FRONTEND-F-RUN-HISTORY-PAGE) — closes the
+# CLI/UI parity gap created when F-003 shipped ``backprop list-runs`` /
+# ``backprop show-run``. The icon reuses the train.svg asset until a
+# dedicated history glyph lands (cheap polish item for v1.3).
 _NAV_ITEMS = (
     ("train",     "Single run", "/",          "/icons/train.svg"),
     ("multi-run", "Multi-run",  "/multi-run", "/icons/multi-run.svg"),
     ("export",    "Export",     "/export",    "/icons/export.svg"),
     ("dataset",   "Dataset",    "/dataset",   "/icons/dataset.svg"),
+    ("runs",      "Runs",       "/runs",      "/icons/train.svg"),
 )
 
 
@@ -62,7 +72,7 @@ def BpHeader() -> rx.Component:
                 },
             ),
             rx.badge(
-                "v1.1.0",
+                _BRAND_VERSION,
                 variant="soft",
                 color_scheme="teal",
                 size="1",
@@ -374,7 +384,7 @@ def BpFooter() -> rx.Component:
                 style={"color": "var(--bp-muted-2)"},
             ),
             rx.text(
-                "v1.1.0",
+                _BRAND_VERSION,
                 size="1",
                 style={"color": "var(--bp-muted-2)"},
             ),

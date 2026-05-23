@@ -22,7 +22,7 @@ The split:
   ``rx.html(f"<style>{TOKENS_CSS}</style>")`` at the app root.
 
 This module is pure data — no Reflex import — so it can be read from anywhere
-(tests, the legacy Gradio shim, etc.) without pulling in the UI dependency.
+(tests, headless contexts, etc.) without pulling in the UI dependency.
 """
 
 from __future__ import annotations

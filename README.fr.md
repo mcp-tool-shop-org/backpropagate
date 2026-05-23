@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Validation de configuration Pydantic | pydantic, pydantic-settings |
 | `export` | Exportation GGUF pour Ollama | llama-cpp-python |
 | `monitoring` | WandB + surveillance du système (intégré au trainer depuis la version 1.1.0) | wandb, psutil |
-| `observability` | Traçage OpenTelemetry | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Journalisation structurée | structlog |
 | `security` | Authentification JWT + génération de jetons | PyJWT, cryptography |
 | `production` | unsloth + ui + validation + journalisation + sécurité | (ensemble) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` est le modèle par défaut ; la valeur `Trainer()` est résolue lorsque celle-ci est appelée sans argument de modèle (voir [`config.py`](backpropagate/config.py) `ModelConfig.name`). Les exemples précédents utilisaient la version quantifiée `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` ; nous avons modifié le modèle par défaut pour utiliser les poids officiels de Qwen afin d'améliorer la fiabilité ([CHANGELOG v0.1.3](CHANGELOG.md)). N'importe quel modèle fonctionne.
+`Qwen/Qwen2.5-7B-Instruct` est la valeur par défaut standard. Lorsque la fonction `Trainer()` est appelée sans argument de modèle, c'est cette valeur qui est utilisée (voir [`config.py`](backpropagate/config.py) `ModelConfig.name`). Les exemples précédents utilisaient la version quantifiée `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; nous avons modifié la valeur par défaut pour utiliser les poids officiels de Qwen afin d'améliorer la fiabilité ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Les deux modèles fonctionnent.
 
 ### Entraînement SLAO multi-exécution
 
@@ -246,9 +245,7 @@ Pour rendre l'URL accessible via Internet, vous devez combiner les options `--sh
 backprop ui --share --auth alice:hunter2
 ```
 
-La commande `backprop ui --share` sans l'option `--auth` renvoie un code d'erreur `1` et un message d'erreur structuré `[INPUT_AUTH_REQUIRED]`. La raison est que l'option `--share` publie une URL `*.gradio.live` que toute personne sur Internet peut consulter, et sans authentification, cela signifie que toute personne peut contrôler votre pipeline d'entraînement.
-
-Pour désactiver explicitement cette fonctionnalité (par exemple, dans un environnement de développement interne), définissez la variable d'environnement `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. Un avertissement important s'affiche à chaque lancement, et il existe une période de grâce de 5 secondes avant que l'interface utilisateur non authentifiée ne s'active, ce qui vous permet d'utiliser `Ctrl-C` si quelque chose ne vous semble pas correct.
+L'exécution de la commande `backprop ui --share` sans l'option `--auth` se termine avec le code d'erreur `1` et l'erreur structurée `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. La raison est la suivante : l'option `--share` publie une URL publique que toute personne sur Internet peut consulter, et sans authentification, cela signifie que n'importe qui peut contrôler votre processus de formation. Il n'y a pas de possibilité de désactivation de cette fonctionnalité ; si vous ne souhaitez pas définir de crédentielles, utilisez plutôt le transfert de port SSH : `ssh -L 7860:localhost:7860 <hôte>`, puis ouvrez `http://localhost:7860` localement. Consultez le document [handbook/security.md](site/src/content/docs/handbook/security.md) pour une description complète du modèle de menace.
 
 Les opérations d'écriture sur le système de fichiers via l'interface utilisateur sont limitées à un seul répertoire :
 
@@ -299,10 +296,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+L'implémentation Gradio de la version 1.0 (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) a été conservée jusqu'à la version 1.1.x à titre de référence et a été supprimée dans la version 1.2.0.
 
 ## Dépannage
 

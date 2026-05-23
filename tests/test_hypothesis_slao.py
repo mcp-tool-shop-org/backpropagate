@@ -1,11 +1,25 @@
 """Property-based testing for SLAO operations.
 
 Uses Hypothesis to generate random inputs and verify invariants.
+
+TESTS-A-015 (v1.1.2 amend wave): Windows + cold imports + tensor ops
+push some property tests past Hypothesis's 200ms default deadline. The
+tests are correctness checks, not perf benchmarks, so we register a
+"no_deadline" profile that turns the deadline off and suppresses the
+``too_slow`` health-check.
+
+TESTS-B-010 (Stage C amend wave): the profile registration + load moved
+to ``tests/conftest.py`` so EVERY hypothesis-using test in the suite
+inherits the same settings (previously only this file loaded the
+profile, leaving ``test_fuzz_checkpoints.py`` flaky on slow runners).
+The block below is preserved as a defensive fallback for running this
+file directly (``pytest tests/test_hypothesis_slao.py``) without
+conftest hooking the profile first.
 """
 
 import pytest
 import torch
-from hypothesis import assume, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from backpropagate.slao import (
@@ -14,6 +28,20 @@ from backpropagate.slao import (
     get_layer_scale,
     time_aware_scale,
 )
+
+# Defensive: conftest.py already registers + loads "no_deadline" for the
+# whole session. Re-register here so the file can run standalone without
+# the conftest hook (e.g. when an operator invokes a single test path
+# directly during triage).
+try:
+    settings.register_profile(
+        "no_deadline",
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+except Exception:  # pragma: no cover — profile already registered
+    pass
+settings.load_profile("no_deadline")
 
 # =============================================================================
 # STRATEGIES

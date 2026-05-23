@@ -28,6 +28,7 @@ Usage:
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -202,9 +203,26 @@ class CheckpointManager:
     def _save_manifest(self) -> bool:
         """Save checkpoint manifest to disk.
 
+        Stage C BACKEND-B-006: writes are atomic. We write to a sibling
+        ``.tmp`` file, fsync it, then ``os.replace`` into place. ``os.replace``
+        is atomic on POSIX *and* on NTFS (Windows) — see the contract on
+        https://docs.python.org/3/library/os.html#os.replace. If the process
+        is killed between the open and the replace, the on-disk
+        ``manifest.json`` remains the prior healthy version instead of a
+        truncated JSON that ``_load_manifest`` would silently reset.
+
+        The manifest is the **index** of every checkpoint on disk. Losing it
+        because of a mid-write crash (SIGKILL, power loss, OOM-killer) causes
+        the entire session's checkpoint metadata to vanish — the .pt files
+        remain but the manager forgets they exist. This contract closes that
+        gap.
+
         Returns:
             True if saved successfully, False on failure.
         """
+        tmp_path = self._manifest_path.with_suffix(
+            self._manifest_path.suffix + ".tmp"
+        )
         try:
             data = {
                 "version": "1.0",
@@ -212,12 +230,30 @@ class CheckpointManager:
                 "policy": asdict(self.policy),
                 "checkpoints": [c.to_dict() for c in self._checkpoints],
             }
-            with open(self._manifest_path, "w") as f:
+            with open(tmp_path, "w") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError as fsync_err:
+                    # fsync is unsupported on some filesystems / streams (rare
+                    # on real disks). The atomic-replace below still preserves
+                    # the prior good manifest if a crash interrupts us — we
+                    # just lose the "survive a power loss after fsync" promise.
+                    logger.debug(
+                        f"fsync skipped (filesystem unsupported): {fsync_err}"
+                    )
+            os.replace(tmp_path, self._manifest_path)
             logger.debug(f"Saved manifest with {len(self._checkpoints)} checkpoints")
             return True
         except Exception as e:
             logger.error(f"Failed to save manifest: {e}")
+            # Best-effort cleanup of the temp file so the dir stays tidy.
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass  # nosec B110 — cleanup is best-effort
             return False
 
     def _get_checkpoint_size(self, path: str) -> int:
@@ -742,15 +778,38 @@ class RunHistoryManager:
     def _save(self, history: list[dict[str, Any]]) -> bool:
         """Persist the history list to disk.
 
+        Stage C BACKEND-B-006: atomic write (tmp + fsync + os.replace) so a
+        mid-write crash doesn't strand the on-disk ``run_history.json`` in a
+        truncated JSON state. ``_load`` falls back to ``[]`` on JSONDecodeError,
+        which would silently wipe the operator's session history. The atomic
+        contract preserves the last known-good version through SIGKILL / power
+        loss / OOM-killer. See companion contract on ``_save_manifest``.
+
         Returns:
             True on success, False on failure.
         """
+        tmp_path = self._history_path.with_suffix(
+            self._history_path.suffix + ".tmp"
+        )
         try:
-            with open(self._history_path, "w") as f:
+            with open(tmp_path, "w") as f:
                 json.dump(history, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError as fsync_err:
+                    logger.debug(
+                        f"fsync skipped (filesystem unsupported): {fsync_err}"
+                    )
+            os.replace(tmp_path, self._history_path)
             return True
         except Exception as e:
             logger.error(f"Failed to save run history: {e}")
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass  # nosec B110 — cleanup is best-effort
             return False
 
     @staticmethod

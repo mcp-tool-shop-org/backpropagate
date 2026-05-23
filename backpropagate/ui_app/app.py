@@ -10,6 +10,8 @@ This module is imported by:
 
 from __future__ import annotations
 
+import os
+
 import reflex as rx
 
 # Absolute imports so this module works whether Reflex loads it as
@@ -17,10 +19,33 @@ import reflex as rx
 # ``backpropagate.ui_app.app`` (Python smoke tests).
 from backpropagate.ui_theme import RADIX_THEME, STYLESHEETS, TOKENS_CSS
 
+from .auth import ENFORCEMENT_AVAILABLE, basic_auth_transformer
 from .pages.dataset import dataset_page
 from .pages.export import export_page
 from .pages.multi_run import multi_run_page
+from .pages.runs import runs_page
 from .pages.train import train_page
+
+# FRONTEND-B-001 / GHSA-pending defense-in-depth:
+# cli.py:cmd_ui refuses --auth/--share when ENFORCEMENT_AVAILABLE is False, but
+# that check is bypassed if a user runs ``python -m reflex run`` or ``reflex
+# run`` directly from the package directory. Fire the same refuse-to-start
+# check here at module import time so the Reflex app cannot bind a port and
+# serve an unauthenticated UI when the operator believes auth is wired up.
+#
+# The check requires BOTH: ENFORCEMENT_AVAILABLE=False (middleware not landed)
+# AND BACKPROPAGATE_UI_AUTH set in the env (operator believes auth is active).
+# When ENFORCEMENT_AVAILABLE flips to True (Wave 6), this guard becomes inert
+# without any further code change.
+if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
+    raise RuntimeError(
+        "FRONTEND-B-001 / GHSA-pending: The Reflex web UI does not yet "
+        "enforce BACKPROPAGATE_UI_AUTH. Refusing to start to prevent the "
+        "v1.1.0 false-promise (the CLI announced 'Auth: enabled' but the "
+        "runtime ignored the env var). "
+        "Use SSH port-forwarding for remote access until middleware lands: "
+        "ssh -L 7860:localhost:7860 <host>"
+    )
 
 
 def _with_tokens(page: rx.Component) -> rx.Component:
@@ -37,15 +62,29 @@ def _with_tokens(page: rx.Component) -> rx.Component:
     )
 
 
+# Wave 6: real auth middleware via Reflex's ``api_transformer`` hook (the
+# documented Reflex >=0.8 surface — App.api was removed in 0.8.0). The
+# transformer wraps the WHOLE ASGI app, so HTTP routes AND the /_event
+# WebSocket upgrade go through the same gate. See ``ui_app/auth.py`` for
+# the full mode matrix + cookie shape + pre-accept WS validation.
+#
+# Order matters: the auth middleware is the outermost wrapper, so it sees
+# the raw scope before Reflex (or any other future api_transformer entry)
+# touches it. v1.3 will chain a request-logging + rate-limit middleware in
+# the same slot.
 app = rx.App(
     theme=rx.theme(**RADIX_THEME),
     stylesheets=STYLESHEETS,
+    api_transformer=basic_auth_transformer,
 )
 
 
-# Register the 4 surfaces. ``add_page`` is preferred over ``@rx.page`` here so
-# the page registry stays in one place and the imports remain explicit.
+# Register the 5 surfaces. ``add_page`` is preferred over ``@rx.page`` here so
+# the page registry stays in one place and the imports remain explicit. The
+# ``/runs`` surface is the Wave 6 v1.2.0 add — it closes the CLI/UI parity
+# gap (``backprop list-runs`` had no UI equivalent until now).
 app.add_page(lambda: _with_tokens(train_page()), route="/", title="backpropagate · train")
 app.add_page(lambda: _with_tokens(multi_run_page()), route="/multi-run", title="backpropagate · multi-run")
 app.add_page(lambda: _with_tokens(export_page()), route="/export", title="backpropagate · export")
 app.add_page(lambda: _with_tokens(dataset_page()), route="/dataset", title="backpropagate · dataset")
+app.add_page(lambda: _with_tokens(runs_page()), route="/runs", title="backpropagate · runs")

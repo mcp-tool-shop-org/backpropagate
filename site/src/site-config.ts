@@ -61,7 +61,7 @@ export const config: SiteConfig = {
       rows: [
         ['backpropagate', 'Core API only — minimal footprint', '—'],
         ['[unsloth]', '2× faster training, 50% less VRAM', 'unsloth'],
-        ['[ui]', 'Gradio web interface for non-coders', 'gradio ≥ 5.6.0'],
+        ['[ui]', 'Reflex (Radix UI) web interface', 'reflex ≥ 0.9.2'],
         ['[validation]', 'Pydantic config validation', 'pydantic, pydantic-settings'],
         ['[export]', 'GGUF export for Ollama', 'llama-cpp-python'],
         ['[monitoring]', 'WandB + system monitoring', 'wandb, psutil'],
@@ -116,7 +116,7 @@ export const config: SiteConfig = {
       kind: 'data-table',
       id: 'scorecard',
       title: 'Quality scorecard',
-      subtitle: 'Ship Gate audit — 25/31 checked, 14 skipped, 100% pass.',
+      subtitle: 'Ship Gate audit — 23/31 checked, 14 skipped, 100% pass.',
       columns: ['Category', 'Score', 'Notes'],
       rows: [
         ['A. Security', '6/8', 'SECURITY.md, trust model, no secrets/telemetry, safe_path()'],

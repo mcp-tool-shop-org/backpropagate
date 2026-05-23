@@ -66,6 +66,12 @@ def _upload_group() -> rx.Component:
                 "application/jsonl": [".jsonl"],
                 "text/plain": [".txt"],
             },
+            # FRONTEND-A-003: wire on_drop into the validator so extension /
+            # size / magic-bytes / sanitize-filename actually fire on the
+            # Reflex surface instead of relying on default behavior.
+            on_drop=DatasetState.handle_upload(  # type: ignore[operator]
+                rx.upload_files(upload_id="dataset_upload")
+            ),
             style={
                 "background": "var(--bp-surface-2)",
                 "border": "1px dashed var(--bp-border-2)",
@@ -74,9 +80,21 @@ def _upload_group() -> rx.Component:
             },
         ),
         rx.cond(
+            DatasetState.upload_error != "",
+            rx.text(
+                DatasetState.upload_error,
+                size="1",
+                style={"color": "var(--bp-peach)", "font_size": "11px"},
+            ),
+            rx.fragment(),
+        ),
+        # FRONTEND-B-013: render only the basename so the operator's home
+        # directory doesn't appear in the UI / screenshots. Full path stays on
+        # the backend for the Trainer hookup.
+        rx.cond(
             DatasetState.uploaded_path != "",
             rx.text(
-                "Uploaded: " + DatasetState.uploaded_path,
+                "Uploaded: " + DatasetState.uploaded_basename,
                 size="1",
                 style={"font_family": "var(--bp-mono)", "color": "var(--bp-text-2)"},
             ),
@@ -107,6 +125,23 @@ def _format_group() -> rx.Component:
             direction="column",
             gap="2",
         ),
+        rx.flex(
+            _label("Override (when auto-detect guesses wrong)"),
+            rx.select.root(
+                rx.select.trigger(placeholder="auto", style={"width": "100%"}),
+                rx.select.content(
+                    rx.select.item("auto-detect", value="auto"),
+                    rx.select.item("ShareGPT", value="sharegpt"),
+                    rx.select.item("Alpaca", value="alpaca"),
+                    rx.select.item("OpenAI", value="openai"),
+                    rx.select.item("JSONL", value="jsonl"),
+                ),
+                value=DatasetState.format_hint,
+                on_change=DatasetState.set_format_hint,
+            ),
+            direction="column",
+            gap="1",
+        ),
         title="Format",
     )
 
@@ -115,7 +150,7 @@ def _preview_group() -> rx.Component:
     """Preview pane — first 5 records when uploaded."""
     return Group(
         rx.cond(
-            DatasetState.preview_records.length() == 0,
+            DatasetState.preview_records.length() == 0,  # type: ignore[attr-defined]
             rx.text(
                 "Upload a dataset to preview the first 5 records here.",
                 size="1",
@@ -223,15 +258,18 @@ def _filter_group() -> rx.Component:
         rx.flex(
             rx.checkbox(
                 "Enable dedup",
-                default_checked=DatasetState.dedup_enabled,
+                checked=DatasetState.dedup_enabled,
+                on_change=DatasetState.set_dedup_enabled,
             ),
             rx.checkbox(
                 "Drop empty records",
-                default_checked=True,
+                checked=DatasetState.drop_empty,
+                on_change=DatasetState.set_drop_empty,
             ),
             rx.checkbox(
                 "Apply curriculum (sort by length)",
-                default_checked=False,
+                checked=DatasetState.apply_curriculum,
+                on_change=DatasetState.set_apply_curriculum,
             ),
             direction="column",
             gap="2",
@@ -242,10 +280,20 @@ def _filter_group() -> rx.Component:
                 _label("Min tokens"),
                 rx.input(
                     placeholder="0",
-                    default_value="0",
+                    value=DatasetState.min_tokens.to_string(),
+                    on_change=DatasetState.set_min_tokens,
                     type="number",
                     size="2",
                     class_name="bp-num",
+                ),
+                rx.cond(
+                    DatasetState.min_tokens_error != "",
+                    rx.text(
+                        DatasetState.min_tokens_error,
+                        size="1",
+                        style={"color": "var(--bp-peach)", "font_size": "11px"},
+                    ),
+                    rx.fragment(),
                 ),
                 direction="column",
                 width="100%",
@@ -254,10 +302,20 @@ def _filter_group() -> rx.Component:
                 _label("Max tokens"),
                 rx.input(
                     placeholder="2048",
-                    default_value="2048",
+                    value=DatasetState.max_tokens.to_string(),
+                    on_change=DatasetState.set_max_tokens,
                     type="number",
                     size="2",
                     class_name="bp-num",
+                ),
+                rx.cond(
+                    DatasetState.max_tokens_error != "",
+                    rx.text(
+                        DatasetState.max_tokens_error,
+                        size="1",
+                        style={"color": "var(--bp-peach)", "font_size": "11px"},
+                    ),
+                    rx.fragment(),
                 ),
                 direction="column",
                 width="100%",

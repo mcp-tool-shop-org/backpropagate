@@ -22,8 +22,29 @@ import os
 import threading
 from dataclasses import dataclass as dc_dataclass
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+
+def _safe_pkg_version() -> str:
+    """Return the installed backpropagate version, or a sentinel fallback.
+
+    BRIDGE-A-015 (Stage C amend): the prior ``_pkg_version("backpropagate")``
+    call ran at class-body evaluation time, so loading the package from a
+    source tree without ``pip install -e .`` (common in CI checkouts,
+    container builds, dev rebases) raised ``PackageNotFoundError`` and
+    crashed module import BEFORE pytest had a chance to collect tests.
+
+    The fallback string ``"0.0.0+unknown"`` is the PEP 440 ``+local``
+    suffix convention for "we know this is a dev build but cannot resolve
+    the canonical version" — distinct from any real release so downstream
+    parsers don't confuse it with a tagged ``0.0.0``.
+    """
+    try:
+        return _pkg_version("backpropagate")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
 
 __all__ = [
     "Settings",
@@ -187,7 +208,14 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         packing: bool = False
 
     class UIConfig(BaseSettings):
-        """Gradio UI configuration."""
+        """Reflex (Radix UI) web interface configuration.
+
+        Migrated from Gradio in v1.1.0. The host / port / share / auto_open
+        knobs continue to apply — `cmd_ui` forwards them to the Reflex
+        subprocess launch. ``host`` defaults to ``127.0.0.1`` (localhost
+        only) for security; expose externally via SSH port-forwarding or a
+        Cloudflare Tunnel rather than ``host=0.0.0.0``.
+        """
         model_config = SettingsConfigDict(
             env_prefix="BACKPROPAGATE_UI__",
             env_ignore_empty=True,
@@ -286,7 +314,13 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         csp_report_only: bool = False  # Set False to enforce
 
         def get_auth_tuple(self) -> tuple | None:
-            """Get auth tuple for Gradio if credentials are set."""
+            """Return ``(username, password)`` if both auth credentials are set, else ``None``.
+
+            Originally fed Gradio's basic-auth tuple; in v1.1.0+ the Reflex
+            UI consumes the same shape via ``ui_app/auth.py``. The format is
+            preserved so existing BACKPROPAGATE_SECURITY__AUTH_USERNAME /
+            AUTH_PASSWORD env vars stay valid across the migration.
+            """
             if self.auth_username and self.auth_password:
                 return (self.auth_username, self.auth_password)
             return None
@@ -343,7 +377,15 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         security: SecurityConfig = Field(default_factory=SecurityConfig)
 
         # Package info
-        version: str = _pkg_version("backpropagate")
+        # BRIDGE-A-015 (Stage C amend): wrap in default_factory so the version
+        # lookup is deferred until Settings() is actually instantiated, AND
+        # routed through _safe_pkg_version which returns "0.0.0+unknown" when
+        # the package metadata is missing. Pre-fix this was
+        # ``version: str = _pkg_version("backpropagate")`` evaluated at class-
+        # body time — a fresh CI checkout without `pip install -e .` would
+        # raise PackageNotFoundError and crash module import before any test
+        # collection.
+        version: str = Field(default_factory=_safe_pkg_version)
         name: str = "backpropagate"
 
         def to_dict(self) -> dict:

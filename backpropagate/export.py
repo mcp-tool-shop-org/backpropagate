@@ -22,6 +22,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import warnings
 from dataclasses import dataclass
@@ -199,9 +200,10 @@ def _run_subprocess_interruptible(
     Returns a ``CompletedProcess`` shaped exactly like ``subprocess.run`` for
     drop-in replacement at the existing raise-site.
     """
-    is_windows = os.name == "nt"
-
-    if is_windows:
+    # sys.platform-based check (mypy narrows these as platform-conditional;
+    # os.name == "nt" does NOT narrow, so we'd hit attr-defined errors on
+    # Linux/macOS mypy runs even though the branch never executes there).
+    if sys.platform == "win32":
         popen_kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
     else:
         popen_kwargs.setdefault("start_new_session", True)
@@ -222,7 +224,7 @@ def _run_subprocess_interruptible(
     except subprocess.TimeoutExpired:
         # Tear down the child explicitly so it doesn't outlive the parent.
         try:
-            if is_windows:
+            if sys.platform == "win32":
                 proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 proc.terminate()
@@ -235,7 +237,7 @@ def _run_subprocess_interruptible(
         # because we put it in a separate group/session) so it actually stops
         # writing instead of leaving a zombie.
         try:
-            if is_windows:
+            if sys.platform == "win32":
                 proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 proc.terminate()
@@ -393,7 +395,6 @@ def _resolve_hf_token(token: str | None) -> str | None:
     whatever the underlying ``huggingface_hub`` session was configured
     with (e.g. an active ``HF_HUB_TOKEN`` from a Colab integration).
     """
-    import os
 
     if token:
         return token

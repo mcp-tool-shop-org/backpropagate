@@ -122,14 +122,14 @@ _COOKIE_TTL_SECONDS = 12 * 60 * 60  # 12 hours; matches DESIGN_BRIEF
 _COOKIE_REALM = "backpropagate"
 _WS_CLOSE_CODE_AUTH_FAILED = 4401  # Application-level "auth failed"
 _WS_CLOSE_CODE_ORIGIN_FAILED = 4403  # Application-level "forbidden origin"
-_LAUNCH_TOKEN_ENV = "BACKPROPAGATE_UI_LAUNCH_TOKEN"
+_LAUNCH_TOKEN_ENV = "BACKPROPAGATE_UI_LAUNCH_TOKEN"  # nosec B105 — env var NAME, not a credential value
 
 
 class AuthMode(enum.Enum):
     """Operator-facing modes from the DESIGN_BRIEF matrix."""
 
     NO_AUTH_LOCAL_ONLY = "no_auth_local_only"
-    TOKEN_AUTO = "token_auto"
+    TOKEN_AUTO = "token_auto"  # nosec B105 — enum identifier, not a credential
     EXPLICIT_CREDS = "explicit_creds"
     PRODUCTION = "production"
 

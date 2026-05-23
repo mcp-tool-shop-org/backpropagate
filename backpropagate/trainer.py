@@ -417,7 +417,7 @@ def _detect_chat_markers(tokenizer: Any) -> tuple[str, str]:
                 name = str(value.get("name_or_path", "")) or str(value.get("_name_or_path", ""))
                 if name:
                     break
-        except Exception:
+        except Exception:  # nosec B112 — best-effort tokenizer name probe; next candidate is the right behavior
             continue
     cls_name = type(tokenizer).__name__.lower()
     haystack = f"{name.lower()} {cls_name}"

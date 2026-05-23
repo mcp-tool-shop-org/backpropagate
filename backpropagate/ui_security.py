@@ -2,7 +2,12 @@
 Backpropagate - UI Security Module
 ==================================
 
-Production-hardened security utilities for the Gradio web interface.
+Production-hardened security utilities used by the Reflex web interface
+(canonical from v1.1.0). The helpers were originally authored against Gradio
+in v1.0; several still carry ``gradio`` in their names for back-compatibility
+(``safe_gradio_handler``, ``DEFAULT_GRADIO_CSP``, etc.) and the underlying
+behavior is framework-agnostic. v1.3 plans a symbol rename with deprecation
+aliases so downstream consumers get a graceful migration path.
 
 Based on:
 - Trail of Bits Gradio 5 Security Audit (https://huggingface.co/blog/gradio-5-security)

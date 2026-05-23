@@ -245,9 +245,7 @@ backprop ui --port 7862
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` 命令，如果未指定 `--auth` 参数，将以错误代码 `1` 退出，并显示结构化错误信息 `[INPUT_AUTH_REQUIRED]`。 原因是：`--share` 会生成一个 `*.gradio.live` 的 URL，任何人都可以访问它。 如果没有身份验证，这意味着任何人都可以控制您的训练流水线。
-
-为了明确禁用身份验证（例如，在内部开发环境中），请设置环境变量 `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`。每次启动时，系统会发出明显的警告。此外，在未授权的界面加载之前，会有一个 5 秒的缓冲期，如果界面显示不正确，您可以按 `Ctrl-C` 停止。
+`backprop ui --share` 命令，如果未指定 `--auth` 参数，将以错误代码 `1` 退出，并显示结构化错误信息 `[RUNTIME_UI_AUTH_NOT_ENFORCED]`。 原因是：`--share` 会发布一个公开的 URL，任何人都可以访问。 如果没有身份验证，这意味着任何人都可以控制您的训练流水线。 如果您不想设置凭据，请使用 SSH 端口转发：`ssh -L 7860:localhost:7860 <host>`，然后在本地打开 `http://localhost:7860`。 请参阅 [handbook/security.md](site/src/content/docs/handbook/security.md) 以获取完整的安全风险评估。
 
 用户界面中的文件写入操作会被限制在一个单独的目录中，以提高安全性。
 

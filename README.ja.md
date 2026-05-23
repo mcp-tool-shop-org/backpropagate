@@ -245,9 +245,7 @@ backprop ui --port 7862
 backprop ui --share --auth alice:hunter2
 ```
 
-`--auth` オプションなしで `backprop ui --share` を実行すると、コード `1` で終了し、構造化されたエラー `[INPUT_AUTH_REQUIRED]` が表示されます。これは、`--share` オプションが `*.gradio.live` という URL を公開し、認証なしで誰でもその URL にアクセスできるため、誰でもトレーニングパイプラインを制御できてしまう可能性があるためです。
-
-明示的に無効にするには（例：内部開発環境）、環境変数 `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` を設定します。起動時に大きな警告が表示されます。また、認証なしの UI が起動するまでに 5 秒の猶予があるので、問題がある場合は `Ctrl-C` で中断できます。
+`backprop ui --share` コマンドを `--auth` オプションなしで実行すると、エラーコード `1` が発生し、構造化されたエラーメッセージ `[RUNTIME_UI_AUTH_NOT_ENFORCED]` が表示されます。これは、`--share` オプションが公開URLを生成し、認証なしで利用可能にすると、インターネット上の誰でもトレーニングパイプラインを操作できてしまうためです。この動作を回避するオプションはありません。認証情報を設定したくない場合は、SSHのポートフォワード機能を使用してください。具体的には、`ssh -L 7860:localhost:7860 <ホスト>` コマンドを実行し、その後、`http://localhost:7860` をローカルで開きます。詳細なセキュリティに関する情報は、[handbook/security.md](site/src/content/docs/handbook/security.md) を参照してください。
 
 UI からのファイルシステムへの書き込みは、単一のディレクトリにサンドボックス化されています。
 

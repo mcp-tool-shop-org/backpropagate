@@ -245,9 +245,7 @@ Pour rendre l'URL accessible via Internet, vous devez combiner les options `--sh
 backprop ui --share --auth alice:hunter2
 ```
 
-La commande `backprop ui --share` sans l'option `--auth` renvoie un code d'erreur `1` et un message d'erreur structuré `[INPUT_AUTH_REQUIRED]`. La raison est que l'option `--share` publie une URL `*.gradio.live` que toute personne sur Internet peut consulter, et sans authentification, cela signifie que toute personne peut contrôler votre pipeline d'entraînement.
-
-Pour désactiver explicitement cette fonctionnalité (par exemple, dans un environnement de développement interne), définissez la variable d'environnement `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. Un avertissement important s'affiche à chaque lancement, et il existe une période de grâce de 5 secondes avant que l'interface utilisateur non authentifiée ne s'active, ce qui vous permet d'utiliser `Ctrl-C` si quelque chose ne vous semble pas correct.
+L'exécution de la commande `backprop ui --share` sans l'option `--auth` se termine avec le code d'erreur `1` et l'erreur structurée `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. La raison est la suivante : l'option `--share` publie une URL publique que toute personne sur Internet peut consulter, et sans authentification, cela signifie que n'importe qui peut contrôler votre processus de formation. Il n'y a pas de possibilité de désactivation de cette fonctionnalité ; si vous ne souhaitez pas définir de crédentielles, utilisez plutôt le transfert de port SSH : `ssh -L 7860:localhost:7860 <hôte>`, puis ouvrez `http://localhost:7860` localement. Consultez le document [handbook/security.md](site/src/content/docs/handbook/security.md) pour une description complète du modèle de menace.
 
 Les opérations d'écriture sur le système de fichiers via l'interface utilisateur sont limitées à un seul répertoire :
 

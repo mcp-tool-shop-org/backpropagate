@@ -245,9 +245,7 @@ To expose a public-internet URL, you must pair `--share` with `--auth`:
 backprop ui --share --auth alice:hunter2
 ```
 
-`backprop ui --share` without `--auth` exits with code `1` and the structured error `[INPUT_AUTH_REQUIRED]`. The rationale: `--share` publishes a `*.gradio.live` URL that anyone on the internet can hit, and without auth that means anyone can drive your training pipeline.
-
-To explicitly opt out (e.g. an internal dev environment), set the env var `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`. A loud warning will print on every launch — and there's a 5-second grace period before the unauth'd UI binds, so you can `Ctrl-C` if it looks wrong.
+`backprop ui --share` without `--auth` exits with code `1` and the structured error `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The rationale: `--share` publishes a public URL that anyone on the internet can hit, and without auth that means anyone can drive your training pipeline. There is no opt-out — if you don't want to set credentials, use SSH port-forwarding instead: `ssh -L 7860:localhost:7860 <host>` then open `http://localhost:7860` locally. See [handbook/security.md](site/src/content/docs/handbook/security.md) for the full threat model.
 
 Filesystem writes from the UI are sandboxed to a single directory:
 

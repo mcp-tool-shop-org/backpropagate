@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | पायडैंटिक का कॉन्फ़िगरेशन सत्यापन। | pydantic, pydantic-सेटिंग्स |
 | `export` | ओलामा के लिए जीजीयूएफ प्रारूप में डेटा का निर्यात। | llama-cpp-python |
 | `monitoring` | वैंडबी (WandB) और सिस्टम मॉनिटरिंग (संस्करण 1.1.0 में ट्रेनर में स्वचालित रूप से एकीकृत)। | wandb, psutil |
-| `observability` | ओपनटेलमेट्री ट्रेसिंग। | opentelemetry-api, opentelemetry-sdk |
 | `logging` | संरचित लॉगिंग। | स्ट्रक्टलॉग (structlog) एक ऐसा उपकरण है। |
 | `security` | JWT प्रमाणीकरण (ऑथेंटिकेशन) और टोकन निर्माण। | PyJWT, क्रिप्टोग्राफी। |
 | `production` | अनस्लोथ + यूआई (यूजर इंटरफेस) + सत्यापन + लॉगिंग + सुरक्षा। | (गुच्छा) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` डिफ़ॉल्ट है - जब किसी मॉडल तर्क के बिना `Trainer()` को कॉल किया जाता है तो यह मान लागू होता है (देखें [`config.py`](backpropagate/config.py) `ModelConfig.name`)। पुराने उदाहरणों में प्री-क्वांटाइज्ड `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` का उपयोग किया गया था; हमने बेहतर विश्वसनीयता के लिए डिफ़ॉल्ट को आधिकारिक Qwen वेट पर बदल दिया है ([CHANGELOG v0.1.3](CHANGELOG.md))। दोनों मॉडल काम करते हैं।
+`Qwen/Qwen2.5-7B-Instruct` डिफ़ॉल्ट विकल्प है — `Trainer()` फ़ंक्शन को बिना किसी मॉडल तर्क के कॉल करने पर यही मान निर्धारित होता है (देखें [`config.py`](backpropagate/config.py) में `ModelConfig.name`)। पुराने उदाहरणों में पहले से क्वांटाइज किया गया `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` उपयोग किया गया था; हमने बेहतर विश्वसनीयता के लिए डिफ़ॉल्ट को आधिकारिक Qwen मॉडल भार में बदल दिया ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21))। दोनों मॉडल काम करते हैं।
 
 ### मल्टी-रन SLAO प्रशिक्षण
 
@@ -299,10 +298,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+v1.0 Gradio कार्यान्वयन (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) को v1.1.x तक संदर्भ के रूप में रखा गया था और v1.2.0 में हटा दिया गया।
 
 ## समस्या निवारण
 

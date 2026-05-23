@@ -94,7 +94,6 @@ pip install backpropagate[full]        # Everything
 | `validation` | Validation de configuration Pydantic | pydantic, pydantic-settings |
 | `export` | Exportation GGUF pour Ollama | llama-cpp-python |
 | `monitoring` | WandB + surveillance du système (intégré au trainer depuis la version 1.1.0) | wandb, psutil |
-| `observability` | Traçage OpenTelemetry | opentelemetry-api, opentelemetry-sdk |
 | `logging` | Journalisation structurée | structlog |
 | `security` | Authentification JWT + génération de jetons | PyJWT, cryptography |
 | `production` | unsloth + ui + validation + journalisation + sécurité | (ensemble) |
@@ -145,7 +144,7 @@ trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` est le modèle par défaut ; la valeur `Trainer()` est résolue lorsque celle-ci est appelée sans argument de modèle (voir [`config.py`](backpropagate/config.py) `ModelConfig.name`). Les exemples précédents utilisaient la version quantifiée `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` ; nous avons modifié le modèle par défaut pour utiliser les poids officiels de Qwen afin d'améliorer la fiabilité ([CHANGELOG v0.1.3](CHANGELOG.md)). N'importe quel modèle fonctionne.
+`Qwen/Qwen2.5-7B-Instruct` est la valeur par défaut standard. Lorsque la fonction `Trainer()` est appelée sans argument de modèle, c'est cette valeur qui est utilisée (voir [`config.py`](backpropagate/config.py) `ModelConfig.name`). Les exemples précédents utilisaient la version quantifiée `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; nous avons modifié la valeur par défaut pour utiliser les poids officiels de Qwen afin d'améliorer la fiabilité ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Les deux modèles fonctionnent.
 
 ### Entraînement SLAO multi-exécution
 
@@ -299,10 +298,10 @@ backpropagate/
 │   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
 │   ├── pages/           #   Train / Multi-Run / Export / Dataset
 │   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-├── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-├── ui_gradio_legacy.py  # DEPRECATED — preserved as v1.0 reference; removed in v1.2
-└── theme_gradio_legacy.py  # DEPRECATED — same
+└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
 ```
+
+L'implémentation Gradio de la version 1.0 (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) a été conservée jusqu'à la version 1.1.x à titre de référence et a été supprimée dans la version 1.2.0.
 
 ## Dépannage
 

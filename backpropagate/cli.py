@@ -342,7 +342,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     # Re-bind in case the handler is called directly without main()'s setup.
     try:
         bind_run_context(run_id=cli_run_id_full, subcommand="train")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability bind; must not abort CLI
         pass
     # Structured log line — routes to JSON when BACKPROPAGATE_LOG_JSON=1,
     # pretty console otherwise. Replaces the legacy stderr-only print().
@@ -353,7 +353,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             model=args.model,
             dataset=str(args.data),
         )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
         pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
@@ -521,7 +521,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
     cli_run_id = cli_run_id_full[:12]
     try:
         bind_run_context(run_id=cli_run_id_full, subcommand="multi-run")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
         pass
     try:
         get_logger(__name__).info(
@@ -530,7 +530,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             model=args.model,
             runs=args.runs,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
         pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
@@ -688,7 +688,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     cli_run_id = cli_run_id_full[:12]
     try:
         bind_run_context(run_id=cli_run_id_full, subcommand="export")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
         pass
     try:
         get_logger(__name__).info(
@@ -696,7 +696,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             cli_run_id=cli_run_id_full,
             format=args.format,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
         pass
     print(
         f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
@@ -2735,7 +2735,7 @@ def main(argv: list[str] | None = None) -> int:
     verbose = bool(getattr(args, "verbose", False))
     try:
         configure_logging(level="DEBUG" if verbose else None, force=True)
-    except Exception:  # noqa: BLE001 — logging setup must not abort the CLI
+    except Exception:  # noqa: BLE001 — logging setup must not abort the CLI  # nosec B110
         # If logging setup itself fails (extremely rare — bad log file path,
         # permission denied), fall back silently so the subcommand still runs.
         # The traceback is intentionally swallowed so a misconfigured
@@ -2750,7 +2750,7 @@ def main(argv: list[str] | None = None) -> int:
     cli_run_id = uuid.uuid4().hex
     try:
         bind_run_context(run_id=cli_run_id, subcommand=getattr(args, "command", None))
-    except Exception:  # noqa: BLE001 — context binding must not abort the CLI
+    except Exception:  # noqa: BLE001 — context binding must not abort the CLI  # nosec B110
         pass
     args.cli_run_id = cli_run_id
 
@@ -2764,7 +2764,7 @@ def main(argv: list[str] | None = None) -> int:
             cli_run_id=cli_run_id,
             subcommand=getattr(args, "command", None),
         )
-    except Exception:  # noqa: BLE001 — logging must not abort the CLI
+    except Exception:  # noqa: BLE001 — logging must not abort the CLI  # nosec B110
         pass
 
     if not args.command:

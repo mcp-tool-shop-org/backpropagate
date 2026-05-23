@@ -1218,6 +1218,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # via FastAPI middleware once Phase 3 wires it. For Phase 1 the variable
     # is exported but Reflex doesn't read it yet.
     env = os.environ.copy()
+    # BRIDGE-B-001: strip ambient BACKPROPAGATE_UI_AUTH when --auth not passed;
+    # prevents ambient-env bypass of refuse-to-start once ENFORCEMENT_AVAILABLE
+    # flips. Without this, `BACKPROPAGATE_UI_AUTH=u:p backprop ui` (no --auth)
+    # would pass the CLI gate then silently activate auth in the Reflex child.
+    if args.auth is None:
+        env.pop("BACKPROPAGATE_UI_AUTH", None)
     if auth:
         env["BACKPROPAGATE_UI_AUTH"] = f"{auth[0]}:{auth[1]}"
     env["BACKPROPAGATE_UI_PORT"] = str(args.port)

@@ -10,6 +10,8 @@ This module is imported by:
 
 from __future__ import annotations
 
+import os
+
 import reflex as rx
 
 # Absolute imports so this module works whether Reflex loads it as
@@ -17,10 +19,32 @@ import reflex as rx
 # ``backpropagate.ui_app.app`` (Python smoke tests).
 from backpropagate.ui_theme import RADIX_THEME, STYLESHEETS, TOKENS_CSS
 
+from .auth import ENFORCEMENT_AVAILABLE
 from .pages.dataset import dataset_page
 from .pages.export import export_page
 from .pages.multi_run import multi_run_page
 from .pages.train import train_page
+
+# FRONTEND-B-001 / GHSA-pending defense-in-depth:
+# cli.py:cmd_ui refuses --auth/--share when ENFORCEMENT_AVAILABLE is False, but
+# that check is bypassed if a user runs ``python -m reflex run`` or ``reflex
+# run`` directly from the package directory. Fire the same refuse-to-start
+# check here at module import time so the Reflex app cannot bind a port and
+# serve an unauthenticated UI when the operator believes auth is wired up.
+#
+# The check requires BOTH: ENFORCEMENT_AVAILABLE=False (middleware not landed)
+# AND BACKPROPAGATE_UI_AUTH set in the env (operator believes auth is active).
+# When ENFORCEMENT_AVAILABLE flips to True (Wave 6), this guard becomes inert
+# without any further code change.
+if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
+    raise RuntimeError(
+        "FRONTEND-B-001 / GHSA-pending: The Reflex web UI does not yet "
+        "enforce BACKPROPAGATE_UI_AUTH. Refusing to start to prevent the "
+        "v1.1.0 false-promise (the CLI announced 'Auth: enabled' but the "
+        "runtime ignored the env var). "
+        "Use SSH port-forwarding for remote access until middleware lands: "
+        "ssh -L 7860:localhost:7860 <host>"
+    )
 
 
 def _with_tokens(page: rx.Component) -> rx.Component:

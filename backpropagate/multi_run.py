@@ -1836,48 +1836,51 @@ class MultiRunTrainer:
 
         # Compute loss on validation set
         model.eval()
-        total_loss = 0.0
-        count = 0
-        skipped = 0
+        try:
+            total_loss = 0.0
+            count = 0
+            skipped = 0
 
-        with torch.no_grad():
-            for sample in val_dataset:
-                try:
-                    # Get text
-                    if 'text' in sample:
-                        text = sample['text']
-                    elif 'messages' in sample:
-                        text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
-                    elif 'conversations' in sample:
-                        # ShareGPT format
-                        text = '\n'.join([c.get('value', '') for c in sample['conversations']])
-                    else:
-                        continue
+            with torch.no_grad():
+                for sample in val_dataset:
+                    try:
+                        # Get text
+                        if 'text' in sample:
+                            text = sample['text']
+                        elif 'messages' in sample:
+                            text = tokenizer.apply_chat_template(sample['messages'], tokenize=False)
+                        elif 'conversations' in sample:
+                            # ShareGPT format
+                            text = '\n'.join([c.get('value', '') for c in sample['conversations']])
+                        else:
+                            continue
 
-                    # Tokenize
-                    inputs = tokenizer(
-                        text,
-                        return_tensors='pt',
-                        truncation=True,
-                        max_length=self._trainer.max_seq_length,
-                    )
+                        # Tokenize
+                        inputs = tokenizer(
+                            text,
+                            return_tensors='pt',
+                            truncation=True,
+                            max_length=self._trainer.max_seq_length,
+                        )
 
-                    # Move to device
-                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                        # Move to device
+                        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-                    # Forward pass
-                    outputs = model(**inputs, labels=inputs['input_ids'])
-                    total_loss += outputs.loss.item()
-                    count += 1
+                        # Forward pass
+                        outputs = model(**inputs, labels=inputs['input_ids'])
+                        total_loss += outputs.loss.item()
+                        count += 1
 
-                    # Limit to prevent slow validation
-                    if count >= self.config.validation_samples:
-                        break
-                except Exception as e:
-                    skipped += 1
-                    logger.warning(f"Skipped validation sample (error: {e})")
-
-        model.train()
+                        # Limit to prevent slow validation
+                        if count >= self.config.validation_samples:
+                            break
+                    except Exception as e:
+                        skipped += 1
+                        logger.warning(f"Skipped validation sample (error: {e})")
+        finally:
+            # Ensure model is restored to training mode on ANY exit path
+            # (normal completion, exception, KeyboardInterrupt, etc.)
+            model.train()
 
         if skipped > 0:
             logger.warning(f"Skipped {skipped} validation samples due to errors")

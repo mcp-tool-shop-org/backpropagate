@@ -382,14 +382,32 @@ class TestOllamaIntegration:
         mock_run.assert_called_once()
 
     def test_register_with_ollama_failure(self, sample_gguf_path):
-        """Test Ollama registration failure raises OllamaRegistrationError."""
+        """Test Ollama registration failure raises OllamaRegistrationError.
+
+        BRIDGE-A-004 (v1.1.2 amend wave): register_with_ollama now invokes
+        ``_run_subprocess_interruptible`` (Popen-based) instead of
+        ``subprocess.run``. Patching the legacy ``subprocess.run`` target
+        was a no-op — the test only passed on machines where ``ollama``
+        happened to be installed AND happened to fail with the expected
+        signature. On a clean CI runner without ollama, Popen raised
+        ``FileNotFoundError`` and the assertion would never match.
+
+        TESTS-B-001 escalation fix: move the patch target to
+        ``backpropagate.export._run_subprocess_interruptible`` so the
+        synthesized ``CalledProcessError`` actually reaches the
+        ``OllamaRegistrationError`` translation branch — pinning the
+        failure-message contract independent of host ollama state.
+        """
         import subprocess
 
         from backpropagate.exceptions import OllamaRegistrationError
         from backpropagate.export import register_with_ollama
 
         with patch("shutil.which", return_value="/usr/bin/ollama"), \
-             patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "ollama")):
+             patch(
+                 "backpropagate.export._run_subprocess_interruptible",
+                 side_effect=subprocess.CalledProcessError(1, "ollama"),
+             ):
             with pytest.raises(OllamaRegistrationError, match="ollama create failed"):
                 register_with_ollama(sample_gguf_path, "test-model")
 

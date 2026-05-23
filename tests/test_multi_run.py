@@ -308,24 +308,80 @@ class TestMultiRunTrainerDataChunking:
         mock_dataset.select.assert_called()
 
     def test_data_chunks_non_overlapping(self, trainer):
-        """Data chunks should not overlap."""
-        # With 500 samples, 5 runs of 100 each
-        # Run 1: 0-99, Run 2: 100-199, etc.
+        """Data chunks across runs must not overlap (when chunks fit one pass).
 
-        samples_per_run = trainer.config.samples_per_run
+        TESTS-B-004 escalation fix: the previous body only computed
+        ``start_idx`` / ``end_idx`` inside the test and asserted on those
+        synthetic ranges — it never called ``_get_data_chunk`` at all, so
+        a broken implementation would still pass. The test was a false
+        positive that gave zero coverage of the actual function under test.
+
+        The rewrite mirrors the shape of ``test_data_chunk_wraparound``
+        below (which is correctly invoked per the Stage A audit): build a
+        deterministic dataset with one identifiable string per index, call
+        ``_get_data_chunk`` for each run, decode the returned strings back
+        to indices, and assert (a) every run returns the right size, (b)
+        union of indices across runs == expected range, and (c) no index
+        appears in two different runs.
+
+        Configuration: 5 runs * 100 samples = 500 indices needed, against
+        a 500-sample dataset. With validation OFF the train pool is the
+        full dataset and there is no wrap-around — each run gets a
+        disjoint window. (Wrap-around is covered by
+        ``test_data_chunk_wraparound``.)
+        """
+        from datasets import Dataset
+
+        # Mirror the trainer fixture's config (num_runs=5, samples_per_run=100,
+        # shuffle_data=False). Validation OFF so the train pool == full dataset.
         total_samples = 500
+        samples_per_run = trainer.config.samples_per_run
+        num_runs = trainer.config.num_runs
+        trainer.config.replay_fraction = 0.0  # isolate the new-samples path
+        trainer.config.validate_every_run = False
+        trainer.config.early_stopping = False
 
-        seen_indices = set()
-        for run_idx in range(1, 6):
-            start_idx = ((run_idx - 1) * samples_per_run) % total_samples
-            end_idx = min(start_idx + samples_per_run, total_samples)
+        dataset = Dataset.from_dict(
+            {"text": [f"sample_{i}" for i in range(total_samples)]}
+        )
 
-            indices = set(range(start_idx, end_idx))
+        seen_indices: set[int] = set()
 
-            # No overlap with previously seen indices
-            assert len(seen_indices & indices) == 0
+        for run_idx in range(1, num_runs + 1):
+            chunk = trainer._get_data_chunk(dataset, run_idx)
 
-            seen_indices.update(indices)
+            assert chunk is not None
+            assert len(chunk) == samples_per_run, (
+                f"Run {run_idx}: expected {samples_per_run} samples, got "
+                f"{len(chunk)}"
+            )
+
+            # Decode the deterministic 'sample_N' strings back to indices.
+            chunk_indices = {int(value.split("_")[1]) for value in chunk["text"]}
+            assert len(chunk_indices) == samples_per_run, (
+                f"Run {run_idx}: _get_data_chunk returned duplicate indices "
+                f"within the same chunk ({samples_per_run - len(chunk_indices)} dupes)"
+            )
+
+            # The load-bearing assertion: this run's indices must not overlap
+            # any previously returned run's indices.
+            overlap = seen_indices & chunk_indices
+            assert not overlap, (
+                f"Run {run_idx} returned indices already seen in earlier "
+                f"runs: {sorted(overlap)[:10]}... "
+                f"(total overlap size {len(overlap)}). _get_data_chunk must "
+                f"partition the dataset across runs when chunks fit one pass."
+            )
+
+            seen_indices.update(chunk_indices)
+
+        # End-state contract: union covers exactly [0, total_samples).
+        expected = set(range(total_samples))
+        assert seen_indices == expected, (
+            f"Union of all run chunks ({len(seen_indices)} indices) does not "
+            f"equal the full dataset range ({total_samples} indices). "
+            f"Missing: {sorted(expected - seen_indices)[:10]}..."
+        )
 
     def test_data_chunk_wraparound(self, trainer):
         """Wraparound (samples_per_run * num_runs > dataset) cycles inside the train pool.

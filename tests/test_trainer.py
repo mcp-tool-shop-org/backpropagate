@@ -1348,3 +1348,343 @@ class TestReportToFeatureFlags:
         assert "wandb" in INSTALL_HINTS
         assert "tensorboard" in INSTALL_HINTS
         assert "mlflow" in INSTALL_HINTS
+
+
+# =============================================================================
+# OOM AUTO-RECOVERY (B-002) — TESTS-A-004
+# =============================================================================
+#
+# CHANGELOG.md L33 documents Trainer(oom_recovery=True) (default-on) that
+# halves batch_size and doubles gradient_accumulation_steps on
+# torch.cuda.OutOfMemoryError, and aborts after _OOM_MAX_RETRIES_AT_MIN_BATCH
+# consecutive failures at batch_size=1 with TrainingError(code='RUNTIME_GPU_OOM').
+#
+# These tests pin the load-bearing v1.1.0 contract by mocking SFTTrainer to
+# raise an OOM-shaped RuntimeError ("out of memory" — caught by the substring
+# check at trainer.py:1027-1028 because torch.cuda.OutOfMemoryError is hard
+# to instantiate without CUDA) on the first N .train() calls.
+
+
+class _OOMScript:
+    """Helper that builds an SFTTrainer mock whose .train() raises OOM N times.
+
+    Why this lives here (not in conftest.py): the OOM-recovery code path
+    re-instantiates SFTTrainer on each retry, so we need a fresh mock instance
+    for each call that still shares the failure-counter across instances. A
+    plain MagicMock(side_effect=[OOM, OOM, ok]) on .train() won't work — the
+    side_effect list resets when SFTTrainer is re-instantiated.
+    """
+
+    def __init__(self, oom_count: int):
+        self._oom_remaining = oom_count
+        self._train_calls = 0
+
+    def _make_instance(self) -> MagicMock:
+        """Return a fresh SFTTrainer mock whose .train() consults shared state."""
+        instance = MagicMock()
+
+        def train_impl(*args, **kwargs):
+            self._train_calls += 1
+            if self._oom_remaining > 0:
+                self._oom_remaining -= 1
+                # OOM-shaped RuntimeError — trainer.py:1027 looks for the
+                # substring "out of memory" (case-insensitive) when isinstance
+                # of torch.cuda.OutOfMemoryError fails (which it does in this
+                # test rig because torch.cuda isn't loaded).
+                raise RuntimeError("CUDA out of memory at batch_size attempt")
+            mock_result = MagicMock()
+            mock_result.training_loss = 0.42
+            return mock_result
+
+        instance.train.side_effect = train_impl
+        instance.state.log_history = [{"loss": 0.42}]
+        return instance
+
+    def factory(self, *args, **kwargs):
+        return self._make_instance()
+
+
+class TestOOMAutoRecovery:
+    """Pin the v1.1.0 OOM auto-recovery contract (CHANGELOG L33, B-002)."""
+
+    def _setup_trainer(self, temp_dir, *, oom_recovery: bool = True,
+                       initial_batch: int = 4, initial_accum: int = 1):
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(
+                output_dir=str(temp_dir),
+                batch_size=initial_batch,
+                gradient_accumulation=initial_accum,
+                oom_recovery=oom_recovery,
+                use_unsloth=False,
+            )
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+        return trainer
+
+    def test_oom_halves_batch_and_doubles_accum(self, temp_dir):
+        """First OOM => batch_size halved, grad_accum doubled, retry succeeds."""
+        trainer = self._setup_trainer(
+            temp_dir, oom_recovery=True, initial_batch=4, initial_accum=1
+        )
+
+        script = _OOMScript(oom_count=1)  # one OOM then success
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"):
+            run = trainer.train("dummy_dataset", steps=10)
+
+        # SFTTrainer.train was called twice (first OOM, then retry).
+        assert script._train_calls == 2, (
+            f"Expected 2 .train() invocations (initial + 1 retry), "
+            f"got {script._train_calls}"
+        )
+        # batch halved from 4 -> 2, accum doubled from 1 -> 2.
+        assert trainer.batch_size == 2, (
+            f"OOM recovery should have halved batch_size from 4 to 2; got "
+            f"{trainer.batch_size}"
+        )
+        assert trainer.gradient_accumulation == 2, (
+            f"OOM recovery should have doubled grad_accum from 1 to 2; got "
+            f"{trainer.gradient_accumulation}"
+        )
+        # Training completed successfully on retry.
+        assert run is not None
+
+    def test_oom_at_min_batch_aborts_with_runtime_gpu_oom(self, temp_dir):
+        """N consecutive OOMs at batch_size=1 => TrainingError RUNTIME_GPU_OOM."""
+        from backpropagate.exceptions import TrainingError
+        from backpropagate.trainer import Trainer
+
+        trainer = self._setup_trainer(
+            temp_dir, oom_recovery=True, initial_batch=1, initial_accum=1
+        )
+
+        # Push enough OOMs to exceed _OOM_MAX_RETRIES_AT_MIN_BATCH plus a buffer.
+        ceiling = Trainer._OOM_MAX_RETRIES_AT_MIN_BATCH + 5
+        script = _OOMScript(oom_count=ceiling)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"), \
+             pytest.raises(TrainingError) as exc_info:
+            trainer.train("dummy_dataset", steps=10)
+
+        # Structured code is the load-bearing programmatic signal — pin it.
+        assert getattr(exc_info.value, "code", None) == "RUNTIME_GPU_OOM", (
+            f"Expected TrainingError(code='RUNTIME_GPU_OOM'); got "
+            f"code={getattr(exc_info.value, 'code', None)!r} "
+            f"message={exc_info.value!s}"
+        )
+
+        # The trainer should have given up after exactly the retry budget at
+        # batch=1 (no halving possible since batch_size is already 1).
+        assert script._train_calls == Trainer._OOM_MAX_RETRIES_AT_MIN_BATCH, (
+            f"Expected {Trainer._OOM_MAX_RETRIES_AT_MIN_BATCH} attempts at "
+            f"batch=1 before abort; got {script._train_calls}"
+        )
+
+    def test_oom_recovery_false_reraises_immediately(self, temp_dir):
+        """oom_recovery=False => first OOM re-raises, no halving.
+
+        Note on the wrapping: the OOM-shaped RuntimeError raised inside the
+        retry loop escapes that loop unchanged when oom_recovery=False (see
+        trainer.py:1030-1031), then the OUTER ``except RuntimeError`` handler
+        at trainer.py:1189 wraps it into a ``TrainingError`` with a "GPU
+        error during training" prefix because the message matches
+        "out of memory". The test pins both shapes — re-raise IS observable
+        as a TrainingError, but the orig RuntimeError is the ``__cause__``.
+        """
+        from backpropagate.exceptions import TrainingError
+
+        trainer = self._setup_trainer(
+            temp_dir, oom_recovery=False, initial_batch=4, initial_accum=1
+        )
+
+        script = _OOMScript(oom_count=5)  # more than enough, none should matter
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"), \
+             pytest.raises(TrainingError) as exc_info:
+            trainer.train("dummy_dataset", steps=10)
+
+        # The original OOM RuntimeError is the cause; the recovery loop did
+        # not retry. (If recovery HAD run, we'd see code='RUNTIME_GPU_OOM'
+        # from the retries-exhausted path, not the generic "GPU error" prefix.)
+        assert isinstance(exc_info.value.__cause__, RuntimeError), (
+            f"Expected __cause__ to be the original OOM RuntimeError; got "
+            f"{type(exc_info.value.__cause__).__name__}"
+        )
+        assert "out of memory" in str(exc_info.value.__cause__).lower()
+
+        # Exactly one attempt — no halving, no retries.
+        assert script._train_calls == 1, (
+            f"oom_recovery=False must re-raise on first OOM; got "
+            f"{script._train_calls} attempts"
+        )
+        # Knobs untouched.
+        assert trainer.batch_size == 4, (
+            f"oom_recovery=False must NOT modify batch_size; got "
+            f"{trainer.batch_size}"
+        )
+        assert trainer.gradient_accumulation == 1, (
+            f"oom_recovery=False must NOT modify grad_accum; got "
+            f"{trainer.gradient_accumulation}"
+        )
+
+
+# =============================================================================
+# ATOMIC CHECKPOINT WRITES (B-006) — TESTS-A-005
+# =============================================================================
+#
+# CHANGELOG.md L32: 'Atomic checkpoint writes — Trainer.save / SLAOMerger.save
+# / export_lora / export_gguf all write to <path>.partial then rename to
+# final. Disk-full mid-write no longer leaves corrupt artifacts.'
+#
+# These tests pin the contract by monkeypatching the inner write step to raise
+# (simulating disk full) and asserting:
+#   (a) the FINAL target file does not exist on disk
+#   (b) the .partial sibling is cleaned up
+#
+# Both Trainer.save and SLAOMerger.save are covered here; export_lora /
+# export_gguf coverage lives in test_export.py (added in this same wave).
+
+
+class TestTrainerSaveAtomic:
+    """Pin the atomic-write contract for Trainer.save (B-006, TESTS-A-005)."""
+
+    def _make_trainer(self, output_dir):
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(output_dir), use_unsloth=False)
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+        return trainer
+
+    def test_save_happy_path_promotes_partial_to_final(self, temp_dir):
+        """Trainer.save: success path leaves final dir, no .partial residue."""
+        trainer = self._make_trainer(temp_dir)
+        save_target = temp_dir / "lora"
+
+        # save_pretrained writes a marker file so we can prove the move worked.
+        def write_marker(path, *args, **kwargs):
+            from pathlib import Path
+            (Path(path) / "adapter_model.safetensors").write_bytes(b"weights")
+            return None
+
+        trainer._model.save_pretrained.side_effect = write_marker
+        trainer._tokenizer.save_pretrained.side_effect = write_marker
+
+        result_path = trainer.save(str(save_target))
+
+        assert save_target.exists(), "Final save directory must exist on success"
+        assert (save_target / "adapter_model.safetensors").exists(), (
+            "Marker file written during partial-stage must be promoted to final dir"
+        )
+        partial_path = save_target.with_name(save_target.name + ".partial")
+        assert not partial_path.exists(), (
+            f"Partial directory must be cleaned up on success path; still "
+            f"exists at {partial_path}"
+        )
+        assert str(save_target) in result_path
+
+    def test_save_disk_full_mid_write_leaves_no_final_artifact(self, temp_dir):
+        """Trainer.save: a mid-write failure must NOT leave a half-written final dir."""
+        from backpropagate.exceptions import CheckpointError
+
+        trainer = self._make_trainer(temp_dir)
+        save_target = temp_dir / "lora"
+
+        # Simulate disk-full: save_pretrained raises mid-write. The partial
+        # directory has already been created by the trainer at this point.
+        trainer._model.save_pretrained.side_effect = OSError(
+            "[Errno 28] No space left on device"
+        )
+
+        with pytest.raises(CheckpointError):
+            trainer.save(str(save_target))
+
+        # The atomic contract: no final artifact, no .partial residue.
+        assert not save_target.exists(), (
+            "Final save directory must NOT exist after a mid-write failure; "
+            "atomic promote should not have run."
+        )
+        partial_path = save_target.with_name(save_target.name + ".partial")
+        assert not partial_path.exists(), (
+            f"Partial directory must be cleaned up on failure path; still "
+            f"exists at {partial_path}"
+        )
+
+
+class TestSLAOMergerSaveAtomic:
+    """Pin the atomic-write contract for SLAOMerger.save (B-006, TESTS-A-005)."""
+
+    def test_slao_save_happy_path(self, temp_dir):
+        """SLAOMerger.save: success path leaves final dir, no .partial residue."""
+        torch = pytest.importorskip("torch")
+        from backpropagate.slao import SLAOMerger
+
+        merger = SLAOMerger()
+        merger.initialize({
+            "layer.lora_A.weight": torch.randn(4, 8),
+            "layer.lora_B.weight": torch.randn(8, 4),
+        })
+
+        save_target = temp_dir / "slao_checkpoint"
+        merger.save(str(save_target))
+
+        assert save_target.exists(), "Final SLAO save dir must exist on success"
+        assert (save_target / "merge_history.json").exists(), (
+            "merge_history.json must be present in the final dir"
+        )
+        partial_path = save_target.with_name(save_target.name + ".partial")
+        assert not partial_path.exists(), (
+            f"Partial dir must be cleaned up on success; still at {partial_path}"
+        )
+
+    def test_slao_save_disk_full_leaves_no_final_artifact(self, temp_dir,
+                                                          monkeypatch):
+        """SLAOMerger.save: torch.save failure must not leave half-written final dir."""
+        torch = pytest.importorskip("torch")
+        from backpropagate.slao import SLAOCheckpointError, SLAOMerger
+
+        merger = SLAOMerger()
+        merger.initialize({
+            "layer.lora_A.weight": torch.randn(4, 8),
+            "layer.lora_B.weight": torch.randn(8, 4),
+        })
+
+        save_target = temp_dir / "slao_checkpoint"
+
+        # Disk-full simulation: torch.save raises mid-write.
+        def fake_torch_save(*args, **kwargs):
+            raise OSError("[Errno 28] No space left on device")
+
+        monkeypatch.setattr("torch.save", fake_torch_save)
+
+        with pytest.raises(SLAOCheckpointError):
+            merger.save(str(save_target))
+
+        # Atomic contract: no final dir, partial cleaned up.
+        assert not save_target.exists(), (
+            "Final SLAO save dir must NOT exist after disk-full mid-write"
+        )
+        partial_path = save_target.with_name(save_target.name + ".partial")
+        assert not partial_path.exists(), (
+            f"Partial dir must be cleaned up on failure; still at {partial_path}"
+        )

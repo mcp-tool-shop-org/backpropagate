@@ -31,7 +31,7 @@ trainer.export("gguf", quantization="q4_k_m")
 - `backprop multi-run --data <file> --runs N --steps N --samples N` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
 - `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
 - `backprop info` -- system info and feature detection
-- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Gradio web UI; `--share` requires `--auth` unless `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`
+- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` requires `--auth` unless `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`
 - `backprop config` -- show resolved configuration
 
 Exit codes: 0 success, 1 user error, 2 runtime error, 3 partial success.

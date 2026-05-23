@@ -1957,23 +1957,45 @@ class MultiRunTrainer:
                 logger.debug(f"load_adapter path failed: {exc}; falling back to state-dict load")
 
         # Fallback: read the state dict and apply via existing helper.
+        # BACKEND-A-001 fix: dispatch the loader by file extension. The prior
+        # code called `safetensors.load_file()` on a .bin path whenever only
+        # the .bin existed, which raises (safetensors loader cannot parse
+        # torch pickles). Now we resolve which file exists first, then pick
+        # the loader. The `except ImportError` clause is scoped to the
+        # safetensors import line ONLY — it must not function as a generic
+        # fallback for unrelated errors inside the loader call.
         try:
             from safetensors.torch import load_file  # type: ignore
 
-            adapter_file = cp_path / "adapter_model.safetensors"
-            if not adapter_file.exists():
-                adapter_file = cp_path / "adapter_model.bin"
-            if not adapter_file.exists():
-                raise FileNotFoundError(
-                    f"No adapter weights at {adapter_file.parent}"
-                )
-            state_dict = load_file(str(adapter_file))
+            safetensors_available = True
         except ImportError:
+            safetensors_available = False
+            load_file = None  # type: ignore[assignment]
+
+        adapter_file = cp_path / "adapter_model.safetensors"
+        if not adapter_file.exists():
+            adapter_file = cp_path / "adapter_model.bin"
+        if not adapter_file.exists():
+            raise FileNotFoundError(
+                f"No adapter weights at {adapter_file.parent}"
+            )
+
+        if adapter_file.suffix == ".safetensors":
+            if not safetensors_available:
+                # Caller saved a .safetensors checkpoint but the resuming
+                # environment does not have safetensors installed. We cannot
+                # silently fall back to torch.load — the formats are not
+                # interchangeable. Surface a clear error.
+                raise ImportError(
+                    "safetensors is required to load "
+                    f"{adapter_file.name}; install with: pip install safetensors"
+                )
+            state_dict = load_file(str(adapter_file))  # type: ignore[misc]
+        else:
+            # .bin checkpoint — use torch.load regardless of whether
+            # safetensors is installed.
             import torch
 
-            adapter_file = cp_path / "adapter_model.bin"
-            if not adapter_file.exists():
-                raise
             # B614 + Ship Gate A: torch.load is unsafe by default (arbitrary
             # code execution via crafted pickle). weights_only=True is the
             # safe path and is what the rest of the codebase uses; this resume
@@ -2005,7 +2027,7 @@ class MultiRunTrainer:
                 from dataclasses import asdict, is_dataclass
 
                 if is_dataclass(mr):
-                    entry["result"] = asdict(mr)
+                    entry["result"] = asdict(mr)  # type: ignore[arg-type]
                 else:
                     entry["result"] = {
                         k: v for k, v in vars(mr).items()

@@ -17,7 +17,10 @@ GGUF Quantizations (fastest → smallest):
 """
 
 import logging
+import os
+import re
 import shutil
+import signal
 import subprocess
 import time
 import warnings
@@ -33,6 +36,227 @@ from .exceptions import (
     MergeExportError,
     OllamaRegistrationError,
 )
+
+# =============================================================================
+# INPUT VALIDATORS (BRIDGE-A-001, BRIDGE-A-002)
+# =============================================================================
+# Both ``register_with_ollama`` and ``push_to_hub`` previously forwarded
+# operator-supplied strings (the Ollama model name, the HF repo_id) into
+# subprocess argv / network calls without validation. While ``shell=False``
+# prevented shell-metachar injection on the ollama path, a leading ``-`` or
+# embedded newline can still confuse the downstream CLI / HTTP library and
+# produce option-injection or malformed-request surprises. We tighten the
+# input contract here so the error message is structured (``ExportError`` with
+# a stable ``code``) instead of leaking out of a downstream library.
+
+# Ollama model name: typical shape is "user/name:tag" but we accept any name
+# made up of alphanumerics + ``.``, ``_``, ``-``, ``:``. We disallow leading
+# ``-`` (option injection) and any whitespace / control char (newline,
+# carriage return, NUL would otherwise produce a malformed Modelfile or
+# truncate the ``ollama create`` argv). Length cap 128 chars matches Ollama's
+# own internal limit comfortably.
+_OLLAMA_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$")
+
+# Hugging Face Hub repo_id: spec is ``<owner>/<name>`` where each segment
+# matches ``[A-Za-z0-9][A-Za-z0-9._-]{0,95}``. We additionally reject any
+# ``..`` segment (path traversal in cached README mirroring on Windows) and
+# any control character.
+_HF_REPO_ID_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,95}/[A-Za-z0-9][A-Za-z0-9._\-]{0,95}$"
+)
+
+
+def _validate_model_name(model_name: str) -> None:
+    """Reject Ollama model names that could confuse the ollama CLI parser.
+
+    Raises:
+        ExportError: with ``code='INPUT_VALIDATION_FAILED'`` when the name
+            contains a control char, leading dash, whitespace, or otherwise
+            fails the allowlist. The message is structured so the operator
+            sees a clean CLI error instead of an obscure ``ollama create``
+            failure.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        err = ExportError(
+            "Ollama model name must be a non-empty string",
+            suggestion="Pass --ollama-name <name> with a name like 'my-finetune' or 'org/model:tag'.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    # Reject NUL, newline, carriage return explicitly so the error message
+    # names the offending character class (the regex below would catch them
+    # via the allowlist, but the operator gets a clearer hint here).
+    if any(ch in model_name for ch in ("\x00", "\n", "\r")):
+        err = ExportError(
+            "Ollama model name contains a control character (NUL / newline / CR)",
+            suggestion="Strip the embedded control char from --ollama-name.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    if model_name.startswith("-"):
+        err = ExportError(
+            f"Ollama model name '{model_name}' starts with '-' — refusing to pass to ollama CLI",
+            suggestion="A leading dash is interpreted as a flag by argv parsers. Rename without the dash.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    if not _OLLAMA_MODEL_NAME_RE.match(model_name):
+        err = ExportError(
+            f"Ollama model name '{model_name}' contains invalid characters",
+            suggestion=(
+                "Allowed: ASCII letters, digits, '.', '_', '-', ':' "
+                "(first char must be alphanumeric); max 128 chars."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+    # Defense in depth: reject if Path(model_name).name differs (catches a
+    # path separator that slipped past the regex on a future relax).
+    if Path(model_name).name != model_name:
+        err = ExportError(
+            f"Ollama model name '{model_name}' contains path separators",
+            suggestion="Model names cannot contain '/' or '\\'.",
+            code="INPUT_VALIDATION_FAILED",
+        )
+        raise err
+
+
+def _validate_repo_id(repo_id: str) -> None:
+    """Reject malformed HF Hub repo identifiers BEFORE the network call.
+
+    Raises:
+        ExportError: with ``code='HUB_PUSH_INVALID_REPO'`` when the value is
+            empty, missing the ``owner/name`` shape, contains ``..``
+            segments, leading dash on either segment, or control chars.
+    """
+    if not isinstance(repo_id, str) or not repo_id:
+        err = ExportError(
+            "Hugging Face repo_id must be a non-empty string",
+            suggestion="Pass --repo owner/name (e.g. 'alice/qwen-finetune').",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    if any(ch in repo_id for ch in ("\x00", "\n", "\r", "\\")):
+        err = ExportError(
+            f"repo_id '{repo_id}' contains a control character or backslash",
+            suggestion="Strip embedded control chars / backslashes from --repo.",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    # Explicit '..' check before the regex so the message can name traversal.
+    segments = repo_id.split("/")
+    if any(seg == ".." or seg == "." for seg in segments):
+        err = ExportError(
+            f"repo_id '{repo_id}' contains a '..' or '.' segment",
+            suggestion="Use the 'owner/name' shape with no relative-path segments.",
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    if not _HF_REPO_ID_RE.match(repo_id):
+        err = ExportError(
+            f"repo_id '{repo_id}' is not in the 'owner/name' shape required by Hugging Face",
+            suggestion=(
+                "Each segment must start alphanumeric and use only "
+                "[A-Za-z0-9._-]; max 96 chars per segment."
+            ),
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+
+def _run_subprocess_interruptible(
+    cmd: list[str],
+    *,
+    timeout: float,
+    capture_output: bool = True,
+    text: bool = True,
+    check: bool = True,
+    **popen_kwargs: Any,
+) -> "subprocess.CompletedProcess[str]":
+    """Run ``cmd`` with KeyboardInterrupt that actually propagates to the child.
+
+    BRIDGE-A-004: ``subprocess.run(cmd, timeout=N)`` does NOT reliably forward
+    SIGINT / Ctrl+C to the spawned child on Windows (a console-CTRL_C is
+    multiplexed across the whole process group; the child may swallow it) or
+    on POSIX (the child may be re-parented before the parent's KeyboardInterrupt
+    handler fires). The result is zombie quantization processes that hold
+    GPU + disk for many minutes after the operator pressed Ctrl+C.
+
+    We replace ``subprocess.run`` with an explicit ``Popen`` whose child runs
+    in its OWN process group / session, then ``.wait(timeout=...)`` on the
+    parent side. KeyboardInterrupt at the parent terminates the child first
+    (SIGTERM on POSIX, CTRL_BREAK_EVENT on Windows), waits up to 10s for
+    cleanup, then re-raises so the caller's ``except KeyboardInterrupt``
+    branch can run as before.
+
+    Returns a ``CompletedProcess`` shaped exactly like ``subprocess.run`` for
+    drop-in replacement at the existing raise-site.
+    """
+    is_windows = os.name == "nt"
+
+    if is_windows:
+        popen_kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        popen_kwargs.setdefault("start_new_session", True)
+
+    stdout_dest = subprocess.PIPE if capture_output else None
+    stderr_dest = subprocess.PIPE if capture_output else None
+
+    proc = subprocess.Popen(  # noqa: S603 — argv is callee-controlled here
+        cmd,
+        stdout=stdout_dest,
+        stderr=stderr_dest,
+        text=text,
+        **popen_kwargs,
+    )
+
+    try:
+        stdout_data, stderr_data = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Tear down the child explicitly so it doesn't outlive the parent.
+        try:
+            if is_windows:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            proc.kill()
+        raise
+    except KeyboardInterrupt:
+        # Propagate Ctrl+C to the child (it didn't get its own console signal
+        # because we put it in a separate group/session) so it actually stops
+        # writing instead of leaving a zombie.
+        try:
+            if is_windows:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            proc.kill()
+        raise
+
+    completed: subprocess.CompletedProcess[str] = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout=stdout_data if capture_output else None,
+        stderr=stderr_data if capture_output else None,
+    )
+
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd, output=stdout_data, stderr=stderr_data
+        )
+
+    return completed
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer
@@ -228,6 +452,11 @@ def push_to_hub(
             ``HUB_PUSH_VERSION`` / ``HUB_PUSH_UNKNOWN`` so callers can
             distinguish.
     """
+    # BRIDGE-A-002: validate repo_id BEFORE the imports so a malformed value
+    # produces a structured error even when huggingface_hub isn't installed.
+    # ExportError.code='HUB_PUSH_INVALID_REPO' makes the failure scrapeable.
+    _validate_repo_id(repo_id)
+
     try:
         from huggingface_hub import HfApi  # type: ignore
         from huggingface_hub import create_repo as hf_create_repo  # type: ignore
@@ -321,6 +550,10 @@ def push_to_hub(
     except HfHubHTTPError as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status in (401, 403):
+            # BRIDGE-A-007 (catalog drift fix): use the canonical
+            # INPUT_AUTH_REQUIRED code that already exists in ERROR_CODES
+            # rather than the orphaned HUB_PUSH_AUTH string. The CLI branch
+            # below tests both for back-compat during the rename.
             err = ExportError(
                 f"Hugging Face authentication failed (HTTP {status}): {exc}",
                 suggestion=(
@@ -329,7 +562,7 @@ def push_to_hub(
                     "for a stored token."
                 ),
             )
-            err.code = "HUB_PUSH_AUTH"  # type: ignore[attr-defined]
+            err.code = "INPUT_AUTH_REQUIRED"  # type: ignore[attr-defined]
             raise err from exc
         if status == 404:
             err = ExportError(
@@ -923,7 +1156,10 @@ def export_gguf(
             quant_str,
         ]
         try:
-            result = subprocess.run(
+            # BRIDGE-A-004: Popen-based runner so Ctrl+C during a 30-min
+            # quantization actually stops the child instead of leaving a
+            # zombie that holds VRAM + disk for the rest of the timeout.
+            result = _run_subprocess_interruptible(
                 cmd,
                 check=True,
                 capture_output=True,
@@ -1029,16 +1265,23 @@ def create_modelfile(
     else:
         modelfile_path = gguf_path.parent / "Modelfile"
 
+    # BRIDGE-A-001: escape backslash and double-quote in the FROM path so a
+    # gguf_path containing either character (rare on POSIX, common on Windows
+    # via UNC paths) produces a well-formed Modelfile. Order matters: escape
+    # backslashes FIRST, otherwise the inserted escape-backslashes are
+    # themselves doubled by the quote escape.
+    gguf_path_str = str(gguf_path).replace("\\", "\\\\").replace('"', '\\"')
+
     lines = [
-        f'FROM "{gguf_path}"',
+        f'FROM "{gguf_path_str}"',
         "",
         f"PARAMETER temperature {temperature}",
         f"PARAMETER num_ctx {context_length}",
     ]
 
     if system_prompt:
-        # Escape quotes in system prompt
-        escaped_prompt = system_prompt.replace('"', '\\"')
+        # Escape backslashes then quotes in system prompt for the same reason.
+        escaped_prompt = system_prompt.replace("\\", "\\\\").replace('"', '\\"')
         lines.extend(
             [
                 "",
@@ -1071,6 +1314,12 @@ def register_with_ollama(
     Raises:
         OllamaRegistrationError: If registration fails
     """
+    # BRIDGE-A-001: refuse option-injection / control-char model names BEFORE
+    # we hand the argv to the ollama CLI. ExportError (with INPUT_VALIDATION_FAILED
+    # code) is the right surface — the operator gets a structured error instead
+    # of a confusing "ollama: unknown option -h" or worse.
+    _validate_model_name(model_name)
+
     gguf_path = Path(gguf_path).resolve()
 
     if not gguf_path.exists():
@@ -1088,6 +1337,12 @@ def register_with_ollama(
             suggestion="Install Ollama from https://ollama.ai and ensure it's in your PATH"
         )
 
+    # BRIDGE-A-003: initialize before the inner try so the finally clause can
+    # safely test it. Previously, if create_modelfile() raised, the finally
+    # would reference an unbound local and the user saw an UnboundLocalError
+    # instead of the real OllamaRegistrationError.
+    modelfile_path: Path | None = None
+
     # Create Modelfile
     try:
         modelfile_path = create_modelfile(gguf_path, system_prompt=system_prompt)
@@ -1098,8 +1353,9 @@ def register_with_ollama(
         ) from e
 
     try:
-        # Run ollama create
-        result = subprocess.run(
+        # BRIDGE-A-004: Popen-based runner so Ctrl+C actually propagates to
+        # the ollama child instead of leaving a zombie quantization process.
+        result = _run_subprocess_interruptible(
             ["ollama", "create", model_name, "-f", str(modelfile_path)],
             capture_output=True,
             text=True,
@@ -1122,12 +1378,18 @@ def register_with_ollama(
             suggestion="Ensure Ollama is running (ollama serve) and try again"
         ) from e
     finally:
-        # Clean up Modelfile
-        try:
-            if modelfile_path.exists():
-                modelfile_path.unlink()
-        except Exception as e:
-            logger.warning(f"Failed to clean up Modelfile: {e}")
+        # BRIDGE-A-003: guard against the modelfile_path = None path (which
+        # only triggers when create_modelfile() raised above — but the `raise`
+        # in the except branch already short-circuits before we reach here.
+        # We still guard defensively because future refactors may move the
+        # raise inside a wider try.). Also tolerate transient OSErrors during
+        # cleanup so they don't mask the real OllamaRegistrationError.
+        if modelfile_path is not None:
+            try:
+                if modelfile_path.exists():
+                    modelfile_path.unlink()
+            except OSError as e:
+                logger.warning(f"Failed to clean up Modelfile at {modelfile_path}: {e}")
 
 
 def list_ollama_models() -> list[str]:

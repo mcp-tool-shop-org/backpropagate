@@ -182,6 +182,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
         "retryable": "sometimes",
     },
+    "RUNTIME_UI_AUTH_NOT_ENFORCED": {
+        "description": "Web UI authentication was requested but the runtime does not yet enforce it.",
+        "default_hint": "Until middleware lands, do not pass --auth or --share. Use SSH port-forwarding for remote access: ssh -L 7860:localhost:7860 <host>",
+        "retryable": "no",
+    },
     "DEP_MODEL_LOAD_FAILED": {
         "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
         "default_hint": "Verify model name, HF token, and network access to huggingface.co.",

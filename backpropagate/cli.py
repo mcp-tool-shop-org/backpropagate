@@ -1081,19 +1081,23 @@ def cmd_ui(args: argparse.Namespace) -> int:
     Execute the ui command to launch the Reflex web interface.
 
     The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This
-    handler now subprocess-launches ``reflex run`` from the directory
-    containing ``rxconfig.py``. All Ship Gate B2 / F-001 / F-003 / FB-012
-    validation runs BEFORE the subprocess launch — auth shape, share+auth
-    requirement, 5-second grace period — so misconfigured launches fail loudly
-    on the CLI side regardless of what the UI framework does.
+    handler subprocess-launches ``reflex run`` from the directory containing
+    ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
+    shape, --auth/--share refuse-to-start — so misconfigured launches fail
+    loudly on the CLI side regardless of what the UI framework does.
+
+    FRONTEND-A-001: until the Reflex UI's auth middleware lands (Phase 3
+    of the migration), the handler REFUSES to start when ``--auth`` or
+    ``--share`` is set. Both flags advertise a contract the runtime cannot
+    deliver; running them would falsely imply the UI was protected. Until
+    the gap closes, operators should use SSH port-forwarding for remote
+    access.
 
     Exit codes (Ship Gate B2):
         0   UI launched and exited cleanly (including Ctrl+C)
-        1   user error — UI extra not installed, malformed --auth, OR
-            --share supplied without --auth while the
-            BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE setting is on
-            (default: on; set to ``false`` to explicitly opt out)
-        2   runtime error — Reflex subprocess failure
+        1   user error — UI extra not installed OR malformed --auth shape
+        2   runtime error — Reflex subprocess failure OR
+            RUNTIME_UI_AUTH_NOT_ENFORCED when --auth/--share were passed
     """
     # Verify Reflex is installed before we do anything else.
     try:
@@ -1104,6 +1108,19 @@ def cmd_ui(args: argparse.Namespace) -> int:
         if args.verbose:
             logger.exception("Import error details")
         return EXIT_USER_ERROR
+
+    # FRONTEND-A-001 cross-cutting fix (bridge half): load the enforcement
+    # availability flag from the UI app. The Reflex UI does not yet enforce
+    # the auth contract we advertise via --auth, so we must refuse to start
+    # any invocation that asks for it. Lazy import so the [ui] extra missing
+    # surfaces as the ImportError above, not as a confusing AttributeError.
+    try:
+        from .ui_app.auth import ENFORCEMENT_AVAILABLE
+    except ImportError:
+        # ui_app/auth.py is shipped with the package, not gated on [ui]. If
+        # it cannot be imported, treat enforcement as unavailable so the
+        # refuse-to-start path below still fires for --auth.
+        ENFORCEMENT_AVAILABLE = False  # type: ignore[assignment]
 
     # Pull in the framework-agnostic auth-shape validator so a malformed
     # --auth fails on the CLI side before we hand it to the subprocess.
@@ -1117,35 +1134,54 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     _print_header("Backpropagate UI")
     _print_info(f"Port: {args.port}")
+
+    # ------------------------------------------------------------------ #
+    # FRONTEND-A-001: refuse-to-start when --auth is requested but the
+    # Reflex UI does not yet enforce it. Pre-fix, the CLI printed
+    # "Auth: enabled (user: ...)" then launched a UI that ignored the
+    # credentials — advertising a contract the runtime didn't deliver.
+    # The honest fix is to fail loudly until middleware lands.
+    # ------------------------------------------------------------------ #
+    if args.auth is not None and not ENFORCEMENT_AVAILABLE:
+        raise BackpropagateError(
+            "--auth was requested but the Reflex UI does not yet enforce "
+            "authentication; running with --auth would advertise a contract "
+            "the runtime does not deliver.",
+            suggestion=(
+                "Until UI middleware lands, do not pass --auth. For remote "
+                "access, use SSH port-forwarding: "
+                "ssh -L 7860:localhost:7860 <host>. "
+                "See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories"
+            ),
+            code="RUNTIME_UI_AUTH_NOT_ENFORCED",
+        )
+
+    # FRONTEND-A-001 (companion): --share has no first-class Reflex equivalent
+    # AND no enforcement of the auth contract above. Refusing both flags keeps
+    # the CLI honest: an operator who passed --share/--auth and saw "launching"
+    # has historically assumed the contract was honored. We convert the prior
+    # warn-and-sleep block into a hard refuse-to-start.
     if args.share:
-        _print_info("Share: enabled (public URL)")
-
-    # ------------------------------------------------------------------ #
-    # F-001 enforcement: --share must come with --auth unless the user
-    # explicitly opted out via env var.
-    # ------------------------------------------------------------------ #
-    require_auth_for_share = _env_flag(
-        "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE",
-        default=True,
-    )
-    if args.share and not args.auth and require_auth_for_share:
-        _print_error(
-            "[INPUT_AUTH_REQUIRED]: --share requires --auth for security."
+        raise BackpropagateError(
+            "--share is not supported by the Reflex UI: there is no built-in "
+            "tunnel AND no enforcement of the public-URL auth contract.",
+            suggestion=(
+                "Use SSH port-forwarding (ssh -L 7860:localhost:7860 <host>), "
+                "Cloudflare Tunnel, or ngrok to expose the local port. The "
+                "--share flag is retained in argparse for future re-enablement."
+            ),
+            code="RUNTIME_UI_AUTH_NOT_ENFORCED",
         )
-        _print_info(
-            "Hint: pass --auth user:password, OR set "
-            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false to "
-            "explicitly opt out."
-        )
-        return EXIT_USER_ERROR
 
-    # Handle authentication
+    # Handle authentication shape-validation. When ENFORCEMENT_AVAILABLE flips
+    # to True (Phase 3 of the Reflex migration) this branch starts running
+    # again. For now it never executes because the refuse-to-start above
+    # short-circuits any args.auth invocation.
     auth = None
     if args.auth:
         try:
             username, password = args.auth.split(":", 1)
             auth = (username, password)
-            _print_info(f"Auth: enabled (user: {username})")
         except ValueError:
             _print_error("Invalid auth format. Use --auth username:password")
             return EXIT_USER_ERROR
@@ -1159,41 +1195,6 @@ def cmd_ui(args: argparse.Namespace) -> int:
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
-
-    # Loud warning if the user explicitly opted out of the auth requirement
-    # while sharing publicly. The stderr line is the CLI signal; a 5-second
-    # grace period gives them time to Ctrl+C.
-    if args.share and not args.auth and not require_auth_for_share:
-        warning_msg = (
-            "WARNING: launching public Reflex UI with NO authentication.\n"
-            "    BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false was set\n"
-            "    explicitly; anyone reaching this port can use the UI.\n"
-            "    Continuing in 5 seconds — Ctrl+C to abort."
-        )
-        _print_warning(
-            "Sharing publicly with NO authentication. "
-            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false was set "
-            "explicitly; anyone reaching this port can use this UI."
-        )
-        print(f"\n{warning_msg}\n", file=sys.stderr, flush=True)
-        import time as _time
-        try:
-            _time.sleep(5)
-        except KeyboardInterrupt:
-            print()
-            _print_info("UI launch aborted")
-            return EXIT_INTERRUPTED
-
-    # --share has no first-class Reflex equivalent (no built-in tunneling).
-    # Phase 1 of the migration keeps the flag in argparse but emits a warning
-    # and continues without tunneling; operators should use Cloudflare Tunnel
-    # / ngrok / SSH port-forwarding to expose the local Reflex port.
-    if args.share:
-        _print_warning(
-            "--share is not yet supported by the Reflex UI. "
-            "Use Cloudflare Tunnel / ngrok / SSH port-forwarding to expose "
-            "the local port. Launching locally for now."
-        )
 
     # Resolve the directory containing rxconfig.py. Reflex requires the
     # ``app_name`` package to be a direct subdirectory of the cwd, so we use
@@ -1490,9 +1491,13 @@ def cmd_push(args: argparse.Namespace) -> int:
         _print_error(f"Push failed: {e.message}")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
-        if code == "HUB_PUSH_AUTH":
+        # BRIDGE-A-007 (catalog drift fix): branch on the canonical
+        # ERROR_CODES entries when they exist (INPUT_AUTH_REQUIRED,
+        # HUB_PUSH_INVALID_REPO) and fall back to the legacy HUB_PUSH_*
+        # strings for the codes that backend still needs to register.
+        if code in ("INPUT_AUTH_REQUIRED", "HUB_PUSH_AUTH"):
             return EXIT_USER_ERROR
-        if code == "HUB_PUSH_NOT_FOUND":
+        if code in ("HUB_PUSH_NOT_FOUND", "HUB_PUSH_INVALID_REPO"):
             return EXIT_USER_ERROR
         return EXIT_RUNTIME_ERROR
     except BackpropagateError as e:
@@ -2155,16 +2160,19 @@ Exit codes (Ship Gate B2):
         "--share",
         action="store_true",
         help=(
-            "Create a public shareable link. REQUIRES --auth USER:PASS "
-            "(enforced — exit code 1 if omitted). Set the env var "
-            "BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false to "
-            "explicitly opt out (you will see a loud unauthenticated warning)."
+            "REFUSED until the Reflex UI's tunneling + auth middleware lands. "
+            "Use SSH port-forwarding / Cloudflare Tunnel / ngrok instead. "
+            "Passing --share today exits with RUNTIME_UI_AUTH_NOT_ENFORCED."
         ),
     )
     ui_parser.add_argument(
         "--auth",
         metavar="USER:PASS",
-        help="Authentication credentials (format: username:password)",
+        help=(
+            "REFUSED until the Reflex UI enforces authentication. Passing "
+            "--auth today exits with RUNTIME_UI_AUTH_NOT_ENFORCED instead of "
+            "advertising an unverified contract."
+        ),
     )
     ui_parser.set_defaults(func=cmd_ui)
 
@@ -2175,13 +2183,26 @@ Exit codes (Ship Gate B2):
 # MAIN
 # =============================================================================
 
-def main(argv: list | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main entry point for the CLI.
 
     See ``backprop --help`` for the documented Ship Gate B2 exit-code contract.
+
+    BRIDGE-A-005: wraps ``args.func(args)`` in a last-resort exception net so
+    unhandled errors honor the Ship Gate B2 exit-code contract (130 for
+    Ctrl+C, 2 for unexpected crash) instead of falling through to Python's
+    default exit code 1. Subcommand-level handlers still run first for
+    friendly per-command messages; this catch-all only fires when something
+    escapes them.
     """
-    parser = create_parser()
-    args = parser.parse_args(argv)
+    try:
+        parser = create_parser()
+        args = parser.parse_args(argv)
+    except KeyboardInterrupt:
+        # KeyboardInterrupt during argparse (rare but possible if a custom
+        # validator does I/O) should still exit 130 per the Ship Gate contract.
+        print("Interrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
 
     if not args.command:
         # First-time-user friendliness (C-CLI-001): bare ``backprop`` invocation
@@ -2193,9 +2214,40 @@ def main(argv: list | None = None) -> int:
         parser.print_help(sys.stderr)
         return EXIT_USER_ERROR
 
-    # Execute the command
-    result: int = args.func(args)
-    return result
+    # Execute the command — wrapped in a last-resort exception net so the
+    # Ship Gate B2 exit-code contract holds even when a subcommand's own
+    # try/except missed something.
+    try:
+        result: int = args.func(args)
+        return result
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    except BackpropagateError as e:
+        code = getattr(e, "code", None) or "RUNTIME"
+        print(f"{code}: {e}", file=sys.stderr)
+        if os.environ.get("BACKPROPAGATE_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        return EXIT_RUNTIME_ERROR
+    except SystemExit:
+        # Let argparse / library SystemExit propagate so tests that catch
+        # SystemExit (e.g. -h flag invocations) see the same behavior.
+        raise
+    except Exception as e:  # noqa: BLE001 — last-resort safety net
+        # The Ship Gate B2 contract promises exit code 2 for unexpected
+        # crashes. The default Python behavior is exit code 1 + traceback.
+        print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        if os.environ.get("BACKPROPAGATE_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        else:
+            print(
+                "Set BACKPROPAGATE_DEBUG=1 for the full traceback, or re-run "
+                "the subcommand with --verbose for friendlier output.",
+                file=sys.stderr,
+            )
+        return EXIT_RUNTIME_ERROR
 
 
 if __name__ == "__main__":

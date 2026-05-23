@@ -66,12 +66,27 @@ def _upload_group() -> rx.Component:
                 "application/jsonl": [".jsonl"],
                 "text/plain": [".txt"],
             },
+            # FRONTEND-A-003: wire on_drop into the validator so extension /
+            # size / magic-bytes / sanitize-filename actually fire on the
+            # Reflex surface instead of relying on default behavior.
+            on_drop=DatasetState.handle_upload(  # type: ignore[operator]
+                rx.upload_files(upload_id="dataset_upload")
+            ),
             style={
                 "background": "var(--bp-surface-2)",
                 "border": "1px dashed var(--bp-border-2)",
                 "border_radius": "var(--bp-r-3)",
                 "cursor": "pointer",
             },
+        ),
+        rx.cond(
+            DatasetState.upload_error != "",
+            rx.text(
+                DatasetState.upload_error,
+                size="1",
+                style={"color": "var(--bp-peach)", "font_size": "11px"},
+            ),
+            rx.fragment(),
         ),
         rx.cond(
             DatasetState.uploaded_path != "",
@@ -115,7 +130,7 @@ def _preview_group() -> rx.Component:
     """Preview pane — first 5 records when uploaded."""
     return Group(
         rx.cond(
-            DatasetState.preview_records.length() == 0,
+            DatasetState.preview_records.length() == 0,  # type: ignore[attr-defined]
             rx.text(
                 "Upload a dataset to preview the first 5 records here.",
                 size="1",

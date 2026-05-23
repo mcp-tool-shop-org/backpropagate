@@ -106,28 +106,40 @@ def BpErrorCallout(
         )
 
     if stack_trace:
-        # Escape the raw trace text so '<' / '>' / '&' don't render as HTML.
-        # The surrounding ``<details>`` keeps the native disclosure semantics
-        # (Radix has no equivalent primitive). The trace itself is internal
-        # observability surface, never user-supplied, but defence in depth.
-        escaped = (
-            stack_trace.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
+        # FRONTEND-A-004: native Reflex primitives instead of ``rx.html``.
+        # Using ``rx.el.details`` + ``rx.el.summary`` + ``rx.el.pre`` preserves
+        # the native ``<details>`` disclosure semantics while routing the
+        # trace text through Reflex's normal escape pipeline. The previous
+        # ``rx.html`` chrome required hand-rolled HTML escaping; this removes
+        # the raw-HTML surface and the precedent that came with it.
+        children.append(
+            rx.el.details(
+                rx.el.summary(
+                    "Stack trace",
+                    style={
+                        "cursor": "pointer",
+                        "color": "var(--bp-muted)",
+                        "font_size": "11px",
+                        "font_family": "var(--bp-mono)",
+                    },
+                ),
+                rx.el.pre(
+                    stack_trace,
+                    style={
+                        "margin": "6px 0 0",
+                        "padding": "8px",
+                        "background": "var(--bp-surface-2)",
+                        "border_radius": "4px",
+                        "font_family": "var(--bp-mono)",
+                        "font_size": "11px",
+                        "color": "var(--bp-text-2)",
+                        "overflow_x": "auto",
+                        "white_space": "pre-wrap",
+                    },
+                ),
+                style={"margin_top": "8px"},
+            )
         )
-        stack_html = (
-            '<details style="margin-top: 8px;">'
-            '<summary style="cursor: pointer; color: var(--bp-muted); '
-            'font-size: 11px; font-family: var(--bp-mono);">'
-            'Stack trace</summary>'
-            '<pre style="margin: 6px 0 0; padding: 8px; '
-            'background: var(--bp-surface-2); border-radius: 4px; '
-            'font-family: var(--bp-mono); font-size: 11px; '
-            'color: var(--bp-text-2); overflow-x: auto; '
-            f'white-space: pre-wrap;">{escaped}</pre>'
-            '</details>'
-        )
-        children.append(rx.html(stack_html))
 
     return rx.callout.root(
         rx.flex(

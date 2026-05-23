@@ -61,7 +61,7 @@ export const config: SiteConfig = {
       rows: [
         ['backpropagate', 'Core API only — minimal footprint', '—'],
         ['[unsloth]', '2× faster training, 50% less VRAM', 'unsloth'],
-        ['[ui]', 'Gradio web interface for non-coders', 'gradio ≥ 5.6.0'],
+        ['[ui]', 'Reflex (Radix UI) web interface', 'reflex ≥ 0.9.2'],
         ['[validation]', 'Pydantic config validation', 'pydantic, pydantic-settings'],
         ['[export]', 'GGUF export for Ollama', 'llama-cpp-python'],
         ['[monitoring]', 'WandB + system monitoring', 'wandb, psutil'],

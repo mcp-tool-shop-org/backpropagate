@@ -128,7 +128,7 @@ def _is_transient_hf_exception(exc: BaseException) -> bool:
     if status is None:
         # No status code attached → connection/timeout/other → retry
         return True
-    return status == 429 or status >= 500
+    return bool(status == 429 or status >= 500)
 
 
 def _retry_hf_call(

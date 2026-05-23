@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-05-22
+
+### Fixed
+
+- **CRITICAL: Web UI authentication contract not enforced (GHSA-pending)** — v1.1.0 and v1.1.1 advertised `--share + --auth` enforcement but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth` or `backprop ui --share --auth` was unauthenticated. v1.1.2 makes `cmd_ui` refuse to start when `--auth` or `--share` is set until middleware enforcement lands. See GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories (pending publication).
+- F-002 multi-run resume: safetensors loader was being called on `.bin` adapter files, raising silently. Now dispatched by extension.
+- export.py `register_with_ollama` UnboundLocalError in finally-block masking the real OllamaRegistrationError.
+- export.py subprocess SIGINT propagation: ollama-create and llama.cpp child processes now receive proper termination on Ctrl+C.
+- cli.py main() lacks top-level exception net — Ship Gate B2 exit-code contract violations on unhandled errors.
+
+### Changed
+
+- **CI gates re-tightened.** v1.1.0 claimed pip-audit + Trivy + Bandit + Semgrep + TruffleHog all gated on findings; v1.1.x rolled most of them back to advisory. v1.1.2 restores hard floor gates: mypy hard (or `ui_app/` override), pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer `continue-on-error`. TruffleHog confirmed retired (delegated to Trivy built-in secret scanner).
+- Web UI `--share` flag is now a hard refusal (was a no-op + 5-second warning). Use SSH port-forwarding until middleware lands.
+- Test count pinned to actual `pytest --collect-only`: 1957 (was variously claimed as 1654/1766/1805).
+- Validation tightening: `ollama create` model_name and `huggingface push` repo_id are validated against allowlist regexes.
+
+### Removed
+
+- tests/test_init_lazy_loading.py — fully skipped legacy file; replacement coverage already lives in test_init_imports.py.
+
+### Tests
+
+1957 (count pinned; was 1766 in v1.1.0 CHANGELOG and 1805 in CLAUDE.md/AUDIT). New regression tests for OOM auto-recovery contract and atomic checkpoint writes — both v1.1.0 headline features that had zero coverage.
+
 ## [1.1.1] - 2026-05-21
 
 ### Fixed

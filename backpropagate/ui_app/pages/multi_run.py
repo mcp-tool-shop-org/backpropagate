@@ -37,7 +37,17 @@ def _model_group() -> rx.Component:
                 rx.input(
                     placeholder="meta-llama/Llama-3.1-8B",
                     default_value=MultiRunState.model,
+                    on_change=MultiRunState.set_model,
                     size="2",
+                ),
+                rx.cond(
+                    MultiRunState.model_error != "",
+                    rx.text(
+                        MultiRunState.model_error,
+                        size="1",
+                        style={"color": "var(--bp-peach)", "font_size": "11px"},
+                    ),
+                    rx.fragment(),
                 ),
                 direction="column",
                 width="100%",
@@ -144,7 +154,7 @@ def _runs_table() -> rx.Component:
                 ),
                 rx.table.body(
                     rx.cond(
-                        MultiRunState.runs.length() == 0,
+                        MultiRunState.runs.length() == 0,  # type: ignore[attr-defined]
                         rx.table.row(
                             rx.table.cell(
                                 rx.text(

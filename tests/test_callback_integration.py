@@ -54,27 +54,50 @@ class TestE2ETrainingCallbacks:
         assert len(calls["error"]) == 1
         assert calls["error"][0] is error
 
-    def test_callback_isolation_from_training_errors(self, mock_training_callback):
-        """Callback errors should not propagate uncaught."""
-        from backpropagate.trainer import TrainingCallback
+    def test_callback_isolation_from_training_errors(self, tmp_path):
+        """Real Trainer.train must isolate a raising on_complete callback.
 
-        error_callback = MagicMock(side_effect=ValueError("Callback crashed!"))
+        Audit TESTS-A-006: the previous version of this test built a
+        ``safe_invoke`` wrapper inside the body and asserted the wrapper
+        called the callback — which would pass even if Trainer dropped its
+        own try/except. This rewrite drives the real Trainer.train with a
+        mocked SFTTrainer and a raising on_complete, then verifies (a) train
+        returns successfully and (b) the callback was actually invoked.
+        """
+        from backpropagate.trainer import Trainer, TrainingCallback
 
-        # Wrapper that catches callback errors (simulating trainer behavior)
-        def safe_invoke(callback_fn, *args):
-            if callback_fn:
-                try:
-                    callback_fn(*args)
-                except Exception:
-                    pass  # Trainer should catch this
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(tmp_path), use_unsloth=False)
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
 
-        callback = TrainingCallback(on_step=error_callback)
+        invocations = {"count": 0}
 
-        # Should not raise
-        safe_invoke(callback.on_step, 1, 0.5)
-        safe_invoke(callback.on_step, 2, 0.4)
+        def raising_callback(run):
+            invocations["count"] += 1
+            raise ValueError("Callback crashed!")
 
-        assert error_callback.call_count == 2
+        callback = TrainingCallback(on_complete=raising_callback)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+        sft_mock = MagicMock()
+        sft_mock.train.return_value = MagicMock(training_loss=0.5)
+        sft_mock.state.log_history = [{"loss": 0.5}]
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", return_value=sft_mock), \
+             patch("trl.SFTConfig"):
+            # Will propagate if Trainer's try/except around on_complete is removed.
+            run = trainer.train("dummy_dataset", steps=10, callback=callback)
+
+        assert invocations["count"] == 1, (
+            "on_complete callback was not invoked by Trainer.train"
+        )
+        assert run is not None, (
+            "Trainer.train must return a TrainingRun even when on_complete raises"
+        )
 
 
 class TestE2EMultiRunCallbacks:
@@ -597,199 +620,203 @@ class TestConcurrentCallbacks:
 # =============================================================================
 
 class TestTrainerCallbackErrorIsolation:
-    """Tests that verify callback errors don't crash training."""
+    """Integration tests pinning the real callback-isolation contract.
 
-    def test_on_complete_callback_error_isolated(self):
-        """on_complete callback error should be caught and logged, not propagate."""
-        from backpropagate.trainer import TrainingCallback, TrainingRun
+    Audit TESTS-A-006: the previous shape of these tests built a handwritten
+    ``safe_invoke`` wrapper inside the test body and asserted the wrapper
+    called the callback. That meant a refactor that drops Trainer's own
+    try/except around on_complete would NOT have been caught — the synthetic
+    wrapper would still pass. These rewrites call the real ``Trainer.train``
+    against a mocked SFTTrainer so the regression surface is the actual
+    in-trainer ``try: callback.on_complete(...) except: ...`` shape at
+    trainer.py:1131-1135.
+    """
 
-        error_callback = MagicMock(side_effect=ValueError("Callback crashed!"))
-        callback = TrainingCallback(on_complete=error_callback)
+    def _setup_trainer(self, temp_dir):
+        from backpropagate.trainer import Trainer
 
-        # Simulate what trainer.train() does when invoking on_complete
-        run = MagicMock(spec=TrainingRun)
-        run.final_loss = 0.5
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir), use_unsloth=False)
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+        return trainer
 
-        # Trainer wraps on_complete in try/except - simulate that behavior
-        callback_invoked = False
-        callback_error_caught = False
+    def _make_sft_mock(self):
+        instance = MagicMock()
+        instance.train.return_value = MagicMock(training_loss=0.5)
+        instance.state.log_history = [{"loss": 0.5}]
+        return instance
 
-        if callback and callback.on_complete:
-            try:
-                callback.on_complete(run)
-                callback_invoked = True
-            except Exception:
-                callback_error_caught = True
+    def test_on_complete_error_isolated_by_real_trainer(self, tmp_path):
+        """Real Trainer.train must catch a raising on_complete callback.
 
-        # The callback was invoked and raised
-        assert error_callback.call_count == 1
-        assert callback_error_caught  # Error was caught
-
-    def test_on_error_callback_error_does_not_mask_original(self):
-        """on_error callback failure shouldn't mask the original training error."""
+        Pins trainer.py:1131-1135 (the ``try/except`` around
+        ``callback.on_complete(run)``). If that try/except is removed in a
+        refactor, this test fails — the callback's ValueError propagates out
+        of ``trainer.train()`` and pytest reports the regression.
+        """
         from backpropagate.trainer import TrainingCallback
 
-        original_error = RuntimeError("Training failed!")
-        callback_error = ValueError("Callback also failed!")
+        trainer = self._setup_trainer(tmp_path)
 
-        error_callback = MagicMock(side_effect=callback_error)
-        callback = TrainingCallback(on_error=error_callback)
+        invoked = {"count": 0}
 
-        # Simulate trainer calling on_error during exception handling
-        caught_error = None
-        try:
-            # Simulate training error
-            raise original_error
-        except RuntimeError as e:
-            # Trainer calls on_error but doesn't let callback error propagate
-            if callback and callback.on_error:
-                try:
-                    callback.on_error(e)
-                except Exception:
-                    pass  # Trainer should catch callback errors
-            caught_error = e
+        def raising_complete(run):
+            invoked["count"] += 1
+            raise ValueError("Callback crashed!")
 
-        assert caught_error is original_error
-        assert error_callback.call_count == 1
+        callback = TrainingCallback(on_complete=raising_complete)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
 
-    def test_multiple_callback_errors_all_isolated(self):
-        """Multiple callback errors should all be isolated."""
-        from backpropagate.trainer import TrainingCallback
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", return_value=self._make_sft_mock()), \
+             patch("trl.SFTConfig"):
+            # If the trainer's try/except is removed, this call propagates.
+            run = trainer.train("dummy_dataset", steps=10, callback=callback)
 
-        step_callback = MagicMock(side_effect=ValueError("Step failed"))
-        complete_callback = MagicMock(side_effect=TypeError("Complete failed"))
-
-        callback = TrainingCallback(
-            on_step=step_callback,
-            on_complete=complete_callback,
+        # The callback was actually invoked AND its exception was swallowed.
+        assert invoked["count"] == 1, (
+            "on_complete callback was not invoked by real Trainer.train"
+        )
+        assert run is not None, (
+            "Trainer.train must return a TrainingRun even when on_complete "
+            "raises; isolation is broken otherwise"
         )
 
-        errors_caught = []
+    def test_on_complete_error_doesnt_corrupt_returned_run(self, tmp_path):
+        """A failing on_complete must not affect the returned TrainingRun."""
+        from backpropagate.trainer import TrainingCallback
 
-        # Simulate training calling both callbacks
-        def safe_invoke(fn, *args):
-            if fn:
-                try:
-                    fn(*args)
-                except Exception as e:
-                    errors_caught.append(e)
-
-        safe_invoke(callback.on_step, 1, 0.5)
-        safe_invoke(callback.on_step, 2, 0.4)
-        safe_invoke(callback.on_complete, MagicMock())
-
-        assert len(errors_caught) == 3
-        assert step_callback.call_count == 2
-        assert complete_callback.call_count == 1
-
-    def test_callback_error_doesnt_affect_training_result(self):
-        """Callback error should not affect the returned TrainingRun."""
-        from backpropagate.trainer import TrainingCallback, TrainingRun
+        trainer = self._setup_trainer(tmp_path)
 
         def bad_complete(run):
-            # Try to modify the run (shouldn't affect the returned value)
-            run.final_loss = 999.0
+            # Even if the callback mutates the run object before raising, the
+            # returned TrainingRun must remain a valid object.
             raise ValueError("Tried to mess with results!")
 
         callback = TrainingCallback(on_complete=bad_complete)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
 
-        # Simulate trainer creating and returning a run
-        run = TrainingRun(
-            run_id="test_run",
-            steps=100,
-            final_loss=0.5,
-            loss_history=[],
-            duration_seconds=60.0,
-            samples_seen=1000,
-            output_path="/path/to/output",
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", return_value=self._make_sft_mock()), \
+             patch("trl.SFTConfig"):
+            run = trainer.train("dummy_dataset", steps=10, callback=callback)
+
+        # The run is still a valid TrainingRun with run_id present.
+        assert run is not None
+        assert getattr(run, "run_id", None), (
+            "Returned TrainingRun must carry a run_id even after on_complete raised"
         )
 
-        # Trainer invokes callback but catches errors
-        if callback and callback.on_complete:
-            try:
-                callback.on_complete(run)
-            except Exception:
-                pass  # Caught as expected
+    def test_synthetic_safe_invoke_pattern_is_a_smoke_test(self):
+        """Documents that the synthetic safe_invoke pattern is a SMOKE test only.
 
-        # The run should still have original values if using a copy
-        # Note: Current implementation passes the same object
-        # This test documents current behavior
-        assert run is not None
+        The previous version of these tests built a hand-rolled ``safe_invoke``
+        wrapper inside the test body. That pattern is a useful smoke test for
+        the *callback type* — it confirms that a raising callback can be
+        invoked-and-swallowed by SOME wrapper — but it is NOT a regression
+        test for ``trainer.py``'s wrapping behavior. The real-Trainer tests
+        above are what pin the contract; this one is preserved so the
+        callback-type API itself stays accidentally-stable.
+        """
+        from backpropagate.trainer import TrainingCallback
+
+        bad_step = MagicMock(side_effect=RuntimeError("Step failed"))
+        bad_complete = MagicMock(side_effect=ValueError("Complete failed"))
+        callback = TrainingCallback(on_step=bad_step, on_complete=bad_complete)
+
+        # The callbacks ARE callable from the dataclass — pin only that.
+        assert callable(callback.on_step)
+        assert callable(callback.on_complete)
+        # And they DO raise when invoked directly (so the integration tests
+        # above are exercising a real failure mode).
+        with pytest.raises(RuntimeError):
+            callback.on_step(1, 0.5)
+        with pytest.raises(ValueError):
+            callback.on_complete(MagicMock())
 
 
 class TestTrainerCallbackWithRealTrainer:
-    """Integration tests using real Trainer class with mocked internals."""
+    """Integration tests that drive real ``Trainer.train`` with mocked TRL.
 
-    def test_trainer_callback_error_handling_logic(self):
-        """Verify the callback error handling pattern used in Trainer."""
-        from backpropagate.trainer import TrainingCallback, TrainingRun
+    Audit TESTS-A-006: replaces the previous synthetic-wrapper smoke tests
+    with calls into ``Trainer.train`` proper. Backed by the same mock pattern
+    used elsewhere in this file (``patch('trl.SFTTrainer')``).
+    """
 
-        error_logged = []
+    def _setup_trainer(self, temp_dir):
+        from backpropagate.trainer import Trainer
 
-        def bad_callback(run):
-            raise ValueError("Callback explosion!")
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir), use_unsloth=False)
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+        return trainer
 
-        callback = TrainingCallback(on_complete=bad_callback)
-
-        # Simulate how trainer.train() handles callback errors
-        run = TrainingRun(
-            run_id="test",
-            steps=10,
-            final_loss=0.5,
-            loss_history=[],
-            duration_seconds=10.0,
-            samples_seen=100,
-            output_path="/test",
-        )
-
-        # This simulates the try/except in trainer.py:455-459
-        if callback and callback.on_complete:
-            try:
-                callback.on_complete(run)
-            except Exception as cb_error:
-                error_logged.append(f"on_complete callback raised error: {cb_error}")
-
-        # Verify the error was caught and logged (not propagated)
-        assert len(error_logged) == 1
-        assert "Callback explosion!" in error_logged[0]
-
-    def test_callback_invocation_wrapper_pattern(self):
-        """Verify the safe callback invocation pattern."""
+    def test_good_callback_invoked_by_real_trainer(self, tmp_path):
+        """A well-behaved on_complete is invoked exactly once by Trainer.train."""
         from backpropagate.trainer import TrainingCallback
 
-        invocations = []
-        errors = []
+        trainer = self._setup_trainer(tmp_path)
+        completed = []
 
-        def safe_callback_invoke(callback_fn, *args, **kwargs):
-            """Pattern used in trainer for safe callback invocation."""
-            if callback_fn is None:
-                return
-            try:
-                callback_fn(*args, **kwargs)
-                invocations.append(("success", args))
-            except Exception as e:
-                errors.append(e)
-                invocations.append(("error", str(e)))
+        def on_complete(run):
+            completed.append(run)
 
-        # Test with working callback
-        def good_callback(step, loss):
-            invocations.append(("called", step, loss))
+        callback = TrainingCallback(on_complete=on_complete)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+        sft_mock = MagicMock()
+        sft_mock.train.return_value = MagicMock(training_loss=0.5)
+        sft_mock.state.log_history = [{"loss": 0.5}]
 
-        callback = TrainingCallback(on_step=good_callback)
-        safe_callback_invoke(callback.on_step, 1, 0.5)
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", return_value=sft_mock), \
+             patch("trl.SFTConfig"):
+            run = trainer.train("dummy_dataset", steps=10, callback=callback)
 
-        assert ("called", 1, 0.5) in invocations
-        assert ("success", (1, 0.5)) in invocations
+        assert len(completed) == 1, (
+            f"on_complete should be invoked exactly once; got {len(completed)}"
+        )
+        assert completed[0].run_id == run.run_id
 
-        # Test with failing callback
-        def bad_callback(step, loss):
-            raise RuntimeError("Failed!")
+    def test_raising_callback_does_not_break_run_persistence(self, tmp_path):
+        """on_complete failure must not prevent the run record from being created."""
+        from backpropagate.trainer import TrainingCallback
 
-        callback2 = TrainingCallback(on_step=bad_callback)
-        safe_callback_invoke(callback2.on_step, 2, 0.4)
+        trainer = self._setup_trainer(tmp_path)
 
-        assert ("error", "Failed!") in invocations
-        assert len(errors) == 1
+        def boom(run):
+            raise ValueError("on_complete blew up")
+
+        callback = TrainingCallback(on_complete=boom)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+        sft_mock = MagicMock()
+        sft_mock.train.return_value = MagicMock(training_loss=0.5)
+        sft_mock.state.log_history = [{"loss": 0.5}]
+
+        # Pre-condition: no runs recorded yet.
+        runs_before = len(trainer._training_runs)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", return_value=sft_mock), \
+             patch("trl.SFTConfig"):
+            trainer.train("dummy_dataset", steps=10, callback=callback)
+
+        # Post-condition: training_runs grew by one, even though on_complete raised.
+        assert len(trainer._training_runs) == runs_before + 1, (
+            "Trainer._training_runs should grow by 1 even when on_complete raises; "
+            "the callback's exception must not abort run persistence."
+        )
 
 
 # =============================================================================

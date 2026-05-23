@@ -49,8 +49,18 @@ def _source_group() -> rx.Component:
             rx.input(
                 placeholder="runs/run-2026-05-21/adapter",
                 default_value=ExportState.source_model_path,
+                on_change=ExportState.set_source_model_path,
                 size="2",
                 style={"width": "100%"},
+            ),
+            rx.cond(
+                ExportState.source_model_path_error != "",
+                rx.text(
+                    ExportState.source_model_path_error,
+                    size="1",
+                    style={"color": "var(--bp-peach)", "font_size": "11px"},
+                ),
+                rx.fragment(),
             ),
             direction="column",
             width="100%",
@@ -153,8 +163,18 @@ def _ollama_group() -> rx.Component:
             rx.input(
                 placeholder="my-finetuned-model",
                 default_value=ExportState.ollama_name,
+                on_change=ExportState.set_ollama_name,
                 size="2",
                 style={"width": "100%"},
+            ),
+            rx.cond(
+                ExportState.ollama_name_error != "",
+                rx.text(
+                    ExportState.ollama_name_error,
+                    size="1",
+                    style={"color": "var(--bp-peach)", "font_size": "11px"},
+                ),
+                rx.fragment(),
             ),
             direction="column",
             width="100%",

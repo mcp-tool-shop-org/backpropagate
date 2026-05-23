@@ -241,15 +241,10 @@ class TestPathsWithSpaces:
 class TestCUDALaunchBlocking:
     """Tests for CUDA error surfacing with launch blocking."""
 
-    def test_cuda_launch_blocking_env_var(self):
-        """CUDA_LAUNCH_BLOCKING should be settable."""
-        # On Windows, setting CUDA_LAUNCH_BLOCKING=1 helps surface errors
-
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-        assert os.environ.get("CUDA_LAUNCH_BLOCKING") == "1"
-
-        # Clean up
-        del os.environ["CUDA_LAUNCH_BLOCKING"]
+    # test_cuda_launch_blocking_env_var (formerly here) was a stdlib tautology
+    # — it set os.environ[X] = 'A' and asserted os.environ[X] == 'A'. That
+    # tests Python's environ dict, not backpropagate. Removed during the
+    # Stage A health pass (see audit TESTS-A-008).
 
     def test_cuda_errors_surface_correctly(self):
         """CUDA errors should be raised, not silently ignored."""
@@ -302,20 +297,21 @@ class TestCUDALaunchBlocking:
 class TestEnvironmentVariables:
     """Tests for required environment variable settings."""
 
-    def test_xformers_disabled_for_new_gpus(self):
-        """xformers should be disabled for RTX 50 series (SM 12.0+)."""
-        # RTX 5080 and newer GPUs may not be compatible with xformers
+    def test_xformers_disabled_for_new_gpus(self, monkeypatch):
+        """xformers env var can be set without polluting global env.
 
-        # Check that the env var can be set
-        os.environ["XFORMERS_DISABLED"] = "1"
+        Uses monkeypatch.setenv so a mid-test assertion failure cannot leak
+        XFORMERS_DISABLED into the rest of the test run. (Previously bare
+        ``os.environ[...] = '1'; del os.environ[...]`` left the var set on any
+        failure path — see audit TESTS-A-008.)
+        """
+        monkeypatch.setenv("XFORMERS_DISABLED", "1")
         assert os.environ.get("XFORMERS_DISABLED") == "1"
-        del os.environ["XFORMERS_DISABLED"]
 
-    def test_hf_transfer_can_be_disabled(self):
-        """HF_HUB_ENABLE_HF_TRANSFER can be disabled."""
-        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+    def test_hf_transfer_can_be_disabled(self, monkeypatch):
+        """HF_HUB_ENABLE_HF_TRANSFER can be set without env pollution."""
+        monkeypatch.setenv("HF_HUB_ENABLE_HF_TRANSFER", "0")
         assert os.environ.get("HF_HUB_ENABLE_HF_TRANSFER") == "0"
-        del os.environ["HF_HUB_ENABLE_HF_TRANSFER"]
 
     def test_required_env_vars_documented(self):
         """Required environment variables should be documented."""

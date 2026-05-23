@@ -43,8 +43,18 @@ def _model_group() -> rx.Component:
                 rx.input(
                     placeholder="meta-llama/Llama-3.1-8B",
                     default_value=TrainState.model,
+                    on_change=TrainState.set_model,
                     size="2",
                     style={"width": "100%"},
+                ),
+                rx.cond(
+                    TrainState.model_error != "",
+                    rx.text(
+                        TrainState.model_error,
+                        size="1",
+                        style={"color": "var(--bp-peach)", "font_size": "11px"},
+                    ),
+                    rx.fragment(),
                 ),
                 direction="column",
                 width="100%",
@@ -179,8 +189,18 @@ def _dataset_group() -> rx.Component:
             rx.input(
                 placeholder="path/to/dataset.jsonl",
                 default_value=TrainState.dataset_path,
+                on_change=TrainState.set_dataset_path,
                 size="2",
                 style={"width": "100%"},
+            ),
+            rx.cond(
+                TrainState.dataset_path_error != "",
+                rx.text(
+                    TrainState.dataset_path_error,
+                    size="1",
+                    style={"color": "var(--bp-peach)", "font_size": "11px"},
+                ),
+                rx.fragment(),
             ),
             direction="column",
             width="100%",

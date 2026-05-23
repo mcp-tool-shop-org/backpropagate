@@ -630,6 +630,16 @@ class TestSanitizeFilenameEnhanced:
 class TestSecurityLogger:
     """Tests for SecurityLogger."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_security_logger(self):
+        """Reset SecurityLogger singleton before AND after each test so
+        previous-test instances cannot leak into ordering-sensitive runs.
+        """
+        from backpropagate.ui_security import SecurityLogger
+        SecurityLogger._instance = None
+        yield
+        SecurityLogger._instance = None
+
     def test_singleton_pattern(self):
         """SecurityLogger should be a singleton."""
         from backpropagate.ui_security import SecurityLogger
@@ -900,12 +910,22 @@ class TestEnvConfigOverride:
 class TestSessionManager:
     """Tests for session management."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_session_manager(self):
+        """Reset SessionManager singleton before AND after each test.
+
+        Previously each test did ``SessionManager._instance = None`` inline
+        without a post-reset, so the post-test instance leaked into whichever
+        test ran next (a real risk under ``--lf`` / random ordering / xdist).
+        """
+        from backpropagate.ui_security import SessionManager
+        SessionManager._instance = None
+        yield
+        SessionManager._instance = None
+
     def test_create_session(self):
         """Should create a session successfully."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
-
-        # Reset singleton for testing
-        SessionManager._instance = None
 
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=5)
@@ -924,9 +944,6 @@ class TestSessionManager:
     def test_session_limit_per_ip(self):
         """Should enforce session limit per IP."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
-
-        # Reset singleton for testing
-        SessionManager._instance = None
 
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=2)
@@ -954,9 +971,6 @@ class TestSessionManager:
         """Should validate and timeout sessions."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        # Reset singleton for testing
-        SessionManager._instance = None
-
         manager = SessionManager()
         config = SecurityConfig(session_timeout_minutes=1)
 
@@ -980,7 +994,6 @@ class TestSessionManager:
         """Should properly end sessions."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        SessionManager._instance = None
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=5)
 
@@ -1002,7 +1015,6 @@ class TestSessionManager:
         """Should track active session count."""
         from backpropagate.ui_security import SecurityConfig, SessionManager
 
-        SessionManager._instance = None
         manager = SessionManager()
         config = SecurityConfig(max_sessions_per_ip=10)
 
@@ -1548,23 +1560,13 @@ class TestGetUiOutputDir:
 
         monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", forbidden)
 
-        try:
-            result = get_ui_output_dir()
-        except BackpropagateError as e:
-            # Happy path: FB-003 denylist fired. Pin the structured code.
-            assert e.code == "UI_OUTPUT_DIR_FORBIDDEN", (
-                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN'), "
-                f"got code={e.code!r}"
-            )
-            return
-        except (ValueError, PermissionError, OSError) as e:
-            # Fallback: helper hasn't landed the structured code yet but a
-            # rejection of some kind still fired — that's acceptable.
-            return
-        else:
-            # The denylist must reject the path. If we got a result back, the
-            # FB-003 guard isn't wired.
-            pytest.fail(
-                f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
-                f"for forbidden base {forbidden!r}, got result={result!r}"
-            )
+        # FB-003 contract: denylisted bases MUST raise BackpropagateError with
+        # the structured code='UI_OUTPUT_DIR_FORBIDDEN'. Anything looser (plain
+        # ValueError, OSError, etc.) is a regression — the user-facing error
+        # surface depends on the code for programmatic handling.
+        with pytest.raises(BackpropagateError) as exc_info:
+            get_ui_output_dir()
+        assert exc_info.value.code == "UI_OUTPUT_DIR_FORBIDDEN", (
+            f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
+            f"for forbidden base {forbidden!r}, got code={exc_info.value.code!r}"
+        )

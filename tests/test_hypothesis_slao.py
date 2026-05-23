@@ -1,11 +1,18 @@
 """Property-based testing for SLAO operations.
 
 Uses Hypothesis to generate random inputs and verify invariants.
+
+TESTS-A-015 (v1.1.2 amend wave): Windows + cold imports + tensor ops
+push some property tests past Hypothesis's 200ms default deadline. The
+tests are correctness checks, not perf benchmarks, so we register a
+"no_deadline" profile at module load and use it for every test in this
+file. The profile also suppresses the "too_slow" health-check that
+Hypothesis would otherwise fire on the same shape of slowness.
 """
 
 import pytest
 import torch
-from hypothesis import assume, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from backpropagate.slao import (
@@ -14,6 +21,21 @@ from backpropagate.slao import (
     get_layer_scale,
     time_aware_scale,
 )
+
+# Register and load a deadline-free profile so the merge / similarity /
+# orthogonal-init property tests don't go flaky on slow Windows runners.
+# Hypothesis allows multiple register_profile calls for the same name as
+# long as parallel test workers don't race, so guarding with try/except is
+# the safe pattern when this module is reloaded inside a single session.
+try:
+    settings.register_profile(
+        "no_deadline",
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+except Exception:  # pragma: no cover — profile already registered
+    pass
+settings.load_profile("no_deadline")
 
 # =============================================================================
 # STRATEGIES

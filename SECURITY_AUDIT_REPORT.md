@@ -1,6 +1,6 @@
 # Backpropagate Security Audit & Implementation Report
 
-> **Note:** This document was a point-in-time audit from early development. The project is now at v1.0.5 (Production/Stable) with 1805 tests collected (verified 2026-05-21 via `pytest --collect-only`). Pre-commit hooks, CI security scanners (Bandit, pip-audit, Semgrep, Trivy, TruffleHog), and all recommendations below marked "Should Do" are now implemented. See CI workflows and README for current security posture. Retained for historical reference only.
+> **Note:** This document was a point-in-time audit from early development. The project is now at v1.1.2 (Production/Stable) with 1957 tests collected (verified 2026-05-22 via `pytest --collect-only`). Pre-commit hooks and CI security scanners (Bandit, pip-audit, Semgrep, Trivy with its built-in secret scanner — TruffleHog removed v1.1.0, see docs/ci-gates-triage-plan.md) and all recommendations below marked "Should Do" are now implemented. See CI workflows and README for current security posture. Retained for historical reference only.
 
 **Date:** January 18, 2026
 **Auditor:** Claude (Opus 4.5)
@@ -132,7 +132,7 @@ All user-provided paths now validated:
 
 **Total Test Results:**
 ```
-~1,796 passed at v1.0.2; current v1.0.5 collects 1805 tests, 0 warnings
+~1,796 passed at v1.0.2; v1.1.2 collects 1957 tests, 0 warnings (verified 2026-05-22)
 ```
 
 ---

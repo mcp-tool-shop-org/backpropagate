@@ -260,7 +260,16 @@ class TestModelfile:
     """Tests for Modelfile creation."""
 
     def test_create_modelfile_basic(self, sample_gguf_path):
-        """Test basic Modelfile creation."""
+        """Test basic Modelfile creation.
+
+        BRIDGE-A-001 (v1.1.2 amend wave): create_modelfile now escapes
+        backslash and double-quote in the FROM path so a gguf_path with
+        either character (UNC / Windows paths) produces a well-formed
+        Modelfile. We assert against the post-escape form to pin the new
+        contract — a raw ``str(path)`` substring match would fail on
+        Windows where ``C:\\Users\\...`` becomes ``C:\\\\Users\\\\...``
+        inside the Modelfile.
+        """
         from backpropagate.export import create_modelfile
 
         modelfile = create_modelfile(sample_gguf_path)
@@ -268,7 +277,18 @@ class TestModelfile:
         assert modelfile.exists()
         content = modelfile.read_text()
         assert "FROM" in content
-        assert str(sample_gguf_path.resolve()) in content
+        # Build the expected escaped form the same way create_modelfile does:
+        # escape backslashes first, then quotes (order matters — otherwise the
+        # inserted escape-backslashes are themselves doubled).
+        expected_escaped_path = (
+            str(sample_gguf_path.resolve())
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+        )
+        assert expected_escaped_path in content, (
+            f"Escaped FROM path {expected_escaped_path!r} not found in Modelfile "
+            f"content:\n{content!r}"
+        )
 
     def test_create_modelfile_with_options(self, sample_gguf_path):
         """Test Modelfile creation with custom options."""
@@ -332,14 +352,30 @@ class TestOllamaIntegration:
                 register_with_ollama(sample_gguf_path, "test-model")
 
     def test_register_with_ollama_success(self, sample_gguf_path):
-        """Test successful Ollama registration."""
+        """Test successful Ollama registration.
+
+        BRIDGE-A-004 (v1.1.2 amend wave): register_with_ollama now calls
+        ``_run_subprocess_interruptible`` (Popen-based) instead of
+        ``subprocess.run``, so Ctrl+C reliably propagates to the child
+        ollama process instead of leaving a zombie. The mock target moved
+        from ``subprocess.run`` to ``backpropagate.export._run_subprocess_interruptible``.
+        """
+        import subprocess as _sp
+
         from backpropagate.export import register_with_ollama
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
+        mock_result = _sp.CompletedProcess(
+            args=["ollama", "create", "test-model"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
 
         with patch("shutil.which", return_value="/usr/bin/ollama"), \
-             patch("subprocess.run", return_value=mock_result) as mock_run:
+             patch(
+                 "backpropagate.export._run_subprocess_interruptible",
+                 return_value=mock_result,
+             ) as mock_run:
             result = register_with_ollama(sample_gguf_path, "test-model")
 
         assert result is True
@@ -757,7 +793,15 @@ class TestSubprocessTimeout:
     """Tests for subprocess.TimeoutExpired handling (TQ-002)."""
 
     def test_export_gguf_llama_cpp_timeout(self, temp_dir, mock_peft_model, mock_tokenizer):
-        """export_gguf should raise GGUFExportError when llama.cpp conversion times out."""
+        """export_gguf should raise GGUFExportError when llama.cpp conversion times out.
+
+        BRIDGE-A-004 (v1.1.2 amend wave): the timeout path now flows
+        through ``_run_subprocess_interruptible`` (Popen-based), not
+        ``subprocess.run``. The mock target moved accordingly. The helper
+        re-raises ``subprocess.TimeoutExpired`` after killing the child
+        process group, which the export_gguf except branch translates
+        into a GGUFExportError with the "timed out" message.
+        """
         from backpropagate.exceptions import GGUFExportError
         from backpropagate.export import export_gguf
 
@@ -765,13 +809,13 @@ class TestSubprocessTimeout:
         merged_model.save_pretrained = MagicMock()
         mock_peft_model.merge_and_unload.return_value = merged_model
 
-        # Fake a llama.cpp convert script on disk
-        convert_script = Path.home() / "llama.cpp" / "convert_hf_to_gguf.py"
-
         with patch("backpropagate.export._has_unsloth", return_value=False), \
              patch("backpropagate.export._is_peft_model", return_value=True), \
              patch.object(Path, "exists", return_value=True), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python convert", timeout=1800)):
+             patch(
+                 "backpropagate.export._run_subprocess_interruptible",
+                 side_effect=subprocess.TimeoutExpired(cmd="python convert", timeout=1800),
+             ):
             with pytest.raises(GGUFExportError, match="timed out"):
                 export_gguf(
                     model=mock_peft_model,
@@ -781,12 +825,22 @@ class TestSubprocessTimeout:
                 )
 
     def test_register_with_ollama_timeout(self, sample_gguf_path):
-        """register_with_ollama should raise OllamaRegistrationError on timeout."""
+        """register_with_ollama should raise OllamaRegistrationError on timeout.
+
+        BRIDGE-A-004 (v1.1.2 amend wave): like the llama.cpp test above,
+        the timeout path is now via ``_run_subprocess_interruptible``. The
+        mock target moved from ``subprocess.run`` to the helper so the
+        synthesized TimeoutExpired actually reaches the
+        OllamaRegistrationError translation branch.
+        """
         from backpropagate.exceptions import OllamaRegistrationError
         from backpropagate.export import register_with_ollama
 
         with patch("shutil.which", return_value="/usr/bin/ollama"), \
-             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ollama create", timeout=600)):
+             patch(
+                 "backpropagate.export._run_subprocess_interruptible",
+                 side_effect=subprocess.TimeoutExpired(cmd="ollama create", timeout=600),
+             ):
             with pytest.raises(OllamaRegistrationError, match="timed out"):
                 register_with_ollama(sample_gguf_path, "test-model")
 
@@ -1146,7 +1200,11 @@ class TestPushToHub:
                     repo_id="alice/adapter",
                 )
 
-        assert getattr(excinfo.value, "code", None) == "HUB_PUSH_AUTH"
+        # BRIDGE-A-007 (v1.1.2 amend wave): the 401/403 branch now sets
+        # the canonical INPUT_AUTH_REQUIRED code (already in ERROR_CODES)
+        # instead of the orphaned HUB_PUSH_AUTH string. cmd_push accepts
+        # both during the rename, but new errors emit INPUT_AUTH_REQUIRED.
+        assert getattr(excinfo.value, "code", None) == "INPUT_AUTH_REQUIRED"
 
     def test_huggingface_hub_missing_emits_clear_export_error(self, tmp_path):
         from backpropagate.exceptions import ExportError
@@ -1196,3 +1254,170 @@ class TestPushToHub:
 
         with patch("backpropagate.export.Path.home", return_value=tmp_path):
             assert _resolve_hf_token(None) is None
+
+
+# =============================================================================
+# ATOMIC EXPORT WRITES (B-006) — TESTS-A-005
+# =============================================================================
+#
+# CHANGELOG.md L32 documents the atomic-write contract for export_lora and
+# export_gguf: both write into ``<path>.partial`` first and ``shutil.move`` to
+# the final path on success. A mid-write failure (disk full, OOM, etc.) MUST
+# leave neither a partial-named directory nor a half-written final artifact.
+#
+# These tests pin the contract by making the inner write step raise during
+# the partial stage and asserting:
+#   (a) the FINAL target path does not exist after the failure
+#   (b) the ``.partial`` sibling is cleaned up
+#
+# Pairs with TestTrainerSaveAtomic + TestSLAOMergerSaveAtomic in test_trainer.py.
+
+
+class TestExportLoraAtomicWrite:
+    """Pin the atomic-write contract for export_lora (B-006, TESTS-A-005)."""
+
+    def test_export_lora_happy_path(self, temp_dir, mock_peft_model):
+        """export_lora: success path promotes partial to final, no residue."""
+        from backpropagate.export import export_lora
+
+        target = temp_dir / "lora_export"
+
+        # Make save_pretrained drop a marker file so we can prove the move ran.
+        def write_marker(path, *args, **kwargs):
+            from pathlib import Path
+            p = Path(path)
+            p.mkdir(parents=True, exist_ok=True)
+            (p / "adapter_model.safetensors").write_bytes(b"weights")
+
+        mock_peft_model.save_pretrained.side_effect = write_marker
+
+        with patch("backpropagate.export._is_peft_model", return_value=True):
+            result = export_lora(
+                model=mock_peft_model,
+                output_dir=target,
+                emit_model_card=False,
+            )
+
+        assert target.exists(), "Final export dir must exist on success"
+        assert (target / "adapter_model.safetensors").exists(), (
+            "Marker written in partial stage must be promoted to final dir"
+        )
+        partial = target.with_name(target.name + ".partial")
+        assert not partial.exists(), (
+            f"Partial dir must be cleaned up on success; still at {partial}"
+        )
+        assert result.path == target
+
+    def test_export_lora_disk_full_leaves_no_final_artifact(self, temp_dir,
+                                                             mock_peft_model):
+        """export_lora: a mid-write OSError must NOT leave a half-written final dir."""
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import export_lora
+
+        target = temp_dir / "lora_export"
+
+        # Simulate disk-full: save_pretrained raises mid-write. The partial
+        # directory has already been created at this point.
+        mock_peft_model.save_pretrained.side_effect = OSError(
+            "[Errno 28] No space left on device"
+        )
+
+        with patch("backpropagate.export._is_peft_model", return_value=True), \
+             pytest.raises(ExportError):
+            export_lora(
+                model=mock_peft_model,
+                output_dir=target,
+                emit_model_card=False,
+            )
+
+        # The atomic contract: no final artifact, no partial residue.
+        assert not target.exists(), (
+            "Final export dir must NOT exist after a mid-write failure"
+        )
+        partial = target.with_name(target.name + ".partial")
+        assert not partial.exists(), (
+            f"Partial dir must be cleaned up on failure; still at {partial}"
+        )
+
+
+class TestExportGgufAtomicWrite:
+    """Pin the atomic-write contract for export_gguf (B-006, TESTS-A-005).
+
+    export_gguf writes via Unsloth into ``output_dir / _unsloth_partial`` then
+    moves the produced .gguf into ``output_dir`` proper. A mid-conversion
+    failure must clean up the partial scratch dir and leave no .gguf at the
+    final path.
+    """
+
+    def test_export_gguf_happy_path(self, temp_dir, mock_peft_model, mock_tokenizer):
+        """export_gguf: Unsloth success path produces final .gguf, no scratch left."""
+        from backpropagate.export import export_gguf
+
+        def fake_save_gguf(path, tokenizer, quantization_method):
+            from pathlib import Path
+            p = Path(path)
+            p.mkdir(parents=True, exist_ok=True)
+            # Unsloth writes the .gguf into the partial dir; export_gguf
+            # moves it up to output_path on success.
+            (p / f"model-{quantization_method}.gguf").write_bytes(b"GGUF" * 256)
+
+        mock_peft_model.save_pretrained_gguf = fake_save_gguf
+
+        target = temp_dir / "gguf_export"
+
+        with patch("backpropagate.export._has_unsloth", return_value=True):
+            result = export_gguf(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=target,
+                quantization="q4_k_m",
+                emit_model_card=False,
+            )
+
+        # The produced .gguf must be at the final path (not in the partial).
+        final_gguf = target / "model-q4_k_m.gguf"
+        assert final_gguf.exists(), (
+            f"Promoted .gguf must exist at final path; expected {final_gguf}"
+        )
+        scratch = target / "_unsloth_partial"
+        assert not scratch.exists(), (
+            f"Unsloth scratch dir must be cleaned up on success; still at {scratch}"
+        )
+        assert result.path == final_gguf
+
+    def test_export_gguf_disk_full_leaves_no_final_gguf(self, temp_dir,
+                                                         mock_peft_model,
+                                                         mock_tokenizer):
+        """export_gguf: Unsloth raising mid-write must NOT leave a final .gguf."""
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_gguf
+
+        # Simulate disk-full during the Unsloth save step.
+        def boom(path, tokenizer, quantization_method):
+            raise OSError("[Errno 28] No space left on device")
+
+        mock_peft_model.save_pretrained_gguf = boom
+
+        target = temp_dir / "gguf_export"
+
+        with patch("backpropagate.export._has_unsloth", return_value=True), \
+             pytest.raises((GGUFExportError, OSError)):
+            export_gguf(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=target,
+                quantization="q4_k_m",
+                emit_model_card=False,
+            )
+
+        # No final .gguf at the canonical path.
+        final_gguf = target / "model-q4_k_m.gguf"
+        assert not final_gguf.exists(), (
+            f"Final .gguf must NOT exist after disk-full mid-write; "
+            f"unexpectedly found at {final_gguf}"
+        )
+        # Scratch dir cleaned up.
+        scratch = target / "_unsloth_partial"
+        assert not scratch.exists(), (
+            f"Unsloth scratch dir must be cleaned up on failure; still at {scratch}"
+        )

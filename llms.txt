@@ -17,7 +17,7 @@ trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ## Key API (Python)
-- `Trainer(model, lora_r=16, lora_alpha=32, learning_rate=2e-4, batch_size="auto", oom_recovery=True, unsloth_fallback=True)`
+- `Trainer(model, lora_r=256, lora_alpha=32, learning_rate=2e-4, batch_size="auto", oom_recovery=True, unsloth_fallback=True, use_dora=False, packing=True, init_lora_weights="default", optim=None)` — v1.3 defaults bump `lora_r` from 16 to 256 (Biderman 2024 / Thinking Machines 2025) with all-linear target; pass `lora_preset="fast"` for the legacy rank-16 / q+v footprint. `packing=True` is the default; pass `packing=False` to opt out. `optim=None` auto-detects `"paged_adamw_8bit"` on RTX 40/50-series cards.
 - `trainer.train(dataset, steps=100, samples=1000)` -> `TrainingRun` (has `run_id`)
 - `trainer.save(path)` -- save LoRA adapter
 - `trainer.export(format, quantization)` -- export to GGUF
@@ -27,11 +27,14 @@ trainer.export("gguf", quantization="q4_k_m")
 - `BackpropagateError.to_dict()` -- structured envelope `{type, code, message, retryable, suggestion, details, cause}`
 
 ## Key CLI Commands
-- `backprop train --data <file> --model <name> --steps N`
+- `backprop train --data <file> --model <name> --steps N [--lora-preset {quality,fast}] [--use-dora] [--no-packing] [--init-lora-weights {default,pissa,loftq}] [--optim <name>]`
 - `backprop multi-run --data <file> --runs N --steps N --samples N` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
+- `backprop diff-runs <run-a> <run-b> [--format json]` -- side-by-side diff of two completed runs
+- `backprop replay <run-id> [--override key=value]` -- re-run with the same config + dataset
+- `backprop export-runs --format jsonl` -- bulk export of run history for offline analytics
 - `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
 - `backprop info` -- system info and feature detection
-- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` (and `--host <non-loopback>`) require `--auth` as a hard error per v1.2.0 (GHSA-f65r-h4g3-3h9h); no env-var opt-out
+- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` (and `--host <non-loopback>`) require `--auth` as a hard error per v1.2.0 (GHSA-f65r-h4g3-3h9h); no env-var opt-out. v1.3 adds real `cloudflared`-based tunneling for `--share`
 - `backprop config` -- show resolved configuration
 
 Exit codes: 0 success, 1 user error, 2 runtime error, 3 partial success.
@@ -57,7 +60,9 @@ All settings overridable via BACKPROPAGATE_* prefix; nested keys use double unde
 - BACKPROPAGATE_LOG_LEVEL (DEBUG/INFO/WARNING/ERROR), BACKPROPAGATE_LOG_JSON, BACKPROPAGATE_LOG_FILE
 - BACKPROPAGATE_DEFER_FEATURE_DETECTION (fast-startup opt-out)
 - BACKPROPAGATE_UI__OUTPUT_DIR (default ~/.backpropagate/ui-outputs; denylist-validated against /etc, ~/.ssh, etc.)
-- BACKPROPAGATE_MODEL__NAME (default Qwen/Qwen2.5-7B-Instruct), BACKPROPAGATE_TRAINING__LEARNING_RATE, BACKPROPAGATE_LORA__R
+- BACKPROPAGATE_MODEL__NAME (default Qwen/Qwen2.5-7B-Instruct), BACKPROPAGATE_TRAINING__LEARNING_RATE, BACKPROPAGATE_LORA__R (v1.3 default 256, was 16)
+- BACKPROPAGATE_UI_REQUEST_LOG (1 = emit structured access log per request; opt-in)
+- BACKPROPAGATE_UI_RATE_LIMIT_REQ_PER_MIN / BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN (defaults 100 / 10)
 - Group prefixes: MODEL__, LORA__, TRAINING__, DATA__, UI__, WINDOWS__, MULTIRUN__, SECURITY__
 
 Full reference: https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/

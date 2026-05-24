@@ -184,8 +184,10 @@ Include:
 
 ## Questions?
 
-- Open an issue for questions
-- Check existing issues first
-- Be respectful and constructive
+- For "how do I do X" / "is this the right pattern" / "did anyone hit this before" — use [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). The Q&A category is the canonical channel; accepted answers help the next person searching. Ideas + Show and Tell categories cover roadmap and community-built recipes.
+- For confirmed bugs — open an [issue](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml). The template requires `run_id` + error code + `backprop info` output.
+- For security issues — file privately via the [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) form; see [SECURITY.md](SECURITY.md).
+- Check existing issues + discussions first to avoid duplicates.
+- Be respectful and constructive.
 
 Thank you for contributing!

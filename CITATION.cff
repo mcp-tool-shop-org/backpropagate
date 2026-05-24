@@ -1,12 +1,16 @@
 cff-version: 1.2.0
-title: backpropagate
-message: "If you use this software, please cite it as below."
+title: "Backpropagate: Headless LLM fine-tuning on a single consumer GPU"
+message: "If you use Backpropagate in published work, please cite both the software and the underlying SLAO research paper (see references)."
 type: software
 authors:
-  - name: mcp-tool-shop
+  - name: "MCP Tool Shop authors"
     email: 64996768+mcp-tool-shop@users.noreply.github.com
 repository-code: "https://github.com/mcp-tool-shop-org/backpropagate"
-url: "https://github.com/mcp-tool-shop-org/backpropagate"
+url: "https://mcp-tool-shop-org.github.io/backpropagate/"
+# version + date-released are kept in lockstep with pyproject.toml's [project].version
+# and the matching CHANGELOG.md section. Update both fields at release time
+# (Dependabot does not bump CFF). The pre-release coordinator script
+# scripts/prep_release.sh (planned, v1.4) will eventually validate this.
 version: 1.2.0
 date-released: 2026-05-23
 license: MIT
@@ -16,17 +20,40 @@ keywords:
   - lora
   - qlora
   - unsloth
-  - slao
-  - peft
-  - transformers
-  - gguf
-  - ollama
-  - huggingface
+  - training
+  - machine-learning
+  - headless
+  - api
+# DOI: placeholder. Mint a Zenodo DOI on the v1.3.0 GitHub release and replace
+# this comment with `doi: 10.5281/zenodo.XXXXXXX`. See the Zenodo-GitHub
+# integration docs at https://docs.github.com/en/repositories/archiving-a-github-repository/referencing-and-citing-content
 references:
   - type: article
-    title: "Single LoRA Continual Learning via Asymmetric Merging"
+    title: "Merge before Forget: A Single LoRA Continual Learning via Continual Merging"
     authors:
-      - name: "SLAO authors"
+      - family-names: "Qiao"
+      - family-names: "Mahdavi"
     url: "https://arxiv.org/abs/2512.23017"
     year: 2025
-    notes: "SLAO — the merge-between-runs technique that backpropagate's multi_run.py + slao.py implement to prevent catastrophic forgetting during extended fine-tuning campaigns. Full author list at the arXiv URL above; this entry uses a collective name placeholder so CFF stays valid until the arXiv metadata is captured exhaustively."
+    notes: "SLAO (Single LoRA Continual Learning via Asymmetric Merging) — the merge-between-runs technique that backpropagate's multi_run.py + slao.py implement to prevent catastrophic forgetting during extended fine-tuning campaigns. arXiv:2512.23017 is the primary citation; backpropagate is the paper's first known downstream adopter."
+  - type: article
+    title: "LoRA Learns Less and Forgets Less"
+    authors:
+      - family-names: "Biderman"
+    url: "https://arxiv.org/abs/2405.09673"
+    year: 2024
+    notes: "Empirical evidence that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks at 67% of the compute. Drives backpropagate's v1.3 default LoRA configuration (rank 256, all-linear target)."
+  - type: article
+    title: "LoRA: Low-Rank Adaptation of Large Language Models"
+    authors:
+      - family-names: "Hu"
+      - family-names: "Shen"
+      - family-names: "Wallis"
+      - family-names: "Allen-Zhu"
+      - family-names: "Li"
+      - family-names: "Wang"
+      - family-names: "Wang"
+      - family-names: "Chen"
+    url: "https://arxiv.org/abs/2106.09685"
+    year: 2021
+    notes: "Foundational LoRA paper underpinning the entire library."

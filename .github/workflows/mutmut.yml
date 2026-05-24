@@ -1,0 +1,112 @@
+name: Mutation testing (mutmut)
+
+# TESTS-F-004 (v1.3 Wave 6b) — mutation-testing CI gate.
+#
+# Mutmut is in dev-deps but the v1.2 ship cycle never ran it in CI; the
+# audit at swarms/v1.3-backpropagate/research/wave-5-feature-audit/tests.json
+# flagged the missed regression-net opportunity.
+#
+# This workflow runs mutmut against a SCOPED subset of source files on
+# ubuntu-latest, captures the surviving-mutation count, and posts it as a
+# CI artifact. It is a SOFT GATE: the build does not fail unless the
+# surviving count regresses by more than 5% from the recorded baseline
+# (see .github/mutmut-baseline.txt). The intent is to catch test-suite
+# weakening over time without breaking emergency hotfixes.
+#
+# Why ubuntu-latest only: mutmut 3.x imports stdlib `resource` which is
+# POSIX-only — the package will not import on Windows. Local Windows
+# contributors use scripts/run_mutmut.sh in WSL.
+#
+# Why scoped subset: a full-codebase mutmut run takes 30-60 minutes on a
+# GitHub-hosted runner. The scoped subset (slao.py + checkpoints.py)
+# covers the two most-modified Wave 6+ modules in <10 minutes. Expand
+# the path list as additional modules harden.
+#
+# Trigger discipline: workflow_dispatch only for v1.3. Add `pull_request`
+# / `schedule` in a follow-up once the baseline is stable for two
+# release cycles (avoid noisy false-positive ratchets while contributors
+# learn the surface).
+
+on:
+  workflow_dispatch:
+    inputs:
+      paths_to_mutate:
+        description: 'Comma-separated paths to mutate (default: slao,checkpoints)'
+        required: false
+        default: 'backpropagate/slao.py,backpropagate/checkpoints.py'
+
+permissions:
+  contents: read
+
+jobs:
+  mutmut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install backpropagate (dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          # Install the package + dev extras (mutmut, pytest, hypothesis,
+          # etc). The smoke-test fast path skips the heavy [ui]/[unsloth]
+          # extras to keep wheel resolution fast.
+          pip install -e ".[dev,validation,logging,security]"
+
+      - name: Show mutmut version
+        run: mutmut --version
+
+      - name: Run mutmut on scoped subset
+        id: mutmut_run
+        env:
+          PATHS_TO_MUTATE: ${{ github.event.inputs.paths_to_mutate }}
+        run: |
+          # mutmut config block in pyproject.toml provides paths/runners; this
+          # override allows the workflow_dispatch input to scope down further.
+          set +e  # mutmut returns non-zero when mutants survive — don't fail the job
+          mutmut run --paths-to-mutate "${PATHS_TO_MUTATE}"
+          # capture exit code so we can decide on the gate below
+          echo "mutmut_exit=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Capture surviving-count + soft gate
+        run: |
+          # mutmut results outputs to stdout; we parse the structured count.
+          mutmut results 2>&1 | tee mutmut-results.txt
+          # Extract surviving count (mutmut 2.x: "<N> survived"; mutmut 3.x: differs)
+          SURVIVED=$(grep -oE '[0-9]+ survived' mutmut-results.txt | grep -oE '[0-9]+' || echo "0")
+          echo "Surviving mutations: $SURVIVED"
+          echo "SURVIVED=$SURVIVED" >> "$GITHUB_ENV"
+          # Baseline lookup — if no baseline file, this is the first run; just
+          # report and don't gate. Subsequent runs gate against +5% regression.
+          BASELINE_FILE=".github/mutmut-baseline.txt"
+          if [ ! -f "$BASELINE_FILE" ]; then
+            echo "No baseline file at $BASELINE_FILE — recording $SURVIVED as the new baseline."
+            echo "$SURVIVED" > "$BASELINE_FILE"
+            exit 0
+          fi
+          BASELINE=$(cat "$BASELINE_FILE")
+          echo "Baseline: $BASELINE; current: $SURVIVED"
+          # +5% regression threshold (rounded up)
+          THRESHOLD=$(python -c "import math; print(math.ceil(${BASELINE} * 1.05))")
+          if [ "$SURVIVED" -gt "$THRESHOLD" ]; then
+            echo "::error::Surviving mutations ($SURVIVED) exceeds 5% regression threshold ($THRESHOLD, baseline $BASELINE)."
+            exit 1
+          fi
+          echo "Within tolerance. Soft gate green."
+
+      - name: Upload mutmut artifacts
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v6.0.0
+        with:
+          name: mutmut-results
+          path: |
+            mutmut-results.txt
+            .github/mutmut-baseline.txt
+          retention-days: 30

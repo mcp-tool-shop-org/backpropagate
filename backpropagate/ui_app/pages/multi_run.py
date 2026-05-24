@@ -52,6 +52,7 @@ def _model_group() -> rx.Component:
                     default_value=MultiRunState.model,
                     on_change=MultiRunState.set_model,
                     size="2",
+                    aria_label="HuggingFace model id",
                 ),
                 rx.cond(
                     MultiRunState.model_error != "",
@@ -68,7 +69,11 @@ def _model_group() -> rx.Component:
             rx.flex(
                 _label("Quantization"),
                 rx.select.root(
-                    rx.select.trigger(placeholder="4-bit", style={"width": "100%"}),
+                    rx.select.trigger(
+                        placeholder="4-bit",
+                        style={"width": "100%"},
+                        aria_label="Quantization level — 4-bit, 8-bit, or 16-bit",
+                    ),
                     rx.select.content(
                         rx.select.item("4-bit", value="4-bit"),
                         rx.select.item("8-bit", value="8-bit"),
@@ -100,6 +105,7 @@ def _sweep_shape_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    aria_label="Number of independent training runs to launch",
                 ),
                 _err_text(MultiRunState.num_runs_error),
                 direction="column",
@@ -114,6 +120,7 @@ def _sweep_shape_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    aria_label="Number of training samples per run",
                 ),
                 _err_text(MultiRunState.samples_per_run_error),
                 direction="column",
@@ -122,7 +129,11 @@ def _sweep_shape_group() -> rx.Component:
             rx.flex(
                 _label("Merge mode"),
                 rx.select.root(
-                    rx.select.trigger(placeholder="slao", style={"width": "100%"}),
+                    rx.select.trigger(
+                        placeholder="slao",
+                        style={"width": "100%"},
+                        aria_label="LoRA merge mode — SLAO, Weighted, or TIES",
+                    ),
                     rx.select.content(
                         rx.select.item("SLAO (default)", value="slao"),
                         rx.select.item("Weighted", value="weighted"),
@@ -174,15 +185,28 @@ def _runs_table() -> rx.Component:
                 rx.table.body(
                     rx.cond(
                         MultiRunState.runs.length() == 0,  # type: ignore[attr-defined]
+                        # FRONTEND-9 (Wave 6b): mirror the runs.py empty-state
+                        # pattern — name a concrete next action rather than
+                        # just "no runs yet." Norman 1988 affordance framing.
                         rx.table.row(
                             rx.table.cell(
-                                rx.text(
-                                    "No runs yet — press Start multi-run to begin.",
-                                    size="1",
-                                    style={
-                                        "color": "var(--bp-muted)",
-                                        "font_style": "italic",
-                                    },
+                                rx.flex(
+                                    rx.text(
+                                        "No runs in this sweep yet.",
+                                        size="2",
+                                        style={"color": "var(--bp-text-2)"},
+                                    ),
+                                    rx.text(
+                                        "Set Num runs + Samples per run + Merge mode "
+                                        "above, then click Start multi-run. From the "
+                                        "shell: `backprop multi-run <model> <dataset> "
+                                        "--num-runs N --samples-per-run M`.",
+                                        size="1",
+                                        style={"color": "var(--bp-muted)"},
+                                    ),
+                                    direction="column",
+                                    gap="2",
+                                    align="center",
                                 ),
                                 col_span=len(headers),
                                 style={"text_align": "center", "padding": "16px"},

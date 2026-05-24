@@ -19,8 +19,9 @@ class TestTrainerInit:
             trainer = Trainer()
 
         assert trainer.model_name is not None
-        assert trainer.lora_r == 16
-        assert trainer.lora_alpha == 32
+        # v1.3 BACKEND-1: LoRAConfig defaults bumped to rank 256 + all-linear.
+        assert trainer.lora_r == 256
+        assert trainer.lora_alpha == 512
         assert trainer._is_loaded is False
 
     def test_trainer_custom_parameters(self):
@@ -979,22 +980,22 @@ class TestLoRARankConfiguration:
     """Tests for custom r, alpha LoRA values."""
 
     def test_lora_rank_default(self):
-        """Default LoRA rank should be 16."""
+        """Default LoRA rank should be 256 (v1.3 BACKEND-1 quality bump)."""
         from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-        assert trainer.lora_r == 16
+        assert trainer.lora_r == 256
 
     def test_lora_alpha_default(self):
-        """Default LoRA alpha should be 32."""
+        """Default LoRA alpha should be 512 (v1.3 BACKEND-1 alpha = 2 * r)."""
         from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-        assert trainer.lora_alpha == 32
+        assert trainer.lora_alpha == 512
 
     def test_lora_rank_custom(self):
         """Custom LoRA rank should be applied."""
@@ -1038,26 +1039,47 @@ class TestLoRATargetModules:
     """Tests for correct LoRA target modules."""
 
     def test_lora_targets_attention_modules(self):
-        """LoRA should target attention projection modules."""
+        """LoRA targets attention projection modules.
+
+        v1.3 BACKEND-1: the default target_modules flipped from a
+        hand-curated 7-name list to PEFT's ``"all-linear"`` wildcard,
+        which expands to every linear/Conv1D module on the model
+        (including q_proj, k_proj, v_proj, o_proj). The contract this
+        test really cares about is "attention projections are covered" —
+        ``"all-linear"`` is a strict superset of the legacy list, so
+        both shapes satisfy it. We branch on the value shape so the
+        test stays meaningful if an operator switches back to the
+        explicit list form via env var.
+        """
         from backpropagate.config import settings
 
-        # Check settings has the expected target modules
         target_modules = settings.lora.target_modules
 
-        assert "q_proj" in target_modules
-        assert "k_proj" in target_modules
-        assert "v_proj" in target_modules
-        assert "o_proj" in target_modules
+        if isinstance(target_modules, str):
+            # Wildcard form — covers every linear module by definition.
+            assert target_modules == "all-linear"
+        else:
+            assert "q_proj" in target_modules
+            assert "k_proj" in target_modules
+            assert "v_proj" in target_modules
+            assert "o_proj" in target_modules
 
     def test_lora_targets_mlp_modules(self):
-        """LoRA should target MLP projection modules."""
+        """LoRA targets MLP projection modules.
+
+        v1.3 BACKEND-1: same superset-vs-list reasoning as the
+        attention-modules test above.
+        """
         from backpropagate.config import settings
 
         target_modules = settings.lora.target_modules
 
-        assert "gate_proj" in target_modules
-        assert "up_proj" in target_modules
-        assert "down_proj" in target_modules
+        if isinstance(target_modules, str):
+            assert target_modules == "all-linear"
+        else:
+            assert "gate_proj" in target_modules
+            assert "up_proj" in target_modules
+            assert "down_proj" in target_modules
 
 
 class TestLoRAMergeAndUnload:

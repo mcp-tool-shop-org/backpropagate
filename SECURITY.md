@@ -4,10 +4,13 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 1.3.x   | :white_check_mark: (in preparation; ships from main once v1.3.0 tags) |
 | 1.2.x   | :white_check_mark: |
 | 1.1.x   | :x: (EOL with v1.2.0 — see GHSA-f65r-h4g3-3h9h below for the auth-bypass advisory affecting 1.1.0 / 1.1.1) |
 | 1.0.x   | :x: (EOL with v1.1.0) |
 | < 1.0   | :x:                |
+
+Once v1.3.0 ships, 1.2.x moves to security-fix-only support for one minor cycle (until v1.4.0); operators should plan migration to v1.3 within that window.
 
 ## Published Security Advisories
 

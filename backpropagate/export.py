@@ -430,6 +430,7 @@ def push_to_hub(
     create_repo: bool = True,
     repo_type: str = "model",
     include_base: bool = False,
+    revision: str | None = None,
 ) -> str:
     """F-001: upload a local adapter / merged model to the Hugging Face Hub.
 
@@ -645,6 +646,7 @@ def push_to_hub(
                 repo_type=repo_type,
                 commit_message=commit_message,
                 token=resolved_token,
+                revision=revision,
             )
         else:
             api.upload_folder(
@@ -654,6 +656,7 @@ def push_to_hub(
                 commit_message=commit_message,
                 allow_patterns=allow_patterns,
                 token=resolved_token,
+                revision=revision,
             )
 
     except HfHubHTTPError as exc:

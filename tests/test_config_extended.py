@@ -202,23 +202,38 @@ class TestLoRAConfig:
     """Tests for LoRAConfig."""
 
     def test_lora_config_defaults(self):
-        """LoRAConfig has correct defaults."""
+        """LoRAConfig has correct defaults.
+
+        v1.3 BACKEND-1: bumped from rank 16 + q+v target to rank 256 +
+        all-linear target. See test_config.py::TestLoRAConfig for the
+        full v1.3 rationale.
+        """
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        assert config.r == 16
-        assert config.lora_alpha == 32
+        assert config.r == 256
+        assert config.lora_alpha == 512
         assert config.lora_dropout == 0.05
-        assert len(config.target_modules) > 0
+        # target_modules accepts "all-linear" (str) OR a list of names;
+        # the v1.3 default is the wildcard string.
+        assert (
+            isinstance(config.target_modules, str)
+            or len(config.target_modules) > 0
+        )
 
     def test_lora_target_modules(self):
-        """LoRAConfig target_modules contains expected modules."""
+        """LoRAConfig target_modules default — v1.3 BACKEND-1 wildcard.
+
+        Default flipped from a hand-curated 7-module list to PEFT's
+        ``"all-linear"`` wildcard. PEFT expands the wildcard to every
+        linear / Conv1D module on the model except the LM head, which
+        is a strict superset of the legacy q/k/v/o + MLP set. Operators
+        who need explicit control can still pass a list of names.
+        """
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        assert "q_proj" in config.target_modules
-        assert "k_proj" in config.target_modules
-        assert "v_proj" in config.target_modules
+        assert config.target_modules == "all-linear"
 
 
 class TestTrainingConfig:

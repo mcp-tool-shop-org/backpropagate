@@ -342,6 +342,29 @@ class TrainState(rx.State):
     # level (one of info/ok/warn/err/tx/hf), msg (str).
     events: list[dict] = []
 
+    # ---- Computed Vars (FRONTEND-6 Wave 6b) --------------------------------
+
+    @rx.var
+    def loss_chart_data(self) -> list[dict]:
+        """Shape ``loss_history`` for ``rx.recharts.line_chart`` consumption.
+
+        Returns ``[{"step": i, "loss": v}, ...]`` — the dict shape recharts
+        needs. Computed-Var so the chart re-renders without an explicit
+        event handler when the trainer pushes a new step into the history.
+        """
+        return [{"step": i, "loss": v} for i, v in enumerate(self.loss_history)]
+
+    @rx.var
+    def run_complete(self) -> bool:
+        """True when the run has reached a terminal state (``done`` or ``error``).
+
+        FRONTEND-10 (post-run "next steps" panel) reads this Var to know when
+        to surface the post-run affordances. ``error`` counts as complete for
+        UI purposes — the operator still wants the "export what you have /
+        start another / view checkpoints" affordances after a failure.
+        """
+        return self.run_state in ("done", "error")
+
     # ---- Setters (FRONTEND-A-002 + FRONTEND-B-002) -------------------------
 
     @rx.event
@@ -611,7 +634,12 @@ class MultiRunState(rx.State):
 
 
 class ExportState(rx.State):
-    """Export surface state: source model, format, quantization, ollama config."""
+    """Export surface state: source model, format, quantization, ollama config.
+
+    Wave 6b (FRONTEND-11): adds push_to_hub fields — backend support already
+    exists in ``backpropagate.export.push_to_hub``; this state surfaces the
+    inputs to the UI form.
+    """
 
     source_model_path: str = ""
     source_model_path_error: str = ""
@@ -620,6 +648,18 @@ class ExportState(rx.State):
     ollama_register: bool = False
     ollama_name: str = ""
     ollama_name_error: str = ""
+
+    # ---- HuggingFace Hub push (FRONTEND-11 Wave 6b) ------------------------
+    hub_enabled: bool = False
+    hub_repo_id: str = ""
+    hub_repo_id_error: str = ""
+    hub_private: bool = True
+    hub_branch: str = "main"
+    hub_branch_error: str = ""
+    hub_token: str = ""  # treated as secret — never logged, validated by length
+    hub_token_error: str = ""
+    hub_status: str = ""  # "" / "pushing" / "done" / "error"
+    hub_message: str = ""  # operator-facing status / error message
 
     # ---- Validated path / name setters (FRONTEND-A-002) --------------------
 
@@ -681,6 +721,163 @@ class ExportState(rx.State):
         self.events = [
             {"t": "00:00:00", "level": "info", "msg": "[stub] export start clicked"}
         ]
+
+    # ---- HuggingFace Hub push setters + handler (FRONTEND-11) --------------
+
+    # HF repo id is ``<owner>/<repo>`` — allow [A-Za-z0-9_-./]. Strict char
+    # set rejects injection probes; the 200-char cap is HF's documented
+    # upper limit (see huggingface_hub.utils.validate_repo_id).
+    _HF_REPO_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+    _HF_BRANCH_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+    @rx.event
+    def set_hub_enabled(self, value: bool) -> None:
+        self.hub_enabled = bool(value)
+
+    @rx.event
+    def set_hub_repo_id(self, value: str) -> None:
+        if not value or not value.strip():
+            self.hub_repo_id = ""
+            self.hub_repo_id_error = ""
+            return
+        cleaned = value.strip()
+        if len(cleaned) > 200:
+            self.hub_repo_id_error = "Repo id too long (max 200 chars)"
+            return
+        if "/" not in cleaned:
+            self.hub_repo_id_error = "Repo id must be <owner>/<repo>"
+            return
+        if not self._HF_REPO_RE.match(cleaned):
+            self.hub_repo_id_error = "Repo id: alnum / dot / dash / underscore / slash only"
+            return
+        self.hub_repo_id = cleaned
+        self.hub_repo_id_error = ""
+
+    @rx.event
+    def set_hub_private(self, value: bool) -> None:
+        self.hub_private = bool(value)
+
+    @rx.event
+    def set_hub_branch(self, value: str) -> None:
+        if not value or not value.strip():
+            self.hub_branch = "main"
+            self.hub_branch_error = ""
+            return
+        cleaned = value.strip()
+        if len(cleaned) > 100:
+            self.hub_branch_error = "Branch name too long (max 100 chars)"
+            return
+        if not self._HF_BRANCH_RE.match(cleaned):
+            self.hub_branch_error = "Branch: alnum / dot / dash / underscore / slash only"
+            return
+        self.hub_branch = cleaned
+        self.hub_branch_error = ""
+
+    @rx.event
+    def set_hub_token(self, value: str) -> None:
+        """Set the HF API token.
+
+        Tokens are write-once on the form (the input is type=password). The
+        value lives only in this state — never logged, never serialized to
+        run history, never echoed in error messages. ``hub_token`` clears
+        after a successful push to limit exposure.
+        """
+        cleaned = (value or "").strip()
+        if not cleaned:
+            self.hub_token = ""
+            self.hub_token_error = ""
+            return
+        # HF tokens are ``hf_<40 base62 chars>``; we don't pin the exact
+        # prefix because operators may use org-scoped tokens with a
+        # different prefix. Sanity-check the length is in the expected
+        # 30-100 char range so we catch "I pasted my username by accident".
+        if len(cleaned) < 20 or len(cleaned) > 200:
+            self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"
+            return
+        self.hub_token = cleaned
+        self.hub_token_error = ""
+
+    @rx.event
+    def push_to_hub(self) -> None:
+        """Push the trained adapter / merged model to a HuggingFace Hub repo.
+
+        Delegates to ``backpropagate.export.push_to_hub`` (the established
+        backend API). Failures surface via ``self.hub_message``; success
+        clears the token so it doesn't sit in the state for the lifetime of
+        the WS session.
+
+        Pre-flight validation:
+        - source_model_path must be set
+        - hub_repo_id + hub_token must be set
+        - all field-level errors must be clear
+
+        The handler runs synchronously; the operator sees ``hub_status =
+        "pushing"`` for the duration. v1.4 should move this to a background
+        task with an SSE progress stream.
+        """
+        if self.source_model_path == "":
+            self.hub_status = "error"
+            self.hub_message = "Set a source adapter / model path before pushing."
+            return
+        if not self.hub_repo_id or self.hub_repo_id_error:
+            self.hub_status = "error"
+            self.hub_message = "Set a valid HuggingFace repo id (<owner>/<repo>)."
+            return
+        if not self.hub_token or self.hub_token_error:
+            self.hub_status = "error"
+            self.hub_message = "Set a valid HuggingFace API token."
+            return
+        if self.hub_branch_error:
+            self.hub_status = "error"
+            self.hub_message = "Fix the branch field error before pushing."
+            return
+
+        self.hub_status = "pushing"
+        self.hub_message = (
+            f"Pushing {self.source_model_path} to "
+            f"{self.hub_repo_id}@{self.hub_branch or 'main'}…"
+        )
+        try:
+            from .export import push_to_hub as _push
+
+            _push(
+                local_path=self.source_model_path,
+                repo_id=self.hub_repo_id,
+                token=self.hub_token,
+                private=bool(self.hub_private),
+                revision=(self.hub_branch or "main"),
+            )
+            self.hub_status = "done"
+            self.hub_message = (
+                f"Pushed to https://huggingface.co/{self.hub_repo_id} "
+                f"on branch {self.hub_branch or 'main'}."
+            )
+            # Clear token after successful push.
+            self.hub_token = ""
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            # Sanitize the error so HF token / operator paths don't leak.
+            try:
+                from .ui_security import sanitize_error_for_user
+
+                message, suggestion = sanitize_error_for_user(
+                    exc, operation="pushing to HuggingFace Hub"
+                )
+                self.hub_status = "error"
+                self.hub_message = (
+                    message + (f" Try: {suggestion}" if suggestion else "")
+                )
+            except Exception:  # noqa: BLE001
+                # Last-resort fallback — preserve the operator-facing
+                # message but trim to 200 chars so we don't spill a giant
+                # traceback into the WS bundle.
+                self.hub_status = "error"
+                self.hub_message = f"Push failed: {type(exc).__name__}: {str(exc)[:200]}"
+
+    @rx.event
+    def clear_hub_status(self) -> None:
+        """Dismiss the HF push status banner."""
+        self.hub_status = ""
+        self.hub_message = ""
 
 
 class DatasetState(rx.State):
@@ -1203,6 +1400,509 @@ class AuthBadgeState(rx.State):
         self.reachable_from = ctx.reachable_from
 
 
+# ---------------------------------------------------------------------------
+# RunDetailState — backs /runs/[run_id] (Wave 6b drill-down)
+# ---------------------------------------------------------------------------
+#
+# Wave 6 shipped the read-only run list; Wave 6b adds the drill-down per
+# V1_3_BRIEF P1. The state mirrors what ``backprop show-run`` would emit
+# (metadata header + hyperparameter dump + training metrics + checkpoint
+# list + log tail) using the existing ``RunHistoryManager.get_run`` API
+# (which supports partial-prefix matching for operator convenience).
+#
+# The four action buttons (Diff, Replay, Delete, Export) DO NOT modify
+# state from inside this class — they shell out to the bridge subcommands
+# via the action handlers, then re-load on completion. The bridge owns the
+# CLI surfaces; this UI surface just renders the output.
+
+
+class RunDetailState(rx.State):
+    """Per-run drill-down state.
+
+    The active run id is read from the dynamic route parameter inside
+    ``load_run`` (Reflex 0.9's ``self.router.page.params.get("run_id")``
+    pattern). We cannot name the state field ``run_id`` because Reflex
+    refuses to bind a dynamic route arg that shadows an existing state
+    var (DynamicRouteArgShadowsStateVarError); the state field is named
+    ``current_run_id`` and the route arg writes to it on mount.
+
+    The remaining fields are filled by ``load_run`` on mount.
+    """
+
+    current_run_id: str = ""
+    loading: bool = False
+    error: str = ""
+    not_found: bool = False
+
+    # Header fields
+    status: str = "-"
+    model: str = "-"
+    dataset: str = "-"
+    started_at: str = "-"
+    completed_at: str = "-"
+    duration: str = "-"
+    final_loss: str = "-"
+    checkpoint_path: str = "-"
+
+    # Hyperparameter table — list of {key, value} dicts so Reflex's foreach
+    # can render them as table rows without on-template f-strings.
+    hyperparameters: list[dict] = []
+
+    # Metrics — read from training_metrics.jsonl when present.
+    # v1.3 drill-down chart consumes loss_history only; lr + grad_norm
+    # series are tracked for v1.4 multi-line metrics view + landed at
+    # that time per [[no-banner-documenting-no-op]] / [[within-swarm-doc-lie-drift-detection]].
+    loss_history: list[float] = []
+
+    # Checkpoint list — {name, size_mb, timestamp} per entry.
+    checkpoints: list[dict] = []
+
+    # Log tail — last 200 lines of training.log when present (trimmed for
+    # WS bundle size).
+    log_lines: list[str] = []
+
+    # Action panel — last shell-out result (for the operator-facing toast).
+    action_result: str = ""
+    action_error: str = ""
+
+    @rx.event
+    def load_run(self) -> None:
+        """Populate fields from the on-disk run history."""
+        from pathlib import Path as _Path
+
+        # Resolve run_id from the dynamic route parameter; fall back to
+        # whatever the operator set programmatically into ``current_run_id``.
+        # Route arg is named ``rid`` (not ``run_id``) to avoid shadowing the
+        # existing ``AppState.run_id`` state var — Reflex 0.9 refuses to
+        # bind a dynamic route arg that shadows any state var anywhere in
+        # the state tree (DynamicRouteArgShadowsStateVarError).
+        route_run_id = ""
+        try:
+            route_run_id = str(self.router.page.params.get("rid", "") or "")
+        except Exception:  # noqa: BLE001 — defensive
+            pass
+        if route_run_id:
+            self.current_run_id = route_run_id
+
+        self.loading = True
+        self.error = ""
+        self.not_found = False
+        try:
+            try:
+                from .ui_security import get_ui_output_dir
+                history_dir = get_ui_output_dir()
+            except Exception:
+                history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
+
+            if not history_dir.exists():
+                self.error = f"No run history at {history_dir}."
+                return
+
+            try:
+                from .checkpoints import RunHistoryManager
+            except ImportError as exc:
+                self.error = f"checkpoints module unavailable: {exc}"
+                return
+
+            manager = RunHistoryManager(str(history_dir))
+            entry = manager.get_run(self.current_run_id) if self.current_run_id else None
+            if entry is None:
+                self.not_found = True
+                self.error = f"Run '{self.current_run_id}' not found in {history_dir}."
+                return
+
+            # Populate header fields.
+            self.status = str(entry.get("status") or "-")
+            self.model = str(entry.get("model_name") or "-")
+            self.dataset = str(entry.get("dataset_info") or "-")
+            self.started_at = str(entry.get("started_at") or entry.get("timestamp") or "-")
+            self.completed_at = str(entry.get("completed_at") or "-")
+            duration = entry.get("duration_seconds")
+            if duration is None:
+                self.duration = "-"
+            else:
+                try:
+                    self.duration = f"{float(duration):.0f}s"
+                except (TypeError, ValueError):
+                    self.duration = "-"
+            final_loss = entry.get("final_loss")
+            if final_loss is None:
+                self.final_loss = "-"
+            else:
+                try:
+                    self.final_loss = f"{float(final_loss):.4f}"
+                except (TypeError, ValueError):
+                    self.final_loss = "-"
+            self.checkpoint_path = str(entry.get("checkpoint_path") or "-")
+
+            # Hyperparameter table — flatten the entry dict into {key, value}
+            # rows, skipping the fields surfaced as headers above so the
+            # operator only sees the per-run config knobs.
+            header_keys = {
+                "run_id", "status", "model_name", "dataset_info",
+                "started_at", "completed_at", "timestamp",
+                "duration_seconds", "final_loss", "checkpoint_path",
+                "loss_history",
+            }
+            hp_rows: list[dict] = []
+            for key in sorted(entry.keys()):
+                if key in header_keys:
+                    continue
+                value = entry[key]
+                # Coerce all values to short strings for table render.
+                if isinstance(value, (dict, list)):
+                    import json as _json
+                    value_str = _json.dumps(value, default=str)[:200]
+                else:
+                    value_str = str(value)[:200]
+                hp_rows.append({"key": key, "value": value_str})
+            self.hyperparameters = hp_rows
+
+            # Loss history — embedded in the run entry (preferred) or
+            # read from training_metrics.jsonl alongside the checkpoint.
+            loss_hist = entry.get("loss_history") or []
+            if isinstance(loss_hist, list):
+                try:
+                    self.loss_history = [float(x) for x in loss_hist if isinstance(x, (int, float))]
+                except (TypeError, ValueError):
+                    self.loss_history = []
+            else:
+                self.loss_history = []
+
+            # Checkpoint list — walk the checkpoint_path directory.
+            self.checkpoints = []
+            if entry.get("checkpoint_path"):
+                cp_dir = _Path(str(entry["checkpoint_path"])).expanduser()
+                if cp_dir.exists() and cp_dir.is_dir():
+                    try:
+                        for child in sorted(cp_dir.iterdir()):
+                            if not child.is_dir():
+                                continue
+                            size_bytes = sum(
+                                p.stat().st_size for p in child.rglob("*") if p.is_file()
+                            )
+                            self.checkpoints.append({
+                                "name": child.name,
+                                "size_mb": f"{size_bytes / (1024**2):.1f}",
+                                "timestamp": str(
+                                    __import__("datetime").datetime.fromtimestamp(
+                                        child.stat().st_mtime
+                                    ).isoformat(timespec="seconds")
+                                ),
+                            })
+                    except OSError:
+                        # Best-effort — the run page still renders without
+                        # checkpoints if filesystem walk fails.
+                        pass
+
+            # Log tail — read last 200 lines from training.log if present
+            # alongside the checkpoint. Capped at 200 lines (~16 KB) to
+            # keep the WS bundle small.
+            self.log_lines = []
+            if entry.get("checkpoint_path"):
+                log_path = _Path(str(entry["checkpoint_path"])).expanduser() / "training.log"
+                if log_path.exists() and log_path.is_file():
+                    try:
+                        with open(log_path, encoding="utf-8", errors="replace") as f:
+                            tail = f.readlines()[-200:]
+                            self.log_lines = [line.rstrip("\n") for line in tail]
+                    except OSError:
+                        pass
+        finally:
+            self.loading = False
+
+    @rx.var
+    def loss_chart_data(self) -> list[dict]:
+        """Shape ``loss_history`` for ``rx.recharts.line_chart`` consumption.
+
+        Returns ``[{"step": i, "loss": v}, ...]`` — the dict shape recharts
+        needs. Computed-Var so the chart re-renders without an explicit
+        event handler when ``load_run`` repopulates ``loss_history``.
+        """
+        return [{"step": i, "loss": v} for i, v in enumerate(self.loss_history)]
+
+    @rx.event
+    def diff_against(self, other_run_id: str) -> None:
+        """Shell out to ``backprop diff-runs <self.current_run_id> <other_run_id>``.
+
+        Bridge owns the subcommand (V1_3_BRIEF / Wave 6b BRIDGE-6); this
+        UI just dispatches and surfaces the result. Failures surface via
+        ``action_error``.
+        """
+        import shutil
+        import subprocess
+
+        if not self.current_run_id or not other_run_id:
+            self.action_error = "Both run IDs are required for diff."
+            return
+        cmd = shutil.which("backprop") or shutil.which("backpropagate")
+        if not cmd:
+            self.action_error = "`backprop` CLI not found on PATH."
+            return
+        try:
+            result = subprocess.run(
+                [cmd, "diff-runs", self.current_run_id, other_run_id],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode == 0:
+                self.action_result = result.stdout[:5000]
+                self.action_error = ""
+            else:
+                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_result = ""
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self.action_error = f"diff-runs failed: {exc}"
+
+    @rx.event
+    def replay(self) -> None:
+        """Shell out to ``backprop replay <self.current_run_id>``.
+
+        Bridge owns the subcommand. Replay re-runs with the same hyperparams
+        as the original; the operator confirms before the heavy work starts.
+        """
+        import shutil
+        import subprocess
+
+        if not self.current_run_id:
+            self.action_error = "No run loaded."
+            return
+        cmd = shutil.which("backprop") or shutil.which("backpropagate")
+        if not cmd:
+            self.action_error = "`backprop` CLI not found on PATH."
+            return
+        try:
+            result = subprocess.run(
+                [cmd, "replay", self.current_run_id, "--dry-run"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode == 0:
+                self.action_result = (
+                    "Dry-run OK. To actually replay: "
+                    f"`backprop replay {self.current_run_id}` from the shell.\n\n"
+                    + result.stdout[:3000]
+                )
+                self.action_error = ""
+            else:
+                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_result = ""
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self.action_error = f"replay --dry-run failed: {exc}"
+
+    @rx.event
+    def delete_run(self) -> None:
+        """Shell out to ``backprop delete-run <self.current_run_id>``.
+
+        Operator confirmation is the responsibility of the UI button (a
+        confirm-dialog wrap); this handler unconditionally executes.
+        """
+        import shutil
+        import subprocess
+
+        if not self.current_run_id:
+            self.action_error = "No run loaded."
+            return
+        cmd = shutil.which("backprop") or shutil.which("backpropagate")
+        if not cmd:
+            self.action_error = "`backprop` CLI not found on PATH."
+            return
+        try:
+            result = subprocess.run(
+                [cmd, "delete-run", self.current_run_id, "--yes"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode == 0:
+                self.action_result = f"Run {self.current_run_id} deleted."
+                self.action_error = ""
+                self.not_found = True
+            else:
+                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_result = ""
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self.action_error = f"delete-run failed: {exc}"
+
+    @rx.event
+    def export_run(self) -> None:
+        """Shell out to ``backprop export-runs --run-id <id> --format jsonl``."""
+        import shutil
+        import subprocess
+
+        if not self.current_run_id:
+            self.action_error = "No run loaded."
+            return
+        cmd = shutil.which("backprop") or shutil.which("backpropagate")
+        if not cmd:
+            self.action_error = "`backprop` CLI not found on PATH."
+            return
+        try:
+            result = subprocess.run(
+                [cmd, "export-runs", "--run-id", self.current_run_id, "--format", "jsonl"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode == 0:
+                self.action_result = result.stdout[:3000]
+                self.action_error = ""
+            else:
+                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_result = ""
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            self.action_error = f"export-runs failed: {exc}"
+
+    @rx.event
+    def clear_action_message(self) -> None:
+        """Dismiss the action result / error banner."""
+        self.action_result = ""
+        self.action_error = ""
+
+
+# ---------------------------------------------------------------------------
+# ModelsState — backs /models (Wave 6b)
+# ---------------------------------------------------------------------------
+#
+# Lists local Hugging Face cache contents + per-model disk usage + unused-
+# model cleanup affordance. Pulls from ``~/.cache/huggingface/hub/``
+# directly via filesystem APIs — no `huggingface_hub` dep required (avoids
+# pulling the heavy optional dep into the [ui] extra path).
+#
+# v1.3 surfaces:
+#   - Total cache size + per-model breakdown
+#   - Last-modified timestamp (proxy for "last used")
+#   - Delete-model affordance (operator confirms before the rm -rf)
+
+
+class ModelsState(rx.State):
+    """Models surface state — local HF cache inventory."""
+
+    models: list[dict] = []
+    total_size_mb: str = "0"
+    cache_dir: str = ""
+    loading: bool = False
+    error: str = ""
+    last_loaded_at: str = ""
+
+    @rx.event
+    def load_models(self) -> None:
+        """Walk ``~/.cache/huggingface/hub/`` and populate ``self.models``.
+
+        HF cache layout (per huggingface_hub docs):
+            <cache>/models--<owner>--<model>/snapshots/<sha>/<files>
+            <cache>/models--<owner>--<model>/refs/<rev>
+
+        We surface one entry per ``models--*`` top-level dir; size is the
+        recursive sum of all files inside.
+        """
+        from datetime import datetime, timezone
+        from pathlib import Path as _Path
+
+        self.loading = True
+        self.error = ""
+        try:
+            cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
+            self.cache_dir = str(cache_dir)
+            if not cache_dir.exists():
+                self.models = []
+                self.total_size_mb = "0"
+                self.error = (
+                    f"No HF cache at {cache_dir}. Models download on first "
+                    "use via `transformers.AutoModel.from_pretrained(...)`."
+                )
+                return
+
+            model_rows: list[dict] = []
+            total_bytes = 0
+            try:
+                for entry in sorted(cache_dir.iterdir()):
+                    if not entry.is_dir():
+                        continue
+                    name = entry.name
+                    if not name.startswith("models--"):
+                        continue
+                    # Unmangle: ``models--meta-llama--Llama-3.1-8B`` ->
+                    # ``meta-llama/Llama-3.1-8B``
+                    pretty = name[len("models--"):].replace("--", "/", 1)
+                    try:
+                        size_bytes = sum(
+                            p.stat().st_size for p in entry.rglob("*") if p.is_file()
+                        )
+                    except OSError:
+                        size_bytes = 0
+                    total_bytes += size_bytes
+                    mtime = 0.0
+                    try:
+                        mtime = entry.stat().st_mtime
+                    except OSError:
+                        pass
+                    model_rows.append({
+                        "name": pretty,
+                        "dir_name": name,
+                        "size_mb": f"{size_bytes / (1024**2):.1f}",
+                        "size_bytes": size_bytes,
+                        "last_modified": (
+                            datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+                            if mtime else "-"
+                        ),
+                    })
+            except OSError as exc:
+                self.error = f"Cannot walk HF cache: {exc}"
+                self.models = []
+                self.total_size_mb = "0"
+                return
+
+            # Sort by size descending — heaviest cache offenders first.
+            model_rows.sort(key=lambda r: r["size_bytes"], reverse=True)
+            self.models = model_rows
+            self.total_size_mb = f"{total_bytes / (1024**2):.1f}"
+            self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        finally:
+            self.loading = False
+
+    @rx.event
+    def delete_model(self, dir_name: str) -> None:
+        """Delete one ``models--*`` directory from the HF cache.
+
+        The operator confirms via a UI button click; the handler unconditionally
+        proceeds. Failures surface via ``self.error``.
+
+        FRONTEND-F-007 safety: the path is validated to live under
+        ``~/.cache/huggingface/hub/`` so a malicious operator-controlled
+        ``dir_name`` can't escape the cache via ``..`` traversal.
+        """
+        import shutil
+        from pathlib import Path as _Path
+
+        cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
+        if not dir_name or not dir_name.startswith("models--") or "/" in dir_name or "\\" in dir_name or ".." in dir_name:
+            self.error = f"Invalid model directory name: {dir_name!r}"
+            return
+        target = cache_dir / dir_name
+        try:
+            target_resolved = target.resolve()
+            cache_resolved = cache_dir.resolve()
+            if not str(target_resolved).startswith(str(cache_resolved)):
+                self.error = f"Refusing to delete outside HF cache: {target_resolved}"
+                return
+            if not target_resolved.exists():
+                self.error = f"Model directory not found: {target}"
+                return
+            shutil.rmtree(target_resolved)
+        except OSError as exc:
+            self.error = f"Failed to delete {dir_name}: {exc}"
+            return
+        # Reload to reflect the deletion.
+        self.load_models()
+
+
 __all__ = [
     "RunState",
     "Theme",
@@ -1218,5 +1918,7 @@ __all__ = [
     "ExportState",
     "DatasetState",
     "RunsState",
+    "RunDetailState",
+    "ModelsState",
     "AuthBadgeState",
 ]

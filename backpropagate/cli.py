@@ -159,6 +159,14 @@ SUBCOMMAND_TIERS: dict[str, str] = {
     "runs": "stable",
     "show-run": "stable",
     "list-runs": "deprecated-prefer-runs",
+    # BRIDGE Wave 6b (v1.3) — multi-run workflow primitives. Marked
+    # 'experimental' so the contract can absorb shape iteration in v1.4
+    # without surprise to operators who pinned against the v1.3 shape.
+    # Promotes to 'stable' once one minor cycle has shipped without
+    # breaking changes.
+    "diff-runs": "experimental",
+    "replay": "experimental",
+    "export-runs": "experimental",
 }
 
 
@@ -593,6 +601,40 @@ def cmd_train(args: argparse.Namespace) -> int:
         # so the banner contextualises that output instead of competing with it.
         _print_info("==> Loading model (this may take 30s-3min for 7B models)...")
 
+        # BRIDGE Wave 6b (v1.3): assemble the optional kwarg bundle for the
+        # backend's Wave 6b additions. Each kwarg is bound on the Trainer
+        # constructor only when (a) the operator explicitly set the flag AND
+        # (b) the Trainer constructor in the installed build accepts that
+        # kwarg. The accept-test uses inspect.signature so a future Trainer
+        # build that drops a kwarg cleanly degrades the CLI to "no-op" for
+        # that flag rather than crashing on a TypeError. The default values
+        # threaded by argparse (False / 'default' / 'quality' / 'auto') are
+        # only forwarded when the underlying Trainer kwarg exists so the
+        # backend's own defaults govern in any version where the kwarg is
+        # absent. Pre-Wave-6b builds therefore see a CLI surface with the
+        # five new flags AVAILABLE but inert until the backend lands —
+        # matching the cross-domain handoff contract.
+        import inspect as _inspect
+        try:
+            _trainer_sig_params = set(_inspect.signature(Trainer.__init__).parameters)
+        except (TypeError, ValueError):
+            # Test doubles that mock Trainer with a non-callable / opaque
+            # MagicMock can't be introspected; degrade to "no Wave 6b
+            # kwargs threaded" so the legacy code path is preserved.
+            _trainer_sig_params = set()
+        wave6b_candidate_kwargs: dict[str, Any] = {
+            "use_dora": bool(getattr(args, "use_dora", False)),
+            # --no-packing is the opt-out; default = packing ON.
+            "packing": not bool(getattr(args, "no_packing", False)),
+            "init_lora_weights": getattr(args, "init_lora_weights", "default"),
+            "lora_preset": getattr(args, "lora_preset", "quality"),
+            "optim": getattr(args, "optim", "auto"),
+        }
+        wave6b_kwargs = {
+            k: v for k, v in wave6b_candidate_kwargs.items()
+            if k in _trainer_sig_params
+        }
+
         # Create trainer
         trainer = Trainer(
             model=args.model,
@@ -601,6 +643,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             batch_size=args.batch_size if args.batch_size != "auto" else "auto",
             output_dir=args.output,
             use_unsloth=not args.no_unsloth,
+            **wave6b_kwargs,
         )
         # F-002: pass resume hint through to trainer.train() once we get there.
         resume_hint = getattr(args, "resume", None)
@@ -772,12 +815,50 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             "==> Setting up multi-run trainer "
             "(model load + dataset tokenisation may take several minutes)..."
         )
+
+        # BRIDGE Wave 6b (v1.3): build the optional Wave 6b kwarg bundle and
+        # bind only the keys the installed MultiRunConfig / MultiRunTrainer
+        # actually accept. Same defensive scaffolding as cmd_train —
+        # introspect dataclass fields / __init__ signature so pre-Wave-6b
+        # builds see the new CLI flags AVAILABLE but inert until the
+        # backend lands, instead of crashing at MultiRunConfig construction.
+        # The dataclass.fields() probe is wrapped in try/except so test
+        # doubles that mock MultiRunConfig with a non-dataclass MagicMock
+        # cleanly degrade to "no Wave 6b kwargs threaded" instead of
+        # crashing the handler.
+        import dataclasses as _dc
+        import inspect as _inspect
+        try:
+            _multi_cfg_fields = {f.name for f in _dc.fields(MultiRunConfig)}
+        except (TypeError, ValueError):
+            _multi_cfg_fields = set()
+        try:
+            _multi_trainer_params = set(_inspect.signature(MultiRunTrainer.__init__).parameters)
+        except (TypeError, ValueError):
+            _multi_trainer_params = set()
+        wave6b_candidate_kwargs: dict[str, Any] = {
+            "use_dora": bool(getattr(args, "use_dora", False)),
+            "packing": not bool(getattr(args, "no_packing", False)),
+            "init_lora_weights": getattr(args, "init_lora_weights", "default"),
+            "lora_preset": getattr(args, "lora_preset", "quality"),
+            "optim": getattr(args, "optim", "auto"),
+        }
+        wave6b_cfg_kwargs = {
+            k: v for k, v in wave6b_candidate_kwargs.items()
+            if k in _multi_cfg_fields
+        }
+        wave6b_trainer_kwargs = {
+            k: v for k, v in wave6b_candidate_kwargs.items()
+            if k not in _multi_cfg_fields and k in _multi_trainer_params
+        }
+
         config = MultiRunConfig(
             num_runs=args.runs,
             steps_per_run=args.steps,
             samples_per_run=args.samples,
             merge_mode=MergeMode(args.merge_mode),
             checkpoint_dir=args.output,
+            **wave6b_cfg_kwargs,
         )
 
         def on_run_complete(run_result: RunResult) -> None:
@@ -788,6 +869,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             config=config,
             on_run_complete=on_run_complete,
             resume_from=getattr(args, "resume", None),  # F-002
+            **wave6b_trainer_kwargs,
         )
 
         print()
@@ -3097,6 +3179,577 @@ def cmd_show_run(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# COMMAND: diff-runs (BRIDGE Wave 6b)
+# =============================================================================
+# Three new multi-run subcommands land in Wave 6b to give operators
+# first-class workflow primitives around the run-history corpus:
+#
+#   * ``diff-runs``    — side-by-side comparison of two completed runs
+#   * ``replay``       — re-execute a recorded run with the same config
+#   * ``export-runs``  — bulk dump of the full history for offline analytics
+#
+# All three read from RunHistoryManager (the same on-disk JSON the existing
+# ``runs`` / ``show-run`` / ``list-runs`` subcommands read) so they slot in
+# without touching the persistence layer. The lookup-miss path follows the
+# Wave 5.5 BACKEND-F-002 + Wave 6a F-018 doctrine: raise InvalidSettingError
+# naming the run_id + searched dir + next-step suggestions, so an operator
+# typo'ing a prefix gets one actionable terminal line instead of a silent
+# empty result.
+
+# Fields included in the diff-runs comparison view. Order is significant —
+# the table renders rows in this order so config-flavored fields come first,
+# then numeric outcomes, then derived columns. Hyperparameter fields are
+# pulled from the ``hyperparameters`` sub-dict and expanded into top-level
+# rows so the diff doesn't require operators to read nested JSON.
+_DIFF_RUNS_TOP_LEVEL_FIELDS: tuple[str, ...] = (
+    "model_name",
+    "dataset_info",
+    "session_kind",
+    "status",
+    "steps",
+    "duration_seconds",
+    "final_loss",
+    "gpu_max_temp",
+    "checkpoint_path",
+    "dataset_hash",
+)
+
+
+def _diff_runs_extract(run: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a run-history entry into the dict shape the diff renderer
+    expects: top-level lifecycle / outcome fields + every hyperparameter
+    promoted to a key prefixed with ``hp.`` so it doesn't collide with the
+    top-level set. Pre-fix attempt was a nested dict + recursive diff; the
+    flat shape keeps the diff output one row per field which renders
+    cleanly in both the colorized table AND --format=json output.
+    """
+    flat: dict[str, Any] = {}
+    for field in _DIFF_RUNS_TOP_LEVEL_FIELDS:
+        flat[field] = run.get(field)
+    hp = run.get("hyperparameters") or {}
+    if isinstance(hp, dict):
+        for key, value in hp.items():
+            flat[f"hp.{key}"] = value
+    return flat
+
+
+def cmd_diff_runs(args: argparse.Namespace) -> int:
+    """Execute ``backprop diff-runs <run_id_a> <run_id_b>`` (BRIDGE Wave 6b).
+
+    Side-by-side comparison of two completed runs. Useful for the "did the
+    config tweak actually move the loss" workflow that previously required
+    operators to manually grep ``show-run`` output for two ids.
+
+    Exit codes:
+        0   diff rendered successfully
+        1   missing run_id / history directory not found
+    """
+    from .checkpoints import RunHistoryManager
+    from .exceptions import InvalidSettingError
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_error(f"No history directory: {history_dir}")
+        _print_info(
+            "Pass --output <dir> to point at the output directory used "
+            "during training."
+        )
+        return EXIT_USER_ERROR
+
+    manager = RunHistoryManager(str(history_dir))
+
+    def _resolve(run_id: str, label: str) -> dict[str, Any] | None:
+        record = manager.get_run(run_id)
+        if record is not None:
+            return record
+        # Mirror the Wave 5.5 BACKEND-F-002 + Wave 6a F-018 doctrine: raise
+        # InvalidSettingError naming the run_id + searched directory +
+        # next-step suggestions so the operator does not have to grep
+        # logs to figure out why their lookup missed.
+        raise InvalidSettingError(
+            setting_name=label,
+            value=run_id,
+            expected=(
+                f"a run_id present in the on-disk run history under "
+                f"output_dir={str(history_dir)!r}"
+            ),
+            suggestion=(
+                f"{label}={run_id!r} was NOT found in the run history at "
+                f"{str(history_dir)!r}. The lookup is scoped to the "
+                f"configured --output directory (not a global run_id "
+                f"index). Next steps:\n"
+                f"  1) Run `backprop runs` to list run_ids available "
+                f"under this output_dir.\n"
+                f"  2) If the run was trained under a different output "
+                f"directory, re-run with `--output <that-dir>`.\n"
+                f"  3) Partial-prefix matches are accepted as long as "
+                f"the prefix is unambiguous; widen the prefix if your "
+                f"first 8 characters collide with multiple runs."
+            ),
+        )
+
+    try:
+        run_a = _resolve(args.run_id_a, "run_id_a")
+        run_b = _resolve(args.run_id_b, "run_id_b")
+    except InvalidSettingError as exc:
+        _print_error(str(exc.message))
+        if exc.suggestion:
+            _print_info(f"Suggestion: {exc.suggestion}")
+        return EXIT_USER_ERROR
+
+    # Both runs resolved — narrow the type for downstream code.
+    assert run_a is not None and run_b is not None
+
+    flat_a = _diff_runs_extract(run_a)
+    flat_b = _diff_runs_extract(run_b)
+    all_keys = sorted(set(flat_a) | set(flat_b))
+
+    rows: list[dict[str, Any]] = []
+    for key in all_keys:
+        val_a = flat_a.get(key)
+        val_b = flat_b.get(key)
+        rows.append({
+            "field": key,
+            "run_a": val_a,
+            "run_b": val_b,
+            "changed": val_a != val_b,
+        })
+
+    if args.format == "json":
+        import json
+        payload = {
+            "run_a": {
+                "run_id": run_a.get("run_id"),
+                "started_at": run_a.get("started_at"),
+            },
+            "run_b": {
+                "run_id": run_b.get("run_id"),
+                "started_at": run_b.get("started_at"),
+            },
+            "diff": rows,
+            "changed_count": sum(1 for r in rows if r["changed"]),
+        }
+        print(json.dumps(payload, indent=2, default=str))
+        return EXIT_OK
+
+    # Human / colorized table view.
+    run_a_id = str(run_a.get("run_id") or "-")[:12]
+    run_b_id = str(run_b.get("run_id") or "-")[:12]
+    _print_header(f"Diff: {run_a_id} vs {run_b_id}")
+
+    # Compute column widths from the longest displayed value so the table
+    # doesn't smear on long checkpoint paths.
+    def _stringify(value: Any) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, float):
+            return f"{value:.4f}" if abs(value) < 1e6 else f"{value:.6g}"
+        return str(value)
+
+    width_field = max(len("FIELD"), *(len(r["field"]) for r in rows))
+    width_a = max(len(run_a_id), *(len(_stringify(r["run_a"])) for r in rows))
+    width_b = max(len(run_b_id), *(len(_stringify(r["run_b"])) for r in rows))
+
+    header = (
+        f"{Colors.BOLD}"
+        f"{'FIELD'.ljust(width_field)}  "
+        f"{run_a_id.ljust(width_a)}  "
+        f"{run_b_id.ljust(width_b)}{Colors.RESET}"
+    )
+    print(header)
+    print(Colors.DIM + "-" * (width_field + width_a + width_b + 4) + Colors.RESET)
+    for row in rows:
+        field_disp = row["field"].ljust(width_field)
+        a_disp = _stringify(row["run_a"]).ljust(width_a)
+        b_disp = _stringify(row["run_b"]).ljust(width_b)
+        if row["changed"]:
+            # Highlight changed rows in yellow so a busy diff still draws
+            # the eye to the divergent fields.
+            line = f"{Colors.YELLOW}{field_disp}  {a_disp}  {b_disp}{Colors.RESET}"
+        else:
+            line = f"{Colors.DIM}{field_disp}  {a_disp}  {b_disp}{Colors.RESET}"
+        print(line)
+
+    print()
+    changed = sum(1 for r in rows if r["changed"])
+    _print_info(f"{changed} of {len(rows)} field(s) differ.")
+    return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: replay (BRIDGE Wave 6b)
+# =============================================================================
+
+def _parse_replay_override(value: str) -> tuple[str, str]:
+    """argparse type for --override key=value tokens. Returns (key, value)
+    so the cmd_replay handler can build a dict without re-parsing.
+    """
+    if "=" not in value:
+        raise argparse.ArgumentTypeError(
+            f"--override expects key=value, got {value!r} (no '=' separator)"
+        )
+    key, raw_val = value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise argparse.ArgumentTypeError(
+            f"--override key is empty in {value!r}"
+        )
+    return key, raw_val
+
+
+# Whitelist of hyperparameter keys the replay subcommand will surface as
+# Trainer / MultiRunTrainer constructor kwargs. Keys outside this list are
+# rejected at --override parse time so an operator typo doesn't silently
+# bypass validation. The list mirrors the kwargs the existing cmd_train /
+# cmd_multi_run handlers thread through.
+_REPLAY_ALLOWED_OVERRIDE_KEYS: frozenset[str] = frozenset({
+    "seed",
+    "learning_rate",
+    "lr",
+    "batch_size",
+    "gradient_accumulation",
+    "max_steps",
+    "steps",
+    "samples",
+    "lora_r",
+    "lora_alpha",
+    "lora_dropout",
+    # BRIDGE Wave 6b additions:
+    "use_dora",
+    "packing",
+    "init_lora_weights",
+    "lora_preset",
+    "optim",
+})
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    """Execute ``backprop replay <run_id>`` (BRIDGE Wave 6b).
+
+    Re-runs a recorded training run with the same config + dataset. The
+    inherited fields are: ``seed`` / ``learning_rate`` / ``batch_size`` /
+    ``gradient_accumulation`` / ``max_steps`` / model / dataset / lora_r.
+    The new run gets a fresh run_id (no clobbering of the original record)
+    so the replay can be diffed against the source via
+    ``backprop diff-runs <original> <replay>``.
+
+    ``--override key=value`` (repeatable) lets the operator tweak specific
+    hyperparameters without losing the rest of the recorded context.
+
+    Exit codes:
+        0   replay completed successfully
+        1   missing run_id, missing history dir, or invalid --override
+        2   training runtime error
+        130 interrupted
+    """
+    import uuid
+
+    from .checkpoints import RunHistoryManager
+    from .exceptions import InvalidSettingError
+    from .logging_config import bind_run_context, get_logger
+    from .trainer import Trainer, TrainingCallback
+
+    _print_header("Backpropagate Replay")
+
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="replay")
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    try:
+        get_logger(__name__).info(
+            "replay_invoked",
+            cli_run_id=cli_run_id_full,
+            target_run_id=getattr(args, "run_id", None),
+        )
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_error(f"No history directory: {history_dir}")
+        _print_info(
+            "Pass --output <dir> to point at the output directory used "
+            "during the original training."
+        )
+        return EXIT_USER_ERROR
+
+    manager = RunHistoryManager(str(history_dir))
+    record = manager.get_run(args.run_id)
+    if record is None:
+        try:
+            raise InvalidSettingError(
+                setting_name="run_id",
+                value=args.run_id,
+                expected=(
+                    f"a run_id present in the on-disk run history under "
+                    f"output_dir={str(history_dir)!r}"
+                ),
+                suggestion=(
+                    f"run_id={args.run_id!r} was NOT found in the run "
+                    f"history at {str(history_dir)!r}. The lookup is "
+                    f"scoped to the configured --output directory (not a "
+                    f"global run_id index). Next steps:\n"
+                    f"  1) Run `backprop runs` to list run_ids available "
+                    f"under this output_dir.\n"
+                    f"  2) If the run was trained under a different "
+                    f"output directory, re-run with `--output <that-dir>`.\n"
+                    f"  3) Partial-prefix matches are accepted as long as "
+                    f"the prefix is unambiguous."
+                ),
+            )
+        except InvalidSettingError as exc:
+            _print_error(str(exc.message))
+            if exc.suggestion:
+                _print_info(f"Suggestion: {exc.suggestion}")
+            return EXIT_USER_ERROR
+
+    # Validate overrides — argparse already split each one into (key, value);
+    # we now reject keys outside the whitelist so a typo'd 'lr_rate' (vs
+    # 'learning_rate') fails LOUDLY at the CLI surface instead of being
+    # silently dropped.
+    override_tokens: list[tuple[str, str]] = list(getattr(args, "override", None) or [])
+    overrides: dict[str, str] = {}
+    for key, value in override_tokens:
+        if key not in _REPLAY_ALLOWED_OVERRIDE_KEYS:
+            _print_error(
+                f"--override key {key!r} is not in the allowed set. "
+                f"Allowed keys: {sorted(_REPLAY_ALLOWED_OVERRIDE_KEYS)}"
+            )
+            return EXIT_USER_ERROR
+        overrides[key] = value
+
+    original_run_id = str(record.get("run_id"))
+    session_kind = record.get("session_kind") or "single_run"
+    model = record.get("model_name") or "Qwen/Qwen2.5-7B-Instruct"
+    dataset = record.get("dataset_info")
+    hp = dict(record.get("hyperparameters") or {})
+
+    _print_info(f"Original run: {original_run_id[:12]}")
+    _print_info(f"Session: {session_kind}")
+    _print_info(f"Model: {model}")
+    _print_info(f"Dataset: {dataset}")
+    if overrides:
+        _print_info(f"Overrides: {overrides}")
+
+    if dataset is None:
+        _print_error(
+            f"Original run {original_run_id[:12]} has no dataset_info "
+            "recorded — cannot replay automatically."
+        )
+        _print_info(
+            "Re-run manually with `backprop train --data <dataset>` "
+            "matching the original configuration."
+        )
+        return EXIT_USER_ERROR
+
+    # Apply overrides to the hyperparameter dict so the downstream Trainer
+    # construction sees the modified values. Numeric fields get a best-effort
+    # parse; non-numeric raise InvalidSettingError so the operator gets a
+    # clear error instead of a silent ValueError deep in Trainer.
+    def _coerce(key: str, raw: str) -> Any:
+        # Best-effort: int → float → bool ('true'/'false') → str fallback.
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+        if raw.lower() in ("true", "false"):
+            return raw.lower() == "true"
+        return raw
+
+    for key, value in overrides.items():
+        hp[key] = _coerce(key, value)
+
+    try:
+        # Single-run replay: the multi-run replay path is symmetrically
+        # supported but uses the MultiRunTrainer constructor. We default
+        # to single-run when session_kind is unset for forward-compat.
+        if session_kind == "multi_run":
+            from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
+
+            mr_config_kwargs: dict[str, Any] = {
+                "num_runs": int(hp.get("num_runs") or 5),
+                "steps_per_run": int(hp.get("steps_per_run") or hp.get("steps") or 100),
+                "samples_per_run": int(hp.get("samples_per_run") or hp.get("samples") or 1000),
+                "merge_mode": MergeMode(hp.get("merge_mode") or "slao"),
+                "checkpoint_dir": str(history_dir),
+            }
+            mr_config = MultiRunConfig(**mr_config_kwargs)
+            mr_trainer = MultiRunTrainer(
+                model=model,
+                config=mr_config,
+            )
+            mr_result = mr_trainer.run(dataset)
+            print()
+            _print_success("Replay (multi-run) complete!")
+            _print_kv("Total runs", str(mr_result.total_runs))
+            _print_kv("Final loss", f"{mr_result.final_loss:.4f}")
+            return EXIT_OK
+
+        # Single-run path: build Trainer with inherited hyperparameters,
+        # then call train() with the inherited dataset / steps / samples.
+        sr_trainer_kwargs: dict[str, Any] = {
+            "model": model,
+            "lora_r": int(hp.get("lora_r") or 16),
+            "learning_rate": float(hp.get("learning_rate") or hp.get("lr") or 2e-4),
+            "output_dir": str(history_dir),
+        }
+        if "batch_size" in hp:
+            sr_trainer_kwargs["batch_size"] = hp["batch_size"]
+        if "gradient_accumulation" in hp:
+            sr_trainer_kwargs["gradient_accumulation"] = int(hp["gradient_accumulation"])
+        if "lora_alpha" in hp:
+            sr_trainer_kwargs["lora_alpha"] = int(hp["lora_alpha"])
+        if "lora_dropout" in hp:
+            sr_trainer_kwargs["lora_dropout"] = float(hp["lora_dropout"])
+
+        # Filter to keys the installed Trainer constructor actually
+        # accepts so a backend version that has dropped a field doesn't
+        # blow up the replay. Defensive try/except keeps mocked-Trainer
+        # test runs working (degrades to "pass all kwargs through, let
+        # Trainer raise if anything is wrong").
+        import inspect as _inspect
+        try:
+            _trainer_params = set(_inspect.signature(Trainer.__init__).parameters)
+            sr_trainer_kwargs = {k: v for k, v in sr_trainer_kwargs.items() if k in _trainer_params}
+        except (TypeError, ValueError):
+            pass
+
+        sr_trainer = Trainer(**sr_trainer_kwargs)
+        callback = TrainingCallback()
+        steps = int(hp.get("max_steps") or hp.get("steps") or 100)
+        samples = hp.get("samples") or hp.get("max_samples")
+        run = sr_trainer.train(
+            dataset=dataset,
+            steps=steps,
+            samples=int(samples) if samples is not None else None,
+            callback=callback,
+        )
+        sr_trainer.save(args.output)
+        print()
+        _print_success("Replay complete!")
+        _print_kv("Final loss", f"{run.final_loss:.4f}")
+        _print_kv("Original run", original_run_id[:12])
+        _print_info(
+            f"Diff against the original with: "
+            f"backprop diff-runs {original_run_id[:12]} <new-run-id>"
+        )
+        return EXIT_OK
+
+    except KeyboardInterrupt:
+        print()
+        _print_warning("Replay interrupted by user")
+        return EXIT_INTERRUPTED
+    except BackpropagateError as e:
+        _print_error(f"Replay failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:
+        if args.verbose:
+            _print_error(f"Replay failed: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Replay failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
+
+
+# =============================================================================
+# COMMAND: export-runs (BRIDGE Wave 6b)
+# =============================================================================
+
+# Supported export formats. JSONL is the canonical pipeline-friendly shape
+# (one record per line, append-only friendly, parses incrementally in jq /
+# W&B / MLflow ingest scripts). Reserved-by-design: csv (column-narrow,
+# loses nested loss_history / merge_history detail) — operators wanting CSV
+# today can pipe through ``jq -r`` or a small Python one-liner.
+_EXPORT_RUNS_FORMATS: tuple[str, ...] = ("jsonl",)
+
+
+def cmd_export_runs(args: argparse.Namespace) -> int:
+    """Execute ``backprop export-runs --format=jsonl`` (BRIDGE Wave 6b).
+
+    Bulk dump of every run history entry as JSONL (one record per line).
+    Useful for offline analytics, pipeline integration with W&B / MLflow,
+    or attaching a corpus to a support ticket.
+
+    Exit codes:
+        0   export completed (or empty history — JSONL output is just
+            zero lines, which is a well-formed empty stream)
+        1   history directory not found
+        2   write failure
+    """
+    import json
+
+    from .checkpoints import RunHistoryManager
+
+    history_dir = Path(args.output).expanduser()
+    if not history_dir.exists():
+        _print_error(f"No history directory: {history_dir}")
+        _print_info(
+            "Pass --output <dir> to point at the output directory used "
+            "during training."
+        )
+        return EXIT_USER_ERROR
+
+    manager = RunHistoryManager(str(history_dir))
+    try:
+        runs = manager.list_runs(status=getattr(args, "status", None), limit=None)
+    except ValueError as e:
+        _print_error(str(e))
+        return EXIT_USER_ERROR
+
+    if args.format not in _EXPORT_RUNS_FORMATS:
+        _print_error(
+            f"Unsupported --format {args.format!r}. Supported: "
+            f"{sorted(_EXPORT_RUNS_FORMATS)}"
+        )
+        return EXIT_USER_ERROR
+
+    # Output destination: --to writes to a file, otherwise stdout. Stdout
+    # is the default so a pipeline `backprop export-runs | jq ...` works
+    # without intermediate files.
+    out_path: Path | None = None
+    if getattr(args, "to", None):
+        out_path = Path(args.to).expanduser()
+
+    try:
+        if out_path is not None:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+                for entry in runs:
+                    fh.write(json.dumps(entry, default=str))
+                    fh.write("\n")
+            _print_success(
+                f"Exported {len(runs)} run(s) to {out_path}"
+            )
+        else:
+            for entry in runs:
+                print(json.dumps(entry, default=str))
+            # Banner goes to stderr so it doesn't pollute a piped jq
+            # consumer reading stdout.
+            print(
+                f"[INFO] Exported {len(runs)} run(s) from {history_dir}",
+                file=sys.stderr,
+            )
+        return EXIT_OK
+    except OSError as e:
+        _print_error(f"Write failed: {e}")
+        return EXIT_RUNTIME_ERROR
+
+
+# =============================================================================
 # COMMAND: validate (BRIDGE-F-007)
 # =============================================================================
 
@@ -3443,6 +4096,61 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         default=16,
         help="LoRA rank (default: 16; must be > 0)",
     )
+    # BRIDGE Wave 6b (v1.3): five new LoRA / training knobs added in
+    # lock-step with the backend agent's Wave 6b additions
+    # (DoRA / packing-default / PiSSA-LoftQ / quality-vs-fast preset /
+    # paged-Adam auto). Each flag binds to a Trainer kwarg of the same
+    # name; the Trainer applies the kwarg verbatim to LoraConfig /
+    # SFTConfig so a future peft / trl release that renames a field
+    # surfaces as a single Trainer-side fix instead of a CLI-side one.
+    train_parser.add_argument(
+        "--use-dora",
+        action="store_true",
+        help=(
+            "Enable DoRA (Weight-Decomposed Low-Rank Adaptation). "
+            "Rank 8 DoRA ~= rank 32 LoRA quality. Zero inference overhead. "
+            "Requires peft>=0.10. (16GB study-swarm Wave 6b)"
+        ),
+    )
+    train_parser.add_argument(
+        "--no-packing",
+        action="store_true",
+        help=(
+            "Disable sample packing. Default ON (1.7-3x throughput). "
+            "Disable only if you hit packing-incompatible behavior."
+        ),
+    )
+    train_parser.add_argument(
+        "--init-lora-weights",
+        choices=["default", "pissa", "loftq"],
+        default="default",
+        help=(
+            "LoRA initialization strategy. PiSSA + LoftQ recover quality "
+            "lost during QLoRA quantization at zero runtime cost. "
+            "(16GB study-swarm Wave 6b)"
+        ),
+    )
+    train_parser.add_argument(
+        "--lora-preset",
+        choices=["quality", "fast"],
+        default="quality",
+        help=(
+            "LoRA configuration preset. 'quality' = rank 256 + all-linear "
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "defaults; smaller memory footprint)."
+        ),
+    )
+    train_parser.add_argument(
+        "--optim",
+        choices=["auto", "adamw_torch", "paged_adamw_8bit", "adamw_8bit"],
+        default="auto",
+        help=(
+            "Optimizer. 'auto' picks paged_adamw_8bit on consumer GPUs "
+            "(<24GB VRAM), adamw_torch otherwise. Override for specific "
+            "needs."
+        ),
+    )
     train_parser.add_argument(
         "--output", "-o",
         default="./output",
@@ -3512,6 +4220,60 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         choices=["slao", "simple"],
         default="slao",
         help="Merge mode (default: slao)",
+    )
+    # BRIDGE Wave 6b (v1.3): mirror of train_parser's five new LoRA /
+    # training knobs so a multi-run session honors the same
+    # DoRA / packing / init-strategy / preset / optimizer choices as a
+    # single-run session. Each flag binds to a MultiRunConfig / Trainer
+    # kwarg of the same name; the underlying Trainer applies it verbatim
+    # to LoraConfig / SFTConfig.
+    multi_parser.add_argument(
+        "--use-dora",
+        action="store_true",
+        help=(
+            "Enable DoRA (Weight-Decomposed Low-Rank Adaptation). "
+            "Rank 8 DoRA ~= rank 32 LoRA quality. Zero inference overhead. "
+            "Requires peft>=0.10. (16GB study-swarm Wave 6b)"
+        ),
+    )
+    multi_parser.add_argument(
+        "--no-packing",
+        action="store_true",
+        help=(
+            "Disable sample packing. Default ON (1.7-3x throughput). "
+            "Disable only if you hit packing-incompatible behavior."
+        ),
+    )
+    multi_parser.add_argument(
+        "--init-lora-weights",
+        choices=["default", "pissa", "loftq"],
+        default="default",
+        help=(
+            "LoRA initialization strategy. PiSSA + LoftQ recover quality "
+            "lost during QLoRA quantization at zero runtime cost. "
+            "(16GB study-swarm Wave 6b)"
+        ),
+    )
+    multi_parser.add_argument(
+        "--lora-preset",
+        choices=["quality", "fast"],
+        default="quality",
+        help=(
+            "LoRA configuration preset. 'quality' = rank 256 + all-linear "
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "defaults; smaller memory footprint)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--optim",
+        choices=["auto", "adamw_torch", "paged_adamw_8bit", "adamw_8bit"],
+        default="auto",
+        help=(
+            "Optimizer. 'auto' picks paged_adamw_8bit on consumer GPUs "
+            "(<24GB VRAM), adamw_torch otherwise. Override for specific "
+            "needs."
+        ),
     )
     multi_parser.add_argument(
         "--output", "-o",
@@ -3856,6 +4618,136 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         help="Emit machine-readable JSON instead of the human view",
     )
     show_run_parser.set_defaults(func=cmd_show_run)
+
+    # diff-runs command (BRIDGE Wave 6b)
+    diff_runs_parser = subparsers.add_parser(
+        "diff-runs",
+        help="Diff config + hyperparameters + final loss between two runs",
+        description=(
+            "Side-by-side comparison of two completed runs from the on-disk "
+            "run history. Reads from RunHistoryManager (the same JSON "
+            "consumed by `runs` / `show-run` / `list-runs`). Useful for the "
+            "'did this config tweak actually move the loss' workflow."
+        ),
+    )
+    diff_runs_parser.add_argument(
+        "run_id_a",
+        help=(
+            "First run_id (or unambiguous prefix). Partial-prefix matching "
+            "follows the same rules as `backprop show-run`."
+        ),
+    )
+    diff_runs_parser.add_argument(
+        "run_id_b",
+        help=(
+            "Second run_id (or unambiguous prefix). Partial-prefix matching "
+            "follows the same rules as `backprop show-run`."
+        ),
+    )
+    diff_runs_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    diff_runs_parser.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help=(
+            "Output format. 'table' = colorized side-by-side view (default, "
+            "humans). 'json' = machine-readable payload with the same diff "
+            "rows + a changed_count summary."
+        ),
+    )
+    diff_runs_parser.set_defaults(func=cmd_diff_runs)
+
+    # replay command (BRIDGE Wave 6b)
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Re-run an existing run with the same config (fresh run_id)",
+        description=(
+            "Re-execute a recorded training run with the same model + "
+            "dataset + hyperparameters. Inherits seed / learning_rate / "
+            "batch_size / gradient_accumulation / max_steps / lora_r from "
+            "the original entry. The replay gets a fresh run_id (no "
+            "clobbering) so the result can be diffed against the source "
+            "via `backprop diff-runs <original> <replay>`. Useful for "
+            "'did this reproduce' verification."
+        ),
+    )
+    replay_parser.add_argument(
+        "run_id",
+        help="The run_id to replay (or any unambiguous prefix).",
+    )
+    replay_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    replay_parser.add_argument(
+        "--override",
+        type=_parse_replay_override,
+        action="append",
+        metavar="KEY=VALUE",
+        default=None,
+        help=(
+            "Override a single hyperparameter; repeatable. Example: "
+            "--override learning_rate=1e-4 --override batch_size=4. "
+            "Only whitelisted keys are accepted (see source for the full "
+            "list; common ones are: learning_rate / lr / batch_size / "
+            "gradient_accumulation / max_steps / samples / lora_r / "
+            "lora_alpha / lora_dropout / use_dora / packing / "
+            "init_lora_weights / lora_preset / optim). Unknown keys "
+            "fail loudly so a typo doesn't silently inherit the original."
+        ),
+    )
+    replay_parser.set_defaults(func=cmd_replay)
+
+    # export-runs command (BRIDGE Wave 6b)
+    export_runs_parser = subparsers.add_parser(
+        "export-runs",
+        help="Bulk export of run history (JSONL, one record per line)",
+        description=(
+            "Dump every run history entry as JSONL — one record per line, "
+            "well-formed even for an empty history (zero lines). Useful "
+            "for offline analytics, pipeline integration with W&B / "
+            "MLflow, or attaching a corpus to a support ticket. Writes "
+            "to stdout by default so `backprop export-runs | jq ...` "
+            "works without intermediate files."
+        ),
+    )
+    export_runs_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    export_runs_parser.add_argument(
+        "--format",
+        choices=list(_EXPORT_RUNS_FORMATS),
+        default="jsonl",
+        help=(
+            "Export format. Today only 'jsonl' is supported (one record "
+            "per line). CSV is intentionally not offered — it loses the "
+            "nested loss_history / merge_history shape; pipe through "
+            "jq -r if you need columns."
+        ),
+    )
+    export_runs_parser.add_argument(
+        "--to",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write to PATH instead of stdout. Parent directory is created "
+            "if it doesn't exist."
+        ),
+    )
+    export_runs_parser.add_argument(
+        "--status",
+        choices=["running", "completed", "failed"],
+        default=None,
+        help="Filter by status before export (default: include all).",
+    )
+    export_runs_parser.set_defaults(func=cmd_export_runs)
 
     # ui command
     ui_parser = subparsers.add_parser(

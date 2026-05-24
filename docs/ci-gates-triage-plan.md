@@ -1,5 +1,17 @@
 # CI Gates Triage Plan — v1.1.x → v1.2
 
+> **Status (2026-05-23):** Executed in **v1.2.0** — gates re-tightened to
+> the CRITICAL floor per the "CI gates re-tightened" entry in
+> [CHANGELOG.md][cl] (TruffleHog retired, mypy hard with `ui_app/` override,
+> pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer
+> `continue-on-error`). The HIGH/MEDIUM/LOW transitive-CVE backlog
+> (14 ERROR-severity Trivy alerts incl. PyJWT CVE-2026-32597) is scheduled
+> for a P0 dep-sweep wave in v1.3 per `research/V1_3_BRIEF.md`. The text
+> below is preserved as the methodology blueprint — re-read when staging
+> any future gate re-tightening.
+>
+> [cl]: ../CHANGELOG.md
+
 **Status:** plan (not yet scheduled). File a tracking issue when picking this up.
 **Why:** the v1.1.0 swarm's Stage B added four CI gate tightenings without first
 baselining what they'd block. Five hotfix PRs (#80 / #82 / #83 / #84 + the

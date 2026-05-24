@@ -123,7 +123,6 @@ Common knobs (see [the full env-vars reference](https://mcp-tool-shop-org.github
 | `BACKPROPAGATE_LOG_JSON` | auto | Force JSON (`true`) or console (`false`) logs |
 | `BACKPROPAGATE_LOG_FILE` | unset | Path to mirror logs into |
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | unset | Skip optional-dep detection at startup for the fastest CLI cold start |
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | When `true`, refuses `backprop ui --share` without `--auth` |
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Sandbox base for all UI filesystem writes; denylist-validated |
 | `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Default model |
 | `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Learning rate |
@@ -313,7 +312,7 @@ A short index of the most common first-run failures. The full reverse index live
 | `register_with_ollama` connection refused | `DEP_OLLAMA_REGISTRATION_FAILED` | Start the daemon: `ollama serve`. Install from <https://ollama.com>. Retryable. |
 | Disk full during checkpoint save | `STATE_CHECKPOINT_INVALID` | Atomic writes leave a `.partial` directory on crash — safe to delete. Previous good checkpoint is intact. |
 | Training paused / aborted on GPU overheat | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 monitor pauses on NVML temp threshold; resumes automatically as the GPU cools. Improve airflow or lower sustained load. |
-| `backprop ui --share` rejected | `INPUT_AUTH_REQUIRED` | Pass `--auth user:password`, or set `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` to opt out (loud warning). |
+| `backprop ui --share` rejected | `INPUT_AUTH_REQUIRED` | Pass `--auth user:password`. As of v1.2.0 (GHSA-f65r-h4g3-3h9h), `--share` without `--auth` is a hard error with no opt-out — use SSH port-forwarding if you cannot expose credentials. |
 | Multi-run "validation overlap" | `CONFIG_INVALID` (Stage A backend B-001) | Lower `--samples` below the training-pool size, increase dataset, or disable validation. |
 | GGUF export failed on first try | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; on Windows you also need Visual C++ Build Tools + CMake. |
 

@@ -635,8 +635,11 @@ class Trainer:
         output_dir: Output directory (default: "./output")
         oom_recovery: If True (default), retry on torch.cuda.OutOfMemoryError
             by halving batch_size and doubling gradient_accumulation_steps
-            (preserves effective batch). Aborts with RUNTIME_GPU_OOM after
-            3 consecutive failures at batch=1. Set False to hard-fail.
+            (preserves effective batch). Aborts with
+            RUNTIME_OOM_RECOVERY_EXHAUSTED after 3 consecutive failures at
+            batch=1 (the recovery loop ran out of options). The first
+            uncovered OOM itself still raises RUNTIME_GPU_OOM when
+            oom_recovery is False. Set False to hard-fail.
         unsloth_fallback: If True (default), fall back to
             AutoModelForCausalLM + get_peft_model when
             unsloth.FastLanguageModel.from_pretrained fails. Set False to

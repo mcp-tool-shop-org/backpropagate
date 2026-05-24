@@ -16,7 +16,7 @@ import os
 
 import reflex as rx
 
-# FRONTEND-B-001 / GHSA-pending defense-in-depth (belt-and-suspenders):
+# FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h defense-in-depth (layer 4 of 4):
 # rxconfig.py is the first module Reflex imports when ``reflex run`` is
 # invoked from the package directory. Some invocations may bypass app.py's
 # import chain (e.g., ``reflex export`` style probes), so we fire the same
@@ -31,12 +31,14 @@ except ImportError:  # pragma: no cover — package-mode import fallback
 
 if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
     raise RuntimeError(
-        "FRONTEND-B-001 / GHSA-pending: The Reflex web UI does not yet "
-        "enforce BACKPROPAGATE_UI_AUTH. Refusing to start to prevent the "
-        "v1.1.0 false-promise (the CLI announced 'Auth: enabled' but the "
-        "runtime ignored the env var). "
-        "Use SSH port-forwarding for remote access until middleware lands: "
-        "ssh -L 7860:localhost:7860 <host>"
+        "FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h: BACKPROPAGATE_UI_AUTH is set, "
+        "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False — the "
+        "[ui] extra is degraded or the auth middleware module failed to "
+        "import. Refusing to start to prevent the v1.1.0 false-promise (CLI "
+        "announces 'Auth: enabled' while the runtime ignores the credential). "
+        "Reinstall the [ui] extra (`pip install -U 'backpropagate[ui]'`) to "
+        "restore the middleware, or unset BACKPROPAGATE_UI_AUTH and use SSH "
+        "port-forwarding for remote access: ssh -L 7860:localhost:7860 <host>"
     )
 
 # FRONTEND-F-CORS-ORIGINS-LOCK (Wave 6, FRONTEND-B-011 closed):

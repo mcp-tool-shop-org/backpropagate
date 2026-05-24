@@ -20,7 +20,7 @@ For vulnerability reporting, see the repo-root [SECURITY.md](https://github.com/
 
 **What backpropagate does NOT trust** — the network surface when exposed:
 
-- The public internet when `--share` is set. v1.2.0 hard-refuses `--share` until the auth middleware lands; until then, [SSH port-forwarding](#ssh-port-forwarding-recipe) is the canonical pattern.
+- The public internet when `--share` is set. v1.2.0 enforces auth via the live FastAPI middleware (see [Four-layer defense in depth](#four-layer-defense-in-depth)); `--share` without `--auth user:pass` refuses to start, and `--share --auth user:pass` runs through the middleware's Basic-auth + Host/Origin allowlist gate. [SSH port-forwarding](#ssh-port-forwarding-recipe) remains the lowest-friction pattern when you do not need a public URL.
 - `BACKPROPAGATE_UI__OUTPUT_DIR` overrides — validated against the denylist on first use.
 - Arbitrary model names passed to `--model` — sanitised against an allowlist regex before reaching the Ollama / HF push surfaces.
 
@@ -30,29 +30,35 @@ For vulnerability reporting, see the repo-root [SECURITY.md](https://github.com/
 - Adversaries with code execution on the host are out of scope. The library's defense surface starts at "operator runs `backprop ui` and an attacker reaches the UI over the network."
 - Model weights as untrusted inputs are out of scope — `pickle` loading is refused, but `safetensors` content is not introspected for adversarial content.
 
-## v1.1.x advisory (GHSA-pending)
+## v1.1.x advisory (GHSA-f65r-h4g3-3h9h)
 
 **Affected:** backpropagate 1.1.0, 1.1.1.
 
+**Severity:** CVSS 9.8 (Critical). Published 2026-05-23.
+
 **Issue:** the Reflex UI advertised `--share + --auth` enforcement, but `backpropagate/ui_app/**` never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --auth user:pass` or `backprop ui --share --auth user:pass` published an **unauthenticated** Web UI. The UI controls training jobs and has read access to `HF_TOKEN` from the operator environment.
 
-**Fix:** v1.2.0 lands a four-layer refuse-to-start defense (described below) and removes the auth advertisement from `--share` until real middleware lands.
+**Fix:** v1.2.0 ships the real FastAPI auth middleware via `rx.App(api_transformer=basic_auth_transformer)`, layered behind a four-layer refuse-to-start defense (described below) that also closes the ambient-env-bypass and direct-`reflex run` invocation paths.
 
-**Advisory:** [GHSA at https://github.com/mcp-tool-shop-org/backpropagate/security/advisories](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories) — link goes live once the advisory is published.
+**Advisory:** [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h).
 
-**Action:** upgrade to v1.2.0 (`pip install -U backpropagate`). v1.1.0 / v1.1.1 will continue to install from PyPI but should not be deployed for any UI workflow that uses `--share`.
+**Action:** upgrade to v1.2.0 (`pip install -U backpropagate`). v1.1.0 / v1.1.1 will continue to install from PyPI but should not be deployed for any UI workflow that uses `--share`, `--host <non-loopback>`, or `--auth`.
 
 ## Four-layer defense in depth
 
-Every layer keys off the single boolean `backpropagate/ui_app/auth.py::ENFORCEMENT_AVAILABLE`. When the real auth middleware lands (Wave 6 of the v1.2.0 swarm), flipping that boolean to `True` re-enables every layer at once.
+Every layer keys off the single boolean `backpropagate/ui_app/auth.py::ENFORCEMENT_AVAILABLE`. In v1.2.0 this flag is `True`: every layer is live, the FastAPI middleware enforces auth on HTTP routes and the `/_event` WebSocket upgrade, and the refuse-to-start rails below catch every bypass path. The flag stays in place so that a downgraded test stub or a partial `[ui]` extra install can still trip the gates instead of silently exposing an unauthenticated UI.
 
-### Layer 1: `cli.py:cmd_ui` refuses-to-start
+### Layer 1: `cli.py:cmd_ui` refuse-to-start gates
 
-If the operator passes `--auth user:pass` or `--share` and `ENFORCEMENT_AVAILABLE=False`, the CLI exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The error message includes a pointer to SSH port-forwarding and to this page.
+These gates fire even with the middleware live, because they catch contract violations the middleware is not the right place to reject:
+
+- `--share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A public URL with no credentials is the v1.1.x bug v1.2.0 closed; refusing keeps the contract intact even if a future tunnel provider is wired up.
+- `--host <non-loopback>` without `--auth` → same code. DNS-rebinding defense per CVE-2024-28224 / CVE-2025-49596 lineage.
+- `--auth` requested while `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra) → same code. Stops the runtime before the v1.1.x false-promise re-emerges.
 
 ### Layer 2: `cli.py:cmd_ui` strips ambient `BACKPROPAGATE_UI_AUTH`
 
-If the operator did **not** pass `--auth` but `BACKPROPAGATE_UI_AUTH` is set in the environment, the CLI strips it before spawning the Reflex subprocess. This closes the BRIDGE-B-001 ambient-env bypass: an env-var-only setup would otherwise reach the subprocess and create the *illusion* of auth coverage when no enforcement exists.
+If the operator did **not** pass `--auth` but `BACKPROPAGATE_UI_AUTH` is set in the environment, the CLI strips it before spawning the Reflex subprocess. This closes the BRIDGE-B-001 ambient-env bypass: an env-var-only setup would otherwise reach the subprocess and create the *illusion* of auth coverage when the operator never asked for it on the command line.
 
 ### Layer 3: `ui_app/app.py` module-import guard
 
@@ -62,9 +68,9 @@ If `BACKPROPAGATE_UI_AUTH` is set at module-import time and `ENFORCEMENT_AVAILAB
 
 Identical guard, fired at `python -m reflex run` direct invocations (the path Reflex itself uses internally and that operators might invoke when debugging). Without this layer, a `BACKPROPAGATE_UI_AUTH=user:pass python -m reflex run` from the package directory would silently start an unauthenticated UI.
 
-## Auth middleware (Wave 6 of v1.2.0)
+## Auth middleware (v1.2.0)
 
-When `ENFORCEMENT_AVAILABLE=True`, a Starlette ASGI middleware enforces the auth contract on both the HTTP routes and the `/_event` WebSocket upgrade. It supports four modes:
+The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_transformer=...)` hook (the `App.api` surface was removed in Reflex 0.8). It wraps the whole ASGI app so HTTP routes AND the `/_event` WebSocket upgrade go through the same gate, and it supports four modes resolved from the CLI flags + environment:
 
 | Mode | Invocation | Bind | Auth | Allowlist | Footer badge |
 |------|-----------|------|------|-----------|--------------|
@@ -79,12 +85,12 @@ When `ENFORCEMENT_AVAILABLE=True`, a Starlette ASGI middleware enforces the auth
 
 **Cookie hardening** — `HttpOnly` + `SameSite=Lax` + `Secure` (when not bound to 127.0.0.1) + 12h expiry + HMAC-signed payload (no server-side session store).
 
-**Hard errors** (refuse-to-start, even with middleware enabled):
+**Hard errors** (refuse-to-start, enforced by the CLI before the middleware ever sees a request):
 
-- `--share` without `--auth` → `RUNTIME_UI_AUTH_NOT_ENFORCED` (kept from v1.2.0 baseline).
+- `--share` without `--auth` → `RUNTIME_UI_AUTH_NOT_ENFORCED`.
 - `--host <non-loopback>` without `--auth` → same code.
-- `--auth` value with colon in the user portion → `INVALID_AUTH_FORMAT`.
-- Tunnel provider fails to return URL within 15s → `TUNNEL_NOT_AVAILABLE` (no half-up state).
+- `--auth` value with a malformed shape (missing colon, empty username or password, multiple colons in the user portion, etc.) → `INPUT_AUTH_INVALID_SHAPE` (validated in `ui_security.validate_auth_shape`).
+- `--auth` requested while `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra) → `RUNTIME_UI_AUTH_NOT_ENFORCED`.
 
 ## SSH port-forwarding recipe
 
@@ -112,15 +118,16 @@ The UI sandboxes filesystem writes (saved adapters, GGUF exports, converted data
 
 - **Default:** `~/.backpropagate/ui-outputs`
 - **Override:** `BACKPROPAGATE_UI__OUTPUT_DIR=<path>`
-- **Validation:** the override resolves against a denylist of `/etc`, `/var`, `~/.ssh`, `~/.aws`, `C:\Windows\System32`, etc. If the override resolves into one of those, startup fails with `[UI_OUTPUT_DIR_FORBIDDEN]`.
+- **Validation:** the override resolves against a denylist of system + credential trees — `/etc`, `/usr`, `/sys`, `/dev`, `/boot`, `/bin`, `/sbin`, `/var/run`, `/var/lib`, `/root`, `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/.config`, plus the Windows system roots (`C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData`) and per-user credential dirs (`%USERPROFILE%\.ssh`, AppData crypto stores). Bare `/var` is intentionally NOT in the denylist because macOS's per-user temp tree lives at `/var/folders/<hash>/T/...` (pytest tmp_path, NSTemporaryDirectory, etc.); only the dangerous subtrees `/var/run` and `/var/lib` are denied individually. If the override resolves into a denied path, startup fails with `[UI_OUTPUT_DIR_FORBIDDEN]`.
 - **Enforcement:** every UI sink passes the resolved base as `allowed_base` to `safe_path`, so user-supplied paths cannot escape via `..` segments.
 
 ## Anti-patterns (do not do)
 
-- Do **not** run `backprop ui --share` and assume it's safe. v1.2.0 refuses to start; v1.1.x advertised auth that didn't fire. Use SSH port-forwarding.
-- Do **not** pass `--host 0.0.0.0` to expose the UI on your LAN without `--auth`. v1.3+ will refuse this combination at startup.
+- Do **not** run `backprop ui --share` without `--auth user:pass`. v1.2.0 refuses to start this combination with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`; v1.1.x silently advertised auth that didn't fire. With `--auth user:pass` the middleware validates every request against the Basic-auth credentials plus the Host/Origin allowlist — but SSH port-forwarding is still the lower-friction pattern when you don't actually need a public URL.
+- Do **not** pass `--host 0.0.0.0` without `--auth user:pass`. v1.2.0 refuses this combination at startup for the same reason — a non-loopback bind without credentials is the DNS-rebinding foot-gun.
 - Do **not** put `HF_TOKEN` or any credential in argparse (it appears in `ps aux`). Export it in the environment or use `huggingface-cli login` to cache it.
 - Do **not** disable the output-directory denylist. It exists to prevent path-traversal bugs in the UI from writing into your system or credential paths.
+- Do **not** invoke `python -m reflex run` or `reflex run` from inside the `backpropagate/` package directory while setting `BACKPROPAGATE_UI_AUTH` and assume auth is wired. The layer-3 + layer-4 import-time guards refuse to start when `ENFORCEMENT_AVAILABLE=False` precisely so that operator confusion cannot bypass the middleware. Always launch via `backprop ui`.
 
 ## Reporting vulnerabilities
 

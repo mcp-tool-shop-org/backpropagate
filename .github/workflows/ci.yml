@@ -264,6 +264,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Run Semgrep
+        # No `|| true` mask: per docs/ci-gates-triage-plan.md the Semgrep
+        # baseline is "0 findings clean after rollback." Exit-code surfaces
+        # any new SAST finding to the security-summary aggregate gate (which
+        # branch protection requires) rather than silently passing.
         run: |
           semgrep scan \
             --config auto \
@@ -271,8 +275,7 @@ jobs:
             --config p/security-audit \
             --sarif \
             --output semgrep-results.sarif \
-            backpropagate/ \
-            || true
+            backpropagate/
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4

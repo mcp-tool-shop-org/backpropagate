@@ -649,3 +649,92 @@ class TestRequireFeatureEdgeCases:
         assert "required" in error_msg.lower()
         assert "not installed" in error_msg.lower()
         assert "Install with:" in error_msg
+
+
+# =============================================================================
+# TESTS-A-011 (v1.3 Wave 1) — validation feature-flag log CONTENT assertions
+# =============================================================================
+# The carryover finding: prior tests for the no-validator path (validation
+# extra not installed) asserted ``logger.warning.assert_called()`` without
+# inspecting the log message itself. A regression that changed the log to
+# something useless ("X happened" instead of the actionable "install
+# backpropagate[validation]") would have passed silently.
+#
+# The fix: re-detect features with the validation/ui/etc. probe and assert
+# on the actual caplog records (level + message substring) for both the
+# AVAILABLE and UNAVAILABLE paths. Caplog content is the load-bearing
+# operator signal — without it the messages can drift to anything.
+
+
+class TestFeatureDetectionLogContent:
+    """Pin the CONTENT (not just the calls) of feature-detection logs."""
+
+    def test_validation_unavailable_log_names_the_feature(self, caplog):
+        """When pydantic is missing, the log message must name 'validation'.
+
+        A regression that changed the message to "feature not available" or
+        dropped the feature name would still satisfy a bare ``assert_called``
+        test. Caplog inspection catches the drift.
+        """
+        import logging
+
+        # The detection runs at import time on first detect_features() call.
+        # Force a re-detect after patching _has_module to claim pydantic is
+        # missing.
+        with patch(
+            "backpropagate.feature_flags._has_module",
+            side_effect=lambda mod: mod not in ("pydantic", "pydantic_settings"),
+        ):
+            with caplog.at_level(logging.DEBUG, logger="backpropagate.feature_flags"):
+                from backpropagate.feature_flags import _detect_features
+                _detect_features()
+
+        # Concatenate all captured messages once to scan against.
+        all_messages = "\n".join(rec.getMessage() for rec in caplog.records)
+        assert "validation" in all_messages, (
+            "Feature-detection log for the validation extra did not contain "
+            "the word 'validation' — operator can't tell which feature is "
+            "the subject of the message."
+        )
+        assert (
+            "unavailable" in all_messages.lower()
+            or "not installed" in all_messages.lower()
+        ), (
+            "Validation-unavailable log message must say the feature is "
+            f"unavailable / not installed; got: {all_messages}"
+        )
+
+    def test_validation_available_log_names_the_feature(self, caplog):
+        """When pydantic IS available, the log must name 'validation' too.
+
+        Symmetric to the unavailable case — both branches must emit a
+        feature-named message so log-grep / log-watch tools can correlate.
+        """
+        import logging
+
+        # Claim pydantic + pydantic_settings ARE installed.
+        with patch(
+            "backpropagate.feature_flags._has_module",
+            side_effect=lambda mod: mod in ("pydantic", "pydantic_settings"),
+        ):
+            with caplog.at_level(logging.DEBUG, logger="backpropagate.feature_flags"):
+                from backpropagate.feature_flags import _detect_features
+                _detect_features()
+
+        validation_messages = [
+            rec.getMessage()
+            for rec in caplog.records
+            if "validation" in rec.getMessage()
+        ]
+        assert validation_messages, (
+            "Feature-detection produced no log entry naming 'validation' "
+            "on the available-branch path."
+        )
+        # The available-branch message must say "available" (not "missing")
+        assert any(
+            "available" in m.lower() or "installed" in m.lower()
+            for m in validation_messages
+        ), (
+            "Validation-available log message must say the feature is "
+            f"available / installed; got: {validation_messages}"
+        )

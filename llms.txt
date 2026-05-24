@@ -31,7 +31,7 @@ trainer.export("gguf", quantization="q4_k_m")
 - `backprop multi-run --data <file> --runs N --steps N --samples N` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
 - `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
 - `backprop info` -- system info and feature detection
-- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` requires `--auth` unless `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false`
+- `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` (and `--host <non-loopback>`) require `--auth` as a hard error per v1.2.0 (GHSA-f65r-h4g3-3h9h); no env-var opt-out
 - `backprop config` -- show resolved configuration
 
 Exit codes: 0 success, 1 user error, 2 runtime error, 3 partial success.
@@ -56,7 +56,6 @@ Full catalog: https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-c
 All settings overridable via BACKPROPAGATE_* prefix; nested keys use double underscore. Highlights:
 - BACKPROPAGATE_LOG_LEVEL (DEBUG/INFO/WARNING/ERROR), BACKPROPAGATE_LOG_JSON, BACKPROPAGATE_LOG_FILE
 - BACKPROPAGATE_DEFER_FEATURE_DETECTION (fast-startup opt-out)
-- BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE (default true; refuses ui --share without --auth)
 - BACKPROPAGATE_UI__OUTPUT_DIR (default ~/.backpropagate/ui-outputs; denylist-validated against /etc, ~/.ssh, etc.)
 - BACKPROPAGATE_MODEL__NAME (default Qwen/Qwen2.5-7B-Instruct), BACKPROPAGATE_TRAINING__LEARNING_RATE, BACKPROPAGATE_LORA__R
 - Group prefixes: MODEL__, LORA__, TRAINING__, DATA__, UI__, WINDOWS__, MULTIRUN__, SECURITY__

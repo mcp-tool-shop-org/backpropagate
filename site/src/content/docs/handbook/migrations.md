@@ -11,19 +11,22 @@ This page covers the v1.1.x → v1.2.0 upgrade. For older transitions (v1.0 → 
 
 If you are on v1.1.x and you have not been relying on the v1.0 Gradio UI, the v1.2.0 upgrade is **mostly drop-in**. The behavioural changes are:
 
-- `backprop ui --share` (with or without `--auth`) **refuses to start** until the auth middleware lands. Until then, use SSH port-forwarding.
+- The Reflex UI now ships a real FastAPI auth middleware via `rx.App(api_transformer=basic_auth_transformer)`. `backprop ui --auth user:pass`, `backprop ui --share --auth user:pass`, and `backprop ui --host 0.0.0.0 --auth user:pass` now actually enforce the credential on every HTTP route and on the `/_event` WebSocket upgrade. Without `--auth`, `--share` and non-loopback `--host` refuse to start with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`.
 - The `[observability]` extra is **removed** (it never wired anything in v1.1.x — it was a doc-lie).
 - Several training-time hooks that were silently no-ops in v1.1.x now **actually fire** — see [Behavioural fixes](#behavioural-fixes) below.
 
 ## Breaking changes
 
-### `backprop ui --share` hard-refuses without `--auth`
+### `backprop ui --share` now requires `--auth`
 
-**v1.1.0 / v1.1.1:** `--share` advertised auth enforcement but the Reflex runtime never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --share --auth user:pass` published an **unauthenticated** public URL — see the [GHSA advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories) for details.
+**v1.1.0 / v1.1.1:** `--share` advertised auth enforcement but the Reflex runtime never read `BACKPROPAGATE_UI_AUTH`. Running `backprop ui --share --auth user:pass` published an **unauthenticated** public URL — see the [GHSA-f65r-h4g3-3h9h advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h) (CVSS 9.8, published 2026-05-23) for the full disclosure.
 
-**v1.2.0:** `backprop ui --share` (with or without `--auth`) exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The refuse-to-start contract is enforced in four layers — see [the security page](/backpropagate/handbook/security/#four-layer-defense-in-depth) for the full chain.
+**v1.2.0:** the FastAPI auth middleware is live and enforces credentials on every request and the `/_event` WebSocket upgrade. `backprop ui --share --auth user:pass` now actually publishes an authenticated URL; `backprop ui --share` **without** `--auth` exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` so an operator cannot accidentally re-create the v1.1.x bug. The refuse-to-start contract is layered four deep (CLI gate, ambient-env strip, `ui_app/app.py` import guard, `rxconfig.py` import guard) — see [the security page](/backpropagate/handbook/security/#four-layer-defense-in-depth) for the full chain.
 
-**Migration:** use SSH port-forwarding instead of `--share`:
+**Migration:**
+
+- **If you were running `backprop ui --share` and a colleague accessed the URL without credentials in v1.1.x**: that URL was unauthenticated. Rotate any `HF_TOKEN` that was on the host while v1.1.x was running. On v1.2.0, run `backprop ui --share --auth user:pass` and share both the URL and credentials over your normal secure channel.
+- **If you have no need for a public URL**: SSH port-forwarding stays the lowest-friction option.
 
 ```bash
 # On the training host:
@@ -33,8 +36,6 @@ backprop ui
 ssh -L 7860:localhost:7860 you@training-host
 # Then open http://localhost:7860 locally.
 ```
-
-Real `--share` support returns when the auth middleware lands; tracked in the [security page](/backpropagate/handbook/security/).
 
 ### v1.0 Gradio UI fully removed
 
@@ -91,7 +92,7 @@ These are not breaking changes in the API-shape sense, but if your code was depe
 
 ## Rollback
 
-If you need to roll back to v1.1.1 (note: the v1.1.x auth advertisement is the GHSA-pending advisory — see the [security page](/backpropagate/handbook/security/)):
+If you need to roll back to v1.1.1 (note: the v1.1.x auth advertisement is [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h) — CVSS 9.8 Critical — and any `--share` URL while v1.1.x was running was unauthenticated; see the [security page](/backpropagate/handbook/security/) for full disclosure):
 
 ```bash
 pip install "backpropagate==1.1.1"

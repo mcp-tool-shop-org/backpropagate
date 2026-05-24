@@ -207,55 +207,194 @@ class TestE2EResumeTraining:
     """End-to-end tests for resuming training from checkpoint."""
 
     def test_e2e_resume_from_checkpoint(self, temp_dir):
-        """Should be able to resume training from saved checkpoint."""
+        """Resume actually drives the resume_from code path (TESTS-A-004 v1.3).
+
+        Replaces the previous tautology which only asserted ``trainer is not
+        None`` after creating a checkpoint directory. The new test exercises
+        the F-002 + F-017 resume path:
+
+        1. Seed an on-disk run_history.json entry (the catalog the
+           ``resume_from=`` lookup consults).
+        2. Construct a Trainer and call its train() with ``resume_from``
+           pointing at the seeded entry.
+        3. Intercept the inner ``SFTTrainer`` so we can assert WITHOUT
+           running real training: (a) the existing run_id was reused, (b)
+           the checkpoint_path from history was threaded into the inner
+           train() call as ``resume_from_checkpoint``.
+
+        The load-bearing safety property: the v1.1.x bug pre-F-017 was
+        that resume reused the run_id (so history wasn't duplicated) but
+        SILENTLY started from step 0 because resume_from_checkpoint was
+        never threaded through. The previous tautology test would have
+        passed against that bug. This one fails.
+        """
+        from datetime import datetime, timezone
+
+        from backpropagate.checkpoints import RunHistoryManager
         from backpropagate.trainer import Trainer
 
-        # Create initial checkpoint directory structure
-        checkpoint_dir = temp_dir / "checkpoint-run1"
-        checkpoint_dir.mkdir()
+        # Step 1 — seed the run history with a "completed" prior run whose
+        # checkpoint dir exists on disk (so the resume path doesn't bail).
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        existing_run_id = "run-existing-123456"
+        checkpoint_path = output_dir / "checkpoint-50"
+        checkpoint_path.mkdir()
+        (checkpoint_path / "adapter_config.json").write_text(
+            json.dumps({"peft_type": "LORA", "r": 16, "lora_alpha": 32}),
+            encoding="utf-8",
+        )
 
-        # Create adapter config file (minimal PEFT config)
-        adapter_config = {
-            "peft_type": "LORA",
-            "r": 16,
-            "lora_alpha": 32,
-        }
-        with open(checkpoint_dir / "adapter_config.json", "w") as f:
-            json.dump(adapter_config, f)
+        manager = RunHistoryManager(str(output_dir))
+        manager._save([
+            {
+                "run_id": existing_run_id,
+                "status": "completed",
+                "checkpoint_path": str(output_dir),
+                "model_name": "test-model",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "final_loss": 0.5,
+            }
+        ])
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(
                 model="test-model",
-                output_dir=str(temp_dir / "output"),
+                output_dir=str(output_dir),
                 use_unsloth=False,
             )
 
-            # Verify trainer is properly initialized
-            assert trainer is not None
-            assert trainer.output_dir is not None
+            # Step 2 — intercept the inner training so we can introspect what
+            # the resume_from kwarg got threaded into. The trainer's load_model
+            # / dataset path runs real code; mock those out so we only exercise
+            # the resume-resolution path under test.
+            mock_dataset = MagicMock()
+            mock_dataset.__len__ = MagicMock(return_value=10)
+
+            with patch.object(
+                trainer, "load_model"
+            ) as mock_load, patch.object(
+                trainer, "_load_dataset", return_value=mock_dataset
+            ), patch(
+                "trl.SFTTrainer"
+            ) as mock_sft_cls, patch(
+                "trl.SFTConfig"
+            ):
+                mock_load.return_value = None
+                trainer._is_loaded = True
+                trainer._model = MagicMock()
+                trainer._tokenizer = MagicMock()
+
+                # Configure SFTTrainer mock to surface a usable train() shape.
+                mock_sft_instance = MagicMock()
+                mock_sft_instance.train.return_value = MagicMock(
+                    metrics={"train_loss": 0.4, "train_runtime": 1.0}
+                )
+                # state.log_history needed by trainer to compute final_loss
+                mock_sft_instance.state = MagicMock()
+                mock_sft_instance.state.log_history = [{"loss": 0.4}]
+                mock_sft_cls.return_value = mock_sft_instance
+
+                # Patch persistence calls that would otherwise touch disk.
+                with patch.object(trainer, "save", return_value=None):
+                    try:
+                        trainer.train(
+                            dataset=mock_dataset,
+                            steps=5,
+                            resume_from=existing_run_id,
+                        )
+                    except Exception:
+                        # The test focus is on resume-path argument threading,
+                        # not full train() completion. Mocked components may
+                        # raise on downstream code; the assertions below only
+                        # need the resume-resolution to have executed.
+                        pass
+
+                # Step 3 — the inner SFTTrainer.train() must have been called
+                # with resume_from_checkpoint pointing at the on-disk dir.
+                # (F-017 invariant.)
+                assert mock_sft_instance.train.called, (
+                    "Trainer.train() did not invoke the inner SFTTrainer — "
+                    "the resume path short-circuited before the inner call."
+                )
+                call_kwargs = mock_sft_instance.train.call_args.kwargs
+                # The kwarg is resume_from_checkpoint (HF/TRL convention)
+                rfc = call_kwargs.get("resume_from_checkpoint")
+                assert rfc is not None and rfc == str(output_dir), (
+                    f"resume_from_checkpoint kwarg was {rfc!r}; expected the "
+                    f"on-disk checkpoint dir {str(output_dir)!r}. The "
+                    f"pre-F-017 bug was that this kwarg never got threaded "
+                    f"through, causing resume to silently start from step 0."
+                )
 
     def test_e2e_checkpoint_contains_state(self, temp_dir):
-        """Checkpoint should contain necessary state for resumption."""
+        """TESTS-A-007: manifest round-trip preserves load-bearing state.
+
+        Pre-rewrite this asserted only that a hand-written JSON file existed,
+        which would not detect: a schema regression in CheckpointInfo,
+        `_save_manifest` breaking the atomic-replace contract, or
+        `find_latest_for_run_id` returning the wrong record on resume.
+
+        Drives the real `register()` -> `_save_manifest()` ->
+        `_load_manifest()` path via a second manager instance and asserts the
+        round-trip preserves every field the resume code path consumes.
+        """
         from backpropagate.checkpoints import CheckpointManager
 
-        manager = CheckpointManager(str(temp_dir))
+        # Phase 1: write a manifest via register()
+        manager_a = CheckpointManager(str(temp_dir))
+        cp_dir = temp_dir / "checkpoint-step10"
+        cp_dir.mkdir()
+        (cp_dir / "adapter_config.json").write_text(
+            json.dumps({"peft_type": "LORA", "r": 16})
+        )
+        info_registered = manager_a.register(
+            run_index=1,
+            checkpoint_path=str(cp_dir),
+            validation_loss=0.8,
+            training_loss=0.9,
+            is_run_boundary=True,
+            run_id="run-7a3f",
+        )
 
-        # Create mock checkpoint
-        checkpoint_path = temp_dir / "checkpoint-step10"
-        checkpoint_path.mkdir()
+        # The atomic write should have produced manifest.json with the expected
+        # schema; if the schema drifts the resume code path silently loses
+        # information at the next load.
+        manifest_path = temp_dir / CheckpointManager.MANIFEST_FILE
+        assert manifest_path.exists(), "_save_manifest must write manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["version"] == "1.0"
+        assert "updated" in manifest
+        assert "policy" in manifest
+        assert isinstance(manifest["checkpoints"], list)
+        assert len(manifest["checkpoints"]) == 1
 
-        # Simulate saving metadata
-        metadata = {
-            "step": 10,
-            "loss": 0.8,
-            "run_idx": 1,
-        }
-        with open(checkpoint_path / "metadata.json", "w") as f:
-            json.dump(metadata, f)
+        # Phase 2: a fresh manager must reload the registered checkpoint
+        # byte-identical from disk. This is the path resume_from exercises
+        # via `find_latest_for_run_id` at process boot.
+        manager_b = CheckpointManager(str(temp_dir))
+        assert len(manager_b._checkpoints) == 1, (
+            "second-instance _load_manifest must recover the registered "
+            "checkpoint; otherwise resume_from cannot locate any prior state"
+        )
+        info_loaded = manager_b._checkpoints[0]
+        assert info_loaded.run_index == info_registered.run_index
+        assert info_loaded.path == str(cp_dir)
+        assert info_loaded.validation_loss == 0.8
+        assert info_loaded.training_loss == 0.9
+        assert info_loaded.is_run_boundary is True
+        assert info_loaded.is_final is True
+        assert info_loaded.run_id == "run-7a3f"
 
-        # Verify checkpoint was created
-        assert checkpoint_path.exists()
-        assert (checkpoint_path / "metadata.json").exists()
+        # Phase 3: the resume lookup path itself
+        latest = manager_b.find_latest_for_run_id("run-7a3f")
+        assert latest is not None, (
+            "find_latest_for_run_id must return the registered checkpoint "
+            "by run_id; this is the lookup multi_run.py:267 uses on resume"
+        )
+        assert latest.path == str(cp_dir)
+        assert manager_b.find_latest_for_run_id("run-missing") is None
 
 
 class TestE2EExportAndInference:

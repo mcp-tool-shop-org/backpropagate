@@ -100,9 +100,17 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 ## "What does `[RUNTIME_UI_AUTH_NOT_ENFORCED]` mean?"
 
-You passed `--share` or `--auth` to `backprop ui`. Starting with v1.1.0 (the Gradio → Reflex migration), the runtime refuses to start when either flag is present, because the Reflex port landed ahead of the auth middleware and a `--share`-published URL would be unauthenticated. Refusing to start is the correct behavior until the middleware ships.
+You passed `--share` (without `--auth`), `--host <non-loopback>` (without `--auth`), or `--auth` while the `[ui]` extra was degraded. The v1.2.0 runtime refuses to start in each of those cases because a public URL or non-loopback bind without credentials is the v1.1.x bug — published in [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h) (CVSS 9.8, 2026-05-23) — and the refuse-to-start contract makes sure it cannot silently come back.
 
-**Fix (recommended): SSH port-forwarding for remote access.**
+**Fix (recommended for the public-URL case): pass `--auth user:pass`.** The v1.2.0 FastAPI auth middleware enforces credentials on every HTTP route and the `/_event` WebSocket upgrade plus the Host/Origin allowlist (DNS-rebinding + CSWSH defense).
+
+```bash
+backprop ui --share --auth user:pass
+# OR
+backprop ui --host 0.0.0.0 --auth user:pass
+```
+
+**Fix (recommended when you don't actually need a public URL): SSH port-forwarding.**
 
 ```bash
 ssh -L 7860:localhost:7860 you@gpu-host
@@ -111,9 +119,7 @@ ssh -L 7860:localhost:7860 you@gpu-host
 
 SSH already handles auth, encryption, and audit. The UI stays bound to `127.0.0.1` on the remote box; only your forwarded tunnel can reach it. No middleware required.
 
-**There is no escape hatch.** The old `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` flag from the Gradio era is now a no-op — the refuse-to-start contract is enforced at both the CLI layer (`cli.py:cmd_ui`) and the app layer (`ui_app/app.py` + `rxconfig.py`), so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var. This intentional, until the middleware lands in a future release.
-
-The tracking issue is the GHSA at <https://github.com/mcp-tool-shop-org/backpropagate/security/advisories>.
+**The old `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` flag from the Gradio era stays a no-op.** The refuse-to-start contract is enforced at both the CLI layer (`cli.py:cmd_ui`) and the app layer (`ui_app/app.py` + `rxconfig.py`), so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var. Full chain in [the security page → Four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth).
 
 ## "What does the `Run ID:` line at startup mean?"
 

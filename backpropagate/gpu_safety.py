@@ -2,14 +2,18 @@
 Backpropagate - GPU Safety Module
 ==================================
 
-Comprehensive GPU monitoring and safety checks to prevent hardware damage
-during intensive training operations.
+GPU monitoring and safety checks to prevent hardware damage during intensive
+training operations. The VRAM metric here is per-process (the current
+PyTorch CUDA context) — it does NOT see allocations made by other processes
+sharing the same GPU. For system-wide VRAM accounting use ``nvidia-smi`` or
+the future system-vram helper. Temperature, power, and utilization come from
+pynvml and ARE system-wide.
 
 Features:
-- Temperature monitoring with configurable thresholds
-- VRAM usage tracking and alerts
+- Temperature monitoring with configurable thresholds (system-wide via pynvml)
+- VRAM usage tracking and alerts (per-process; see caveat above)
 - Automatic throttling/pause when limits exceeded
-- Power draw monitoring (if supported)
+- Power draw monitoring (if supported, system-wide via pynvml)
 - Graceful shutdown on critical conditions
 
 Safety Thresholds (NVIDIA GPUs):
@@ -170,6 +174,15 @@ class GPUStatus:
     temperature_max_c: float | None = None
 
     # Memory
+    # NOTE on scope: vram_used_gb / vram_free_gb / vram_percent are
+    # PER-PROCESS — they reflect what the current PyTorch CUDA context has
+    # reserved via torch.cuda.memory_reserved(), not what the GPU as a whole
+    # has allocated. Other processes' allocations are invisible to these
+    # fields. For system-wide VRAM, query nvidia-smi or the (future)
+    # system-vram helper. vram_total_gb IS the system GPU total (from
+    # cudaDeviceProp.total_memory) so percent math against it is "what
+    # share of total GPU VRAM has THIS process reserved", not "how full is
+    # the GPU overall".
     vram_total_gb: float = 0.0
     vram_used_gb: float = 0.0
     vram_free_gb: float = 0.0
@@ -205,7 +218,13 @@ def get_gpu_status(device_index: int = 0, config: GPUSafetyConfig | None = None)
         config: Safety config for threshold evaluation
 
     Returns:
-        GPUStatus with current readings and safety condition
+        GPUStatus with current readings and safety condition. The
+        ``vram_*`` fields are PER-PROCESS only (sourced from
+        ``torch.cuda.memory_reserved``) — they do not see allocations
+        from other processes sharing the GPU. Temperature, power, and
+        utilization come from pynvml and ARE system-wide. For
+        system-wide VRAM, use ``nvidia-smi`` or the future system-vram
+        helper.
     """
     config = config or GPUSafetyConfig()
     status = GPUStatus(device_index=device_index)

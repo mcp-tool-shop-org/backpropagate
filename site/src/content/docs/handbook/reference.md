@@ -41,18 +41,22 @@ The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pull
 backprop train --data <file> --model <model> --steps <n>
 backprop multi-run --data <file> --runs <n> --steps <n> --samples <n>
 backprop export <path> --format gguf --quantization <q> [--ollama] [--ollama-name <name>]
-backprop ui --port <port>   # --share / --auth currently refuse-to-start (Reflex middleware pending)
+backprop ui --port <port> [--auth user:pass] [--share] [--host 0.0.0.0]
 backprop info
 backprop config
 ```
 
 See [CLI reference](/backpropagate/handbook/cli-reference/) for every flag, every default, and the full exit-code contract.
 
-### `--share` and `--auth` currently refuse-to-start
+### `--share` / `--host` require `--auth` post-v1.2.0
 
-`backprop ui --share` and `backprop ui --auth USER:PASS` both exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The v1.1+ Reflex UI lands ahead of its auth middleware, so the runtime refuses either flag rather than expose an unauthenticated public URL. The refuse-to-start contract is enforced one layer deeper too — `python -m reflex run` from the package directory refuses unless the legitimate `backprop ui` bridge sets its bypass env var.
+The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape` and into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. What refuses to start:
 
-For remote access right now, use SSH port-forwarding (`ssh -L 7860:localhost:7860 <host>`). The longer rationale, the tracking GHSA, and the middleware roadmap are in [the troubleshooting page](/backpropagate/handbook/troubleshooting/#what-does-runtime_ui_auth_not_enforced-mean) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
+- `backprop ui --share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (a public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)).
+- `backprop ui --host <non-loopback>` without `--auth` → same code (DNS-rebinding defense).
+- `backprop ui --auth user:pass` when `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra install) → same code.
+
+The refuse-to-start contract is enforced one layer deeper too — `python -m reflex run` from the package directory refuses unless the legitimate `backprop ui` bridge sets its bypass env var. For remote access without a public URL, SSH port-forwarding (`ssh -L 7860:localhost:7860 <host>`) stays the lower-friction option. Full rationale + the four-layer defense chain in [the security page](/backpropagate/handbook/security/#four-layer-defense-in-depth) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
 
 ## Windows support
 

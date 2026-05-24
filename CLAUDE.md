@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.1.1 on PyPI; v1.2.0 in preparation; full Ship Gate passing).
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.2.0 on PyPI; v1.3.0 in preparation; full Ship Gate passing).
 
 ## Architecture
 
@@ -25,7 +25,7 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 ## Key Notes
 
 - Headless-first; UI is opt-in via `pip install backpropagate[ui]`
-- Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[observability]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
+- Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
 - First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
 - Tested on RTX 5080 (16GB VRAM)
 - 1865 tests in tests/ (1856 passed + 10 skipped; pinned 2026-05-23 post-Wave-6), 50% coverage floor (`fail_under = 50` in coverage config)

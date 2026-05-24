@@ -123,7 +123,6 @@ pip install backpropagate[full]        # Everything
 | `BACKPROPAGATE_LOG_JSON` | ऑटो | JSON लॉग (`true`) या कंसोल लॉग (`false`) को फ़ोर्स करें |
 | `BACKPROPAGATE_LOG_FILE` | अनिर्धारित | लॉग को किस स्थान पर सहेजा जाए |
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | अनिर्धारित | सबसे तेज़ CLI कोल्ड स्टार्ट के लिए स्टार्टअप पर वैकल्पिक-निर्भरता का पता लगाना छोड़ दें |
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | जब `true` होता है, तो `--auth` के बिना `backprop ui --share` को अस्वीकार कर देता है |
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | सभी UI फ़ाइल सिस्टम राइट्स के लिए सैंडबॉक्स बेस; डिनाइलिस्ट-सत्यापित |
 | `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | डिफ़ॉल्ट मॉडल |
 | `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | लर्निंग रेट |
@@ -313,7 +312,7 @@ v1.0 Gradio कार्यान्वयन (`ui_gradio_legacy.py` + `theme_gr
 | `register_with_ollama` कनेक्शन अस्वीकृत। | `DEP_OLLAMA_REGISTRATION_FAILED` | डेमॉन शुरू करें: `ollama serve`। <https://ollama.com> से इंस्टॉल करें। पुनः प्रयास करने योग्य। |
 | चेकपॉइंट सहेजते समय डिस्क भर गई। | `STATE_CHECKPOINT_INVALID` | क्रैश होने पर एटॉमिक राइट्स `.partial` नामक एक डायरेक्टरी बनाते हैं - इसे हटाना सुरक्षित है। पिछला अच्छा चेकपॉइंट बरकरार है। |
 | GPU के अत्यधिक गर्म होने के कारण प्रशिक्षण रुक गया/रद्द कर दिया गया। | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 मॉनिटर NVML तापमान सीमा पर रुक जाता है; GPU के ठंडा होने पर यह स्वचालित रूप से फिर से शुरू हो जाता है। वायु प्रवाह में सुधार करें या निरंतर लोड को कम करें। |
-| `backprop ui --share` अस्वीकृत। | `INPUT_AUTH_REQUIRED` | `--auth user:password` पास करें, या `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` सेट करें (चेतावनी)। |
+| `backprop ui --share` अस्वीकृत। | `INPUT_AUTH_REQUIRED` | `--auth user:password` पास करें। v1.2.0 (GHSA-f65r-h4g3-3h9h) से, `--auth` के बिना `--share` एक हार्ड एरर है जिसे ऑप्ट-आउट नहीं किया जा सकता; यदि क्रेडेंशियल्स को उजागर नहीं कर सकते तो SSH पोर्ट-फॉरवर्डिंग का उपयोग करें। |
 | मल्टी-रन "वैलिडेशन ओवरलैप"। | `CONFIG_INVALID` (स्टेज A बैकएंड B-001) | `--samples` को प्रशिक्षण पूल आकार से कम करें, डेटासेट बढ़ाएं, या वैलिडेशन को अक्षम करें। |
 | GGUF एक्सपोर्ट पहली बार में विफल रहा। | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`। विंडोज पर, आपको Visual C++ Build Tools + CMake की भी आवश्यकता है। |
 

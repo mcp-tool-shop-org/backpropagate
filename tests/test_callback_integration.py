@@ -186,21 +186,49 @@ class TestE2EGPUMonitoringCallbacks:
     def test_gpu_monitor_to_multirun_integration(
         self, mock_get_status, gpu_status_safe, mock_multirun_callbacks
     ):
-        """GPUMonitor callbacks should integrate with MultiRunTrainer."""
+        """GPUMonitor callbacks should integrate with MultiRunTrainer.
+
+        TESTS-A-008 (v1.3 Wave 1): replaced ``time.sleep(0.2)`` with a
+        deterministic ``threading.Event`` wait. The prior sleep flaked on
+        slow Windows CI runners (the first poll cycle could take > 200ms
+        when the subprocess sandbox was cold), producing intermittent
+        ``len(calls['gpu_status']) > 0`` failures.
+
+        The new pattern: wrap the original on_status callback in a
+        signalling wrapper that sets an Event on the first invocation.
+        Wait for the event with a generous timeout. Wait completes the
+        moment the callback fires — not on a wall-clock guess.
+        """
+        import threading
+
         from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig
 
         mock_get_status.return_value = gpu_status_safe
         callbacks, calls = mock_multirun_callbacks
 
-        # Create monitor with multirun callback
+        # Signal fires the moment the first callback is observed.
+        first_call = threading.Event()
+        original_on_status = callbacks["on_gpu_status"]
+
+        def signalling_on_status(status):
+            original_on_status(status)
+            first_call.set()
+
         monitor = GPUMonitor(
             config=GPUSafetyConfig(check_interval=0.05),
-            on_status=callbacks["on_gpu_status"],
+            on_status=signalling_on_status,
         )
 
         try:
             monitor.start()
-            time.sleep(0.2)  # Allow several callbacks
+            # Deterministic wait — 5s ceiling is generous for the slowest
+            # observed CI runner; the sleep version used 200ms which was
+            # below the cold-start floor on Windows.
+            triggered = first_call.wait(timeout=5.0)
+            assert triggered, (
+                "GPU monitor did not invoke on_status within 5s — the "
+                "callback wiring or polling thread is broken (not a flake)."
+            )
         finally:
             monitor.stop()
 

@@ -4093,8 +4093,8 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     train_parser.add_argument(
         "--lora-r",
         type=_positive_int,
-        default=16,
-        help="LoRA rank (default: 16; must be > 0)",
+        default=256,
+        help="LoRA rank (default: 256 in v1.3 'quality' preset; pass --lora-preset=fast for v1.2.x rank-16 footprint). Must be > 0.",
     )
     # BRIDGE Wave 6b (v1.3): five new LoRA / training knobs added in
     # lock-step with the backend agent's Wave 6b additions

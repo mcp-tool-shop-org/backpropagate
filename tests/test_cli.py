@@ -55,7 +55,7 @@ class TestParser:
         assert args.samples is None
         assert args.batch_size == "auto"
         assert args.lr == 2e-4
-        assert args.lora_r == 16
+        assert args.lora_r == 256  # v1.3 'quality' preset default (was 16 in v1.2.x; --lora-preset=fast reverts)
         assert args.output == "./output"
         assert args.no_unsloth is False
 

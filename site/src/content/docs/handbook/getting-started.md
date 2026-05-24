@@ -62,6 +62,33 @@ backprop info
 
 This prints your Python version, PyTorch version, CUDA status, GPU name and VRAM, which optional features are installed, and current configuration defaults. Run it before your first training to confirm everything is working.
 
+## Shell completion (v1.3)
+
+`backprop` ships with `argcomplete` integration so tab-completion works in bash / zsh / fish. Enable it by adding one line to your shell rc file:
+
+**bash** (`~/.bashrc`):
+
+```bash
+eval "$(register-python-argcomplete backprop)"
+```
+
+**zsh** (`~/.zshrc`):
+
+```bash
+autoload -Uz compinit && compinit
+eval "$(register-python-argcomplete backprop)"
+```
+
+**fish** (`~/.config/fish/config.fish`):
+
+```fish
+register-python-argcomplete --shell fish backprop | source
+```
+
+Re-open your shell. `backprop tr<TAB>` now completes to `train`; `backprop export --format <TAB>` completes to `lora` / `merged` / `gguf`. Completion is opt-in (the `eval` line is what activates it) — without the line, the CLI behaves exactly the same.
+
+If you installed via `pipx`, `argcomplete` came along with the package; you only need to add the `eval` / `source` line.
+
 ## Web UI
 
 ```bash

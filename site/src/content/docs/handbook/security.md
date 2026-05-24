@@ -74,10 +74,16 @@ The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_t
 
 | Mode | Invocation | Bind | Auth | Allowlist | Footer badge |
 |------|-----------|------|------|-----------|--------------|
-| Default | `backprop ui` | 127.0.0.1 | per-launch random token in URL | `127.0.0.1`, `localhost` | `Local · token` |
-| Basic | `backprop ui --auth user:pass` | 127.0.0.1 | HTTP Basic | `127.0.0.1`, `localhost` | `Local · Basic` |
-| Shared | `backprop ui --share --auth user:pass` | tunnel | HTTP Basic | `127.0.0.1` + tunnel host | `Shared · Basic` |
-| Network | `backprop ui --host 0.0.0.0 --auth user:pass` | network | HTTP Basic | `127.0.0.1` + LAN IPs | `Network · Basic` |
+| Default | `backprop ui` | 127.0.0.1 | per-launch random token in URL + lock file (v1.3) | `127.0.0.1`, `localhost` | `Local · token` |
+| Basic | `backprop ui --auth user:pass` (or `--auth-file <path>`) | 127.0.0.1 | HTTP Basic | `127.0.0.1`, `localhost` | `Local · Basic` |
+| Shared | `backprop ui --share --auth user:pass` (or `--auth-file <path>`) | cloudflared tunnel (v1.3) | HTTP Basic | `127.0.0.1` + tunnel host | `Shared · Basic` |
+| Network | `backprop ui --host 0.0.0.0 --auth user:pass` (or `--auth-file <path>`) | network | HTTP Basic | `127.0.0.1` + LAN IPs | `Network · Basic` |
+
+**`--auth-file` (v1.3 alternative to `--auth`):** reads `user:pass` from a file instead of taking it on the command line — keeps the credential out of shell history and out of `ps aux`. Mutually exclusive with `--auth` (passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`). The file mode is checked on POSIX: a mode wider than `0600` emits a warning at startup. Create with `printf 'user:pass' > path && chmod 600 path`. Satisfies the same gate as `--auth`. See [recipes → --auth-file](/backpropagate/handbook/recipes/#use---auth-file-for-shell-history-safe-auth).
+
+**Per-launch lock-file token (v1.3, default mode):** in token-auto mode (the default when neither `--auth` nor `--auth-file` is passed), the per-launch random token now also lands in a `0600` lock file at `$XDG_RUNTIME_DIR/backpropagate/session-<port>.lock` (Linux/macOS) or `%LOCALAPPDATA%\backpropagate\session-<port>.lock` (Windows). The file is deleted on shutdown. Parallel processes running as the same user can discover the token without screen-scraping the startup banner — useful for `backprop info --runtime` and external tooling that wants to validate against the running UI.
+
+**Public-URL tunnel via `cloudflared` (v1.3):** `--share` now spawns `cloudflared tunnel --url http://127.0.0.1:<port>`, parses the announced `https://*.trycloudflare.com` URL from cloudflared's stderr (with a `BACKPROPAGATE_CLOUDFLARED_TIMEOUT`-bounded wait — default 30s), and adds the URL to the auth middleware's Host + Origin allowlist via `BACKPROPAGATE_UI_SHARE_HOST`. Install `cloudflared` from <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>. The quick-tunnel is ephemeral (no account / no zone / no DNS setup) and dies with the `backprop ui` process. If `cloudflared` is not on `PATH`, the runtime emits a clear error pointing at the install URL + [SSH port-forwarding](#ssh-port-forwarding-recipe) as the fallback.
 
 **Host-header allowlist** — every request validates `Host` against the mode's allowlist. DNS-rebinding defense; backpropagate is in the same exposure class as Ollama (CVE-2024-28224), MCP Inspector (CVE-2025-49596 CVSS 9.4), and Claude Code VS Code (CVE-2025-52882).
 

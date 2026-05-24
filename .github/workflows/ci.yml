@@ -84,14 +84,37 @@ jobs:
         # regression outside the override scope will fail this step.
         run: mypy backpropagate/ --ignore-missing-imports
 
+      # TESTS-F-003 — opt-in pytest-xdist parallel execution.
+      #
+      # The env-var gate (BACKPROPAGATE_PYTEST_PARALLEL=1) makes the
+      # parallel path explicit and reversible: default CI stays serial
+      # (matches the existing baseline; --collect-only count is stable)
+      # and an operator / CI ad-hoc run can flip the knob to exercise
+      # the parallel path. xdist's `worksteal` distribution is the
+      # current best-practice for SFT-heavy suites where individual
+      # tests have variable wall-time (load-balancing beats round-robin
+      # for the long-tail tests that dominate wall-clock). The tests
+      # agent owns the per-test `serial` / `xdist_group` marker audit;
+      # this YAML is the consumer.
       - name: Run tests
         if: matrix.python-version != '3.11'
         shell: bash
-        run: pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
+        env:
+          BACKPROPAGATE_PYTEST_PARALLEL: ${{ vars.BACKPROPAGATE_PYTEST_PARALLEL || '0' }}
+        run: |
+          set -euo pipefail
+          PARALLEL_FLAGS=""
+          if [ "${BACKPROPAGATE_PYTEST_PARALLEL}" = "1" ]; then
+            PARALLEL_FLAGS="-n auto --dist worksteal"
+            echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
+          fi
+          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
 
       - name: Run tests with coverage
         if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
         shell: bash
+        env:
+          BACKPROPAGATE_PYTEST_PARALLEL: ${{ vars.BACKPROPAGATE_PYTEST_PARALLEL || '0' }}
         # Coverage floor is sourced from pyproject.toml
         # ([tool.coverage.report].fail_under) so the two surfaces stay in
         # lockstep — bumping the floor in one place takes effect in CI
@@ -101,12 +124,30 @@ jobs:
           set -euo pipefail
           COV_FLOOR=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])")
           echo "Coverage floor (from pyproject.toml): ${COV_FLOOR}"
-          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" -m "not gpu and not slow and not integration"
+          PARALLEL_FLAGS=""
+          if [ "${BACKPROPAGATE_PYTEST_PARALLEL}" = "1" ]; then
+            # coverage.py's combine step picks up the per-worker .coverage.*
+            # files automatically when -n is set, so --cov + xdist coexist
+            # without extra wiring beyond the standard `coverage combine`
+            # pytest-cov already does at session teardown.
+            PARALLEL_FLAGS="-n auto --dist worksteal"
+            echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
+          fi
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
 
       - name: Run tests (Windows/macOS smoke)
         if: matrix.python-version == '3.11' && matrix.os != 'ubuntu-latest'
         shell: bash
-        run: pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
+        env:
+          BACKPROPAGATE_PYTEST_PARALLEL: ${{ vars.BACKPROPAGATE_PYTEST_PARALLEL || '0' }}
+        run: |
+          set -euo pipefail
+          PARALLEL_FLAGS=""
+          if [ "${BACKPROPAGATE_PYTEST_PARALLEL}" = "1" ]; then
+            PARALLEL_FLAGS="-n auto --dist worksteal"
+            echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
+          fi
+          pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
@@ -439,6 +480,76 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # CIDOCS-F-003 — wire verify.sh into CI as an observability artifact.
+  # Stage C added `verify.sh --format=json`; v1.3 CI consumes it here.
+  # The job stays SOFT-GATED (continue-on-error: true) for the first
+  # rotation of v1.3.x patch releases — operators need a chance to see
+  # the JSON output land in artifacts before a flaky stage starts gating
+  # PRs. Per the baseline-before-enforce doctrine, we flip the gate to
+  # strict in a follow-up patch once we've confirmed the JSON shape is
+  # stable across 3+ green runs.
+  verify-smoke:
+    name: verify.sh smoke (advisory)
+    runs-on: ubuntu-latest
+    needs: [test]
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full]"
+
+      - name: Run verify.sh --format=json
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          # verify.sh exits 1 on any stage failure; capture so we can keep
+          # the artifact-upload + drift-grep steps running even when the
+          # smoke is red. The gating happens in the next step.
+          ./verify.sh --format=json > verify.json 2>&1 || true
+
+      - name: Upload verify.json artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-json
+          path: |
+            verify.json
+            verify-*.log
+          if-no-files-found: warn
+
+      - name: Gate on first_failed_stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The final verify record in JSON mode carries .first_failed_stage
+          # as either null (pass) or a string naming the first failing
+          # stage. Pull the LAST line of verify.json (the aggregate record)
+          # and assert null.
+          if ! [ -s verify.json ]; then
+            echo "::warning::verify.json is empty — verify.sh produced no output"
+            exit 1
+          fi
+          FAILED=$(tail -1 verify.json | python3 -c "import json, sys; print(json.loads(sys.stdin.read()).get('first_failed_stage') or '')")
+          if [ -n "${FAILED}" ]; then
+            echo "::error::verify.sh first_failed_stage=${FAILED}"
+            echo "Download the verify-json artifact for the per-stage .log files."
+            exit 1
+          fi
+          echo "verify.sh: all stages passed (first_failed_stage=null)"
 
   security-summary:
     name: Security Summary

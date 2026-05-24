@@ -1,29 +1,75 @@
 name: Feature Request
-description: Suggest a new feature
+description: Suggest a new feature or enhancement for backpropagate
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. Per the **Issue Reporting →
+        Feature Requests** section of `CONTRIBUTING.md`, the most useful
+        framing is: use case first, proposed API second, backward-compat
+        impact third.
+
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What problem does this solve?
+      label: Use case
+      description: |
+        What operator-facing pain does this feature close? Lead with the
+        scenario, not the implementation — "I want to fine-tune on a
+        Slurm cluster and Backpropagate's checkpoint format does not
+        round-trip the optimizer state" beats "add Slurm support".
     validations:
       required: true
+
   - type: textarea
     id: solution
     attributes:
-      label: Proposed Solution
-      description: How would you like this to work?
+      label: Proposed API / behavior
+      description: |
+        How would the feature surface to operators? Concrete signatures
+        / CLI flags / env vars are far easier to evaluate than abstract
+        intent. Example: `trainer.train(slurm_resume_path=...)` or
+        `backprop train --slurm-resume <path>`.
+      placeholder: |
+        ```python
+        from backpropagate import Trainer
+        trainer = Trainer(model="...", ...)
+        run = trainer.train(..., new_param=...)
+        ```
     validations:
       required: true
+
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives Considered
-      description: Other solutions you've considered
+      label: Alternatives considered
+      description: |
+        Other solutions you weighed, and why this one wins. A "what I
+        already tried" list also helps the maintainer skip dead-ends in
+        triage. Optional but useful.
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Backward compatibility
+      description: |
+        Does the proposal change any existing public surface (CLI flag,
+        env var, Python API signature, error code, config field)?
+      options:
+        - "No — purely additive"
+        - "Yes — but behind a new opt-in flag / extra"
+        - "Yes — would change behavior of an existing surface (call out which)"
+        - "Unclear — would appreciate maintainer input"
+    validations:
+      required: true
+
   - type: textarea
     id: context
     attributes:
-      label: Additional Context
-      description: Any other information
+      label: Additional context
+      description: |
+        Links to related issues, upstream HuggingFace / trl / unsloth
+        discussions, papers, or downstream consumers that motivate the
+        request. Optional.

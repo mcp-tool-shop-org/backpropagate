@@ -68,6 +68,12 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 |----------|---------|--------------|
 | `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. |
 
+## cloudflared tunnel (v1.3)
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `BACKPROPAGATE_CLOUDFLARED_TIMEOUT` | `30` (seconds) | Maximum seconds `backprop ui --share` will wait for `cloudflared` to announce the `https://*.trycloudflare.com` URL on stderr. The default 30s is comfortable on a healthy uplink; operators on slow uplinks can extend the budget. On timeout the CLI emits a clear error pointing at SSH port-forwarding as the fallback. |
+
 ## Model
 
 | Variable | Default | What it does |

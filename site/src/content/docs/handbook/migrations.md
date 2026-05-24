@@ -1,11 +1,141 @@
 ---
-title: Migrating to v1.2.0
-description: What changed since v1.1.x and how to update your code.
+title: Migrations
+description: Operator-facing upgrade paths between Backpropagate versions.
 sidebar:
   order: 10
 ---
 
-This page covers the v1.1.x → v1.2.0 upgrade. For older transitions (v1.0 → v1.1, the Gradio → Reflex pivot) see the [v1.1.0 CHANGELOG section](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#110---2026-05-21).
+Operator-facing migration narratives. Each section covers one upgrade hop with breaking changes, behavioural fixes, and the recommended migration steps. For older transitions (v1.0 → v1.1, the Gradio → Reflex pivot) see the [v1.1.0 CHANGELOG section](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#110---2026-05-21).
+
+## v1.2.x → v1.3
+
+A polish + truth-in-advertising release. The big shift is that two CLI flags (`--host` and `--share`) that were silently no-ops since v1.1.0 are now actually wired to the runtime — so operators who *thought* they were binding to a network interface or publishing a public URL but never actually were will see different behaviour.
+
+### TL;DR
+
+- **`backprop ui --host <addr>` now actually binds to that address** (was loopback-only since v1.1.0).
+- **`backprop ui --share` now actually publishes a public URL** via a real `cloudflared` tunnel (was a silent no-op since v1.1.0).
+- **PyInstaller binary distribution removed.** The `npm install -g backpropagate` shim now prints install guidance and exits `2` instead of attempting to download a binary that never existed at the v1.x release tags.
+- **`Trainer.train(resume_from=run_id)` is now strict.** A missing `run_id` raises `INPUT_RESUME_NOT_FOUND` rather than silently restarting from scratch.
+- **New CLI flag: `--auth-file <path>`** — shell-history-safe alternative to `--auth user:pass`.
+- **New env vars + lock-file token** (see [breaking changes](#breaking-changes-v13) below).
+
+### Breaking changes (v1.3)
+
+#### PyInstaller binary distribution removed
+
+**v1.2.x:** the `bin/backpropagate.js` shim shipped with `npm install -g backpropagate` attempted to download a PyInstaller binary for your platform from the GitHub release. The binary build pipeline (`release-binaries.yml`) failed three consecutive times in v1.2.0 — the workflow is now deleted and the `.spec` files are pulled. The v1.0 / v1.1 / v1.2 release tags have zero attached binary assets, so the launcher would 404 on every `npm` install.
+
+**v1.3:** the shim is a **friendly-error shim**. Running `backpropagate` after `npm install -g backpropagate` prints install guidance for the supported channels and exits `2`. The `@mcptoolshop/npm-launcher` runtime dependency was dropped from `package.json` (every `npm install` was pulling dead code).
+
+The decision to delete rather than retry was made by a 4-agent study-swarm: three previous attempts at building cross-platform PyInstaller binaries for a 2 GB+ ML stack failed for distinct reasons (asset-resolution, dependency-bundling, slow-build-on-CI). Continuing the pattern was not a good use of the v1.3 budget.
+
+**Migration:** use one of the supported install channels:
+
+```bash
+# Recommended — isolated venv with PATH integration
+pipx install backpropagate
+
+# Alternative — same shape, different tool
+uv tool install backpropagate
+
+# Or — manage your own venv
+pip install backpropagate[standard]
+
+# Or — container
+docker pull ghcr.io/mcp-tool-shop-org/backpropagate:1.3.0
+```
+
+If you were relying on the v1.0 / v1.1 / v1.2 PyInstaller binary path (you weren't — the binaries never shipped), `pipx install backpropagate` is the closest equivalent: isolated, on-PATH, single-command install.
+
+#### `backprop ui --host` and `--share` now actually do what they advertise
+
+**v1.1.0 → v1.2.x:** both flags were silently no-ops. `--host 0.0.0.0` was validated but never threaded to the Reflex subprocess argv — the UI silently stayed loopback-only. `--share` was a leftover from the Gradio era; the Reflex migration removed the underlying tunnel and nothing replaced it.
+
+**v1.3:**
+
+- **`--host <addr>`** now flows through to the Reflex backend bind via the `--backend-host` argument that landed in reflex 0.9.2. `backprop ui --host 0.0.0.0` actually publishes the UI on every interface.
+- **`--share`** implements a real `cloudflared`-based tunnel. The CLI shells out to `cloudflared tunnel --url http://127.0.0.1:<port>`, parses the announced `https://*.trycloudflare.com` URL from the daemon's stderr, and adds it to the `Host` / `Origin` allowlist the auth middleware already enforces.
+
+Both paths still require `--auth user:pass` (or the new `--auth-file <path>` — see below). The refuse-to-start contract from v1.2.0 is unchanged: a public URL or non-loopback bind without credentials is the v1.1.x bug — see [security → four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth) — and the gate still fires.
+
+**Migration:**
+
+- **If you were passing `--host 0.0.0.0` in v1.2.x and assuming it was working:** it wasn't. Your UI was loopback-only. On v1.3, the same command will actually publish on `0.0.0.0`. Make sure `--auth user:pass` is set, and review your firewall (you almost certainly do NOT want `0.0.0.0` in a shared environment). SSH port-forwarding is the lower-friction alternative — see [security → SSH port-forwarding recipe](/backpropagate/handbook/security/#ssh-port-forwarding-recipe).
+- **If you were passing `--share` in v1.2.x and assuming it published a URL:** it didn't (and the auth-middleware refuse-to-start gate fired anyway, so most operators saw `[RUNTIME_UI_AUTH_NOT_ENFORCED]` instead of getting a URL). On v1.3, install `cloudflared` from <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/> and the announced URL will appear in the startup banner. If you can't install `cloudflared`, SSH port-forwarding is the recommended alternative.
+
+#### Strict `resume_from` behaviour
+
+**v1.2.x:** passing `Trainer.train(resume_from=<missing_run_id>)` (or `backprop resume --run-id <missing_run_id>`) would log a WARN about the missing checkpoint and silently start a fresh run from step 0 with a new `run_id`. Operators tracking specific run IDs would find them mysteriously replaced by a different ID with no error signal.
+
+**v1.3:** the trainer raises `INPUT_RESUME_NOT_FOUND` (exit code `1`, not retryable). If the on-disk state is gone (history record deleted, checkpoint directory wiped), you have to acknowledge that explicitly by omitting `resume_from` or passing `resume_from=None`.
+
+**Migration:**
+
+```python
+# Old (v1.2.x) — silent fallback to fresh start
+trainer.train(data, resume_from=maybe_missing_run_id)
+
+# New (v1.3) — explicit handling
+from backpropagate import InputError
+try:
+    trainer.train(data, resume_from=maybe_missing_run_id)
+except InputError as e:
+    if e.code == "INPUT_RESUME_NOT_FOUND":
+        # operator decision: start fresh, or surface to user
+        trainer.train(data)
+    else:
+        raise
+```
+
+#### Operators relying on `pip install backpropagate[observability]`
+
+This extra was removed in **v1.2.0**, not v1.3 — but it's worth re-flagging because v1.3 has no new mention of it and operators upgrading directly from v1.1.x to v1.3 may still hit it. The extra advertised OpenTelemetry distributed tracing but **zero modules imported `opentelemetry`** — it was a doc-lie.
+
+**v1.2.0+:** `pip install backpropagate[observability]` fails with "no matches found." The `[full]` bundle no longer pulls it.
+
+**Migration:** drop `observability` from your install line. If you depended on OpenTelemetry yourself, install it directly (`pip install opentelemetry-api opentelemetry-sdk`) — Backpropagate never used either package, so installing them at the top level of your project gives you the same surface (which is to say: nothing wired to Backpropagate's runtime). Real OpenTelemetry integration may land in a future release.
+
+### Added (v1.3)
+
+#### `--auth-file <path>` CLI flag
+
+A shell-history-safe alternative to `--auth user:pass`. Reads a `user:pass` line from a file. Mutually exclusive with `--auth` — passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`. Satisfies the same `--share` / `--host <non-loopback>` gate that `--auth` does.
+
+```bash
+echo -n "alice:super-secret-password" > ~/.config/backpropagate/auth
+chmod 600 ~/.config/backpropagate/auth
+backprop ui --share --auth-file ~/.config/backpropagate/auth
+```
+
+See [recipes → --auth-file](/backpropagate/handbook/recipes/#use---auth-file-for-shell-history-safe-auth) for the full recipe.
+
+#### Per-launch lock-file token
+
+`backprop ui` (in `token_auto` mode — the default when neither `--auth` nor `--auth-file` is passed) now writes a per-launch random token to `$XDG_RUNTIME_DIR/backpropagate/session-<port>.lock` (Linux/macOS) or `%LOCALAPPDATA%\backpropagate\session-<port>.lock` (Windows). File permissions are `0600`. The file is deleted on shutdown.
+
+This is the same token that already appeared in the URL — the lock file gives a parallel process running as the same user a way to discover the token without screen-scraping the startup banner. Read by external tooling that wants to validate against the running UI; consumed by `backprop info --runtime` (when present). The token itself is unchanged from v1.2.0; only the discovery surface is new.
+
+#### Audit-trail log line for successful auth
+
+v1.1.x had no log line for a successful cookie-set on the GHSA-f65r-h4g3-3h9h surface — operators could see failed-auth lines (close code `4401` / `4403`) but never knew which cookie just succeeded. v1.3 emits one `auth_success` INFO line per session at the cookie-set sites (both `token_auto` and `explicit_creds` / `production` modes), with `{user, mode, host}` fields. Per-request validation passes log at DEBUG. **No cookie value, no password, no Basic-header bytes are recorded** — the line is safe to ship to a central log aggregator.
+
+### Behavioural fixes (v1.3)
+
+- **CI gates re-tightened.** No operator-visible change unless you were depending on a previously-advisory gate to silently fail-open. Hard floors restored: mypy hard, `pip-audit` CRITICAL floor, Trivy CRITICAL floor.
+- **`release.yml` is idempotent + has `workflow_dispatch`.** No operator-visible change unless you were a maintainer; mentioned here for completeness.
+
+### What did not change (v1.2.x → v1.3)
+
+- The auth middleware contract (`rx.App(api_transformer=basic_auth_transformer)` and the four-layer refuse-to-start defense) is identical to v1.2.0. If you were running a working v1.2.0 `backprop ui --auth user:pass` setup, v1.3 is drop-in.
+- Public Python API surface (`Trainer`, `MultiRunTrainer`, `SLAOMerger`, `export_lora`, `export_gguf`, callback hooks).
+- CLI subcommand names + canonical flags. New: `--auth-file` (additive, doesn't break existing `--auth` callers).
+- Run-history schema, checkpoint manifest schema, error-code names. New code: `INPUT_RESUME_NOT_FOUND` (additive).
+- Environment variable names — every `BACKPROPAGATE_*` knob keeps its v1.2.x meaning.
+
+---
+
+## v1.1.x → v1.2.0
 
 ## TL;DR
 

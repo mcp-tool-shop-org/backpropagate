@@ -185,6 +185,76 @@ class TestTrainerSave:
 
         assert str(custom_path) in path
 
+    def test_save_registers_checkpoint_for_multi_run_resume(self, temp_dir):
+        """BACKEND-F-007 (Wave 6a): Trainer.save() must register the
+        saved checkpoint in a CheckpointManager rooted at
+        ``self.output_dir`` so a later ``MultiRunTrainer`` pointed at
+        the same ``checkpoint_dir`` can discover it via
+        ``find_latest_for_run_id`` and resume from it.
+
+        Pre-F-007 the single-run save path wrote the PEFT directory +
+        the ``run_id`` correlation file but never appeared in any
+        manifest — an operator who trained single-run, then tried to
+        continue in multi-run mode against the same output_dir, hit a
+        silent-fresh-start at the multi-run resume site because the
+        manifest scan returned no matching ``run_id``. This test pins
+        the cross-trainer interop invariant from the write side; the
+        cross-trainer integration test (read side) lives in
+        tests/test_integration.py."""
+        from backpropagate.checkpoints import CheckpointManager
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+        run_id = "single-run-id-test-f007"
+        trainer.save(run_id=run_id)
+
+        # Reopen the manifest fresh — proves the registration was
+        # persisted to disk, not just held in memory.
+        cm = CheckpointManager(str(temp_dir))
+        cp = cm.find_latest_for_run_id(run_id)
+        assert cp is not None, (
+            "BACKEND-F-007 contract violation: single-run-saved checkpoint "
+            "was not registered in the manifest; MultiRunTrainer.resume "
+            "via find_latest_for_run_id would fail."
+        )
+        # run_index=0 is the convention for single-run-saved checkpoints
+        # (multi-run uses 1-based per-run indices). _restore_session_state
+        # advances to run_index + 1 on resume, so a single-run starting
+        # point cleanly hands off to run 1 of the multi-run loop.
+        assert cp.run_index == 0
+        assert cp.is_run_boundary is True
+        assert cp.run_id == run_id
+
+    def test_save_register_in_manifest_false_skips_registration(self, temp_dir):
+        """BACKEND-F-007 (Wave 6a): operators saving ad-hoc / export-only
+        snapshots can opt out of manifest registration by passing
+        ``register_in_manifest=False``. Pollution-prevention escape hatch
+        for callers (export.py merged-weights snapshots, throwaway eval
+        saves) that should not appear in the resume-candidate set."""
+        from backpropagate.checkpoints import CheckpointManager
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+        run_id = "noreg-test-f007"
+        trainer.save(run_id=run_id, register_in_manifest=False)
+
+        cm = CheckpointManager(str(temp_dir))
+        cp = cm.find_latest_for_run_id(run_id)
+        assert cp is None, (
+            "register_in_manifest=False must NOT register the checkpoint; "
+            "this is the documented opt-out for ad-hoc / export-only saves."
+        )
+
 
 class TestTrainerExport:
     """Tests for Trainer export functionality."""
@@ -2175,4 +2245,157 @@ class TestTrainingLoggerCaplog:
         )
         assert "my-data.jsonl" in combined, (
             f"dataset field missing from rendered log output: {combined!r}"
+        )
+
+
+# =============================================================================
+# BACKEND-F-002 — single-run resume_from miss is a hard error (Wave 6a regression)
+# =============================================================================
+#
+# Cross-domain pin from Wave 5.5 BACKEND-F-002 fix
+# (backpropagate/trainer.py::Trainer.train). Pre-fix, passing
+# ``resume_from=<unknown-id>`` to ``Trainer.train()`` silently fell
+# through to a fresh run under a NEW run_id — the operator's resume
+# intent was dropped without an exception, the on-disk history record
+# was created with an unrelated run_id, and the model produced was not
+# what the operator asked for.
+#
+# The fix raises ``InvalidSettingError`` (code ``CONFIG_INVALID_SETTING``)
+# when the resume_from lookup misses. The error message + suggestion
+# carry the load-bearing diagnostic anchors:
+#   - the requested run_id (so the operator can copy-paste to the
+#     ``backprop runs`` command)
+#   - the output_dir actually searched (so a mistyped --output is
+#     immediately obvious)
+#   - the operator's next steps (``backprop runs`` list, or re-run
+#     with the right --output, or omit resume_from to start fresh)
+#
+# This test pins all three anchors so a future refactor that drops
+# any of them lands red in CI.
+class TestResumeFromStrictMiss:
+    """BACKEND-F-002 regression: strict resume_from miss raises."""
+
+    def test_resume_from_missing_raises_invalid_setting_error(self, temp_dir):
+        """A ``resume_from`` that names a run_id not in the on-disk
+        history raises ``InvalidSettingError`` instead of silently
+        starting fresh.
+        """
+        from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            # Bypass model loading + dataset loading; the resume check
+            # runs AFTER both, so we need to short-circuit them so the
+            # test fails fast on the resume miss rather than blowing
+            # up on a missing model or dataset.
+            trainer._is_loaded = True
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+
+            with patch.object(
+                trainer, "_load_dataset", return_value=MagicMock()
+            ):
+                with pytest.raises(InvalidSettingError) as excinfo:
+                    trainer.train(
+                        dataset="dummy.jsonl",
+                        resume_from="nonexistent-run-id-test-f002",
+                    )
+
+        # Code anchor: stable code for the catalog.
+        exc = excinfo.value
+        assert exc.code == "CONFIG_INVALID_SETTING", (
+            f"BACKEND-F-002 error-code drift: expected CONFIG_INVALID_SETTING, "
+            f"got {exc.code!r}. Update both the trainer + ERROR_CODES catalog "
+            f"if you intentionally renamed the code."
+        )
+
+    def test_resume_from_missing_message_anchors_run_id_and_output_dir(self, temp_dir):
+        """The error message + suggestion together MUST name the
+        requested run_id and the output_dir searched. The whole point
+        of the F-002 fix is operator-actionable failure — an
+        InvalidSettingError without these anchors is the same silent
+        wrong-model bug behind a different exception type.
+        """
+        from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
+
+        requested_id = "nonexistent-id-anchored-f002"
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._is_loaded = True
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+
+            with patch.object(
+                trainer, "_load_dataset", return_value=MagicMock()
+            ):
+                with pytest.raises(InvalidSettingError) as excinfo:
+                    trainer.train(
+                        dataset="dummy.jsonl",
+                        resume_from=requested_id,
+                    )
+
+        exc = excinfo.value
+        # Combine the rendered message + suggestion + structured
+        # details into a single haystack so the test is robust to
+        # which field carries each anchor.
+        haystack = (
+            f"{exc!s} || "
+            f"{exc.suggestion or ''} || "
+            f"{exc.details or {}}"
+        )
+
+        # The requested run_id must appear somewhere — the operator's
+        # most common next move is to copy-paste it into
+        # ``backprop runs | grep`` to verify whether the typo is in
+        # the ID or the output_dir.
+        assert requested_id in haystack, (
+            f"BACKEND-F-002 contract violation: requested run_id "
+            f"{requested_id!r} missing from error surface. Rendered: "
+            f"{haystack!r}"
+        )
+
+        # The output_dir leaf name must appear so a mistyped --output
+        # is immediately obvious. We match the leaf rather than the
+        # full path to stay robust across Windows backslashes vs POSIX
+        # forward slashes in the rendered repr.
+        assert temp_dir.name in haystack, (
+            f"BACKEND-F-002 contract violation: output_dir leaf "
+            f"{temp_dir.name!r} missing from error surface. The operator "
+            f"can't tell whether they passed the wrong --output. "
+            f"Rendered: {haystack!r}"
+        )
+
+    def test_resume_from_missing_suggestion_mentions_backprop_runs(self, temp_dir):
+        """The suggestion text MUST mention ``backprop runs`` — the
+        operator-actionable CLI command that lists the available
+        run_ids under an output_dir. Without this hint, the operator
+        sees the failure but doesn't know the recovery move.
+        """
+        from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._is_loaded = True
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+
+            with patch.object(
+                trainer, "_load_dataset", return_value=MagicMock()
+            ):
+                with pytest.raises(InvalidSettingError) as excinfo:
+                    trainer.train(
+                        dataset="dummy.jsonl",
+                        resume_from="another-missing-id-f002",
+                    )
+
+        suggestion = excinfo.value.suggestion or ""
+        assert "backprop runs" in suggestion, (
+            "BACKEND-F-002 contract violation: suggestion text doesn't "
+            "mention `backprop runs` — the operator can't discover the "
+            "recovery command from the error alone. "
+            f"suggestion={suggestion!r}"
         )

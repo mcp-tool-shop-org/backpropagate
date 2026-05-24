@@ -26,15 +26,34 @@ Usage:
     print(manager.get_stats())  # Total size, count, best checkpoint
 """
 
+import contextlib
 import json
 import logging
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# BACKEND-F-012 (Wave 6a): cross-platform advisory file locking around
+# RunHistoryManager mutators. ``filelock`` is a transitive dep via every
+# core dep (huggingface_hub, datasets, torch, transformers all require
+# it); it is also added explicitly in pyproject.toml core deps so the
+# import is guaranteed regardless of upstream pin shifts. The fallback
+# below preserves the lock-less behavior if a future stripped install
+# drops ``filelock`` from the env — load-bearing for the no-op upgrade
+# path (existing single-operator-per-output_dir setups keep working).
+try:
+    from filelock import FileLock
+    from filelock import Timeout as FileLockTimeout
+
+    _FILELOCK_AVAILABLE = True
+except ImportError:  # pragma: no cover — exercised only in stripped installs
+    FileLock = None  # type: ignore[assignment, misc]
+    FileLockTimeout = TimeoutError  # type: ignore[assignment, misc]
+    _FILELOCK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -804,6 +823,7 @@ class RunHistoryManager:
         self,
         output_dir: str,
         on_record_callback: Callable[[dict[str, Any]], None] | None = None,
+        lock_timeout_seconds: float | None = None,
     ) -> None:
         """
         Initialize the run history manager.
@@ -822,11 +842,39 @@ class RunHistoryManager:
                 run in parallel with the next write — but it IS
                 synchronous; long-running sinks should themselves spawn
                 a worker thread / queue.
+            lock_timeout_seconds: BACKEND-F-012 (Wave 6a) — maximum wait
+                for the cross-platform ``filelock`` advisory lock around
+                the load+mutate+save cycle in every public mutator
+                (``record_run`` / ``record_run_started`` /
+                ``record_run_completed`` / ``record_run_failed`` /
+                ``update_run`` / ``delete_run``). When two operators run
+                ``backprop train`` against the same output_dir
+                simultaneously, the lock serializes their writes so
+                neither's entry is silently dropped and ``run_history.json``
+                never lands in a truncated mid-write state from two
+                interleaved ``json.dump`` calls on the same .tmp file.
+                Defaults to :attr:`DEFAULT_LOCK_TIMEOUT_SECONDS` (30s).
+                Pass 0 to disable the timeout (block forever) — useful
+                for orchestrators that prefer queuing over failing fast.
+                On timeout, mutators log a structured error and return
+                False rather than raising, so a stuck holder never
+                cascades into a hard training failure (history
+                persistence is best-effort by Stage C contract).
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._history_path = self.output_dir / self.HISTORY_FILE
         self._on_record_callback = on_record_callback
+        # BACKEND-F-012 (Wave 6a): lock-file path is a sibling of the
+        # history file. ``.lock`` suffix is conventional for ``filelock``
+        # and lets the file be safely gitignored / cleaned-up by
+        # housekeeping tooling without touching the source-of-truth JSON.
+        self._lock_path = self.output_dir / f"{self.HISTORY_FILE}.lock"
+        self._lock_timeout_seconds = (
+            self.DEFAULT_LOCK_TIMEOUT_SECONDS
+            if lock_timeout_seconds is None
+            else float(lock_timeout_seconds)
+        )
 
     def _fire_callback(self, entry: dict[str, Any]) -> None:
         """Stage C amend BACKEND-B-016: invoke the optional record hook,
@@ -844,6 +892,74 @@ class RunHistoryManager:
                 f"({type(cb_err).__name__}: {cb_err}); on-disk persistence "
                 f"is unaffected but the external sink missed this entry."
             )
+
+    @contextlib.contextmanager
+    def _locked_mutate(self, operation: str) -> Iterator[bool]:
+        """BACKEND-F-012 (Wave 6a): cross-platform file lock around the
+        load+mutate+save cycle in every public mutator.
+
+        Yields True when the lock was acquired (caller proceeds with the
+        critical section); yields False when acquisition timed out or
+        ``filelock`` is unavailable in a degraded environment (caller
+        proceeds WITHOUT serialization — preserves the prior behavior
+        rather than failing the training run because of a stuck holder).
+
+        The history-persistence contract is best-effort (see Stage C
+        BACKEND-B-006: ``_save`` returns False on failure rather than
+        raising, and every caller logs WARN and continues). The lock
+        timeout follows the same contract: a stuck holder produces a
+        diagnosable log line but never cascades into a hard training
+        failure. Two concurrent ``backprop train`` invocations that race
+        on this lock will still serialize correctly via the underlying
+        OS file-lock; the timeout protects against a *crashed* holder
+        whose lock the OS hasn't released (rare on POSIX, possible on
+        Windows when a process is force-killed mid-critical-section).
+
+        Args:
+            operation: Short tag used in log lines so an operator can
+                trace which mutator hit the timeout
+                (e.g. "record_run_started", "delete_run"). Not parsed —
+                purely cosmetic for triage.
+        """
+        if not _FILELOCK_AVAILABLE or FileLock is None:
+            # Degraded fallback: no lock available. Log at DEBUG (not
+            # WARN — a stripped install is a deliberate operator choice
+            # and the prior unbounded behavior was the baseline) and
+            # proceed without serialization.
+            logger.debug(
+                f"RunHistoryManager._locked_mutate({operation}): filelock "
+                f"unavailable; proceeding without cross-process serialization. "
+                f"Concurrent writes from a second process may race."
+            )
+            yield True
+            return
+
+        # ``filelock`` interprets timeout=-1 as block-forever. Our public
+        # contract is "0 disables the timeout" so we translate here.
+        effective_timeout = self._lock_timeout_seconds
+        if effective_timeout <= 0:
+            effective_timeout = -1
+
+        lock = FileLock(str(self._lock_path), timeout=effective_timeout)
+        try:
+            with lock:
+                yield True
+        except FileLockTimeout:
+            # A stuck holder — likely a crashed process whose lock file
+            # the OS hasn't released. Log structured + actionable so the
+            # operator can decide whether to delete the .lock file (safe
+            # ONLY when they know no live process holds it).
+            logger.error(
+                f"RunHistoryManager._locked_mutate({operation}): lock "
+                f"acquisition timed out after {self._lock_timeout_seconds:.1f}s "
+                f"on {self._lock_path!s}. A concurrent writer is either still "
+                f"holding the lock (legitimate contention) or crashed mid-"
+                f"critical-section (stuck lock). If you have verified no live "
+                f"process is writing to {self._history_path!s}, manually "
+                f"removing {self._lock_path!s} will clear the stuck holder. "
+                f"Skipping this mutation to avoid blocking the training run."
+            )
+            yield False
 
     # --------------------------------------------------------------------- #
     # Internal helpers
@@ -988,13 +1104,20 @@ class RunHistoryManager:
                 self.MAX_LOSS_HISTORY_POINTS,
             )
 
-        # Persist.
-        history = self._load()
-        history.append(entry)
-        if not self._save(history):
-            logger.warning(
-                "Run history save failed — entry may be lost on next load"
-            )
+        # Persist. BACKEND-F-012 (Wave 6a): the load+mutate+save cycle
+        # runs under the cross-platform file lock so a concurrent
+        # ``backprop train`` against the same output_dir cannot
+        # interleave-and-overwrite this entry. On stuck-lock timeout
+        # the helper logs structured + actionable and yields False;
+        # we still attempt the write (degraded to prior unlocked
+        # behavior) so a crashed sibling never strands fresh entries.
+        with self._locked_mutate("record_run"):
+            history = self._load()
+            history.append(entry)
+            if not self._save(history):
+                logger.warning(
+                    "Run history save failed — entry may be lost on next load"
+                )
 
         logger.info(
             f"Recorded run: id={entry.get('run_id')}, "
@@ -1084,12 +1207,16 @@ class RunHistoryManager:
             "schema_version": self.CURRENT_ENTRY_SCHEMA_VERSION,
         })
 
-        history = self._load()
-        # Replace any existing entry with the same run_id (idempotent start).
-        history = [r for r in history if r.get("run_id") != run_id]
-        history.append(entry)
-        if not self._save(history):
-            logger.warning("record_run_started: save failed")
+        # BACKEND-F-012 (Wave 6a): load+mutate+save under file lock so a
+        # concurrent ``backprop train`` start against the same output_dir
+        # cannot interleave with the idempotent replace below.
+        with self._locked_mutate("record_run_started"):
+            history = self._load()
+            # Replace any existing entry with the same run_id (idempotent start).
+            history = [r for r in history if r.get("run_id") != run_id]
+            history.append(entry)
+            if not self._save(history):
+                logger.warning("record_run_started: save failed")
 
         logger.info(
             f"Recorded run start: run_id={run_id} model={model_name} "
@@ -1111,7 +1238,50 @@ class RunHistoryManager:
         merge_history: list[dict[str, Any]] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Mark a previously-started run as completed and persist final metrics."""
+        """Mark a previously-started run as completed and persist final metrics.
+
+        BACKEND-F-012 (Wave 6a): the load+mutate+save cycle runs under
+        the cross-platform file lock so a concurrent writer (another
+        ``backprop train`` against the same output_dir, or a multi-run
+        session firing record_run_completed simultaneously) cannot
+        clobber this update.
+        """
+        with self._locked_mutate("record_run_completed"):
+            entry = self._mutate_completed(
+                run_id=run_id,
+                final_loss=final_loss,
+                loss_history=loss_history,
+                steps=steps,
+                duration_seconds=duration_seconds,
+                gpu_max_temp=gpu_max_temp,
+                checkpoint_path=checkpoint_path,
+                merge_history=merge_history,
+                extra=extra,
+            )
+        logger.info(
+            f"Recorded run completed: run_id={run_id} final_loss={final_loss}"
+        )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback.
+        self._fire_callback(entry)
+        return entry
+
+    def _mutate_completed(
+        self,
+        run_id: str,
+        final_loss: float | None,
+        loss_history: list[float] | None,
+        steps: int | None,
+        duration_seconds: float | None,
+        gpu_max_temp: float | None,
+        checkpoint_path: str | None,
+        merge_history: list[dict[str, Any]] | None,
+        extra: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """BACKEND-F-012 (Wave 6a): inner critical section for
+        record_run_completed. Extracted so the lock context wraps the
+        load+mutate+save cycle in one place without the public
+        signature having to change.
+        """
         history = self._load()
         matched = False
         now = datetime.now().isoformat()
@@ -1179,11 +1349,6 @@ class RunHistoryManager:
 
         if not self._save(history):
             logger.warning("record_run_completed: save failed")
-        logger.info(
-            f"Recorded run completed: run_id={run_id} final_loss={final_loss}"
-        )
-        # Stage C amend BACKEND-B-016: fire the external-sink callback.
-        self._fire_callback(entry)
         return entry
 
     def record_run_failed(
@@ -1195,7 +1360,42 @@ class RunHistoryManager:
         checkpoint_path: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Mark a previously-started run as failed and persist the failure reason."""
+        """Mark a previously-started run as failed and persist the failure reason.
+
+        BACKEND-F-012 (Wave 6a): the load+mutate+save cycle runs under
+        the cross-platform file lock so a concurrent writer cannot
+        clobber this update.
+        """
+        with self._locked_mutate("record_run_failed"):
+            entry = self._mutate_failed(
+                run_id=run_id,
+                failure_reason=failure_reason,
+                loss_history=loss_history,
+                duration_seconds=duration_seconds,
+                checkpoint_path=checkpoint_path,
+                extra=extra,
+            )
+        logger.info(
+            f"Recorded run failed: run_id={run_id} reason={failure_reason}"
+        )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback.
+        self._fire_callback(entry)
+        return entry
+
+    def _mutate_failed(
+        self,
+        run_id: str,
+        failure_reason: str,
+        loss_history: list[float] | None,
+        duration_seconds: float | None,
+        checkpoint_path: str | None,
+        extra: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """BACKEND-F-012 (Wave 6a): inner critical section for
+        record_run_failed. Extracted so the lock context wraps the
+        load+mutate+save cycle in one place without the public
+        signature having to change.
+        """
         history = self._load()
         matched = False
         now = datetime.now().isoformat()
@@ -1250,11 +1450,6 @@ class RunHistoryManager:
 
         if not self._save(history):
             logger.warning("record_run_failed: save failed")
-        logger.info(
-            f"Recorded run failed: run_id={run_id} reason={failure_reason}"
-        )
-        # Stage C amend BACKEND-B-016: fire the external-sink callback.
-        self._fire_callback(entry)
         return entry
 
     def update_run(
@@ -1267,26 +1462,31 @@ class RunHistoryManager:
         Returns the updated entry, or ``None`` if the run_id was not found.
         Used by export.py to append to ``export_paths`` and by the resume
         path to roll ``status`` from "failed" back to "running".
+
+        BACKEND-F-012 (Wave 6a): the load+mutate+save cycle runs under
+        the cross-platform file lock so a concurrent writer cannot
+        interleave with this patch.
         """
         if not fields:
             return self.get_run(run_id)
 
-        history = self._load()
-        updated: dict[str, Any] | None = None
-        for entry in history:
-            if entry.get("run_id") != run_id:
-                continue
-            for key, value in fields.items():
-                entry[key] = value
-            updated = entry
-            break
+        with self._locked_mutate("update_run"):
+            history = self._load()
+            updated: dict[str, Any] | None = None
+            for entry in history:
+                if entry.get("run_id") != run_id:
+                    continue
+                for key, value in fields.items():
+                    entry[key] = value
+                updated = entry
+                break
 
-        if updated is None:
-            logger.warning(f"update_run: run_id={run_id} not found")
-            return None
+            if updated is None:
+                logger.warning(f"update_run: run_id={run_id} not found")
+                return None
 
-        if not self._save(history):
-            logger.warning("update_run: save failed")
+            if not self._save(history):
+                logger.warning("update_run: save failed")
         return updated
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
@@ -1353,16 +1553,22 @@ class RunHistoryManager:
         return history
 
     def delete_run(self, run_id: str) -> bool:
-        """Remove a run entry by ``run_id``. Returns True on success."""
-        history = self._load()
-        before = len(history)
-        history = [r for r in history if r.get("run_id") != run_id]
-        if len(history) == before:
-            logger.warning(f"delete_run: run_id={run_id} not found")
-            return False
-        if not self._save(history):
-            logger.warning("delete_run: save failed")
-            return False
+        """Remove a run entry by ``run_id``. Returns True on success.
+
+        BACKEND-F-012 (Wave 6a): the load+mutate+save cycle runs under
+        the cross-platform file lock so a concurrent writer cannot
+        clobber this delete.
+        """
+        with self._locked_mutate("delete_run"):
+            history = self._load()
+            before = len(history)
+            history = [r for r in history if r.get("run_id") != run_id]
+            if len(history) == before:
+                logger.warning(f"delete_run: run_id={run_id} not found")
+                return False
+            if not self._save(history):
+                logger.warning("delete_run: save failed")
+                return False
         logger.info(f"Deleted run history entry: run_id={run_id}")
         return True
 
@@ -1374,6 +1580,22 @@ class RunHistoryManager:
     # generous floor — operators with genuinely long-running sessions can
     # raise it via the ``stale_threshold_seconds`` kwarg.
     DEFAULT_IN_PROGRESS_TTL_SECONDS: float = 24 * 60 * 60  # 24 hours
+
+    # BACKEND-F-012 (Wave 6a): default lock acquisition timeout for the
+    # ``_locked_mutate`` cross-platform file lock around mutators. Two
+    # concurrent ``backprop train`` invocations against the same output_dir
+    # race on ``run_history.json``: both load → both mutate → both save,
+    # last writer wins, the earlier writer's entry is silently discarded
+    # AND under unlucky timing the on-disk JSON ends up truncated mid-write
+    # because two ``json.dump`` calls interleave on the same .tmp file.
+    # The lock serializes the whole load+mutate+save cycle. 30s is a
+    # generous floor — the per-mutation critical section is sub-millisecond
+    # in practice (single JSON read + list append + JSON write of ≤MAX_LOSS
+    # entries); anything approaching the floor signals a stuck holder
+    # (crashed process whose lock file the OS hasn't released) and the
+    # operator should triage rather than wait quietly. Override via
+    # ``lock_timeout_seconds`` constructor kwarg.
+    DEFAULT_LOCK_TIMEOUT_SECONDS: float = 30.0
 
     def in_progress_runs(
         self,

@@ -1,51 +1,139 @@
 name: Bug Report
-description: Report a bug or issue
+description: Report a bug in backpropagate
 title: "[Bug]: "
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        Per the **Reporting bugs** section of the README and `CONTRIBUTING.md`,
+        the four most useful pieces of context are: `run_id`, the error
+        code, `backprop info` output, and a redacted traceback. The fields
+        below collect each one explicitly so the maintainer can triage
+        without a back-and-forth.
+
+        Stderr in non-verbose mode is automatically redacted (Bearer
+        tokens, `sk-*`, `hf_*`, AWS keys, `password=` / `token=` /
+        `api_key=` pairs) — so a copy-paste of the failure is safe.
+        For the full unredacted traceback, re-run with
+        `BACKPROPAGATE_DEBUG=1` or `--verbose` and review before pasting.
+
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: Clear description of the bug
+      description: Clear description of the bug — what you expected vs. what happened.
+      placeholder: |
+        I ran `backprop train ...` and expected the run to complete, but
+        it failed with [CODE_NAME] after step 12.
     validations:
       required: true
+
+  - type: input
+    id: run_id
+    attributes:
+      label: run_id
+      description: |
+        The uuid printed at startup as `run_started run_id=<uuid>` (also
+        available as `TrainingRun.run_id` / `RunResult.run_id`). Lets the
+        maintainer correlate every log line, every checkpoint, and every
+        SLAO merge for the failing run.
+      placeholder: "a1b2c3d4-e5f6-7890-abcd-ef0123456789"
+    validations:
+      required: true
+
+  - type: input
+    id: error_code
+    attributes:
+      label: Error code
+      description: |
+        The `[CODE_NAME]` literal from the failing stderr line — for
+        example `[RUNTIME_OOM_RECOVERY_EXHAUSTED]` or `[INPUT_AUTH_INVALID_SHAPE]`.
+        See the [error codes handbook](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/)
+        for the catalog.
+      placeholder: "[CODE_NAME]"
+    validations:
+      required: true
+
+  - type: textarea
+    id: backprop_info
+    attributes:
+      label: "`backprop info` output"
+      description: |
+        Paste the full output of `backprop info`. This single command
+        reports Python version, OS, hardware (GPU model + VRAM),
+        installed extras, and the active config — everything the
+        maintainer needs to bisect a platform-specific regression.
+      render: shell
+      placeholder: |
+        $ backprop info
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback
+      description: |
+        Paste the failing stderr / Python traceback. For best signal,
+        re-run with `BACKPROPAGATE_DEBUG=1` (or `--verbose`) which
+        suppresses redaction and prints the full chained traceback —
+        review for any remaining secrets before pasting.
+      render: shell
+      placeholder: |
+        Traceback (most recent call last):
+          File "...", line N, in ...
+        BackpropagateError: [CODE_NAME] ...
+    validations:
+      required: true
+
   - type: textarea
     id: reproduce
     attributes:
-      label: Steps to Reproduce
-      description: How to reproduce the issue
+      label: Steps to reproduce
+      description: |
+        The smallest command sequence or Python snippet that reproduces
+        the failure. If the bug requires a specific dataset, paste a
+        2-3 line minimal version — do not attach proprietary data.
       placeholder: |
-        1. Run command...
-        2. See error...
+        1. `pip install backpropagate==1.3.0`
+        2. `backprop train --model Qwen/Qwen2.5-0.5B-Instruct --dataset examples/quickstart.jsonl`
+        3. Observe the [CODE_NAME] failure at step N.
     validations:
       required: true
+
   - type: textarea
     id: expected
     attributes:
-      label: Expected Behavior
-      description: What you expected to happen
+      label: Expected behavior
+      description: What you expected to happen instead.
     validations:
       required: true
+
   - type: dropdown
-    id: os
+    id: install_channel
     attributes:
-      label: Operating System
+      label: Install channel
+      description: How did you install backpropagate?
       options:
-        - Windows
-        - Linux
-        - macOS
+        - "pipx install backpropagate"
+        - "uv tool install backpropagate"
+        - "pip install backpropagate (user venv)"
+        - "pip install -e . (source checkout)"
+        - "docker ghcr.io/mcp-tool-shop-org/backpropagate"
+        - "npm install -g backpropagate (deprecated; expect friendly-error)"
+        - "other (note in Additional context)"
     validations:
       required: true
-  - type: input
-    id: python
+
+  - type: textarea
+    id: context
     attributes:
-      label: Python Version
-      placeholder: "3.11"
-    validations:
-      required: true
-  - type: input
-    id: gpu
-    attributes:
-      label: GPU (if applicable)
-      placeholder: "RTX 4090"
+      label: Additional context
+      description: |
+        Anything else worth knowing — recent dep changes, related issues,
+        custom config / env vars, downstream tooling versions
+        (Ollama / llama.cpp / Reflex). Optional.

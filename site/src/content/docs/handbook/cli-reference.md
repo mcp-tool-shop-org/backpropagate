@@ -26,7 +26,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model`, `-m` | `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` * | Model name (HF id or local path). |
+| `--model`, `-m` | `Qwen/Qwen2.5-7B-Instruct` | Model name (HF id or local path). |
 | `--data`, `-d` | **required** | Dataset path (JSONL/CSV) or HuggingFace dataset name. |
 | `--steps` | `100` | Number of training steps (must be > 0). |
 | `--samples` | unset | Maximum samples to use from the dataset (must be > 0). |
@@ -36,7 +36,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
 
-\* CLI defaults to the pre-quantized `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`. The Python `Trainer()` (no args) resolves to the official `Qwen/Qwen2.5-7B-Instruct` from `config.py` `ModelConfig.name`. Both work; the CLI default is a faster first-run because the weights are already 4-bit. A future patch may align the CLI default with the Python default — coordinate via the issue tracker.
+The CLI default aligns with `config.py`'s `ModelConfig.name` as of v1.3 (F-018). Pass `--model unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to opt into the pre-quantized variant, but only with the `[unsloth]` extra installed.
 
 ## `backprop multi-run`
 
@@ -48,11 +48,11 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model`, `-m` | `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` * | Model name. (Same CLI/Python-default divergence as `backprop train` — see note above.) |
+| `--model`, `-m` | `Qwen/Qwen2.5-7B-Instruct` | Model name (HF id or local path). Same as `backprop train`. |
 | `--data`, `-d` | **required** | Dataset path or HF name. |
 | `--runs` | `5` | Number of training runs. |
 | `--steps` | `100` | Steps per run. |
-| `--samples` | `1000` | Samples per run. (Note: the existing error message text suggests `--samples-per-run` — the actual flag is `--samples`.) |
+| `--samples` | `1000` | Samples per run. The matching Python-API knob is `samples_per_run`. |
 | `--merge-mode` | `slao` | One of `slao` / `simple`. |
 | `--output`, `-o` | `./output` | Output directory. |
 

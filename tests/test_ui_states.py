@@ -749,3 +749,107 @@ class TestDatasetStateEventHandlers:
         state.uploaded_path = "/tmp/some-uploaded-file.jsonl"
         state.detect_format_stub()
         assert state.detected_format == "alpaca"
+
+
+# =============================================================================
+# AppState — theme toggle + FRONTEND-F-001 (Wave 5.5) theme-token contract
+# =============================================================================
+
+
+class TestAppStateTheme:
+    """The theme-toggle state contract.
+
+    FRONTEND-F-001 (Wave 5.5): the v1.2 bug was that ``AppState.toggle_theme``
+    flipped a server-side bool but no DOM mutation reached the document
+    root, so the LIGHT_TOKENS palette never activated. The fix moves the
+    load-bearing toggle to Reflex's built-in ``rx.color_mode`` +
+    ``rx.toggle_color_mode`` (DOM-mutating, prefers-color-scheme aware).
+
+    These tests pin two contracts:
+
+    1. The legacy ``AppState.theme`` field + ``toggle_theme`` event still
+       work as before (back-compat for any external automation that reads
+       state directly).
+    2. The TOKENS_CSS stylesheet keys off the selectors that Reflex's
+       next-themes provider actually emits (``.light`` / ``.light-theme``)
+       plus the legacy ``[data-theme="light"]`` fallback — the v1.2 bug
+       was that ONLY the last selector was emitted and Reflex never set
+       it.
+    """
+
+    def test_initial_theme_is_dark(self):
+        """Default theme field is ``dark`` (legacy back-compat)."""
+        from backpropagate.ui_state import AppState
+
+        state = AppState()
+        assert state.theme == "dark"
+
+    def test_toggle_theme_flips_state(self):
+        """Legacy ``toggle_theme`` event still flips dark<->light.
+
+        Kept for back-compat with any external automation reading the
+        state field directly; the load-bearing DOM update happens via
+        ``rx.toggle_color_mode`` wired into ``BpHeader``.
+        """
+        from backpropagate.ui_state import AppState
+
+        state = AppState()
+        assert state.theme == "dark"
+        state.toggle_theme()
+        assert state.theme == "light"
+        state.toggle_theme()
+        assert state.theme == "dark"
+
+    def test_tokens_css_emits_light_class_selectors(self):
+        """The LIGHT_TOKENS block fires on ``.light`` / ``.light-theme``.
+
+        FRONTEND-F-001: Reflex's color-mode provider writes
+        ``class="light"`` onto ``<html>`` (next-themes ``attribute="class"``).
+        The v1.2 ``[data-theme="light"]`` selector never matched because
+        nothing in the codebase set that attribute. This test pins the
+        triple selector so future refactors can't silently regress.
+        """
+        from backpropagate.ui_theme import TOKENS_CSS
+
+        # All three selectors must be present so the LIGHT_TOKENS block
+        # fires regardless of which Reflex / Radix / next-themes shape is
+        # active. Verify ordering is alphabetical-ish (consistent with the
+        # ui_theme.py source).
+        assert ".light" in TOKENS_CSS
+        assert ".light-theme" in TOKENS_CSS
+        assert '[data-theme="light"]' in TOKENS_CSS
+
+    def test_tokens_css_emits_full_light_token_set(self):
+        """The light-mode token set is present in the emitted CSS.
+
+        Pin that a representative bg + text + accent token from
+        LIGHT_TOKENS appears in the assembled stylesheet — guards against
+        accidental drift between LIGHT_TOKENS dict and TOKENS_CSS.
+        """
+        from backpropagate.ui_theme import LIGHT_TOKENS, TOKENS_CSS
+
+        # Hit the dominant surface + text + accent triplet.
+        for key in ("--bp-bg", "--bp-text", "--bp-teal"):
+            assert LIGHT_TOKENS[key] in TOKENS_CSS, (
+                f"LIGHT_TOKENS[{key!r}] = {LIGHT_TOKENS[key]!r} missing from "
+                "TOKENS_CSS — the LIGHT_TOKENS block was not emitted, which "
+                "would re-strand the theme toggle"
+            )
+
+    def test_radix_theme_omits_hardcoded_appearance(self):
+        """RADIX_THEME must NOT lock ``appearance`` — that goes at the
+        rx.theme() call site bound to ``rx.color_mode``.
+
+        FRONTEND-F-001: hard-coding ``appearance="dark"`` here was the
+        v1.2 bug — it overrode the per-render binding and the toggle
+        button became a no-op. This test pins the fix.
+        """
+        from backpropagate.ui_theme import RADIX_THEME
+
+        assert "appearance" not in RADIX_THEME, (
+            "RADIX_THEME contains a hard-coded 'appearance' — that strands "
+            "the theme toggle button (the v1.2 FRONTEND-F-001 bug). The "
+            "appearance binding must live at the rx.theme() call site in "
+            "ui_app/app.py, where it is wired to rx.color_mode so DOM "
+            "mutation actually fires."
+        )

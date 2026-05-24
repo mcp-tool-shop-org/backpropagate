@@ -1,0 +1,30 @@
+name: Doc Drift Check
+
+# Forcing-function CI for the within-swarm-doc-lie pattern: a PR that adds a
+# new BACKPROPAGATE_* env var, a new --flag, or a new rx.State field WITHOUT
+# updating the handbook + the cli.py env-var catalog will fail this check.
+#
+# Doctrine earned 2026-05-24, v1.3 swarm Wave 5 audit:
+# [[within-swarm-doc-lie-drift-detection]]. Stripping or bypassing this
+# workflow requires the same doctrine review.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Run doc-drift check
+        run: python scripts/check_doc_drift.py

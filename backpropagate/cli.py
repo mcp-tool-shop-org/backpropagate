@@ -1199,11 +1199,38 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
     # Always include the structured-logging env vars from logging_config.py
     # (these are read via os.environ.get, not via pydantic-settings, so the
     # introspection above won't pick them up).
+    #
+    # BRIDGE-F-004 (Wave 5.5): added the three "raw os.environ.get" knobs
+    # that the runtime honors but pydantic-settings doesn't see —
+    # BACKPROPAGATE_UI_QUIET (banner suppression at cli.py:1509),
+    # BACKPROPAGATE_DEBUG (full-traceback toggle at cli.py:3210/3301/3312),
+    # and BACKPROPAGATE_LLAMA_CPP_PATH (GGUF convert-script escape hatch
+    # at export.py:1297). Adding them here closes the doc-lie where
+    # `backprop info --env-vars` claimed to enumerate every BACKPROPAGATE_*
+    # env var but silently skipped these three.
     logging_envs = [
         ("BACKPROPAGATE_LOG_LEVEL", "INFO", "str", "Structured-logger level: DEBUG / INFO / WARNING / ERROR."),
         ("BACKPROPAGATE_LOG_JSON", "0", "bool", "Emit JSON-formatted log lines instead of pretty console output."),
         ("BACKPROPAGATE_LOG_FILE", "", "path", "File path for log output; appended to in addition to stderr."),
         ("BACKPROPAGATE_DEFER_FEATURE_DETECTION", "", "bool", "Skip optional-feature detection at import time."),
+        (
+            "BACKPROPAGATE_UI_QUIET",
+            "",
+            "bool",
+            "When set to '1', suppress the 3-line UI startup banner (URL / auth mode / Ctrl+C hint) on stderr. Use for CI / headless launches that don't want banner noise. Only the exact value '1' suppresses; '0' / 'false' / unset leave the banner on.",
+        ),
+        (
+            "BACKPROPAGATE_DEBUG",
+            "",
+            "bool",
+            "When set to any truthy value, the top-level CLI exception net prints the full Python traceback in addition to the one-line error message. Off by default to keep operator-facing failures short; flip to '1' when filing a bug report.",
+        ),
+        (
+            "BACKPROPAGATE_LLAMA_CPP_PATH",
+            "",
+            "path",
+            "Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to convert_hf_to_gguf.py directly or the llama.cpp directory containing it. Searched FIRST, before shutil.which / ~/llama.cpp / /usr/local/bin.",
+        ),
     ]
     seen = {row["env_var"] for row in rows}
     for env_name, default, type_name, description in logging_envs:

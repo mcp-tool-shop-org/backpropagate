@@ -68,11 +68,11 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 ## "samples_per_run exceeds training pool"
 
-**Symptom:** `CONFIG_INVALID` from multi-run with the suggestion *Reduce --samples-per-run below N*.
+**Symptom:** `CONFIG_INVALID` from multi-run with the suggestion *Reduce --samples (Python: samples_per_run) below N*.
 
 **Why:** Multi-run reserves 10% of the dataset as a validation holdout; the remaining 90% is the training pool. If `samples_per_run` exceeds the training pool, no chunk can be cut without overlapping the validation set.
 
-**Fix:** Lower `--samples` on the CLI (or `samples_per_run=` in the Python API) below the reported training pool size, OR pass a larger dataset, OR disable validation with `validate_every_run=False, early_stopping=False`. Note: the suggestion text currently spells the CLI flag as `--samples-per-run`, but the actual flag on `backprop multi-run` is `--samples`. (Code fix queued — docs reflect the real flag.)
+**Fix:** Lower `--samples` on the CLI (or `samples_per_run=` in the Python API) below the reported training pool size, OR pass a larger dataset, OR disable validation with `validate_every_run=False, early_stopping=False`.
 
 ## "Unsloth import failed, falling back to transformers"
 
@@ -96,7 +96,7 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 ## "Multi-run validation overlap"
 
-**Symptom:** Same as *samples_per_run exceeds training pool* above. Stage A's backend B-001 fix raises a clean `ConfigurationError` instead of silently overlapping train/val. The CLI flag drift (`--samples-per-run` in the suggestion vs `--samples` on argparse) is a known doc-code mismatch — docs say the real flag.
+**Symptom:** Same as *samples_per_run exceeds training pool* above. Stage A's backend B-001 fix raises a clean `ConfigurationError` instead of silently overlapping train/val.
 
 ## "What does `[RUNTIME_UI_AUTH_NOT_ENFORCED]` mean?"
 

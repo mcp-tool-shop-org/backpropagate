@@ -113,25 +113,37 @@ def BpHeader() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
+            # FRONTEND-F-001 (Wave 5.5): bind to Reflex's built-in color
+            # mode so the toggle actually mutates the DOM (Radix theme
+            # provider writes ``class="light"`` / ``class="dark"`` on the
+            # html root, which fires the ``.light`` / ``.light-theme``
+            # selector in TOKENS_CSS). The previous wiring flipped
+            # ``AppState.theme`` server-side but never reached the DOM,
+            # so the icon swapped but the page stayed dark.
+            #
+            # ``rx.color_mode`` is "system" until the operator overrides
+            # it once; we show the sun icon (= will switch to light) when
+            # NOT currently light, regardless of whether dark is the
+            # resolved system pref or an explicit choice.
             rx.button(
                 rx.cond(
-                    AppState.theme == "dark",
-                    rx.image(
-                        src="/icons/sun.svg",
-                        width="16px",
-                        height="16px",
-                        alt="switch to light theme",
-                    ),
+                    rx.color_mode == "light",
                     rx.image(
                         src="/icons/moon.svg",
                         width="16px",
                         height="16px",
                         alt="switch to dark theme",
                     ),
+                    rx.image(
+                        src="/icons/sun.svg",
+                        width="16px",
+                        height="16px",
+                        alt="switch to light theme",
+                    ),
                 ),
                 size="1",
                 variant="ghost",
-                on_click=AppState.toggle_theme,
+                on_click=rx.toggle_color_mode,
                 aria_label="Toggle theme",
             ),
             rx.link(

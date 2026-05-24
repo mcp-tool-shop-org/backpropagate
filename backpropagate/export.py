@@ -344,6 +344,14 @@ def _maybe_write_model_card(
             "lora_alpha": hp.get("lora_alpha"),
             "seed": hp.get("seed"),
             "training_duration": run_record.get("duration_seconds"),
+            # BACKEND-F-016: thread the session_kind + full hyperparameters
+            # dict so the model_card's Reproduce block renders the right
+            # command shape (backprop train vs backprop multi-run) and
+            # includes the load-bearing flags (--batch-size, --lr,
+            # --max-seq-length, --no-unsloth, etc.) that pre-F-016 were
+            # silently dropped from the printed reproduce command.
+            "session_kind": run_record.get("session_kind"),
+            "extra_hyperparameters": hp,
         })
 
     if extra_card_fields:

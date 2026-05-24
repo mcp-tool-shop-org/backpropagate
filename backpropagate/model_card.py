@@ -225,6 +225,8 @@ def generate_model_card(
     library_version: str | None = None,
     incomplete_provenance: bool = False,
     extra_tags: list[str] | None = None,
+    session_kind: str | None = None,
+    extra_hyperparameters: dict[str, Any] | None = None,
 ) -> str:
     """Generate a Hugging Face-style model card as a Markdown string.
 
@@ -384,30 +386,166 @@ def generate_model_card(
     lines.append("- Test suite: 1800+ tests, 50% coverage floor.")
 
     # Reproduce block.
+    #
+    # BACKEND-F-016: build the command shape dynamically from the
+    # captured runtime hyperparameters. Pre-F-016 the block hardcoded a
+    # `backprop train` invocation with only --model / --data / --steps /
+    # --lora-r, omitting --batch-size / --lr / --max-seq-length /
+    # --no-unsloth / response_markers — so literally re-running the
+    # printed command did NOT reproduce the model. Multi-run sessions
+    # got the same single-run shape, doubly wrong: their actual
+    # invocation was `backprop multi-run --runs N --steps-per-run S`,
+    # not `backprop train`. F-016 routes session_kind + the captured
+    # extra_hyperparameters into the renderer so the printed command
+    # matches the runtime config the trainer actually used.
     if base_model:
         # Stage C amend BACKEND-B-021: strip backticks from values
         # embedded inside the ```bash code-fence``` so a hostile path
         # can't close the fence early and inject markdown. Newlines also
         # collapsed to spaces — a multi-line value would otherwise break
         # the shell command on its own.
-        _bm = _sanitize_codespan(base_model)
-        _ds = _sanitize_codespan(dataset_path) if dataset_path else "<your-dataset>"
-        reproduce_lines = [
-            "## Reproduce",
-            "",
-            "```bash",
-            "backprop train \\",
-            f"  --model {_bm} \\",
-            f"  --data {_ds} \\",
-            f"  --steps {steps if steps is not None else '<steps>'} \\",
-            f"  --lora-r {lora_r if lora_r is not None else 16}",
-            "```",
-        ]
+        reproduce_lines = _build_reproduce_block(
+            base_model=base_model,
+            dataset_path=dataset_path,
+            steps=steps,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            seed=seed,
+            session_kind=session_kind,
+            extra_hyperparameters=extra_hyperparameters or {},
+        )
         lines.append("")
         lines.extend(reproduce_lines)
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _build_reproduce_block(
+    *,
+    base_model: str,
+    dataset_path: str | None,
+    steps: int | None,
+    lora_r: int | None,
+    lora_alpha: int | None,
+    seed: int | None,
+    session_kind: str | None,
+    extra_hyperparameters: dict[str, Any],
+) -> list[str]:
+    """BACKEND-F-016: render the Reproduce block from the captured runtime config.
+
+    Branches on ``session_kind`` ('multi_run' vs 'single_run'/None):
+
+    * **multi_run** — emits ``backprop multi-run`` with the load-bearing
+      multi-run flags (--runs, --steps-per-run, --samples-per-run,
+      --merge-mode, --initial-lr, --final-lr, --lr-decay).
+    * **single_run** (default) — emits ``backprop train`` with the
+      load-bearing single-run flags (--batch-size, --lr,
+      --max-seq-length, --no-unsloth when use_unsloth=False, plus the
+      pre-F-016 baseline of --model / --data / --steps / --lora-r /
+      --lora-alpha / --seed).
+
+    Values are pulled from ``extra_hyperparameters`` (populated by the
+    trainer's hyperparameters dict at record_run_started). Missing
+    values render as literal angle-bracket placeholders so the operator
+    immediately sees which knobs are missing rather than getting a
+    plausible-looking command that silently lies.
+
+    All user-controlled values run through ``_sanitize_codespan`` so a
+    hostile path or model name cannot break out of the ```bash
+    code-fence```.
+    """
+    _bm = _sanitize_codespan(base_model)
+    _ds = (
+        _sanitize_codespan(dataset_path)
+        if dataset_path
+        else "<your-dataset>"
+    )
+
+    def _fmt_num(value: Any, fallback: str) -> str:
+        if value is None:
+            return fallback
+        # Floats: keep scientific notation for LRs but render plainly.
+        if isinstance(value, float):
+            # 2e-4 → "2e-04" via str() is ugly; let's keep simple.
+            return repr(value)
+        return _sanitize_codespan(str(value))
+
+    if (session_kind or "single_run").lower() == "multi_run":
+        # Multi-run shape. Names match cli.py's `multi-run` subcommand.
+        num_runs = extra_hyperparameters.get("num_runs")
+        steps_per_run = extra_hyperparameters.get("steps_per_run")
+        samples_per_run = extra_hyperparameters.get("samples_per_run")
+        merge_mode = extra_hyperparameters.get("merge_mode")
+        initial_lr = extra_hyperparameters.get("initial_lr")
+        final_lr = extra_hyperparameters.get("final_lr")
+        lr_decay = extra_hyperparameters.get("lr_decay")
+        warmup_steps_per_run = extra_hyperparameters.get("warmup_steps_per_run")
+        _seed = extra_hyperparameters.get("seed", seed)
+
+        cmd_lines = [
+            "backprop multi-run \\",
+            f"  --model {_bm} \\",
+            f"  --data {_ds} \\",
+            f"  --runs {_fmt_num(num_runs, '<runs>')} \\",
+            f"  --steps-per-run {_fmt_num(steps_per_run, '<steps-per-run>')} \\",
+            f"  --samples-per-run {_fmt_num(samples_per_run, '<samples-per-run>')} \\",
+            f"  --merge-mode {_sanitize_codespan(str(merge_mode)) if merge_mode is not None else '<merge-mode>'} \\",
+            f"  --initial-lr {_fmt_num(initial_lr, '<initial-lr>')} \\",
+            f"  --final-lr {_fmt_num(final_lr, '<final-lr>')} \\",
+            f"  --lr-decay {_sanitize_codespan(str(lr_decay)) if lr_decay is not None else '<lr-decay>'} \\",
+            f"  --warmup-steps-per-run {_fmt_num(warmup_steps_per_run, '<warmup-steps-per-run>')} \\",
+            f"  --seed {_fmt_num(_seed, '<seed>')}",
+        ]
+    else:
+        # Single-run shape — the historic default. Adds the flags that
+        # pre-F-016 were silently dropped: --batch-size, --lr,
+        # --max-seq-length, --no-unsloth (when applicable),
+        # --lora-alpha, --seed. All values come from the captured
+        # hyperparameters dict; missing values render as placeholders.
+        batch_size = extra_hyperparameters.get("batch_size")
+        learning_rate = extra_hyperparameters.get("learning_rate")
+        max_seq_length = extra_hyperparameters.get("max_seq_length")
+        use_unsloth = extra_hyperparameters.get("use_unsloth")
+        _seed = extra_hyperparameters.get("seed", seed)
+        _lora_r = (
+            lora_r
+            if lora_r is not None
+            else extra_hyperparameters.get("lora_r", 16)
+        )
+        _lora_alpha = (
+            lora_alpha
+            if lora_alpha is not None
+            else extra_hyperparameters.get("lora_alpha")
+        )
+
+        cmd_lines = [
+            "backprop train \\",
+            f"  --model {_bm} \\",
+            f"  --data {_ds} \\",
+            f"  --steps {_fmt_num(steps, '<steps>')} \\",
+            f"  --lr {_fmt_num(learning_rate, '<lr>')} \\",
+            f"  --batch-size {_fmt_num(batch_size, '<batch-size>')} \\",
+            f"  --max-seq-length {_fmt_num(max_seq_length, '<max-seq-length>')} \\",
+            f"  --lora-r {_fmt_num(_lora_r, '16')} \\",
+            f"  --lora-alpha {_fmt_num(_lora_alpha, '<lora-alpha>')} \\",
+        ]
+        # --no-unsloth is the right flag when the run was trained
+        # without unsloth (some operator environments explicitly opt
+        # out). Only emit it when use_unsloth was captured as False;
+        # absent value defaults to unsloth-enabled which is the
+        # standard path so no flag is needed.
+        if use_unsloth is False:
+            cmd_lines.append("  --no-unsloth \\")
+        cmd_lines.append(f"  --seed {_fmt_num(_seed, '<seed>')}")
+
+    return [
+        "## Reproduce",
+        "",
+        "```bash",
+        *cmd_lines,
+        "```",
+    ]
 
 
 def write_model_card_for_export(
@@ -431,6 +569,8 @@ def write_model_card_for_export(
     library_version: str | None = None,
     incomplete_provenance: bool = False,
     extra_tags: list[str] | None = None,
+    session_kind: str | None = None,
+    extra_hyperparameters: dict[str, Any] | None = None,
     filename: str = "model_card.md",
 ) -> Path:
     """Write a ``model_card.md`` next to an export.
@@ -463,6 +603,8 @@ def write_model_card_for_export(
         library_version=library_version,
         incomplete_provenance=incomplete_provenance,
         extra_tags=extra_tags,
+        session_kind=session_kind,
+        extra_hyperparameters=extra_hyperparameters,
     )
 
     card_path.write_text(card_md, encoding="utf-8")

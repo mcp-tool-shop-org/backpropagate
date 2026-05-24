@@ -1190,11 +1190,25 @@ class Trainer:
             samples: Number of samples to use (overrides config)
             callback: Optional callback for training events
             resume_from: F-002 — when set, look up the run_id in the on-disk
-                run history and reuse its run_id + last checkpoint path. When
-                ``None`` (default), start a fresh run. Multi-run resume lives
-                on ``MultiRunTrainer``; the Trainer-level resume hook is a
+                run history (scoped to ``self.output_dir``) and reuse its
+                run_id + last checkpoint path. When ``None`` (default),
+                start a fresh run. Multi-run resume lives on
+                ``MultiRunTrainer``; the Trainer-level resume hook is a
                 lighter "pick up the existing run_id and let the SFTTrainer
                 resume from the latest HF checkpoint in output_dir" path.
+
+                BACKEND-F-002 (v1.3): the lookup is output_dir-scoped (not
+                a global run_id index). When the requested run_id is NOT
+                found under the configured output_dir, this method raises
+                ``InvalidSettingError`` with code
+                ``INPUT_RESUME_NOT_FOUND``. Pre-F-002 the lookup miss fell
+                through to a silent fresh-run under a NEW run_id —
+                operators passing ``resume_from=<id-from-different-output>``
+                lost their resume intent without an exception. Now the
+                failure is loud and actionable: the error message names
+                the requested run_id, the output_dir searched, and the
+                operator's next steps (``backprop runs`` to list, or
+                re-run with the correct ``--output``).
 
         Returns:
             TrainingRun with results
@@ -1301,10 +1315,45 @@ class Trainer:
                         if record_cp:
                             resume_checkpoint_path = str(record_cp)
                 else:
-                    logger.warning(
-                        f"resume_from={resume_from!r} not found in run history; "
-                        "starting fresh."
+                    # BACKEND-F-002: hard-error on lookup miss instead of
+                    # silent fresh-start. The operator passed resume_from
+                    # expecting resumption; falling back to a fresh run
+                    # under a NEW run_id silently drops the resume intent
+                    # and produces a model the operator did not ask for.
+                    # The error message names the requested run_id, the
+                    # output_dir actually searched, and the operator's
+                    # next steps so the failure is actionable in the
+                    # terminal without grep'ing logs.
+                    raise InvalidSettingError(
+                        setting_name="resume_from",
+                        value=resume_from,
+                        expected=(
+                            f"a run_id present in the on-disk run history "
+                            f"under output_dir={str(self.output_dir)!r}"
+                        ),
+                        suggestion=(
+                            f"resume_from={resume_from!r} was NOT found in the "
+                            f"run history at {str(self.output_dir)!r}. The "
+                            f"resume lookup is scoped to the configured "
+                            f"output_dir (not a global run_id index). Next "
+                            f"steps:\n"
+                            f"  1) Run `backprop runs` to list run_ids "
+                            f"available under this output_dir.\n"
+                            f"  2) If the run was trained under a different "
+                            f"output_dir, re-run with `--output <that-dir>` "
+                            f"so the lookup hits.\n"
+                            f"  3) To start truly fresh under a NEW run_id, "
+                            f"omit resume_from (or pass resume_from=None)."
+                        ),
                     )
+            except InvalidSettingError:
+                # BACKEND-F-002: never swallow the hard resume-miss error.
+                # The try/except below catches generic infra failures
+                # (RunHistoryManager IO errors, malformed JSON, etc.) and
+                # downgrades them to a WARN + fresh run. The F-002 strict
+                # contract violation must propagate unchanged so the
+                # operator sees the actionable hint.
+                raise
             except Exception as exc:
                 logger.warning(f"Resume lookup failed: {exc}")
         run_id = run_id_for_resume or uuid.uuid4().hex

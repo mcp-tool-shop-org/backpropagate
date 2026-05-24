@@ -28,6 +28,14 @@ Implementation notes:
 - Color is mapped to a Radix ``color_scheme`` (green / amber / red - the
   three Radix tints that read clearly across both dark and light themes
   per the design digest token doc).
+
+FRONTEND-F-002 (Wave 5.5): the badge now READS ``bind_host`` /
+``bind_port`` / ``reachable_from`` from ``AuthBadgeState`` and surfaces
+them as a compact ``host:port`` chip immediately to the right of the
+auth-mode label. Pre-fix the badge populated the 3 fields but never
+rendered them — operators saw the auth mode but not the load-bearing
+"WHERE is this UI reachable from" context. The tooltip continues to
+carry the full multi-clause hover text (mode + bind + reach + auth).
 """
 
 from __future__ import annotations
@@ -81,6 +89,59 @@ def _emoji_for_mode() -> rx.Var[str]:
     )
 
 
+def _bind_chip() -> rx.Component:
+    """Compact ``host:port · reach`` chip rendered after the mode label.
+
+    FRONTEND-F-002 (Wave 5.5): the load-bearing surface that exposes the
+    three ``bind_host`` / ``bind_port`` / ``reachable_from`` fields that
+    Stage C wired into ``AuthBadgeState`` but never rendered.
+
+    The chip is rendered in muted text (var(--bp-muted-2)) so it visually
+    subordinates to the auth-mode label but stays readable for the
+    operator scanning the footer for "where is this UI listening".
+
+    aria-hidden because the same context is already in the badge's
+    ``aria_label`` (which mirrors hover_text) — preventing the screen
+    reader from re-announcing the bind tuple in a separate audible
+    chunk after the mode label.
+    """
+    return rx.flex(
+        rx.text(
+            "·",
+            size="1",
+            style={
+                "color": "var(--bp-muted-2)",
+                "font_size": "10px",
+            },
+            aria_hidden="true",
+        ),
+        rx.text(
+            AuthBadgeState.bind_host + ":" + AuthBadgeState.bind_port,
+            size="1",
+            class_name="bp-num",
+            style={
+                "font_family": "var(--bp-mono)",
+                "font_size": "10px",
+                "color": "var(--bp-muted-2)",
+                "letter_spacing": "0.01em",
+            },
+            aria_hidden="true",
+        ),
+        rx.text(
+            "(" + AuthBadgeState.reachable_from + ")",
+            size="1",
+            style={
+                "font_size": "10px",
+                "color": "var(--bp-muted-2)",
+                "font_style": "italic",
+            },
+            aria_hidden="true",
+        ),
+        gap="1",
+        align="center",
+    )
+
+
 def BpAuthBadge() -> rx.Component:
     """Render the footer auth-mode badge.
 
@@ -93,6 +154,11 @@ def BpAuthBadge() -> rx.Component:
     ``rx.badge``. The tooltip text and the badge's ``aria_label`` carry
     the same hover-text string so the chip is accessible to operators
     using either input modality.
+
+    FRONTEND-F-002 (Wave 5.5): badge now renders a compact bind chip
+    (``host:port (reach)``) right after the mode label so the three
+    ``AuthBadgeState`` bind fields are actually surfaced. Pre-fix they
+    were populated but never read.
     """
     return rx.tooltip(
         rx.badge(
@@ -111,6 +177,7 @@ def BpAuthBadge() -> rx.Component:
                     size="1",
                     style={"font_size": "11px"},
                 ),
+                _bind_chip(),
                 gap="1",
                 align="center",
             ),
@@ -118,7 +185,9 @@ def BpAuthBadge() -> rx.Component:
             variant="soft",
             size="1",
             # aria-label mirrors the hover-text so screen readers get the
-            # full context (Stage C accessibility floor).
+            # full context (Stage C accessibility floor). The bind tuple
+            # is already inside hover_text (per ui_security.py) so the
+            # visible bind chip stays aria-hidden to avoid re-announcing.
             aria_label=AuthBadgeState.hover_text,
             # Stable ID so external test harnesses can target the badge.
             id="bp-auth-badge",

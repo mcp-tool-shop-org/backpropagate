@@ -14,12 +14,28 @@ The split:
   background).
 - ``THEME_TOKENS`` — CSS custom properties for dark mode (default). These
   override Radix's stock surfaces so the UI breathes deeper than slate.
-- ``LIGHT_TOKENS`` — light-mode parity tokens. Activated by setting
-  ``data-theme="light"`` on the document root.
+- ``LIGHT_TOKENS`` — light-mode parity tokens. Activated when Reflex's
+  next-themes provider writes ``class="light"`` onto the ``<html>`` root
+  (Reflex configures next-themes with ``attribute: "class"`` — see
+  ``reflex_base/compiler/templates.py``). We also keep the legacy
+  ``[data-theme="light"]`` selector as a fallback in case future Reflex
+  versions switch back to a data-attribute strategy.
 - ``STYLESHEETS`` — external CSS hrefs (Geist + Geist Mono from Google Fonts).
 - ``TOKENS_CSS`` — a pre-assembled stylesheet string that lays the THEME_TOKENS
-  under ``:root`` and LIGHT_TOKENS under ``[data-theme="light"]``. Inject via
-  ``rx.html(f"<style>{TOKENS_CSS}</style>")`` at the app root.
+  under ``:root`` and LIGHT_TOKENS under ``.light, .light-theme, [data-theme="light"]``.
+  Inject via ``rx.html(f"<style>{TOKENS_CSS}</style>")`` at the app root.
+
+FRONTEND-F-001 (Wave 5.5): the LIGHT_TOKENS selector was previously
+``[data-theme="light"]`` only, which never fired because nothing in the
+codebase set that attribute on the document root. Reflex's color-mode
+provider writes ``class="dark"`` / ``class="light"`` on ``<html>`` (via
+next-themes ``attribute="class"``), so we now key off both the Radix
+``.dark-theme`` / ``.light-theme`` shape AND the bare ``.dark`` / ``.light``
+classes plus the legacy data-attribute. The toggle in ``BpHeader`` now
+binds to ``rx.color_mode`` + ``rx.toggle_color_mode`` instead of the
+server-side ``AppState.toggle_theme`` so the DOM actually mutates AND
+``prefers-color-scheme`` is honored on first load (next-themes defaults to
+``system``).
 
 This module is pure data — no Reflex import — so it can be read from anywhere
 (tests, headless contexts, etc.) without pulling in the UI dependency.
@@ -34,8 +50,14 @@ from __future__ import annotations
 # Drop into ``rx.theme(**RADIX_THEME)``. The named accent + gray palettes wire
 # Radix's component primitives; the THEME_TOKENS hex set below overrides
 # surfaces so the UI breathes deeper than Radix's stock slate.
+#
+# FRONTEND-F-001 (Wave 5.5): ``appearance`` is INTENTIONALLY OMITTED here.
+# ``ui_app/app.py`` passes ``appearance=rx.color_mode`` at the call site so
+# the Radix theme re-tints whenever Reflex's next-themes provider flips
+# (operator click on the header toggle OR ``prefers-color-scheme`` change on
+# first load). Hard-coding ``"dark"`` here would override that binding and
+# strand the toggle button — the v1.2 bug FRONTEND-F-001 was caught for.
 RADIX_THEME: dict[str, object] = {
-    "appearance": "dark",          # default
     "accent_color": "teal",        # Ocean Mist primary
     "gray_color": "slate",         # cool neutrals; matches bg #0F1316
     "radius": "medium",            # corresponds to our --bp-r-2 / r-3 ladder
@@ -126,7 +148,16 @@ def _emit_block(selector: str, tokens: dict[str, str]) -> str:
 
 TOKENS_CSS: str = "\n\n".join([
     _emit_block(":root", THEME_TOKENS),
-    _emit_block('[data-theme="light"]', LIGHT_TOKENS),
+    # FRONTEND-F-001 (Wave 5.5): match every selector that Reflex /
+    # next-themes / Radix Themes may emit when the operator flips to light:
+    # - ``.light`` / ``.light-theme``: classes next-themes + Radix put on
+    #   the document root when ``attribute="class"``.
+    # - ``[data-theme="light"]``: legacy fallback in case Reflex switches
+    #   back to a data-attribute strategy (cheap defensive measure).
+    _emit_block(
+        '.light, .light-theme, [data-theme="light"]',
+        LIGHT_TOKENS,
+    ),
     # Body baseline — picks up the dark surface + Geist body type.
     """body {
   background: var(--bp-bg);

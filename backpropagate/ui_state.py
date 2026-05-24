@@ -186,8 +186,21 @@ class AppState(rx.State):
 
     @rx.event
     def toggle_theme(self) -> None:
-        """Flip dark/light. The TOKENS_CSS stylesheet keys off
-        ``[data-theme="light"]`` so this re-themes the whole tree."""
+        """Flip dark/light (deprecated path — kept for back-compat).
+
+        FRONTEND-F-001 (Wave 5.5): the load-bearing theme toggle now lives
+        on Reflex's built-in ``rx.color_mode`` + ``rx.toggle_color_mode``
+        plumbing — the header button binds to those directly so the DOM
+        actually mutates (Radix theme provider writes ``class="light"`` /
+        ``class="dark"`` on the html root, which fires the ``.light`` /
+        ``.light-theme`` selector in ``ui_theme.TOKENS_CSS``).
+
+        This server-side ``AppState.theme`` field + handler stay for
+        backward compatibility — external automation or future surfaces
+        may still introspect/mutate it — but they no longer drive the
+        visible theme. The v1.2 bug was that ONLY this server-side
+        toggle existed, so the icon swapped but the page stayed dark.
+        """
         self.theme = "light" if self.theme == "dark" else "dark"
 
     @rx.event

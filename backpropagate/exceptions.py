@@ -212,6 +212,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Inspect the abort reason; the last checkpoint may be usable.",
         "retryable": "sometimes",
     },
+    "INPUT_RESUME_NOT_FOUND": {
+        "description": "Trainer.train(resume_from=X) lookup missed — the requested run_id was not found in the on-disk run history under the configured output_dir. Pre-F-002 this silently fell through to a fresh run; v1.3+ raises so the resume intent is never lost.",
+        "default_hint": "Run `backprop runs` to list available run_ids in the current output_dir. If the run was trained under a different --output, re-run with that output_dir. To start truly fresh under a NEW run_id, omit resume_from (or pass resume_from=None).",
+        "retryable": "no",
+    },
     "STATE_CHECKPOINT_INVALID": {
         "description": "Checkpoint save or load failed (disk full, corrupt file, permission).",
         "default_hint": "Verify free disk space and write permission on the output directory.",

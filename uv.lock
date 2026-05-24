@@ -216,6 +216,15 @@ wheels = [
 ]
 
 [[package]]
+name = "argcomplete"
+version = "3.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/61/0b9ae6399dd4a58d8c1b1dc5a27d6f2808023d0b5dd3104bb99f45a33ff6/argcomplete-3.6.3.tar.gz", hash = "sha256:62e8ed4fd6a45864acc8235409461b72c9a28ee785a2011cc5eb78318786c89c", size = 73754, upload-time = "2025-10-20T03:33:34.741Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/f5/9373290775639cb67a2fce7f629a1c240dce9f12fe927bc32b2736e16dfc/argcomplete-3.6.3-py3-none-any.whl", hash = "sha256:f5007b3a600ccac5d25bbce33089211dfd49eab4a7718da3f10e3082525a92ce", size = 43846, upload-time = "2025-10-20T03:33:33.021Z" },
+]
+
+[[package]]
 name = "async-timeout"
 version = "5.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -291,12 +300,14 @@ wheels = [
 
 [[package]]
 name = "backpropagate"
-version = "1.2.0"
+version = "1.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "argcomplete" },
     { name = "bitsandbytes" },
     { name = "datasets" },
+    { name = "filelock" },
     { name = "packaging" },
     { name = "peft" },
     { name = "tenacity" },
@@ -381,6 +392,7 @@ validation = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=0.25.0" },
+    { name = "argcomplete", specifier = ">=3.0.0" },
     { name = "backpropagate", extras = ["unsloth", "ui"], marker = "extra == 'standard'" },
     { name = "backpropagate", extras = ["unsloth", "ui", "validation", "export", "monitoring", "logging", "security"], marker = "extra == 'full'" },
     { name = "backpropagate", extras = ["unsloth", "ui", "validation", "logging", "security"], marker = "extra == 'production'" },
@@ -389,6 +401,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'security'", specifier = ">=42.0.0" },
     { name = "datasets", specifier = ">=2.14.0" },
     { name = "fastapi", marker = "extra == 'ui'", specifier = ">=0.115" },
+    { name = "filelock", specifier = ">=3.0.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0" },
     { name = "llama-cpp-python", marker = "extra == 'export'", specifier = ">=0.2.0" },

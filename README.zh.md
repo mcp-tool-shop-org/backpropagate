@@ -10,142 +10,152 @@
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
   <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/mcp-tool-shop-org/backpropagate"><img src="https://api.scorecard.dev/projects/github.com/mcp-tool-shop-org/backpropagate/badge" alt="OpenSSF Scorecard"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**使用 3 行代码进行无头 LLM 微调。 智能默认设置、感知 VRAM 的批处理大小、多轮 SLAO 训练，以及一键导出为 Ollama 兼容的 GGUF 格式。**
+# 训练一个适配器。将其发送到 Ollama。完成
 
-*SLAO 是一种通过非对称合并实现的单 LoRA 持续学习方法，它是一种在长时间微调过程中防止灾难性遗忘的技术（[论文](https://arxiv.org/abs/2512.23017)）。*
-
-*使用 3 行代码训练 LLM。 只需要再一行代码即可导出到 Ollama。*
-
-## 快速开始
-
-```bash
-pip install backpropagate[standard]
-```
-
-```python
-from backpropagate import Trainer
-
-trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
-trainer.train("examples/quickstart.jsonl", steps=10)
-trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
-```
-
-该仓库包含一个名为 `examples/quickstart.jsonl` 的小型文件（包含 5 个 ShareGPT 格式的示例），以便在全新安装的环境中直接运行上述代码。 对于您自己的训练，请参阅下面的 [数据集格式](#dataset-format)。
-
-### 无代码方式：Web UI
-
-是否更喜欢使用 UI 而不是 Python REPL？ 安装相同的扩展，然后运行：
-
-```bash
-pip install backpropagate[standard]
-backprop ui --port 7862
-```
-
-Reflex (Radix UI) 界面允许您选择一个 JSONL 文件、选择一个模型、进行训练并导出，无需使用 Python。 该 UI 采用本地优先的设计；要将其暴露到公共互联网，请参阅下面的 [Web UI](#web-ui)，了解 `--share` + `--auth` 安全协议以及支持的隧道选项（Cloudflare Tunnel、ngrok）。
-
-## 数据集格式
-
-您的 JSONL 训练文件应每行包含一个示例。 最简单的格式是 ShareGPT 对话：
-
-```jsonl
-{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
-{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
-```
-
-也支持 Alpaca (`instruction`/`output`)、OpenAI 对话 (`messages`) 以及原始文本格式。 请参阅 `examples/quickstart.jsonl`，其中包含可复制的起始示例。
-
-## 为什么需要反向传播？
-
-| 问题 | 解决方案 |
-|---------|----------|
-| 微调很复杂 | 3 行代码：加载、训练、保存 |
-| Windows 系统很麻烦 | 一流的 Windows 支持 |
-| VRAM 管理很困难 | 自动批处理大小、GPU 监控 |
-| 模型导出很复杂 | 一键导出为 GGUF 格式，并自动注册到 Ollama |
-| 长时间运行会导致遗忘 | 多轮 SLAO 训练 |
-
-## 主要特性
-
-- **无头设计**: 专为 CI/CD 流水线、自动化工作流程和程序化执行而设计。
-- **智能默认设置**: 根据您的硬件和数据集自动配置最佳超参数。
-- **多轮 SLAO 训练**: 采用高级训练策略，以防止长时间运行期间的灾难性遗忘。
-- **一流的 Windows 支持**: 经过测试和优化，适用于 Windows 环境，避免常见的 PyTorch/CUDA 问题。
-- **无缝导出**: 一键导出为 GGUF 格式，并自动注册到 Ollama。
-- **模块化架构**: 只安装您需要的依赖项（例如，`[unsloth]`、`[ui]`、`[export]`）。
-
-## 安装
-
-```bash
-pip install backpropagate              # Core only (minimal)
-pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-pip install backpropagate[ui]          # + Reflex (Radix UI) web interface
-pip install backpropagate[standard]    # unsloth + ui (recommended)
-pip install backpropagate[full]        # Everything
-```
-
-| 扩展 | 描述 | 依赖项 |
-|-------|-------------|--------------|
-| `unsloth` | 训练速度提升 2 倍，VRAM 减少 50% | unsloth |
-| `ui` | Reflex (Radix UI) Web 界面 | reflex>=0.9.2, fastapi>=0.115 |
-| `validation` | Pydantic 配置验证 | pydantic, pydantic-settings |
-| `export` | 用于 Ollama 的 GGUF 导出 | llama-cpp-python |
-| `monitoring` | WandB + 系统监控（在 v1.1.0 中自动集成到训练器中） | wandb, psutil |
-| `logging` | 结构化日志记录 | structlog |
-| `security` | JWT 身份验证 + 令牌生成 | PyJWT, cryptography |
-| `production` | unsloth + ui + validation + logging + security | (捆绑) |
-
-**要求：** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
-
-### 平台先决条件
-
-Backpropagate 能够处理运行时的一些问题（多进程、RTX 40/50 上的 xformers、Windows 上的数据加载器）。它**不能**解决安装时遇到的平台相关问题，请先解决这些问题：
-
-- **CUDA 工具包版本。** PyTorch 的发布与 CUDA 版本相关，选择错误的 wheel 可能会静默地安装仅支持 CPU 的 PyTorch 版本。请使用 <https://pytorch.org/get-started/locally/> 上的选择器，获取适用于您驱动程序的精确 `pip install torch ...` 命令。运行 `nvidia-smi` 以查看您的驱动程序/CUDA 版本。
-- **Windows。** 需要 Visual Studio Build Tools (C++) 和 CMake，用于 `[export]` 扩展（从源代码构建 `llama-cpp-python`）。现在已发布适用于 Windows 的 `bitsandbytes` wheel（>= 0.43）；较旧的指南中提到的 `bitsandbytes-windows` 已经过时。
-- **macOS。** **不支持** GPU 训练，因为它不支持 CUDA。您可以安装 Backpropagate，通过 Ollama 运行导出的 GGUF 文件进行*推理*，但 `trainer.train()` 会引发 `DEP_GPU_NOT_AVAILABLE` 错误。请使用支持 CUDA 的机器进行训练。
-- **Linux。** 大多数发行版可以直接使用。如果您使用的是 PyPI 的二进制发布版本，请注意，Linux 构建版本仅支持 CPU 版本的 PyTorch（以保持在 GitHub 的 2 GB 发布文件大小限制内）；请先安装来自 pytorch.org 的匹配的 CUDA wheel。
-
-有关更详细的安装故障排除信息，请参阅 [故障排除手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/)。
-
-## 配置
-
-所有设置都可以通过使用 `BACKPROPAGATE_` 前缀的环境变量进行覆盖（例如，`BACKPROPAGATE_LOG_LEVEL=debug`）。当安装了 `[validation]` 扩展时，项目根目录下的 `.env` 文件将被自动加载。
-
-常用配置项（请参阅 [完整的环境变量参考](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/)，了解所有选项）：
-
-| 变量 | 默认值 | 说明 |
-|----------|---------|-------|
-| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `BACKPROPAGATE_LOG_JSON` | 自动 | 强制使用 JSON (`true`) 或控制台 (`false`) 日志 |
-| `BACKPROPAGATE_LOG_FILE` | 未设置 | 用于将日志写入的路径 |
-| `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | 未设置 | 在启动时跳过可选依赖项检测，以实现最快的 CLI 启动速度 |
-| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | 所有 UI 文件系统写入的基础目录；已进行白名单验证 |
-| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | 默认模型 |
-| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | 学习率 |
-| `BACKPROPAGATE_LORA__R` | `16` | LoRA 秩 |
-
-嵌套键使用双下划线作为分隔符（Pydantic 的 `env_nested_delimiter` 约定）。
-
-## 用法
-
-### 基本训练
+Backpropagate 是一个 Python 库，用于在单个 GPU 上微调大型语言模型。只需三行代码，即可在 16GB 的显卡上训练一个 7B 模型。再执行一个命令，即可将其导出到 Ollama，然后您就可以使用 `ollama run` 命令进行微调。它在 Windows 上的兼容性良好。
 
 ```python
 from backpropagate import Trainer
 
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
-trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` 是默认的、标准的配置。当 `Trainer()` 函数在没有指定模型参数的情况下被调用时，该值会被解析（参见 `config.py` 文件的 `ModelConfig.name`）。 较早的示例使用了预量化的 `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` 模型；我们已将默认配置更改为官方的 Qwen 模型权重，以提高可靠性（[CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)）。 两种模型都可以使用。
+```bash
+backprop ollama register ./output/lora --name my-model
+ollama run my-model
+```
 
-### 多轮 SLAO 训练
+就这样。没有 YAML 配置文件。没有 `accelerate launch` 命令。也没有单独的“如何将其转换为 GGUF 格式”的教程。如果您有一个 CUDA GPU 并且有一个包含训练数据的 JSONL 文件，您只需三行代码就可以完成微调。
+
+## 安装
+
+```bash
+# Recommended: isolated Python install (no conflicts with system Python or other projects)
+pipx install backpropagate
+
+# Or via uv (faster install, same isolation)
+uv tool install backpropagate
+
+# Standard pip (if you manage your own virtualenv)
+pip install backpropagate
+```
+
+如果您想要可选功能，请将安装替换为以下选项之一：
+
+```bash
+pipx install "backpropagate[standard]"   # adds Unsloth (2x faster training) + the web UI
+pipx install "backpropagate[full]"       # adds everything: unsloth, ui, monitoring, export, etc.
+```
+
+更喜欢 Docker？`docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest` 也可以。镜像支持 `linux/amd64` 和 `linux/arm64`，因此 Apple Silicon 和 ARM Linux 用户可以获得原生镜像。一个标准的 `compose.yaml` 文件，用于“在容器中运行 UI”，位于仓库根目录，使用 `docker compose up` 命令可以启动 Web UI，地址为 `http://localhost:7860`，并且会挂载一个持久化的 `~/.backpropagate` 卷。
+
+## Backpropagate 的定位
+
+有很多优秀的库可用于微调大型语言模型。每个库在不同的方面都非常出色：
+
+- **[Axolotl](https://github.com/OpenAccess-AI-Collective/axolotl)** — 如果您喜欢 YAML 配置文件，并且想要参考一些配方。
+- **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** — 如果您想要一个 Web GUI，并且内置了对 DPO/PPO/RLHF 的支持。
+- **[Unsloth](https://github.com/unslothai/unsloth)** — 如果您需要尽可能快的训练速度，并且使用的是受支持的模型系列。
+- **[torchtune](https://github.com/pytorch/torchtune)** — 如果您想要 Meta 提供的原生 PyTorch 配方，可以进行编辑。
+
+Backpropagate 是一个缺失的选项：**一个用于单个消费级 GPU 的独立操作员的 3 行 Python API，用于训练适配器并将其部署。** 没有 YAML，没有 GUI，没有 DPO/PPO，没有多节点。 只有每个人真正需要的循环，以及一个会妨碍您的导出步骤。
+
+如果您尝试了上述任何一个库，但因为配置文件而感到困扰，或者遇到了模型系列的限制，或者想要 Windows 优先的默认设置，那么 Backpropagate 就是为您准备的。
+
+## 您可以在 16GB 的消费级 GPU 上微调的内容
+
+以下是在 16GB 显卡（RTX 4080 / 5080 / 4070 Ti Super）上的实际限制：
+
+| 模型 | 方法 | 状态 |
+|---|---|---|
+| Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | 良好。完整的序列长度，还有剩余空间。 |
+| Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | 标准。约 7-8 GB。Backpropagate 的默认设置。 |
+| Llama-3 13B | QLoRA + 采样压缩 | 勉强可用。使用较短的序列。 |
+| Mixtral 8x7B (总参数 47B) | AQLM 2-bit + LoRA | v1.4 中的实验性功能。您可以在 16GB 显卡上运行的最大模型。 |
+
+对于 3B 及更小的模型，可以在 16GB 的显卡上进行完整的微调（而不仅仅是 LoRA），并且计划在 v1.4 中提供一个 `mode="full"` 选项。对于 7B+ 的模型，需要 24GB+ 的 GPU 才能进行完整的微调。您可以考虑租用 A100 云服务器，或者坚持使用 LoRA，因为最近的研究表明，在大多数微调后的任务中，LoRA 的质量可以与完整的微调相媲美（请参阅 [“不适合使用的场景”](#what-backpropagate-is-not-for) 部分以获取引用）。
+
+## Backpropagate 不适合的场景
+
+坦诚的说明有助于每个人。Backpropagate 不适用于以下场景，并且尝试使其执行这些操作会比使用正确的工具更糟糕：
+
+- **70亿参数以上模型的全面微调** — Backpropagate 使用 LoRA/QLoRA，它训练一个小的适配器，而不是更新每个权重。对于 70 亿参数及以上的模型，全面微调需要 24GB+ 的 GPU 内存，无法在 16GB 的消费级显卡上运行。对于 30 亿参数及以下的模型，全面微调可以在 16GB 的显卡上运行；v1.4 计划提供 `mode="full"` 选项。更重要的是，最近的研究（[Biderman 2024](https://arxiv.org/abs/2405.09673)，[Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)）表明，在正确的配置下，LoRA 在大多数微调任务（指令遵循、领域适应、角色/风格）中，其质量可以与全面微调相媲美，但计算量仅为 67%。因此，对于大多数用户实际需要的任务，使用 LoRA 不会带来任何损失。如果您确实需要对 70 亿参数以上的模型进行全面微调，请直接使用 HuggingFace 的 `transformers.Trainer`，并在 24GB+ 的显卡上运行。
+- **DPO/PPO/GRPO/偏好学习** — Backpropagate 仅支持单阶段的监督微调。对于偏好学习，请直接使用 TRL 或 LLaMA-Factory。
+- **多节点训练** — 仅支持单个机器上的单个 GPU。单个机器上的多 GPU 可以运行（通过 `accelerate launch`），但未正式支持。
+- **macOS 训练** — Apple Silicon 没有 CUDA，因此训练需要在运行 Linux 或 Windows 的机器上，该机器需要配备 NVIDIA GPU。您仍然可以在 Mac 上通过 Ollama 运行训练好的模型。
+- **任何不在测试模型系列中的模型** — Qwen 2.5 / 3.5 (70亿 / 40亿参数)，Phi-4-mini-3.8B，SmolLM3-3B，Llama 3.2 (30亿 / 10亿参数)，Mistral 7B。其他模型通常可以运行，但未在 CI 中进行测试。
+
+如果您需要这些功能，请使用上面列出的库。它们在这方面做得更好。
+
+## Backpropagate 提供的功能：
+
+四个功能，一次安装：
+
+**1. 一个真正的 3 行 API，无需配置文件即可运行。**
+README 顶部的代码片段可以实现端到端的运行。无需 `accelerate config`，无需 YAML，无需 Hydra 覆盖。只需 `Trainer(model).train(data)`，即可完成微调。
+
+**2. 真正适用于 Windows 的解决方案。**
+大多数机器学习库对 Windows 的支持往往不够完善。Backpropagate 在 Windows + RTX 5080 上经过了全面测试。该库处理了 Windows 运行时的各种问题——它知道如何预处理您的数据，以防止 Windows 多进程崩溃；它会自动禁用 RTX 40/50 显卡上的 xformers，因为这会导致问题；它还会选择不导致崩溃的数据加载器设置。您无需了解这些细节，它只需正常运行即可。
+
+**3. 专为无人值守运行而设计。**
+训练需要几个小时。您不想一直盯着它。Backpropagate 旨在可以长时间运行：
+
+- 如果 GPU 内存不足，它会自动将批次大小减半并重试——最多重试三次。无需手动调整。
+- 如果 GPU 过热，它会暂停直到温度降下来，然后继续。
+- 每个检查点都会以原子方式写入——如果您的笔记本电脑在保存过程中崩溃，之前的有效检查点仍然可用。
+- 每次训练都会生成一个唯一的 ID，该 ID 会附加到每条日志行、每个检查点和每个 Weights & Biases 条目上。如果出现问题，一个 ID 可以让维护人员将所有内容关联起来。
+- 错误会显示稳定的代码（例如 `RUNTIME_GPU_OOM`、`DEP_OLLAMA_REGISTRATION_FAILED` 等），以便您可以搜索日志文件，并参考[故障排除指南](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) 查找解决方案。CUDA 相关的错误有专门的[CUDA 故障排除页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/)。
+
+**4. 一条命令，从训练好的适配器到 `ollama run`。**
+许多库可以训练一个模型。但很少有库会在您想要实际使用它时，让您轻松操作。Backpropagate 可以将模型导出为 GGUF 格式（Ollama 使用的格式），并使用一条命令注册 Ollama 模型。您可以从“训练完成”到“我可以与我的微调模型进行对话”，只需大约 30 秒。
+
+## 快速开始
+
+这个仓库包含一个微小的示例数据集，因此 README 文件的开头部分的代码可以在干净的环境中运行。
+
+```bash
+pipx install "backpropagate[standard]"
+
+python -c "
+from backpropagate import Trainer
+trainer = Trainer('Qwen/Qwen2.5-7B-Instruct')
+trainer.train('examples/quickstart.jsonl', steps=10)
+trainer.export('gguf', quantization='q4_k_m')
+"
+```
+
+这会使用 5 个短的 ShareGPT 格式的对话来训练一个 Qwen 2.5 7B 的适配器，然后将结果导出为 GGUF 格式。对于您自己的数据，请将 JSONL 文件格式化为每行一个示例。
+
+```jsonl
+{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
+{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
+```
+
+Alpaca（`instruction` / `output`）、OpenAI 聊天（`messages`）以及原始文本格式也适用——Backpropagate 会自动检测格式。
+
+有关更多端到端的工作流程（例如，微调并推送到 Hugging Face Hub，在出现 OOM 错误后恢复，在较长的训练周期中进行多次迭代训练等），请参阅[手册配方页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/)。
+
+### Web UI（可选）
+
+如果您更喜欢点击而不是输入 Python 代码，请安装 UI 扩展，然后启动：
+
+```bash
+pipx install "backpropagate[ui]"
+backprop ui --port 7862
+```
+
+一个本地 Web 界面将在 `http://localhost:7862` 上打开，您可以在其中选择数据集、选择模型、进行训练和导出。默认情况下，UI 仅在本地可用。要将其暴露给其他设备，请参阅下面的“[Web UI](#web-ui)”部分，了解 `--share` + `--auth` 安全机制。
+
+## 多次迭代训练
+
+如果您希望在多个数据集上逐步进行微调——例如，您每周都会获得新的训练数据，并且希望在不忘记之前学到的知识的情况下将其添加到模型中——那么 Backpropagate 的 `multi_run` 模式非常适合您：
 
 ```python
 from backpropagate import Trainer
@@ -157,196 +167,196 @@ result = trainer.multi_run(
     num_runs=5,
     steps_per_run=100,
     samples_per_run=1000,
-    merge_mode="slao",  # Single LoRA Continual Learning via Asymmetric Merging
 )
 ```
 
-SLAO（通过非对称合并的单 LoRA 持续学习）实现了 [Merge before Forget](https://arxiv.org/abs/2512.23017) 论文：通过 QR 分解进行正交 A 矩阵初始化，非对称 A/B 处理，以及基于时间的 `λ(i) = 1/√i` 缩放。CLI 标志是 `--samples`（底层字段是 `samples_per_run`）。
+这会进行五次训练迭代，并在每次迭代之间合并适配器，从而在保留先前知识的同时，整合新的示例。该技术基于最近的持续学习研究，请参阅此 README 文件的底部部分的“[参考文献](#references)”。
 
-### 导出到 Ollama
+命令行版本：
 
-```python
-# Export to GGUF
-result = trainer.export("gguf", quantization="q4_k_m")
-
-# Register with Ollama separately
-from backpropagate import register_with_ollama
-register_with_ollama(result.path, "my-finetuned-model")
-# ollama run my-finetuned-model
+```bash
+backprop multi-run --data my_data.jsonl --runs 5 --steps 100 --samples 1000
 ```
 
-### CLI
+## 从检查点恢复
+
+如果在第四次迭代时崩溃的五次迭代训练可以恢复。 每次多迭代会话都会将其迭代 ID 写入磁盘上的历史记录和检查点清单，因此您可以从上次中断的地方继续，只需一个命令即可：
+
+```bash
+backprop resume <run-id>
+backprop multi-run --data ... --resume <run-id>
+backprop train --data ... --resume <run-id>     # single-run resume
+```
+
+`backprop multi-run` 的默认行为（不带 `--resume`）会自动检测到同一输出目录中的正在进行的会话，并继续执行。 要强制从头开始，请指定一个全新的输出目录。
+
+## 培训经历
+
+每次 `backprop train` 和 `backprop multi-run` 的执行都会在 `<output>/run_history.json` 中记录一行，包括使用的模型、数据集、超参数、状态、最终损失和损失历史记录。 您可以列出和检查过去的训练过程：
+
+```bash
+backprop list-runs                         # last 20 runs
+backprop list-runs --status failed         # filter by status
+backprop list-runs --json --limit 100      # machine-readable
+backprop show-run abcd1234                 # detail view (partial ID is fine)
+```
+
+## 实验跟踪
+
+Backpropagate 会自动检测已安装的实验跟踪器（Weights & Biases、TensorBoard、MLflow），并将其集成。 如果安装了 `wandb` 并且您已登录，则每次运行都会自动记录到 W&B，并且运行名称与磁盘上的运行 ID 匹配，这样您可以使用一个标识符在 W&B、您的日志和 `run_history.json` 文件中进行搜索。
+
+```bash
+pip install backpropagate[monitoring]   # installs wandb + psutil
+wandb login                             # one-time setup
+backprop train --data my_data.jsonl
+```
+
+您可以使用 `Trainer(report_to=["wandb"])`、`Trainer(report_to=["tensorboard"])` 或 `Trainer(report_to="none")` 来禁用此功能。
+
+## 网页用户界面
+
+Reflex Web 界面是可选的，请使用 `pipx install "backpropagate[ui]"` 安装，然后启动：
+
+```bash
+backprop ui --port 7862
+```
+
+UI 在本地运行在 `http://localhost:7862` 上。 要将其暴露给其他设备（例如，您网络中的其他用户或公共 URL），您必须将 `--share`（或 `--host`）与 `--auth` 结合使用：
+
+```bash
+backprop ui --share --auth alice:hunter2
+```
+
+如果 `backprop ui --share` 不带 `--auth`，则会显示错误。 原因：`--share` 会发布一个 URL，任何互联网用户都可以访问，而没有身份验证，这意味着任何人都可能控制您的流水线并读取您的 Hugging Face 令牌。 没有禁用此功能的选项——如果您不想设置凭据，请使用 SSH 端口转发：
+
+```bash
+# On the client:
+ssh -L 7860:localhost:7860 <your-training-host>
+# On the server:
+backprop ui                             # no --share
+# Then open http://localhost:7860 in your local browser
+```
+
+请参阅 [handbook/security.md](https://mcp-tool-shop-org.github.io/backpropagate/handbook/security/)，了解完整的威胁模型。
+
+用户界面中的文件写入操作会被限制在一个单独的目录中，以提高安全性。
+
+- 默认值：`~/.backpropagate/ui-outputs`
+- 覆盖：设置 `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
+- 覆盖设置会进行白名单验证，系统路径或凭据路径（如 `/etc`、`~/.ssh`、`~/.aws`、`C:\Windows\System32` 等）将被拒绝。
+
+## 平台说明
+
+**要求：** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
+
+Python 3.10将于2026年10月结束官方支持，Backpropagate计划在v1.4版本中移除对Python 3.10的支持。对于新安装，建议使用Python 3.11或3.12，其中3.11是经过最广泛测试的版本。
+
+Backpropagate可以处理不同平台上的训练过程中的一些问题，但它无法解决安装过程中的问题。最常见的问题有两种：
+
+- **错误的CUDA驱动程序。** PyTorch为每个CUDA版本发布一个二进制文件。如果选择了错误的驱动程序，您将只能使用CPU版本的PyTorch，并且训练速度会非常慢。请使用<https://pytorch.org/get-started/locally/> 上的驱动程序选择器，选择适合您驱动程序的版本。运行 `nvidia-smi` 命令可以查看您的驱动程序/CUDA版本。
+- **Windows + GGUF导出。** `[export]` 扩展会从源代码构建 `llama-cpp-python`，这需要Visual Studio Build Tools（C++组件）和CMake。
+
+**macOS：** 不支持GPU训练（没有CUDA）。您可以在Mac上通过Ollama运行训练好的适配器，但 `trainer.train()` 会抛出 `DEP_GPU_NOT_AVAILABLE` 错误。对于实际的训练，请使用支持CUDA的Linux或Windows机器。
+
+请参阅[故障排除手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/)，获取详细的安装问题解决方案，以及专门的[CUDA故障排除页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/)，用于解决驱动程序/显存/xformers/bf16与fp16相关的问题。
+
+## CLI
+
+每个Python API都有一个命令行界面（CLI）的对应版本：
 
 ```bash
 backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
-backprop info
-backprop list-runs                              # v1.1.0: query past training runs
-backprop show-run <run-id>                      # v1.1.0: detail view
-backprop resume <run-id>                        # v1.1.0: resume a crashed multi-run
-backprop push ./output/lora --repo me/my-model  # v1.1.0: push adapter to HF Hub
+backprop info                          # environment + version snapshot
+backprop list-runs                     # past training runs
+backprop show-run <run-id>             # detail view
+backprop resume <run-id>               # resume a crashed run
+backprop push ./output/lora --repo me/my-model    # push adapter to HuggingFace Hub
+backprop diff-runs <run-a> <run-b>     # diff two runs side by side
+backprop replay <run-id>               # re-run with same config / dataset
+backprop export-runs --format jsonl    # bulk export run history
 ```
 
-请参阅 [CLI 参考](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/)，了解每个子命令和标志，或运行 `backprop <子命令> --help`。
+完整的参考信息请参见[命令行界面手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/)，或者使用 `backprop <子命令> --help` 命令。
 
-### 从检查点恢复（v1.1.0）
+## 配置
 
-一个原本会在第4次运行时崩溃的5次连续运行流程现在可以恢复。 每次连续运行都会将运行ID写入`run_history.json`文件以及磁盘上的检查点清单，因此，要从中断处恢复，只需执行一个命令即可。
+所有设置都可以通过使用 `BACKPROPAGATE_` 前缀的环境变量进行覆盖：
 
-```bash
-backprop resume <run-id>                       # picks up the in-progress session
-backprop multi-run --data ... --resume <run-id> # explicit form
-backprop train --data ... --resume <run-id>    # single-run resume (continues run_id)
-```
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `BACKPROPAGATE_LOG_JSON` | 自动 | 强制JSON或控制台日志输出 |
+| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | 默认模型 |
+| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | 学习率 |
+| `BACKPROPAGATE_LORA__R` | `256` | LoRA秩（v1.3的默认值；使用 `--lora-preset=fast` 参数可以设置成v1.2.x的默认值16） |
+| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | UI文件系统沙箱 |
 
-`backprop multi-run` 命令的默认行为是自动检测同一输出目录中是否已存在的正在进行的任务，并继续执行。 如果要强制创建一个全新的会话，可以使用 `resume_from="off"` 参数（Python API），或者省略 `--resume` 参数，并指定一个新的输出目录。
-
-当一个多轮训练恢复时，模型会加载该`run_id`对应的最新检查点，从检查点旁边的`slao/`目录恢复SLAO的合并状态，然后从`last_completed_run + 1`处继续训练循环。历史记录条目的`status`状态会恢复为`running`，因此运行`backprop list-runs --status running`命令可以显示正在进行的会话。
-
-### 实验跟踪功能 (版本 1.1.0)
-
-`Trainer` 会自动检测已安装的实验跟踪器（`wandb`、`tensorboard`、`mlflow`），并将它们与底层的 `transformers.TrainingArguments` 进行连接。默认情况下，`report_to="auto"` 会自动选择可导入的跟踪器。
-
-```bash
-pip install backpropagate[monitoring]  # installs wandb + psutil
-wandb login                            # one-time
-backprop train --data my_data.jsonl    # W&B run gets the same run_id prefix as the on-disk history
-```
-
-可以使用 `Trainer(report_to=["wandb"])`、`Trainer(report_to=["tensorboard"])` 或 `Trainer(report_to="none")` 来显式地禁用某些功能。要使用 MLflow，请安装 `pip install mlflow`；要使用 TensorBoard，请安装 `pip install tensorboard`。W&B 运行的名称格式为 `backprop-<run_id_prefix>`，这样操作人员可以使用相同的标识符在 W&B、我们的日志以及 `run_history.json` 文件中进行搜索。
-
-### 培训经历
-
-每次 `backprop train` 和 `backprop multi-run` 的执行都会在 `<output>/run_history.json` 文件中记录一行，包含运行ID、模型、数据集、超参数、状态、最终损失、损失历史，以及（对于多轮运行）SLAO 合并的时间线。列出最近的运行记录：
-
-```bash
-backprop list-runs                         # most recent 20 runs, all statuses
-backprop list-runs --status failed         # filter
-backprop list-runs --json --limit 100      # machine-readable
-backprop show-run abcd1234                 # detail view (partial run_id ok)
-```
-
-运行历史信息在不同进程中得以保留。Web界面的“运行”标签显示的是一个独立的、内存中的视图；而存储在磁盘上的历史记录才是 `list-runs`（列出运行记录）、`show-run`（显示运行记录）和 `resume`（恢复运行）命令的权威数据来源。
-
-### 网页用户界面
-
-启动本地的 Reflex 界面。
-
-```bash
-backprop ui --port 7862
-```
-
-要公开一个可以通过公共互联网访问的URL，您必须同时使用 `--share` 和 `--auth` 选项。
-
-```bash
-backprop ui --share --auth alice:hunter2
-```
-
-`backprop ui --share` 命令，如果未指定 `--auth` 参数，将以错误代码 `1` 退出，并显示结构化错误信息 `[RUNTIME_UI_AUTH_NOT_ENFORCED]`。 原因是：`--share` 会发布一个公开的 URL，任何人都可以访问。 如果没有身份验证，这意味着任何人都可以控制您的训练流水线。 如果您不想设置凭据，请使用 SSH 端口转发：`ssh -L 7860:localhost:7860 <host>`，然后在本地打开 `http://localhost:7860`。 请参阅 [handbook/security.md](site/src/content/docs/handbook/security.md) 以获取完整的安全风险评估。
-
-用户界面中的文件写入操作会被限制在一个单独的目录中，以提高安全性。
-
-- 默认值：`~/.backpropagate/ui-outputs`
-- 可重写：`BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
-- 重写设置会经过**黑名单验证**—— 系统路径和凭据路径（如`/etc`、`/var`、`~/.ssh`、`~/.aws`、`C:\Windows\System32`等）会被拒绝，并显示错误信息`[UI_OUTPUT_DIR_FORBIDDEN]`。
-
-## Windows 支持服务
-
-Backpropagate 软件设计时就考虑了在 Windows 操作系统上的兼容性，可以直接运行。
-
-- 为了避免多进程崩溃，进行了预处理。
-- 自动禁用 xformers，适用于 RTX 40/50 系列显卡。
-- 采用安全的 DataLoader 设置。
-- 已在 RTX 5080 (16GB 显存) 上进行测试。
+嵌套键使用双下划线（`MODEL__NAME`，而不是 `MODEL_NAME`）。完整的参考信息请参见[环境变量手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/)。
 
 ## 模型预设
 
-| 预设。 | 显存 (xiǎn cún) | 速度。 | 质量。 |
-|--------|------|-------|---------|
-| Qwen 2.5 7B。 | 约12GB。 | 中等。 | 祝好。 |
-| Qwen 2.5 3B 模型。 | 约8GB。 | 快速。 | 好的。 |
-| Llama 3.2，30亿参数版本。 | 约8GB。 | 快速。 | 好的。 |
-| Llama 3.2 1B | 约6GB。 | 最快的。 | 基础。 |
-| Mistral 7B | 约12GB。 | 中等。 | 好的。 |
+| 预设。 | 显存 (xiǎn cún) | 许可证 | 说明 |
+|---|---|---|---|
+| Qwen-3.5-4B | 约8GB。 | Apache 2.0 | 适用于小于5B的模型，在该尺寸下质量最佳。 |
+| Phi-4-mini-3.8B | 约8GB。 | MIT | 在推理/数学/代码方面表现出色。许可证清洁。 |
+| SmolLM3-3B | 约6GB。 | Apache 2.0 | 完全开放的配置。原生64K上下文。 |
+| Qwen 2.5 7B。 | 约12GB。 | Apache 2.0 | 现有默认值。在旧版7B预设中质量最佳。 |
+| Qwen 2.5 3B 模型。 | 约8GB。 | Qwen-Research | ⚠ 研究许可证 — 在商业用途前请查看Qwen的许可证条款。 |
+| Llama 3.2，30亿参数版本。 | 约8GB。 | Llama Community | 是Qwen 3B的良好替代方案，具有宽松的限制条件。 |
+| Llama 3.2 1B | 约6GB。 | Llama Community | 适用于小型设备上的快速实验。 |
+| Mistral 7B | 约12GB。 | Apache 2.0 | 与Qwen 7B相当，但使用了不同的对话模板。 |
 
-## 架构
-
-```
-backpropagate/
-├── trainer.py           # Core Trainer class
-├── multi_run.py         # Multi-run SLAO training
-├── slao.py              # SLAO LoRA merging algorithm
-├── datasets.py          # Dataset loading, filtering & curriculum
-├── export.py            # GGUF/Ollama export
-├── config.py            # Pydantic settings + training presets
-├── gpu_safety.py        # GPU monitoring & safety
-├── cli.py               # CLI entry point (backprop command)
-├── checkpoints.py       # Checkpoint management
-├── exceptions.py        # Structured error hierarchy
-├── feature_flags.py     # Optional feature detection
-├── security.py          # Path traversal & torch security
-├── logging_config.py    # Structured logging setup
-├── ui_theme.py          # Radix theme tokens + CSS (Reflex era)
-├── ui_state.py          # rx.State subclasses
-├── ui_app/              # Reflex web interface (Radix UI)
-│   ├── app.py           #   rx.App entry point
-│   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
-│   ├── pages/           #   Train / Multi-Run / Export / Dataset
-│   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-```
-
-v1.0 的 Gradio 实现（`ui_gradio_legacy.py` + `theme_gradio_legacy.py`）在 v1.1.x 版本中被保留，仅作为参考，并在 v1.2.0 版本中被移除。
+其他模型通常也适用，但只有这八个模型在CI中被固定。使用 `--lora-preset=quality`（默认值）可以设置成秩为256/全线性目标，参考Biderman 2024 + Thinking Machines 2025，或者使用 `--lora-preset=fast` 设置成秩为16/q+v目标，以获得与v1.2.x相同的内存占用。
 
 ## 故障排除
 
-常见首次运行失败的简要索引。完整的反向索引位于[故障排除手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/)；以下每个代码都记录在[错误代码](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/)中。
+这是最常见的首次运行失败的简要索引。完整的反向索引请参见[故障排除手册页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/)。有关驱动程序/显存/混合精度深度分析，请参阅[CUDA故障排除页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/)。
 
-| 症状 | 代码 | 解决方法 |
-|---------|------|-----|
-| 训练过程中 GPU 内存耗尽 | `RUNTIME_GPU_OOM` | OOM 自动恢复 (B-002) 会自动将批次大小减半，最多 3 次。要禁用此功能，请使用：`Trainer(oom_recovery=False)`。要强制使用更小的批次大小，请使用：`--batch-size 1`。 |
-| HF Hub 返回 401 错误 / "未找到模型" | `DEP_MODEL_LOAD_FAILED` | 使用 `huggingface-cli login` 重新登录。如果出现拼写错误，请从 <https://huggingface.co/models> 复制确切的 ID。 |
-| 模型名称拼写错误 | `INPUT_VALIDATION_FAILED` 或 `DEP_MODEL_LOAD_FAILED` | 验证 <https://huggingface.co/models> 上的 `org/name` 标识符。 |
+| 症状 | 错误代码 | 解决方法 |
+|---|---|---|
+| 训练过程中 GPU 内存耗尽 | `RUNTIME_GPU_OOM` | 自动模式：当出现内存不足错误时，Backpropagate 会减小批次大小，并最多重试 3 次。要禁用此功能，请使用 `Trainer(oom_recovery=False)`。要强制使用更小的批次大小，请使用 `--batch-size 1`。 |
+| HuggingFace 返回 401 错误 / "未找到模型" | `DEP_MODEL_LOAD_FAILED` | 使用 `huggingface-cli login` 重新登录。如果出现拼写错误，请从 <https://huggingface.co/models> 复制确切的 ID。 |
 | `register_with_ollama` 连接被拒绝 | `DEP_OLLAMA_REGISTRATION_FAILED` | 启动守护进程：`ollama serve`。 从 <https://ollama.com> 安装。 可重试。 |
 | 保存检查点时磁盘已满 | `STATE_CHECKPOINT_INVALID` | 在崩溃时，原子写入会在目录中留下一个 `.partial` 目录，可以安全删除。之前的有效检查点仍然存在。 |
-| GPU 过热导致训练暂停/中止 | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 监视器在 NVML 温度阈值处暂停，GPU 冷却后会自动恢复。 改善散热或降低持续负载。 |
-| `backprop ui --share` 被拒绝 | `INPUT_AUTH_REQUIRED` | 使用 `--auth user:password`。自 v1.2.0（GHSA-f65r-h4g3-3h9h）起，`--share` 在没有 `--auth` 的情况下是硬性错误，不可关闭。如果无法公开凭据，请使用 SSH 端口转发。 |
-| 多次运行出现 "验证重叠" | `CONFIG_INVALID` (Stage A backend B-001) | 降低 `--samples` 的值，使其低于训练池大小，增加数据集，或禁用验证。 |
+| 训练因 GPU 过热而暂停。 | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | 自动模式：当 GPU 温度超过阈值时，Backpropagate 会暂停，并在 GPU 冷却后恢复。如果此问题频繁发生，请改善散热。 |
+| `backprop ui --share` 被拒绝 | `INPUT_AUTH_REQUIRED` | 使用 `--auth user:password`，或者使用 SSH 端口转发（请参阅 [Web UI](#web-ui)）。 |
 | 首次尝试 GGUF 导出失败 | `RUNTIME_GGUF_EXPORT_FAILED` | 使用 `pip install backpropagate[export]`。 在 Windows 上，还需要 Visual C++ Build Tools + CMake。 |
 
 ## 报告错误
 
-当出现错误时，Backpropagate 在启动时会打印一条 `run_started run_id=<uuid>` 行，并将相同的 ID 绑定到检查点清单、SLAO 合并历史记录和结构化日志行。 在任何错误报告中，请包含 `run_id`，它允许维护人员关联该次运行中的每一行日志、每个检查点和每个合并。
+当出现错误时，Backpropagate 在启动时会打印一行，例如 `run_started run_id=<uuid>`，并将相同的 ID 绑定到每一行日志、每个检查点以及每个 Weights & Biases 条目。**在任何错误报告中，请包含 `run_id`** — 它可以帮助维护者将所有内容与该特定运行关联起来。
 
 一个好的错误报告应包含：
 
-1. **`run_id`** — 启动时打印的 UUID（也可作为 `TrainingRun.run_id` 和 `RunResult.run_id`）。
-2. **错误代码** — `stderr` 中出现的 `[CODE_NAME]: message` 行，可以使用 `grep` 命令查找；请参阅 [错误代码](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) 了解详细信息。
-3. **已删除的命令行。** 在非详细模式下，`stderr` 会自动删除（Bearer 令牌、`sk-*`、`hf_*`、AWS 密钥、`password=`/`token=`/`api_key=` 对会被删除），可以安全粘贴。 要获取完整的未删除的堆栈跟踪，请使用 `--verbose` 重新运行，但在发布之前请仔细检查。
+1. **`run_id`** — 启动时打印的 UUID。
+2. **错误代码** — `stderr` 中的 `[CODE_NAME]: message` 行。请参阅 [错误代码](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) 目录。
+3. **已屏蔽的命令行。** `stderr` 会自动进行屏蔽（Bearer 令牌、`sk-*`、`hf_*`、AWS 密钥、`password=` / `token=` 对等信息会被删除）——可以安全地粘贴。要查看完整的未屏蔽的堆栈跟踪，请使用 `--verbose` 重新运行，但在发布之前请仔细检查。
 4. **Python / PyTorch 版本、GPU 型号、操作系统。** `backprop info` 可以一次性打印所有这些信息。
+
+问题、想法或“这是预期的吗”的讨论应在 [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions) 中提出。安全问题应通过 [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) 表单私下报告 — 请参阅 [SECURITY.md](SECURITY.md) 了解相关政策。
 
 ## 隐私
 
 所有训练都在您的 GPU 上本地进行。 Backpropagate 仅向 HuggingFace 下载模型时才会进行网络请求（您需要主动发起）。 没有遥测，没有云依赖。
 
-## 评分卡
+## 参考资料
 
-| 类别 | 评分 | 说明 |
-|----------|-------|-------|
-| A. 安全性 | 6/8 | SECURITY.md，信任模型，无秘密/遥测，safe_path()。 MCP 项目已跳过。 |
-| B. 错误处理 | 5/7 | 结构化异常信息（`code`/`message`/`hint`/`cause`/`retryable`），通过 `ERROR_CODES` 注册表提供；CLI 退出码：0/1/2/3；不显示原始堆栈跟踪，除非使用 `--verbose` 参数；`run_id` 关联；已屏蔽的标准错误输出；`--share` + `--auth` 权限控制。MCP/桌面/VS Code 已跳过。 |
-| C. 运维文档 | 4/7 | README、CHANGELOG、LICENSE、--help。日志记录/MCP/复杂功能已跳过。 |
-| D. 发布流程 | 6/9 | `verify.sh`、版本号=标签、CI 中包含 5 个扫描器、dependabot、`python_requires`、干净的构建。 |
-| E. 身份标识 | 4/4 | Logo、翻译、着陆页、元数据。 |
-| **Total** | **25/31** | 跳过了 14 个项目，并已给出理由；`shipcheck audit` 检查通过 100%；审计日期：2026-05-21（B 行在 B 阶段和 A 阶段 CLI 退出码工作完成后重新评估）。 |
+Backpropagate 的默认设置和多轮训练模式是基于最近的研究。如果您对底层技术感兴趣：
 
-设计历史以及每个条目对应的具体内容：请参阅 [ROADMAP.md](ROADMAP.md)——所有第 1-4 周的项目都已在 v1.1.0 版本中发布。
+- **Hu et al. 2021.** *LoRA: Low-Rank Adaptation of Large Language Models.* [arXiv:2106.09685](https://arxiv.org/abs/2106.09685) — 介绍了 LoRA 的基础论文，Backpropagate 使用 LoRA 来高效地训练适配器。
+- **Biderman et al. 2024.** *LoRA Learns Less and Forgets Less.* [arXiv:2405.09673](https://arxiv.org/abs/2405.09673) — 提供了经验证据，表明在大多数后续训练任务中，秩为 256 且针对所有线性目标的 LoRA 质量与完整微调相当，但计算量仅为 67%。这驱动了 Backpropagate v1.3 的默认 LoRA 配置。
+- **Thinking Machines 2025.** *LoRA Without Regret.* [thinkingmachines.ai/blog/lora](https://thinkingmachines.ai/blog/lora/) — 这是一个实践性的后续，它识别了在较高 LoRA 秩下，与完整微调相比，所需的 10 倍学习率修正。
+- **Kirkpatrick et al. 2017.** *Overcoming catastrophic forgetting in neural networks.* [arXiv:1612.00796](https://arxiv.org/abs/1612.00796) — 原始的对神经网络“遗忘”之前训练内容的描述（EWC — Elastic Weight Consolidation）。
+- **Wang et al. 2023.** *Orthogonal Subspace Learning for Language Model Continual Learning.* [arXiv:2310.14152](https://arxiv.org/abs/2310.14152) — O-LoRA，一种较早的方法，通过将新的适配器限制在正交子空间，使用 LoRA 进行持续学习。
+- **Yadav et al. 2023.** *TIES-Merging: Resolving Interference When Merging Models.* [arXiv:2306.01708](https://arxiv.org/abs/2306.01708) — 一种用于合并多个微调模型的、无需干扰的基础技术。
+- **Qiao & Mahdavi 2025.** *Merge before Forget: A Single LoRA Continual Learning via Continual Merging.* [arXiv:2512.23017](https://arxiv.org/abs/2512.23017) — Backpropagate 的多轮合并算法的具体实现。这是一篇 2025 年 12 月的预印本；Backpropagate 是该论文的第一个已知的下游应用。
 
 ## 许可证
 
-MIT — 详情请参阅 [LICENSE](LICENSE)。
+MIT — 参见 [LICENSE](LICENSE)。
 
 ---
 

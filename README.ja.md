@@ -10,142 +10,152 @@
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
   <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/mcp-tool-shop-org/backpropagate"><img src="https://api.scorecard.dev/projects/github.com/mcp-tool-shop-org/backpropagate/badge" alt="OpenSSF Scorecard"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**わずか3行のコードでLLMをファインチューニング。最適なデフォルト設定、VRAMを考慮したバッチサイズ、複数回の学習によるSLAO、そしてOllamaへのワンクリックGGUFエクスポート機能。**
+# アダプターをトレーニングします。それをOllamaに送信します。完了です
 
-*SLAOは、非対称なマージによる継続学習（Single LoRA Continual Learning via Asymmetric Merging）であり、長期間のファインチューニング中に発生する破滅的な忘却を防ぐための手法です。（[論文](https://arxiv.org/abs/2512.23017)）*
-
-*わずか3行のコードでLLMを学習させ、さらに1行でOllamaにエクスポートできます。*
-
-## クイックスタート
-
-```bash
-pip install backpropagate[standard]
-```
-
-```python
-from backpropagate import Trainer
-
-trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
-trainer.train("examples/quickstart.jsonl", steps=10)
-trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
-```
-
-このリポジトリには、`examples/quickstart.jsonl`という小さなファイル（ShareGPT形式の5つの例）が含まれており、これにより、上記のコードスニペットをクリーンな環境でエンドツーエンドで実行できます。ご自身の学習を行う場合は、以下の「データセット形式」を参照してください。
-
-### コード不要：Web UI
-
-Python REPLではなく、UIを使用したいですか？同じ追加機能をインストールして実行してください。
-
-```bash
-pip install backpropagate[standard]
-backprop ui --port 7862
-```
-
-Reflex (Radix UI)インターフェースを使用すると、JSONLファイルを選択し、モデルを選択し、学習を実行し、エクスポートすることができます。Pythonの知識は不要です。このUIはローカル環境での使用を前提としており、インターネット経由での公開については、以下の「Web UI」を参照してください。セキュリティ契約（`--share` + `--auth`）と、サポートされているトンネルオプション（Cloudflare Tunnel、ngrok）について説明しています。
-
-## データセット形式
-
-JSONL形式の学習ファイルは、各行に1つの例が記述されている必要があります。最もシンプルな形式は、ShareGPTのチャット形式です。
-
-```jsonl
-{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
-{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
-```
-
-Alpaca（`instruction`/`output`）、OpenAIのチャット（`messages`）、および生のテキスト形式もサポートされています。`examples/quickstart.jsonl`には、コピーしてすぐに使えるサンプルが含まれています。
-
-## なぜバックプロパゲーションを行うのか？
-
-| 問題点 | 解決策 |
-|---------|----------|
-| ファインチューニングは複雑 | 3行で完了：ロード、学習、保存 |
-| Windowsは使い物にならない | Windowsへの完全なサポート |
-| VRAM管理は難しい | 自動バッチサイズ調整、GPU監視 |
-| モデルのエクスポートは混乱を招く | ワンクリックでGGUF形式にエクスポートし、Ollamaに自動登録 |
-| 長時間の学習は忘却を引き起こす | 複数回の学習によるSLAO |
-
-## 主な機能
-
-- **設計上、ヘッドレス**: CI/CDパイプライン、自動化されたワークフロー、およびプログラムによる実行向けに設計されています。
-- **最適なデフォルト設定**: ハードウェアとデータセットに基づいて、最適なハイパーパラメータを自動的に設定します。
-- **複数回の学習によるSLAO**: 長時間の学習中に発生する破滅的な忘却を防ぐための高度な学習戦略。
-- **Windowsへの完全なサポート**: Windows環境で動作するようにテストおよび最適化されており、一般的なPyTorch/CUDAの問題を回避します。
-- **シームレスなエクスポート**: ワンクリックでGGUF形式にエクスポートし、Ollamaに自動登録します。
-- **モジュール式のアーキテクチャ**: 必要な依存関係のみをインストールできます（例：`[unsloth]`、`[ui]`、`[export]`）。
-
-## インストール
-
-```bash
-pip install backpropagate              # Core only (minimal)
-pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-pip install backpropagate[ui]          # + Reflex (Radix UI) web interface
-pip install backpropagate[standard]    # unsloth + ui (recommended)
-pip install backpropagate[full]        # Everything
-```
-
-| 追加機能 | 説明 | 依存関係 |
-|-------|-------------|--------------|
-| `unsloth` | 学習速度が2倍、VRAM使用量が50%削減 | unsloth |
-| `ui` | Reflex (Radix UI)のWebインターフェース | reflex>=0.9.2, fastapi>=0.115 |
-| `validation` | Pydanticによる設定検証 | pydantic, pydantic-settings |
-| `export` | Ollama用のGGUFエクスポート | llama-cpp-python |
-| `monitoring` | WandB + システム監視（v1.1.0でトレーナーに自動的に組み込み） | wandb, psutil |
-| `logging` | 構造化されたロギング | structlog |
-| `security` | JWT認証 + トークン生成 | PyJWT, cryptography |
-| `production` | unsloth + ui + 検証 + ロギング + セキュリティ | （バンドル） |
-
-**要件:** Python 3.10以上、CUDA対応GPU（8GB以上のVRAM）、PyTorch 2.0以上
-
-### プラットフォームの前提条件
-
-Backpropagateは、実行時の問題を解決します（マルチプロセッシング、RTX 40/50でのxformers、Windowsでのデータローダー）。ただし、インストール時のプラットフォームの問題は解決しません。それらの問題は事前に解決してください。
-
-- **CUDA ツールキットのバージョン。** PyTorch は CUDA に合わせてリリースされます。誤った wheel を選択すると、CPU のみで動作する torch がインストールされてしまいます。お使いのドライバに合った正確な `pip install torch ...` コマンドについては、<https://pytorch.org/get-started/locally/> の選択ツールをご利用ください。`nvidia-smi` コマンドを実行して、ドライバまたは CUDA のバージョンを確認してください。
-- **Windows。** `[export]` オプションを使用する場合（`llama-cpp-python` はソースコードからビルドされます）、Visual Studio Build Tools (C++) と CMake が必要です。`bitsandbytes` wheel は、Windows ネイティブで利用できるようになりました（>= 0.43）。古いドキュメントで `bitsandbytes-windows` が言及されている場合は、最新の情報ではありません。
-- **macOS。** GPU を使用した学習は**サポートされていません**。CUDA は利用できません。エクスポートされた GGUF モデルを Ollama を介して *推論* 実行するには、Backpropagate をインストールできますが、`trainer.train()` を実行すると `DEP_GPU_NOT_AVAILABLE` エラーが発生します。学習には CUDA 対応の環境を使用してください。
-- **Linux。** ほとんどのディストリビューションで問題なく動作します。PyPI からのバイナリリリースを使用している場合は、Linux のビルドでは CPU のみで動作する torch が使用されていることに注意してください（GitHub のリリースアセットの 2GB 制限を超えるため）。最初に、pytorch.org から対応する CUDA wheel をインストールしてください。
-
-詳細なインストールに関するトラブルシューティングについては、[トラブルシューティングガイド](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) を参照してください。
-
-## 設定
-
-すべての設定は、`BACKPROPAGATE_` というプレフィックスが付いた環境変数を使用して上書きできます（例：`BACKPROPAGATE_LOG_LEVEL=debug`）。プロジェクトのルートディレクトリにある `.env` ファイルは、`[validation]` オプションがインストールされている場合に自動的に読み込まれます。
-
-一般的な設定項目（詳細については、[環境変数リファレンス](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/) を参照してください）。
-
-| 変数 | デフォルト値 | 備考 |
-|----------|---------|-------|
-| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `BACKPROPAGATE_LOG_JSON` | auto | JSON ログを強制 (`true`) するか、コンソールログ (`false`) を使用するか |
-| `BACKPROPAGATE_LOG_FILE` | 未設定 | ログを保存するパス |
-| `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | 未設定 | 起動時のオプション依存関係の検出をスキップし、CLI の起動を高速化 |
-| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | すべての UI ファイルシステムの書き込みのサンドボックスベース。許可リストで検証済み |
-| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | デフォルトモデル |
-| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | 学習率 |
-| `BACKPROPAGATE_LORA__R` | `16` | LoRA のランク |
-
-ネストされたキーでは、区切り文字として二重アンダースコアを使用します（Pydantic の `env_nested_delimiter` 規則）。
-
-## 使い方
-
-### 基本的な学習
+Backpropagateは、単一のGPUで大規模言語モデルをファインチューニングするためのPythonライブラリです。わずか3行のコードで、16GBのカードで7Bモデルをトレーニングできます。さらに1つのコマンドで、ファインチューニングしたモデルをOllamaにエクスポートし、`ollama run`コマンドで実行できます。Windowsでも問題なく動作します。
 
 ```python
 from backpropagate import Trainer
 
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
-trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` がデフォルトです。`Trainer()` を呼び出す際にモデル引数を指定しない場合、この値が適用されます（`config.py` の `ModelConfig.name` を参照）。以前の例では、事前量子化された `unsloth/Qwen2.5-7B-Instruct-bnb-4bit` が使用されていましたが、より安定性の高い公式の Qwen モデルをデフォルトに変更しました（[CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)）。どちらのモデルでも動作します。
+```bash
+backprop ollama register ./output/lora --name my-model
+ollama run my-model
+```
 
-### マルチラン SLAO 学習
+これだけで完了です。YAMLの設定ファイルは不要です。`accelerate launch`コマンドも不要です。また、GGUF形式への変換に関するチュートリアルもありません。CUDA対応のGPUと、トレーニングデータを含むJSONLファイルがあれば、わずか3行のコードでファインチューニングを開始できます。
+
+## インストール
+
+```bash
+# Recommended: isolated Python install (no conflicts with system Python or other projects)
+pipx install backpropagate
+
+# Or via uv (faster install, same isolation)
+uv tool install backpropagate
+
+# Standard pip (if you manage your own virtualenv)
+pip install backpropagate
+```
+
+オプション機能が必要な場合は、以下のいずれかでインストール方法を変更してください。
+
+```bash
+pipx install "backpropagate[standard]"   # adds Unsloth (2x faster training) + the web UI
+pipx install "backpropagate[full]"       # adds everything: unsloth, ui, monitoring, export, etc.
+```
+
+Dockerを使用したい場合は、`docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest`でも動作します。`linux/amd64`と`linux/arm64`の両方のイメージが提供されており、Apple SiliconやARM Linux環境でもネイティブイメージを使用できます。UIをコンテナで実行するための標準的な`compose.yaml`ファイルは、リポジトリのルートにあります。`docker compose up`コマンドを実行すると、Web UIが`http://localhost:7860`で起動し、永続的な`~/.backpropagate`ボリュームがマウントされます。
+
+## Backpropagateの立ち位置
+
+大規模言語モデルのファインチューニングには、いくつかの優れたライブラリがあります。それぞれが異なる強みを持っています。
+
+- **[Axolotl](https://github.com/OpenAccess-AI-Collective/axolotl)**：YAML設定を使用し、他のユーザーのレシピを参考にしたい場合に最適です。
+- **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)**：Web GUIを使用し、DPO/PPO/RLHFなどの機能を利用したい場合に最適です。
+- **[Unsloth](https://github.com/unslothai/unsloth)**：可能な限り高速なトレーニングが必要で、対応するモデルファミリーを使用する場合に最適です。
+- **[torchtune](https://github.com/pytorch/torchtune)**：Metaが提供する、PyTorchネイティブのレシピを編集したい場合に最適です。
+
+Backpropagateは、これらのライブラリとは異なるアプローチを提供します。**単一のコンシューマーGPUで動作するユーザー向けに、アダプターをトレーニングし、配布するための、3行のPython APIです。** YAML設定、GUI、DPO/PPO、マルチノード構成は不要です。必要な機能と、邪魔になるエクスポート手順のみを提供します。
+
+もし、上記のライブラリを試してみて、設定ファイルの煩雑さに困ったり、対応するモデルファミリーがないことに気づいたり、Windows環境での利用を優先したい場合は、Backpropagateが適しています。
+
+## 16GBのコンシューマーGPUでファインチューニングできるモデル
+
+16GBのカード（RTX 4080 / 5080 / 4070 Ti Super）で動作するモデルの目安です。
+
+| モデル | 方法 | 状態 |
+|---|---|---|
+| Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | 快適。最大シーケンス長で動作し、余裕があります。 |
+| Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | 標準的。約7〜8GBのメモリを使用。Backpropagateのデフォルト設定。 |
+| Llama-3 13B | QLoRA + サンプルパッキング | ギリギリだが動作する。短いシーケンスを使用してください。 |
+| Mixtral 8x7B (合計470億パラメータ) | AQLM 2-bit + LoRA | v1.4での実験機能。16GBのカードで動作する最大のモデルです。 |
+
+3B以下のモデルでは、LoRAだけでなく、フルファインチューニングも16GBで実行可能です。v1.4では`mode="full"`オプションとして実装予定です。7B以上のモデルでは、フルファインチューニングには24GB以上のGPUが必要になります。クラウドのA100インスタンスを検討するか、LoRAを使用することをお勧めします。最近の研究によると、LoRAはほとんどのトレーニング後のタスクで、フルファインチューニングと同等の品質が得られることがわかっています（詳細については、[このセクション](#what-backpropagate-is-not-for)を参照）。
+
+## Backpropagateが適さないケース
+
+正直な情報を提供することで、ユーザーの皆様に最適な選択肢を提供します。Backpropagateは、これらの機能を提供していません。これらの機能を実装しようとしても、適切なツールを使用するよりも手間がかかる可能性があります。
+
+- **70億パラメータ以上のモデルのフルパラメータファインチューニング** — BackpropagateはLoRA/QLoRAを使用しており、すべての重みを更新するのではなく、小さなアダプターを学習します。70億パラメータ以上のモデルの場合、フルファインチューニングには24GB以上のGPUメモリが必要であり、16GBの一般的なグラフィックボードでは動作しません。30億パラメータ以下のモデルでは、16GBのメモリでフルファインチューニングが可能です。v1.4では、`mode="full"`オプションが予定されています。全体として、最近の研究（[Biderman 2024](https://arxiv.org/abs/2405.09673)、[Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)）によると、正しく設定されたLoRAは、ほとんどの追加学習タスク（指示に従う、ドメイン適応、ペルソナ/スタイル）において、フルファインチューニングと同等の品質を、計算量の67%で実現できます。したがって、ほとんどのユーザーが実際に必要とするタスクにおいては、LoRAを使用しても何も失うことはありません。もし、70億パラメータ以上のモデルのフルファインチューニングが必要な場合は、HuggingFaceの`transformers.Trainer`を直接、24GB以上のGPUでご使用ください。
+- **DPO/PPO/GRPO/好みの学習** — Backpropagateは、シングルステージの教師ありファインチューニングのみをサポートしています。好みの学習については、TRLまたはLLaMA-Factoryを直接ご使用ください。
+- **マルチノードトレーニング** — シングルGPUのみをサポートします。シングルマシンのマルチGPU構成は動作しますが（`accelerate launch`を使用）、公式にはサポートされていません。
+- **macOSでのトレーニング** — Apple SiliconにはCUDAがないため、トレーニングはNVIDIA GPUを搭載したLinuxまたはWindowsの環境で行う必要があります。学習済みのモデルは、Ollamaを通じてMacでも実行できます。
+- **テスト対象外のモデルファミリー** — Qwen 2.5 / 3.5 (7B / 4B)、Phi-4-mini-3.8B、SmolLM3-3B、Llama 3.2 (3B / 1B)、Mistral 7B。他のモデルも動作する場合がありますが、CI環境では検証されていません。
+
+上記のような機能が必要な場合は、上記に記載されているライブラリをご利用ください。それらは、それらの機能に特化しています。
+
+## Backpropagateが提供するもの
+
+インストール時に利用できる、以下の4つの機能：
+
+**1. 設定ファイルが不要な、シンプルな3行のAPI**
+このREADMEの冒頭にあるコードは、エンドツーエンドで実行できます。`accelerate config`、YAMLファイル、Hydraの設定などは不要です。`Trainer(model).train(data)`と記述するだけで、ファインチューニングが完了します。
+
+**2. 実際に動作するWindowsサポート**
+多くの機械学習ライブラリでは、Windowsは後回しに扱われています。Backpropagateは、Windows + RTX 5080環境で、最初からテストされています。ライブラリは、Windows特有の動作を自動的に処理します。例えば、Windowsのマルチプロセスでクラッシュしないようにデータを事前にトークン化したり、RTX 40/50シリーズのカードでxformersが動作しない場合に自動的に無効にしたり、データローダーの設定を自動的に調整したりします。これらのことをユーザーが知る必要はありません。すべて自動的に処理されます。
+
+**3. 無人実行に対応**
+トレーニングには時間がかかります。ユーザーが常に監視する必要はありません。Backpropagateは、バックグラウンドで実行されるように設計されています。
+
+- GPUメモリが不足した場合、バッチサイズを自動的に半分にし、最大3回まで再試行します。手動での調整は不要です。
+- GPUの温度が上昇した場合、温度が下がるまで一時停止し、その後、再開します。
+- すべてのチェックポイントは、アトミックに書き込まれます。つまり、ラップトップが保存中にクラッシュした場合でも、以前の正常なチェックポイントは保持されます。
+- すべてのトレーニング実行には、一意のIDが割り当てられ、ログの各行、チェックポイント、およびWeights & Biasesのエントリに記録されます。問題が発生した場合、このIDを使用することで、管理者がすべての情報を関連付けることができます。
+- エラーには、安定したコード（`RUNTIME_GPU_OOM`、`DEP_OLLAMA_REGISTRATION_FAILED`など）が付属しています。これにより、ログを検索したり、[トラブルシューティングガイド](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/)を参照して、解決策を見つけることができます。CUDA関連のエラーについては、専用の[CUDAトラブルシューティングページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/)があります。
+
+**4. 学習済みのアダプターから`ollama run`まで、1つのコマンド**
+多くのライブラリがモデルを学習しますが、実際に使用したい場合に、ユーザーの邪魔をしないものも多くありません。Backpropagateは、Ollamaで使用される形式（GGUF）にエクスポートし、Ollamaモデルを登録する機能を、1つのコマンドで提供します。トレーニングが完了してから、ファインチューニングしたモデルでチャットを開始するまで、わずか30秒で完了します。
+
+## クイックスタート
+
+このリポジトリには、小さなサンプルデータセットが含まれており、このREADMEの冒頭にあるコードが、クリーンな環境で実行できるように設計されています。
+
+```bash
+pipx install "backpropagate[standard]"
+
+python -c "
+from backpropagate import Trainer
+trainer = Trainer('Qwen/Qwen2.5-7B-Instruct')
+trainer.train('examples/quickstart.jsonl', steps=10)
+trainer.export('gguf', quantization='q4_k_m')
+"
+```
+
+これは、5つの短いShareGPT形式の会話データセットでQwen 2.5 7Bのアダプターを学習し、その結果をGGUF形式でエクスポートするものです。ご自身のデータを使用する場合は、JSONLファイルを1行1つの例で記述してください。
+
+```jsonl
+{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
+{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
+```
+
+Alpaca（`instruction` / `output`）、OpenAIのチャット（`messages`）、および生のテキスト形式も使用できます。Backpropagateは、形式を自動的に検出します。
+
+より包括的なワークフロー（ファインチューニングとHugging Face Hubへのアップロード、OOMエラーからの再開、長期的なキャンペーンにおける複数回の学習など）については、[handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/)を参照してください。
+
+### Web UI（オプション）
+
+Pythonコードを直接入力する代わりに、Web UIを使用したい場合は、UIの追加機能をインストールして起動します。
+
+```bash
+pipx install "backpropagate[ui]"
+backprop ui --port 7862
+```
+
+ローカルのWebインターフェースが`http://localhost:7862`で起動します。ここで、データセットを指定し、モデルを選択し、学習を実行し、エクスポートすることができます。UIはデフォルトではローカルでのみ利用可能です。他のデバイスからアクセスできるようにするには、[Web UI](#web-ui)を参照して、`--share`と`--auth`のセキュリティ設定を確認してください。
+
+## 複数回の学習
+
+複数のデータセットで段階的にファインチューニングを行いたい場合（たとえば、毎週新しい学習データを受け取り、以前に学習した内容を忘れることなく追加したい場合）は、Backpropagateの`multi_run`モードが適しています。
 
 ```python
 from backpropagate import Trainer
@@ -157,196 +167,196 @@ result = trainer.multi_run(
     num_runs=5,
     steps_per_run=100,
     samples_per_run=1000,
-    merge_mode="slao",  # Single LoRA Continual Learning via Asymmetric Merging
 )
 ```
 
-SLAO (Single LoRA Continual Learning via Asymmetric Merging) は、[Merge before Forget](https://arxiv.org/abs/2512.23017) という論文を実装しています。QR 分解による直交 A 行列の初期化、非対称な A/B 行列の処理、および時間依存の `λ(i) = 1/√i` スケーリングが含まれます。CLI フラグは `--samples` で、対応するフィールドは `samples_per_run` です。
+これは、5回の学習を繰り返し実行し、各回の実行でアダプターをマージすることで、以前の知識を維持しながら新しい例を取り入れる方法です。この手法は、最近の研究に基づいています。詳細は、このREADMEの末尾にある[References](#references)を参照してください。
 
-### Ollama へのエクスポート
+CLI（コマンドラインインターフェース）版：
 
-```python
-# Export to GGUF
-result = trainer.export("gguf", quantization="q4_k_m")
-
-# Register with Ollama separately
-from backpropagate import register_with_ollama
-register_with_ollama(result.path, "my-finetuned-model")
-# ollama run my-finetuned-model
+```bash
+backprop multi-run --data my_data.jsonl --runs 5 --steps 100 --samples 1000
 ```
 
-### CLI
+## チェックポイントからの再開
+
+4回目の実行でクラッシュした5回の学習も、再開可能です。すべての`multi_run`セッションは、実行IDをオンディスクの履歴ファイルとチェックポイントマニフェストに書き込みます。そのため、中断した場所から再開するには、1つのコマンドで済みます。
+
+```bash
+backprop resume <run-id>
+backprop multi-run --data ... --resume <run-id>
+backprop train --data ... --resume <run-id>     # single-run resume
+```
+
+`backprop multi-run`のデフォルト設定（`--resume`オプションなし）では、同じ出力ディレクトリ内に実行中のセッションが存在する場合、それを自動的に検出し、再開します。クリーンな状態から開始するには、新しい出力ディレクトリを指定してください。
+
+## トレーニング履歴
+
+`backprop train`および`backprop multi-run`の実行ごとに、`<output>/run_history.json`ファイルに1行が記録されます。記録される内容は、使用したモデル、データセット、ハイパーパラメータ、ステータス、最終的な損失、損失履歴などです。過去の実行を一覧表示し、確認することができます。
+
+```bash
+backprop list-runs                         # last 20 runs
+backprop list-runs --status failed         # filter by status
+backprop list-runs --json --limit 100      # machine-readable
+backprop show-run abcd1234                 # detail view (partial ID is fine)
+```
+
+## 実験の追跡
+
+Backpropagateは、インストールされている実験追跡ツール（Weights & Biases、TensorBoard、MLflow）を自動的に検出し、連携させます。`wandb`がインストールされており、ログインしている場合は、各実行が自動的にW&Bに記録されます。記録される実行名は、オンディスクの実行IDと一致します。これにより、W&B、ログ、および`run_history.json`ファイルを、1つの識別子で検索することができます。
+
+```bash
+pip install backpropagate[monitoring]   # installs wandb + psutil
+wandb login                             # one-time setup
+backprop train --data my_data.jsonl
+```
+
+`Trainer(report_to=["wandb"])`、`Trainer(report_to=["tensorboard"])`、または`Trainer(report_to="none")`を使用して、この機能を無効にすることができます。
+
+## Web UI
+
+ReflexのWebインターフェースは、オプションで利用可能です。`pipx install "backpropagate[ui]"`でインストールし、起動します。
+
+```bash
+backprop ui --port 7862
+```
+
+UIは、ローカルで`http://localhost:7862`で実行されます。他のデバイス（ネットワーク上の他のユーザー、パブリックURLなど）からアクセスできるようにするには、`--share`（または`--host`）と`--auth`を組み合わせて使用する必要があります。
+
+```bash
+backprop ui --share --auth alice:hunter2
+```
+
+`backprop ui --share`を`--auth`なしで実行すると、エラーが発生します。その理由は、`--share`はインターネット上の誰でもアクセスできるURLを公開しますが、認証なしでは、誰でも学習パイプラインを操作したり、Hugging Faceのトークンを読み取ったりできる可能性があるためです。この機能を無効にすることはできません。認証情報を設定したくない場合は、SSHポートフォワードを使用してください。
+
+```bash
+# On the client:
+ssh -L 7860:localhost:7860 <your-training-host>
+# On the server:
+backprop ui                             # no --share
+# Then open http://localhost:7860 in your local browser
+```
+
+完全な脅威モデルについては、[handbook/security.md](https://mcp-tool-shop-org.github.io/backpropagate/handbook/security/)を参照してください。
+
+UI からのファイルシステムへの書き込みは、単一のディレクトリにサンドボックス化されています。
+
+- デフォルト: `~/.backpropagate/ui-outputs`
+- 上書き: `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own` を設定
+- 上書きは、許可リスト方式で検証されます。システムや認証情報に関連するパス (`/etc`, `~/.ssh`, `~/.aws`, `C:\Windows\System32` など) は許可されません。
+
+## プラットフォームに関する注意点
+
+**要件:** Python 3.10以上、CUDA対応GPU（8GB以上のVRAM）、PyTorch 2.0以上
+
+Python 3.10 は、2026年10月にサポート終了となります。Backpropagate は、v1.4 で Python 3.10 のサポートを終了する予定です。新規インストールの場合は、Python 3.11 または 3.12 を推奨します。3.11 が最もテストされているバージョンです。
+
+Backpropagate は、異なるプラットフォームでのトレーニング時の動作に関する問題を処理しますが、インストール時の問題を解決することはできません。最も一般的な問題は以下の2つです。
+
+- **誤った CUDA wheel の選択:** PyTorch は、CUDA のバージョンごとに異なるバイナリが提供されています。誤ったものを選択すると、CPU のみを使用する PyTorch がインストールされ、トレーニング速度が著しく低下します。お使いのドライバに合った wheel を、<https://pytorch.org/get-started/locally/> で選択してください。`nvidia-smi` コマンドを実行して、ドライバと CUDA のバージョンを確認してください。
+- **Windows + GGUF エクスポート:** `[export]` オプションは、ソースコードから `llama-cpp-python` をビルドしますが、これには Visual Studio Build Tools (C++ コンポーネント) と CMake が必要です。
+
+**macOS:** GPU トレーニングはサポートされていません (CUDA 非対応)。トレーニング済みのアダプターは、Ollama を使用して Mac で実行できますが、`trainer.train()` を実行すると `DEP_GPU_NOT_AVAILABLE` エラーが発生します。トレーニング自体は、CUDA 対応の Linux または Windows マシンで行ってください。
+
+詳細なインストールに関するトラブルシューティングガイドは、[トラブルシューティングハンドブックのページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) を参照してください。また、ドライバ / VRAM / xformers / bf16-vs-fp16 に関する問題については、専用の [CUDA トラブルシューティングページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/) を参照してください。
+
+## CLI
+
+すべての Python API には、対応する CLI (コマンドラインインターフェース) が用意されています。
 
 ```bash
 backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
-backprop info
-backprop list-runs                              # v1.1.0: query past training runs
-backprop show-run <run-id>                      # v1.1.0: detail view
-backprop resume <run-id>                        # v1.1.0: resume a crashed multi-run
-backprop push ./output/lora --repo me/my-model  # v1.1.0: push adapter to HF Hub
+backprop info                          # environment + version snapshot
+backprop list-runs                     # past training runs
+backprop show-run <run-id>             # detail view
+backprop resume <run-id>               # resume a crashed run
+backprop push ./output/lora --repo me/my-model    # push adapter to HuggingFace Hub
+backprop diff-runs <run-a> <run-b>     # diff two runs side by side
+backprop replay <run-id>               # re-run with same config / dataset
+backprop export-runs --format jsonl    # bulk export run history
 ```
 
-すべてのサブコマンドとフラグについては、[CLI リファレンス](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/) を参照するか、`backprop <サブコマンド> --help` を実行してください。
+完全なリファレンスは、[CLI ハンドブックのページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/) を参照するか、`backprop <サブコマンド> --help` を実行してください。
 
-### チェックポイントからの再開 (v1.1.0)
+## 設定
 
-4 回の実行でクラッシュした 5 回のマルチランが、現在では復旧可能です。すべてのマルチランセッションでは、`run_id` が `run_history.json` とオンディスクのチェックポイントマニフェストの両方に書き込まれるため、中断した場所から再開するには、次のコマンドを実行します。
+すべての設定は、`BACKPROPAGATE_` というプレフィックスが付いた環境変数を使用して上書きできます。
 
-```bash
-backprop resume <run-id>                       # picks up the in-progress session
-backprop multi-run --data ... --resume <run-id> # explicit form
-backprop train --data ... --resume <run-id>    # single-run resume (continues run_id)
-```
+| 変数 | デフォルト値 | 備考 |
+|---|---|---|
+| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `BACKPROPAGATE_LOG_JSON` | auto | JSON またはコンソールログの出力を強制 |
+| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | デフォルトモデル |
+| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | 学習率 |
+| `BACKPROPAGATE_LORA__R` | `256` | LoRA のランク (v1.3 のデフォルト値。v1.2.x のデフォルト値である 16 を使用するには、`--lora-preset=fast` を指定) |
+| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | UI ファイルシステムサンドボックス |
 
-`backprop multi-run` のデフォルト動作（`--resume` オプションなし）では、同じ出力ディレクトリで実行中のジョブを自動的に検出し、それを継続します。クリーンなセッションを開始するには、`resume_from="off"`（Python API）を指定するか、`--resume` オプションを省略して、新しい出力ディレクトリで実行してください。
-
-マルチラン再開時には、その `run_id` に対応する最新のチェックポイントがモデルにロードされ、チェックポイントの隣にある `slao/` ディレクトリから SLAO のマージ状態が復元され、実行ループが `last_completed_run + 1` から継続されます。履歴エントリの `status` が `running` に戻るため、`backprop list-runs --status running` コマンドで実行中のセッションが表示されます。
-
-### 実験の追跡機能（v1.1.0）
-
-`Trainer` は、インストールされている実験追跡ツール (`wandb`, `tensorboard`, `mlflow`) を自動的に検出し、それらを基盤となる `transformers.TrainingArguments` に統合します。デフォルトでは `report_to="auto"` が設定されており、インポート可能なものがすべて利用されます。
-
-```bash
-pip install backpropagate[monitoring]  # installs wandb + psutil
-wandb login                            # one-time
-backprop train --data my_data.jsonl    # W&B run gets the same run_id prefix as the on-disk history
-```
-
-明示的に無効にするには、`Trainer(report_to=["wandb"])`、`Trainer(report_to=["tensorboard"])`、または `Trainer(report_to="none")` を使用します。MLflow を使用するには `pip install mlflow` を、TensorBoard を使用するには `pip install tensorboard` を実行してください。W&B の実行名は `backprop-<run_id_prefix>` なので、オペレーターは同じ識別子で W&B、ログ、および `run_history.json` を検索できます。
-
-### トレーニング履歴
-
-`backprop train` および `backprop multi-run` の実行ごとに、`<output>/run_history.json` に、実行 ID、モデル、データセット、ハイパーパラメータ、ステータス、最終的な損失、損失履歴、および（マルチランの場合）SLAO のマージのタイムラインが記録されます。最近の実行の一覧を表示するには、以下のコマンドを使用します。
-
-```bash
-backprop list-runs                         # most recent 20 runs, all statuses
-backprop list-runs --status failed         # filter
-backprop list-runs --json --limit 100      # machine-readable
-backprop show-run abcd1234                 # detail view (partial run_id ok)
-```
-
-実行履歴はプロセスを越えて保持されます。Web UI の「Runs」タブは、メモリ内のビューであり、オンディスクの履歴が `list-runs` / `show-run` / `resume` のための信頼できる情報源です。
-
-### Web UI
-
-ローカルで Reflex インターフェースを起動します。
-
-```bash
-backprop ui --port 7862
-```
-
-パブリックインターネット経由でアクセスできるようにするには、`--share` オプションを `--auth` オプションと組み合わせて使用する必要があります。
-
-```bash
-backprop ui --share --auth alice:hunter2
-```
-
-`backprop ui --share` コマンドを `--auth` オプションなしで実行すると、エラーコード `1` が発生し、構造化されたエラーメッセージ `[RUNTIME_UI_AUTH_NOT_ENFORCED]` が表示されます。これは、`--share` オプションが公開URLを生成し、認証なしで利用可能にすると、インターネット上の誰でもトレーニングパイプラインを操作できてしまうためです。この動作を回避するオプションはありません。認証情報を設定したくない場合は、SSHのポートフォワード機能を使用してください。具体的には、`ssh -L 7860:localhost:7860 <ホスト>` コマンドを実行し、その後、`http://localhost:7860` をローカルで開きます。詳細なセキュリティに関する情報は、[handbook/security.md](site/src/content/docs/handbook/security.md) を参照してください。
-
-UI からのファイルシステムへの書き込みは、単一のディレクトリにサンドボックス化されています。
-
-- デフォルト: `~/.backpropagate/ui-outputs`
-- 上書き: `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
-- 上書きは、許可リストで検証されます。システムパスや認証情報パス（`/etc`, `/var`, `~/.ssh`, `~/.aws`, `C:\Windows\System32` など）は、`[UI_OUTPUT_DIR_FORBIDDEN]` というエラーで拒否されます。
-
-## Windows サポート
-
-Backpropagate は、Windows での動作を前提として設計されています。
-
-- マルチプロセッシングのクラッシュを回避するための事前トークン化
-- RTX 40/50 シリーズ向け xformers の自動無効化
-- 安全なデータローダー設定
-- RTX 5080 (16GB VRAM) での動作確認済み
+ネストされたキーには、二重アンダースコアを使用します (`MODEL__NAME`、`MODEL_NAME` ではありません)。完全なリファレンスは、[環境変数ハンドブックのページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/) を参照してください。
 
 ## モデルプリセット
 
-| プリセット | VRAM | 速度 | 品質 |
-|--------|------|-------|---------|
-| Qwen 2.5 7B | ~12GB | 中 | 最高 |
-| Qwen 2.5 3B | ~8GB | 高速 | 良 |
-| Llama 3.2 3B | ~8GB | 高速 | 良 |
-| Llama 3.2 1B | ~6GB | 最速 | 基本 |
-| Mistral 7B | ~12GB | 中 | 良 |
+| プリセット | VRAM | ライセンス | 備考 |
+|---|---|---|---|
+| Qwen-3.5-4B | ~8GB | Apache 2.0 | 5B 以下のモデルに推奨されるデフォルト値。このサイズで最高の品質を提供します。 |
+| Phi-4-mini-3.8B | ~8GB | MIT | 推論 / 数学 / コードにおいて高い性能を発揮します。ライセンスの制約が緩やかです。 |
+| SmolLM3-3B | ~6GB | Apache 2.0 | 完全にオープンソースのレシピ。ネイティブな 64K コンテキストに対応。 |
+| Qwen 2.5 7B | ~12GB | Apache 2.0 | 既存のデフォルト値。レガシーの 7B プリセットの中で最高の品質を提供します。 |
+| Qwen 2.5 3B | ~8GB | Qwen-Research | ⚠ 研究ライセンス — 商用利用の際は、Qwen のライセンス条項を確認してください。 |
+| Llama 3.2 3B | ~8GB | Llama Community | Qwen 3B の優れた代替案であり、許可条件があります。 |
+| Llama 3.2 1B | ~6GB | Llama Community | 小規模な環境での迅速な実験に適しています。 |
+| Mistral 7B | ~12GB | Apache 2.0 | Qwen 7B と同等ですが、チャットテンプレートが異なります。 |
 
-## アーキテクチャ
-
-```
-backpropagate/
-├── trainer.py           # Core Trainer class
-├── multi_run.py         # Multi-run SLAO training
-├── slao.py              # SLAO LoRA merging algorithm
-├── datasets.py          # Dataset loading, filtering & curriculum
-├── export.py            # GGUF/Ollama export
-├── config.py            # Pydantic settings + training presets
-├── gpu_safety.py        # GPU monitoring & safety
-├── cli.py               # CLI entry point (backprop command)
-├── checkpoints.py       # Checkpoint management
-├── exceptions.py        # Structured error hierarchy
-├── feature_flags.py     # Optional feature detection
-├── security.py          # Path traversal & torch security
-├── logging_config.py    # Structured logging setup
-├── ui_theme.py          # Radix theme tokens + CSS (Reflex era)
-├── ui_state.py          # rx.State subclasses
-├── ui_app/              # Reflex web interface (Radix UI)
-│   ├── app.py           #   rx.App entry point
-│   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
-│   ├── pages/           #   Train / Multi-Run / Export / Dataset
-│   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-```
-
-v1.0 の Gradio 実装 (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) は、v1.1.x まで参照として保持され、v1.2.0 で削除されました。
+他のモデルも動作する可能性がありますが、CI (継続的インテグレーション) で使用されるのはこれらの 8 つのモデルのみです。ランク 256 / all-linear ターゲット (Biderman 2024 + Thinking Machines 2025 の推奨) を使用するには、`--lora-preset=quality` (デフォルト) を指定します。v1.2.x のフットプリントが必要な場合は、`--lora-preset=fast` を指定して、レガシーのランク 16 / q+v ターゲットを使用します。
 
 ## トラブルシューティング
 
-よく発生する初期エラーの簡単な一覧です。詳細な逆引き索引は、[トラブルシューティングハンドブックのページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) にあります。以下に示すすべてのコードは、[エラーコード](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) に詳しく説明されています。
+初回実行時に発生する可能性のある一般的なエラーの簡単な一覧です。完全な逆引き一覧は、[トラブルシューティングハンドブックのページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) を参照してください。ドライバ / VRAM / 混合精度に関する詳細については、[CUDA トラブルシューティングページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/) を参照してください。
 
-| 症状 | コード | 対処法 |
-|---------|------|-----|
-| GPUメモリ不足によるトレーニング中断 | `RUNTIME_GPU_OOM` | OOM自動復旧 (B-002) が、バッチサイズを最大3回まで自動的に半分にします。無効にするには、`Trainer(oom_recovery=False)` を指定します。バッチサイズを強制的に小さくするには、`--batch-size 1` を指定します。 |
-| HF Hub から 401 エラー / "モデルが見つかりません" というエラー | `DEP_MODEL_LOAD_FAILED` | `huggingface-cli login` を実行し、再度試してください。入力ミスがある場合は、<https://huggingface.co/models> から正確な ID をコピーしてください。 |
-| モデル名の入力ミス | `INPUT_VALIDATION_FAILED` または `DEP_MODEL_LOAD_FAILED` | <https://huggingface.co/models> での `org/name` の識別子を確認してください。 |
+| 症状 | エラーコード | 対処法 |
+|---|---|---|
+| GPUメモリ不足によるトレーニング中断 | `RUNTIME_GPU_OOM` | 自動モードでは、メモリ不足が発生した場合、バッチサイズを半分にし、最大3回まで再試行します。この機能を無効にするには、`Trainer(oom_recovery=False)` と指定してください。バッチサイズを強制的に小さくするには、`--batch-size 1` オプションを使用してください。 |
+| HuggingFaceから401エラー（「モデルが見つかりません」）が返ってきました。 | `DEP_MODEL_LOAD_FAILED` | `huggingface-cli login` を実行し、再度試してください。入力ミスがある場合は、<https://huggingface.co/models> から正確な ID をコピーしてください。 |
 | `register_with_ollama` への接続拒否 | `DEP_OLLAMA_REGISTRATION_FAILED` | デーモンを起動します: `ollama serve`。 <https://ollama.com> からインストールしてください。再試行可能です。 |
 | チェックポイント保存中にディスク容量不足 | `STATE_CHECKPOINT_INVALID` | クラッシュ時に、`.partial` というディレクトリが作成されますが、削除しても問題ありません。以前の正常なチェックポイントは保持されています。 |
-| GPUの過熱によるトレーニングの一時停止/中断 | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003: NVMLの温度閾値を超えるとモニタが一時停止し、GPUが冷却されると自動的に再開されます。エアフローを改善するか、GPUへの負荷を軽減してください。 |
-| `backprop ui --share` が拒否される | `INPUT_AUTH_REQUIRED` | `--auth user:password` を指定してください。v1.2.0（GHSA-f65r-h4g3-3h9h）以降、`--share` を `--auth` なしで使用することはハードエラーとなり、オプトアウトはできません。認証情報を公開できない場合は SSH ポートフォワーディングを使用してください。 |
-| 複数回の実行における "validation overlap" (検証データの重複) | `CONFIG_INVALID` (Stage A backend B-001) | `--samples` の値を、トレーニングプールサイズよりも小さくするか、データセットを増やすか、検証を無効にしてください。 |
+| GPUの過熱により、トレーニングを一時中断しました。 | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | 自動モードでは、温度が設定された閾値を超えると一時的に動作が停止し、GPUが冷却されると再開されます。この現象が頻繁に発生する場合は、冷却効率を改善するために、エアフローを見直してください。 |
+| `backprop ui --share` が拒否される | `INPUT_AUTH_REQUIRED` | `--auth user:password` オプションを指定するか、代わりに SSH のポートフォワード機能を使用してください（[Web UI](#web-ui) を参照）。 |
 | GGUF エクスポートが初回試行で失敗 | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]` を実行してください。Windows の場合は、Visual C++ Build Tools + CMake も必要です。 |
 
 ## バグの報告
 
-エラーが発生した場合、Backpropagate は起動時に `run_started run_id=<uuid>` という行を出力し、同じ ID をチェックポイントのマニフェスト、SLAOのマージ履歴、および構造化されたログ行に関連付けます。バグ報告には、`run_id` を必ず含めてください。これにより、開発者が、その特定の実行に関するすべてのログ行、すべてのチェックポイント、およびすべてのマージを関連付けることができます。
+Backpropagateがエラーを検出した場合、起動時に`run_started run_id=<UUID>`のようなメッセージを表示し、同じIDをすべてのログ、チェックポイント、およびWeights & Biasesのエントリに紐付けます。**バグ報告を行う際は、必ず`run_id`を含めてください。** これにより、開発者が特定の実行に関する情報をすべて関連付けることができます。
 
 良いバグレポートには、以下の情報が含まれている必要があります。
 
-1. **`run_id`** — 起動時に表示される UUID (また、`TrainingRun.run_id` および `RunResult.run_id` でも利用可能です)。
-2. **エラーコード** — `stderr` に表示される `[CODE_NAME]: message` の行を検索してください。詳細については、[エラーコード](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) を参照してください。
-3. **コマンドライン (一部情報を削除したもの)。** 詳細表示モードでない場合、`stderr` は自動的に情報が削除されます (Bearerトークン、`sk-*`、`hf_*`、AWSキー、`password=`/`token=`/`api_key=` のペアは削除されます)。貼り付けても安全です。完全なトレースバックを表示するには、`--verbose` オプションで再実行しますが、投稿する前に内容を確認してください。
-4. **Python / PyTorch のバージョン、GPU のモデル、OS。** `backprop info` コマンドで、これらすべてを表示できます。
+1. **`run_id`**: 起動時に表示されるUUID。
+2. **エラーコード**: `stderr`に出力される`[コード名]: メッセージ`という形式のエラーメッセージ。エラーコードの一覧は、[エラーコード](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/)を参照してください。
+3. **編集されたコマンドライン**: `stderr`は自動的に編集されます（Bearerトークン、`sk-*`、`hf_*`、AWSキー、`password=`/`token=`の組み合わせは削除されます）。安心して貼り付けてください。完全な未編集のトレースバックを表示するには、`--verbose`オプションをつけて再度実行してください。ただし、投稿する前に内容を確認してください。
+4. **Python/PyTorchのバージョン、GPUモデル、OS**: `backprop info`コマンドを実行すると、これらすべての情報が一度に表示されます。
+
+質問、アイデア、または「これは想定通りですか？」といった内容については、[GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions) のページにお寄せください。セキュリティに関する問題は、[GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) のフォームを通じて、非公開でご報告ください。詳細は、[SECURITY.md](SECURITY.md) をご確認ください。
 
 ## プライバシー
 
 トレーニングはすべて、ローカルの GPU 上で行われます。Backpropagate は、HuggingFace からモデルをダウンロードするために必要なネットワークリクエストを除き、他のネットワークリクエストは行いません。テレメトリーやクラウドへの依存はありません。
 
-## スコアカード
+## 参考文献
 
-| カテゴリ | スコア | 備考 |
-|----------|-------|-------|
-| A. セキュリティ | 6/8 | SECURITY.md、信頼できるモデル、秘密情報/テレメトリーなし、safe_path()。MCP の項目はスキップされます。 |
-| B. エラー処理 | 5/7 | 構造化された例外情報（`code`/`message`/`hint`/`cause`/`retryable`）は、ERROR_CODES レジストリを通じて提供されます。CLIの終了コードは0/1/2/3です。`--verbose`オプションなしでは、生のスタックトレースは表示されません。`run_id`による関連付け、内容が一部隠蔽された標準エラー出力、`--share`と`--auth`の組み合わせによる制限。MCP、デスクトップ版、Visual Studio Codeは対象外です。 |
-| C. オペレーター向けドキュメント | 4/7 | README、CHANGELOG、LICENSE、`--help`。ロギング、MCP、複雑な機能は対象外。 |
-| D. リリース時の品質管理 | 6/9 | `verify.sh`、バージョン=タグ、CI環境での5つのスキャナー、dependabot、`python_requires`、クリーンなビルド。 |
-| E. アイデンティティ | 4/4 | ロゴ、翻訳、ランディングページ、メタデータ。 |
-| **Total** | **25/31** | 14項目は理由によりスキップされました。`shipcheck audit`は100%合格。監査日: 2026年5月21日（B行は、ステージBとステージAのCLI終了コードの作業後に再評価）。 |
+Backpropagateのデフォルト設定や複数回のトレーニングを行う機能は、最新の研究に基づいて設計されています。もし、その基盤となる技術にご興味があれば：
 
-設計の経緯と、各項目が何に対応しているかについては、[ROADMAP.md](ROADMAP.md)を参照してください。v1.1.0では、Week 1～4のすべての項目がリリースされます。
+- **Hu et al. 2021.** *LoRA: 低ランク適応による大規模言語モデルの効率化.* [arXiv:2106.09685](https://arxiv.org/abs/2106.09685) — LoRAを紹介する基礎論文。Backpropagateは、この技術を用いてアダプターを効率的に学習します。
+- **Biderman et al. 2024.** *LoRAはより少なく学習し、より少なく忘却する.* [arXiv:2405.09673](https://arxiv.org/abs/2405.09673) — 実験的な証拠として、ランク256のLoRAで、すべての線形ターゲットを使用した場合、ほとんどの追加学習タスクにおいて、フルファインチューニングと同等の品質を、計算量の67%で達成できることが示されています。これは、Backpropagateのバージョン1.3のデフォルトLoRA設定の基盤となっています。
+- **Thinking Machines 2025.** *後悔のないLoRA.* [thinkingmachines.ai/blog/lora](https://thinkingmachines.ai/blog/lora/) — 高いLoRAランクを使用する場合に必要な、学習率とフルファインチューニングとの関係を明らかにする実践的な解説。
+- **Kirkpatrick et al. 2017.** *ニューラルネットワークにおける破滅的な忘却の克服.* [arXiv:1612.00796](https://arxiv.org/abs/1612.00796) — ニューラルネットワークが、新しいデータでファインチューニングを行う際に、以前の学習内容を「忘れてしまう」理由を最初に説明した論文（EWC：Elastic Weight Consolidation）。
+- **Wang et al. 2023.** *言語モデルの継続学習のための直交部分空間学習.* [arXiv:2310.14152](https://arxiv.org/abs/2310.14152) — O-LoRAは、新しいアダプターを直交部分空間に制限することで、LoRAを継続学習に利用する初期のアプローチです。
+- **Yadav et al. 2023.** *TIES-マージ：モデルのマージ時の干渉の解消.* [arXiv:2306.01708](https://arxiv.org/abs/2306.01708) — 複数のファインチューニング済みモデルを、干渉なくマージするための基本的な技術です。
+- **Qiao & Mahdavi 2025.** *忘却する前にマージ：継続的なマージによる単一のLoRA継続学習.* [arXiv:2512.23017](https://arxiv.org/abs/2512.23017) — Backpropagateが実装している、特定のアルゴリズムです。2025年12月に発表されたプレプリントであり、Backpropagateがこの論文を最初に実用化した事例として知られています。
 
 ## ライセンス
 
-MIT — 詳細については、[LICENSE](LICENSE)を参照してください。
+MITライセンスについては、[LICENSE](LICENSE) をご参照ください。
 
 ---
 

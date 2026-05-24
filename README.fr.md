@@ -10,142 +10,152 @@
   <a href="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml"><img src="https://github.com/mcp-tool-shop-org/backpropagate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/backpropagate/"><img src="https://img.shields.io/pypi/v/backpropagate" alt="PyPI"></a>
   <a href="https://codecov.io/gh/mcp-tool-shop-org/backpropagate"><img src="https://img.shields.io/codecov/c/github/mcp-tool-shop-org/backpropagate" alt="Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/mcp-tool-shop-org/backpropagate"><img src="https://api.scorecard.dev/projects/github.com/mcp-tool-shop-org/backpropagate/badge" alt="OpenSSF Scorecard"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-**Affinage de LLM sans interface graphique en 3 lignes. Paramètres par défaut intelligents, gestion de la taille des lots en fonction de la VRAM, apprentissage continu SLAO sur plusieurs exécutions, et exportation GGUF en un clic pour Ollama.**
+# Entraînez un adaptateur. Envoyez-le à Ollama. Passez à autre chose
 
-*SLAO est l'apprentissage continu LoRA via une fusion asymétrique, une technique de fusion entre les exécutions qui empêche l'oubli catastrophique lors de sessions d'affinage prolongées ([article](https://arxiv.org/abs/2512.23017)).*
-
-*Entraînez des LLM en 3 lignes de code. Exportez-les vers Ollama avec une ligne supplémentaire.*
-
-## Démarrage rapide
-
-```bash
-pip install backpropagate[standard]
-```
-
-```python
-from backpropagate import Trainer
-
-trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
-trainer.train("examples/quickstart.jsonl", steps=10)
-trainer.export("gguf", quantization="q4_k_m")  # Ready for Ollama
-```
-
-Le dépôt contient un petit fichier `examples/quickstart.jsonl` (5 exemples au format ShareGPT) afin que le code ci-dessus puisse être exécuté de bout en bout sur une installation propre. Pour votre propre entraînement, consultez la section [Format des données](#dataset-format) ci-dessous.
-
-### Option sans code : Interface web
-
-Préférez-vous une interface graphique plutôt qu'un REPL Python ? Installez le module correspondant et exécutez la commande suivante :
-
-```bash
-pip install backpropagate[standard]
-backprop ui --port 7862
-```
-
-L'interface Reflex (Radix UI) vous permet de spécifier un fichier JSONL, de choisir un modèle, de l'entraîner et de l'exporter, sans nécessiter de code Python. L'interface est conçue pour fonctionner localement ; pour une exposition sur Internet, consultez la section [Interface web](#web-ui) ci-dessous pour connaître le contrat de sécurité `--share` + `--auth` et les options de tunnel prises en charge (Cloudflare Tunnel, ngrok).
-
-## Format des données
-
-Votre fichier d'entraînement au format JSONL doit contenir un exemple par ligne. Le format le plus simple est le chat ShareGPT :
-
-```jsonl
-{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
-{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
-```
-
-Les formats Alpaca (`instruction`/`output`), OpenAI chat (`messages`) et texte brut sont également pris en charge. Consultez le fichier `examples/quickstart.jsonl` pour un point de départ que vous pouvez copier.
-
-## Pourquoi propager le gradient ?
-
-| Problème | Solution |
-|---------|----------|
-| L'affinage est complexe | 3 lignes : chargement, entraînement, sauvegarde |
-| Windows est un cauchemar | Prise en charge complète de Windows |
-| La gestion de la VRAM est difficile | Ajustement automatique de la taille des lots, surveillance du GPU |
-| L'exportation des modèles est déroutante | Exportation GGUF en un clic + enregistrement automatique avec Ollama |
-| Les longues exécutions entraînent l'oubli | Entraînement SLAO sur plusieurs exécutions |
-
-## Fonctionnalités clés
-
-- **Conçu sans interface graphique :** Conçu pour les pipelines CI/CD, les flux de travail automatisés et l'exécution programmatique.
-- **Paramètres par défaut intelligents :** Configure automatiquement les hyperparamètres optimaux en fonction de votre matériel et de votre ensemble de données.
-- **Entraînement SLAO sur plusieurs exécutions :** Stratégies d'entraînement avancées pour éviter l'oubli catastrophique lors de longues exécutions.
-- **Prise en charge complète de Windows :** Testé et optimisé pour les environnements Windows, évitant les pièges courants de PyTorch/CUDA.
-- **Exportation transparente :** Exportation en un clic au format GGUF et enregistrement automatique avec Ollama.
-- **Architecture modulaire :** Installez uniquement les dépendances dont vous avez besoin (par exemple, `[unsloth]`, `[ui]`, `[export]`).
-
-## Installation
-
-```bash
-pip install backpropagate              # Core only (minimal)
-pip install backpropagate[unsloth]     # + Unsloth 2x faster training
-pip install backpropagate[ui]          # + Reflex (Radix UI) web interface
-pip install backpropagate[standard]    # unsloth + ui (recommended)
-pip install backpropagate[full]        # Everything
-```
-
-| Modules complémentaires | Description | Dépendances |
-|-------|-------------|--------------|
-| `unsloth` | Entraînement 2 fois plus rapide, 50 % de VRAM en moins | unsloth |
-| `ui` | Interface web Reflex (Radix UI) | reflex>=0.9.2, fastapi>=0.115 |
-| `validation` | Validation de configuration Pydantic | pydantic, pydantic-settings |
-| `export` | Exportation GGUF pour Ollama | llama-cpp-python |
-| `monitoring` | WandB + surveillance du système (intégré au trainer depuis la version 1.1.0) | wandb, psutil |
-| `logging` | Journalisation structurée | structlog |
-| `security` | Authentification JWT + génération de jetons | PyJWT, cryptography |
-| `production` | unsloth + ui + validation + journalisation + sécurité | (ensemble) |
-
-**Prérequis :** Python 3.10+ · GPU CUDA (8 Go+ de VRAM) · PyTorch 2.0+
-
-### Prérequis de la plateforme
-
-Backpropagate gère les particularités liées à l'exécution (multiprocessing, xformers sur RTX 40/50, workers du dataloader sur Windows). Il **ne** gère pas les problèmes liés à l'installation propres à chaque plateforme ; corrigez d'abord ces problèmes :
-
-- **Version du kit de développement CUDA.** PyTorch est publié en fonction de la version de CUDA ; choisir la mauvaise version installe silencieusement une version de torch qui n'utilise que le CPU. Utilisez le sélecteur à l'adresse <https://pytorch.org/get-started/locally/> pour obtenir la commande `pip install torch ...` exacte correspondant à votre pilote. Exécutez `nvidia-smi` pour voir la version de votre pilote/CUDA.
-- **Windows.** Visual Studio Build Tools (C++) et CMake sont requis pour l'extension `[export]` (construction de `llama-cpp-python` à partir du code source). La version de `bitsandbytes` est maintenant disponible nativement pour Windows (>= 0.43) ; les anciens guides mentionnant `bitsandbytes-windows` sont obsolètes.
-- **macOS.** L'entraînement sur GPU **n'est pas pris en charge** ; il n'y a pas de CUDA. Vous pouvez installer Backpropagate pour exécuter l' *inférence* sur un fichier GGUF exporté via Ollama, mais `trainer.train()` génère une erreur `DEP_GPU_NOT_AVAILABLE`. Utilisez une machine avec CUDA pour l'entraînement.
-- **Linux.** La plupart des distributions fonctionnent sans problème. Si vous utilisez la version binaire PyPI, notez que la version Linux utilise torch uniquement pour le CPU (afin de respecter la limite de 2 Go des fichiers joints sur GitHub) ; installez d'abord la version CUDA correspondante à partir de pytorch.org.
-
-Pour le dépannage de l'installation, consultez [la page du guide de dépannage](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/).
-
-## Configuration
-
-Tous les paramètres peuvent être remplacés à l'aide de variables d'environnement, en utilisant le préfixe `BACKPROPAGATE_` (par exemple, `BACKPROPAGATE_LOG_LEVEL=debug`). Un fichier `.env` à la racine du projet est chargé automatiquement lorsque l'extension `[validation]` est installée.
-
-Paramètres courants (voir [la référence complète des variables d'environnement](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/) pour tout) :
-
-| Variable | Valeur par défaut | Notes |
-|----------|---------|-------|
-| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `BACKPROPAGATE_LOG_JSON` | auto | Force les journaux en JSON (`true`) ou sur la console (`false`) |
-| `BACKPROPAGATE_LOG_FILE` | non défini | Chemin vers le répertoire où les journaux sont enregistrés |
-| `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | non défini | Ignore la détection des dépendances optionnelles au démarrage pour un démarrage plus rapide de l'interface en ligne de commande |
-| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Répertoire de base pour toutes les opérations d'écriture sur le système de fichiers de l'interface utilisateur ; liste de contrôle d'accès validée |
-| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Modèle par défaut |
-| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Taux d'apprentissage |
-| `BACKPROPAGATE_LORA__R` | `16` | Rang LoRA |
-
-Les clés imbriquées utilisent un double tiret-bas comme délimiteur (convention Pydantic `env_nested_delimiter`).
-
-## Utilisation
-
-### Entraînement de base
+Backpropagate est une bibliothèque Python pour l'ajustement fin de grands modèles de langage sur un seul GPU. Trois lignes de code suffisent pour entraîner un modèle de 7 milliards de paramètres sur une carte de 16 Go. Une seule commande permet de l'exporter vers Ollama, ce qui vous permet d'utiliser la commande `ollama run` pour exécuter votre modèle ajusté. Il fonctionne parfaitement sous Windows.
 
 ```python
 from backpropagate import Trainer
 
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
-trainer.save("./my-model")
 trainer.export("gguf", quantization="q4_k_m")
 ```
 
-`Qwen/Qwen2.5-7B-Instruct` est la valeur par défaut standard. Lorsque la fonction `Trainer()` est appelée sans argument de modèle, c'est cette valeur qui est utilisée (voir [`config.py`](backpropagate/config.py) `ModelConfig.name`). Les exemples précédents utilisaient la version quantifiée `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; nous avons modifié la valeur par défaut pour utiliser les poids officiels de Qwen afin d'améliorer la fiabilité ([CHANGELOG v1.1.0](CHANGELOG.md#110---2026-05-21)). Les deux modèles fonctionnent.
+```bash
+backprop ollama register ./output/lora --name my-model
+ollama run my-model
+```
 
-### Entraînement SLAO multi-exécution
+C'est tout. Il n'y a pas de fichier de configuration YAML. Il n'y a pas de "cérémonie" `accelerate launch`. Il n'y a pas de tutoriel séparé pour "convertir ensuite en GGUF". Si vous avez un GPU CUDA et un fichier JSONL contenant vos données d'entraînement, vous n'êtes qu'à trois lignes d'un ajustement fin fonctionnel.
+
+## Installation
+
+```bash
+# Recommended: isolated Python install (no conflicts with system Python or other projects)
+pipx install backpropagate
+
+# Or via uv (faster install, same isolation)
+uv tool install backpropagate
+
+# Standard pip (if you manage your own virtualenv)
+pip install backpropagate
+```
+
+Si vous souhaitez les fonctionnalités optionnelles, remplacez l'installation par l'une de ces options :
+
+```bash
+pipx install "backpropagate[standard]"   # adds Unsloth (2x faster training) + the web UI
+pipx install "backpropagate[full]"       # adds everything: unsloth, ui, monitoring, export, etc.
+```
+
+Préférez Docker ? La commande `docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest` fonctionne également. Des images sont disponibles pour `linux/amd64` et `linux/arm64`, ce qui permet aux utilisateurs d'Apple Silicon et d'ARM Linux d'utiliser une image native. Un fichier `compose.yaml` standard pour "l'interface utilisateur dans un conteneur" se trouve à la racine du dépôt. La commande `docker compose up` lance l'interface utilisateur web sur `http://localhost:7860` avec un volume persistant `~/.backpropagate`.
+
+## La place de Backpropagate
+
+Il existe plusieurs bonnes bibliothèques pour l'ajustement fin des LLM. Chacune est excellente pour des choses différentes :
+
+- **[Axolotl](https://github.com/OpenAccess-AI-Collective/axolotl)** — si vous aimez les configurations YAML et que vous souhaitez avoir une communauté de recettes à suivre.
+- **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** — si vous voulez une interface utilisateur web et une prise en charge intégrée de DPO/PPO/RLHF.
+- **[Unsloth](https://github.com/unslothai/unsloth)** — si vous avez besoin de la formation la plus rapide possible et que vous utilisez un modèle pris en charge.
+- **[torchtune](https://github.com/pytorch/torchtune)** — si vous voulez les recettes PyTorch natives de Meta que vous pouvez modifier.
+
+Backpropagate est l'option manquante : **une API Python en 3 lignes pour les utilisateurs individuels sur un seul GPU grand public, qui souhaitent entraîner un adaptateur et le distribuer.** Pas de YAML, pas d'interface utilisateur graphique, pas de DPO/PPO, pas de configuration multi-nœuds. Juste la boucle dont tout le monde a réellement besoin et l'étape d'exportation qui est un obstacle.
+
+Si vous avez essayé l'une des bibliothèques ci-dessus et que vous avez été rebuté par la "cérémonie" des fichiers de configuration, ou si vous avez rencontré un problème de compatibilité avec un modèle, ou si vous vouliez des paramètres par défaut adaptés à Windows, Backpropagate est fait pour vous.
+
+## Ce que vous pouvez ajuster finement sur un GPU grand public de 16 Go
+
+Voici les limites pratiques sur une carte de 16 Go (RTX 4080 / 5080 / 4070 Ti Super) :
+
+| Modèle | Méthode | Statut |
+|---|---|---|
+| Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | Confortable. Longueur de séquence complète, avec de la marge. |
+| Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | Standard. Environ 7-8 Go. Les paramètres par défaut de Backpropagate. |
+| Llama-3 13B | QLoRA + échantillonnage | Juste limite, mais fonctionne. Utilisez des séquences plus courtes. |
+| Mixtral 8x7B (47 milliards de paramètres au total) | AQLM 2 bits + LoRA | Expérimental en v1.4. Le plus grand modèle que vous puissiez utiliser sur une carte de 16 Go. |
+
+Pour les modèles de 3 milliards de paramètres et moins, un ajustement fin complet (et non seulement LoRA) est possible sur 16 Go et est prévu comme une option `mode="full"` pour la version 1.4. Pour les modèles de 7 milliards de paramètres et plus, un ajustement fin complet nécessite un GPU de 24 Go ou plus. Envisagez de louer un A100 dans le cloud, ou utilisez LoRA, qui, selon les recherches récentes, offre une qualité équivalente à l'ajustement fin complet pour la plupart des tâches post-entraînement (voir la section "ce que Backpropagate n'est pas" pour les références).
+
+## Ce que Backpropagate N'EST PAS
+
+Une description honnête aide tout le monde. Backpropagate ne fait pas ces choses, et essayer de le faire le ferait vivre une expérience pire que celle de chercher l'outil approprié :
+
+- **Affinage précis des modèles de plus de 7 milliards de paramètres** — Backpropagate utilise LoRA/QLoRA, qui entraîne un petit adaptateur au lieu de mettre à jour chaque poids. Pour les modèles de 7 milliards de paramètres et plus, l'affinage complet nécessite 24 Go de mémoire GPU et ne tient pas sur une carte grand public de 16 Go. Pour les modèles de 3 milliards de paramètres et moins, l'affinage complet est possible avec 16 Go ; une option `mode="full"` est prévue pour la version 1.4. L'essentiel : des recherches récentes ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) montrent que LoRA, avec une configuration appropriée, offre une qualité d'affinage comparable à l'affinage complet pour la plupart des tâches post-entraînement (suivi d'instructions, adaptation au domaine, personnalité/style), tout en utilisant 67 % moins de ressources de calcul. Ainsi, pour la plupart des tâches que les utilisateurs souhaitent réellement effectuer, vous ne perdez rien en utilisant LoRA. Si vous avez réellement besoin d'un affinage complet d'un modèle de plus de 7 milliards de paramètres, utilisez directement le module `transformers.Trainer` de HuggingFace sur une carte de 24 Go ou plus.
+- **DPO / PPO / GRPO / affinage par préférences** — Backpropagate effectue uniquement un affinage supervisé en une seule étape. Pour l'apprentissage par préférences, utilisez directement TRL ou LLaMA-Factory.
+- **Entraînement multi-nœuds** — uniquement un GPU sur une seule machine. L'utilisation de plusieurs GPU sur une seule machine est possible (via `accelerate launch`), mais n'est pas officiellement prise en charge.
+- **Entraînement sur macOS** — Apple Silicon ne dispose pas de CUDA, l'entraînement doit donc être effectué sur une machine Linux ou Windows avec un GPU NVIDIA. Vous pouvez toujours exécuter le modèle entraîné sur un Mac via Ollama.
+- **Tout ce qui se trouve en dehors des familles de modèles testées** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. D'autres modèles fonctionnent souvent, mais ne sont pas inclus dans les tests d'intégration continue.
+
+Si vous avez besoin de ces fonctionnalités, utilisez l'une des bibliothèques mentionnées ci-dessus. Elles sont plus adaptées à cela.
+
+## Ce que Backpropagate vous offre :
+
+Quatre éléments, dans une seule installation :
+
+**1. Une API simple en 3 lignes qui fonctionne sans fichier de configuration.**
+Le code en haut de ce fichier README est exécutable de bout en bout. Pas de `accelerate config`, pas de YAML, pas de surcharge Hydra. Il suffit de `Trainer(model).train(data)` et vous avez un modèle affiné.
+
+**2. Une compatibilité Windows qui fonctionne réellement.**
+La plupart des bibliothèques de machine learning traitent Windows comme une option secondaire. Backpropagate est testé de manière approfondie sur Windows + RTX 5080. La bibliothèque gère les particularités de l'environnement d'exécution : elle sait comment prétraiter vos données pour éviter les plantages liés au multiprocessing de Windows, elle désactive automatiquement xformers sur les cartes RTX 40/50 où cela entraînerait des problèmes, et elle sélectionne les paramètres du chargeur de données qui évitent les erreurs. Vous n'avez pas besoin de connaître ces détails. Tout simplement, cela fonctionne.
+
+**3. Conçu pour les exécutions automatisées.**
+L'entraînement prend des heures. Vous ne voulez pas devoir le surveiller en permanence. Backpropagate est conçu pour fonctionner en arrière-plan :
+
+- Si vous manquez de mémoire GPU, il réduit automatiquement la taille du lot et retente, jusqu'à trois fois. Pas de réglages manuels nécessaires.
+- Si votre GPU devient trop chaud, il met en pause jusqu'à ce que la température redescende, puis reprend.
+- Chaque point de contrôle est enregistré de manière atomique : si votre ordinateur portable plante pendant la sauvegarde, le dernier point de contrôle valide est toujours conservé.
+- Chaque exécution d'entraînement reçoit un identifiant unique qui est ajouté à chaque ligne de journal, à chaque point de contrôle et à chaque entrée Weights & Biases. Si quelque chose ne va pas, cet identifiant permet à un développeur de corréler toutes les informations.
+- Les erreurs sont accompagnées de codes stables (`RUNTIME_GPU_OOM`, `DEP_OLLAMA_REGISTRATION_FAILED`, etc.), ce qui vous permet de rechercher dans vos journaux et dans le [guide de dépannage](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) pour trouver la solution. Les erreurs spécifiques à CUDA ont une [page de dépannage dédiée](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/).
+
+**4. Une seule commande pour passer d'un adaptateur entraîné à `ollama run`.**
+De nombreuses bibliothèques entraînent un modèle. Peu d'entre elles vous facilitent la tâche lorsque vous souhaitez réellement l'utiliser. Backpropagate exporte vers GGUF (le format utilisé par Ollama) et enregistre un modèle Ollama en une seule commande. Vous passez de "entraînement terminé" à "je peux discuter avec mon modèle affiné" en environ 30 secondes.
+
+## Démarrage rapide
+
+Le dépôt contient un petit ensemble de données d'exemple afin que le code du début de ce fichier README puisse être exécuté sur une installation propre :
+
+```bash
+pipx install "backpropagate[standard]"
+
+python -c "
+from backpropagate import Trainer
+trainer = Trainer('Qwen/Qwen2.5-7B-Instruct')
+trainer.train('examples/quickstart.jsonl', steps=10)
+trainer.export('gguf', quantization='q4_k_m')
+"
+```
+
+Cela entraîne un adaptateur Qwen 2.5 7B sur 5 courtes conversations au format ShareGPT, puis exporte le résultat au format GGUF. Pour vos propres données, formatez votre fichier JSONL avec un exemple par ligne :
+
+```jsonl
+{"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
+{"conversations": [{"from": "human", "value": "Explain recursion."}, {"from": "gpt", "value": "A function that calls itself."}]}
+```
+
+Les formats Alpaca (`instruction` / `output`), OpenAI chat (`messages`) et texte brut fonctionnent également. Backpropagate détecte automatiquement le format.
+
+Pour des flux de travail plus complets (affinage et publication sur le Hub Hugging Face, reprise après une erreur de mémoire, exécution multiple de SLAO sur une longue période, etc.), consultez la [page des recettes du manuel](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
+
+### Interface utilisateur web (facultatif)
+
+Si vous préférez cliquer plutôt que taper du code Python, installez le module d'interface utilisateur et lancez-le :
+
+```bash
+pipx install "backpropagate[ui]"
+backprop ui --port 7862
+```
+
+Une interface web locale s'ouvre à l'adresse `http://localhost:7862`, où vous pouvez spécifier un ensemble de données, choisir un modèle, effectuer un entraînement et exporter le résultat. L'interface utilisateur est par défaut accessible uniquement localement. Pour la rendre accessible à d'autres appareils, consultez la section [Interface utilisateur web](#web-ui) ci-dessous pour connaître le contrat de sécurité `--share` + `--auth`.
+
+## Entraînement en plusieurs étapes
+
+Si vous souhaitez effectuer un affinage incrémental sur plusieurs ensembles de données (par exemple, si vous recevez de nouvelles données d'entraînement chaque semaine et que vous souhaitez les ajouter sans oublier ce que vous avez appris auparavant), le mode `multi_run` de Backpropagate est fait pour vous :
 
 ```python
 from backpropagate import Trainer
@@ -157,196 +167,196 @@ result = trainer.multi_run(
     num_runs=5,
     steps_per_run=100,
     samples_per_run=1000,
-    merge_mode="slao",  # Single LoRA Continual Learning via Asymmetric Merging
 )
 ```
 
-SLAO (Single LoRA Continual Learning via Asymmetric Merging) implémente l'article [Merge before Forget](https://arxiv.org/abs/2512.23017) : initialisation orthogonale de la matrice A via la décomposition QR, gestion asymétrique de A/B et mise à l'échelle temporelle `λ(i) = 1/√i`. Le paramètre de l'interface en ligne de commande est `--samples` (le champ sous-jacent est `samples_per_run`).
+Cela effectue cinq passes d'entraînement, en fusionnant l'adaptateur entre chaque passe de manière à préserver les connaissances antérieures tout en intégrant de nouveaux exemples. Cette technique est basée sur des recherches récentes en matière d'apprentissage continu. Consultez la section [Références](#references) en bas de ce fichier README.
 
-### Exportation vers Ollama
+La version en ligne de commande :
 
-```python
-# Export to GGUF
-result = trainer.export("gguf", quantization="q4_k_m")
-
-# Register with Ollama separately
-from backpropagate import register_with_ollama
-register_with_ollama(result.path, "my-finetuned-model")
-# ollama run my-finetuned-model
+```bash
+backprop multi-run --data my_data.jsonl --runs 5 --steps 100 --samples 1000
 ```
 
-### Interface en ligne de commande
+## Reprise à partir d'un point de contrôle
+
+Une session d'entraînement en cinq étapes qui se bloque à la quatrième étape peut être reprise. Chaque session d'entraînement en plusieurs étapes enregistre son ID de session dans l'historique et le manifeste du point de contrôle, ce qui vous permet de reprendre là où vous vous étiez arrêté en une seule commande :
+
+```bash
+backprop resume <run-id>
+backprop multi-run --data ... --resume <run-id>
+backprop train --data ... --resume <run-id>     # single-run resume
+```
+
+Par défaut, `backprop multi-run` (sans `--resume`) détecte automatiquement une session en cours dans le même répertoire de sortie et la reprend. Pour forcer un démarrage propre, spécifiez un nouveau répertoire de sortie.
+
+## Historique de l'entraînement
+
+Chaque invocation de `backprop train` et `backprop multi-run` enregistre une ligne dans `<output>/run_history.json`, contenant des informations sur le modèle utilisé, l'ensemble de données, les hyperparamètres, l'état, la perte finale et l'historique des pertes. Vous pouvez afficher et examiner les sessions précédentes :
+
+```bash
+backprop list-runs                         # last 20 runs
+backprop list-runs --status failed         # filter by status
+backprop list-runs --json --limit 100      # machine-readable
+backprop show-run abcd1234                 # detail view (partial ID is fine)
+```
+
+## Suivi des expériences
+
+Backpropagate détecte automatiquement les outils de suivi d'expériences installés (Weights & Biases, TensorBoard, MLflow) et les configure. Si `wandb` est installé et que vous êtes connecté, chaque session enregistre automatiquement les données sur W&B avec un nom de session correspondant à l'ID de session enregistré sur le disque. Vous pouvez ainsi effectuer une recherche sur W&B, vos journaux et `run_history.json` en utilisant un seul identifiant.
+
+```bash
+pip install backpropagate[monitoring]   # installs wandb + psutil
+wandb login                             # one-time setup
+backprop train --data my_data.jsonl
+```
+
+Pour ne pas utiliser ces outils, utilisez `Trainer(report_to=["wandb"])`, `Trainer(report_to=["tensorboard"])` ou `Trainer(report_to="none")`.
+
+## Interface web
+
+L'interface web Reflex est facultative. Pour l'installer, utilisez `pipx install "backpropagate[ui]"` et lancez-la :
+
+```bash
+backprop ui --port 7862
+```
+
+L'interface utilisateur s'exécute localement à l'adresse `http://localhost:7862`. Pour la rendre accessible à d'autres appareils (autres personnes sur votre réseau, une URL publique, etc.), vous devez utiliser les options `--share` (ou `--host`) en combinaison avec `--auth` :
+
+```bash
+backprop ui --share --auth alice:hunter2
+```
+
+`backprop ui --share` sans `--auth` génère une erreur. La raison est que `--share` publie une URL que toute personne sur Internet peut atteindre, et sans authentification, cela signifie que toute personne peut contrôler votre pipeline d'entraînement et lire votre jeton HuggingFace. Il n'y a pas d'option pour désactiver cette fonctionnalité. Si vous ne souhaitez pas définir de crédentielles, utilisez plutôt le transfert de port SSH :
+
+```bash
+# On the client:
+ssh -L 7860:localhost:7860 <your-training-host>
+# On the server:
+backprop ui                             # no --share
+# Then open http://localhost:7860 in your local browser
+```
+
+Consultez [handbook/security.md](https://mcp-tool-shop-org.github.io/backpropagate/handbook/security/) pour connaître le modèle de menace complet.
+
+Les opérations d'écriture sur le système de fichiers via l'interface utilisateur sont limitées à un seul répertoire :
+
+- Par défaut : `~/.backpropagate/ui-outputs`
+- Pour modifier : définissez `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
+- La modification est validée par une liste de contrôle — les chemins système ou d'informations d'identification (`/etc`, `~/.ssh`, `~/.aws`, `C:\Windows\System32`, etc.) sont refusés.
+
+## Notes sur la plateforme
+
+**Prérequis :** Python 3.10+ · GPU CUDA (8 Go+ de VRAM) · PyTorch 2.0+
+
+Python 3.10 atteindra la fin de son cycle de vie en octobre 2026, et Backpropagate prévoit de supprimer le support de Python 3.10 dans la version 1.4. Pour les nouvelles installations, privilégiez Python 3.11 ou 3.12 — Python 3.11 est la version la plus testée.
+
+Backpropagate gère les particularités de l'exécution sur différentes plateformes, mais il ne peut pas résoudre les problèmes d'installation. Les deux problèmes les plus courants sont :
+
+- **Mauvais fichier "wheel" CUDA.** PyTorch est publié avec une version binaire par version de CUDA. Si vous choisissez la mauvaise version, vous obtenez silencieusement une version de PyTorch qui n'utilise que le processeur, et l'entraînement est extrêmement lent. Utilisez le sélecteur de "wheel" à l'adresse <https://pytorch.org/get-started/locally/> pour votre pilote. Exécutez `nvidia-smi` pour voir votre version de pilote / CUDA.
+- **Windows + exportation GGUF.** L'option `[export]` construit `llama-cpp-python` à partir du code source, ce qui nécessite les outils de construction Visual Studio (composant C++) et CMake.
+
+**macOS :** L'entraînement sur GPU n'est pas pris en charge (pas de CUDA). Vous pouvez exécuter l'adaptateur entraîné sur un Mac via Ollama, mais `trainer.train()` génère une erreur `DEP_GPU_NOT_AVAILABLE`. Utilisez une machine Linux ou Windows avec CUDA pour l'entraînement lui-même.
+
+Consultez la [page du manuel de dépannage](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) pour obtenir un guide complet de résolution des problèmes d'installation, et la [page de dépannage CUDA dédiée](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/) pour les problèmes liés aux pilotes / VRAM / xformers / bf16-vs-fp16.
+
+## Interface en ligne de commande
+
+Chaque API Python a un équivalent en ligne de commande (CLI) :
 
 ```bash
 backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
-backprop info
-backprop list-runs                              # v1.1.0: query past training runs
-backprop show-run <run-id>                      # v1.1.0: detail view
-backprop resume <run-id>                        # v1.1.0: resume a crashed multi-run
-backprop push ./output/lora --repo me/my-model  # v1.1.0: push adapter to HF Hub
+backprop info                          # environment + version snapshot
+backprop list-runs                     # past training runs
+backprop show-run <run-id>             # detail view
+backprop resume <run-id>               # resume a crashed run
+backprop push ./output/lora --repo me/my-model    # push adapter to HuggingFace Hub
+backprop diff-runs <run-a> <run-b>     # diff two runs side by side
+backprop replay <run-id>               # re-run with same config / dataset
+backprop export-runs --format jsonl    # bulk export run history
 ```
 
-Consultez [la référence de l'interface en ligne de commande](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/) pour chaque sous-commande et chaque paramètre, ou exécutez `backprop <sous-commande> --help`.
+Référence complète disponible sur la [page de référence du CLI](https://mcp-tool-shop-org.github.io/backpropagate/handbook/cli-reference/), ou `backprop <sous-commande> --help`.
 
-### Reprise à partir d'un point de contrôle (v1.1.0)
+## Configuration
 
-Un cycle d'entraînement interrompu à la quatrième étape peut désormais être repris. Chaque session d'entraînement enregistre son identifiant (`run_id`) à la fois dans le fichier `run_history.json` et dans le fichier de manifeste des points de contrôle sur le disque, ce qui permet de reprendre l'entraînement en une seule commande.
+Chaque paramètre peut être modifié via une variable d'environnement en utilisant le préfixe `BACKPROPAGATE_` :
 
-```bash
-backprop resume <run-id>                       # picks up the in-progress session
-backprop multi-run --data ... --resume <run-id> # explicit form
-backprop train --data ... --resume <run-id>    # single-run resume (continues run_id)
-```
+| Variable | Valeur par défaut | Notes |
+|---|---|---|
+| `BACKPROPAGATE_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `BACKPROPAGATE_LOG_JSON` | auto | Forcer les journaux JSON ou console |
+| `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Modèle par défaut |
+| `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Taux d'apprentissage |
+| `BACKPROPAGATE_LORA__R` | `256` | Rang LoRA (valeur par défaut de la version 1.3 ; utilisez `--lora-preset=fast` pour la valeur par défaut de la version 1.2.x, qui est 16) |
+| `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Espace de stockage du système de fichiers de l'interface utilisateur |
 
-Par défaut, la commande `backprop multi-run` (sans l'option `--resume`) détecte automatiquement une session en cours pour le même répertoire de sortie et la reprend. Pour forcer une nouvelle session, utilisez `resume_from="off"` (API Python) ou omettez l'option `--resume` et démarrez dans un nouveau répertoire de sortie.
-
-Lorsqu'une session d'entraînement est reprise, le dernier point de contrôle associé à cet `run_id` est chargé dans le modèle, l'état de fusion SLAO est restauré à partir du répertoire `slao/` situé à côté du point de contrôle, et le cycle d'entraînement reprend à partir de `last_completed_run + 1`. L'état de la ligne d'historique passe à `running`, ce qui permet à la commande `backprop list-runs --status running` d'afficher la session en cours.
-
-### Suivi des expériences (v1.1.0)
-
-Le module `Trainer` détecte automatiquement les outils de suivi d'expériences installés (`wandb`, `tensorboard`, `mlflow`) et les intègre aux paramètres d'entraînement de `transformers`. La valeur par défaut `report_to="auto"` utilise tout ce qui est importable.
-
-```bash
-pip install backpropagate[monitoring]  # installs wandb + psutil
-wandb login                            # one-time
-backprop train --data my_data.jsonl    # W&B run gets the same run_id prefix as the on-disk history
-```
-
-Pour désactiver explicitement le suivi, utilisez `Trainer(report_to=["wandb"])`, `Trainer(report_to=["tensorboard"])` ou `Trainer(report_to="none")`. Pour utiliser MLflow, installez le package `mlflow` avec `pip install mlflow`; pour TensorBoard, installez `pip install tensorboard`. Le nom de l'exécution W&B est `backprop-<run_id_prefix>`, ce qui permet aux utilisateurs de rechercher des informations à l'aide de ce même identifiant dans W&B, les journaux et le fichier `run_history.json`.
-
-### Historique de l'entraînement
-
-Chaque invocation de `backprop train` et `backprop multi-run` enregistre une ligne dans le fichier `<output>/run_history.json` contenant l'identifiant de l'exécution, le modèle, le jeu de données, les hyperparamètres, l'état, la perte finale, l'historique des pertes et, pour les exécutions multiples, le calendrier de fusion SLAO. Pour afficher les exécutions récentes, utilisez la commande appropriée.
-
-```bash
-backprop list-runs                         # most recent 20 runs, all statuses
-backprop list-runs --status failed         # filter
-backprop list-runs --json --limit 100      # machine-readable
-backprop show-run abcd1234                 # detail view (partial run_id ok)
-```
-
-L'historique des exécutions est conservé entre les processus. L'onglet "Runs" de l'interface web est une vue en mémoire distincte ; l'historique enregistré sur le disque est la source de vérité pour les commandes `list-runs` / `show-run` / `resume`.
-
-### Interface web
-
-Lancez l'interface Reflex localement :
-
-```bash
-backprop ui --port 7862
-```
-
-Pour rendre l'URL accessible via Internet, vous devez combiner les options `--share` et `--auth` :
-
-```bash
-backprop ui --share --auth alice:hunter2
-```
-
-L'exécution de la commande `backprop ui --share` sans l'option `--auth` se termine avec le code d'erreur `1` et l'erreur structurée `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. La raison est la suivante : l'option `--share` publie une URL publique que toute personne sur Internet peut consulter, et sans authentification, cela signifie que n'importe qui peut contrôler votre processus de formation. Il n'y a pas de possibilité de désactivation de cette fonctionnalité ; si vous ne souhaitez pas définir de crédentielles, utilisez plutôt le transfert de port SSH : `ssh -L 7860:localhost:7860 <hôte>`, puis ouvrez `http://localhost:7860` localement. Consultez le document [handbook/security.md](site/src/content/docs/handbook/security.md) pour une description complète du modèle de menace.
-
-Les opérations d'écriture sur le système de fichiers via l'interface utilisateur sont limitées à un seul répertoire :
-
-- Par défaut : `~/.backpropagate/ui-outputs`
-- Pour modifier : `BACKPROPAGATE_UI__OUTPUT_DIR=/path/you/own`
-- Cette modification est **validée par une liste de contrôle** : les chemins système et d'informations d'identification (`/etc`, `/var`, `~/.ssh`, `~/.aws`, `C:\Windows\System32`, etc.) sont refusés avec le message `[UI_OUTPUT_DIR_FORBIDDEN]`.
-
-## Prise en charge de Windows
-
-Backpropagate est conçu pour fonctionner sur Windows sans configuration particulière :
-
-- Pré-tokenisation pour éviter les plantages liés au multiprocessing.
-- Désactivation automatique de xformers pour les séries RTX 40/50.
-- Paramètres de dataloader sécurisés.
-- Testé sur RTX 5080 (16 Go de VRAM).
+Les clés imbriquées utilisent un double tiret bas (`MODEL__NAME`, et non `MODEL_NAME`). La référence complète est disponible sur la [page des variables d'environnement du manuel](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/).
 
 ## Modèles préconfigurés
 
-| Modèle | VRAM | Vitesse | Qualité |
-|--------|------|-------|---------|
-| Qwen 2.5 7B | ~12 Go | Moyenne | Meilleure |
-| Qwen 2.5 3B | ~8 Go | Rapide | Bonne |
-| Llama 3.2 3B | ~8 Go | Rapide | Bonne |
-| Llama 3.2 1B | ~6 Go | Très rapide | Basique |
-| Mistral 7B | ~12 Go | Moyenne | Bonne |
+| Modèle | VRAM | Licence | Notes |
+|---|---|---|---|
+| Qwen-3.5-4B | ~8 Go | Apache 2.0 | Valeur par défaut recommandée pour les modèles de moins de 5 milliards de paramètres. Meilleure qualité pour cette taille. |
+| Phi-4-mini-3.8B | ~8 Go | MIT | Excellent pour le raisonnement, les mathématiques et la programmation. Licence très permissive. |
+| SmolLM3-3B | ~6 Go | Apache 2.0 | Recette entièrement ouverte. Contexte natif de 64 Ko. |
+| Qwen 2.5 7B | ~12 Go | Apache 2.0 | Valeur par défaut existante. Meilleure qualité parmi les anciens modèles 7B. |
+| Qwen 2.5 3B | ~8 Go | Qwen-Research | ⚠ Licence de recherche — consultez les conditions de licence de Qwen avant toute utilisation commerciale. |
+| Llama 3.2 3B | ~8 Go | Llama Community | Alternative intéressante à Qwen 3B avec des conditions d'utilisation permissives. |
+| Llama 3.2 1B | ~6 Go | Llama Community | Idéal pour les premières expérimentations sur de petites cartes. |
+| Mistral 7B | ~12 Go | Apache 2.0 | Comparable à Qwen 7B, mais avec un modèle de conversation différent. |
 
-## Architecture
-
-```
-backpropagate/
-├── trainer.py           # Core Trainer class
-├── multi_run.py         # Multi-run SLAO training
-├── slao.py              # SLAO LoRA merging algorithm
-├── datasets.py          # Dataset loading, filtering & curriculum
-├── export.py            # GGUF/Ollama export
-├── config.py            # Pydantic settings + training presets
-├── gpu_safety.py        # GPU monitoring & safety
-├── cli.py               # CLI entry point (backprop command)
-├── checkpoints.py       # Checkpoint management
-├── exceptions.py        # Structured error hierarchy
-├── feature_flags.py     # Optional feature detection
-├── security.py          # Path traversal & torch security
-├── logging_config.py    # Structured logging setup
-├── ui_theme.py          # Radix theme tokens + CSS (Reflex era)
-├── ui_state.py          # rx.State subclasses
-├── ui_app/              # Reflex web interface (Radix UI)
-│   ├── app.py           #   rx.App entry point
-│   ├── chrome.py        #   Header / LeftNav / SideRail / Footer
-│   ├── pages/           #   Train / Multi-Run / Export / Dataset
-│   └── components/      #   Bp* primitives (status pill, sparkline, event log…)
-└── ui_security.py       # Rate limiting, CSRF, file validation (framework-agnostic)
-```
-
-L'implémentation Gradio de la version 1.0 (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) a été conservée jusqu'à la version 1.1.x à titre de référence et a été supprimée dans la version 1.2.0.
+D'autres modèles peuvent fonctionner, mais seuls ces huit sont intégrés dans les tests automatisés (CI). Utilisez `--lora-preset=quality` (par défaut) pour obtenir un rang de 256 / des cibles "all-linear" selon Biderman 2024 + Thinking Machines 2025, ou `--lora-preset=fast` pour obtenir l'empreinte de la version 1.2.x avec un rang de 16 / des cibles q+v si vous avez besoin de cette empreinte.
 
 ## Dépannage
 
-Un bref index des erreurs les plus courantes rencontrées au démarrage. L'index complet se trouve sur la page du manuel de dépannage : [https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/); chaque code ci-dessous est documenté dans la section [codes d'erreur](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/).
+Un bref index des erreurs les plus courantes lors de la première exécution. L'index inversé complet est disponible sur la [page du manuel de dépannage](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/). Pour une analyse approfondie des pilotes / VRAM / précision mixte, consultez la [page de dépannage CUDA](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/).
 
-| Symptôme | Code | Solution |
-|---------|------|-----|
-| La mémoire de la GPU est épuisée pendant l'entraînement. | `RUNTIME_GPU_OOM` | La fonctionnalité de récupération automatique en cas de manque de mémoire (OOM) (B-002) réduit automatiquement la taille du lot jusqu'à 3 fois. Pour la désactiver : `Trainer(oom_recovery=False)`. Pour forcer une taille plus petite : `--batch-size 1`. |
-| Le hub Hugging Face renvoie un code 401 / "modèle introuvable". | `DEP_MODEL_LOAD_FAILED` | Utilisez `huggingface-cli login` et réessayez. En cas de faute de frappe, copiez l'identifiant exact depuis <https://huggingface.co/models>. |
-| Faute de frappe dans le nom du modèle. | `INPUT_VALIDATION_FAILED` ou `DEP_MODEL_LOAD_FAILED`. | Vérifiez l'identifiant `org/name` sur <https://huggingface.co/models>. |
+| Symptôme | Code d'erreur | Solution |
+|---|---|---|
+| La mémoire de la GPU est épuisée pendant l'entraînement. | `RUNTIME_GPU_OOM` | Automatic — Backpropagate réduit la taille du lot de moitié et tente jusqu'à 3 fois. Pour désactiver cette fonctionnalité : `Trainer(oom_recovery=False)`. Pour forcer une taille plus petite : `--batch-size 1`. |
+| HuggingFace renvoie 401 / "modèle introuvable" | `DEP_MODEL_LOAD_FAILED` | Utilisez `huggingface-cli login` et réessayez. En cas de faute de frappe, copiez l'identifiant exact depuis <https://huggingface.co/models>. |
 | `register_with_ollama` : connexion refusée. | `DEP_OLLAMA_REGISTRATION_FAILED` | Démarrez le démon : `ollama serve`. Installez depuis <https://ollama.com>. Opération pouvant être répétée. |
 | Le disque est plein lors de la sauvegarde du point de contrôle. | `STATE_CHECKPOINT_INVALID` | Les écritures atomiques laissent un répertoire `.partial` en cas de plantage ; il est sûr de le supprimer. Le point de contrôle précédent est intact. |
-| L'entraînement est interrompu / arrêté en raison de la surchauffe de la GPU. | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 : le moniteur met l'entraînement en pause lorsque le seuil de température NVML est atteint ; il reprend automatiquement lorsque la GPU refroidit. Améliorez la circulation de l'air ou réduisez la charge. |
-| `backprop ui --share` est refusé. | `INPUT_AUTH_REQUIRED` | Passez `--auth user:password`. Depuis la v1.2.0 (GHSA-f65r-h4g3-3h9h), `--share` sans `--auth` est une erreur stricte sans possibilité de désactivation ; utilisez la redirection de port SSH si vous ne pouvez pas exposer d'identifiants. |
-| "Chevauchement" des exécutions multiples lors de la validation. | `CONFIG_INVALID` (Étape A, backend B-001). | Réduisez `--samples` en dessous de la taille du pool d'entraînement, augmentez la taille du jeu de données ou désactivez la validation. |
+| L'entraînement est interrompu en raison de la surchauffe du GPU. | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | Automatic — Backpropagate met l'entraînement en pause lorsque la température atteint un seuil et le reprend lorsque le GPU refroidit. Améliorez la circulation de l'air si cela se produit fréquemment. |
+| `backprop ui --share` est refusé. | `INPUT_AUTH_REQUIRED` | Utilisez l'option `--auth user:password`, ou utilisez plutôt le transfert de port SSH (voir [Interface Web](#web-ui)). |
 | L'export GGUF a échoué lors de la première tentative. | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; sous Windows, vous avez également besoin des outils de construction Visual C++ et de CMake. |
 
 ## Signaler des bogues
 
-Lorsqu'une erreur se produit, Backpropagate affiche une ligne `run_started run_id=<uuid>` au démarrage et associe cet ID aux manifestes des points de contrôle, à l'historique des fusions SLAO et aux lignes de journal structurées. Incluez l'`run_id` dans tout rapport de bogue ; cela permet à un mainteneur de corréler chaque ligne de journal, chaque point de contrôle et chaque fusion pour cette exécution spécifique.
+Lorsqu'une erreur se produit, Backpropagate affiche une ligne au démarrage, comme `run_started run_id=<uuid>`, et associe cet ID à chaque ligne de journal, à chaque point de contrôle et à chaque entrée Weights & Biases. **Incluez l'ID de la session (`run_id`) dans tout rapport de bug** ; cela permet à un développeur de corréler tous les éléments pour cette exécution spécifique.
 
 Un bon rapport de bogue comprend :
 
-1. **`run_id`** — l'UUID affiché au démarrage (également disponible sous `TrainingRun.run_id` et `RunResult.run_id`).
-2. **Le code d'erreur** — la ligne `[CODE_NAME]: message` dans stderr ; consultez [codes d'erreur](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) pour le catalogue.
-3. **La ligne de commande masquée.** La sortie stderr en mode non verbeux est automatiquement masquée (les jetons Bearer, `sk-*`, `hf_*`, les clés AWS, les paires `password=/token=/api_key=` sont supprimées) ; il est donc sûr de la copier. Pour obtenir la trace complète et non masquée, relancez avec `--verbose`, mais examinez-la avant de la publier.
-4. **Versions de Python / PyTorch, modèle de GPU, système d'exploitation.** `backprop info` affiche tout cela en une seule fois.
+1. **L'ID de la session (`run_id`)** : l'UUID affiché au démarrage.
+2. **Le code d'erreur** : la ligne `[CODE_NAME]: message` dans la sortie d'erreur standard (stderr). Consultez [la liste des codes d'erreur](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) pour plus d'informations.
+3. **La ligne de commande masquée.** La sortie d'erreur standard est automatiquement masquée (les jetons Bearer, les chaînes commençant par `sk-*`, `hf_*`, les clés AWS, les paires `password=` / `token=` sont supprimées) ; vous pouvez la copier sans problème. Pour obtenir la trace complète et non masquée, relancez l'exécution avec l'option `--verbose`, mais examinez-la avant de la publier.
+4. **Versions de Python / PyTorch, modèle du GPU, système d'exploitation.** La commande `backprop info` affiche toutes ces informations en une seule fois.
+
+Les questions, les suggestions ou les discussions sur le fait de savoir si un comportement est normal doivent être posées sur [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Les problèmes de sécurité doivent être signalés de manière privée via le formulaire [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) ; consultez le fichier [SECURITY.md](SECURITY.md) pour connaître la politique.
 
 ## Confidentialité
 
 Toute l'exécution se fait localement sur votre GPU. Backpropagate ne fait aucune requête réseau, sauf pour télécharger les modèles depuis HuggingFace (ce que vous initiez). Pas de télémétrie, pas de dépendance au cloud.
 
-## Tableau de bord
+## Références
 
-| Catégorie | Score | Notes |
-|----------|-------|-------|
-| A. Sécurité | 6/8 | SECURITY.md, modèle de confiance, pas de secrets/télémétrie, safe_path(). Les éléments MCP sont ignorés. |
-| B. Gestion des erreurs | 5/7 | Structure des exceptions (code/message/indice/cause/pouvant être retentée) via le registre ERROR_CODES ; codes de sortie de la CLI : 0/1/2/3 ; pas de traces de pile brutes sans l'option `--verbose` ; corrélation par `run_id` ; stderr masqué ; blocage via `--share` + `--auth`. MCP/bureau/vscode ignorés. |
-| C. Documentation pour les opérateurs | 4/7 | README, CHANGELOG, LICENSE, --help. Journalisation/MCP/éléments complexes ignorés. |
-| D. Hygiène de la livraison | 6/9 | verify.sh, version=tag, 5 scanners dans l'intégration continue, dependabot, python_requires, build propre. |
-| E. Identité | 4/4 | Logo, traductions, page d'accueil, métadonnées. |
-| **Total** | **25/31** | 14 éléments ignorés avec justification. `shipcheck audit` réussit à 100 %. Date de l'audit : 2026-05-21 (la ligne B a été réévaluée après les travaux de la phase B et les codes de sortie de la CLI de la phase A). |
+Les paramètres par défaut de Backpropagate et son mode d'entraînement multi-sessions sont basés sur des recherches récentes. Si vous souhaitez en savoir plus sur les techniques utilisées :
 
-Historique de la conception et correspondance de chaque élément : voir [ROADMAP.md](ROADMAP.md) — tous les éléments des semaines 1 à 4 sont livrés dans la version 1.1.0.
+- **Hu et al. 2021.** *LoRA: Low-Rank Adaptation of Large Language Models.* [arXiv:2106.09685](https://arxiv.org/abs/2106.09685) — l'article fondateur qui présente LoRA, la technique utilisée par Backpropagate pour entraîner efficacement les adaptateurs.
+- **Biderman et al. 2024.** *LoRA Learns Less and Forgets Less.* [arXiv:2405.09673](https://arxiv.org/abs/2405.09673) — des preuves empiriques que LoRA avec un rang de 256 et des cibles linéaires atteint une qualité équivalente à un réglage fin complet pour la plupart des tâches après l'entraînement, tout en utilisant 67 % moins de ressources de calcul. Cela influence la configuration LoRA par défaut de Backpropagate (v1.3).
+- **Thinking Machines 2025.** *LoRA Without Regret.* [thinkingmachines.ai/blog/lora](https://thinkingmachines.ai/blog/lora/) — une suite pratique qui identifie la correction du taux d'apprentissage 10 fois par rapport au réglage fin complet nécessaire pour les rangs LoRA élevés.
+- **Kirkpatrick et al. 2017.** *Overcoming catastrophic forgetting in neural networks.* [arXiv:1612.00796](https://arxiv.org/abs/1612.00796) — la caractérisation originale de la raison pour laquelle les réseaux neuronaux "oublient" les entraînements précédents lors du réglage fin sur de nouvelles données (EWC — Elastic Weight Consolidation).
+- **Wang et al. 2023.** *Orthogonal Subspace Learning for Language Model Continual Learning.* [arXiv:2310.14152](https://arxiv.org/abs/2310.14152) — O-LoRA, une approche antérieure utilisant LoRA pour l'apprentissage continu en contraignant les nouveaux adaptateurs à des sous-espaces orthogonaux.
+- **Yadav et al. 2023.** *TIES-Merging: Resolving Interference When Merging Models.* [arXiv:2306.01708](https://arxiv.org/abs/2306.01708) — une technique fondamentale pour fusionner plusieurs modèles réglés finement sans interférence.
+- **Qiao & Mahdavi 2025.** *Merge before Forget: A Single LoRA Continual Learning via Continual Merging.* [arXiv:2512.23017](https://arxiv.org/abs/2512.23017) — l'algorithme spécifique implémenté par le module de fusion multi-sessions de Backpropagate. Il s'agit d'une prépublication de décembre 2025 ; Backpropagate est le premier utilisateur connu de cet article.
 
 ## Licence
 
-MIT — voir [LICENSE](LICENSE) pour plus de détails.
+MIT — voir [LICENSE](LICENSE).
 
 ---
 

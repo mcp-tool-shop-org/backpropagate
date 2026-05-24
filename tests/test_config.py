@@ -31,9 +31,11 @@ def test_settings_defaults():
     assert settings.training.per_device_train_batch_size == 2
     assert settings.training.gradient_accumulation_steps == 4
 
-    # LoRA defaults
-    assert settings.lora.r == 16
-    assert settings.lora.lora_alpha == 32
+    # LoRA defaults — v1.3 BACKEND-1: bumped from rank 16 (q+v target,
+    # 1x LR) to rank 256 (all-linear target). Operators who want the
+    # old behavior pass --lora-preset=fast.
+    assert settings.lora.r == 256
+    assert settings.lora.lora_alpha == 512
 
 
 def test_feature_flags():
@@ -148,24 +150,41 @@ class TestLoRAConfig:
     """Tests for LoRAConfig class."""
 
     def test_lora_config_defaults(self):
-        """Test LoRAConfig default values."""
+        """Test LoRAConfig default values.
+
+        v1.3 BACKEND-1: defaults bumped from rank 16 (q+v target, 1x
+        LR) to rank 256 (all-linear target, 10x LR) per
+        Biderman 2024 + Thinking Machines 2025 — the rank-16 defaults
+        left ~15-20% post-training quality on the table. Operators who
+        want the speed-tilted old defaults pass --lora-preset=fast or
+        construct a LoRAConfig with the v1.2 shape explicitly.
+        """
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        assert config.r == 16
-        assert config.lora_alpha == 32
+        assert config.r == 256
+        assert config.lora_alpha == 512
         assert config.lora_dropout == 0.05
         assert config.use_gradient_checkpointing == "unsloth"
         assert config.random_state == 42
+        # v1.3 BACKEND-3 / BACKEND-6: new fields default OFF for
+        # backward-compat with v1.2 behavior. Operators opt in via
+        # --use-dora / --init-lora-weights {pissa,loftq}.
+        assert config.use_dora is False
+        assert config.init_lora_weights == "default"
 
     def test_lora_config_target_modules(self):
-        """Test LoRAConfig target_modules default."""
+        """Test LoRAConfig target_modules default.
+
+        v1.3 BACKEND-1: default flipped from a hand-curated 7-module
+        list to PEFT's ``"all-linear"`` wildcard (matches every linear/
+        Conv1D module except the LM head). Wider adaptation surface =
+        better quality at ~2-3x LoRA parameter count.
+        """
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        expected_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                           "gate_proj", "up_proj", "down_proj"]
-        assert config.target_modules == expected_modules
+        assert config.target_modules == "all-linear"
 
 
 class TestTrainingConfig:
@@ -210,7 +229,11 @@ class TestDataConfig:
         assert config.chat_format == "chatml"
         assert config.pre_tokenize is True
         assert config.shuffle is True
-        assert config.packing is False
+        # v1.3 BACKEND-4: packing default flipped False -> True (single
+        # biggest wall-clock lever for SFT: 1.7-3x throughput, attention-
+        # backend agnostic). Opt out via --no-packing or
+        # BACKPROPAGATE_DATA__PACKING=false.
+        assert config.packing is True
 
 
 class TestUIConfig:

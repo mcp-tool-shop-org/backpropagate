@@ -128,7 +128,11 @@ def _format_group() -> rx.Component:
         rx.flex(
             _label("Override (when auto-detect guesses wrong)"),
             rx.select.root(
-                rx.select.trigger(placeholder="auto", style={"width": "100%"}),
+                rx.select.trigger(
+                    placeholder="auto",
+                    style={"width": "100%"},
+                    aria_label="Dataset format override — auto / ShareGPT / Alpaca / OpenAI / JSONL",
+                ),
                 rx.select.content(
                     rx.select.item("auto-detect", value="auto"),
                     rx.select.item("ShareGPT", value="sharegpt"),
@@ -147,14 +151,34 @@ def _format_group() -> rx.Component:
 
 
 def _preview_group() -> rx.Component:
-    """Preview pane — first 5 records when uploaded."""
+    """Preview pane — first 5 records when uploaded.
+
+    FRONTEND-9 (Wave 6b): mirror the runs.py empty-state pattern — name a
+    concrete next action rather than just "upload to see preview." Norman
+    1988 affordance framing.
+    """
     return Group(
         rx.cond(
             DatasetState.preview_records.length() == 0,  # type: ignore[attr-defined]
-            rx.text(
-                "Upload a dataset to preview the first 5 records here.",
-                size="1",
-                style={"color": "var(--bp-muted)", "font_style": "italic"},
+            rx.flex(
+                rx.text(
+                    "No dataset loaded yet.",
+                    size="2",
+                    style={"color": "var(--bp-text-2)"},
+                ),
+                rx.text(
+                    "Drop a .jsonl / .json / .csv file into the upload zone "
+                    "above. We'll auto-detect ShareGPT / Alpaca / OpenAI "
+                    "shape and show the first 5 records here. From the shell: "
+                    "examples are at examples/quickstart.jsonl in the repo.",
+                    size="1",
+                    style={"color": "var(--bp-muted)"},
+                ),
+                direction="column",
+                gap="2",
+                align="center",
+                padding="4",
+                width="100%",
             ),
             rx.vstack(
                 rx.foreach(
@@ -285,6 +309,7 @@ def _filter_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    aria_label="Minimum tokens per record (filter)",
                 ),
                 rx.cond(
                     DatasetState.min_tokens_error != "",
@@ -307,6 +332,7 @@ def _filter_group() -> rx.Component:
                     type="number",
                     size="2",
                     class_name="bp-num",
+                    aria_label="Maximum tokens per record (filter)",
                 ),
                 rx.cond(
                     DatasetState.max_tokens_error != "",

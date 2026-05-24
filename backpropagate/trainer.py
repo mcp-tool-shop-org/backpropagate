@@ -841,6 +841,31 @@ class Trainer:
             f"unsloth_fallback={self.unsloth_fallback}"
         )
 
+        # v1.3 BACKEND-2: surface license caveats for known restrictively-
+        # licensed presets at Trainer boot. ``lookup_model_preset_by_id``
+        # matches by HF model_id (case-insensitive) so an operator who
+        # passed the raw id (e.g. "Qwen/Qwen2.5-3B-Instruct") still gets
+        # the caveat, not just operators who use ``get_model_preset``.
+        # Caveat is logged at WARNING so it survives operators who
+        # filter for >= WARN (CI / batch runners).
+        try:
+            from .config import lookup_model_preset_by_id
+
+            _preset = lookup_model_preset_by_id(self.model_name)
+            if _preset is not None and _preset.license_restriction:
+                logger.warning(
+                    "%s preset=%s license=%s",
+                    _preset.license_restriction,
+                    _preset.name,
+                    _preset.license,
+                )
+        except Exception as _license_check_err:  # noqa: BLE001 — observability must not block boot  # nosec B110
+            # License-caveat surface is opportunistic; never let a lookup
+            # bug crash Trainer construction.
+            logger.debug(
+                f"license-restriction check skipped: {_license_check_err!r}"
+            )
+
     def _resolve_report_to(self) -> str | list[str]:
         """F-005: resolve the user's report_to intent to a TRL-compatible value.
 
@@ -957,6 +982,153 @@ class Trainer:
                 f"(reason=unexpected_error: {type(e).__name__}: {e})"
             )
         return 2  # Safe default
+
+    # =========================================================================
+    # v1.3 BACKEND-5 / BACKEND-7 — per-card optim + dtype resolution
+    # =========================================================================
+    # The pydantic-settings defaults ("adamw_8bit" for optim, bf16=True/
+    # fp16=False) are conservative cross-card defaults. The runtime
+    # resolvers below upgrade them when the card warrants it AND the
+    # operator hasn't explicitly overridden them. The "explicit
+    # override" detection compares the resolved settings value against
+    # the documented default; any deviation means the operator either
+    # set the env var or passed a CLI flag, and we leave their choice
+    # alone.
+
+    @staticmethod
+    def _detect_optim_for_card(configured_optim: str) -> str:
+        """v1.3 BACKEND-5: resolve the optimizer for the current GPU.
+
+        Pre-fix: every card got ``adamw_8bit`` (the conservative
+        default). Consumer cards (< 24GB VRAM) benefit materially from
+        ``paged_adamw_8bit`` — the paged variant uses
+        CPU<->GPU memory paging to reduce peak VRAM at a tiny
+        wall-clock cost, which is the right tradeoff on a 16GB card.
+        24GB+ cards have headroom and can stay on the non-paged variant.
+
+        Detection rules (in order):
+
+        1. If the operator passed anything other than the documented
+           default ``adamw_8bit``, honor their choice unchanged. The
+           explicit-override surface is the canonical knob for
+           operators who pinned a specific optimizer for an LR
+           schedule / fairness constraint / token budget that depends
+           on it.
+        2. If torch is missing or CUDA is unavailable, leave the
+           default in place — no runtime data to act on.
+        3. If the card has < 24GB VRAM, upgrade ``adamw_8bit`` →
+           ``paged_adamw_8bit`` (consumer-card tier).
+        4. Otherwise leave the default in place (datacenter-class card
+           with VRAM to spare).
+
+        Returns the resolved optimizer string. Pure function; the
+        caller threads it into SFTConfig.optim.
+        """
+        # Rule 1: explicit operator override wins. The documented v1.3
+        # default in config.py is "adamw_8bit"; anything else is the
+        # operator's explicit pick.
+        if configured_optim != "adamw_8bit":
+            return configured_optim
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return configured_optim
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        except Exception as exc:  # noqa: BLE001
+            # Defensive: never let a CUDA query failure crash the
+            # optimizer resolver — fall back to the default.
+            logger.debug(
+                f"_detect_optim_for_card: CUDA query failed ({exc!r}); "
+                f"leaving optim={configured_optim!r} unchanged."
+            )
+            return configured_optim
+        if vram_gb < 24:
+            logger.info(
+                f"_detect_optim_for_card: vram={vram_gb:.1f}GB < 24 -> "
+                f"upgrading optim adamw_8bit -> paged_adamw_8bit (reduces "
+                f"peak VRAM via CPU<->GPU paging; override with --optim "
+                f"adamw_torch / adamw_8bit / etc. to opt out)."
+            )
+            return "paged_adamw_8bit"
+        logger.debug(
+            f"_detect_optim_for_card: vram={vram_gb:.1f}GB >= 24 -> "
+            f"keeping optim=adamw_8bit (datacenter tier; paged variant "
+            f"would trade throughput for unneeded VRAM headroom)."
+        )
+        return configured_optim
+
+    @staticmethod
+    def _detect_optimal_dtype(configured_bf16: bool, configured_fp16: bool) -> tuple[bool, bool]:
+        """v1.3 BACKEND-7: resolve (bf16, fp16) for the current GPU.
+
+        bf16 has hardware support starting at Ampere (compute capability
+        8.0) and is preferred over fp16 wherever it's available — same
+        numerical range as fp32 (no LR-loss-scale dance) at fp16
+        storage cost. Pre-fix the resolver hardcoded fp16=True for
+        every non-Ampere card, including Ada (8.9) and Hopper (9.0)
+        which both have bf16 hardware. The Ada miss matters because
+        RTX 40-series cards (4090/4080/4070) are the most common
+        consumer hardware for fine-tuning at v1.3 ship.
+
+        Detection rules (in order):
+
+        1. If the operator already set bf16=True OR fp16=True
+           explicitly (config.py default is bf16=True, fp16=False),
+           honor their choice. We treat the config default as
+           "no explicit override" so the resolver can flip fp16 ->
+           bf16 on Ada when the conservative default was carried.
+           The operator's only way to *force* fp16 on Ada today is
+           to pass ``--fp16`` AND ``--no-bf16`` (or set both env vars)
+           — the resolver respects that by leaving the explicit choice
+           alone (bf16=False, fp16=True ⇒ skip).
+        2. If torch is missing or CUDA is unavailable, leave the
+           defaults in place.
+        3. If the card supports bf16 (compute capability >= 8.0, i.e.
+           Ampere / Ada / Hopper / Blackwell): prefer (bf16=True,
+           fp16=False).
+        4. Otherwise prefer (bf16=False, fp16=True) — pre-Ampere
+           cards.
+
+        Returns ``(bf16, fp16)`` for SFTConfig.
+        """
+        # Rule 1: honor explicit fp16=True (operator forced fp16 over
+        # the bf16 default — they know their card / their LR schedule).
+        if configured_fp16:
+            return (configured_bf16, configured_fp16)
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return (configured_bf16, configured_fp16)
+            major, minor = torch.cuda.get_device_capability(0)
+            capability = float(f"{major}.{minor}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                f"_detect_optimal_dtype: CUDA capability query failed "
+                f"({exc!r}); leaving (bf16={configured_bf16}, "
+                f"fp16={configured_fp16}) unchanged."
+            )
+            return (configured_bf16, configured_fp16)
+        if capability >= 8.0:
+            # Ampere / Ada / Hopper / Blackwell — bf16 hardware
+            # available. Pre-Ada this means SM 8.0 (A100, 3090). Ada
+            # is 8.9 (4090/4080/4070); Hopper is 9.0 (H100); Blackwell
+            # is 12.x (B100, RTX 5080 / 5090).
+            if not configured_bf16:
+                logger.info(
+                    f"_detect_optimal_dtype: capability={capability} "
+                    f"(Ampere+) -> upgrading dtype to bf16 (was fp16). "
+                    f"bf16 has fp32 numerical range without the loss-"
+                    f"scale dance; opt out with --fp16."
+                )
+            return (True, False)
+        # Pre-Ampere — bf16 hardware unavailable, must use fp16.
+        if configured_bf16:
+            logger.warning(
+                f"_detect_optimal_dtype: capability={capability} "
+                f"(pre-Ampere) does not support bf16; downgrading to "
+                f"fp16. Operator-supplied bf16=True ignored on this card."
+            )
+        return (False, True)
 
     def _cleanup_vram(self) -> None:
         """
@@ -1098,17 +1270,36 @@ class Trainer:
                 cause_category=_classify_model_load_cause(e),
             ) from e
 
-        # Apply LoRA
+        # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
+        # init_lora_weights through to the Unsloth call site. Built as a
+        # kwargs dict so we can ``if-check`` each new field before
+        # passing it — keeps the call backward-compatible with older
+        # Unsloth releases whose get_peft_model signature doesn't accept
+        # the v1.3 kwargs.
+        lora_kwargs: dict[str, Any] = {
+            "r": self.lora_r,
+            "target_modules": settings.lora.target_modules,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "bias": "none",
+            "use_gradient_checkpointing": settings.lora.use_gradient_checkpointing,
+            "random_state": settings.lora.random_state,
+        }
+        # v1.3 BACKEND-3: forward use_dora only when True so we don't
+        # tickle the kwarg on an older Unsloth that may not accept it.
+        if getattr(settings.lora, "use_dora", False):
+            lora_kwargs["use_dora"] = True
+        # v1.3 BACKEND-6: forward init_lora_weights only when the
+        # operator picked something other than the PEFT default. PEFT
+        # accepts the string {"pissa", "loftq"} OR the bool True
+        # (default-initialization). Map "default" -> True per the PEFT API.
+        _init_w = getattr(settings.lora, "init_lora_weights", "default")
+        if _init_w and _init_w != "default":
+            lora_kwargs["init_lora_weights"] = _init_w
         try:
             self._model = FastLanguageModel.get_peft_model(
                 self._model,
-                r=self.lora_r,
-                target_modules=settings.lora.target_modules,
-                lora_alpha=self.lora_alpha,
-                lora_dropout=self.lora_dropout,
-                bias="none",
-                use_gradient_checkpointing=settings.lora.use_gradient_checkpointing,
-                random_state=settings.lora.random_state,
+                **lora_kwargs,
             )
         except Exception as e:
             # F-019: post-download LoRA application — usually a PEFT
@@ -1162,15 +1353,47 @@ class Trainer:
         # Prepare for training
         self._model = prepare_model_for_kbit_training(self._model)
 
-        # Apply LoRA
-        lora_config = LoraConfig(
-            r=self.lora_r,
-            lora_alpha=self.lora_alpha,
-            target_modules=settings.lora.target_modules,
-            lora_dropout=self.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
+        # init_lora_weights through to PEFT. Built as a kwargs dict so
+        # an older PEFT (pre-0.10 for DoRA, pre-0.7 for PiSSA/LoftQ)
+        # that doesn't accept the field doesn't make us crash on this
+        # call. The trainer logs a warning + carries on with vanilla
+        # LoRA when the kwarg is rejected.
+        lora_kwargs: dict[str, Any] = {
+            "r": self.lora_r,
+            "lora_alpha": self.lora_alpha,
+            "target_modules": settings.lora.target_modules,
+            "lora_dropout": self.lora_dropout,
+            "bias": "none",
+            "task_type": "CAUSAL_LM",
+        }
+        if getattr(settings.lora, "use_dora", False):
+            lora_kwargs["use_dora"] = True
+        _init_w = getattr(settings.lora, "init_lora_weights", "default")
+        if _init_w and _init_w != "default":
+            # PEFT's init_lora_weights accepts {True, False, "gaussian",
+            # "pissa", "loftq"}; the trainer's surface only exposes
+            # "default"|"pissa"|"loftq" (str -> str passthrough).
+            lora_kwargs["init_lora_weights"] = _init_w
+        try:
+            lora_config = LoraConfig(**lora_kwargs)
+        except TypeError as exc:
+            # Old PEFT rejected one of the v1.3 kwargs. Strip them and
+            # retry with the legacy shape so the trainer doesn't hard-
+            # fail on an Unsloth-pinned environment that ships an older
+            # PEFT. WARN so the operator notices the silent downgrade.
+            stripped: list[str] = []
+            for k in ("use_dora", "init_lora_weights"):
+                if k in lora_kwargs:
+                    stripped.append(k)
+                    lora_kwargs.pop(k)
+            logger.warning(
+                f"PEFT LoraConfig rejected v1.3 kwarg(s) {stripped!r} "
+                f"({exc!r}); retrying with the legacy LoraConfig shape. "
+                f"Upgrade PEFT >= 0.10 (DoRA) / >= 0.7 (PiSSA/LoftQ) to "
+                f"enable these features."
+            )
+            lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
 
     def train(
@@ -1359,6 +1582,16 @@ class Trainer:
         run_id = run_id_for_resume or uuid.uuid4().hex
         run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
 
+        # v1.3 BACKEND-5 / BACKEND-7: resolve optim + (bf16, fp16) for
+        # the actual card so consumer GPUs get the paged optimizer
+        # automatically and Ada cards prefer bf16 over fp16. The
+        # resolvers honor explicit operator overrides; only the
+        # documented defaults get auto-upgraded.
+        resolved_optim = self._detect_optim_for_card(settings.training.optim)
+        resolved_bf16, resolved_fp16 = self._detect_optimal_dtype(
+            settings.training.bf16, settings.training.fp16
+        )
+
         # Training arguments (TRL 0.27+ uses SFTConfig)
         training_args = SFTConfig(
             output_dir=str(self.output_dir),
@@ -1368,12 +1601,12 @@ class Trainer:
             learning_rate=self.learning_rate,
             weight_decay=settings.training.weight_decay,
             warmup_steps=settings.training.warmup_steps,
-            optim=settings.training.optim,
+            optim=resolved_optim,
             lr_scheduler_type=settings.training.lr_scheduler_type,
             logging_steps=settings.training.logging_steps,
             save_steps=settings.training.save_steps,
-            bf16=settings.training.bf16,
-            fp16=settings.training.fp16,
+            bf16=resolved_bf16,
+            fp16=resolved_fp16,
             seed=settings.training.seed,
             overwrite_output_dir=True,
             dataloader_num_workers=0 if os.name == "nt" else 4,
@@ -1524,12 +1757,17 @@ class Trainer:
                             learning_rate=self.learning_rate,
                             weight_decay=settings.training.weight_decay,
                             warmup_steps=settings.training.warmup_steps,
-                            optim=settings.training.optim,
+                            # v1.3 BACKEND-5 / BACKEND-7: re-resolve per
+                            # retry so the OOM-recovery path inherits the
+                            # same paged/bf16 upgrades as the first attempt.
+                            # Pure functions of the configured value, so
+                            # the resolution is stable across retries.
+                            optim=resolved_optim,
                             lr_scheduler_type=settings.training.lr_scheduler_type,
                             logging_steps=settings.training.logging_steps,
                             save_steps=settings.training.save_steps,
-                            bf16=settings.training.bf16,
-                            fp16=settings.training.fp16,
+                            bf16=resolved_bf16,
+                            fp16=resolved_fp16,
                             seed=settings.training.seed,
                             overwrite_output_dir=True,
                             dataloader_num_workers=0 if os.name == "nt" else 4,

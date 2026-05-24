@@ -72,7 +72,15 @@ __all__ = [
     # Training presets (Phase 1.2)
     "TrainingPreset",
     "TRAINING_PRESETS",
+    "MODEL_PRESETS",
+    "ModelPreset",
     "get_preset",
+    "get_model_preset",
+    "lookup_model_preset_by_id",
+    # LoRA presets (v1.3 BACKEND-1)
+    "LoRAPreset",
+    "LORA_PRESETS",
+    "get_lora_preset",
     # LR scaling helpers (Phase 1.3)
     "get_recommended_lr",
     "get_recommended_warmup",
@@ -217,27 +225,66 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         trust_remote_code: bool = True
 
     class LoRAConfig(BaseSettings):
-        """LoRA/QLoRA configuration."""
+        """LoRA/QLoRA configuration.
+
+        v1.3 BACKEND-1 default bump: rank 16 / q+v+gate target / 1× LR
+        defaults left ~15-20% quality on the table per Biderman 2024 +
+        Thinking Machines 2025 — LoRA at rank 256 + all-linear target +
+        higher LR matches full fine-tuning quality on most post-training
+        tasks at roughly 67% of the compute. Defaults are now the
+        "quality" preset; operators who liked the old speed-tilted
+        behavior can opt in via ``--lora-preset=fast`` (CLI) or
+        ``LORA_PRESETS["fast"]`` (programmatic).
+
+        ``target_modules`` accepts either a list of module names (legacy
+        shape) or the PEFT wildcard string ``"all-linear"`` (PEFT >= 0.7;
+        wires to every linear/Conv1D module except the LM head). The
+        latter is the v1.3 default — wider adaptation surface = better
+        quality at the cost of ~2-3× LoRA parameter count.
+
+        ``use_dora``: enable DoRA (Liu et al., 2024 — Weight-Decomposed
+        Low-Rank Adaptation). When True, PEFT decomposes weight updates
+        into magnitude + direction so a small rank (e.g. 8) matches
+        plain LoRA rank 32 quality at zero inference overhead. Default
+        OFF for backward-compat; flip to True for better quality at
+        +5-10% training time cost. Requires PEFT >= 0.10 (the field is
+        ignored on older PEFT — trainer.py degrades gracefully).
+
+        ``init_lora_weights``: PEFT initialization scheme for the LoRA
+        weights. ``"default"`` (Microsoft reference impl, B=0 so the
+        adapter is a no-op pre-training), ``"pissa"`` (PiSSA — Meng et
+        al. 2024; initialize from top-r SVD of W, faster convergence on
+        QLoRA), ``"loftq"`` (LoftQ — Li et al. 2023; coupled
+        quantization-aware initialization that recovers some
+        quantization error on QLoRA). Both pissa/loftq are free quality
+        recovery for QLoRA runs.
+        """
         model_config = SettingsConfigDict(
             env_prefix="BACKPROPAGATE_LORA__",
             env_ignore_empty=True,
         )
 
-        # LoRA rank (dimension)
-        r: int = 16
-        # LoRA alpha (scaling factor)
-        lora_alpha: int = 32
+        # LoRA rank (dimension). v1.3 default bumped 16 -> 256 (quality preset).
+        r: int = 256
+        # LoRA alpha (scaling factor). Keep alpha = 2 * r convention.
+        lora_alpha: int = 512
         # Dropout rate
         lora_dropout: float = 0.05
-        # Target modules for LoRA
-        target_modules: list[str] = Field(default_factory=lambda: [
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
-        ])
+        # Target modules for LoRA. v1.3 default bumped from a hand-curated
+        # 7-module list to the PEFT "all-linear" wildcard. Accepts a list
+        # of names for explicit control (e.g. ["q_proj", "v_proj"] for the
+        # legacy q+v shape).
+        target_modules: str | list[str] = Field(default="all-linear")
         # Use gradient checkpointing (reduces VRAM by ~30%)
         use_gradient_checkpointing: str = "unsloth"  # "unsloth" or True/False
         # Random state for reproducibility
         random_state: int = 42
+        # v1.3 BACKEND-3: DoRA opt-in. Default False for backward-compat.
+        use_dora: bool = False
+        # v1.3 BACKEND-6: PiSSA / LoftQ initialization. Literal-shaped string;
+        # PEFT accepts {"default", "pissa", "loftq"} (we map "default" -> True
+        # at the call site in trainer.py to honor the PEFT API).
+        init_lora_weights: str = "default"
 
     class TrainingConfig(BaseSettings):
         """Training hyperparameters."""
@@ -302,8 +349,14 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         pre_tokenize: bool = True
         # Shuffle dataset
         shuffle: bool = True
-        # Packing (combine short sequences)
-        packing: bool = False
+        # Packing (combine short sequences). v1.3 BACKEND-4: flipped from
+        # False to True. Sample packing is the single biggest wall-clock
+        # lever for SFT runs (1.7-3× throughput per recent benchmarks,
+        # attention-backend agnostic). Operators who hit edge cases
+        # (boundary-token leakage, exotic chat templates) can opt out
+        # via ``--no-packing`` (CLI) or
+        # ``BACKPROPAGATE_DATA__PACKING=false`` (env).
+        packing: bool = True
 
     class UIConfig(BaseSettings):
         """Reflex (Radix UI) web interface configuration.
@@ -585,15 +638,19 @@ else:
 
     @dataclass
     class LoRAConfig:  # type: ignore[no-redef]
-        r: int = 16
-        lora_alpha: int = 32
+        # v1.3 BACKEND-1: defaults bumped to "quality" preset (rank 256 +
+        # all-linear). See BaseSettings branch docstring above for the
+        # research-backed rationale. Defaults match the BaseSettings
+        # branch byte-identically so a missing pydantic-settings install
+        # doesn't silently change training behavior.
+        r: int = 256
+        lora_alpha: int = 512
         lora_dropout: float = 0.05
-        target_modules: list[str] = field(default_factory=lambda: [
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
-        ])
+        target_modules: str | list[str] = field(default="all-linear")
         use_gradient_checkpointing: str = "unsloth"
         random_state: int = 42
+        use_dora: bool = False
+        init_lora_weights: str = "default"
 
     @dataclass
     class TrainingConfig:  # type: ignore[no-redef]
@@ -624,7 +681,9 @@ else:
         chat_format: str = "chatml"
         pre_tokenize: bool = True
         shuffle: bool = True
-        packing: bool = False
+        # v1.3 BACKEND-4: packing default flipped True (see BaseSettings
+        # branch docstring above for rationale).
+        packing: bool = True
 
     @dataclass
     class UIConfig:  # type: ignore[no-redef]
@@ -853,6 +912,289 @@ class TrainingPreset:
     def effective_batch_size(self) -> int:
         """Calculate effective batch size (batch_size * gradient_accumulation)."""
         return self.batch_size * self.gradient_accumulation
+
+
+# =============================================================================
+# LORA PRESETS (v1.3 BACKEND-1)
+# =============================================================================
+# Decoupled from TRAINING_PRESETS (which govern the training loop —
+# steps/runs/batch) so an operator can opt into "fast" LoRA shape (rank
+# 16 + q+v) without also pinning batch size or step count. The "fast"
+# preset reproduces the pre-v1.3 LoRAConfig defaults so anyone who
+# liked the speed-tilted behavior can opt in via ``--lora-preset=fast``.
+
+
+@dc_dataclass
+class LoRAPreset:
+    """LoRA shape preset (rank + target_modules + LR multiplier).
+
+    Used by ``--lora-preset {fast,quality}`` to swap an entire set of
+    LoRA defaults at the CLI without forcing operators to pass each
+    knob individually. ``lr_multiplier`` is applied on top of whichever
+    base LR the operator supplies (CLI ``--lr`` or
+    ``settings.training.learning_rate``); a multiplier of 1.0 means
+    "use the base LR unchanged."
+    """
+
+    name: str
+    description: str
+    r: int
+    lora_alpha: int
+    target_modules: str | list[str]
+    lr_multiplier: float
+
+
+LORA_PRESETS: dict[str, LoRAPreset] = {
+    "fast": LoRAPreset(
+        name="fast",
+        description=(
+            "Pre-v1.3 defaults — rank 16 + q+v target modules + 1x LR. "
+            "Materially faster per step + lower VRAM, but leaves ~15-20% "
+            "post-training quality on the table vs. the quality preset. "
+            "Pick when you're iterating on data formatting / pipeline "
+            "wiring and want the fastest possible signal."
+        ),
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "v_proj"],
+        lr_multiplier=1.0,
+    ),
+    "quality": LoRAPreset(
+        name="quality",
+        description=(
+            "v1.3 default — rank 256 + all-linear target + 10x LR. "
+            "Matches full fine-tuning quality on most post-training "
+            "tasks per Biderman 2024 + Thinking Machines 2025 at ~67% "
+            "of the compute. Slightly more VRAM (verify it fits your "
+            "card before kicking off a long run)."
+        ),
+        r=256,
+        lora_alpha=512,
+        target_modules="all-linear",
+        lr_multiplier=10.0,
+    ),
+}
+
+
+def get_lora_preset(name: str) -> LoRAPreset:
+    """Get a LoRA shape preset by name.
+
+    Args:
+        name: Preset name ("fast" or "quality").
+
+    Returns:
+        LoRAPreset.
+
+    Raises:
+        ValueError: If preset name is not recognized.
+    """
+    if name not in LORA_PRESETS:
+        available = ", ".join(LORA_PRESETS.keys())
+        raise ValueError(
+            f"Unknown LoRA preset {name!r}. Available: {available}"
+        )
+    return LORA_PRESETS[name]
+
+
+# =============================================================================
+# MODEL PRESETS (v1.3 BACKEND-2 + 8 + 9 + 10)
+# =============================================================================
+# Operator-facing catalog of model_id presets the trainer knows about.
+# Each preset carries: the HF model_id, recommended LoRA rank /
+# max_seq_length / packing toggle, an "best for X" hint, and an
+# OPTIONAL license_restriction string. When non-None, Trainer.__init__
+# prints the caveat at boot so an operator using a non-commercial
+# model for commercial training cannot miss it.
+
+
+@dc_dataclass
+class ModelPreset:
+    """Model preset entry (model_id + recommendations + license metadata)."""
+
+    name: str
+    model_id: str
+    description: str
+    # License SPDX identifier (e.g. "Apache-2.0", "MIT", "Qwen-Research").
+    license: str
+    # Recommended LoRA rank for this model. Smaller models (< 4B) should
+    # cap at 128 to avoid wasting parameters on layers that don't have
+    # enough information capacity to use them.
+    recommended_lora_r: int
+    # Recommended max_seq_length. Defaults to 2048 (matches the
+    # ModelConfig default) for legacy models; native-long-context
+    # models (SmolLM3 64K, Qwen3.5 native long) can use larger values.
+    recommended_max_seq_length: int
+    # Recommended packing toggle. True for most models (1.7-3× throughput
+    # per the v1.3 BACKEND-4 rationale); False only for models with
+    # known boundary-token-leakage issues.
+    recommended_packing: bool
+    # "Best for X" hint surfaced to the operator. One short sentence.
+    best_for: str
+    # OPTIONAL license caveat. When non-None, Trainer.__init__ prints
+    # this text at boot so an operator using e.g. Qwen2.5-3B (which is
+    # released under the Qwen-Research non-commercial license) for
+    # commercial training cannot silently violate the license. Default
+    # None (no caveat needed for permissive licenses).
+    license_restriction: str | None = None
+
+
+# Research-backed catalog. New v1.3 presets land here (Phi-4-mini-3.8B,
+# Qwen-3.5-4B, SmolLM3-3B) alongside the existing v1.2 presets that the
+# TRAINING_PRESETS table referred to in prose.
+MODEL_PRESETS: dict[str, ModelPreset] = {
+    "qwen2.5-7b": ModelPreset(
+        name="qwen2.5-7b",
+        model_id="Qwen/Qwen2.5-7B-Instruct",
+        description="Qwen2.5 7B Instruct — canonical 16GB target",
+        license="Apache-2.0",
+        recommended_lora_r=256,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for="General-purpose post-training on a 16GB card (RTX 5080 / 4080).",
+    ),
+    "qwen2.5-3b": ModelPreset(
+        name="qwen2.5-3b",
+        model_id="Qwen/Qwen2.5-3B-Instruct",
+        description="Qwen2.5 3B Instruct — small, fast iteration",
+        # SPDX-ish marker; Qwen-Research is non-OSI but the catalog
+        # field is descriptive, not normative.
+        license="Qwen-Research",
+        recommended_lora_r=128,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for="Fast iteration on workflow plumbing when you don't need 7B quality.",
+        # v1.3 BACKEND-2: surface the Qwen-Research non-commercial
+        # caveat at Trainer boot so a commercial-use operator cannot
+        # miss it. Operators who need a commercial 3B should pick
+        # phi-4-mini-3.8b (MIT) or qwen3.5-4b (Apache 2.0).
+        license_restriction=(
+            "WARNING: Qwen-Research license — non-commercial only. See "
+            "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/LICENSE "
+            "for terms. For commercial use, pick phi-4-mini-3.8b (MIT) or "
+            "qwen3.5-4b (Apache 2.0) — both new in v1.3."
+        ),
+    ),
+    "llama-3.2-3b": ModelPreset(
+        name="llama-3.2-3b",
+        model_id="meta-llama/Llama-3.2-3B-Instruct",
+        description="Llama 3.2 3B Instruct — Meta's small instruct model",
+        license="Llama-3.2-Community",
+        recommended_lora_r=128,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for="Mainstream small-model baseline; ecosystem-rich Meta tooling.",
+    ),
+    "llama-3.2-1b": ModelPreset(
+        name="llama-3.2-1b",
+        model_id="meta-llama/Llama-3.2-1B-Instruct",
+        description="Llama 3.2 1B Instruct — tightest VRAM footprint",
+        license="Llama-3.2-Community",
+        recommended_lora_r=64,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for="Edge / sub-8GB VRAM cards; pipeline smoke tests.",
+    ),
+    "mistral-7b": ModelPreset(
+        name="mistral-7b",
+        model_id="mistralai/Mistral-7B-Instruct-v0.3",
+        description="Mistral 7B Instruct v0.3 — Apache-licensed 7B alternative",
+        license="Apache-2.0",
+        recommended_lora_r=256,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for="Apache-2.0 7B when you want a non-Qwen baseline.",
+    ),
+    # ----- v1.3 BACKEND-8: Phi-4-mini-3.8B (MIT, commercial-safe) -----
+    "phi-4-mini-3.8b": ModelPreset(
+        name="phi-4-mini-3.8b",
+        model_id="microsoft/Phi-4-mini-instruct",
+        description="Phi-4-mini 3.8B Instruct — Microsoft's MIT-licensed small model",
+        license="MIT",
+        # 3.8B sits between Llama-3.2-3B and Qwen2.5-7B — recommend 128
+        # so the LoRA adapter has room without bloating the parameter
+        # count beyond what 3.8B can use.
+        recommended_lora_r=128,
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for=(
+            "Commercial-safe 3.8B with strong reasoning. MMLU ~73, "
+            "HumanEval ~74.4. Drop-in for qwen2.5-3b when you need an "
+            "OSI license."
+        ),
+    ),
+    # ----- v1.3 BACKEND-9: Qwen-3.5-4B (Apache 2.0) -----
+    "qwen3.5-4b": ModelPreset(
+        name="qwen3.5-4b",
+        model_id="Qwen/Qwen3.5-4B-Instruct",
+        description="Qwen 3.5 4B Instruct — Apache-2.0 4B with native long context",
+        license="Apache-2.0",
+        recommended_lora_r=128,
+        # Qwen 3.5 supports native long context out of the box; bump
+        # the suggestion from 2048 to 4096 so operators don't leave
+        # context on the table for chat / RAG workloads. Operators can
+        # still override down to 2048 for tighter VRAM.
+        recommended_max_seq_length=4096,
+        recommended_packing=True,
+        best_for=(
+            "Commercial-safe 4B with native long context and strong "
+            "MMLU-Pro (~79.1). Best Apache-2.0 4B at v1.3 launch."
+        ),
+    ),
+    # ----- v1.3 BACKEND-10: SmolLM3-3B (Apache 2.0) -----
+    "smollm3-3b": ModelPreset(
+        name="smollm3-3b",
+        model_id="HuggingFaceTB/SmolLM3-3B",
+        description="SmolLM3 3B — HuggingFace's Apache-2.0 small with 64K context",
+        license="Apache-2.0",
+        recommended_lora_r=128,
+        # SmolLM3 ships native 64K context; lift recommendation to
+        # 8192 (still well under the 64K ceiling) so operators
+        # eyeballing the preset see the model's character.
+        recommended_max_seq_length=8192,
+        recommended_packing=True,
+        best_for=(
+            "Long-context 3B — beats Llama-3.2-3B + Qwen-2.5-3B at "
+            "the same parameter count. Pick when you need 32K+ context "
+            "in a small model."
+        ),
+    ),
+}
+
+
+def get_model_preset(name: str) -> ModelPreset:
+    """Get a model preset by name.
+
+    Args:
+        name: Preset name (one of MODEL_PRESETS.keys()).
+
+    Returns:
+        ModelPreset.
+
+    Raises:
+        ValueError: If preset name is not recognized.
+    """
+    if name not in MODEL_PRESETS:
+        available = ", ".join(MODEL_PRESETS.keys())
+        raise ValueError(
+            f"Unknown model preset {name!r}. Available: {available}"
+        )
+    return MODEL_PRESETS[name]
+
+
+def lookup_model_preset_by_id(model_id: str) -> ModelPreset | None:
+    """Return the ModelPreset whose ``model_id`` matches ``model_id``.
+
+    Used by Trainer.__init__ to surface license caveats when the
+    operator passes a HF model_id directly (instead of by preset name).
+    Match is case-insensitive on the model_id to avoid silent misses
+    on capitalization-only differences. Returns None when no preset
+    knows about the model.
+    """
+    needle = model_id.strip().lower()
+    for preset in MODEL_PRESETS.values():
+        if preset.model_id.lower() == needle:
+            return preset
+    return None
 
 
 # Research-backed presets based on SLAO paper, Unsloth docs, and Databricks guide

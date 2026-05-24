@@ -1,0 +1,68 @@
+# Canonical "UI in a container" compose file for backpropagate.
+# CIDOCS-F-010 (Wave 6b, v1.3 prep).
+#
+# Usage:
+#   docker compose up        # foreground; Ctrl+C stops
+#   docker compose up -d     # background
+#   docker compose down      # stop + remove
+#
+# The image is published as a multi-arch manifest (linux/amd64 + linux/arm64);
+# Docker Desktop on Apple Silicon and ARM-Linux operators pull the native
+# arm64 layer automatically.
+#
+# Auth — the Reflex web UI refuses to accept --share / --host without
+# BACKPROPAGATE_UI_AUTH set (GHSA-f65r-h4g3-3h9h hard contract). For local
+# loopback use (the default below — `127.0.0.1` on the host side of the
+# port mapping) auth is not required. To expose to other hosts on your
+# network, set BACKPROPAGATE_UI_AUTH=user:password in your environment or
+# in a `.env` file next to this compose.yaml and change the port mapping
+# to "0.0.0.0:7860:7860".
+#
+# Volumes — ~/.backpropagate persists run history, checkpoints, and the
+# UI sandbox base. On Windows hosts the path expands to %USERPROFILE%\.backpropagate
+# via Docker Desktop's path translation.
+
+services:
+  ui:
+    image: ghcr.io/mcp-tool-shop-org/backpropagate:latest
+    # Override the image's default ENTRYPOINT (`backpropagate --help`) with
+    # the UI command. `--port 7860` is the canonical container-internal
+    # port; the host-side mapping below is what operators reach.
+    command: ["ui", "--port", "7860", "--host", "0.0.0.0"]
+    ports:
+      # Default: loopback-only so the auth-not-required path is safe.
+      # Change to "0.0.0.0:7860:7860" with BACKPROPAGATE_UI_AUTH set for
+      # LAN exposure; use a real tunnel (cloudflared / SSH port-forward)
+      # for public internet exposure — see handbook/security.md.
+      - "127.0.0.1:7860:7860"
+    environment:
+      # Reflex needs to know the externally-reachable bind address so it
+      # can rewrite its frontend asset URLs. Loopback only matches the
+      # ports mapping above.
+      - BACKPROPAGATE_UI_HOST_BIND=0.0.0.0
+      # Optional — pass through from host env or a .env file. When unset,
+      # the UI starts in no-auth-local-only mode (port mapping must stay
+      # loopback for that to be safe).
+      - BACKPROPAGATE_UI_AUTH=${BACKPROPAGATE_UI_AUTH:-}
+      # Optional structured-logging + monitoring knobs. Defaults match
+      # the in-container Reflex defaults; uncomment to override.
+      # - BACKPROPAGATE_LOG_LEVEL=INFO
+      # - BACKPROPAGATE_LOG_JSON=true
+      # - BACKPROPAGATE_UI_REQUEST_LOG=1
+    volumes:
+      # Persist run history, checkpoints, and the UI sandbox base. The
+      # host-side `~/.backpropagate` matches what `backprop` writes when
+      # run natively — switching between container and native install
+      # preserves state.
+      - ${HOME:-${USERPROFILE}}/.backpropagate:/home/appuser/.backpropagate
+    restart: unless-stopped
+    healthcheck:
+      # The image's own HEALTHCHECK runs `backpropagate --version`; this
+      # repeats the same probe at the compose layer so `docker compose ps`
+      # surfaces the same health column without forcing operators into
+      # `docker inspect`.
+      test: ["CMD", "backpropagate", "--version"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 10s

@@ -38,9 +38,18 @@ except Exception as _exc:  # noqa: BLE001
         f"error: {type(_exc).__name__}: {_exc}"
     ) from _exc
 
+# Wave 6b (v1.3) middleware siblings — wrap the same ASGI chain as auth but
+# do not participate in the GHSA-f65r-h4g3-3h9h auth contracts. Wired below
+# via ``rx.App(api_transformer=(...))`` as a Sequence; Reflex 0.9.x applies
+# the sequence in order (first entry is the innermost wrap, last entry is
+# the outermost / network-facing wrap). See ``middleware/__init__.py`` for
+# the chain-ordering rationale.
+from .middleware import healthz_middleware, rate_limit_middleware, request_logging_middleware
 from .pages.dataset import dataset_page
 from .pages.export import export_page
+from .pages.models import models_page
 from .pages.multi_run import multi_run_page
+from .pages.run_detail import run_detail_page
 from .pages.runs import runs_page
 from .pages.train import train_page
 
@@ -90,10 +99,29 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 # WebSocket upgrade go through the same gate. See ``ui_app/auth.py`` for
 # the full mode matrix + cookie shape + pre-accept WS validation.
 #
-# Order matters: the auth middleware is the outermost wrapper, so it sees
-# the raw scope before Reflex (or any other future api_transformer entry)
-# touches it. v1.3 will chain a request-logging + rate-limit middleware in
-# the same slot.
+# Wave 6b (v1.3): chain healthz + rate-limit + auth + request-logging via
+# the ``Sequence`` form of ``api_transformer``. Reflex 0.9.x iterates the
+# sequence in order and applies each entry as ``asgi_app = entry(asgi_app)``
+# (verified against ``reflex==0.9.2.post1`` via inspect.getsource(rx.App)).
+# So the FIRST entry is the innermost wrap (closest to Reflex), and the
+# LAST entry is the outermost (network-facing). The desired runtime order
+# when a request arrives is:
+#
+#     healthz_middleware               (outermost — /healthz early-exit;
+#                                       orchestrator probe never touches auth
+#                                       or rate-limit, returns JSON directly)
+#       → rate_limit_middleware        (fast-fail 429 before auth so brute-
+#                                       force can't exhaust HMAC budget)
+#         → basic_auth_transformer     (UNCHANGED — GHSA contracts intact)
+#           → request_logging_mw       (innermost — log line carries the
+#                                       resolved auth state)
+#             → Reflex
+#
+# Which in api_transformer sequence-order is:
+#
+#     (request_logging, basic_auth, rate_limit, healthz)
+#       innermost first ──────────────────────────► outermost last
+#
 # FRONTEND-F-001 (Wave 5.5): bind ``appearance`` to ``rx.color_mode`` so
 # the Radix theme re-tints whenever the operator toggles theme OR the
 # ``prefers-color-scheme`` media query flips. Reflex's color-mode provider
@@ -110,7 +138,12 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 app = rx.App(
     theme=rx.theme(appearance=rx.color_mode, **RADIX_THEME),
     stylesheets=STYLESHEETS,
-    api_transformer=basic_auth_transformer,
+    api_transformer=(
+        request_logging_middleware,
+        basic_auth_transformer,
+        rate_limit_middleware,
+        healthz_middleware,
+    ),
 )
 
 
@@ -123,3 +156,9 @@ app.add_page(lambda: _with_tokens(multi_run_page()), route="/multi-run", title="
 app.add_page(lambda: _with_tokens(export_page()), route="/export", title="backpropagate · export")
 app.add_page(lambda: _with_tokens(dataset_page()), route="/dataset", title="backpropagate · dataset")
 app.add_page(lambda: _with_tokens(runs_page()), route="/runs", title="backpropagate · runs")
+# Wave 6b (v1.3): drill-down + models surface.
+# Dynamic route: ``/runs/[run_id]`` populates ``RunDetailState`` on mount and
+# renders the per-run page (mirrors ``backprop show-run``). Models surface
+# lists local HF cache contents + disk usage + per-model cleanup affordance.
+app.add_page(lambda: _with_tokens(run_detail_page()), route="/runs/[rid]", title="backpropagate · run detail")
+app.add_page(lambda: _with_tokens(models_page()), route="/models", title="backpropagate · models")

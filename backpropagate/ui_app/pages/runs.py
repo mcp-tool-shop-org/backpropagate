@@ -60,7 +60,11 @@ def _filter_bar() -> rx.Component:
         rx.flex(
             _label("Status"),
             rx.select.root(
-                rx.select.trigger(placeholder="All statuses", style={"width": "180px"}),
+                rx.select.trigger(
+                    placeholder="All statuses",
+                    style={"width": "180px"},
+                    aria_label="Filter run history by status",
+                ),
                 rx.select.content(
                     rx.select.item("All statuses", value=""),
                     rx.select.item("Running", value="running"),
@@ -140,16 +144,26 @@ def _status_badge(status_var) -> rx.Component:
 
 
 def _run_row(run: dict) -> rx.Component:
-    """One table row. Read-only — no click handler (drill-down deferred to v1.3)."""
+    """One table row. The run-id cell links to ``/runs/<rid>`` per FRONTEND-4
+    (Wave 6b drill-down). Other cells are read-only (clicking the row body
+    does NOT navigate; clicking the run-id link does).
+    """
     return rx.grid(
-        rx.text(
-            run["run_id_short"],
-            class_name="bp-num",
-            style={
-                "font_family": "var(--bp-mono)",
-                "color": "var(--bp-peach)",
-                "font_size": "12px",
-            },
+        rx.link(
+            rx.text(
+                run["run_id_short"],
+                class_name="bp-num",
+                style={
+                    "font_family": "var(--bp-mono)",
+                    "color": "var(--bp-peach)",
+                    "font_size": "12px",
+                    "text_decoration": "underline",
+                    "text_decoration_color": "var(--bp-peach)",
+                    "text_underline_offset": "3px",
+                },
+            ),
+            href="/runs/" + run["run_id"],
+            aria_label="Open run detail page for this run id",
         ),
         rx.text(
             run["started_at"],

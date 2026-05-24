@@ -146,21 +146,28 @@ from .checkpoints import (
 # and WindowsConfig stay internal to Settings — operators who need them
 # can `from backpropagate.config import UIConfig` explicitly.
 from .config import (
+    LORA_PRESETS,
+    MODEL_PRESETS,
     PYDANTIC_SETTINGS_AVAILABLE,
     TRAINING_PRESETS,
     DataConfig,
     LoRAConfig,
+    LoRAPreset,
     ModelConfig,
+    ModelPreset,
     Settings,
     TrainingConfig,
     TrainingPreset,
     get_cache_dir,
+    get_lora_preset,
+    get_model_preset,
     get_output_dir,
     get_preset,
     get_recommended_lr,
     get_recommended_warmup,
     get_settings,
     get_training_args,
+    lookup_model_preset_by_id,
     reload_settings,
     settings,
 )
@@ -441,6 +448,14 @@ __all__ = [
     "get_preset",
     "get_recommended_lr",
     "get_recommended_warmup",
+    # v1.3 BACKEND-1 / BACKEND-8/9/10: LoRA + model presets
+    "LORA_PRESETS",
+    "LoRAPreset",
+    "get_lora_preset",
+    "MODEL_PRESETS",
+    "ModelPreset",
+    "get_model_preset",
+    "lookup_model_preset_by_id",
 
     # Core trainer
     "Trainer",

@@ -22,6 +22,7 @@ from backpropagate.ui_state import AppState, AuthBadgeState, TrainState
 from .components.auth_badge import BpAuthBadge
 from .components.event_log import BpEventLog
 from .components.gpu_ring import BpGpuRing
+from .components.loss_chart import BpLossChart
 from .components.sparkline import BpSparkline
 from .components.status_pill import BpStatusPill
 from .components.vram_bar import BpVramBar
@@ -43,6 +44,10 @@ _NAV_ITEMS = (
     ("export",    "Export",     "/export",    "/icons/export.svg"),
     ("dataset",   "Dataset",    "/dataset",   "/icons/dataset.svg"),
     ("runs",      "Runs",       "/runs",      "/icons/records.svg"),
+    # Wave 6b (FRONTEND-7): /models — local HF cache inventory + cleanup.
+    # ``chip.svg`` reads as "compute hardware / model artifact"; matches the
+    # mental model that lives alongside Runs in the operator's workflow.
+    ("models",    "Models",     "/models",    "/icons/chip.svg"),
 )
 
 
@@ -282,14 +287,56 @@ def BpSideRail() -> rx.Component:
             ),
             first=True,
         ),
-        # Sparkline section — caption + meta from state
+        # Loss chart section — FRONTEND-6 (Wave 6b): wire to TrainState.
+        # loss_history (via loss_chart_data computed Var) so the side-rail
+        # actually shows live training loss instead of the v1.2 literal
+        # placeholder. When the list is empty (idle / first frame) fall back
+        # to the SVG placeholder so the rail doesn't look broken before the
+        # first metric arrives. Recharts re-renders only the chart, not the
+        # full page tree, so per-step updates are cheap.
         _rail_section(
-            BpSparkline(
-                data=[],
-                w=264,
-                h=48,
-                caption="Loss · last 80 steps",
-                meta="",
+            rx.cond(
+                TrainState.loss_history.length() == 0,
+                rx.flex(
+                    rx.text(
+                        "Loss · last 80 steps",
+                        size="1",
+                        style={
+                            "color": "var(--bp-text-2)",
+                            "text_transform": "uppercase",
+                            "letter_spacing": "0.06em",
+                            "font_size": "10px",
+                        },
+                    ),
+                    BpSparkline(
+                        data=[],
+                        w=264,
+                        h=48,
+                        caption="",
+                        meta="",
+                    ),
+                    direction="column",
+                    gap="1",
+                ),
+                rx.flex(
+                    rx.text(
+                        "Loss · live",
+                        size="1",
+                        style={
+                            "color": "var(--bp-text-2)",
+                            "text_transform": "uppercase",
+                            "letter_spacing": "0.06em",
+                            "font_size": "10px",
+                        },
+                    ),
+                    BpLossChart(
+                        TrainState.loss_chart_data,
+                        height=80,
+                        label="loss",
+                    ),
+                    direction="column",
+                    gap="1",
+                ),
             ),
             rx.flex(
                 rx.text(

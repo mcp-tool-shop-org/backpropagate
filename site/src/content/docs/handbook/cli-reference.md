@@ -35,6 +35,11 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--lora-r` | `16` | LoRA rank (must be > 0). |
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
+| `--lora-preset` | `quality` | One of `quality` / `fast`. `quality` = rank 256 + all-linear + 10× LR (v1.3 default, matches full fine-tuning per Biderman 2024). `fast` = rank 16 + q+v + 1× LR (v1.2.x footprint). |
+| `--use-dora` | off | Enable DoRA (Weight-Decomposed Low-Rank Adaptation). Rank-8 DoRA ≈ rank-32 LoRA quality, zero inference overhead. Requires `peft>=0.10`. |
+| `--no-packing` | (packing ON by default) | Disable sample packing. Default ON gives 1.7-3× throughput; disable only if you hit packing-incompatible behavior. |
+| `--init-lora-weights` | `default` | One of `default` / `pissa` / `loftq`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
+| `--optim` | auto | Optimizer string. `auto` picks `paged_adamw_8bit` on consumer GPUs (<24GB VRAM), `adamw_torch_fused` otherwise. Override with `adamw_torch` / `paged_adamw_8bit` / `adamw_8bit` etc. |
 
 The CLI default aligns with `config.py`'s `ModelConfig.name` as of v1.3 (F-018). Pass `--model unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to opt into the pre-quantized variant, but only with the `[unsloth]` extra installed.
 
@@ -55,6 +60,63 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--samples` | `1000` | Samples per run. The matching Python-API knob is `samples_per_run`. |
 | `--merge-mode` | `slao` | One of `slao` / `simple`. |
 | `--output`, `-o` | `./output` | Output directory. |
+| `--lora-preset` | `quality` | Same as `backprop train`. |
+| `--use-dora` | off | Same as `backprop train`. |
+| `--no-packing` | (packing ON by default) | Same as `backprop train`. |
+| `--init-lora-weights` | `default` | Same as `backprop train`. |
+| `--optim` | auto | Same as `backprop train`. |
+
+## `backprop diff-runs` (v1.3, experimental)
+
+Side-by-side comparison of two completed runs from the on-disk run history. Useful for "did this config tweak actually move the loss" workflows.
+
+```bash
+backprop diff-runs <run_id_a> <run_id_b> [--output ./output] [--format {table,json}]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `run_id_a` (positional) | **required** | First run_id (or unambiguous prefix). |
+| `run_id_b` (positional) | **required** | Second run_id (or unambiguous prefix). |
+| `--output`, `-o` | `./output` | Output directory containing `run_history.json`. |
+| `--format` | `table` | One of `table` (colorized side-by-side) / `json` (machine-readable). |
+
+Lookup miss raises `InvalidSettingError` naming the run_id + searched dir + next-step suggestions.
+
+## `backprop replay` (v1.3, experimental)
+
+Re-execute a recorded training run with the same model + dataset + hyperparameters. The replay gets a fresh `run_id` (no clobbering of the original) so it can be diffed via `backprop diff-runs`.
+
+```bash
+backprop replay <run_id> [--output ./output] [--override KEY=VALUE]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `run_id` (positional) | **required** | The run_id to replay (or any unambiguous prefix). |
+| `--output`, `-o` | `./output` | Output directory. |
+| `--override` | unset | Repeatable `KEY=VALUE`. Override a single hyperparameter (whitelist: `seed`, `learning_rate`, `lr`, `batch_size`, `gradient_accumulation`, `max_steps`, `steps`, `samples`, `lora_r`, `lora_alpha`, `lora_dropout`, `use_dora`, `packing`, `init_lora_weights`, `lora_preset`, `optim`). Unknown keys fail loudly. |
+
+Inherits seed / learning_rate / batch_size / gradient_accumulation / max_steps / lora_r from the recorded entry. Supports both single-run and multi-run session_kinds.
+
+## `backprop export-runs` (v1.3, experimental)
+
+Bulk dump of every run history entry as JSONL (one record per line). Useful for offline analytics, pipeline integration with W&B / MLflow, or attaching a corpus to a support ticket.
+
+```bash
+backprop export-runs > runs.jsonl
+backprop export-runs --to runs.jsonl --status completed
+backprop export-runs | jq '.run_id'
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output`, `-o` | `./output` | Output directory containing `run_history.json`. |
+| `--format` | `jsonl` | Today only `jsonl` supported (CSV intentionally not offered — loses nested loss_history shape). |
+| `--to` | unset (stdout) | Write to `PATH` instead of stdout. Parent directory created if missing. |
+| `--status` | unset (all) | Filter by status before export — one of `running` / `completed` / `failed`. |
+
+Writes to stdout by default so `backprop export-runs | jq ...` works without intermediate files. Banner goes to stderr to keep stdout clean.
 
 ## `backprop export`
 

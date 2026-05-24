@@ -193,7 +193,7 @@ def request_logging_middleware(asgi_app: Callable) -> Callable:
                 # Operator's logging surface is broken; we cannot recover
                 # mid-request. Silent-swallow per the auth-middleware pattern
                 # (auth never crashes a request on a logging failure either).
-                pass
+                pass  # nosec B110 — middleware MUST NOT crash request on log failure
 
     return middleware
 

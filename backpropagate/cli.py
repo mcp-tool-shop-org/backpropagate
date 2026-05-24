@@ -1666,9 +1666,10 @@ def _lock_file_dir() -> Path:
             base = Path.home() / "AppData" / "Local"
     else:
         # Linux fallback when XDG_RUNTIME_DIR is unset — /tmp is world-
-        # writable but the file itself gets mode 0o600 below, so an
-        # attacker can see the file's existence but cannot read it.
-        base = Path("/tmp")
+        # writable but the file itself gets mode 0o600 below + the
+        # parent dir gets 0o700 a few lines down (defense in depth), so
+        # an attacker can see the file's existence but cannot read it.
+        base = Path("/tmp")  # nosec B108 — mode-restricted file + dir below
 
     target = base / "backpropagate"
     target.mkdir(parents=True, exist_ok=True)

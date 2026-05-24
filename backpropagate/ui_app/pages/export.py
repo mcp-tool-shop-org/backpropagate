@@ -289,7 +289,7 @@ def _hub_group() -> rx.Component:
                         aria_label="HuggingFace API token (write scope) — cleared on successful push",
                     ),
                     rx.cond(
-                        ExportState.hub_token_error != "",
+                        ExportState.hub_token_error != "",  # nosec B105 — empty-string comparison for UI cond, not a credential
                         rx.text(
                             ExportState.hub_token_error,
                             size="1",

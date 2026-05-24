@@ -189,3 +189,52 @@ def test_chrome_footer_constructs_with_badge() -> None:
 
     footer = BpFooter()
     assert footer is not None
+
+
+def test_auth_badge_bind_chip_reads_state_fields() -> None:
+    """FRONTEND-F-002 (Wave 5.5): badge surfaces bind_host/bind_port/reachable_from.
+
+    Pre-fix, ``AuthBadgeState`` populated 3 bind-related fields
+    (``bind_host`` / ``bind_port`` / ``reachable_from``) but the
+    ``BpAuthBadge`` component never read them — dead state shipping
+    alongside the component. This test pins the helper that surfaces
+    those fields in the visible chip body.
+    """
+    pytest.importorskip("reflex")
+    from backpropagate.ui_app.components import auth_badge as _ab
+
+    # The chip helper must exist + return a renderable component.
+    assert hasattr(_ab, "_bind_chip"), (
+        "BpAuthBadge no longer renders bind_host/bind_port/reachable_from "
+        "(_bind_chip helper missing) — re-stranding the 3 AuthBadgeState "
+        "fields that FRONTEND-F-002 was earned to surface"
+    )
+    chip = _ab._bind_chip()
+    assert chip is not None
+    # Component-string roundtrip - the rendered chip body must reference
+    # the 3 AuthBadgeState fields (Reflex Vars stringify to JS expressions
+    # that contain the field name).
+    chip_str = str(chip)
+    for field_name in ("bind_host", "bind_port", "reachable_from"):
+        assert field_name in chip_str, (
+            f"_bind_chip output does not reference AuthBadgeState.{field_name} — "
+            "the field is back to being a dead state field"
+        )
+
+
+def test_auth_badge_full_render_includes_bind_chip() -> None:
+    """The full BpAuthBadge tree contains the bind chip — guards against
+    accidental decoupling where _bind_chip exists but isn't wired in."""
+    pytest.importorskip("reflex")
+    from backpropagate.ui_app.components.auth_badge import BpAuthBadge
+
+    rendered = str(BpAuthBadge())
+    # All 3 bind-related state field names must appear in the rendered
+    # component tree (mode_text + hover_text + bind_host + bind_port +
+    # reachable_from = 5 distinct AuthBadgeState fields the badge now
+    # reads).
+    for field_name in ("bind_host", "bind_port", "reachable_from"):
+        assert field_name in rendered, (
+            f"BpAuthBadge does not surface AuthBadgeState.{field_name}; "
+            f"FRONTEND-F-002 regression"
+        )

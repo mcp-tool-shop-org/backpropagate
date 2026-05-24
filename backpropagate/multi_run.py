@@ -102,6 +102,64 @@ __all__ = [
 ]
 
 
+def _build_abort_callback(trainer: "MultiRunTrainer") -> Any:
+    """BACKEND-F-001: bridge ``MultiRunTrainer._should_abort`` into HF's
+    TrainerCallback so the abort signal interrupts the inner
+    ``SFTTrainer.train()`` call mid-step instead of only between runs.
+
+    Pre-F-001 ``abort()`` set ``_should_abort=True`` and the next iteration
+    of the inter-run loop honored it — but the SFTTrainer.train() call
+    that was already in flight ran to completion (potentially hours)
+    before the loop checked again. The GPU emergency handler
+    (``_on_gpu_emergency``) calls ``abort()`` expecting fast-fail; without
+    this callback that safety contract is silently broken.
+
+    Mechanism: HF Trainer fires :meth:`on_step_end` after every gradient
+    step. The callback polls ``trainer._should_abort`` and, when set,
+    flips ``control.should_training_stop = True`` (the documented HF
+    contract for cooperative cancellation). The inner SFTTrainer then
+    exits its training loop cleanly at the next step boundary —
+    typically within seconds — and ``_execute_run`` returns normally so
+    the run-loop's ``if self._should_abort: break`` check at the top of
+    :meth:`run` fires and the session tears down cleanly.
+
+    Returns ``None`` when transformers is unavailable; the caller should
+    skip callback installation in that case (defensive — transformers is
+    a hard dep of TRL so this branch should never fire in practice).
+    """
+    try:
+        from transformers import TrainerCallback as _HFTrainerCallback
+    except Exception as exc:
+        logger.debug(
+            f"_build_abort_callback: transformers TrainerCallback "
+            f"unavailable ({exc!r}); mid-run abort will fall back to "
+            f"between-run-only semantics."
+        )
+        return None
+
+    class _AbortCallback(_HFTrainerCallback):  # type: ignore[misc, valid-type]
+        """HF callback that interrupts SFTTrainer.train() when _should_abort fires."""
+
+        def __init__(self, multi_run_trainer: "MultiRunTrainer") -> None:
+            super().__init__()
+            self._mrt = multi_run_trainer
+
+        def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:  # noqa: ANN401, ARG002
+            if self._mrt._should_abort:
+                # Cooperative cancellation — HF Trainer reads this flag
+                # after every step and exits its training loop cleanly.
+                control.should_training_stop = True
+                logger.warning(
+                    f"AbortCallback: should_training_stop=True at "
+                    f"global_step={getattr(state, 'global_step', '?')} "
+                    f"(reason={self._mrt._abort_reason!r}); inner "
+                    f"SFTTrainer will exit at the next step boundary."
+                )
+            return control
+
+    return _AbortCallback(trainer)
+
+
 class MergeMode(Enum):
     """LoRA merge mode between runs."""
     SIMPLE = "simple"   # Load previous, continue training
@@ -1025,7 +1083,34 @@ class MultiRunTrainer:
         return result
 
     def abort(self, reason: str = "User requested abort") -> None:
-        """Request abort of current multi-run session."""
+        """Request abort of current multi-run session.
+
+        BACKEND-F-001: as of v1.3 the abort signal is honored BOTH:
+
+        - Mid-run, via the ``_AbortCallback`` wired into the inner
+          ``SFTTrainer.train()`` call. HF Trainer fires ``on_step_end``
+          after every gradient step; when ``_should_abort`` is set the
+          callback flips ``control.should_training_stop = True`` and the
+          inner training loop exits cleanly at the next step boundary
+          (typically within seconds — bounded by ``logging_steps`` and
+          dataloader-batch granularity).
+        - Between runs, via the ``if self._should_abort: break`` check
+          at the top of the per-run loop in :meth:`run`.
+
+        This is the safety contract the GPU emergency handler
+        (``_on_gpu_emergency``) relies on. Pre-F-001 the in-flight
+        ``SFTTrainer.train()`` call ran to completion before the
+        between-run check fired — potentially hours of wasted GPU after a
+        thermal emergency. The mid-run interruption closes that gap.
+
+        Operators calling ``abort()`` from a UI button, signal handler,
+        or programmatic safety check can rely on the call resolving in
+        seconds, not hours, regardless of whether a run is in flight.
+        Note that mid-run abort relies on transformers being importable;
+        on a malformed environment where the callback cannot install
+        (logged at DEBUG) the behavior gracefully degrades to the prior
+        between-run-only semantics.
+        """
         self._should_abort = True
         self._abort_reason = reason
         logger.warning(f"MultiRun abort requested: {reason}")
@@ -1214,11 +1299,20 @@ class MultiRunTrainer:
                 packing=settings.data.packing,
             )
 
+            # BACKEND-F-001: wire the abort callback into the inner
+            # SFTTrainer so MultiRunTrainer.abort() interrupts mid-run
+            # via control.should_training_stop, not just between runs.
+            # Rebuilt per-attempt so the OOM retry path picks up a fresh
+            # adapter bound to the new SFTTrainer instance.
+            _abort_cb = _build_abort_callback(self)
+            sft_callbacks = [_abort_cb] if _abort_cb is not None else None
+
             trainer = SFTTrainer(
                 model=self._trainer._model,
                 processing_class=self._trainer._tokenizer,
                 train_dataset=chunk_dataset,
                 args=training_args,
+                callbacks=sft_callbacks,
             )
 
             try:
@@ -2233,7 +2327,16 @@ class MultiRunTrainer:
                 self._gpu_pause_event.set()
 
     def _on_gpu_emergency(self, status: GPUStatus) -> None:
-        """Handle emergency GPU condition."""
+        """Handle emergency GPU condition.
+
+        BACKEND-F-001: as of v1.3 :meth:`abort` interrupts the inner
+        ``SFTTrainer.train()`` mid-step via the ``_AbortCallback``
+        bridge — so a thermal/VRAM emergency mid-run now actually
+        halts training within seconds instead of waiting for the
+        in-flight run to finish. This restores the safety contract
+        the GPU emergency path documented but pre-F-001 silently
+        could not deliver.
+        """
         logger.error(f"GPU EMERGENCY: {status.condition_reason}")
         self.abort(f"GPU emergency: {status.condition_reason}")
 

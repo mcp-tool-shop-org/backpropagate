@@ -94,8 +94,21 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 # the raw scope before Reflex (or any other future api_transformer entry)
 # touches it. v1.3 will chain a request-logging + rate-limit middleware in
 # the same slot.
+# FRONTEND-F-001 (Wave 5.5): bind ``appearance`` to ``rx.color_mode`` so
+# the Radix theme re-tints whenever the operator toggles theme OR the
+# ``prefers-color-scheme`` media query flips. Reflex's color-mode provider
+# writes ``class="light"`` / ``class="dark"`` on ``<html>`` (next-themes
+# with attribute="class"), which fires the ``.light, .light-theme,
+# [data-theme="light"]`` selector in TOKENS_CSS. The v1.2 bug was that
+# ``RADIX_THEME`` hard-coded ``appearance="dark"`` which stranded the
+# header toggle button — it flipped server-side state but never wrote
+# the DOM mutation needed to swap the active CSS variable set.
+#
+# The toggle button in ``BpHeader`` reads/writes via ``rx.color_mode`` +
+# ``rx.toggle_color_mode`` (the documented Reflex 0.9 surface); see
+# ``ui_app/chrome.py``.
 app = rx.App(
-    theme=rx.theme(**RADIX_THEME),
+    theme=rx.theme(appearance=rx.color_mode, **RADIX_THEME),
     stylesheets=STYLESHEETS,
     api_transformer=basic_auth_transformer,
 )

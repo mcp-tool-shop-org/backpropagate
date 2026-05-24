@@ -5,7 +5,10 @@ sidebar:
   order: 7
 ---
 
-Every Backpropagate setting can be overridden via an environment variable. The convention is `BACKPROPAGATE_<GROUP>__<FIELD>` — note the double underscore between the group and the field name (Pydantic's `env_nested_delimiter`).
+Every Backpropagate setting can be overridden via an environment variable. Two conventions coexist:
+
+- **Pydantic-nested-settings shape (`BACKPROPAGATE_<GROUP>__<FIELD>`, double underscore between group and field)** — used for every knob inside the structured `Settings` model (logging, model, lora, training, data, windows, multirun, security, plus the UI sandbox `__OUTPUT_DIR`). These are bound via Pydantic's `env_nested_delimiter`.
+- **Raw `os.environ.get` shape (`BACKPROPAGATE_<NAME>` or `BACKPROPAGATE_UI_<NAME>`, single underscores throughout)** — used for runtime knobs that bypass Pydantic (UI subprocess launch config, debug-traceback toggle, GGUF convert-script discovery, structured-logger config).
 
 Two ways to set them: export in your shell, or put them in a `.env` file in the working directory (loaded automatically when the `[validation]` extra is installed).
 
@@ -22,19 +25,20 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | unset | When set (any truthy value), feature detection at startup is skipped — every optional dep flag stays `False` until you call `refresh_features()` explicitly. Use for the absolute-fastest CLI startup; pays the cost on first real use. |
+| `BACKPROPAGATE_DEBUG` | unset | When set to any truthy value, the top-level CLI exception net prints the full Python traceback in addition to the one-line error message. Off by default to keep operator-facing failures short; flip to `1` when filing a bug report. |
 
 ## UI sandbox (FB-003)
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Single allowed-base directory for **all** UI-initiated filesystem writes (saved adapters, GGUF exports, converted datasets, Modelfiles). Every UI sink passes this as `allowed_base` to `safe_path` so user-supplied paths cannot escape the sandbox. **Denylist-validated** — resolves against a denylist of system + credential trees (`/etc`, `/usr`, `/sys`, `/dev`, `/boot`, `/bin`, `/sbin`, `/var/run`, `/var/lib`, `/root`, `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/.config`, plus the Windows system roots and per-user credential dirs); if the override resolves into a denied path, startup fails with `UI_OUTPUT_DIR_FORBIDDEN`. Bare `/var` is intentionally NOT denied because macOS's per-user temp tree lives at `/var/folders/<hash>/T/...`; only `/var/run` and `/var/lib` are denied individually. Pick a non-system directory. |
-| `BACKPROPAGATE_UI__PORT` | `7862` | Port the Reflex frontend binds. (Reflex also binds a backend WebSocket on `port + 1` by default.) |
-| `BACKPROPAGATE_UI__HOST` | `127.0.0.1` | Bind host. Localhost-only by default for security. Non-loopback overrides (e.g. `0.0.0.0`) require `--auth user:pass` post-v1.2.0; otherwise the runtime refuses to start with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. SSH port-forwarding remains the lowest-friction remote-access pattern. |
-| `BACKPROPAGATE_UI__SHARE` | `false` | Setting this true is equivalent to passing `--share`. Post-v1.2.0, `--share` requires `--auth user:pass`; without `--auth` the runtime refuses to start. See [the CLI reference](/backpropagate/handbook/cli-reference/#share--host-require-auth-v120-contract). |
+| `BACKPROPAGATE_UI_PORT` | `7862` | Port the Reflex frontend binds. Read directly by `cmd_ui` (cli.py), `rxconfig.py` (CORS allowlist build-up), and the auth-badge resolver (ui_security.py). Reflex also binds a backend WebSocket on `port + 1` by default. |
+| `BACKPROPAGATE_UI_HOST_BIND` | `127.0.0.1` | Bind host for the Reflex backend. Read by `cmd_ui` and the auth-badge resolver. Non-loopback overrides (e.g. `0.0.0.0`) require `--auth user:pass` post-v1.2.0; otherwise the runtime refuses to start with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. SSH port-forwarding remains the lowest-friction remote-access pattern. |
+| `BACKPROPAGATE_UI_SHARE_HOST` | unset | Tunnel host announced to the Host-header allowlist when `--share` is active (cli.py, ui_security.py). v1.3 transitional: populated by the cloudflared tunnel implementation once Wave 6 lands. See [the CLI reference](/backpropagate/handbook/cli-reference/#share--host-require-auth-v120-contract). |
 | `BACKPROPAGATE_UI_AUTH` | unset | When set, the Reflex auth middleware enforces HTTP Basic credentials on every HTTP route and the `/_event` WebSocket upgrade. Same format as `--auth user:pass`. The CLI strips an ambient value when `--auth` was not also passed, to close the v1.1.x ambient-env-bypass path. |
 | `BACKPROPAGATE_UI_LAUNCH_TOKEN` | unset | Per-launch random token honored by the auth middleware (token_auto mode). The Wave-6 MVP does not have the CLI generate one; the middleware honors it if an operator sets it explicitly. v1.3 polish item to wire CLI auto-generation. |
 | `BACKPROPAGATE_UI_CORS_EXTRA_ORIGINS` | unset | Comma-separated extra CORS origins, additive to the loopback defaults. Used by operators who serve the UI behind a reverse proxy at a non-loopback origin. |
-| `BACKPROPAGATE_UI__AUTO_OPEN` | `true` | Open the browser automatically when the UI starts. |
+| `BACKPROPAGATE_UI_QUIET` | unset | When set to `1`, suppresses the 3-line UI startup banner (URL / auth mode / Ctrl+C hint) on stderr. Use for CI / headless launches that don't want banner noise. Only the exact value `1` suppresses; `0` / `false` / unset leave the banner on. |
 
 ## Security (F-001 / FB-003)
 
@@ -57,6 +61,12 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_SECURITY__AUDIT_LOG_FILE` | unset (stdout) | Path for audit log. |
 | `BACKPROPAGATE_SECURITY__ENABLE_CSP` | `true` | Emit a Content-Security-Policy response header. |
 | `BACKPROPAGATE_SECURITY__CSP_REPORT_ONLY` | `false` | When `true`, CSP runs in report-only mode (logs violations, does not block). |
+
+## Export / GGUF
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. |
 
 ## Model
 

@@ -1,0 +1,173 @@
+# Allow-list for scripts/check_doc_drift.py.
+#
+# Three categories of grandfathered drift — items that pre-date the v1.3
+# drift-check forcing function and are intentionally left as-is. NEW drift
+# (a Wave 6+ PR that introduces a new env var, flag, or state field without
+# closing the loop) is NOT grandfathered: the script reports it and CI
+# blocks the merge.
+#
+# Adding a NEW entry to ANY list here is a doctrine-review action — the
+# same bar as adding a new code='X' kwarg without a catalog row. The PR
+# description must explain why the grandfathering is earned and link the
+# upstream surface that takes responsibility (e.g., a separate doc page,
+# a deprecation note, a "v1.4 cleanup" issue).
+#
+# Doctrine: [[within-swarm-doc-lie-drift-detection]]
+
+# ---------------------------------------------------------------------------
+# Env vars: BACKPROPAGATE_* runtime reads that intentionally are NOT in
+# site/src/content/docs/handbook/env-vars.md.
+# ---------------------------------------------------------------------------
+#
+# Wave 5.5 targets to close — DELIBERATELY OMITTED from this list so the
+# drift script reports them as findings:
+#   BACKPROPAGATE_UI_QUIET, BACKPROPAGATE_DEBUG, BACKPROPAGATE_LLAMA_CPP_PATH
+# (bridge agent added these to _enumerate_env_vars but env-vars.md was not
+#  amended in the same wave; ci-docs flagging here so the cidocs agent or
+#  a follow-up PR adds the handbook rows).
+env_vars_handbook_grandfathered = [
+    # UI single-underscore env vars that are runtime fallbacks for the
+    # pydantic double-underscore canonical names. env-vars.md documents the
+    # canonical form (BACKPROPAGATE_UI__PORT, etc.); the single-underscore
+    # forms below are read by rxconfig.py and ui_security.py as legacy /
+    # subprocess-passthrough aliases. v1.4 cleanup target: either add a
+    # "single-underscore aliases" subsection to env-vars.md OR consolidate
+    # the rxconfig.py reads onto the canonical form.
+    "BACKPROPAGATE_UI_HOST_BIND",
+    "BACKPROPAGATE_UI_PORT",
+    "BACKPROPAGATE_UI_SHARE_HOST",
+]
+
+# ---------------------------------------------------------------------------
+# Env vars: BACKPROPAGATE_* runtime reads that intentionally are NOT in the
+# _enumerate_env_vars catalog in backpropagate/cli.py.
+#
+# The catalog is the operator-facing `backprop info --env-vars` surface
+# (driven by pydantic-settings introspection + a hand-curated list of raw
+# os.environ.get knobs). The UI-subprocess env vars below are consumed by
+# the Reflex runtime via a separate well-documented contract in env-vars.md
+# and don't belong in the operator-facing pydantic catalog.
+# ---------------------------------------------------------------------------
+env_vars_catalog_grandfathered = [
+    # UI auth + bind-host surface — documented in env-vars.md "UI sandbox"
+    # and "CLI / runtime opt-outs" tables; consumed by ui_app/auth.py and
+    # ui_security.py via env.get(...) not pydantic introspection.
+    "BACKPROPAGATE_UI_AUTH",
+    "BACKPROPAGATE_UI_CORS_EXTRA_ORIGINS",
+    "BACKPROPAGATE_UI_HOST_BIND",
+    "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+    "BACKPROPAGATE_UI_PORT",
+    "BACKPROPAGATE_UI_SHARE_HOST",
+    "BACKPROPAGATE_UI__OUTPUT_DIR",
+]
+
+# ---------------------------------------------------------------------------
+# CLI flags registered via argparse.add_argument that intentionally are NOT
+# in site/src/content/docs/handbook/cli-reference.md.
+#
+# The handbook covers the six top-level subcommands documented for new
+# operators (train / multi-run / export / info / config / ui). The flags
+# below belong to maintenance subcommands (push, runs, list-runs, resume,
+# show-run) that have help text on the command itself but aren't yet
+# table-formatted in the handbook. v1.4 cleanup target — until then,
+# `backprop <subcmd> --help` is the canonical surface.
+# ---------------------------------------------------------------------------
+cli_flags_grandfathered = [
+    "--env-vars",       # backprop info --env-vars
+    "--error-codes",    # backprop info --error-codes
+    "--hub-private",    # backprop push --hub-private
+    "--hub-token",      # backprop push --hub-token
+    "--include-base",   # backprop push --include-base
+    "--json",           # backprop info --json / backprop runs --json
+    "--limit",          # backprop list-runs --limit
+    "--no-model-card",  # backprop push --no-model-card
+    "--private",        # backprop push --private (deprecated alias for --hub-private)
+    "--push-to-hub",    # backprop push --push-to-hub
+    "--repo",           # backprop push --repo
+    "--resume",         # backprop train --resume (documented in prose, not the table)
+    "--set",            # backprop config --set (already in cli-reference.md table for config)
+    "--status",         # backprop runs --status
+    "--token",          # backprop push --token
+    "--verbose",        # top-level --verbose / -v
+    "--version",        # top-level --version / -V
+]
+
+# ---------------------------------------------------------------------------
+# Reflex state fields on rx.State subclasses with no consumer in ui_app/.
+#
+# The script's consumer heuristic walks ui_app/**/*.py for either
+# `ClassName.fieldname` (direct attribute access) OR the class name +
+# fieldname in the same file (covers template binding). False positives
+# happen when a field is bound via a setter handler that doesn't show up
+# as direct attribute access; list them per-class here.
+#
+# DELIBERATELY OMITTED — Wave 5.5 frontend agent is wiring the tooltip
+# consumer for these in components/auth_badge.py. Listing them here would
+# bypass the drift check; we want it to fire until the consumer lands.
+#   AuthBadgeState.bind_host
+#   AuthBadgeState.bind_port
+#   AuthBadgeState.reachable_from
+# ---------------------------------------------------------------------------
+[reflex_state_fields_no_consumer_required]
+
+# AppState surface state — `active_surface` mutates via set_active_surface
+# event handler but the page selection reads it through Reflex's reactive
+# var dispatcher pattern that the substring heuristic can't see.
+AppState = [
+    "active_surface",
+]
+
+# TrainState — gpu_safety telemetry fields populated by the trainer event
+# stream but rendered through templated text the heuristic doesn't catch.
+TrainState = [
+    "vram_used_gb",
+    "vram_total_gb",
+]
+
+# MultiRunState — every config field is mirrored from TrainState by
+# design (Reflex's metaclass requires direct declaration, see ui_state.py
+# comment block before `_apply_model`). The multi_run.py page does not
+# yet surface the full config form (Phase 3 Trainer hookup pending), so
+# these fields are populated by setters but read only by future UI.
+# v1.4 cleanup target: either wire the rest of the multi_run.py form or
+# trim the mirrored fields.
+MultiRunState = [
+    "dataset_path",
+    "dataset_path_error",
+    "steps",
+    "steps_error",
+    "batch_size",
+    "batch_size_error",
+    "learning_rate",
+    "learning_rate_error",
+    "lora_r",
+    "lora_r_error",
+    "lora_alpha",
+    "lora_alpha_error",
+    "lora_dropout",
+    "lora_dropout_error",
+    "target_modules",
+    "target_modules_error",
+    "replay_fraction",
+    "replay_fraction_error",
+    "current_run_index",
+    "events",
+]
+
+# ExportState — events list populated by the export pipeline; rendered via
+# Reflex foreach that the substring heuristic doesn't see.
+ExportState = [
+    "events",
+]
+
+# DatasetState — upload_count incremented by the upload event handler;
+# read by templated text in the dataset page.
+DatasetState = [
+    "upload_count",
+]
+
+# RunsState — output_dir_override populated by config-read on mount; read
+# by templated breadcrumb that the heuristic doesn't see.
+RunsState = [
+    "output_dir_override",
+]

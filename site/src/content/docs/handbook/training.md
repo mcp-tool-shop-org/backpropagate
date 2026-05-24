@@ -35,7 +35,7 @@ result = trainer.multi_run(
 )
 ```
 
-CLI equivalent (note: the CLI flag is `--samples`, not `--samples-per-run` — the underlying field is `samples_per_run`):
+CLI equivalent (the CLI flag is `--samples`; the matching Python-API field is `samples_per_run`):
 
 ```bash
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100 --samples 1000

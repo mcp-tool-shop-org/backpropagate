@@ -547,6 +547,52 @@ def push_to_hub(
     # exception branch; on success it stays False and the mirror is kept
     # (the documented "keep so local matches Hub" behavior).
     upload_failed = False
+    # BRIDGE-B-007 (Stage C humanization): instrument each push_to_hub stage
+    # so a JSON-log consumer can see (a) when the push started, (b) what
+    # files / bytes are being uploaded, (c) when the repo was created
+    # (vs. reused), and (d) duration on success. The "==> Pushing to Hub"
+    # print at cli.py:866 is the only user-facing signal pre-fix; for a
+    # 4-minute 7B merged-model push there is no progress event in the
+    # structured log stream. Imports stay lazy to avoid pulling structlog
+    # into the cold path of `backprop --help`.
+    import time as _push_time
+    _push_started_at = _push_time.monotonic()
+
+    # Inventory the upload payload so the started event names file_count +
+    # total_bytes — operators triaging a stuck push want to know if they
+    # are 30 seconds into a 7B-model upload or 30 seconds into a 50-MB
+    # adapter-only push.
+    def _inventory(path: Path) -> tuple[int, int]:
+        if path.is_file():
+            try:
+                return 1, path.stat().st_size
+            except OSError:
+                return 1, 0
+        total_files = 0
+        total_bytes = 0
+        for f in path.rglob("*"):
+            if f.is_file():
+                total_files += 1
+                try:
+                    total_bytes += f.stat().st_size
+                except OSError:
+                    pass
+        return total_files, total_bytes
+
+    _file_count, _total_bytes = _inventory(local_path_p)
+    try:
+        logger.info(
+            "hub_push_started repo_id=%s local_path=%s file_count=%d total_bytes=%d private=%s repo_type=%s",
+            repo_id,
+            str(local_path_p),
+            _file_count,
+            _total_bytes,
+            private,
+            repo_type,
+        )
+    except Exception:  # noqa: BLE001 — observability must not block the push  # nosec B110
+        pass
+
     try:
         if create_repo:
             hf_create_repo(
@@ -556,6 +602,14 @@ def push_to_hub(
                 exist_ok=True,
                 repo_type=repo_type,
             )
+            try:
+                logger.info(
+                    "hub_push_repo_ready repo_id=%s private=%s exist_ok=True",
+                    repo_id,
+                    private,
+                )
+            except Exception:  # noqa: BLE001  # nosec B110
+                pass
 
         # Filter set for adapter-only push. We default to uploading only
         # ``adapter_*`` / ``model_card.md`` / ``README.md`` / config files
@@ -685,6 +739,23 @@ def push_to_hub(
                     f"README rollback cleanup failed at {readme_copy_path}: "
                     f"{cleanup_exc}"
                 )
+
+    # BRIDGE-B-007 (Stage C): hub_push_complete fires on the success path
+    # only (the exception branches above already mark upload_failed=True
+    # and re-raise with HUB_PUSH_* codes that operators can grep). The
+    # duration is rounded to 0.1s so the JSON log stays compact.
+    try:
+        _duration = _push_time.monotonic() - _push_started_at
+        logger.info(
+            "hub_push_complete repo_id=%s url=https://huggingface.co/%s duration_seconds=%.1f file_count=%d total_bytes=%d",
+            repo_id,
+            repo_id,
+            _duration,
+            _file_count,
+            _total_bytes,
+        )
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
 
     return f"https://huggingface.co/{repo_id}"
 
@@ -1206,16 +1277,52 @@ def export_gguf(
     gguf_path = output_path / f"{model_name}-{quant_str}.gguf"
 
     # Check for llama-cpp-python or llama.cpp (system/user paths only, no CWD-relative)
+    #
+    # BRIDGE-B-014 (Stage C humanization): path discovery now honors:
+    #   1. ``BACKPROPAGATE_LLAMA_CPP_PATH`` env var — operator escape hatch
+    #      for non-standard install locations (CI runners under /opt, chocolatey
+    #      under C:\tools, etc.). Value may be the script path or the
+    #      llama.cpp directory containing it.
+    #   2. ``shutil.which('convert_hf_to_gguf.py')`` — catches PATH-based
+    #      installs on every OS (Linux pip, Windows scoop, macOS brew).
+    #   3. ``~/llama.cpp/convert_hf_to_gguf.py`` (the original home-dir path).
+    #   4. ``/usr/local/bin/convert_hf_to_gguf.py`` (the original POSIX
+    #      system-wide path — meaningless on Windows but harmless).
+    # The error suggestion below enumerates ALL paths searched so the operator
+    # knows what to populate / what to set.
+    import shutil as _shutil
     convert_script = None
-    llama_cpp_paths = [
-        Path.home() / "llama.cpp" / "convert_hf_to_gguf.py",
-        Path("/usr/local/bin/convert_hf_to_gguf.py"),
-    ]
+    searched_paths: list[Path] = []
 
-    for path in llama_cpp_paths:
-        if path.exists():
-            convert_script = path
-            break
+    env_override = os.environ.get("BACKPROPAGATE_LLAMA_CPP_PATH")
+    if env_override:
+        env_path = Path(env_override).expanduser()
+        # Accept either a direct script path or a containing directory.
+        if env_path.is_dir():
+            env_path = env_path / "convert_hf_to_gguf.py"
+        searched_paths.append(env_path)
+        if env_path.exists():
+            convert_script = env_path
+
+    if convert_script is None:
+        # shutil.which returns the first match in PATH; works cross-OS.
+        which_result = _shutil.which("convert_hf_to_gguf.py")
+        if which_result:
+            which_path = Path(which_result)
+            searched_paths.append(which_path)
+            if which_path.exists():
+                convert_script = which_path
+
+    if convert_script is None:
+        # Final fallback to the two well-known paths.
+        for path in [
+            Path.home() / "llama.cpp" / "convert_hf_to_gguf.py",
+            Path("/usr/local/bin/convert_hf_to_gguf.py"),
+        ]:
+            searched_paths.append(path)
+            if path.exists():
+                convert_script = path
+                break
 
     if convert_script:
         logger.warning(f"Using llama.cpp convert script: {convert_script}")
@@ -1262,12 +1369,27 @@ def export_gguf(
     else:
         # Clean up and raise
         shutil.rmtree(merged_path, ignore_errors=True)
+        # BRIDGE-B-014 (Stage C): enumerate every path the discovery probed
+        # so the operator knows what to populate. The
+        # BACKPROPAGATE_LLAMA_CPP_PATH escape hatch is named explicitly in
+        # the suggestion because operators on Windows / unusual install
+        # locations need a way to point at their existing install without
+        # symlinking into ~/llama.cpp.
+        searched_summary = (
+            "; ".join(str(p) for p in searched_paths)
+            if searched_paths
+            else "(no paths probed — env var unset, shutil.which returned None)"
+        )
         raise GGUFExportError(
             "GGUF export requires either Unsloth or llama.cpp",
             output_path=str(output_path),
             suggestion=(
-                "Install Unsloth (pip install unsloth) or clone llama.cpp to "
-                "~/llama.cpp/ (expected: ~/llama.cpp/convert_hf_to_gguf.py)"
+                "Install Unsloth (`pip install unsloth`) or clone llama.cpp. "
+                f"Paths probed: {searched_summary}. "
+                "To point at a non-standard install, set "
+                "`BACKPROPAGATE_LLAMA_CPP_PATH=/path/to/convert_hf_to_gguf.py` "
+                "(file or directory accepted). Default home-dir target: "
+                "~/llama.cpp/convert_hf_to_gguf.py."
             )
         )
 

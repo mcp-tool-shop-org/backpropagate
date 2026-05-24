@@ -559,18 +559,53 @@ class TestHelperFunctions:
         assert result is False
 
     def test_has_unsloth(self):
-        """Test _has_unsloth detection."""
-        # Test with unsloth not available
-        with patch.dict("sys.modules", {"unsloth": None}):
-            # Force reimport check
-            with patch("builtins.__import__", side_effect=ImportError("No unsloth")):
-                # The function should return False when import fails
-                pass
+        """Test _has_unsloth detection — exercises both branches.
 
-        # Just verify the function exists and can be called in some form
+        TESTS-B-009 (Stage C humanization): the prior implementation had a
+        dead ``with patch(... ImportError ...): pass`` block that asserted
+        nothing for the import-fail branch — the actual ``_has_unsloth()``
+        call ran OUTSIDE both patch contexts, so the appearance-of-coverage
+        for the ImportError path was theatrical. This rewrite runs the call
+        INSIDE the patch so the False branch is actually exercised AND
+        forces the unsloth module to be removed from sys.modules so the
+        ``import unsloth`` statement inside ``_has_unsloth`` actually
+        triggers the import machinery (rather than hitting the module cache).
+        """
+        import sys
+
         from backpropagate.export import _has_unsloth
-        # On Python 3.14 with unsloth installed but incompatible, this may raise
-        # We'll catch and verify it at least attempts the check
+
+        # Import-fail branch: force the unsloth import to raise ImportError.
+        # Must (a) clear the module cache so the import statement re-runs
+        # the import machinery (otherwise ``import unsloth`` is a fast
+        # ``sys.modules['unsloth']`` lookup and the patched __import__ is
+        # never consulted), and (b) raise ImportError from __import__ for
+        # 'unsloth' and 'unsloth.*' subpackages.
+        real_import = __import__
+        cached_unsloth_keys = [k for k in list(sys.modules) if k == "unsloth" or k.startswith("unsloth.")]
+        cached_unsloth = {k: sys.modules.pop(k) for k in cached_unsloth_keys}
+
+        def _no_unsloth(name, *args, **kwargs):
+            if name == "unsloth" or name.startswith("unsloth."):
+                raise ImportError("Patched: no unsloth in this test")
+            return real_import(name, *args, **kwargs)
+
+        try:
+            with patch("builtins.__import__", side_effect=_no_unsloth):
+                assert _has_unsloth() is False, (
+                    "_has_unsloth() must return False when the unsloth import "
+                    "raises ImportError (the patch fired but the function "
+                    "still claimed unsloth was available — coverage bug)"
+                )
+        finally:
+            # Restore module cache so downstream tests in this session that
+            # use unsloth aren't impacted.
+            sys.modules.update(cached_unsloth)
+
+        # Real-environment branch: now call without patches to verify the
+        # function returns a bool either way (this is what the prior test
+        # actually asserted; we keep it as a smoke check + the platform
+        # skips for hosts where unsloth import raises non-ImportError).
         try:
             result = _has_unsloth()
             assert isinstance(result, bool)

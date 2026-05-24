@@ -5,6 +5,18 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Serialize per-tag releases (don't cancel an in-flight release just because
+# someone re-pushed the same tag or triggered workflow_dispatch). Cancelling a
+# mid-flight `npm publish` after the Sigstore-provenance attestation has been
+# signed but before the packument-save commits leaves the registry in a state
+# where retries fail with E409 ('packument-save race') for 5-30 minutes — see
+# memory: npm-publish-409-first-publish-race. Matching publish.yml's group
+# shape keeps the publish + GHCR chain reaction (which fires on
+# `release: published`) consistent with the upstream release run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write       # for GitHub Release creation
   id-token: write       # for npm provenance via Sigstore OIDC
@@ -60,8 +72,12 @@ jobs:
       # version. tomllib lives in Python 3.11+ stdlib — falling through to a
       # 3.10 default would ImportError. Pin 3.11 explicitly so the version
       # check is reproducible across runner-image bumps.
+      # Pinned to the same setup-python SHA as ci.yml + publish.yml (v6.2.0)
+      # so the action-runtime parity across workflows is consistent (the
+      # v6.x line is the Node-24-runtime major; v6.0.0 → v6.2.0 is a patch
+      # bump within that major).
       - name: Setup Python for pyproject version check
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v6.0.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.11'
 

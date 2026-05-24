@@ -38,7 +38,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
-from .exceptions import DatasetNotFoundError, DatasetParseError
+from .exceptions import DatasetNotFoundError, DatasetParseError, InvalidSettingError
 
 logger = logging.getLogger(__name__)
 
@@ -920,7 +920,19 @@ def validate_dataset(
 # =============================================================================
 
 def _count_tokens_approx(text: str) -> int:
-    """Approximate token count (4 chars ≈ 1 token)."""
+    """Approximate token count (4 chars ≈ 1 token).
+
+    Stage C amend BACKEND-B-024: the 4-chars-per-token heuristic is
+    calibrated for ASCII English. CJK datasets are roughly 1 char per
+    token (so this heuristic over-counts by ~4x — the dataset will appear
+    longer than it really is and ``min_tokens`` floors will be MUCH
+    stricter than intended). Code datasets are closer to 2-3 chars per
+    token. Operators filtering by ``min_tokens`` / ``max_tokens`` on a
+    non-ASCII-English corpus should re-derive the cutoffs against their
+    real tokenizer; v1.4 will accept an optional ``token_counter``
+    callable to plug in ``tokenizer.encode`` directly. Until then, this
+    function is a fast-path approximation only.
+    """
     return len(text) // 4
 
 
@@ -1060,6 +1072,35 @@ def deduplicate_minhash(
 
     Requires datasketch library: pip install datasketch
 
+    Stage C amend BACKEND-B-007: deterministic, single-pass algorithm.
+    The prior implementation interleaved insert + query which made the
+    dedup result depend on insertion order in a subtle way: the LSH
+    ``insert`` raised ``ValueError`` on near-duplicates without indexing
+    them, then the follow-up ``lsh.query(mh)`` for those skipped documents
+    returned an empty result set, so they were quietly dropped from
+    ``unique_indices`` even when they should have been the canonical
+    representative for their cluster. Net effect: re-running the same
+    dataset twice could yield different sample counts on near-duplicate
+    boundaries.
+
+    The fix is the canonical pattern: (1) build every MinHash up front
+    without inserting, (2) iterate samples in document order, (3) for each
+    sample ask LSH whether any already-inserted document matches; if not,
+    insert + keep this one as the canonical representative; if yes, skip.
+    This is deterministic given a deterministic ``num_perm`` seed (the
+    datasketch default uses a fixed seed for permutations, so MinHash
+    values are reproducible across runs).
+
+    Determinism contract:
+        ``MinHashLSH(threshold, num_perm)`` is deterministic for a given
+        ``(threshold, num_perm)`` pair. The MinHash permutations are
+        seeded from a fixed default in the datasketch library. Calling
+        this function twice on the same ``samples`` list yields byte-
+        identical ``unique`` output. Operators who shuffle ``samples``
+        between calls will get different (but deterministic) outputs —
+        sort or seed the upstream shuffle if you need stability across
+        pipeline runs.
+
     Args:
         samples: List of samples
         key: Field to check for duplicates (if samples are dicts)
@@ -1076,38 +1117,46 @@ def deduplicate_minhash(
             "datasketch required for minhash deduplication: pip install datasketch"
         )
 
-    # Create LSH index
-    lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
-
-    # Create MinHash for each sample and add to LSH
-    minhashes = []
-    for i, sample in enumerate(samples):
+    # Stage C amend BACKEND-B-007: phase 1 — build every MinHash up front.
+    # No insert side effects in this pass so the per-sample minhash is
+    # purely a function of its text.
+    minhashes: list[Any] = []
+    for sample in samples:
         text = _get_text_content(sample, key)
-
-        # Create MinHash from character n-grams
         mh = MinHash(num_perm=num_perm)
         for ngram in _get_ngrams(text, n=3):
             mh.update(ngram.encode("utf-8"))
-
         minhashes.append(mh)
 
-        # Try to insert - if similar document exists, skip
+    # Stage C amend BACKEND-B-007: phase 2 — single-pass canonical dedup.
+    # For each sample in document order, ask LSH whether any
+    # already-inserted document is a near-duplicate. If not, this sample
+    # IS the canonical representative for its cluster; insert + keep.
+    # If yes, skip.
+    lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
+    kept_indices: list[int] = []
+    for i, mh in enumerate(minhashes):
+        matches = lsh.query(mh)
+        if matches:
+            # Near-duplicate of an already-kept canonical — skip.
+            continue
+        # No prior match — keep this one as the canonical representative
+        # for its cluster.
         try:
             lsh.insert(str(i), mh)
-        except ValueError:
-            # Duplicate detected by LSH
-            pass
+        except ValueError as exc:
+            # Defensive: LSH should never raise here because the query
+            # above returned empty. If it does, we'd silently drop the
+            # sample under the old code path; instead, log loud and keep
+            # the sample (consistency over discard).
+            logger.warning(
+                f"deduplicate_minhash: LSH insert raised on index {i} "
+                f"despite empty query result — keeping sample (degraded "
+                f"to first-seen). Underlying error: {exc}"
+            )
+        kept_indices.append(i)
 
-    # Get unique indices
-    unique_indices = set()
-    for _i, mh in enumerate(minhashes):
-        result = lsh.query(mh)
-        if result:
-            # Keep the first (lowest index) among similar documents
-            min_idx = min(int(r) for r in result)
-            unique_indices.add(min_idx)
-
-    unique = [samples[i] for i in sorted(unique_indices)]
+    unique = [samples[i] for i in kept_indices]
     num_removed = len(samples) - len(unique)
 
     return unique, num_removed
@@ -1260,6 +1309,70 @@ class PerplexityFilter:
 
         logger.info(f"Model loaded on {self._device}")
 
+    def unload(self) -> None:
+        """Stage C amend BACKEND-B-011: release the perplexity model from
+        VRAM/RAM.
+
+        ``PerplexityFilter`` lazy-loads the scoring model on first use and
+        keeps the reference indefinitely. For a 1.3GB GPT-2 model on a
+        constrained-VRAM rig, this competes with the main training model
+        for VRAM — calling ``loader.filter_perplexity(...)`` then
+        ``trainer.train(...)`` could OOM at training start because GPT-2
+        weights were still resident.
+
+        ``unload()`` drops both model + tokenizer, runs ``gc.collect()``,
+        and calls ``torch.cuda.empty_cache()`` if CUDA is available. Safe
+        to call multiple times; safe to call when the model was never
+        loaded. The filter can be re-used after unload — the next score
+        call will lazy-reload.
+
+        For deterministic cleanup, prefer the context-manager form:
+
+            with PerplexityFilter("gpt2") as pf:
+                filtered, _ = pf.filter(samples)
+            # model is released here
+        """
+        if self._model is None and self._tokenizer is None:
+            return
+        logger.info(
+            f"PerplexityFilter.unload: releasing model={self.model_name!r} "
+            f"from {self._device}"
+        )
+        try:
+            del self._model
+        except Exception:
+            pass
+        try:
+            del self._tokenizer
+        except Exception:
+            pass
+        self._model = None
+        self._tokenizer = None
+        import gc as _gc
+        _gc.collect()
+        try:
+            import torch as _torch
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.debug(f"PerplexityFilter.unload: empty_cache skipped: {exc}")
+
+    def __enter__(self) -> "PerplexityFilter":
+        """Stage C amend BACKEND-B-011: context-manager support.
+
+        Enables ``with PerplexityFilter(...) as pf:`` for automatic
+        ``unload()`` on exit — the recommended pattern when running
+        perplexity scoring before fine-tuning to avoid competing for VRAM
+        with the training model.
+        """
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        """Stage C amend BACKEND-B-011: auto-unload on context-manager exit."""
+        self.unload()
+
     def score_text(self, text: str) -> float:
         """
         Compute perplexity for a single text.
@@ -1389,6 +1502,49 @@ class PerplexityFilter:
         Returns:
             Tuple of (filtered_samples, PerplexityStats)
         """
+        # Stage C amend BACKEND-B-020: fail loud on inverted percentile /
+        # threshold bounds. Pre-fix, ``min_percentile > max_percentile``
+        # silently produced ``threshold_low > threshold_high`` which
+        # filtered out nearly every sample — the operator saw an empty
+        # result with no explanation. Same for absolute thresholds. The
+        # message names the bad value and the fix.
+        if (
+            min_percentile is not None
+            and max_percentile is not None
+            and min_percentile > max_percentile
+        ):
+            raise InvalidSettingError(
+                "min_percentile",
+                min_percentile,
+                f"value less than max_percentile (got "
+                f"min_percentile={min_percentile}, "
+                f"max_percentile={max_percentile})",
+                suggestion=(
+                    "Swap the two arguments — min_percentile is the LOW "
+                    "cutoff (drop samples scoring below this percentile) "
+                    "and max_percentile is the HIGH cutoff (drop samples "
+                    "scoring above)."
+                ),
+            )
+        if (
+            min_perplexity is not None
+            and max_perplexity is not None
+            and min_perplexity > max_perplexity
+        ):
+            raise InvalidSettingError(
+                "min_perplexity",
+                min_perplexity,
+                f"value less than max_perplexity (got "
+                f"min_perplexity={min_perplexity}, "
+                f"max_perplexity={max_perplexity})",
+                suggestion=(
+                    "Swap the two arguments — min_perplexity is the LOW "
+                    "cutoff (drop samples easier than this) and "
+                    "max_perplexity is the HIGH cutoff (drop samples "
+                    "harder than this)."
+                ),
+            )
+
         # Score all samples
         scores = self.score(samples, key=key, show_progress=show_progress)
 

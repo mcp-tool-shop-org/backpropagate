@@ -110,6 +110,8 @@ For the optional Reflex UI: `pipx install backpropagate[ui]` (or `pip install ba
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
+> **Heads-up — Python 3.10 reaches upstream end-of-life in October 2026.** Backpropagate v1.3 still supports 3.10 (the CI matrix runs 3.10 / 3.11 / 3.12 / 3.13). A future release (target: v1.4) will drop 3.10 to align with the upstream EOL and the rest of the supported-version table on python.org. If you're standing up a new install, prefer Python 3.11 or 3.12 — the cli + UI smoke cells in CI run on 3.11, so it's the most-tested floor.
+
 ### Platform prerequisites
 
 Backpropagate handles the runtime quirks (multiprocessing, xformers on RTX 40/50, dataloader workers on Windows). It does **not** handle the install-time platform pain — fix those first:

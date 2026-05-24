@@ -987,15 +987,24 @@ class TestGPUMonitorPauseResumeCallbacks:
 
     @patch("backpropagate.gpu_safety.get_gpu_status")
     def test_pause_stops_callbacks(self, mock_get_status, gpu_status_safe):
-        """Pausing the monitor should stop callbacks."""
+        """Pausing the monitor should stop callbacks.
+
+        TESTS-B-015 (v1.3 Wave 3 Stage C): switched from
+        ``time.sleep + count compare + 'allow 1 extra for timing edge cases'``
+        to a deterministic threading.Event wait. Same flake-fix pattern as
+        Wave 1 TESTS-A-008. The explicit '+1 tolerance' was a flake smell;
+        replaced with a hard ceiling on the post-pause count delta.
+        """
         from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig
 
         mock_get_status.return_value = gpu_status_safe
 
         callback_count = [0]
+        first_call = threading.Event()
 
         def on_status(status):
             callback_count[0] += 1
+            first_call.set()
 
         monitor = GPUMonitor(
             config=GPUSafetyConfig(check_interval=0.02),
@@ -1004,32 +1013,55 @@ class TestGPUMonitorPauseResumeCallbacks:
 
         try:
             monitor.start()
-            time.sleep(0.1)  # Let some callbacks fire
+            # Wait deterministically for the first callback instead of
+            # sleeping a fixed 100ms (which races on cold-start Windows CI).
+            triggered = first_call.wait(timeout=5.0)
+            assert triggered, (
+                "GPU monitor did not fire on_status within 5s — the "
+                "polling thread is broken (not a flake)."
+            )
             count_before_pause = callback_count[0]
             assert count_before_pause > 0
 
             monitor.pause()
-            time.sleep(0.1)  # Wait while paused
+            # After pause, give the monitor a short settle window — the
+            # already-in-flight poll cycle may complete one final callback
+            # before the pause flag is observed by the loop. We accept up
+            # to 1 extra callback (an in-flight poll) but no more.
+            time.sleep(0.1)
             count_after_pause = callback_count[0]
 
-            # Should have no or very few new callbacks while paused
-            # Allow 1 extra for timing edge cases
-            assert count_after_pause <= count_before_pause + 1
+            assert count_after_pause <= count_before_pause + 1, (
+                f"Paused monitor still firing callbacks: "
+                f"{count_after_pause - count_before_pause} new callbacks "
+                f"after pause (expected at most 1 in-flight)."
+            )
 
         finally:
             monitor.stop()
 
     @patch("backpropagate.gpu_safety.get_gpu_status")
     def test_resume_restarts_callbacks(self, mock_get_status, gpu_status_safe):
-        """Resuming the monitor should restart callbacks."""
+        """Resuming the monitor should restart callbacks.
+
+        TESTS-B-015 (v1.3 Wave 3 Stage C): switched from sleep+count to
+        a deterministic threading.Event triggered on the FIRST post-resume
+        callback. The prior ``time.sleep(0.1) + count > prior`` pattern
+        could race on cold-start Windows where the first post-resume
+        poll cycle took > 100ms.
+        """
         from backpropagate.gpu_safety import GPUMonitor, GPUSafetyConfig
 
         mock_get_status.return_value = gpu_status_safe
 
         callback_count = [0]
+        # We re-arm this event after pause/resume to detect the first
+        # post-resume callback deterministically.
+        callback_event = threading.Event()
 
         def on_status(status):
             callback_count[0] += 1
+            callback_event.set()
 
         monitor = GPUMonitor(
             config=GPUSafetyConfig(check_interval=0.02),
@@ -1038,18 +1070,33 @@ class TestGPUMonitorPauseResumeCallbacks:
 
         try:
             monitor.start()
-            time.sleep(0.05)
+            # Wait for the first callback so we know polling is live.
+            assert callback_event.wait(timeout=5.0), (
+                "Initial callback did not fire within 5s — polling broken."
+            )
 
             monitor.pause()
+            # Brief settle for in-flight poll. We do NOT assert during this
+            # window; this test is about resume-fires-callbacks, not pause-
+            # stops-callbacks (that's a separate test above).
             time.sleep(0.05)
             count_at_pause = callback_count[0]
+            callback_event.clear()  # re-arm for the post-resume detection
 
             monitor.resume()
-            time.sleep(0.1)  # Wait for callbacks to resume
+            # Wait deterministically for the first post-resume callback.
+            resumed = callback_event.wait(timeout=5.0)
+            assert resumed, (
+                "Resumed monitor did not fire any callback within 5s — "
+                "the resume() path is broken (callbacks should restart "
+                "on the next poll cycle)."
+            )
             count_after_resume = callback_count[0]
 
-            # Should have more callbacks after resume
-            assert count_after_resume > count_at_pause
+            assert count_after_resume > count_at_pause, (
+                f"Resume failed: count went from {count_at_pause} to "
+                f"{count_after_resume}; expected strictly greater."
+            )
 
         finally:
             monitor.stop()

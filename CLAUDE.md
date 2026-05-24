@@ -28,7 +28,8 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
 - First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
 - Tested on RTX 5080 (16GB VRAM)
-- 1865 tests in tests/ (1856 passed + 10 skipped; pinned 2026-05-23 post-Wave-6), 50% coverage floor (`fail_under = 50` in coverage config)
+- 1865 tests in tests/ (1856 passed + 10 skipped; pinned 2026-05-23 post-Wave-6), 50% coverage floor (single source of truth: `[tool.coverage.report].fail_under = 50` in pyproject.toml; ci.yml reads it via tomllib so the two surfaces stay in lockstep)
+- Python 3.10 → 3.13 supported in CI; 3.10 reaches upstream EOL Oct 2026 and is scheduled for drop in v1.4. v1.3 still ships against 3.10. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — UI + Windows + macOS smoke cells all run on 3.11)
 - All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
 
 ## User-facing docs surface

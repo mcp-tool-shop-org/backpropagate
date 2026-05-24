@@ -251,8 +251,13 @@ asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests that require GPU or external services",
-    "gpu: marks tests that require a GPU",
     "hypothesis: marks property-based tests",
+    # TESTS-B-011 (v1.3 Wave 3 Stage C): the prior 'gpu' marker was declared
+    # here but never applied to a single test (verified via
+    # ``pytest --collect-only -m gpu`` returning 0 tests). Removed to keep
+    # ``--strict-markers`` honest. Tests that genuinely require a GPU should
+    # be marked ``integration`` (the broader integration marker already
+    # gates GPU-required tests via the ``-m 'not integration'`` fast cycle).
 ]
 filterwarnings = [
     # Ignore deprecation warning about TRANSFORMERS_CACHE - this is user's env config

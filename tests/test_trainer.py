@@ -1786,10 +1786,13 @@ class TestUnslothFallback:
                 with pytest.raises((ModelLoadError, ValueError)):
                     trainer.load_model()
 
-                mock_transformers.assert_not_called(), (
-                    "With unsloth_fallback=False, the transformers fallback "
-                    "must NOT be invoked — the original error must propagate."
-                )
+                # TESTS-B-016 (Stage C): drop the trailing tuple — assert_not_called
+                # itself raises AssertionError("Expected to be called 0 times. Called N times.")
+                # which is the operator-facing message that matters. Keep the
+                # intent as a leading comment instead of a never-fired msg.
+                # Contract: with unsloth_fallback=False, the transformers fallback
+                # must NOT be invoked — the original error must propagate.
+                mock_transformers.assert_not_called()
 
     def test_unsloth_import_error_skips_fallback_path(self):
         """ImportError bypasses the fallback and surfaces as ModelLoadError.

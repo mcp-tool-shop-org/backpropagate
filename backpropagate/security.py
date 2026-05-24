@@ -211,7 +211,50 @@ def check_torch_security() -> bool:
         return True  # Assume safe if we can't check
 
 
+# Stage C amend BACKEND-B-013: thread-safe module-init security check.
+# Previously this was a lazy first-call cache inside ``safe_torch_load``,
+# which:
+#   (a) raced across threads in the Reflex UI (benign — N warnings instead
+#       of one — but messy);
+#   (b) NEVER fired when a .safetensors path was loaded because the lazy
+#       check happened AFTER the early-return branch. A torch-old env
+#       silently missed the warning on every safetensors load.
+# Now the check fires once at module import, with a threading.Lock guarding
+# the bookkeeping flag for symmetry with the rest of the module.
 _torch_security_checked: bool = False
+_torch_security_lock = __import__("threading").Lock()
+
+
+def _ensure_torch_security_checked() -> None:
+    """Stage C amend BACKEND-B-013: run :func:`check_torch_security` once
+    per process under a lock so the warning fires before ANY load path
+    (safetensors OR torch.load) ever returns.
+
+    Idempotent and thread-safe. The lock contention is negligible — the
+    flag is set once and every subsequent call short-circuits on the
+    initial read before grabbing the lock.
+    """
+    global _torch_security_checked
+    if _torch_security_checked:
+        return
+    with _torch_security_lock:
+        if _torch_security_checked:
+            return
+        check_torch_security()
+        _torch_security_checked = True
+
+
+# Eagerly run the check at module import so the warning fires before any
+# load happens, even on a pure-safetensors workflow that never touches
+# torch.load. Wrapped in try/except so a bad torch env doesn't kill
+# import — the lazy fallback in safe_torch_load still covers that case.
+try:
+    _ensure_torch_security_checked()
+except Exception as _bootstrap_exc:  # pragma: no cover - defensive
+    logger.debug(
+        f"Eager torch-security check at import failed: {_bootstrap_exc}; "
+        f"will retry lazily inside safe_torch_load."
+    )
 
 
 def safe_torch_load(
@@ -225,6 +268,11 @@ def safe_torch_load(
     Prefers safetensors format when available, falls back to
     torch.load with weights_only=True.
 
+    Stage C amend BACKEND-B-013: the torch-version security check is now
+    invoked BEFORE the safetensors early-return so a torch-old environment
+    loading .safetensors files still surfaces the warning. The check is
+    thread-safe via :func:`_ensure_torch_security_checked`.
+
     Args:
         path: Path to the weights file
         weights_only: Enforce weights_only mode (default True)
@@ -237,8 +285,6 @@ def safe_torch_load(
         FileNotFoundError: If path doesn't exist
         RuntimeError: If loading fails
     """
-    global _torch_security_checked
-
     import torch
 
     path = Path(path)
@@ -246,10 +292,10 @@ def safe_torch_load(
     if not path.exists():
         raise FileNotFoundError(f"Weights file not found: {path}")
 
-    # Check PyTorch security once (cached after first call)
-    if not _torch_security_checked:
-        check_torch_security()
-        _torch_security_checked = True
+    # Stage C amend BACKEND-B-013: run the security check BEFORE branching
+    # on file suffix. Pre-fix, .safetensors paths returned without ever
+    # firing the check; now both paths share the same security floor.
+    _ensure_torch_security_checked()
 
     # Prefer safetensors format (more secure)
     if path.suffix == ".safetensors":

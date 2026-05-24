@@ -19,7 +19,25 @@ import reflex as rx
 # ``backpropagate.ui_app.app`` (Python smoke tests).
 from backpropagate.ui_theme import RADIX_THEME, STYLESHEETS, TOKENS_CSS
 
-from .auth import ENFORCEMENT_AVAILABLE, basic_auth_transformer
+# FRONTEND-B-003 (Stage C humanization): catch a broad ``Exception`` (not
+# just ``ImportError``) so a syntax error or transitive import crash in
+# auth.py produces a humanized refuse-to-start rather than a confusing
+# ``NameError`` further down. If ``basic_auth_transformer`` is missing we
+# cannot wire ``rx.App(api_transformer=...)``; failing fast with the same
+# canonical message that the env-var guard prints is the correct shape.
+try:
+    from .auth import ENFORCEMENT_AVAILABLE, basic_auth_transformer
+except Exception as _exc:  # noqa: BLE001
+    raise RuntimeError(
+        "FRONTEND-B-001 / FRONTEND-B-003 / GHSA-f65r-h4g3-3h9h: the auth "
+        "middleware module (backpropagate.ui_app.auth) failed to import - "
+        "refusing to start the Reflex UI because it would bind a port and "
+        "serve traffic without the load-bearing middleware. Reinstall the "
+        "[ui] extra with `pip install --force-reinstall 'backpropagate[ui]'` "
+        "to restore the module, then re-run `backprop ui`. Underlying import "
+        f"error: {type(_exc).__name__}: {_exc}"
+    ) from _exc
+
 from .pages.dataset import dataset_page
 from .pages.export import export_page
 from .pages.multi_run import multi_run_page

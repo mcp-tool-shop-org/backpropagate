@@ -138,15 +138,27 @@ from .checkpoints import (
 )
 
 # Configuration
+#
+# BRIDGE-B-010 (Stage C): promote the public TRAINING_PRESETS /
+# get_recommended_lr / get_recommended_warmup surface from config.__all__
+# into backpropagate's top-level namespace so the documented import
+# `from backpropagate import TRAINING_PRESETS` actually resolves. UIConfig
+# and WindowsConfig stay internal to Settings — operators who need them
+# can `from backpropagate.config import UIConfig` explicitly.
 from .config import (
     PYDANTIC_SETTINGS_AVAILABLE,
+    TRAINING_PRESETS,
     DataConfig,
     LoRAConfig,
     ModelConfig,
     Settings,
     TrainingConfig,
+    TrainingPreset,
     get_cache_dir,
     get_output_dir,
+    get_preset,
+    get_recommended_lr,
+    get_recommended_warmup,
     get_settings,
     get_training_args,
     reload_settings,
@@ -205,13 +217,16 @@ from .export import (
 )
 from .feature_flags import (
     FEATURES,
+    INSTALL_HINTS,
     FeatureNotAvailable,
     check_feature,
+    ensure_feature,
     get_gpu_info,
     get_install_hint,
     get_system_info,
     list_available_features,
     list_missing_features,
+    refresh_features,
     require_feature,
 )
 
@@ -287,6 +302,16 @@ except PackageNotFoundError:
 # we keep ``__getattr__`` so callers that import the old names get a clear
 # deprecation error pointing at the CLI.
 
+# BRIDGE-B-015 (Stage C): each entry now carries (message, removed_in)
+# so the warning + ImportError can name the version where the hard removal
+# will happen. The deprecation handler emits a DeprecationWarning BEFORE
+# raising ImportError so code wrapped in ``try: ... except ImportError:``
+# still sees the warning via stderr (the default DeprecationWarning filter
+# behavior is "default once per location" which gives operators a single
+# heads-up without spamming long-running notebooks). Industry convention
+# per PEP 562 examples and numpy / pandas precedent.
+_REMOVED_IN_VERSION = "v1.4"
+
 _DEPRECATED_UI_ATTRS = {
     "launch": (
         "backpropagate.launch() is removed in v1.1.0. The Web UI migrated "
@@ -312,11 +337,23 @@ def __getattr__(name: str) -> Any:
     """
     Lazy loading for optional features with helpful error messages.
 
-    When a user tries to import a removed Gradio-era attribute, raise an
-    ImportError pointing at the v1.1.0 Reflex replacement.
+    BRIDGE-B-015 (Stage C): when a user touches a removed Gradio-era
+    attribute we (1) emit a DeprecationWarning naming the future removal
+    version (currently ``v1.4``) so callers wrapping the access in
+    ``try: ... except ImportError: pass`` still see the heads-up in stderr,
+    then (2) raise ``ImportError`` with the migration hint so the existing
+    contract is preserved. In v1.4 the ImportError can be swapped for a
+    plain AttributeError to match the rest of ``__getattr__``'s contract.
     """
     if name in _DEPRECATED_UI_ATTRS:
-        raise ImportError(_DEPRECATED_UI_ATTRS[name])
+        import warnings as _warnings
+        base_msg = _DEPRECATED_UI_ATTRS[name]
+        full_msg = (
+            f"{base_msg} This shim will become a hard AttributeError in "
+            f"{_REMOVED_IN_VERSION}."
+        )
+        _warnings.warn(full_msg, DeprecationWarning, stacklevel=2)
+        raise ImportError(full_msg)
 
     raise AttributeError(f"module 'backpropagate' has no attribute '{name}'")
 
@@ -371,8 +408,11 @@ __all__ = [
 
     # Feature flags
     "FEATURES",
+    "INSTALL_HINTS",
     "check_feature",
     "require_feature",
+    "ensure_feature",
+    "refresh_features",
     "get_install_hint",
     "list_available_features",
     "list_missing_features",
@@ -393,6 +433,14 @@ __all__ = [
     "LoRAConfig",
     "DataConfig",
     "PYDANTIC_SETTINGS_AVAILABLE",
+    # BRIDGE-B-010 (Stage C): training presets are documented public surface
+    # (see `Research-backed presets based on SLAO paper` in config.py) and
+    # now resolve via `from backpropagate import TRAINING_PRESETS`.
+    "TRAINING_PRESETS",
+    "TrainingPreset",
+    "get_preset",
+    "get_recommended_lr",
+    "get_recommended_warmup",
 
     # Core trainer
     "Trainer",

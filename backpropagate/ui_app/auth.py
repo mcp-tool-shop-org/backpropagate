@@ -122,6 +122,12 @@ _COOKIE_TTL_SECONDS = 12 * 60 * 60  # 12 hours; matches DESIGN_BRIEF
 _COOKIE_REALM = "backpropagate"
 _WS_CLOSE_CODE_AUTH_FAILED = 4401  # Application-level "auth failed"
 _WS_CLOSE_CODE_ORIGIN_FAILED = 4403  # Application-level "forbidden origin"
+# FRONTEND-B-005 (Stage C observability): distinct close code for Host-header
+# mismatch (DNS-rebinding defense) so operators / clients can differentiate it
+# from Origin mismatch (CSWSH defense) in close-frame logs. RFC 6455 reserves
+# 4000-4999 for application use; 4404 is unused by Reflex and reads as
+# "Host not allowlisted" (echoes HTTP 421 Misdirected Request semantics).
+_WS_CLOSE_CODE_HOST_FAILED = 4404  # Application-level "forbidden host"
 _LAUNCH_TOKEN_ENV = "BACKPROPAGATE_UI_LAUNCH_TOKEN"  # nosec B105 — env var NAME, not a credential value
 
 
@@ -716,16 +722,21 @@ def basic_auth_transformer(asgi_app: Callable) -> Callable:
 
         # ---- WebSocket branch -------------------------------------------
         if scope_type == "websocket":
-            # Host-header allowlist (DNS-rebinding on WS upgrade — close BEFORE
-            # accept, never after).
+            # Host-header allowlist (DNS-rebinding on WS upgrade - close BEFORE
+            # accept, never after). FRONTEND-B-005 (Stage C observability): use
+            # the dedicated Host-mismatch close code so post-mortem analysis
+            # can distinguish Host mismatch (DNS-rebinding defense) from
+            # Origin mismatch (CSWSH defense). Both paths still close BEFORE
+            # websocket.accept() - the load-bearing pre-accept invariant is
+            # preserved.
             if not _host_matches_allowlist(host_header, host_allow):
                 logger.warning(
-                    "auth: WS rejected — disallowed Host",
+                    "auth: WS rejected - disallowed Host",
                     extra={"host": host_header, "path": scope.get("path", "")},
                 )
                 await send({
                     "type": "websocket.close",
-                    "code": _WS_CLOSE_CODE_ORIGIN_FAILED,
+                    "code": _WS_CLOSE_CODE_HOST_FAILED,
                     "reason": "host_header_not_allowed",
                 })
                 return
@@ -782,4 +793,10 @@ __all__ = [
     "AuthMode",
     "ENFORCEMENT_AVAILABLE",
     "basic_auth_transformer",
+    # FRONTEND-B-005: distinct close codes for Host vs Origin failures.
+    # Exported so post-mortem analysis scripts can name them rather than
+    # decoding raw 44xx integers.
+    "_WS_CLOSE_CODE_AUTH_FAILED",
+    "_WS_CLOSE_CODE_ORIGIN_FAILED",
+    "_WS_CLOSE_CODE_HOST_FAILED",
 ]

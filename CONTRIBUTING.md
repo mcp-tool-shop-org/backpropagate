@@ -160,7 +160,7 @@ Prefixes:
 - Validate all user inputs
 - Use `weights_only=True` for `torch.load()`
 - Check for path traversal in file operations
-- See `SECURITY_AUDIT_REPORT.md` for full guidelines
+- See [`SECURITY.md`](SECURITY.md) for the reporting policy and supported versions; the operator-facing threat model + auth-middleware mode matrix lives at [`site/src/content/docs/handbook/security.md`](site/src/content/docs/handbook/security.md) (rendered at the handbook's `/handbook/security/` page). The historical `SECURITY_AUDIT_REPORT.md` is a stub kept for backlink compatibility.
 
 ## Issue Reporting
 

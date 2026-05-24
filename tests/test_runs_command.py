@@ -277,6 +277,46 @@ class TestCmdRuns:
         run_order = [r["run_id"] for r in payload["runs"]]
         assert run_order == ["new", "mid", "old"]
 
+    def test_limit_cap_applies_to_payload(self, tmp_path):
+        """``--limit 2`` caps the result set to the 2 newest entries.
+
+        TESTS-B-017 (v1.3 Wave 3 Stage C humanization): the module docstring
+        claims '--limit cap' coverage but every prior test passed limit=None,
+        so a regression in the limit-cap logic would not be caught. This
+        test seeds 5 entries, calls with limit=2, and asserts the payload
+        contains exactly the 2 newest IDs in the documented sort order.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_runs
+
+        _seed_history(tmp_path, [
+            {"run_id": "alpha", "status": "completed", "started_at": "2026-01-01T00:00:00+00:00"},
+            {"run_id": "bravo", "status": "completed", "started_at": "2026-02-01T00:00:00+00:00"},
+            {"run_id": "charlie", "status": "completed", "started_at": "2026-03-01T00:00:00+00:00"},
+            {"run_id": "delta", "status": "completed", "started_at": "2026-04-01T00:00:00+00:00"},
+            {"run_id": "echo", "status": "completed", "started_at": "2026-05-01T00:00:00+00:00"},
+        ])
+        args = argparse.Namespace(
+            output=str(tmp_path),
+            status=None,
+            limit=2,
+            json=True,
+        )
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = cmd_runs(args)
+        assert result == EXIT_OK
+
+        payload = json.loads(buf.getvalue())
+        assert len(payload["runs"]) == 2, (
+            f"--limit 2 should cap result to 2 entries, got {len(payload['runs'])}"
+        )
+        # Newest-first: echo (May), delta (April).
+        ids = [r["run_id"] for r in payload["runs"]]
+        assert ids == ["echo", "delta"], (
+            f"--limit 2 should keep the 2 newest, got {ids}"
+        )
+
 
 # =============================================================================
 # RunsState — Reflex state handler

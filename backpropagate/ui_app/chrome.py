@@ -17,8 +17,9 @@ from __future__ import annotations
 import reflex as rx
 
 from backpropagate import __version__
-from backpropagate.ui_state import AppState, TrainState
+from backpropagate.ui_state import AppState, AuthBadgeState, TrainState
 
+from .components.auth_badge import BpAuthBadge
 from .components.event_log import BpEventLog
 from .components.gpu_ring import BpGpuRing
 from .components.sparkline import BpSparkline
@@ -28,19 +29,20 @@ from .components.vram_bar import BpVramBar
 # FRONTEND-A-015: shared dynamic version label so header + footer cannot drift.
 _BRAND_VERSION = f"v{__version__}"
 
-# Surface key → (label, href, icon URL). The icons live under
+# Surface key -> (label, href, icon URL). The icons live under
 # ``backpropagate/assets/icons/`` so Reflex serves them at ``/icons/<name>.svg``.
 #
-# Wave 6 added the ``runs`` entry (FRONTEND-F-RUN-HISTORY-PAGE) — closes the
+# Wave 6 added the ``runs`` entry (FRONTEND-F-RUN-HISTORY-PAGE) - closes the
 # CLI/UI parity gap created when F-003 shipped ``backprop list-runs`` /
-# ``backprop show-run``. The icon reuses the train.svg asset until a
-# dedicated history glyph lands (cheap polish item for v1.3).
+# ``backprop show-run``. Stage C (FRONTEND-B-008): the runs row now uses
+# the dedicated ``records.svg`` glyph instead of reusing ``train.svg`` -
+# distinct visual identity matters in a 5-item nav.
 _NAV_ITEMS = (
     ("train",     "Single run", "/",          "/icons/train.svg"),
     ("multi-run", "Multi-run",  "/multi-run", "/icons/multi-run.svg"),
     ("export",    "Export",     "/export",    "/icons/export.svg"),
     ("dataset",   "Dataset",    "/dataset",   "/icons/dataset.svg"),
-    ("runs",      "Runs",       "/runs",      "/icons/train.svg"),
+    ("runs",      "Runs",       "/runs",      "/icons/records.svg"),
 )
 
 
@@ -211,7 +213,14 @@ def _nav_link(key: str, label: str, href: str, icon_url: str, active_key: str) -
 
 
 def BpLeftNav(active: str = "train") -> rx.Component:
-    """188px left rail — vertical nav."""
+    """188px left rail - vertical nav.
+
+    FRONTEND-B-011 (Stage C truth-in-advertising): the Settings link was
+    removed in v1.3 because the /settings route is not yet registered in
+    ``ui_app/app.py`` (Reflex returns a generic not-found page on click).
+    The link returns when the Settings surface ships (currently scoped to
+    a v1.4 follow-up); shipping a visible dead link is operator-hostile.
+    """
     return rx.flex(
         rx.flex(
             *(_nav_link(key, label, href, icon, active) for key, label, href, icon in _NAV_ITEMS),
@@ -220,33 +229,6 @@ def BpLeftNav(active: str = "train") -> rx.Component:
             width="100%",
         ),
         rx.spacer(),
-        rx.flex(
-            rx.link(
-                rx.flex(
-                    rx.image(
-                        src="/icons/settings.svg",
-                        width="16px",
-                        height="16px",
-                        style={"color": "var(--bp-muted)"},
-                        alt="",
-                    ),
-                    rx.text(
-                        "Settings",
-                        size="1",
-                        style={"color": "var(--bp-muted)"},
-                    ),
-                    gap="2",
-                    align="center",
-                    padding_x="3",
-                    padding_y="2",
-                ),
-                href="/settings",
-                underline="none",
-                width="100%",
-            ),
-            direction="column",
-            width="100%",
-        ),
         direction="column",
         width="188px",
         padding="3",
@@ -367,7 +349,18 @@ def BpSideRail() -> rx.Component:
 
 
 def BpFooter() -> rx.Component:
-    """32px footer strip."""
+    """32px footer strip.
+
+    Stage C (FRONTEND-F-FOOTER-AUTH-BADGE): the auth-mode badge sits in the
+    center, between handbook/version on the left and run_id/github on the
+    right. The badge gives the operator at-a-glance reassurance (or red-flag
+    warning) about the current auth posture without leaving the page.
+
+    The ``on_mount`` populates AuthBadgeState from the env-var surface that
+    ``ui_app/auth.py::basic_auth_transformer`` also consumes - the values
+    are stable for the lifetime of the Reflex subprocess (the CLI exports
+    them once at launch).
+    """
     return rx.flex(
         # Left: handbook + version
         rx.flex(
@@ -391,6 +384,9 @@ def BpFooter() -> rx.Component:
             gap="2",
             align="center",
         ),
+        rx.spacer(),
+        # Center: auth-mode badge (FRONTEND-F-FOOTER-AUTH-BADGE, Stage C)
+        BpAuthBadge(),
         rx.spacer(),
         # Right: run_id mirror (when present) + gh
         rx.flex(
@@ -427,4 +423,5 @@ def BpFooter() -> rx.Component:
             "border_top": "1px solid var(--bp-border)",
             "flex_shrink": "0",
         },
+        on_mount=AuthBadgeState.refresh,
     )

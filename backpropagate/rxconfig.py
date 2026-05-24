@@ -20,19 +20,51 @@ import reflex as rx
 # rxconfig.py is the first module Reflex imports when ``reflex run`` is
 # invoked from the package directory. Some invocations may bypass app.py's
 # import chain (e.g., ``reflex export`` style probes), so we fire the same
-# refuse-to-start check here too. Importing from ui_app.auth is safe — that
+# refuse-to-start check here too. Importing from ui_app.auth is safe - that
 # module has no Reflex dependencies and only exposes the ENFORCEMENT_AVAILABLE
 # flag. See ``backpropagate/ui_app/app.py`` for the same guard with full
 # rationale.
+#
+# FRONTEND-B-003 (Stage C humanization): catch a broad ``Exception`` (not
+# just ``ImportError``) so that a syntax error in auth.py or a transitive
+# import crash (e.g. a downgraded Reflex with a broken import path) does
+# NOT fall through to a confusing ``NameError`` further down. If both the
+# package-relative AND the absolute import fail, we surface a humanized
+# refuse-to-start with the underlying cause AND the install hint - the
+# operator should never see a bare ``NameError: name 'ENFORCEMENT_AVAILABLE'
+# is not defined`` traceback for a load-bearing security check.
+ENFORCEMENT_AVAILABLE: bool
 try:
-    from ui_app.auth import ENFORCEMENT_AVAILABLE
-except ImportError:  # pragma: no cover — package-mode import fallback
-    from backpropagate.ui_app.auth import ENFORCEMENT_AVAILABLE
+    from ui_app.auth import ENFORCEMENT_AVAILABLE  # type: ignore[no-redef]
+except Exception as _exc:  # noqa: BLE001 — broken module is broken module
+    try:
+        from backpropagate.ui_app.auth import ENFORCEMENT_AVAILABLE  # type: ignore[no-redef]
+    except Exception as _exc2:  # noqa: BLE001
+        if os.environ.get("BACKPROPAGATE_UI_AUTH"):
+            raise RuntimeError(
+                "FRONTEND-B-001 / FRONTEND-B-003 / GHSA-f65r-h4g3-3h9h: "
+                "BACKPROPAGATE_UI_AUTH is set, but the auth middleware module "
+                "failed to import. Refusing to start to prevent the v1.1.0 "
+                "false-promise (CLI announces 'Auth: enabled' while the "
+                "runtime ignores the credential). Reinstall the [ui] extra "
+                "(`pip install --force-reinstall 'backpropagate[ui]'`) to "
+                "restore the middleware, or unset BACKPROPAGATE_UI_AUTH and "
+                "use SSH port-forwarding for remote access: "
+                f"`ssh -L 7860:localhost:7860 <host>`. Underlying import "
+                f"error: {type(_exc2).__name__}: {_exc2}"
+            ) from _exc2
+        # Operator did NOT set BACKPROPAGATE_UI_AUTH, so the no-auth-local-
+        # only path is legitimate; the auth module being unimportable is
+        # still surprising (Reflex would have crashed elsewhere), but the
+        # safe behavior here is to treat enforcement as unavailable and let
+        # the no-auth path proceed (the CLI's refuse-to-start rails are the
+        # gate that ensures we only reach this code for the loopback case).
+        ENFORCEMENT_AVAILABLE = False
 
 if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
     raise RuntimeError(
         "FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h: BACKPROPAGATE_UI_AUTH is set, "
-        "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False — the "
+        "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False - the "
         "[ui] extra is degraded or the auth middleware module failed to "
         "import. Refusing to start to prevent the v1.1.0 false-promise (CLI "
         "announces 'Auth: enabled' while the runtime ignores the credential). "

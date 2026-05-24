@@ -33,6 +33,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -117,7 +118,11 @@ class MergeResult:
 # CORE SLAO FUNCTIONS
 # =============================================================================
 
-def time_aware_scale(run_index: int, scaling_type: str = "sqrt", min_scale: float = 0.1) -> float:
+def time_aware_scale(
+    run_index: int,
+    scaling_type: str | Any = "sqrt",
+    min_scale: float = 0.1,
+) -> float:
     """
     Compute time-aware scaling factor for SLAO merging.
 
@@ -125,13 +130,23 @@ def time_aware_scale(run_index: int, scaling_type: str = "sqrt", min_scale: floa
     factor" because task vectors from different tasks tend to be approximately
     orthogonal.
 
+    Stage C amend BACKEND-B-018: ``scaling_type`` accepts either a string
+    (one of the built-in schedules) OR a callable ``(run_index) -> float``
+    for operators experimenting with custom decay curves without forking
+    the merger. The callable's return value is still clamped to
+    ``[min_scale, 1.0]`` so a buggy custom schedule can't produce wildly
+    out-of-range scales.
+
     Args:
         run_index: Current run index (1-based, first run = 1)
-        scaling_type: Type of scaling:
+        scaling_type: Type of scaling. Accepts:
             - "sqrt": 1/√i (paper default, good balance)
             - "linear": 1/i (more aggressive, preserves early learning)
             - "log": 1/log(i+1) (slower decay, more plasticity)
             - "constant": 1.0 (simple EMA, no decay)
+            - ``Callable[[int], float]``: a custom decay schedule. The
+              callable receives ``run_index`` and returns a raw scale
+              that's clamped to ``[min_scale, 1.0]`` after the call.
         min_scale: Minimum scaling factor to prevent vanishing updates
 
     Returns:
@@ -145,6 +160,7 @@ def time_aware_scale(run_index: int, scaling_type: str = "sqrt", min_scale: floa
         >>> time_aware_scale(4, "sqrt")   # 0.5
         >>> time_aware_scale(9, "sqrt")   # 0.333
         >>> time_aware_scale(4, "log")    # 0.621 (slower decay)
+        >>> time_aware_scale(4, lambda i: 1.0 / (i ** 0.3))  # custom
     """
     if not isinstance(run_index, int) or run_index < 1:
         raise InvalidSettingError(
@@ -152,10 +168,41 @@ def time_aware_scale(run_index: int, scaling_type: str = "sqrt", min_scale: floa
             suggestion="Run index should start at 1 for the first run"
         )
 
+    # Stage C amend BACKEND-B-018: handle callable schedule first so we
+    # bypass the string-validation branch entirely. Failures inside the
+    # custom callable propagate to the caller (no silent fallback —
+    # the operator's contract is "if your callable raises, the merge
+    # raises").
+    if callable(scaling_type):
+        try:
+            scale = float(scaling_type(run_index))
+        except Exception as exc:
+            raise InvalidSettingError(
+                "scaling_type",
+                repr(scaling_type),
+                "callable returning a finite float",
+                suggestion=(
+                    f"The custom scaling callable raised "
+                    f"{type(exc).__name__}: {exc}. Return a float in "
+                    f"[min_scale, 1.0]."
+                ),
+            ) from exc
+        if not math.isfinite(scale):
+            raise InvalidSettingError(
+                "scaling_type",
+                repr(scaling_type),
+                "callable returning a finite float",
+                suggestion=(
+                    f"Custom callable returned {scale!r} at run_index="
+                    f"{run_index}. Return a finite float in [min_scale, 1.0]."
+                ),
+            )
+        return max(scale, min_scale)
+
     valid_scaling_types = ("sqrt", "linear", "log", "constant")
     if scaling_type not in valid_scaling_types:
         raise InvalidSettingError(
-            "scaling_type", scaling_type, f"one of {valid_scaling_types}",
+            "scaling_type", scaling_type, f"one of {valid_scaling_types} (or a callable)",
             suggestion="Use 'sqrt' for recommended time-aware scaling"
         )
 
@@ -465,6 +512,14 @@ class SLAOMerger:
         """
         Initialize the merger with the first LoRA.
 
+        Stage C amend BACKEND-B-012: log a/b matrix counts (and DEBUG-level
+        layer indices) at initialization so post-mortem triage on PEFT
+        version drift or target_modules misconfig can confirm the merger
+        saw the expected adapter geometry without re-running the session.
+        Pre-fix, only the total parameter count was logged — useful as a
+        sanity check but invisible to "did I get all the layers I asked
+        for?" questions.
+
         Args:
             lora_state_dict: State dict from first trained LoRA
         """
@@ -477,7 +532,49 @@ class SLAOMerger:
         }
         self._run_index = 1
 
-        logger.info(f"SLAO initialized with {len(lora_state_dict)} parameters")
+        # Stage C amend BACKEND-B-012: a-matrix / b-matrix counts +
+        # layer-index breakdown for observability.
+        a_keys = [k for k in lora_state_dict if ".lora_A." in k]
+        b_keys = [k for k in lora_state_dict if ".lora_B." in k]
+        other_keys = [
+            k for k in lora_state_dict
+            if ".lora_A." not in k and ".lora_B." not in k
+        ]
+        logger.info(
+            f"SLAO initialized with {len(lora_state_dict)} parameters "
+            f"(a_matrices={len(a_keys)} b_matrices={len(b_keys)} "
+            f"other={len(other_keys)})"
+        )
+        if a_keys or b_keys:
+            # DEBUG-level breakdown — only fires when logging is verbose.
+            # Extract numeric layer index from common PEFT key patterns
+            # like ``base_model.model.model.layers.<N>.self_attn.q_proj.lora_A.default.weight``.
+            import re
+            _LAYER_RE = re.compile(r"\.layers\.(\d+)\.")
+            a_layers = sorted({
+                int(m.group(1))
+                for k in a_keys
+                for m in [_LAYER_RE.search(k)]
+                if m
+            })
+            b_layers = sorted({
+                int(m.group(1))
+                for k in b_keys
+                for m in [_LAYER_RE.search(k)]
+                if m
+            })
+            if a_layers:
+                logger.debug(
+                    f"SLAO initialize: a_matrix layer indices = "
+                    f"{a_layers!r} (first={a_layers[0]} last={a_layers[-1]} "
+                    f"count={len(a_layers)})"
+                )
+            if b_layers:
+                logger.debug(
+                    f"SLAO initialize: b_matrix layer indices = "
+                    f"{b_layers!r} (first={b_layers[0]} last={b_layers[-1]} "
+                    f"count={len(b_layers)})"
+                )
 
     def get_init_weights(self) -> dict[str, torch.Tensor] | None:
         """
@@ -853,14 +950,37 @@ class SLAOMerger:
                     ) from e
 
             # Save merge history (B-001: include run_id correlation token,
-            # B-008: include norms so post-mortems can detect drift over time)
+            # B-008: include norms so post-mortems can detect drift over time).
+            #
+            # Stage C amend BACKEND-B-003 / BACKEND-B-004: persist EVERY
+            # SLAOConfig field that affects merge math (adaptive_scaling,
+            # layer_scaling, layer_scale_*, use_time_aware_scaling,
+            # normalize_after_merge). Pre-fix, load() restored only three
+            # fields (scaling_type / min_scale / use_orthogonal_init);
+            # resuming a session that started with ``adaptive_scaling=True``
+            # silently flipped it back to False on the resumed runs,
+            # producing different math than the prior session. Operators
+            # could only detect this by diff-ing logs across sessions.
+            # The ``version`` field anchors the schema for v1.4 migration.
             history_data = {
+                "version": "1.0",
+                "created_at": datetime.now().isoformat(),
                 "run_index": self._run_index,
                 "run_id": run_id,
                 "config": {
                     "scaling_type": self.config.scaling_type,
                     "min_scale": self.config.min_scale,
                     "use_orthogonal_init": self.config.use_orthogonal_init,
+                    "use_time_aware_scaling": self.config.use_time_aware_scaling,
+                    "normalize_after_merge": self.config.normalize_after_merge,
+                    "save_merge_history": self.config.save_merge_history,
+                    # Phase 4.1 / 4.2 fields — silently dropped pre-fix.
+                    "use_adaptive_scaling": self.config.use_adaptive_scaling,
+                    "adaptive_scale_range": list(self.config.adaptive_scale_range),
+                    "use_layer_scaling": self.config.use_layer_scaling,
+                    "layer_scale_early": self.config.layer_scale_early,
+                    "layer_scale_middle": self.config.layer_scale_middle,
+                    "layer_scale_late": self.config.layer_scale_late,
                 },
                 "history": [
                     {
@@ -956,13 +1076,82 @@ class SLAOMerger:
                 with open(history_path) as f:
                     history_data = json.load(f)
 
+                # Stage C amend BACKEND-B-003: read+verify schema version. A
+                # mismatched version is non-fatal at load time (we use field
+                # defaults for missing fields) but the operator gets a clear
+                # WARN line so they can correlate post-resume divergence with
+                # a schema mismatch. v1.4 will add a real migrator; v1.3
+                # just fails-loud-but-keeps-going.
+                disk_version = str(history_data.get("version") or "0.0")
+                _CURRENT_SLAO_SCHEMA = "1.0"
+                if disk_version != _CURRENT_SLAO_SCHEMA:
+                    logger.warning(
+                        f"SLAO merge_history.json on disk has "
+                        f"version={disk_version!r} but this build expects "
+                        f"{_CURRENT_SLAO_SCHEMA!r}. Missing fields will fall "
+                        f"back to runtime defaults — pass them explicitly on "
+                        f"the resumed session to silence this warning and "
+                        f"preserve prior merge math."
+                    )
+
                 self._run_index = history_data.get("run_index", 0)
 
-                # Restore config
+                # Restore config.
+                #
+                # Stage C amend BACKEND-B-004: restore EVERY field the save
+                # path writes. Pre-fix, ``load`` quietly dropped
+                # ``use_adaptive_scaling`` / ``use_layer_scaling`` /
+                # ``layer_scale_*`` so a resumed session silently changed
+                # merge math. The fallback-to-default branches each emit a
+                # warn-once line so the operator knows which fields fell
+                # back and why — the message is actionable ("pass the flag
+                # explicitly to silence this warning").
                 cfg = history_data.get("config", {})
                 self.config.scaling_type = cfg.get("scaling_type", "sqrt")
                 self.config.min_scale = cfg.get("min_scale", 0.1)
                 self.config.use_orthogonal_init = cfg.get("use_orthogonal_init", True)
+
+                # Optional fields that LANDED in v1.3 schema. Pre-v1.3
+                # checkpoints don't carry them; restore from runtime
+                # default + WARN once per missing field so the operator
+                # sees the fall-back surface.
+                def _restore_or_warn(field_name: str, default: Any) -> Any:
+                    if field_name in cfg:
+                        return cfg[field_name]
+                    logger.warning(
+                        f"Resuming from a pre-v1.3 SLAO checkpoint that "
+                        f"does not carry {field_name!r}; defaulting to "
+                        f"{default!r}. Pass {field_name} explicitly on the "
+                        f"resumed session to silence this warning and "
+                        f"preserve prior merge math."
+                    )
+                    return default
+
+                self.config.use_time_aware_scaling = _restore_or_warn(
+                    "use_time_aware_scaling", self.config.use_time_aware_scaling
+                )
+                self.config.normalize_after_merge = _restore_or_warn(
+                    "normalize_after_merge", self.config.normalize_after_merge
+                )
+                self.config.use_adaptive_scaling = _restore_or_warn(
+                    "use_adaptive_scaling", self.config.use_adaptive_scaling
+                )
+                if "adaptive_scale_range" in cfg:
+                    rng = cfg["adaptive_scale_range"]
+                    if isinstance(rng, (list, tuple)) and len(rng) == 2:
+                        self.config.adaptive_scale_range = (float(rng[0]), float(rng[1]))
+                self.config.use_layer_scaling = _restore_or_warn(
+                    "use_layer_scaling", self.config.use_layer_scaling
+                )
+                self.config.layer_scale_early = _restore_or_warn(
+                    "layer_scale_early", self.config.layer_scale_early
+                )
+                self.config.layer_scale_middle = _restore_or_warn(
+                    "layer_scale_middle", self.config.layer_scale_middle
+                )
+                self.config.layer_scale_late = _restore_or_warn(
+                    "layer_scale_late", self.config.layer_scale_late
+                )
             except json.JSONDecodeError as e:
                 logger.warning(f"Corrupted merge history file, using defaults: {e}")
             except Exception as e:

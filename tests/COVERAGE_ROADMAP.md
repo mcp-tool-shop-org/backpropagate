@@ -149,7 +149,8 @@ class TestCmdInfoExtended:
 host / share gates. v1.3 Wave 1 added `tests/test_host_gate.py` covering
 the `--host <non-loopback>` refuse-to-start path; the `--share`
 refuse-to-start gate has long-standing coverage in
-`tests/test_cli_extended.py::TestCmdUiNoMiddleware`.
+`tests/test_cli_extended.py::TestCmdUI::test_cmd_ui_share_without_auth_still_refuses`
+(and its alias `test_cmd_ui_share_refuses_to_start`).
 
 ```python
 class TestCmdUI:
@@ -795,8 +796,9 @@ TESTS-A-005 / A-006).
 
 ### 5.3 Reflex Subprocess Launcher (`cli.cmd_ui`)
 
-See `tests/test_cli_extended.py::TestCmdUiNoMiddleware` (—share + auth
-gates) and `tests/test_host_gate.py` (—host gate, v1.3 Wave 1).
+See `tests/test_cli_extended.py::TestCmdUI::test_cmd_ui_share_without_auth_still_refuses`
+(—share + auth gates) and `tests/test_host_gate.py` (—host gate, v1.3
+Wave 1).
 
 ---
 

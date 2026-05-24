@@ -71,11 +71,12 @@ class TestHostNonLoopbackRefuseToStart:
                 "Error message must mention --host so the operator knows "
                 "which flag triggered the gate."
             )
-            mock_run.assert_not_called(), (
-                "Refuse-to-start gate fired AFTER subprocess launch — "
-                "the unprotected UI ran before the error surfaced. The "
-                "gate MUST close before the subprocess is created."
-            )
+            # TESTS-B-016 (Stage C): drop the trailing tuple — assert_not_called
+            # itself raises AssertionError("Expected to be called 0 times. Called N times.")
+            # which is the operator-facing message that matters. The prior
+            # statement-form ``call(), ("message")`` looked like an assert
+            # message but was actually a tuple-expression discarded at runtime.
+            mock_run.assert_not_called()
 
     def test_host_lan_ip_without_auth_refuses(self):
         """``backprop ui --host 192.168.1.10`` (LAN IP, no --auth) hard-errors.

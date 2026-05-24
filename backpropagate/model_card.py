@@ -105,6 +105,95 @@ def _format_value(value: Any, none_placeholder: str = "*(not recorded)*") -> str
     return str(value)
 
 
+# Stage C amend BACKEND-B-021: characters that would otherwise let a
+# user-controlled string break out of a markdown link / autolink context
+# and inject executable markdown. Used by :func:`_sanitize_markdown` on
+# fields embedded into the model card OUTSIDE code-spans.
+_MARKDOWN_ESCAPE_CHARS = ("\\", "[", "]", "(", ")", "<", ">", "`")
+
+
+def _sanitize_markdown(value: str | None) -> str:
+    """Stage C amend BACKEND-B-021: escape characters that would let a
+    user-controlled string inject markdown (e.g. a dataset_path like
+    ``evil.jsonl ](javascript:alert(1))`` would otherwise render as a
+    clickable link in the published HF model card).
+
+    Threat model is normally low (the same operator authors the dataset
+    path AND publishes the model card), but when the dataset path comes
+    from a queue / multi-tenant UI / job-template substitution, this is
+    the boundary between unsanitized input and an HF repo README that
+    other users may visit. Cheap to add; covers the obvious surface.
+
+    Returns an empty string when the input is None.
+    """
+    if value is None:
+        return ""
+    out = str(value)
+    for ch in _MARKDOWN_ESCAPE_CHARS:
+        out = out.replace(ch, "\\" + ch)
+    return out
+
+
+def _sanitize_codespan(value: str | None) -> str:
+    """Stage C amend BACKEND-B-021: prepare a user-controlled string for
+    embedding INSIDE a ```backticks``` codespan. A bare backtick in the
+    value would break out of the codespan and let the operator inject
+    markdown after the early-close. We strip backticks (replacement: U+02CB
+    modifier letter grave accent) rather than try to escape them, because
+    code-span backtick escaping requires variable-length delimiters that
+    are hard to template safely. Newlines are also collapsed to spaces so
+    the path stays on one row.
+
+    Returns an empty string when the input is None.
+    """
+    if value is None:
+        return ""
+    return str(value).replace("`", "ˋ").replace("\n", " ").replace("\r", " ")
+
+
+def _sanitize_yaml_scalar(value: str | None) -> str:
+    """Stage C amend BACKEND-B-021: prepare a user-controlled string for
+    embedding as a YAML frontmatter scalar (``key: value`` form).
+
+    Strategy: if the value contains only "safe" characters
+    (alphanumeric + ``-/._@:+``) we emit it bare so simple tags / model
+    names like ``llm`` or ``Qwen/Qwen2.5-7B-Instruct`` render naturally
+    — preserving the cosmetic shape every downstream tooling expects.
+    Otherwise we wrap in double-quotes and escape embedded backslashes /
+    double-quotes / newlines so a hostile value can't break out of the
+    YAML scalar and corrupt the HF model-card parser.
+
+    Note: ``:`` is in the "safe" set because HF model names commonly use
+    it (e.g. ``user:tag``), but YAML treats a bare ``key: value: more``
+    as an error. Bare ``:`` IS safe inside a YAML scalar context (after
+    the key's colon); the parser only consumes the first ``:`` as the
+    key separator.
+
+    Returns ``'""'`` (empty quoted scalar) when the input is None — but
+    callers should generally just skip the line in that case.
+    """
+    if value is None:
+        return '""'
+    s = str(value)
+    # Conservative bare-emit charset. Anything outside this set forces
+    # the double-quoted form.
+    _SAFE_BARE = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "-_./+@"
+    )
+    if s and all(c in _SAFE_BARE for c in s):
+        return s
+    escaped = (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f'"{escaped}"'
+
+
 def _format_duration(seconds: float | int | None) -> str:
     if not isinstance(seconds, (int, float)) or seconds <= 0:
         return "*(not recorded)*"
@@ -169,20 +258,29 @@ def generate_model_card(
                 tags.append(tag)
 
     # Frontmatter.
+    #
+    # Stage C amend BACKEND-B-021: quote the user-controlled scalar so a
+    # base_model containing ``:`` / newlines / quotes can't break out of
+    # the YAML frontmatter and corrupt the HF model-card parser.
     lines: list[str] = ["---"]
     if base_model:
-        lines.append(f"base_model: {base_model}")
+        lines.append(f"base_model: {_sanitize_yaml_scalar(base_model)}")
     lines.append("library_name: backpropagate")
     lines.append("tags:")
     for tag in tags:
-        lines.append(f"  - {tag}")
+        # Tags are author-defined and typically alphanumeric/dash; still
+        # sanitize so a hostile extra_tags injection can't escape YAML.
+        lines.append(f"  - {_sanitize_yaml_scalar(tag)}")
     lines.append("---")
     lines.append("")
-    lines.append(f"# {model_short}")
+    # Stage C amend BACKEND-B-021: ``model_short`` is derived from
+    # base_model so it carries the same untrust surface; sanitize it for
+    # the H1 to prevent header / link / autolink injection.
+    lines.append(f"# {_sanitize_markdown(model_short)}")
     lines.append("")
     if base_model:
         lines.append(
-            f"Fine-tuned `{base_model}` via "
+            f"Fine-tuned `{_sanitize_codespan(base_model)}` via "
             f"[backpropagate](https://github.com/mcp-tool-shop-org/backpropagate) "
             f"v{library_version}."
         )
@@ -206,16 +304,28 @@ def generate_model_card(
     lines.append("")
     lines.append("| Property | Value |")
     lines.append("|---|---|")
-    lines.append(f"| Run ID | `{run_id or '(not recorded)'}` |")
-    lines.append(f"| Base model | `{base_model or '(not recorded)'}` |")
+    # Stage C amend BACKEND-B-021: every user-controlled string embedded
+    # inside ``backticks`` runs through _sanitize_codespan so a hostile
+    # value containing a bare backtick can't break out of the codespan
+    # and inject markdown after the early-close. dataset_hash is a hex
+    # digest from sha256().hexdigest()[:16] (trusted) but we sanitize it
+    # too for cheap defense-in-depth.
+    lines.append(
+        f"| Run ID | `{_sanitize_codespan(run_id) or '(not recorded)'}` |"
+    )
+    lines.append(
+        f"| Base model | `{_sanitize_codespan(base_model) or '(not recorded)'}` |"
+    )
     dataset_line = "*(not recorded)*"
     if dataset_path:
+        ds = _sanitize_codespan(dataset_path)
         if dataset_hash:
-            dataset_line = f"`{dataset_path}` (sha256: `{dataset_hash}`)"
+            dh = _sanitize_codespan(dataset_hash)
+            dataset_line = f"`{ds}` (sha256: `{dh}`)"
         else:
-            dataset_line = f"`{dataset_path}`"
+            dataset_line = f"`{ds}`"
     elif dataset_hash:
-        dataset_line = f"(remote) sha256: `{dataset_hash}`"
+        dataset_line = f"(remote) sha256: `{_sanitize_codespan(dataset_hash)}`"
     lines.append(f"| Dataset | {dataset_line} |")
     lines.append(f"| Steps | {_format_value(steps)} |")
     lines.append(f"| Final loss | {_format_value(final_loss)} |")
@@ -225,11 +335,13 @@ def generate_model_card(
     lines.append(f"| Training duration | {_format_duration(training_duration)} |")
     lines.append(f"| GPU | {_format_value(gpu_used)} |")
     if export_format:
-        lines.append(f"| Export format | `{export_format}` |")
+        lines.append(f"| Export format | `{_sanitize_codespan(export_format)}` |")
     if quantization:
-        lines.append(f"| Quantization | `{quantization}` |")
-    lines.append(f"| Created | {created_at} |")
-    lines.append(f"| Library version | `backpropagate=={library_version}` |")
+        lines.append(f"| Quantization | `{_sanitize_codespan(quantization)}` |")
+    lines.append(f"| Created | {_sanitize_markdown(created_at)} |")
+    lines.append(
+        f"| Library version | `backpropagate=={_sanitize_codespan(library_version)}` |"
+    )
 
     # Loss sparkline.
     sparkline = build_loss_sparkline(loss_history)
@@ -273,13 +385,20 @@ def generate_model_card(
 
     # Reproduce block.
     if base_model:
+        # Stage C amend BACKEND-B-021: strip backticks from values
+        # embedded inside the ```bash code-fence``` so a hostile path
+        # can't close the fence early and inject markdown. Newlines also
+        # collapsed to spaces — a multi-line value would otherwise break
+        # the shell command on its own.
+        _bm = _sanitize_codespan(base_model)
+        _ds = _sanitize_codespan(dataset_path) if dataset_path else "<your-dataset>"
         reproduce_lines = [
             "## Reproduce",
             "",
             "```bash",
             "backprop train \\",
-            f"  --model {base_model} \\",
-            f"  --data {dataset_path or '<your-dataset>'} \\",
+            f"  --model {_bm} \\",
+            f"  --data {_ds} \\",
             f"  --steps {steps if steps is not None else '<steps>'} \\",
             f"  --lora-r {lora_r if lora_r is not None else 16}",
             "```",

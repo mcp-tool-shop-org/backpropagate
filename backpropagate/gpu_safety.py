@@ -58,6 +58,35 @@ logger = logging.getLogger(__name__)
 _nvml_initialized = False
 _nvml_init_lock = threading.Lock()
 _nvml_unavailable_logged = False
+# Stage C amend BACKEND-B-014: cache runtime-init failures so a permanently-
+# broken NVML environment (driver mismatch, broken WSL setup, sensor failure)
+# doesn't spam N log lines per get_gpu_status() call inside the monitoring
+# loop. The flag is reset by :func:`reset_nvml_state` for operators who
+# fix their drivers mid-session.
+_nvml_runtime_failed = False
+_nvml_runtime_failure_logged = False
+
+
+def reset_nvml_state() -> None:
+    """Stage C amend BACKEND-B-014: clear the runtime-failure cache.
+
+    After fixing a broken driver / NVML setup mid-session, call this to
+    re-arm :func:`_ensure_nvml_initialized` so it'll attempt nvmlInit()
+    again on the next call. Without this escape hatch, the monitoring
+    loop would refuse to retry until the process is restarted.
+
+    Safe to call from any thread (acquires the same lock the init path
+    uses). No-op when no failure has been cached.
+    """
+    global _nvml_runtime_failed, _nvml_runtime_failure_logged
+    with _nvml_init_lock:
+        if _nvml_runtime_failed:
+            logger.info(
+                "reset_nvml_state: clearing cached NVML runtime-failure flag; "
+                "next get_gpu_status() will retry nvmlInit()."
+            )
+        _nvml_runtime_failed = False
+        _nvml_runtime_failure_logged = False
 
 
 def _ensure_nvml_initialized() -> bool:
@@ -65,16 +94,29 @@ def _ensure_nvml_initialized() -> bool:
     Initialize pynvml once. Thread-safe via double-checked locking.
 
     Returns True if pynvml is ready, False if unavailable or init failed.
+
+    Stage C amend BACKEND-B-014: caches runtime-failure state in
+    :data:`_nvml_runtime_failed` so a broken NVML env (driver mismatch,
+    WSL bug, sensor failure) returns False fast on subsequent calls
+    instead of re-attempting nvmlInit() forever. The first failure is
+    logged at WARN with the explanatory message + recovery hint; later
+    calls short-circuit silently. Operators who fix the env mid-session
+    can call :func:`reset_nvml_state` to re-arm the init path.
     """
-    global _nvml_initialized
+    global _nvml_initialized, _nvml_runtime_failed, _nvml_runtime_failure_logged
 
     if _nvml_initialized:
         return True
+    if _nvml_runtime_failed:
+        # Cached failure — short-circuit to avoid log spam.
+        return False
 
     with _nvml_init_lock:
         # Double-check after acquiring lock
         if _nvml_initialized:
             return True
+        if _nvml_runtime_failed:
+            return False
 
         try:
             import pynvml
@@ -91,7 +133,21 @@ def _ensure_nvml_initialized() -> bool:
                 _nvml_unavailable_logged = True
             return False
         except Exception as e:
-            logger.debug(f"pynvml init failed: {e}")
+            # Stage C amend BACKEND-B-014: cache the runtime failure so
+            # subsequent calls return fast. Log loud the FIRST time, then
+            # stay quiet to avoid swamping the monitoring loop output.
+            _nvml_runtime_failed = True
+            if not _nvml_runtime_failure_logged:
+                logger.warning(
+                    f"pynvml runtime init failed: {e}. "
+                    f"Temperature/power monitoring will be unavailable for "
+                    f"the rest of this process. Common causes: driver / "
+                    f"library version mismatch, WSL without GPU passthrough, "
+                    f"or NVIDIA driver hung. Call "
+                    f"backpropagate.gpu_safety.reset_nvml_state() to retry "
+                    f"after fixing the env."
+                )
+                _nvml_runtime_failure_logged = True
             return False
 
 

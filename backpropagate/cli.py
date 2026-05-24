@@ -63,6 +63,54 @@ EXIT_INTERRUPTED = 130
 
 
 # =============================================================================
+# LOGGING-SETUP FAILURE TRACKING (BRIDGE-B-013 Stage C)
+# =============================================================================
+# Module-level flag set by main() when configure_logging / bind_run_context /
+# cli_invoked-emit raise. Surfaced as a single stderr WARN line at the end of
+# main() so the operator knows logs aren't flowing without aborting the CLI.
+
+_LOGGING_SETUP_FAILED = False
+_LOGGING_SETUP_FAIL_REASON = ""
+
+
+# =============================================================================
+# SUBCOMMAND STABILITY TIERS (BRIDGE-B-017 Stage C)
+# =============================================================================
+# Centralized registry of subcommand stability so:
+#   1. The CLI can print a one-line deprecation hint when an operator invokes
+#      a subcommand whose tier is "deprecated-prefer-X".
+#   2. `backprop info --subcommand-tiers` (v1.4 scaffolding) can dump the
+#      registry for CI scripts that want to grep for upcoming removals.
+#
+# Tiers:
+#   stable                   — Part of the documented contract; no removal
+#                              planned.
+#   experimental             — May change shape between minor versions; opt-in
+#                              consumers should pin the exact version.
+#   deprecated-prefer-X      — Will be removed in a future major; use `X`
+#                              instead. Prints a one-line stderr hint on
+#                              invocation.
+#
+# Pre-fix the only deprecation candidate was `list-runs` vs `runs` (added in
+# BRIDGE-F-001 with the schema_version field). The registry has only one
+# deprecated entry today but the scaffold is in place for v1.4 candidates.
+
+SUBCOMMAND_TIERS: dict[str, str] = {
+    "train": "stable",
+    "multi-run": "stable",
+    "export": "stable",
+    "ui": "stable",
+    "info": "stable",
+    "config": "stable",
+    "resume": "stable",
+    "push": "stable",
+    "runs": "stable",
+    "show-run": "stable",
+    "list-runs": "deprecated-prefer-runs",
+}
+
+
+# =============================================================================
 # ARGPARSE TYPE VALIDATORS
 # =============================================================================
 # Defensive-coding helpers used by `create_parser` to reject obviously wrong
@@ -121,6 +169,92 @@ def _positive_float(value: str) -> float:
     return n
 
 
+# BRIDGE-B-005 (Stage C humanization): tighten --auth parsing so a malformed
+# value fails on the argparse side with a humanized error that names the
+# offending character class. Pre-fix the only validation was downstream in
+# cmd_ui (split-on-first-colon + validate_auth_shape), which did NOT reject
+# usernames containing colons / whitespace / control chars or passwords
+# containing newlines — both of which would corrupt the Basic-auth header.
+#
+# Accepted shape: "<username>:<password>" — username matches
+# ^[^\s:\x00\x1f\x7f]+$ (no whitespace, no colon, no NUL, no C0/DEL controls);
+# password is the remainder after the FIRST colon and may NOT contain
+# \r / \n / \x00 (those would split the Basic-auth header on the wire).
+#
+# The error message names which side and which character class failed,
+# masks the actual value (operators paste these into bug reports), and
+# points at BACKPROPAGATE_UI_AUTH / a future --auth-file as escape hatches
+# for shell-history-sensitive deployments.
+_AUTH_USERNAME_FORBIDDEN = re.compile(r"[\s:\x00-\x1f\x7f]")
+_AUTH_PASSWORD_FORBIDDEN = re.compile(r"[\r\n\x00]")
+
+
+def _auth_credential(value: str) -> str:
+    """argparse type for --auth user:pass values.
+
+    Returns the original raw string on success (the cmd_ui handler does
+    the actual ``split(':', 1)`` so call-site logic is unchanged).
+    Raises ``argparse.ArgumentTypeError`` with a humanized message naming
+    the offending side + character class on failure.
+    """
+    if not isinstance(value, str) or not value:
+        raise argparse.ArgumentTypeError(
+            "--auth requires user:pass (both non-empty). Got an empty value. "
+            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "history."
+        )
+
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(
+            "--auth requires user:pass — no colon separator found. "
+            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "history."
+        )
+
+    username, password = value.split(":", 1)
+
+    if not username:
+        raise argparse.ArgumentTypeError(
+            "--auth requires user:pass (both non-empty). Got: empty username "
+            "(format was ':<pass>'). "
+            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "history."
+        )
+
+    if not password:
+        raise argparse.ArgumentTypeError(
+            "--auth requires user:pass (both non-empty). Got: empty password "
+            "(format was '<user>:'). "
+            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "history."
+        )
+
+    bad_user = _AUTH_USERNAME_FORBIDDEN.search(username)
+    if bad_user:
+        raise argparse.ArgumentTypeError(
+            "--auth username contains a forbidden character "
+            f"(category: whitespace / colon / control). "
+            f"Offending codepoint: U+{ord(bad_user.group(0)):04X}. "
+            "Usernames may contain printable ASCII except space, colon, and "
+            "control chars; the colon is the user:pass separator and a "
+            "username-embedded colon would silently become part of the "
+            "password. Quote the value if you need special chars in the "
+            "password."
+        )
+
+    bad_pass = _AUTH_PASSWORD_FORBIDDEN.search(password)
+    if bad_pass:
+        raise argparse.ArgumentTypeError(
+            "--auth password contains a forbidden character "
+            f"(category: newline / NUL). "
+            f"Offending codepoint: U+{ord(bad_pass.group(0)):04X}. "
+            "Newlines and NUL would corrupt the HTTP Basic-auth header "
+            "on the wire. Strip the line ending or pick a different password."
+        )
+
+    return value
+
+
 # Patterns used to redact common secret-bearing tokens from non-verbose
 # error output. The previous catch-all (`(password|...)\s*[=:]\s*\S+`) had
 # two defects: (1) it matched plain prose like "the token: abc is wrong"
@@ -149,6 +283,40 @@ _SECRET_PATTERNS = [
     (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
     (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
+    # BRIDGE-B-012 (Stage C): additional patterns the error-redaction layer
+    # should catch before pasting into a bug report.
+    #
+    # URL-embedded credentials (https://user:token@host/...): HfHubHTTPError
+    # occasionally surfaces request URLs in its message. Match the canonical
+    # `scheme://user:secret@host` form (NOT the user@host form, which is just
+    # an SSH-style address with no secret). The capture preserves the scheme
+    # and the host so the operator still sees what service was contacted.
+    (
+        re.compile(r"(https?://)[^/\s:@]+:[^/\s:@]+@([^/\s]+)"),
+        r"\1<REDACTED>@\2",
+    ),
+    # JWT tokens (3 base64url segments separated by `.`): RFC 7519 shape.
+    # The `eyJ` prefix is the base64 header of `{"`, present in essentially
+    # every real JWT, which keeps false-positive risk low against prose.
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"),
+        "<JWT_REDACTED>",
+    ),
+    # GitHub Personal Access Tokens (ghp_*, ghs_*, gho_*, ghu_*, ghr_*):
+    # canonical prefix per GitHub's secret-scanning docs; the suffix length
+    # is 36+ base62 chars. Matches modern PATs (post-2021); the legacy
+    # 40-hex format isn't redacted here because it has high false-positive
+    # rate against generic 40-hex strings.
+    (
+        re.compile(r"\b(ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
+        r"\1_<REDACTED>",
+    ),
+    # GitLab PATs (glpat-...): canonical 20+ base62 / hyphen suffix per
+    # GitLab's tokens docs.
+    (
+        re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
+        "glpat-<REDACTED>",
+    ),
     # Keyword-prefixed credentials: require key=value OR key:value shape with
     # a high-entropy value (>=8 non-space chars including >=1 digit-or-special).
     # The separator (group 2) is preserved in the replacement.
@@ -1279,6 +1447,112 @@ def cmd_info(args: argparse.Namespace) -> int:
 # COMMAND: config
 # =============================================================================
 
+def _print_ui_startup_banner(
+    *,
+    bound_host: str,
+    port: int,
+    auth: tuple[str, str] | None,
+    share: bool,
+    token_query: str | None = None,
+) -> None:
+    """Print the 3-line Jupyter-pattern startup banner to stderr.
+
+    BRIDGE-B (Stage C auth-polish): when ``backprop ui`` boots, surface a
+    short operator-facing banner so the trust model is calibrated before
+    the first request. Lee & See 2004 trust-calibration framing applied
+    to the UI launch flow:
+
+        [backprop] http://<bound-host>:<port>/  <- UI listening
+        [backprop] auth: <mode> -- <concrete-consequence>
+        [backprop] open the URL to start; stop with Ctrl+C
+
+    ``<mode>`` and ``<concrete-consequence>`` map by precedence:
+
+    +---------------------------------+--------------------------------+
+    | Mode                            | Concrete consequence            |
+    +=================================+================================+
+    | none (loopback-only)            | any local process can access    |
+    |                                 | the UI                          |
+    +---------------------------------+--------------------------------+
+    | token (auto-generated)          | share the URL above to grant    |
+    |                                 | access -- URL contains a secret |
+    +---------------------------------+--------------------------------+
+    | basic (user '<u>')              | password protects the UI;       |
+    |                                 | rotate the password if          |
+    |                                 | compromised                     |
+    +---------------------------------+--------------------------------+
+    | DISABLED (--share without auth) | the UI is PUBLIC; anyone with   |
+    |                                 | the URL has full access         |
+    +---------------------------------+--------------------------------+
+
+    Suppress entirely with ``BACKPROPAGATE_UI_QUIET=1`` for CI / headless
+    cases that don't want the banner noise.
+
+    Test contract (cross-domain handoff for tests agent — this function
+    has no test file in tests/ because bridge agent has no write access
+    to tests/. Tests agent: please add tests/test_ui_banner.py asserting
+    each of the 4 auth modes produces the expected 3-line shape on
+    stderr, AND that BACKPROPAGATE_UI_QUIET=1 suppresses output entirely):
+
+    * mode=no_auth_local -> calling with auth=None + share=False prints
+      "auth: none (loopback-only) -- any local process..."
+    * mode=token_auto -> calling with auth=None + token_query="abc" prints
+      a URL with ?token=abc AND "auth: token (auto-generated)..."
+    * mode=basic -> calling with auth=("alice", "secret") prints the URL
+      WITHOUT any password text AND "auth: basic (user 'alice')..."
+    * mode=insecure -> calling with auth=None + share=True prints
+      "auth: DISABLED (--share without --auth)..." (this code path is
+      gated upstream and should be unreachable in practice, but the
+      branch exists to make the banner total over the 4 modes.)
+    """
+    # Honor the quiet-mode escape hatch first so CI doesn't see banner noise.
+    if os.environ.get("BACKPROPAGATE_UI_QUIET") == "1":
+        return
+
+    url_path = f"/?token={token_query}" if token_query else "/"
+    url = f"http://{bound_host}:{port}{url_path}"
+
+    # Determine the mode + concrete-consequence pair (Lee & See 2004
+    # trust-calibration framing — operator should know what the auth
+    # decision means BEFORE they share the URL).
+    is_loopback = bound_host in ("127.0.0.1", "localhost", "::1")
+
+    if share and auth is None:
+        # The refuse-to-start gate should have prevented this, but the
+        # branch exists to make the banner total over the 4 modes.
+        mode_label = "DISABLED (--share without --auth)"
+        consequence = "the UI is PUBLIC; anyone with the URL has full access"
+    elif auth is not None:
+        username = auth[0]
+        mode_label = f"basic (user {username!r})"
+        consequence = (
+            "password protects the UI; rotate the password if compromised"
+        )
+    elif token_query:
+        mode_label = "token (auto-generated)"
+        consequence = (
+            "share the URL above to grant access -- URL contains a secret"
+        )
+    elif is_loopback:
+        mode_label = "none (loopback-only)"
+        consequence = "any local process can access the UI"
+    else:
+        # Non-loopback bind without --auth — gated upstream as
+        # RUNTIME_UI_AUTH_NOT_ENFORCED. Same total-coverage rationale as
+        # the share+no-auth branch.
+        mode_label = "DISABLED (non-loopback bind without --auth)"
+        consequence = (
+            "the UI is reachable from the network with NO authentication"
+        )
+
+    print(f"[backprop] {url}  <- UI listening", file=sys.stderr)
+    print(f"[backprop] auth: {mode_label} -- {consequence}", file=sys.stderr)
+    print(
+        "[backprop] open the URL to start; stop with Ctrl+C",
+        file=sys.stderr,
+    )
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     """
     Execute the ui command to launch the Reflex web interface.
@@ -1402,6 +1676,19 @@ def cmd_ui(args: argparse.Namespace) -> int:
             code="RUNTIME_UI_AUTH_NOT_ENFORCED",
         )
 
+    # BRIDGE-B-008 (Stage C — documented gap): post-launch health probe
+    # against /_health (asserts unauthenticated GET / returns 401) is a
+    # v1.4 candidate. Today the CLI refuses to start if ENFORCEMENT_AVAILABLE
+    # is False at import time, which catches the dominant failure mode
+    # (auth.py import error). What it does NOT catch: a runtime regression
+    # where FastAPI middleware imports cleanly but raises AttributeError at
+    # request time. Adding a Popen + probe loop is a moderate refactor that
+    # requires reworking the subprocess.run call site to a non-blocking
+    # Popen with a healthcheck thread. Tracked as the v1.4 followup
+    # "BRIDGE-V14-UI-PROBE" so the auth contract assertion catches both
+    # the import-time + runtime layers (same defensive depth that caught
+    # v1.2.0's FRONTEND-B-001 layer-2 auth bypass).
+    #
     # If the runtime claims enforcement is unavailable (e.g. ui_app.auth
     # import failed) but auth was requested, refuse rather than silently
     # launching an unprotected UI with a "Auth: enabled" log line.
@@ -1558,16 +1845,75 @@ def cmd_ui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    # BRIDGE-B-006 (Stage C): emit a structured-log subprocess_starting
+    # event so an operator grepping `ui_subprocess` in JSON logs can see
+    # the lifecycle of the Reflex child alongside cmd_train / cmd_export.
+    # The auth credentials are NOT logged — only a boolean flag — to keep
+    # the JSON log audit-safe.
+    from .logging_config import get_logger as _get_logger
+    _ui_logger = _get_logger(__name__)
+    try:
+        _ui_logger.info(
+            "ui_subprocess_starting",
+            host_bind=backend_host,
+            port=args.port,
+            auth_mode=("basic" if auth else "none"),
+            share=bool(args.share),
+            cmd=cmd,
+        )
+    except Exception:  # noqa: BLE001 — observability must not block launch  # nosec B110
+        pass
+
+    # BRIDGE-B (Stage C auth-polish): Jupyter-pattern startup banner.
+    # Printed AFTER the refuse-to-start gates have fired (lines above)
+    # and BEFORE the subprocess.run call so the operator sees it the
+    # moment the launch is decided. Suppressed by BACKPROPAGATE_UI_QUIET=1.
+    _print_ui_startup_banner(
+        bound_host=backend_host,
+        port=args.port,
+        auth=auth,
+        share=bool(args.share),
+        token_query=None,
+    )
+
+    import time as _time  # local import to keep cold-start of `backprop --help` cheap
+    _ui_start_ts = _time.monotonic()
     try:
         print()
         _print_info("Launching Reflex interface...")
         result = subprocess.run(cmd, env=env, cwd=str(package_dir))
+        _duration = _time.monotonic() - _ui_start_ts
+        try:
+            _ui_logger.info(
+                "ui_subprocess_exit",
+                returncode=result.returncode,
+                duration_seconds=round(_duration, 2),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         return result.returncode if result.returncode is not None else EXIT_OK
     except KeyboardInterrupt:
+        _duration = _time.monotonic() - _ui_start_ts
+        try:
+            _ui_logger.info(
+                "ui_subprocess_signal",
+                signum=2,  # SIGINT
+                duration_seconds=round(_duration, 2),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         print()
         _print_info("UI stopped")
         return EXIT_OK
     except FileNotFoundError:
+        try:
+            _ui_logger.info(
+                "ui_subprocess_exit",
+                returncode=None,
+                error="FileNotFoundError (python interpreter or reflex missing)",
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         _print_error(
             "Failed to launch Reflex — interpreter not found. "
             "This usually means the [ui] extra wasn't fully installed."
@@ -2756,11 +3102,16 @@ Exit codes (Ship Gate B2):
     )
     ui_parser.add_argument(
         "--auth",
+        type=_auth_credential,
         metavar="USER:PASS",
         help=(
             "Enable HTTP basic auth on the Reflex UI. Required when --share "
             "or a non-loopback --host is passed. Credentials are forwarded "
-            "to the subprocess via BACKPROPAGATE_UI_AUTH."
+            "to the subprocess via BACKPROPAGATE_UI_AUTH. "
+            "Username must not contain whitespace, colon, or control chars; "
+            "password must not contain newlines or NUL. Use the "
+            "BACKPROPAGATE_UI_AUTH env var to keep credentials out of shell "
+            "history."
         ),
     )
     ui_parser.set_defaults(func=cmd_ui)
@@ -2799,10 +3150,26 @@ def main(argv: list[str] | None = None) -> int:
          log line in the process carries the same correlation token.
       4. Stashes the CLI-level run_id on ``args.cli_run_id`` so subcommand
          handlers can re-emit / re-bind it without minting a second UUID.
+
+    BRIDGE-B-016 (Stage C): mint ``cli_run_id`` BEFORE ``parser.parse_args``
+    so a Ctrl+C during an early argparse validator (e.g. a future
+    ``_hf_repo_validator`` that does a network probe) still produces a
+    run_id the operator can grep for in any partial log output.
+
+    BRIDGE-B-013 (Stage C): log-setup failures no longer fail silently.
+    The first failure stashes a one-line reason into a module-level flag;
+    main() surfaces a single ``[WARN] structured logging setup failed: ...``
+    line to stderr before returning so the operator knows logs aren't
+    flowing without aborting the CLI.
     """
+    import traceback
     import uuid
 
     from .logging_config import bind_run_context, configure_logging, get_logger
+
+    # BRIDGE-B-016 (Stage C): mint the cli_run_id BEFORE parse_args so the
+    # KeyboardInterrupt during arg validation has a token to print.
+    cli_run_id = uuid.uuid4().hex
 
     try:
         parser = create_parser()
@@ -2810,32 +3177,52 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         # KeyboardInterrupt during argparse (rare but possible if a custom
         # validator does I/O) should still exit 130 per the Ship Gate contract.
-        print("Interrupted.", file=sys.stderr)
+        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
         return EXIT_INTERRUPTED
 
     # BRIDGE-B-002: configure structured logging before ANY subcommand runs.
     # ``--verbose`` bumps the level to DEBUG so structlog emits the full
     # event stream; otherwise honour BACKPROPAGATE_LOG_LEVEL (default INFO).
     verbose = bool(getattr(args, "verbose", False))
+
+    # BRIDGE-B-013 (Stage C): track logging-setup failures so the operator
+    # sees a stderr WARN line at the end of main() naming the reason.
+    # Pre-fix this was a silent ``except Exception: pass`` — a typo'd
+    # BACKPROPAGATE_LOG_FILE pointing at a non-existent directory left the
+    # CLI running with no log output AND no warning. Module-level flag so
+    # all three swallow-points (configure_logging, bind_run_context,
+    # cli_invoked) can collapse to one warn line.
+    global _LOGGING_SETUP_FAILED, _LOGGING_SETUP_FAIL_REASON
+    _LOGGING_SETUP_FAILED = False
+    _LOGGING_SETUP_FAIL_REASON = ""
+
     try:
         configure_logging(level="DEBUG" if verbose else None, force=True)
-    except Exception:  # noqa: BLE001 — logging setup must not abort the CLI  # nosec B110
+    except Exception as _log_exc:  # noqa: BLE001 — logging setup must not abort the CLI
         # If logging setup itself fails (extremely rare — bad log file path,
         # permission denied), fall back silently so the subcommand still runs.
         # The traceback is intentionally swallowed so a misconfigured
         # BACKPROPAGATE_LOG_FILE can't crash the CLI on startup.
-        pass
+        _LOGGING_SETUP_FAILED = True
+        # Stash the first-line reason (typically the OSError message);
+        # full traceback is BACKPROPAGATE_DEBUG-gated below.
+        _LOGGING_SETUP_FAIL_REASON = f"{type(_log_exc).__name__}: {_log_exc}"
+        if os.environ.get("BACKPROPAGATE_DEBUG"):
+            traceback.print_exc()
 
-    # BRIDGE-B-002: mint one CLI-level run_id and bind it so every structured
-    # log line emitted from this process carries it. Subcommand handlers
-    # re-emit the same id to stderr (replacing the prior 12-char-only print)
-    # so operators triaging a multi-hour overnight job can grep ONE token
-    # across CLI output, trainer logs, and run_history.json.
-    cli_run_id = uuid.uuid4().hex
+    # BRIDGE-B-002: bind the cli_run_id so every structured log line emitted
+    # from this process carries it. Subcommand handlers re-emit the same id
+    # to stderr (replacing the prior 12-char-only print) so operators
+    # triaging a multi-hour overnight job can grep ONE token across CLI
+    # output, trainer logs, and run_history.json.
     try:
         bind_run_context(run_id=cli_run_id, subcommand=getattr(args, "command", None))
-    except Exception:  # noqa: BLE001 — context binding must not abort the CLI  # nosec B110
-        pass
+    except Exception as _bind_exc:  # noqa: BLE001 — context binding must not abort the CLI
+        if not _LOGGING_SETUP_FAILED:
+            _LOGGING_SETUP_FAILED = True
+            _LOGGING_SETUP_FAIL_REASON = (
+                f"bind_run_context: {type(_bind_exc).__name__}: {_bind_exc}"
+            )
     args.cli_run_id = cli_run_id
 
     # Emit the CLI-level run_id once via the structured logger (auto-routed
@@ -2848,8 +3235,30 @@ def main(argv: list[str] | None = None) -> int:
             cli_run_id=cli_run_id,
             subcommand=getattr(args, "command", None),
         )
-    except Exception:  # noqa: BLE001 — logging must not abort the CLI  # nosec B110
-        pass
+    except Exception as _emit_exc:  # noqa: BLE001 — logging must not abort the CLI
+        if not _LOGGING_SETUP_FAILED:
+            _LOGGING_SETUP_FAILED = True
+            _LOGGING_SETUP_FAIL_REASON = (
+                f"cli_invoked emit: {type(_emit_exc).__name__}: {_emit_exc}"
+            )
+
+    # BRIDGE-B-017 (Stage C): print a deprecation hint when an operator
+    # invokes a subcommand whose stability tier is "deprecated-prefer-X".
+    # The hint is purely advisory — the deprecated subcommand still runs.
+    # Operators piping `backprop info --subcommand-tiers` can grep for
+    # upcoming removals.
+    cmd_name = getattr(args, "command", None)
+    tier = SUBCOMMAND_TIERS.get(cmd_name or "", "stable")
+    if tier.startswith("deprecated"):
+        try:
+            preferred = tier.split("prefer-", 1)[1] if "prefer-" in tier else "the replacement subcommand"
+        except Exception:  # noqa: BLE001  # nosec B110
+            preferred = "the replacement subcommand"
+        print(
+            f"[deprecation] `backprop {cmd_name}` is deprecated; prefer "
+            f"`backprop {preferred}`. See `backprop info --subcommand-tiers`.",
+            file=sys.stderr,
+        )
 
     if not args.command:
         # First-time-user friendliness (C-CLI-001): bare ``backprop`` invocation
@@ -2861,6 +3270,22 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help(sys.stderr)
         return EXIT_USER_ERROR
 
+    # BRIDGE-B-013 (Stage C): if logging setup failed earlier, surface a
+    # single stderr WARN line BEFORE we hand control to the subcommand.
+    # The subcommand will be run regardless ("logging setup must not abort
+    # the CLI" per the existing principle), but the operator gets a clear
+    # heads-up that BACKPROPAGATE_LOG_* env vars aren't taking effect.
+    def _maybe_warn_logging_setup_failed() -> None:
+        if _LOGGING_SETUP_FAILED:
+            print(
+                f"[WARN] structured logging setup failed: "
+                f"{_LOGGING_SETUP_FAIL_REASON}. "
+                "Re-run with BACKPROPAGATE_DEBUG=1 for the full traceback.",
+                file=sys.stderr,
+            )
+
+    _maybe_warn_logging_setup_failed()
+
     # Execute the command — wrapped in a last-resort exception net so the
     # Ship Gate B2 exit-code contract holds even when a subcommand's own
     # try/except missed something.
@@ -2868,13 +3293,12 @@ def main(argv: list[str] | None = None) -> int:
         result: int = args.func(args)
         return result
     except KeyboardInterrupt:
-        print("Interrupted.", file=sys.stderr)
+        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
         return EXIT_INTERRUPTED
     except BackpropagateError as e:
         code = getattr(e, "code", None) or "RUNTIME"
         print(f"{code}: {e}", file=sys.stderr)
         if os.environ.get("BACKPROPAGATE_DEBUG"):
-            import traceback
             traceback.print_exc()
         return EXIT_RUNTIME_ERROR
     except SystemExit:
@@ -2886,7 +3310,6 @@ def main(argv: list[str] | None = None) -> int:
         # crashes. The default Python behavior is exit code 1 + traceback.
         print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
         if os.environ.get("BACKPROPAGATE_DEBUG"):
-            import traceback
             traceback.print_exc()
         else:
             print(

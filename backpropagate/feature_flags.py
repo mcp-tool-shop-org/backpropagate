@@ -43,11 +43,14 @@ __all__ = [
     "FEATURES",
     "check_feature",
     "require_feature",
+    "ensure_feature",
     "get_install_hint",
     "list_available_features",
     "list_missing_features",
     "refresh_features",
     "FeatureNotAvailable",
+    "INSTALL_HINTS",
+    "FEATURE_DESCRIPTIONS",
 ]
 
 # Feature detection results
@@ -66,21 +69,78 @@ FEATURES: dict[str, bool] = {
     "wandb": False,
     "tensorboard": False,
     "mlflow": False,
+    # BRIDGE-B-009 (Stage C): expose psutil as its own primitive flag so a
+    # wandb-only OR psutil-only install can still reach get_system_info()'s
+    # memory section. ``monitoring`` is preserved as the AND of psutil+wandb
+    # for back-compat with callers that gate on the umbrella flag.
+    "psutil": False,
 }
 
-# Installation hints for each feature
+# Installation hints for each feature.
+#
+# BRIDGE-B-003 (Stage C humanization): each hint names the install command, what
+# the operator gains by adding it, and the common failure mode they will hit if
+# they DON'T install it. The goal is "next action plus consequence" so the
+# operator can triage a missing-feature stderr line without leaving the terminal
+# — Norman 1988 affordance framing applied to optional-extra install hints.
 INSTALL_HINTS: dict[str, str] = {
-    "unsloth": "pip install backpropagate[unsloth]",
-    "ui": "pip install backpropagate[ui]",
-    "validation": "pip install backpropagate[validation]",
-    "export": "pip install backpropagate[export]",
-    "monitoring": "pip install backpropagate[monitoring]",
-    "flash_attention": "pip install flash-attn --no-build-isolation",
-    "triton": "pip install triton",
+    "unsloth": (
+        "pip install 'backpropagate[unsloth]' — enables 2x faster QLoRA "
+        "training with ~50% less VRAM (Qwen / Llama 7B fits 16 GB). "
+        "Without it: training falls back to plain transformers + peft (~2x "
+        "slower; may OOM on a 16 GB card for 7B + LoRA r=32)."
+    ),
+    "ui": (
+        "pip install 'backpropagate[ui]' — installs Reflex (Radix UI) web "
+        "interface for training / export / run history. "
+        "Without it: `backprop ui` exits with 'UI dependencies not installed'."
+    ),
+    "validation": (
+        "pip install 'backpropagate[validation]' — enables Pydantic config "
+        "validation so BACKPROPAGATE_* env vars are type-checked at startup. "
+        "Without it: malformed env vars (e.g. non-numeric learning_rate) "
+        "surface as runtime ValueError in the trainer, not a clear startup error."
+    ),
+    "export": (
+        "pip install 'backpropagate[export]' — installs llama-cpp-python for "
+        "in-process GGUF export. "
+        "Without it: GGUF export falls back to a subprocess call to "
+        "~/llama.cpp/convert_hf_to_gguf.py (or shutil.which) and errors if "
+        "neither is present."
+    ),
+    "monitoring": (
+        "pip install 'backpropagate[monitoring]' — installs wandb + psutil "
+        "so the trainer can wire experiment tracking and `backprop info` "
+        "shows host memory. "
+        "Without it: training runs unobserved (no wandb dashboard) and "
+        "`backprop info` omits the Memory section."
+    ),
+    "flash_attention": (
+        "pip install flash-attn --no-build-isolation — enables Flash "
+        "Attention 2 (typically 1.3-1.7x training speedup on Ampere+). "
+        "Without it: training uses standard SDPA attention (correct but slower)."
+    ),
+    "triton": (
+        "pip install triton — enables Unsloth's hand-tuned Triton kernels. "
+        "Without it: Unsloth falls back to its pure-PyTorch path (correct "
+        "but loses the kernel-fusion speedup)."
+    ),
     # F-005 per-tracker hints.
-    "wandb": "pip install backpropagate[monitoring]  # bundles wandb + psutil",
-    "tensorboard": "pip install tensorboard",
-    "mlflow": "pip install mlflow",
+    "wandb": (
+        "pip install 'backpropagate[monitoring]' — bundles wandb + psutil. "
+        "Without it: `report_to=\"wandb\"` is silently dropped by the trainer's "
+        "auto-resolver (no error, no dashboard)."
+    ),
+    "tensorboard": (
+        "pip install tensorboard — enables local TensorBoard event-file "
+        "logging. "
+        "Without it: `report_to=\"tensorboard\"` is silently dropped."
+    ),
+    "mlflow": (
+        "pip install mlflow — enables MLflow tracking + model-registry "
+        "integration. "
+        "Without it: `report_to=\"mlflow\"` is silently dropped."
+    ),
 }
 
 # Feature descriptions
@@ -96,7 +156,18 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
     "wandb": "Weights & Biases experiment tracking",
     "tensorboard": "TensorBoard local experiment logs",
     "mlflow": "MLflow experiment tracking and model registry",
+    "psutil": "Host-memory introspection (used by `backprop info`)",
 }
+
+
+# BRIDGE-B-009 (Stage C): psutil install hint as a primitive (separate from
+# the wandb+psutil monitoring bundle). Operators who only want memory
+# introspection can pip install just psutil.
+INSTALL_HINTS["psutil"] = (
+    "pip install psutil — enables host-memory introspection in `backprop info`. "
+    "Without it: `backprop info` omits the Memory section (training continues "
+    "fine; only the introspection surface degrades)."
+)
 
 
 # =============================================================================
@@ -180,12 +251,25 @@ def _detect_features() -> None:
     else:
         logger.debug("Feature 'export' unavailable: llama-cpp-python not installed")
 
-    # Monitoring feature (WandB + psutil) — needs both
-    if _has_module("psutil") and _has_module("wandb"):
+    # BRIDGE-B-009 (Stage C): detect psutil + wandb independently so each
+    # primitive flag can drive its own code path (memory introspection vs.
+    # experiment-tracking auto-wire). ``monitoring`` remains the AND of the
+    # two so existing callers gating on the umbrella flag keep behaving.
+    has_psutil = _has_module("psutil")
+    has_wandb = _has_module("wandb")
+    FEATURES["psutil"] = has_psutil
+    if has_psutil:
+        logger.debug("Feature 'psutil' available")
+    else:
+        logger.debug("Feature 'psutil' unavailable: psutil not installed")
+
+    if has_psutil and has_wandb:
         FEATURES["monitoring"] = True
         logger.debug("Feature 'monitoring' available: wandb and psutil installed")
     else:
-        logger.debug("Feature 'monitoring' unavailable")
+        logger.debug(
+            "Feature 'monitoring' unavailable (requires both psutil and wandb)"
+        )
 
     # Flash Attention feature
     if _has_module("flash_attn"):
@@ -447,8 +531,15 @@ def get_system_info() -> dict[str, Any]:
         "gpu": get_gpu_info(),
     }
 
-    # Add memory info if psutil available
-    if FEATURES["monitoring"]:
+    # Add memory info if psutil available.
+    #
+    # BRIDGE-B-009 (Stage C): gate on the psutil primitive flag rather than
+    # the monitoring umbrella. Pre-fix this required BOTH wandb AND psutil
+    # to surface memory info — an operator with `pip install psutil` alone
+    # would see Memory missing because wandb wasn't installed, even though
+    # psutil itself was reachable. Now the memory path fires whenever psutil
+    # is importable.
+    if FEATURES.get("psutil") or FEATURES.get("monitoring"):
         try:
             import psutil
             mem = psutil.virtual_memory()

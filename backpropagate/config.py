@@ -61,6 +61,14 @@ __all__ = [
     "UIConfig",
     "WindowsConfig",
     "SecurityConfig",
+    # BRIDGE-B-004 (Stage C): canonical name for the env-var-driven
+    # MultiRunSettings pydantic-settings model. The legacy alias
+    # ``MultiRunConfig`` is kept in this module's namespace ONLY for
+    # back-compat with code that did ``from backpropagate.config import
+    # MultiRunConfig``; new code should import the alias from
+    # ``backpropagate.multi_run`` (the dataclass with merge_mode / lr_decay
+    # / replay fields used by ``cmd_multi_run``).
+    "MultiRunSettings",
     # Training presets (Phase 1.2)
     "TrainingPreset",
     "TRAINING_PRESETS",
@@ -91,6 +99,96 @@ WINDOWS_DEFAULTS = {
     "cuda_launch_blocking": True,
     "pre_tokenize": True,  # Avoid multiprocessing crashes
 }
+
+
+# =============================================================================
+# WINDOWS-FIXES MUTATION TRACKING (BRIDGE-B-011 Stage C)
+# =============================================================================
+# Track the original env-var values that apply_windows_fixes overwrites so
+# unapply_windows_fixes can restore (not just delete) the pre-mutation state
+# for test isolation. _UNSET sentinel distinguishes "var was unset before"
+# from "var was empty-string before".
+
+class _Unset:
+    """Sentinel for env vars that were not set prior to apply_windows_fixes."""
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return "<UNSET>"
+
+
+_UNSET = _Unset()
+
+# Mapping of env-var name -> (prior_value_or_UNSET, new_value). Populated by
+# _apply_env_mutations; consumed by unapply_windows_fixes.
+_WINDOWS_FIXES_APPLIED: dict[str, tuple[object, str]] = {}
+
+
+def _apply_env_mutations(mutations: dict[str, str]) -> None:
+    """Apply env-var mutations, recording the prior value of each key.
+
+    Used by ``Settings.apply_windows_fixes`` (both BaseSettings and dataclass
+    fallback branches) so the assignments are uniformly observable + reversible.
+
+    Emits a structlog ``windows_fixes_applied`` event listing the mutated
+    keys and new values. The event is best-effort — if structlog is not
+    installed or logging is misconfigured, the mutations still take effect
+    (the trainer's load-bearing fix path must not depend on observability).
+    """
+    for key, new_value in mutations.items():
+        prior: object = os.environ.get(key, _UNSET)
+        # Record only the FIRST prior value seen — if apply_windows_fixes is
+        # called twice without unapply in between, the "real" original
+        # (pre-our-changes) is the one from the first call, not the second.
+        if key not in _WINDOWS_FIXES_APPLIED:
+            _WINDOWS_FIXES_APPLIED[key] = (prior, new_value)
+        else:
+            # Update the new_value (in case the second call wrote a different
+            # one) but keep the original prior.
+            original_prior, _ = _WINDOWS_FIXES_APPLIED[key]
+            _WINDOWS_FIXES_APPLIED[key] = (original_prior, new_value)
+        os.environ[key] = new_value
+
+    # Best-effort structlog event so JSON consumers can grep for the
+    # mutation. Import lazily to avoid a circular dependency with
+    # logging_config (which imports config indirectly via Settings reload).
+    try:
+        from .logging_config import get_logger as _get_logger
+        _get_logger(__name__).info(
+            "windows_fixes_applied",
+            mutated=list(mutations.keys()),
+            values=mutations,
+        )
+    except Exception:  # noqa: BLE001 — observability must not block the load-bearing path  # nosec B110
+        pass
+
+
+def unapply_windows_fixes() -> None:
+    """Restore env vars mutated by :func:`Settings.apply_windows_fixes`.
+
+    BRIDGE-B-011 (Stage C humanization): primarily a test-isolation helper.
+    A test that exercises a non-Windows code path on a Windows CI runner
+    can call this in teardown so the next test doesn't see leaked
+    ``TOKENIZERS_PARALLELISM`` / ``XFORMERS_DISABLED`` env vars.
+
+    Behavior:
+    * If the var was unset before apply, it is popped.
+    * If the var had a prior value, that value is restored exactly.
+    * Vars not touched by apply_windows_fixes are left alone.
+
+    Calling unapply multiple times is safe (the second call is a no-op).
+    """
+    while _WINDOWS_FIXES_APPLIED:
+        key, (prior, _new_value) = _WINDOWS_FIXES_APPLIED.popitem()
+        if isinstance(prior, _Unset):
+            os.environ.pop(key, None)
+        else:
+            assert isinstance(prior, str)  # narrow from tuple[object, str]
+            os.environ[key] = prior
+    try:
+        from .logging_config import get_logger as _get_logger
+        _get_logger(__name__).info("windows_fixes_unapplied")
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
 
 
 # =============================================================================
@@ -244,8 +342,30 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Pre-tokenize to avoid multiprocessing issues
         pre_tokenize: bool = True
 
-    class MultiRunConfig(BaseSettings):
-        """Multi-run training configuration."""
+    class MultiRunSettings(BaseSettings):
+        """Multi-run training settings driven by BACKPROPAGATE_MULTIRUN__* env vars.
+
+        BRIDGE-B-004 (Stage C humanization): pre-fix this class was named
+        ``MultiRunConfig`` and collided with
+        :class:`backpropagate.multi_run.MultiRunConfig` (a dataclass with
+        merge_mode + lr_decay + replay fields used by ``cmd_multi_run``).
+        The collision left every ``BACKPROPAGATE_MULTIRUN__*`` env var dead
+        because ``cmd_multi_run`` instantiates the multi_run.py class, never
+        ``Settings().multi_run``. Renaming to ``MultiRunSettings`` makes the
+        ownership distinct: this class is the operator-facing env-var
+        knobs, multi_run.MultiRunConfig is the in-process call-site object.
+
+        Environment variables (env_prefix=BACKPROPAGATE_MULTIRUN__):
+            BACKPROPAGATE_MULTIRUN__NUM_RUNS=5
+            BACKPROPAGATE_MULTIRUN__STEPS_PER_RUN=100
+            BACKPROPAGATE_MULTIRUN__SAMPLES_PER_RUN=1000
+            BACKPROPAGATE_MULTIRUN__CONTINUE_FROM_PREVIOUS=true
+            BACKPROPAGATE_MULTIRUN__SAVE_INTERMEDIATE=true
+
+        Validation failures (non-numeric NUM_RUNS, etc.) surface as
+        pydantic ValidationError with the env var name in the location
+        field — operators can grep the message for the var they set.
+        """
         model_config = SettingsConfigDict(
             env_prefix="BACKPROPAGATE_MULTIRUN__",
             env_ignore_empty=True,
@@ -373,7 +493,8 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         data: DataConfig = Field(default_factory=DataConfig)
         ui: UIConfig = Field(default_factory=UIConfig)
         windows: WindowsConfig = Field(default_factory=WindowsConfig)
-        multi_run: MultiRunConfig = Field(default_factory=MultiRunConfig)
+        # BRIDGE-B-004 (Stage C): renamed config.MultiRunConfig -> MultiRunSettings.
+        multi_run: MultiRunSettings = Field(default_factory=MultiRunSettings)
         security: SecurityConfig = Field(default_factory=SecurityConfig)
 
         # Package info
@@ -415,13 +536,25 @@ if PYDANTIC_SETTINGS_AVAILABLE:
             }
 
         def apply_windows_fixes(self) -> None:
-            """Apply Windows-specific environment variables."""
+            """Apply Windows-specific environment variables.
+
+            BRIDGE-B-011 (Stage C humanization): each mutation is now recorded
+            in the module-level ``_WINDOWS_FIXES_APPLIED`` dict (key -> prior
+            value or _UNSET sentinel) so :func:`unapply_windows_fixes` can
+            restore the original environment for test isolation. A structlog
+            event lists every mutated env var + new value so operators
+            grepping JSON logs can correlate "the trainer disabled xformers
+            on me" with the exact env-var write.
+            """
             if os.name == "nt":  # Windows
-                os.environ["TOKENIZERS_PARALLELISM"] = str(self.windows.tokenizers_parallelism).lower()
+                mutations: dict[str, str] = {
+                    "TOKENIZERS_PARALLELISM": str(self.windows.tokenizers_parallelism).lower(),
+                }
                 if self.windows.xformers_disabled:
-                    os.environ["XFORMERS_DISABLED"] = "1"
+                    mutations["XFORMERS_DISABLED"] = "1"
                 if self.windows.cuda_launch_blocking:
-                    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+                    mutations["CUDA_LAUNCH_BLOCKING"] = "1"
+                _apply_env_mutations(mutations)
 
 else:
     # Fallback implementation using dataclasses
@@ -509,7 +642,9 @@ else:
         pre_tokenize: bool = True
 
     @dataclass
-    class MultiRunConfig:  # type: ignore[no-redef]
+    class MultiRunSettings:  # type: ignore[no-redef]
+        """Dataclass fallback for MultiRunSettings — see BRIDGE-B-004 above."""
+
         num_runs: int = 5
         steps_per_run: int = 100
         samples_per_run: int = 1000
@@ -557,7 +692,8 @@ else:
         data: DataConfig = field(default_factory=DataConfig)
         ui: UIConfig = field(default_factory=UIConfig)
         windows: WindowsConfig = field(default_factory=WindowsConfig)
-        multi_run: MultiRunConfig = field(default_factory=MultiRunConfig)
+        # BRIDGE-B-004 (Stage C): renamed config.MultiRunConfig -> MultiRunSettings.
+        multi_run: MultiRunSettings = field(default_factory=MultiRunSettings)
         security: SecurityConfig = field(default_factory=SecurityConfig)
         version: str = "0.1.0"
         name: str = "backpropagate"
@@ -566,12 +702,18 @@ else:
             return {"version": self.version}
 
         def apply_windows_fixes(self) -> None:
+            # BRIDGE-B-011 (Stage C): mirror the BaseSettings branch — route
+            # through _apply_env_mutations so the unapply helper + structlog
+            # event fire identically when pydantic-settings is absent.
             if os.name == "nt":
-                os.environ["TOKENIZERS_PARALLELISM"] = str(self.windows.tokenizers_parallelism).lower()
+                mutations: dict[str, str] = {
+                    "TOKENIZERS_PARALLELISM": str(self.windows.tokenizers_parallelism).lower(),
+                }
                 if self.windows.xformers_disabled:
-                    os.environ["XFORMERS_DISABLED"] = "1"
+                    mutations["XFORMERS_DISABLED"] = "1"
                 if self.windows.cuda_launch_blocking:
-                    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+                    mutations["CUDA_LAUNCH_BLOCKING"] = "1"
+                _apply_env_mutations(mutations)
 
 
 # =============================================================================
@@ -591,6 +733,24 @@ def get_settings() -> Settings:
 
 # Backwards-compatible singleton
 settings = get_settings()
+
+
+# BRIDGE-B-004 (Stage C): name-collision back-compat alias.
+#
+# Pre-fix, ``config.MultiRunConfig`` and ``multi_run.MultiRunConfig`` were
+# distinct classes with overlapping but non-identical fields; the public
+# surface ``from backpropagate import MultiRunConfig`` resolved to the
+# multi_run.py dataclass (the one cmd_multi_run uses) but
+# ``from backpropagate.config import MultiRunConfig`` returned the env-var
+# Settings shape. Operators got the wrong shape depending on import path.
+#
+# Fix: the env-var class is now ``MultiRunSettings`` (load-bearing
+# operator surface for BACKPROPAGATE_MULTIRUN__* vars). The canonical
+# call-site object stays ``multi_run.MultiRunConfig``. This alias keeps the
+# legacy ``from backpropagate.config import MultiRunConfig`` import
+# resolving to the env-var class for one release; it can be removed in
+# v1.4 once downstream code has migrated to ``MultiRunSettings``.
+MultiRunConfig = MultiRunSettings
 
 
 # =============================================================================

@@ -43,6 +43,15 @@ def BpRecoveryBanner(
     """
     color, icon_url = _VARIANTS.get(variant, _VARIANTS["info"])
 
+    # FRONTEND-B-005 (Stage C polish): SVG icons served as ``<img src=...>``
+    # cannot be re-tinted via CSS ``color`` - the SVG fill is baked into the
+    # file. The previous ``style={"color": color}`` was dead code (browsers
+    # silently ignore it on ``<img>``). The variant accent is now carried
+    # ONLY by the box border + background tint below, which IS the only
+    # place the variant color visibly applies. The icon itself is whatever
+    # color it ships with on disk - if a future polish pass wants accent-
+    # tinted icons, swap to inline-SVG (rx.html with the SVG source) so the
+    # ``currentColor`` fill picks up the parent's ``color``.
     return rx.box(
         rx.flex(
             rx.image(
@@ -50,8 +59,6 @@ def BpRecoveryBanner(
                 width="16px",
                 height="16px",
                 style={
-                    "color": color,
-                    "filter": "none",
                     "flex_shrink": "0",
                     "margin_top": "2px",
                 },

@@ -1,13 +1,10 @@
 {
   "name": "@mcptoolshop/backpropagate",
   "version": "1.2.0",
-  "description": "Headless LLM fine-tuning CLI with smart defaults — train, export, serve. Reflex web UI (auth-gated), HF Hub push, resume-from-checkpoint, run history, model cards, multi-run SLAO. v1.2.0: auth-bypass closed + truth-in-advertising sweep.",
+  "description": "Deprecated npm distribution shim for backpropagate — prints install guidance for pipx/uv tool/pip. See https://github.com/mcp-tool-shop-org/backpropagate",
   "type": "commonjs",
   "license": "MIT",
   "engines": { "node": ">=20" },
-  "dependencies": {
-    "@mcptoolshop/npm-launcher": "^1.0.0"
-  },
   "bin": {
     "backpropagate": "bin/backpropagate.js"
   },

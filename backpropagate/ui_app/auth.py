@@ -613,7 +613,15 @@ def basic_auth_transformer(asgi_app: Callable) -> Callable:
             cookie_value = cookies.get(_COOKIE_NAME, "")
             user = _validate_cookie(cookie_value, secret)
             if user:
-                # Valid session — pass through.
+                # Valid session — pass through. Log per-request validation at
+                # DEBUG (FRONTEND-B-001 / advisor D3): per-session INFO + per-
+                # request DEBUG is the Jupyter-style audit-trail floor on the
+                # CVSS 9.8 surface. Silent by default; observable via
+                # ``LOG_LEVEL=DEBUG`` on a busy UI without spam.
+                logger.debug(
+                    "auth: request validated",
+                    extra={"auth_user": user, "path": path, "method": method},
+                )
                 await asgi_app(scope, receive, send)
                 return
 
@@ -640,6 +648,19 @@ def basic_auth_transformer(asgi_app: Callable) -> Callable:
                     is_loopback = _is_loopback_host(host_header)
                     cookie = _sign_cookie("default-user", secret)
                     set_cookie = _set_cookie_header(cookie, secure=not is_loopback)
+                    # FRONTEND-B-001 / advisor D3: log first-successful-auth at
+                    # INFO with {user, mode, host}. Matches Jupyter's "you
+                    # connected" pattern — one INFO line per session = manageable
+                    # in CI / production logs. Cookie value MUST NOT appear here
+                    # (HMAC payload contains the username which is already logged).
+                    logger.info(
+                        "auth: session opened",
+                        extra={
+                            "auth_user": "default-user",
+                            "auth_mode": mode.value,
+                            "remote_host": host_header,
+                        },
+                    )
                     redirect_headers = [
                         (b"location", path.encode("latin-1")),
                         (b"set-cookie", set_cookie),
@@ -669,6 +690,19 @@ def basic_auth_transformer(asgi_app: Callable) -> Callable:
             is_loopback = _is_loopback_host(host_header)
             cookie = _sign_cookie(authed_user, secret)
             set_cookie = _set_cookie_header(cookie, secure=not is_loopback)
+            # FRONTEND-B-001 / advisor D3: log first-successful-auth at INFO
+            # with {user, mode, host}. Matches Jupyter's "you connected"
+            # pattern — one INFO line per session = manageable in CI / production
+            # logs. ``authed_user`` is the verified username (NOT the password
+            # or cookie value), safe to log.
+            logger.info(
+                "auth: session opened",
+                extra={
+                    "auth_user": authed_user,
+                    "auth_mode": mode.value,
+                    "remote_host": host_header,
+                },
+            )
 
             async def send_with_cookie(message: dict) -> None:
                 if message.get("type") == "http.response.start":

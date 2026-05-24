@@ -297,9 +297,19 @@ class TestE2EGPUMonitoringCallbacks:
         finally:
             monitor.stop()
 
+        # First emergency MUST fire — without this assert, the timing
+        # check below silently passes when zero emergencies fire (which
+        # would itself be a regression: gpu_status_emergency should
+        # always trigger on_emergency).
+        assert len(emergency_times) > 0, (
+            "GPU emergency callback never fired despite mocked emergency "
+            "status. Previously gated by `if emergency_times:` which let "
+            "the zero-event case pass silently, defeating the entire "
+            "point of the timing test (a callback that never fires also "
+            "never fires 'too late')."
+        )
         # First emergency should fire within ~20ms (check_interval)
-        if emergency_times:
-            assert emergency_times[0] < 0.1
+        assert emergency_times[0] < 0.1
 
 
 class TestCLICallbackIntegration:

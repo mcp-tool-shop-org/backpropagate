@@ -341,10 +341,26 @@ async def test_websocket_upgrade_accepts_valid_cookie(basic_mode_middleware):
             "/", headers=basic_auth_header("alice", "hunter2")
         )
         cookie_header = http_response.headers.get("set-cookie", "")
-        # Parse cookie name=value from Set-Cookie
+        # Parse cookie name=value from Set-Cookie. The middleware is
+        # contractually required to issue a session cookie on basic-auth
+        # success (see backpropagate.ui_app.auth._set_cookie_header). If
+        # this changes, surface as a real test failure — silent skip would
+        # mask a regression of the v1.2.0 session-cookie contract.
+        assert cookie_header, (
+            "v1.2.0 security contract: middleware MUST set a session "
+            "cookie on basic-auth success (see "
+            "backpropagate.ui_app.auth._set_cookie_header). Got empty "
+            "Set-Cookie header — this is a regression of the WS-upgrade "
+            "auth-cookie path."
+        )
         cookie_kv = cookie_header.split(";", 1)[0]
-        if "=" not in cookie_kv:
-            pytest.skip("Set-Cookie was not in expected form; middleware may use a different cookie name")
+        assert "=" in cookie_kv, (
+            f"v1.2.0 security contract: auth cookie MUST be key=value "
+            f"shape (see auth._set_cookie_header which emits "
+            f"f'{{_COOKIE_NAME}}={{value}}'). Got: {cookie_kv!r}. If the "
+            f"cookie shape changed intentionally, update this test to "
+            f"match the new contract."
+        )
         cookie_name, _, cookie_value = cookie_kv.partition("=")
     scope = make_ws_scope(
         path="/_event",
@@ -491,17 +507,28 @@ def test_token_lock_file_mode_0600(tmp_path, monkeypatch):
     the per-launch token is also written to
     ``$XDG_RUNTIME_DIR/backpropagate/session-<port>.lock`` so machine-to-
     machine clients can authenticate without exposing it in argv.
+
+    NOTE (v1.3 Wave 3.5): the previous shape of this test silently skipped
+    when ``write_launch_token_lock`` was absent, which made the lock-file
+    mode 0600 contract appear "passing" even though the feature was not
+    implemented. The skip is now scoped + forward-pointing: it explicitly
+    names the deferred work item so the Wave 5/6 implementer inherits a
+    live scaffold rather than a green-but-meaningless test.
     """
+    pytest.skip(
+        reason=(
+            "lock-file token mode 0600 contract: feature deferred to v1.3 "
+            "Wave 5/6 auth-middleware-polish item 3 (write_launch_token_lock). "
+            "See research/V1_3_BRIEF.md P0 'Lock-file token for "
+            "machine-to-machine auth'. Test scaffold preserved for the "
+            "Wave 5/6 implementer."
+        )
+    )
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(
         "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
     )
-    try:
-        from backpropagate.ui_app.auth import write_launch_token_lock
-    except ImportError:
-        pytest.skip(
-            "write_launch_token_lock helper not yet exported by ui_app.auth"
-        )
+    from backpropagate.ui_app.auth import write_launch_token_lock
     lock_path = write_launch_token_lock(port=7860, token="test-token")
     assert lock_path.exists()
     # On POSIX, check the mode bits. On Windows, just verify the file is
@@ -526,8 +553,19 @@ async def test_cookie_hardening(basic_mode_middleware):
             "/", headers=basic_auth_header("alice", "hunter2")
         )
         set_cookie = response.headers.get("set-cookie", "")
-        if not set_cookie:
-            pytest.skip("Middleware does not set a cookie on this request shape")
+        # The middleware is contractually required to issue a session
+        # cookie on basic-auth success per
+        # backpropagate.ui_app.auth._set_cookie_header. If Set-Cookie is
+        # absent here it indicates a regression of the v1.2.0 cookie-
+        # issuance contract, not a benign "different request shape" — fail
+        # loudly rather than silently skip the HttpOnly/SameSite assertions.
+        assert set_cookie, (
+            "v1.2.0 security contract: middleware MUST set a session "
+            "cookie on basic-auth success (see "
+            "backpropagate.ui_app.auth._set_cookie_header). Empty "
+            "Set-Cookie regresses the HttpOnly + SameSite=Lax hardening "
+            "this test is meant to guard."
+        )
         set_cookie_l = set_cookie.lower()
         assert "httponly" in set_cookie_l, (
             "Cookie must have HttpOnly (defense: JS read access)"

@@ -87,6 +87,16 @@ pip install backpropagate[standard]    # unsloth + ui (recommended)
 pip install backpropagate[full]        # Everything
 ```
 
+**Recommended (isolated install):**
+
+```bash
+pipx install backpropagate             # isolated venv, automatic PATH integration
+uv tool install backpropagate          # same UX, faster (Rust-based)
+pip install backpropagate              # works in any existing venv
+```
+
+For the optional Reflex UI: `pipx install backpropagate[ui]` (or `pip install backpropagate[ui]` if you manage your own venv).
+
 | Extra | Description | Dependencies |
 |-------|-------------|--------------|
 | `unsloth` | 2x faster training, 50% less VRAM | unsloth |

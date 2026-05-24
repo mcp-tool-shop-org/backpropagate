@@ -1,8 +1,12 @@
 # .npmignore — what to EXCLUDE from the npm tarball.
 #
-# The npm package is a thin Node wrapper that bootstraps the Python CLI
-# (via @mcptoolshop/npm-launcher). Only the launcher + READMEs + LICENSE
-# need to ship. Everything else stays on GitHub.
+# The npm package is a deprecated friendly-error shim: bin/backpropagate.js
+# prints install guidance for pipx / uv tool / pip and exits 2. No runtime
+# dependencies. Only the shim + READMEs + LICENSE need to ship; everything
+# else stays on GitHub. History: v1.0–v1.2 used @mcptoolshop/npm-launcher
+# to bootstrap PyInstaller binaries; the binary pipeline failed three
+# consecutive times in v1.2.0, so v1.3 retires that path and the launcher
+# dependency was dropped.
 #
 # KNOWN LIMITATION: npm has a hardcoded "always include" rule for files
 # matching ^(README|LICENSE|CHANGELOG|NOTICE|HISTORY)(\..*)?$ — listing them

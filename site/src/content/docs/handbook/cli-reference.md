@@ -110,18 +110,21 @@ backprop ui --port 7862
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port`, `-p` | `7862` | Port to bind (1..65535). |
-| `--share` | off | **Currently rejected.** Reflex has no built-in tunnel and v1.1+ has no auth middleware yet, so the runtime refuses to start when this flag is passed. Use SSH port-forwarding instead — see below. |
-| `--auth USER:PASS` | unset | **Currently rejected.** Same reason — no middleware to consume the credential. Tracked for a future release. |
+| `--host` | `127.0.0.1` | Bind host. Non-loopback values (e.g. `0.0.0.0`, LAN IP) require `--auth user:pass` post-v1.2.0; otherwise the runtime exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. |
+| `--share` | off | Publish via a public tunnel. Requires `--auth user:pass` post-v1.2.0; otherwise the runtime exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The v1.2.0 FastAPI middleware enforces the credential on every request and the `/_event` WebSocket upgrade. |
+| `--auth USER:PASS` | unset | Enable HTTP Basic auth on the Reflex UI. Required when `--share` or non-loopback `--host` is passed. Validated by `validate_auth_shape` — malformed values (missing colon, empty user or pass, etc.) exit `1` with `INPUT_AUTH_INVALID_SHAPE`. The credential flows into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. |
 
-### `--share` / `--auth` refuse-to-start contract (Wave 1)
+### `--share` / `--host` require `--auth` (v1.2.0 contract)
 
-Starting with v1.1.0 (Gradio → Reflex migration), passing either `--share` or `--auth` makes the runtime exit `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The reason: the Reflex port of the UI lands ahead of the auth middleware, so any `--share`-published URL would be unauthenticated. Refusing to start is the correct behavior until the middleware ships.
+The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape` and into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. The CLI rails refuse to start in these cases:
 
-- `backprop ui --share` → exits `1`.
-- `backprop ui --auth alice:hunter2` → exits `1` (even without `--share`).
-- The same refuse-to-start contract is enforced one layer deeper inside `ui_app/app.py` and `rxconfig.py`, so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var.
+- `backprop ui --share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h) (CVSS 9.8, 2026-05-23).
+- `backprop ui --host <non-loopback>` without `--auth` → same code (DNS-rebinding defense per CVE-2024-28224 / CVE-2025-49596 lineage).
+- `backprop ui --auth user:pass` while the `[ui]` extra is degraded (`ENFORCEMENT_AVAILABLE=False`) → same code.
 
-**For remote access right now, use SSH port-forwarding:**
+The refuse-to-start contract is enforced one layer deeper inside `ui_app/app.py` and `rxconfig.py`, so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var.
+
+**For remote access without a public URL, SSH port-forwarding stays the lower-friction option:**
 
 ```bash
 ssh -L 7860:localhost:7860 you@gpu-host
@@ -130,7 +133,7 @@ ssh -L 7860:localhost:7860 you@gpu-host
 
 SSH already handles auth, encryption, and audit — the runtime stays bound to `127.0.0.1` on the remote box and only your forwarded tunnel can reach it.
 
-The proper middleware fix is tracked for a future release; the GHSA at <https://github.com/mcp-tool-shop-org/backpropagate/security/advisories> covers the gap. Filesystem writes are still sandboxed to `BACKPROPAGATE_UI__OUTPUT_DIR` — see [Environment variables → UI sandbox](/backpropagate/handbook/env-vars/#ui-sandbox-fb-003) for the denylist (refuses `/etc`, `~/.ssh`, etc. with `UI_OUTPUT_DIR_FORBIDDEN`).
+Filesystem writes are sandboxed to `BACKPROPAGATE_UI__OUTPUT_DIR` — see [Environment variables → UI sandbox](/backpropagate/handbook/env-vars/#ui-sandbox-fb-003) for the denylist (refuses `/etc`, `/var/run`, `~/.ssh`, etc. with `UI_OUTPUT_DIR_FORBIDDEN`). Full chain in [the security page → Four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth).
 
 ## See also
 

@@ -1,21 +1,37 @@
 # Coverage Test Roadmap
 
-**Target**: Increase coverage from 70% to 85%+
+**Status**: Living document; updated 2026-05-23 (v1.3 Wave 1 Stage A).
 
-**Priority Modules**:
-| Module | Current | Target | Gap |
-|--------|---------|--------|-----|
-| cli.py | 73% | 90% | 17% |
-| datasets.py | 68% | 85% | 17% |
-| config.py | 61% | 85% | 24% |
-| multi_run.py | 55% | 85% | 30% |
-| ui.py | 53% | 75% | 22% |
+**Current floor**: `fail_under = 50` in coverage config. Per-module gaps below
+are advisory; the floor is what CI enforces.
+
+**v1.1.0 → v1.2.0 migration note** — the legacy `ui.py` + `theme.py` Gradio
+modules were preserved as `ui_gradio_legacy.py` through v1.1.x and DELETED in
+v1.2.0 (Wave 4.5). Test coverage for the Reflex Web UI lives in
+`backpropagate/ui_app/` and is exercised by `tests/test_ui_security.py`,
+`tests/test_auth_middleware.py`, `tests/test_runs_command.py`, and the
+Reflex-state tests inside `test_ui_app_*` files as they land. Any roadmap
+section referencing `ui.py` / `gradio.Tab` / `TestGPUMonitoringUI` (as
+Gradio components) has been removed — those surfaces no longer exist.
+
+**Priority surfaces (post-v1.2.0)**:
+
+| Module | Notes |
+|--------|-------|
+| `cli.py` | 2900+ lines; ~30 subcommands; high-traffic. Wave 1 added `--error-codes` + `runs` + `--host` gate coverage. |
+| `datasets.py` | JSONL/ShareGPT/Alpaca/OpenAI auto-detect; format-drift surface. |
+| `config.py` | Pydantic-settings; presets; env-var override paths. |
+| `multi_run.py` | SLAO + replay strategies; resume_from + run_history coordination. |
+| `ui_app/` (Reflex) | Replaces deleted `ui.py`. Covered by `test_ui_security.py`, `test_auth_middleware.py`, `test_runs_command.py`. |
+| `ui_state.py` | Reflex state classes (`AppState`/`TrainState`/`MultiRunState`/`ExportState`/`DatasetState`/`RunsState`). |
+| `ui_app/auth.py` | ASGI middleware — Host/Origin allowlist, cookie/HMAC session, pre-accept WS close. |
 
 ---
 
-## 1. CLI.PY Tests (73% → 90%)
+## 1. CLI.PY Coverage Areas
 
 ### 1.1 Color Support Detection (`_supports_color`)
+
 ```python
 class TestSupportsColorExtended:
     """Extended tests for terminal color detection."""
@@ -37,6 +53,7 @@ class TestSupportsColorExtended:
 ```
 
 ### 1.2 Training Command Error Handling
+
 ```python
 class TestCmdTrainErrors:
     """Error handling in cmd_train."""
@@ -61,6 +78,7 @@ class TestCmdTrainErrors:
 ```
 
 ### 1.3 Multi-Run Command Errors
+
 ```python
 class TestCmdMultiRunErrors:
     """Error handling in cmd_multi_run."""
@@ -79,6 +97,7 @@ class TestCmdMultiRunErrors:
 ```
 
 ### 1.4 Export Command
+
 ```python
 class TestCmdExportExtended:
     """Extended export command tests."""
@@ -100,6 +119,10 @@ class TestCmdExportExtended:
 ```
 
 ### 1.5 Info Command
+
+Wave 1 (v1.3) added `--error-codes` regression coverage to
+`tests/test_cli.py::TestCmdInfoErrorCodes`. Outstanding:
+
 ```python
 class TestCmdInfoExtended:
     """Extended info command tests."""
@@ -112,30 +135,44 @@ class TestCmdInfoExtended:
 
     def test_feature_flags_displayed(self):
         """All feature flags shown with status."""
+
+    def test_env_vars_flag_lists_every_var(self):
+        """--env-vars enumerates every BACKPROPAGATE_* env var."""
+
+    def test_json_flag_produces_parseable_payload(self):
+        """--json output round-trips through json.loads()."""
 ```
 
-### 1.6 UI Command
+### 1.6 UI Command (Reflex subprocess launcher)
+
+`cmd_ui` shells out to `python -m reflex` after validating the auth /
+host / share gates. v1.3 Wave 1 added `tests/test_host_gate.py` covering
+the `--host <non-loopback>` refuse-to-start path; the `--share`
+refuse-to-start gate has long-standing coverage in
+`tests/test_cli_extended.py::TestCmdUiNoMiddleware`.
+
 ```python
 class TestCmdUI:
     """UI launch command tests."""
 
     def test_auth_invalid_format(self):
-        """Auth string without colon raises error."""
+        """--auth string without colon raises EXIT_USER_ERROR."""
 
-    def test_ui_import_error(self):
-        """Missing gradio shows helpful error."""
+    def test_reflex_import_error(self):
+        """Missing reflex extra shows actionable error."""
 
-    def test_launch_failure_handled(self):
-        """Gradio launch error handled gracefully."""
+    def test_subprocess_launch_failure_handled(self):
+        """Reflex subprocess crash surfaces a clean error."""
 
     def test_keyboard_interrupt_during_ui(self):
         """Ctrl+C during UI runtime exits cleanly."""
 
-    def test_auth_parsed_correctly(self):
-        """user:pass format parsed into tuple."""
+    def test_env_vars_propagate_to_subprocess(self):
+        """BACKPROPAGATE_UI_* env vars propagate correctly."""
 ```
 
 ### 1.7 Windows-Specific Config
+
 ```python
 class TestWindowsConfigDisplay:
     """Windows-specific configuration display."""
@@ -147,11 +184,26 @@ class TestWindowsConfigDisplay:
         """Windows settings not shown on Linux/Mac."""
 ```
 
+### 1.8 `backprop runs` / `_build_runs_payload` (added v1.3 Wave 1)
+
+Coverage in `tests/test_runs_command.py` — pins the BRIDGE-F-001 versioned
+JSON payload contract. Outstanding work:
+
+- `cmd_show_run` (F-003) — by-id lookup + `--json` payload (not yet
+  covered).
+- `cmd_runs` `--limit` cap behaviour (currently only filter + sort tests).
+- Pretty-print human-view branch (currently only `--json` branch tested).
+
 ---
 
-## 2. DATASETS.PY Tests (68% → 85%)
+## 2. DATASETS.PY Coverage Areas
+
+(Original 2.1 → 2.9 sections retained — these are still load-bearing for
+the dataset surface. The format-detection / dedup / curriculum / replay
+families are stable post-v1.2.)
 
 ### 2.1 Validation Summary
+
 ```python
 class TestValidationSummary:
     """Validation result rendering."""
@@ -167,6 +219,7 @@ class TestValidationSummary:
 ```
 
 ### 2.2 Quality Filtering
+
 ```python
 class TestQualityFiltering:
     """Dataset quality filtering."""
@@ -197,6 +250,7 @@ class TestQualityFiltering:
 ```
 
 ### 2.3 Format Detection
+
 ```python
 class TestFormatDetection:
     """Dataset format auto-detection."""
@@ -230,6 +284,7 @@ class TestFormatDetection:
 ```
 
 ### 2.4 Deduplication
+
 ```python
 class TestDeduplication:
     """Exact and fuzzy deduplication."""
@@ -254,6 +309,7 @@ class TestDeduplication:
 ```
 
 ### 2.5 Perplexity Filtering
+
 ```python
 class TestPerplexityFiltering:
     """Perplexity-based quality filtering."""
@@ -293,6 +349,7 @@ class TestPerplexityFiltering:
 ```
 
 ### 2.6 File Loading
+
 ```python
 class TestDatasetLoading:
     """Dataset file loading."""
@@ -326,6 +383,7 @@ class TestDatasetLoading:
 ```
 
 ### 2.7 Streaming Datasets
+
 ```python
 class TestStreamingDatasets:
     """HuggingFace streaming datasets."""
@@ -350,6 +408,7 @@ class TestStreamingDatasets:
 ```
 
 ### 2.8 Curriculum Learning
+
 ```python
 class TestCurriculumLearning:
     """Curriculum-based data ordering."""
@@ -377,6 +436,7 @@ class TestCurriculumLearning:
 ```
 
 ### 2.9 Statistics
+
 ```python
 class TestDatasetStatistics:
     """Dataset statistics computation."""
@@ -399,9 +459,10 @@ class TestDatasetStatistics:
 
 ---
 
-## 3. CONFIG.PY Tests (61% → 85%)
+## 3. CONFIG.PY Coverage Areas
 
 ### 3.1 Pydantic Availability
+
 ```python
 class TestPydanticFallback:
     """Config loading without pydantic."""
@@ -417,6 +478,7 @@ class TestPydanticFallback:
 ```
 
 ### 3.2 Fallback Configuration
+
 ```python
 class TestFallbackConfig:
     """Dataclass-based config fallback."""
@@ -441,6 +503,7 @@ class TestFallbackConfig:
 ```
 
 ### 3.3 Training Arguments
+
 ```python
 class TestTrainingArgs:
     """Training argument generation."""
@@ -456,6 +519,7 @@ class TestTrainingArgs:
 ```
 
 ### 3.4 Settings Management
+
 ```python
 class TestSettingsManagement:
     """Settings reload and caching."""
@@ -471,6 +535,7 @@ class TestSettingsManagement:
 ```
 
 ### 3.5 Presets
+
 ```python
 class TestTrainingPresets:
     """Training preset configurations."""
@@ -487,9 +552,10 @@ class TestTrainingPresets:
 
 ---
 
-## 4. MULTI_RUN.PY Tests (55% → 85%)
+## 4. MULTI_RUN.PY Coverage Areas
 
 ### 4.1 Initialization
+
 ```python
 class TestMultiRunInit:
     """MultiRunTrainer initialization."""
@@ -508,6 +574,7 @@ class TestMultiRunInit:
 ```
 
 ### 4.2 Dataset Loading
+
 ```python
 class TestMultiRunDataset:
     """Dataset loading for multi-run."""
@@ -523,6 +590,7 @@ class TestMultiRunDataset:
 ```
 
 ### 4.3 Run Execution
+
 ```python
 class TestRunExecution:
     """Individual run execution."""
@@ -556,6 +624,7 @@ class TestRunExecution:
 ```
 
 ### 4.4 Run Management
+
 ```python
 class TestRunManagement:
     """Multi-run management."""
@@ -577,6 +646,7 @@ class TestRunManagement:
 ```
 
 ### 4.5 Experience Replay
+
 ```python
 class TestExperienceReplay:
     """Experience replay strategies."""
@@ -598,6 +668,7 @@ class TestExperienceReplay:
 ```
 
 ### 4.6 Data Pipeline
+
 ```python
 class TestDataPipeline:
     """Data chunking and wrapping."""
@@ -619,6 +690,7 @@ class TestDataPipeline:
 ```
 
 ### 4.7 CLI Interface
+
 ```python
 class TestMultiRunCLI:
     """Multi-run CLI interface."""
@@ -638,180 +710,123 @@ class TestMultiRunCLI:
 
 ---
 
-## 5. UI.PY Tests (53% → 75%)
+## 5. UI_APP/ Coverage Areas (Reflex — replaces deleted `ui.py`)
 
-### 5.1 Security & Theme
+The Reflex Web UI shipped in v1.1.0 and is the canonical UI surface from
+v1.2.0 onward. Coverage lives in:
+
+- `tests/test_ui_security.py` — `EnhancedRateLimiter`, `FileValidator`,
+  shared auth/path-sandbox helpers in `backpropagate.ui_security`.
+- `tests/test_auth_middleware.py` — ASGI middleware contract per
+  `DESIGN_BRIEF.md` "Testing requirements" (16 brief-numbered tests +
+  hardening additions; v1.3 Wave 1 added pre-/post-accept HMAC
+  regression set).
+- `tests/test_runs_command.py` (v1.3 Wave 1) — `RunsState` + CLI runs
+  data API (BRIDGE-F-001).
+- `tests/test_host_gate.py` (v1.3 Wave 1) — `--host <non-loopback>`
+  refuse-to-start gate (BRIDGE-A-002).
+
+### 5.1 Reflex State Classes (`ui_state.py`)
+
 ```python
-class TestUISecurityExtended:
-    """Extended UI security tests."""
+class TestAppState:
+    """Top-level AppState (theme, active surface)."""
 
-    def test_theme_creation(self):
-        """Custom theme created correctly."""
+    def test_initial_theme_default(self):
+        """Theme defaults to the documented value."""
 
-    def test_css_application(self):
-        """Custom CSS applied to interface."""
+    def test_set_active_surface_updates_state(self):
+        """Switching surfaces (train/runs/export) updates state."""
 
-    def test_rate_limiting_decorator(self):
-        """Rate limiter decorator works."""
 
-    def test_input_sanitization(self):
-        """User inputs sanitized."""
+class TestTrainState:
+    """TrainState — single-run training surface."""
+
+    def test_form_field_defaults(self):
+        """Empty initial state — no model/data/etc."""
+
+    def test_set_model_validates_shape(self):
+        """Invalid model strings are rejected."""
+
+    def test_start_training_dispatches_subprocess(self):
+        """start_training() shells out to backprop train ..."""
+
+
+class TestMultiRunState:
+    """MultiRunState — SLAO multi-run surface."""
+
+    def test_runs_default_5(self):
+        """Default number of runs is the documented value."""
+
+    def test_replay_strategy_dropdown_options(self):
+        """Replay strategy options match the SLAO contract."""
+
+
+class TestExportState:
+    """ExportState — LoRA/merged/GGUF export surface."""
+
+    def test_format_options(self):
+        """Export format dropdown lists all supported formats."""
+
+    def test_quantization_visible_for_gguf(self):
+        """Quant dropdown shows only when format=gguf."""
+
+
+class TestDatasetState:
+    """DatasetState — dataset upload/preview surface."""
+
+    def test_uploaded_path_validation(self):
+        """Operator-supplied paths are sandbox-validated."""
+
+    def test_detected_format_after_upload(self):
+        """Format detection populates detected_format."""
+
+
+class TestRunsState:  # Covered by tests/test_runs_command.py — see there.
+    """Run-history surface — populates the /runs page."""
 ```
 
-### 5.2 Training Interface
-```python
-class TestTrainingInterface:
-    """Training tab UI components."""
+### 5.2 ASGI Auth Middleware (`ui_app/auth.py`)
 
-    def test_model_dropdown_populated(self):
-        """Model dropdown has options."""
+See `tests/test_auth_middleware.py` for the 16 brief-numbered tests +
+hardening additions (cookie tampering, expired-cookie pre-accept close,
+HMAC compare_digest source-level invariant — added v1.3 Wave 1
+TESTS-A-005 / A-006).
 
-    def test_training_params_validated(self):
-        """Invalid params show error."""
+### 5.3 Reflex Subprocess Launcher (`cli.cmd_ui`)
 
-    def test_start_training_button(self):
-        """Start button triggers training."""
-
-    def test_stop_training_button(self):
-        """Stop button aborts training."""
-
-    def test_progress_display_updates(self):
-        """Progress bar updates during training."""
-```
-
-### 5.3 Dataset Interface
-```python
-class TestDatasetInterface:
-    """Dataset tab UI components."""
-
-    def test_dataset_preview(self):
-        """Dataset samples displayed."""
-
-    def test_validation_results(self):
-        """Validation errors shown."""
-
-    def test_format_detection_display(self):
-        """Detected format shown."""
-
-    def test_statistics_display(self):
-        """Dataset stats displayed."""
-```
-
-### 5.4 GPU Monitoring
-```python
-class TestGPUMonitoringUI:
-    """GPU monitoring dashboard."""
-
-    def test_temperature_display(self):
-        """Temperature shown with color."""
-
-    def test_vram_display(self):
-        """VRAM usage shown with bar."""
-
-    def test_status_indicator(self):
-        """Status indicator updates."""
-
-    def test_history_graph(self):
-        """Temperature history graphed."""
-```
-
-### 5.5 Export Interface
-```python
-class TestExportInterface:
-    """Export tab UI components."""
-
-    def test_format_selection(self):
-        """Export format dropdown works."""
-
-    def test_quantization_selection(self):
-        """Quantization options shown for GGUF."""
-
-    def test_export_button(self):
-        """Export button triggers export."""
-
-    def test_progress_display(self):
-        """Export progress shown."""
-```
-
-### 5.6 Callbacks & Logging
-```python
-class TestUICallbacks:
-    """UI callback system."""
-
-    def test_training_progress_callback(self):
-        """Progress callback updates UI."""
-
-    def test_error_callback(self):
-        """Error callback shows message."""
-
-    def test_completion_callback(self):
-        """Completion callback shows success."""
-
-    def test_log_streaming(self):
-        """Logs streamed to UI."""
-```
+See `tests/test_cli_extended.py::TestCmdUiNoMiddleware` (—share + auth
+gates) and `tests/test_host_gate.py` (—host gate, v1.3 Wave 1).
 
 ---
 
 ## Implementation Priority
 
-### Phase 1: Critical Path (Week 1)
-1. CLI error handling tests
-2. Dataset format detection tests
-3. Multi-run execution tests
-4. Config fallback tests
+### Phase 1: Critical Path (Wave 1 — partially shipped)
+- [x] CLI `--error-codes` regression (TESTS-A-003)
+- [x] CLI `--host` gate coverage (BRIDGE-A-002)
+- [x] CLI `runs` + `_build_runs_payload` (TESTS-A-002)
+- [x] Auth middleware pre-/post-accept HMAC regression (TESTS-A-005/A-006)
+- [x] `test_e2e_resume_from_checkpoint` rewrite (TESTS-A-004)
+- [ ] Dataset format-detection drift coverage (next wave)
+- [ ] Multi-run execution edge cases (next wave)
 
-### Phase 2: Feature Coverage (Week 2)
-1. Quality filtering tests
-2. Deduplication tests
-3. Experience replay tests
-4. UI training interface tests
+### Phase 2: Feature Coverage
+- Dataset quality filtering / dedup / replay edge cases.
+- ui_state.py Reflex state classes (TrainState/MultiRunState/ExportState).
+- cmd_ui subprocess-launch failure paths.
 
-### Phase 3: Edge Cases (Week 3)
-1. Perplexity filtering tests
-2. Streaming dataset tests
-3. Curriculum learning tests
-4. GPU monitoring UI tests
+### Phase 3: Edge Cases
+- Perplexity filtering / streaming datasets / curriculum learning.
+- ui_app/auth.py — cookie persistence across restarts, lock-file mode 0600
+  on POSIX (already covered) + a Windows-ACL companion.
 
-### Phase 4: Polish (Week 4)
-1. File loading edge cases
-2. Windows-specific tests
-3. UI export interface tests
-4. Statistics computation tests
+### Phase 4: Polish
+- File loading edge cases, Windows-specific tests, statistics edge cases.
 
 ---
 
-## Test Utilities Needed
+## Test Utilities
 
-```python
-# tests/test_helpers.py additions
-
-class MockGradioInterface:
-    """Mock Gradio interface for UI testing."""
-    pass
-
-class MockHuggingFaceHub:
-    """Mock HuggingFace Hub for dataset tests."""
-    pass
-
-class MockPandasDataFrame:
-    """Mock pandas for parquet/csv tests."""
-    pass
-
-class MockPerplexityModel:
-    """Mock GPT-2 for perplexity tests."""
-    pass
-```
-
----
-
-## Expected Coverage After Implementation
-
-| Module | Before | After | Tests Added |
-|--------|--------|-------|-------------|
-| cli.py | 73% | 92% | ~35 |
-| datasets.py | 68% | 87% | ~55 |
-| config.py | 61% | 88% | ~25 |
-| multi_run.py | 55% | 86% | ~45 |
-| ui.py | 53% | 78% | ~30 |
-| **Total** | **70%** | **86%** | **~190** |
+Current helpers live in `tests/helpers/` (asgi.py, callbacks.py, ws.py).
+Add Reflex state helpers as the ui_state.py coverage rolls out.

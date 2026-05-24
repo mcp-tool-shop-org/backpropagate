@@ -1279,25 +1279,6 @@ def cmd_info(args: argparse.Namespace) -> int:
 # COMMAND: config
 # =============================================================================
 
-def _env_flag(name: str, default: bool) -> bool:
-    """
-    Read a boolean-flavored environment variable.
-
-    Truthy values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
-    Falsy values:  ``0``, ``false``, ``no``, ``off``.
-    Anything else (or unset) returns ``default``.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    raw = raw.strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
 def cmd_ui(args: argparse.Namespace) -> int:
     """
     Execute the ui command to launch the Reflex web interface.
@@ -1422,10 +1403,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
             code="RUNTIME_UI_AUTH_NOT_ENFORCED",
         )
 
-    # Handle authentication shape-validation. When ENFORCEMENT_AVAILABLE flips
-    # to True (Phase 3 of the Reflex migration) this branch starts running
-    # again. For now it never executes because the refuse-to-start above
-    # short-circuits any args.auth invocation.
+    # Parse the --auth credentials into a (username, password) tuple. Post-
+    # v1.2.0 the middleware enforces auth at runtime (ENFORCEMENT_AVAILABLE
+    # is True) and the refuse-to-start gates above only fire for --share or
+    # --host with a non-loopback bind WITHOUT --auth — meaning any --auth
+    # invocation reaches this branch and the parsed tuple flows into the
+    # subprocess env as BACKPROPAGATE_UI_AUTH.
     auth = None
     if args.auth:
         try:
@@ -1633,11 +1616,38 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     """Execute the ``backprop resume <run_id>`` subcommand (F-002)."""
+    import uuid
+
     from .checkpoints import RunHistoryManager
+    from .logging_config import bind_run_context, get_logger
     from .multi_run import MultiRunTrainer
     from .trainer import Trainer, TrainingCallback
 
     _print_header("Backpropagate Resume")
+
+    # BRIDGE-B-002: reuse main()'s cli_run_id so resume's structured logs
+    # carry the same correlation token operators see at the top of stderr,
+    # matching cmd_train / cmd_multi_run / cmd_export. Falling back to a
+    # fresh UUID keeps the handler robust when called directly from tests
+    # that bypass main().
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="resume")
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    try:
+        get_logger(__name__).info(
+            "resume_invoked",
+            cli_run_id=cli_run_id_full,
+            target_run_id=getattr(args, "run_id", None),
+        )
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
 
     history_dir = Path(args.output).expanduser()
     if not history_dir.exists():

@@ -441,10 +441,13 @@ def test_share_without_auth_refuses_to_start():
 
 
 # Brief test 12: --host non-loopback without --auth refuses to start
-# Same — CLI-level guard. Add the bridge agent's new test if/when --host lands.
-@pytest.mark.skip(reason="Pinned at CLI layer; bridge agent's --host work covers this")
+# Same — CLI-level guard. Pinned at the CLI layer in test_host_gate.py
+# (BRIDGE-A-002 → TESTS coverage added in v1.3 Wave 1 Stage A). This
+# skip-marker is kept as a documentation pointer so an auditor reading
+# the brief-numbered tests in this file can find the CLI-layer coverage.
+@pytest.mark.skip(reason="Pinned at CLI layer in tests/test_host_gate.py (BRIDGE-A-002)")
 def test_host_non_loopback_without_auth_refuses_to_start():
-    """Brief #12 — see CLI tests for --host handling."""
+    """Brief #12 — see tests/test_host_gate.py for the CLI-layer coverage."""
 
 
 # Brief test 13: no default credentials anywhere
@@ -599,3 +602,149 @@ async def test_ping_endpoint_bypasses_auth(basic_mode_middleware):
         assert response.status_code != 401, (
             "/ping must bypass the auth gate (health-check pattern)"
         )
+
+
+# =============================================================================
+# TESTS-A-005 + TESTS-A-006 — Auth middleware regression set (v1.3 Wave 1)
+# =============================================================================
+# Adds:
+# 1. Explicit regression for the pre-``websocket.accept()`` cookie path —
+#    expired/garbage cookie MUST close pre-accept (the DoS-vector property
+#    pinned at the individual-request level, not just under load).
+# 2. Direct test of ``_validate_cookie`` HMAC-verification path (the cookie
+#    helper that the middleware's post-Host-allowlist check delegates to).
+#    A regression that switched ``hmac.compare_digest`` for an ``==``
+#    comparison would still pass the existing tests (the cookie validates
+#    correctly under load) but would re-open the timing-attack surface on
+#    HMAC sig verification.
+
+
+@requires_middleware
+@pytest.mark.asyncio
+async def test_ws_pre_accept_close_on_expired_cookie(basic_mode_middleware, monkeypatch):
+    """TESTS-A-005 — expired session cookie closes WS PRE-accept (regression).
+
+    The middleware's cookie-validation path uses ``_validate_cookie`` which
+    checks both signature AND expiry. A regression that skipped the expiry
+    check (e.g. by moving expiry to after the HMAC verify or removing the
+    ``now > exp`` branch) would let an expired cookie through to
+    ``websocket.accept()`` — converting the auth-required gate into a
+    permanent grant once the cookie was first issued.
+
+    This test forges a structurally-valid cookie with a long-past
+    expiration and asserts the middleware closes 4401 BEFORE accept.
+    """
+    # Mint a structurally-valid cookie value, then poison the embedded
+    # expiry by re-signing with an exp deep in the past.
+    from backpropagate.ui_app import auth as auth_module
+
+    secret = auth_module._derive_secret(dict(monkeypatch.delenv and {}))  # type: ignore[misc]
+    # Use the actual env-derivation path so the secret matches what the
+    # middleware will compute under the fixture.
+    import os as _os
+    secret = auth_module._derive_secret({"BACKPROPAGATE_UI_AUTH": _os.environ.get("BACKPROPAGATE_UI_AUTH", "")})
+
+    # The cookie format is <user>:<exp>:<sig>. Backdate exp by a year.
+    import base64
+    import hashlib
+    import hmac as _hmac
+
+    user = "alice"
+    past_exp = "1000000000"  # September 2001 — definitely expired
+    message = f"{user}:{past_exp}".encode()
+    digest = _hmac.new(secret, message, hashlib.sha256).digest()
+    sig = base64.urlsafe_b64encode(digest[:32]).rstrip(b"=").decode("ascii")
+    expired_cookie = f"{user}:{past_exp}:{sig}"
+
+    scope = make_ws_scope(
+        path="/_event",
+        host="127.0.0.1:7860",
+        origin=_LOOPBACK_ORIGIN,
+        cookies={"backprop_sess": expired_cookie},
+    )
+    recorder = WSMessageRecorder()
+    receive = await make_connect_receive()
+    await basic_mode_middleware(scope, receive, recorder)
+
+    assert recorder.accepted_before_closed is False, (
+        "Expired cookie reached websocket.accept() — the expiry check was "
+        "bypassed (post-accept anti-pattern regression). Middleware must "
+        "close PRE-accept for expired cookies."
+    )
+    assert recorder.closed is True
+    assert recorder.close_code == 4401, (
+        f"Expired cookie produced close code {recorder.close_code}; "
+        f"expected 4401 (auth required)."
+    )
+
+
+def test_cookie_hmac_signature_verification_uses_constant_time_compare():
+    """TESTS-A-006 — _validate_cookie HMAC path uses hmac.compare_digest.
+
+    The cookie helper at ``backpropagate.ui_app.auth._validate_cookie`` is
+    the post-cookie-parse leaf that the WS middleware delegates to. The
+    safety property: signature verification MUST use ``hmac.compare_digest``
+    (constant-time) rather than ``==`` (early-exit byte compare that leaks
+    timing).
+
+    A regression that switched the comparator would still pass functional
+    tests — the cookie validates correctly. But it would silently re-open
+    the timing-attack surface where an attacker can recover the HMAC
+    signature byte-by-byte by measuring response time.
+
+    This test mechanises the source-level invariant.
+    """
+    import inspect
+
+    from backpropagate.ui_app import auth as auth_module
+
+    source = inspect.getsource(auth_module._validate_cookie)
+    # The helper MUST use compare_digest, not a bare equality compare.
+    assert "compare_digest" in source, (
+        "_validate_cookie no longer uses hmac.compare_digest — "
+        "the HMAC verification has regressed to a non-constant-time "
+        "comparator, re-opening the timing-attack surface."
+    )
+
+
+@requires_middleware
+@pytest.mark.asyncio
+async def test_ws_tampered_cookie_signature_closes_pre_accept(basic_mode_middleware):
+    """TESTS-A-006 — a cookie with tampered HMAC signature is rejected pre-accept.
+
+    Complements the source-level invariant above with a behavioural test:
+    if an attacker flips a bit in the signature portion of a session cookie,
+    the middleware must close PRE-accept with 4401 — not silently let
+    through (which would happen if compare_digest were replaced with a
+    broken comparator that early-returned on a length mismatch).
+    """
+    # Mint a syntactically-valid cookie envelope where the signature is
+    # garbage (32 random base64 chars). The user + future-exp portion is
+    # well-formed so the parsing branch is exercised, but the HMAC verify
+    # MUST fail and the middleware MUST close pre-accept.
+    import base64
+    import os as _os
+    import time as _time
+
+    user = "alice"
+    future_exp = str(int(_time.time()) + 3600)  # 1h from now
+    garbage_sig_bytes = _os.urandom(32)
+    garbage_sig = base64.urlsafe_b64encode(garbage_sig_bytes).rstrip(b"=").decode("ascii")
+    tampered_cookie = f"{user}:{future_exp}:{garbage_sig}"
+
+    scope = make_ws_scope(
+        path="/_event",
+        host="127.0.0.1:7860",
+        origin=_LOOPBACK_ORIGIN,
+        cookies={"backprop_sess": tampered_cookie},
+    )
+    recorder = WSMessageRecorder()
+    receive = await make_connect_receive()
+    await basic_mode_middleware(scope, receive, recorder)
+
+    assert recorder.accepted_before_closed is False, (
+        "Tampered-signature cookie reached websocket.accept() — the HMAC "
+        "verify gate is broken."
+    )
+    assert recorder.closed is True
+    assert recorder.close_code == 4401

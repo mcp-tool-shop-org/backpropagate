@@ -136,7 +136,7 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     },
     "INPUT_AUTH_REQUIRED": {
         "description": "An operation required --auth credentials but they were not supplied.",
-        "default_hint": "Pass --auth user:password OR set BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false (warns).",
+        "default_hint": "Pass --auth user:pass on the CLI, or set BACKPROPAGATE_UI_AUTH=user:pass in the environment. See handbook/security.md for the full auth contract.",
         "retryable": "no",
     },
     "INPUT_AUTH_INVALID_SHAPE": {

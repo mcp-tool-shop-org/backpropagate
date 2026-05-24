@@ -123,7 +123,6 @@ Impostazioni comuni (vedere [il riferimento completo alle variabili d'ambiente](
 | `BACKPROPAGATE_LOG_JSON` | auto | Forza i log in formato JSON (`true`) o nella console (`false`) |
 | `BACKPROPAGATE_LOG_FILE` | non impostato | Percorso per salvare i log |
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | non impostato | Salta il rilevamento delle dipendenze opzionali all'avvio per un avvio più rapido della CLI |
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | Se impostato su `true`, rifiuta `backprop ui --share` senza l'opzione `--auth` |
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Directory di base per tutte le scritture del file system dell'interfaccia utente; con convalida della whitelist |
 | `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Modello predefinito |
 | `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Learning rate (tasso di apprendimento) |
@@ -313,7 +312,7 @@ Un breve elenco dei problemi più comuni riscontrati all'avvio. L'indice complet
 | Rifiuto della connessione `register_with_ollama`. | `DEP_OLLAMA_REGISTRATION_FAILED` | Avviare il demone: `ollama serve`. Installare da <https://ollama.com>. Operazione riprovabile. |
 | Disco pieno durante il salvataggio del checkpoint. | `STATE_CHECKPOINT_INVALID` | In caso di crash, vengono creati file `.partial`. È sicuro eliminarli. Il checkpoint precedente e valido è intatto. |
 | L'addestramento viene interrotto/annullato a causa del surriscaldamento della GPU. | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003: il monitor si interrompe quando viene superata la soglia di temperatura NVML; riprende automaticamente quando la GPU si raffredda. Migliorare il flusso d'aria o ridurre il carico sostenuto. |
-| Richiesta di `backprop ui --share` rifiutata. | `INPUT_AUTH_REQUIRED` | Passare l'argomento `--auth user:password` oppure impostare `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` per disabilitare la funzione (con un avviso). |
+| Richiesta di `backprop ui --share` rifiutata. | `INPUT_AUTH_REQUIRED` | Passare l'argomento `--auth user:password`. Da v1.2.0 (GHSA-f65r-h4g3-3h9h), `--share` senza `--auth` è un errore hard senza opzioni di disabilitazione; usare il port-forwarding SSH se non si possono esporre credenziali. |
 | "Sovrapposizione" di esecuzioni multiple durante la validazione. | `CONFIG_INVALID` (backend Stage A B-001). | Ridurre il valore di `--samples` al di sotto della dimensione del pool di addestramento, aumentare le dimensioni del dataset o disabilitare la validazione. |
 | Esportazione GGUF non riuscita al primo tentativo. | `RUNTIME_GGUF_EXPORT_FAILED` | Eseguire `pip install backpropagate[export]`; su Windows è necessario anche Visual C++ Build Tools + CMake. |
 

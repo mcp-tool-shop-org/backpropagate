@@ -4,6 +4,12 @@
 # OR locally with: docker manifest inspect python:3.11-slim
 # When updating, bump BOTH FROM lines together — Dependabot's docker ecosystem
 # (added in .github/dependabot.yml) will open a PR per digest change.
+#
+# Python version note: pyproject.toml declares `requires-python = ">=3.10"`
+# and the PyPI wheel is `py3-none-any` (works on 3.10, 3.11, 3.12, 3.13). This
+# image pins to 3.11 as the shipped runtime — it is one of several supported
+# Pythons, not the minimum. Operators on 3.10 / 3.12 / 3.13 should install
+# from PyPI directly into their own interpreter rather than this image.
 FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*

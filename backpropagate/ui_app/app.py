@@ -26,25 +26,29 @@ from .pages.multi_run import multi_run_page
 from .pages.runs import runs_page
 from .pages.train import train_page
 
-# FRONTEND-B-001 / GHSA-pending defense-in-depth:
+# FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h defense-in-depth (layer 3 of 4):
 # cli.py:cmd_ui refuses --auth/--share when ENFORCEMENT_AVAILABLE is False, but
 # that check is bypassed if a user runs ``python -m reflex run`` or ``reflex
 # run`` directly from the package directory. Fire the same refuse-to-start
 # check here at module import time so the Reflex app cannot bind a port and
 # serve an unauthenticated UI when the operator believes auth is wired up.
 #
-# The check requires BOTH: ENFORCEMENT_AVAILABLE=False (middleware not landed)
-# AND BACKPROPAGATE_UI_AUTH set in the env (operator believes auth is active).
-# When ENFORCEMENT_AVAILABLE flips to True (Wave 6), this guard becomes inert
-# without any further code change.
+# The check requires BOTH: ENFORCEMENT_AVAILABLE=False (the [ui] extra is
+# degraded or the auth module failed to import) AND BACKPROPAGATE_UI_AUTH set
+# in the env (operator believes auth is active). In a healthy v1.2.0 install,
+# ENFORCEMENT_AVAILABLE is True and this guard is inert — the real FastAPI
+# middleware wired below via rx.App(api_transformer=basic_auth_transformer)
+# enforces the credential on every HTTP route and the /_event WS upgrade.
 if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
     raise RuntimeError(
-        "FRONTEND-B-001 / GHSA-pending: The Reflex web UI does not yet "
-        "enforce BACKPROPAGATE_UI_AUTH. Refusing to start to prevent the "
-        "v1.1.0 false-promise (the CLI announced 'Auth: enabled' but the "
-        "runtime ignored the env var). "
-        "Use SSH port-forwarding for remote access until middleware lands: "
-        "ssh -L 7860:localhost:7860 <host>"
+        "FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h: BACKPROPAGATE_UI_AUTH is set, "
+        "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False — the "
+        "[ui] extra is degraded or the auth middleware module failed to "
+        "import. Refusing to start to prevent the v1.1.0 false-promise (CLI "
+        "announces 'Auth: enabled' while the runtime ignores the credential). "
+        "Reinstall the [ui] extra (`pip install -U 'backpropagate[ui]'`) to "
+        "restore the middleware, or unset BACKPROPAGATE_UI_AUTH and use SSH "
+        "port-forwarding for remote access: ssh -L 7860:localhost:7860 <host>"
     )
 
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v1.3 prep
+
+### Removed
+
+- **npm distribution deprecated.** The `bin/backpropagate.js` shim used to bootstrap a Linux venv or download PyInstaller binaries from a GitHub Release via `@mcptoolshop/npm-launcher`. The binary build pipeline failed three consecutive times in v1.2.0 and the v1.0/v1.1/v1.2 release tags have zero attached binary assets — the launcher would 404. The shim now prints install guidance for the supported channels (`pipx install backpropagate` recommended, plus `uv tool install backpropagate` and `pip install backpropagate`) and exits 2. The npm package stays published so this message reaches existing `npm install -g backpropagate` users. Full migration (delete `.github/workflows/release-binaries.yml`, drop the PyInstaller `.spec` files, sweep docs to point at pipx) is scheduled for Wave 5/6 of the v1.3 swarm per `research/V1_3_BRIEF.md` D2 SPLIT.
+
+### Known issues / tech debt
+
+- 14 ERROR-severity Trivy alerts on `main` (incl. PyJWT CVE-2026-32597) are routed to the v1.3 P0 dep-sweep wave. PyJWT is NOT on the auth middleware runtime path — `ui_app/auth.py` uses stdlib `hmac` rather than `jwt`.
+
 ## [1.2.0] - 2026-05-23
 
 A dogfood-swarm release closing the **v1.1.x auth-bypass advisory** and a truth-in-advertising sweep across CI gates, docs, and pinned numbers. No feature regressions; full backward compatibility with v1.1.x.

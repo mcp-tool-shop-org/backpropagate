@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This roadmap outlines the comprehensive testing strategy for event handlers and callbacks in the backpropagate codebase. The project uses a callback-based architecture (no WebSockets currently exist).
+This roadmap outlines the comprehensive testing strategy for event handlers and callbacks in the backpropagate codebase. The project uses a callback-based architecture for the training core (`trainer.py` / `multi_run.py` / `gpu_safety.py`) AND ships an ASGI WebSocket transport in the Reflex Web UI from v1.1.0 onward — see Section 9 for the WS auth middleware that gates that transport.
 
 **Current Coverage Analysis:**
 - TrainingCallback: ~40% covered (basic tests exist)
@@ -431,60 +431,73 @@ tests/
 
 ---
 
-## 9. WebSocket Roadmap (Future)
+## 9. WebSocket Surface — Reflex Web UI ASGI Middleware (v1.2.0+ — SHIPPED)
 
-**Note:** The codebase currently has NO WebSocket implementation. If real-time communication is needed in the future, consider:
+**Status correction (v1.3 Wave 1, 2026-05-23):** the prior version of this
+section said "The codebase currently has NO WebSocket implementation." That
+was true through v1.0.x but no longer holds — the v1.2.0 release introduced
+a real ASGI WebSocket transport wired through
+`backpropagate.ui_app.auth.basic_auth_transformer`, the auth middleware
+that gates every Reflex `/_event` WS upgrade.
 
-### Potential WebSocket Use Cases
+### What ships today
 
-1. **Live Training Dashboard**
-   - Real-time loss curves
-   - GPU metrics streaming
-   - Training progress updates
+The Reflex Web UI (`backpropagate/ui_app/`) uses ASGI WebSockets for its
+state-sync transport (Reflex's standard `/_event` path). The
+`basic_auth_transformer` middleware wraps the Reflex ASGI app and:
 
-2. **Remote Monitoring**
-   - Multi-machine training coordination
-   - Remote abort/pause commands
-   - Distributed checkpoint management
+1. **HTTP gate**: validates Host header (DNS-rebinding defense),
+   Origin header (CSWSH defense), and either session-cookie /
+   per-launch-token / Basic-auth credentials. Sets HMAC-signed
+   session cookie on success.
+2. **WebSocket gate**: validates Host + Origin BEFORE
+   `websocket.accept()` (mandatory pre-accept close to prevent the
+   DoS-vector anti-pattern), then validates the session cookie via
+   `_validate_cookie` (constant-time HMAC compare). Rejected upgrades
+   close with code 4401 (auth) or 4403 (origin) — never accepted then
+   closed.
 
-3. **Integration with External Tools**
-   - Weights & Biases live sync
-   - TensorBoard streaming
-   - Custom dashboards
+### Source of truth
 
-### Recommended WebSocket Architecture
+- `backpropagate/ui_app/auth.py` — middleware implementation (~750 LOC).
+- `DESIGN_BRIEF.md` "Middleware logic" + "Testing requirements" — the
+  16 brief-numbered tests this middleware was designed against.
+- `backpropagate/exceptions.py::ERROR_CODES` — `INPUT_AUTH_REQUIRED`,
+  `INPUT_AUTH_INVALID_SHAPE`, `RUNTIME_UI_AUTH_NOT_ENFORCED`,
+  `UI_OUTPUT_DIR_FORBIDDEN` are the auth-surface codes.
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Trainer       │────>│  Event Emitter   │────>│  WebSocket Hub  │
-│  (callbacks)    │     │  (adapter)       │     │  (broadcast)    │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                         │
-                        ┌────────────────────────────────┼────────────────────────┐
-                        │                                │                        │
-                        v                                v                        v
-                ┌──────────────┐              ┌──────────────┐           ┌──────────────┐
-                │   Browser    │              │   CLI Tool   │           │  External    │
-                │   Dashboard  │              │   Monitor    │           │  Service     │
-                └──────────────┘              └──────────────┘           └──────────────┘
-```
+### Test coverage (where it lives now)
 
-### WebSocket Test Categories (If Implemented)
+| Surface | Test file | Coverage |
+|---|---|---|
+| Brief tests 1-16 (the canonical DESIGN_BRIEF surface) | `tests/test_auth_middleware.py` | Complete (10 active + 2 cross-referenced + 4 environmental skips). |
+| Helper-recorder smoke tests | `tests/test_auth_middleware.py` | Complete (pre/post-accept detection invariants). |
+| Hardening additions (malformed headers, /ping bypass, cookie hardening) | `tests/test_auth_middleware.py` | Complete. |
+| Pre-accept cookie-expiry close + tampered-signature close (v1.3 Wave 1) | `tests/test_auth_middleware.py` | New — TESTS-A-005 + TESTS-A-006. |
+| HMAC `compare_digest` source-level invariant (v1.3 Wave 1) | `tests/test_auth_middleware.py` | New — TESTS-A-006 source inspection. |
+| CLI `--share` refuse-to-start | `tests/test_cli_extended.py::TestCmdUiNoMiddleware` | Complete. |
+| CLI `--host <non-loopback>` refuse-to-start (v1.3 Wave 1) | `tests/test_host_gate.py` | New — BRIDGE-A-002. |
+| ASGI helper infrastructure | `tests/helpers/asgi.py` + `tests/helpers/ws.py` | Complete; smoke-tested by the helper tests at the top of `test_auth_middleware.py`. |
 
-1. **Connection Tests**
-   - Connect/disconnect handling
-   - Reconnection logic
-   - Authentication
+### Open follow-ups (post-v1.3 Wave 1)
 
-2. **Message Tests**
-   - Event serialization
-   - Message ordering
-   - Backpressure handling
+1. **Lock-file token mode on Windows** — the brief covers POSIX
+   `0o600` mode bits; the Windows-ACL equivalent (DENY EVERYONE except
+   current user) is not yet test-asserted.
+2. **CSRF token TTL** — `CSRFProtection.validate_token` has a TTL
+   field but no expiry-race regression test yet (the JWT analogue
+   was fixed in v1.3 Wave 1 — see TESTS-A-009).
+3. **Multi-client broadcast** — Reflex's transport doesn't broadcast
+   today; if a future feature adds a fan-out path, the brief should
+   grow tests for ordering / backpressure.
 
-3. **Integration Tests**
-   - Callback to WebSocket bridge
-   - Multiple client broadcast
-   - Error propagation
+### Historical (deleted scaffolding)
+
+The previous "potential WebSocket architecture" diagram + "if
+implemented" test categories described a hypothetical future. That
+future arrived in v1.2.0 — the actual coverage is enumerated above.
+The diagram is dropped to avoid drift between the imagined and the
+shipped architectures.
 
 ---
 

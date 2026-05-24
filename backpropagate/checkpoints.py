@@ -253,7 +253,7 @@ class CheckpointManager:
                 if tmp_path.exists():
                     tmp_path.unlink()
             except OSError:
-                pass  # nosec B110 — cleanup is best-effort
+                pass
             return False
 
     def _get_checkpoint_size(self, path: str) -> int:
@@ -809,7 +809,7 @@ class RunHistoryManager:
                 if tmp_path.exists():
                     tmp_path.unlink()
             except OSError:
-                pass  # nosec B110 — cleanup is best-effort
+                pass
             return False
 
     @staticmethod

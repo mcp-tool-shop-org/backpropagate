@@ -473,20 +473,90 @@ class TestHelperFunctions:
         size = _get_dir_size_mb(temp_dir)
         assert 0.9 < size < 1.1  # Approximately 1 MB total
 
-    def test_is_peft_model_true(self, mock_peft_model):
-        """Test _is_peft_model returns True for PeftModel."""
+    def test_is_peft_model_true(self):
+        """_is_peft_model returns True for an actual PeftModel instance.
+
+        TESTS-A-010 (v1.3 Wave 1): the previous version of this test was a
+        false-pass — it created an empty ``with`` block that did nothing,
+        then asserted ``isinstance(result, bool)`` which is trivially true
+        for both True and False return paths. The test passed regardless of
+        whether ``_is_peft_model`` worked.
+
+        New shape: patch the ``peft.PeftModel`` class the function imports
+        and pass a real instance of the patched class so the inner
+        ``isinstance(model, PeftModel)`` returns True. A regression that
+        broke the import (e.g. moved the symbol) or the isinstance check
+        (e.g. typo'd the type name) now fails this test.
+        """
         from backpropagate.export import _is_peft_model
 
-        with patch("backpropagate.export.PeftModel", create=True) as MockPeft:
-            # Make isinstance return True
-            with patch("builtins.isinstance", return_value=True):
-                # We need to patch at import level
-                pass
+        # Use a real local class so isinstance() against it is meaningful.
+        # This is intentionally NOT a MagicMock — MagicMock instances satisfy
+        # ``isinstance(x, MagicMock)`` regardless of the class under test,
+        # which would re-create the false-pass shape.
+        class FakePeftModel:
+            pass
 
-        # Without actual peft installed, this will return False
-        # Just test it doesn't crash
-        result = _is_peft_model(mock_peft_model)
-        assert isinstance(result, bool)
+        instance = FakePeftModel()
+
+        # Patch the symbol the function imports inside its try block. The
+        # function does ``from peft import PeftModel`` then
+        # ``isinstance(model, PeftModel)`` — so we need to make the import
+        # resolve to FakePeftModel.
+        import sys
+        import types
+
+        fake_peft_module = types.ModuleType("peft")
+        fake_peft_module.PeftModel = FakePeftModel  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"peft": fake_peft_module}):
+            result = _is_peft_model(instance)
+        # Active assertion — the FakePeftModel-typed instance MUST satisfy
+        # the isinstance check inside _is_peft_model.
+        assert result is True, (
+            "_is_peft_model returned False for an instance of the patched "
+            "PeftModel class — the isinstance check inside the function "
+            "is broken or the import is resolving wrong."
+        )
+
+    def test_is_peft_model_false_for_unrelated_type(self):
+        """_is_peft_model returns False for objects that are NOT PeftModel.
+
+        Companion to test_is_peft_model_true above — pins the negative
+        path so a regression that always returns True (e.g. ``return
+        True`` slipped in for debugging) is caught.
+        """
+        from backpropagate.export import _is_peft_model
+
+        class FakePeftModel:
+            pass
+
+        class UnrelatedModel:
+            pass
+
+        import sys
+        import types
+
+        fake_peft_module = types.ModuleType("peft")
+        fake_peft_module.PeftModel = FakePeftModel  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"peft": fake_peft_module}):
+            result = _is_peft_model(UnrelatedModel())
+        assert result is False
+
+    def test_is_peft_model_false_when_peft_missing(self):
+        """_is_peft_model returns False when peft is not installed.
+
+        Pins the ImportError-handling branch so a regression that lets
+        ImportError propagate is caught immediately.
+        """
+        # Make the import inside the function fail by injecting a None
+        # entry into sys.modules (sentinel for "import failed").
+        import sys
+
+        from backpropagate.export import _is_peft_model
+
+        with patch.dict(sys.modules, {"peft": None}):
+            result = _is_peft_model(object())
+        assert result is False
 
     def test_has_unsloth(self):
         """Test _has_unsloth detection."""

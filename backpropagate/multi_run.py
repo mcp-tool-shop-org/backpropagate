@@ -57,9 +57,11 @@ from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
     BackpropagateError,
+    CheckpointError,
     ConfigurationError,
     DatasetError,
     DatasetNotFoundError,
+    InvalidSettingError,
     TrainingError,
 )
 from .gpu_safety import (
@@ -286,8 +288,10 @@ class MultiRunTrainer:
                 triggers batch_size halving + gradient_accumulation doubling
                 (preserving effective batch size) and the run retries. After
                 3 consecutive OOMs at batch=1 the session aborts with a
-                structured error (code=RUNTIME_GPU_OOM). Set False to make
-                OOMs hard-fail the run.
+                structured error (code=RUNTIME_OOM_RECOVERY_EXHAUSTED — the
+                recovery loop ran out of options; the first uncovered OOM
+                itself still surfaces as RUNTIME_GPU_OOM when oom_recovery is
+                False). Set False to make OOMs hard-fail the run.
             on_run_start: Callback when run starts
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)
@@ -353,6 +357,15 @@ class MultiRunTrainer:
         self._resume_start_run_idx: int = 1
         self._resume_checkpoint_path: str | None = None
         self._resumed_from_run_id: str | None = None
+        # BACKEND-A-004: True once _restore_session_state successfully loaded
+        # SLAO merger state from disk. The run-loop uses this to decide
+        # whether a subsequent _load_resume_checkpoint failure is a coherent-
+        # state corruption (SLAO restored but model weights diverged from it)
+        # vs a no-op (SLAO never restored, so falling back to the freshly
+        # loaded base model is safe). When True and the checkpoint load
+        # fails, the run aborts with CheckpointError instead of silently
+        # continuing in a mismatched state.
+        self._resume_slao_state_restored: bool = False
 
         # Callbacks
         self.on_run_start = on_run_start
@@ -493,6 +506,10 @@ class MultiRunTrainer:
                     # SLAOMerger.save (used in _execute_run after every
                     # successful merge).
                     self._slao_merger.load(str(slao_path))
+                    # BACKEND-A-004: mark SLAO state as restored so the
+                    # run-loop knows a subsequent checkpoint-load failure
+                    # leaves the merger and model in inconsistent states.
+                    self._resume_slao_state_restored = True
                     logger.info(f"Restored SLAO merger state from {slao_path}")
                 except Exception as exc:
                     logger.warning(
@@ -535,6 +552,32 @@ class MultiRunTrainer:
         self._is_running = True
         self._should_abort = False
         self._abort_reason = None
+
+        # BACKEND-A-001: fail fast on the silent-disable trap where
+        # ``early_stopping=True`` is combined with ``validate_every_run=False``.
+        # The downstream code at the run-execute site (this file's run-loop)
+        # only wraps the run with the validation harness when
+        # ``validate_every_run or early_stopping`` is truthy, but the
+        # ``early_stopping`` branch needs a ``val_loss`` to compare against —
+        # which only the validation harness computes. The prior behaviour
+        # reserved a 10% validation holdout, ran the validation pass, and then
+        # quietly suppressed the early-stopping check because the loop only
+        # called ``_check_early_stopping`` when ``val_loss is not None`` (it
+        # would be ``None`` whenever ``validate_every_run`` was False because
+        # ``_execute_run_with_validation`` keys the validation compute on
+        # ``validate_every_run`` alone). Operators got the dataset-shrink cost
+        # without the early-stopping benefit. Surface the inconsistency now,
+        # before any model/data work happens.
+        if self.config.early_stopping and not self.config.validate_every_run:
+            raise InvalidSettingError(
+                setting_name="early_stopping",
+                value=True,
+                expected="validate_every_run=True (early stopping requires a per-run validation loss)",
+                suggestion=(
+                    "Either enable validation (set validate_every_run=True) or "
+                    "disable early stopping (set early_stopping=False)."
+                ),
+            )
 
         # Setup checkpoint directory first so the resume detector can read
         # the on-disk run history before we mint a new run_id.
@@ -723,15 +766,61 @@ class MultiRunTrainer:
                 # F-002: when resuming, hydrate the model with the last
                 # checkpoint so the SLAO accumulator + LoRA weights pick up
                 # where they left off.
+                #
+                # BACKEND-A-004: this load is part of a two-step transaction
+                # with the SLAO-merger restore that _restore_session_state
+                # performed earlier. If we let the LoRA-weights load fail
+                # silently after the SLAO state was already swapped in, the
+                # merger's accumulated A/B matrices reference an adapter
+                # geometry that the freshly-loaded base model does not
+                # carry — every subsequent merge then operates on a
+                # mismatched pair and the resumed run silently diverges
+                # from the prior session. Two acceptable resolutions:
+                #   (a) SLAO never restored ⇒ falling back to the fresh
+                #       base model is coherent (just slower convergence on
+                #       the first resumed run). Warn and continue.
+                #   (b) SLAO restored ⇒ the merger has prior-run state but
+                #       the model would not. Abort the resume with
+                #       CheckpointError so the operator can re-run from a
+                #       known-good checkpoint, rather than burn GPU hours
+                #       producing silently corrupted output.
                 if self._resume_checkpoint_path:
                     try:
                         self._load_resume_checkpoint(self._resume_checkpoint_path)
                     except Exception as exc:
+                        if self._resume_slao_state_restored:
+                            logger.error(
+                                "Resume aborted: SLAO merger state was "
+                                f"restored from a prior session but the LoRA "
+                                f"checkpoint at {self._resume_checkpoint_path} "
+                                f"failed to load ({exc}). The merger and "
+                                "model are now in inconsistent states; "
+                                "continuing would silently produce corrupted "
+                                "merges across runs. Re-run with "
+                                "resume_from='off' to start fresh, or "
+                                "supply a checkpoint that pairs with the "
+                                "persisted SLAO state."
+                            )
+                            raise CheckpointError(
+                                operation="load",
+                                path=str(self._resume_checkpoint_path),
+                                reason=(
+                                    f"resume aborted: SLAO merger state was "
+                                    f"already restored but the paired LoRA "
+                                    f"checkpoint load failed ({exc}); "
+                                    "merger/model state would be inconsistent. "
+                                    "Re-run with resume_from='off' to start "
+                                    "fresh."
+                                ),
+                            ) from exc
                         logger.warning(
                             f"Failed to load resume checkpoint "
                             f"{self._resume_checkpoint_path}: {exc}. "
-                            "Continuing with the freshly loaded base model — "
-                            "results may diverge from the original run."
+                            "SLAO state was not restored either, so the "
+                            "merger will re-initialize on the first resumed "
+                            "run; results may diverge from the original "
+                            "session but the merger/model pair stays "
+                            "coherent."
                         )
             for run_idx in range(start_idx, self.config.num_runs + 1):
                 if self._should_abort:

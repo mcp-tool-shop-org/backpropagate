@@ -268,6 +268,109 @@ class TestCmdInfo:
         assert "Model" in captured.out
 
 
+# =============================================================================
+# C-CLI-005 / TESTS-A-003 — ``backprop info --error-codes`` regression
+# =============================================================================
+# Pins:
+# 1. ``--error-codes`` flag is accepted by the argparse parser.
+# 2. ``backprop info --error-codes`` exits 0 + dumps the catalog.
+# 3. The catalog includes the INPUT_AUTH_REQUIRED hint and it points at
+#    ``--auth user:pass`` (the v1.3 corrected hint after BACKEND-A-XXX).
+# 4. Every catalog row appears in the output (no silent truncation).
+# Prior to this, there was ZERO test for --error-codes; a renamed flag or
+# accidentally-deleted print_error_code_catalog() call would have silently
+# broken the operator-facing error lookup.
+
+
+class TestCmdInfoErrorCodes:
+    """Tests for ``backprop info --error-codes`` (C-CLI-005)."""
+
+    def test_parser_accepts_error_codes_flag(self, cli_parser):
+        """``backprop info --error-codes`` parses without SystemExit."""
+        args = cli_parser.parse_args(["info", "--error-codes"])
+        assert args.command == "info"
+        assert args.error_codes is True
+
+    def test_cmd_info_error_codes_exits_zero(self, capsys):
+        """``backprop info --error-codes`` returns EXIT_OK (0)."""
+        import argparse
+
+        from backpropagate.cli import EXIT_OK, cmd_info
+
+        args = argparse.Namespace(
+            error_codes=True,
+            env_vars=False,
+            json=False,
+            verbose=False,
+        )
+        result = cmd_info(args)
+        assert result == EXIT_OK
+
+    def test_cmd_info_error_codes_dumps_catalog(self, capsys):
+        """The catalog dump includes the table header and every catalog code.
+
+        Mechanises the contract: every key in ``exceptions.ERROR_CODES`` must
+        appear in the printed output, with the description following.
+        """
+        import argparse
+
+        from backpropagate.cli import cmd_info
+        from backpropagate.exceptions import ERROR_CODES
+
+        args = argparse.Namespace(
+            error_codes=True,
+            env_vars=False,
+            json=False,
+            verbose=False,
+        )
+        cmd_info(args)
+        captured = capsys.readouterr()
+        out = captured.out
+
+        # Header
+        assert "code" in out
+        assert "retryable" in out
+        assert "description" in out
+
+        # Every catalog code must appear in the output.
+        for code in ERROR_CODES.keys():
+            assert code in out, (
+                f"Code {code!r} from ERROR_CODES is missing from the catalog "
+                f"dump — print_error_code_catalog() silently dropped it."
+            )
+
+    def test_input_auth_required_hint_points_at_auth_flag(self):
+        """Pins the corrected ``INPUT_AUTH_REQUIRED`` hint (v1.3 fix).
+
+        The pre-fix hint pointed at the legacy ``backpropagate.launch()``
+        Python API which was removed in v1.1.0. The corrected v1.3 hint
+        must reference ``--auth user:pass`` (the CLI surface) +
+        ``BACKPROPAGATE_UI_AUTH`` (the env-var surface) since those are
+        the two actually-supported auth-supply mechanisms in v1.2.0+.
+        """
+        from backpropagate.exceptions import ERROR_CODES
+
+        entry = ERROR_CODES.get("INPUT_AUTH_REQUIRED")
+        assert entry is not None, "INPUT_AUTH_REQUIRED missing from catalog"
+
+        hint = entry.get("default_hint", "")
+        assert "--auth" in hint, (
+            f"INPUT_AUTH_REQUIRED hint should reference --auth (the CLI "
+            f"surface). Current hint: {hint!r}. The pre-fix hint pointed at "
+            f"the legacy backpropagate.launch() Python API which was removed "
+            f"in v1.1.0."
+        )
+        assert "BACKPROPAGATE_UI_AUTH" in hint, (
+            f"INPUT_AUTH_REQUIRED hint should reference BACKPROPAGATE_UI_AUTH "
+            f"(the env-var surface). Current hint: {hint!r}."
+        )
+        # The hint must NOT mention the deleted legacy API.
+        assert "launch(" not in hint and "backpropagate.launch" not in hint, (
+            f"INPUT_AUTH_REQUIRED hint still references the deleted "
+            f"backpropagate.launch() API. Current hint: {hint!r}."
+        )
+
+
 class TestCmdConfig:
     """Tests for config command."""
 

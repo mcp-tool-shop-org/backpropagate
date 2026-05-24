@@ -148,19 +148,48 @@ class TestJWTManager:
         assert "Invalid token" in msg
 
     def test_verify_expired_token(self):
-        """JWTManager rejects expired tokens."""
+        """JWTManager rejects expired tokens (TESTS-A-009 v1.3: deterministic clock).
+
+        Replaces the prior ``expiry_minutes=0 + time.sleep(0.1)`` pattern
+        which raced on slow CI: PyJWT's ``leeway=0`` and integer-second
+        ``exp`` truncation meant the 100ms sleep occasionally produced
+        ``now == exp`` (not ``now > exp``), letting the token through.
+
+        New pattern: forge a token with an explicitly-past ``exp`` claim
+        by patching ``time.time`` in the ui_security module during
+        ``create_token``. PyJWT's decoder then sees ``exp << now`` and
+        emits ``ExpiredSignatureError`` deterministically — zero real-
+        time sleep, no flake surface.
+
+        freezegun is NOT in dev deps and is intentionally not added —
+        ``unittest.mock.patch`` achieves the same goal with zero new
+        dependencies.
+        """
+        from unittest.mock import patch
+
         config = JWTConfig(
             secret="test-secret-123456789012345678901234",
-            expiry_minutes=0,  # Immediate expiry
+            expiry_minutes=1,  # 1-minute window (forged exp will be < now)
         )
         manager = JWTManager(config)
 
-        token = manager.create_token("user123")
-        time.sleep(0.1)  # Wait for expiry
+        # Pin "now" to one year in the past while minting the token. The
+        # resulting token has exp = (past_now + 60s) which is still firmly
+        # in the past relative to actual wall-clock — so verify_token
+        # observes ``exp < now`` and PyJWT raises ExpiredSignatureError.
+        # ``backpropagate.ui_security.time`` is the ``time`` module imported
+        # at module top; patching the .time attribute affects the
+        # create_token() call without touching the real clock.
+        past = 1_000_000_000.0  # Sep 9 2001 — definitely past
+        with patch("backpropagate.ui_security.time.time", return_value=past):
+            token = manager.create_token("user123")
 
+        # verify_token reads wall-clock time inside PyJWT's decoder; no
+        # patching needed — real "now" is centuries past the forged exp.
         valid, payload, msg = manager.verify_token(token)
 
         assert valid is False
+        assert payload is None
         assert "expired" in msg.lower()
 
     def test_refresh_access_token(self):

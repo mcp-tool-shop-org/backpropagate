@@ -123,7 +123,6 @@ Paramètres courants (voir [la référence complète des variables d'environneme
 | `BACKPROPAGATE_LOG_JSON` | auto | Force les journaux en JSON (`true`) ou sur la console (`false`) |
 | `BACKPROPAGATE_LOG_FILE` | non défini | Chemin vers le répertoire où les journaux sont enregistrés |
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | non défini | Ignore la détection des dépendances optionnelles au démarrage pour un démarrage plus rapide de l'interface en ligne de commande |
-| `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE` | `true` | Lorsque `true`, refuse `backprop ui --share` sans l'option `--auth` |
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | Répertoire de base pour toutes les opérations d'écriture sur le système de fichiers de l'interface utilisateur ; liste de contrôle d'accès validée |
 | `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Modèle par défaut |
 | `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Taux d'apprentissage |
@@ -313,7 +312,7 @@ Un bref index des erreurs les plus courantes rencontrées au démarrage. L'index
 | `register_with_ollama` : connexion refusée. | `DEP_OLLAMA_REGISTRATION_FAILED` | Démarrez le démon : `ollama serve`. Installez depuis <https://ollama.com>. Opération pouvant être répétée. |
 | Le disque est plein lors de la sauvegarde du point de contrôle. | `STATE_CHECKPOINT_INVALID` | Les écritures atomiques laissent un répertoire `.partial` en cas de plantage ; il est sûr de le supprimer. Le point de contrôle précédent est intact. |
 | L'entraînement est interrompu / arrêté en raison de la surchauffe de la GPU. | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | B-003 : le moniteur met l'entraînement en pause lorsque le seuil de température NVML est atteint ; il reprend automatiquement lorsque la GPU refroidit. Améliorez la circulation de l'air ou réduisez la charge. |
-| `backprop ui --share` est refusé. | `INPUT_AUTH_REQUIRED` | Passez `--auth user:password` ou définissez `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` pour le désactiver (avec un avertissement). |
+| `backprop ui --share` est refusé. | `INPUT_AUTH_REQUIRED` | Passez `--auth user:password`. Depuis la v1.2.0 (GHSA-f65r-h4g3-3h9h), `--share` sans `--auth` est une erreur stricte sans possibilité de désactivation ; utilisez la redirection de port SSH si vous ne pouvez pas exposer d'identifiants. |
 | "Chevauchement" des exécutions multiples lors de la validation. | `CONFIG_INVALID` (Étape A, backend B-001). | Réduisez `--samples` en dessous de la taille du pool d'entraînement, augmentez la taille du jeu de données ou désactivez la validation. |
 | L'export GGUF a échoué lors de la première tentative. | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; sous Windows, vous avez également besoin des outils de construction Visual C++ et de CMake. |
 

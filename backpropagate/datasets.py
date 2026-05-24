@@ -1340,12 +1340,12 @@ class PerplexityFilter:
         )
         try:
             del self._model
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            pass  # nosec B110 — cleanup; missing attr is fine
         try:
             del self._tokenizer
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            pass  # nosec B110 — cleanup; missing attr is fine
         self._model = None
         self._tokenizer = None
         import gc as _gc

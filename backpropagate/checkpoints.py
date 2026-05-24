@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -161,6 +162,13 @@ class CheckpointManager:
 
     MANIFEST_FILE = "manifest.json"
 
+    # Stage C amend BACKEND-B-003: schema version anchor for the manifest.
+    # Bump on incompatible changes (e.g. field rename or semantic shift);
+    # leave at "1.0" for additive fields (those are forward-compat via
+    # ``CheckpointInfo.from_dict``'s unknown-key filter). v1.4 may build a
+    # real migrator; v1.3 just fails-loud-but-keeps-going on mismatch.
+    CURRENT_MANIFEST_VERSION = "1.0"
+
     def __init__(
         self,
         checkpoint_dir: str,
@@ -185,11 +193,31 @@ class CheckpointManager:
         self._load_manifest()
 
     def _load_manifest(self) -> None:
-        """Load checkpoint manifest from disk."""
+        """Load checkpoint manifest from disk.
+
+        Stage C amend BACKEND-B-003: validate the on-disk ``version`` field
+        against :attr:`CURRENT_MANIFEST_VERSION` and WARN on mismatch.
+        ``CheckpointInfo.from_dict`` already discards unknown keys
+        (forward-compat for additive schema changes); the version check
+        adds backward-compat fail-loud-but-keep-going semantics. v1.4 will
+        ship a real migrator. Missing version (pre-v1.0 manifests) defaults
+        to "0.0" and surfaces the warn line so operators correlate
+        post-resume behavior with schema age.
+        """
         if self._manifest_path.exists():
             try:
                 with open(self._manifest_path) as f:
                     data = json.load(f)
+                disk_version = str(data.get("version") or "0.0")
+                if disk_version != self.CURRENT_MANIFEST_VERSION:
+                    logger.warning(
+                        f"Checkpoint manifest on disk has "
+                        f"version={disk_version!r} but this build expects "
+                        f"{self.CURRENT_MANIFEST_VERSION!r}. Unknown fields "
+                        f"will be discarded by CheckpointInfo.from_dict; "
+                        f"missing fields fall back to defaults. v1.4 will "
+                        f"ship a real migrator for older formats."
+                    )
                 self._checkpoints = [
                     CheckpointInfo.from_dict(c) for c in data.get("checkpoints", [])
                 ]
@@ -672,7 +700,25 @@ class CheckpointManager:
                 logger.error(f"Failed to force-prune {victim.path}: {e}")
                 break
         else:
-            logger.error(f"force_prune_to_size hit {max_iterations} iteration limit — aborting to prevent infinite loop")
+            # Stage C amend BACKEND-B-022: include actionable context so an
+            # operator who hits the safety guard has the info they need to
+            # decide between "raise the limit" and "file a bug." Pre-fix
+            # the log line stopped at "aborting" with no diagnostics.
+            current_total_bytes = sum(cp.size_bytes for cp in self._checkpoints)
+            current_total_gb = current_total_bytes / (1024**3)
+            logger.error(
+                f"force_prune_to_size hit {max_iterations} iteration limit "
+                f"— aborting to prevent infinite loop. State at abort: "
+                f"checkpoints_remaining={len(self._checkpoints)}, "
+                f"total_size_gb={current_total_gb:.2f}, "
+                f"target_size_gb={max_size_gb:.2f}, "
+                f"pruned_this_pass={len(pruned)}. "
+                f"If this is a legitimate large-session, raise "
+                f"force_prune_to_size's max_iterations ceiling (current "
+                f"hard-coded at {max_iterations}); if not, file a bug at "
+                f"https://github.com/mcp-tool-shop-org/backpropagate/issues "
+                f"with the manifest.json + this log line."
+            )
 
         try:
             if not self._save_manifest():
@@ -717,6 +763,15 @@ class RunHistoryManager:
     STATUS_FAILED = "failed"
     VALID_STATUSES = frozenset({STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED})
 
+    # Stage C amend BACKEND-B-003: per-entry schema version. The file
+    # itself is a JSON array (changing that shape would break operators
+    # mid-flight in v1.3), so we anchor versioning at the entry level.
+    # Bump on incompatible per-entry shape changes; leave at "1.0" for
+    # additive fields (record_run_* tolerates missing optional fields).
+    # v1.4 may introduce a per-file envelope; for now the per-entry tag is
+    # enough to flag mismatched-version writers in a mixed-tooling shop.
+    CURRENT_ENTRY_SCHEMA_VERSION = "1.0"
+
     # Fields that a well-formed run entry should contain.
     _EXPECTED_FIELDS = frozenset({
         "run_id",
@@ -745,29 +800,88 @@ class RunHistoryManager:
     # Maximum loss-history samples stored per run to bound file size.
     MAX_LOSS_HISTORY_POINTS = 100
 
-    def __init__(self, output_dir: str) -> None:
+    def __init__(
+        self,
+        output_dir: str,
+        on_record_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         """
         Initialize the run history manager.
 
         Args:
             output_dir: Directory where ``run_history.json`` will be stored.
+            on_record_callback: Stage C amend BACKEND-B-016 — optional
+                hook called after every record_run / record_run_started /
+                record_run_completed / record_run_failed with the
+                normalized entry dict. Use this to ship records to
+                external systems (DataDog, ELK, wandb, mlflow, custom
+                DB) without wrapping every train() call yourself.
+                Callback failures are swallowed (logged at WARN) so a
+                broken sink never breaks on-disk persistence. The
+                callback is invoked OUTSIDE the on-disk save so it can
+                run in parallel with the next write — but it IS
+                synchronous; long-running sinks should themselves spawn
+                a worker thread / queue.
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._history_path = self.output_dir / self.HISTORY_FILE
+        self._on_record_callback = on_record_callback
+
+    def _fire_callback(self, entry: dict[str, Any]) -> None:
+        """Stage C amend BACKEND-B-016: invoke the optional record hook,
+        swallowing any exception so a broken sink never breaks on-disk
+        persistence. The error is logged at WARN with the callback's
+        repr so the operator can correlate failures to a specific sink.
+        """
+        if self._on_record_callback is None:
+            return
+        try:
+            self._on_record_callback(entry)
+        except Exception as cb_err:
+            logger.warning(
+                f"RunHistoryManager on_record_callback raised "
+                f"({type(cb_err).__name__}: {cb_err}); on-disk persistence "
+                f"is unaffected but the external sink missed this entry."
+            )
 
     # --------------------------------------------------------------------- #
     # Internal helpers
     # --------------------------------------------------------------------- #
 
     def _load(self) -> list[dict[str, Any]]:
-        """Load the history file from disk, returning an empty list on failure."""
+        """Load the history file from disk, returning an empty list on failure.
+
+        Stage C amend BACKEND-B-003: scan loaded entries for unfamiliar
+        ``schema_version`` values and WARN once per unique mismatch. The
+        scan is non-fatal: forward-compat is best-effort via field
+        defaults, backward-compat (entries lacking ``schema_version``) is
+        the "0.0" implicit baseline. v1.4 may build a real migrator.
+        """
         if not self._history_path.exists():
             return []
         try:
             with open(self._history_path) as f:
                 data = json.load(f)
             if isinstance(data, list):
+                # Stage C amend BACKEND-B-003: surface schema-version
+                # mismatches once per unique value so a mixed-version
+                # writer (e.g. v1.2 wrote a row, v1.3 reads it) is
+                # diagnosable from a single log line.
+                seen_versions: set[str] = set()
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        continue
+                    ver = str(entry.get("schema_version") or "0.0")
+                    if ver != self.CURRENT_ENTRY_SCHEMA_VERSION and ver not in seen_versions:
+                        seen_versions.add(ver)
+                        logger.warning(
+                            f"run_history.json contains entry with "
+                            f"schema_version={ver!r} but this build expects "
+                            f"{self.CURRENT_ENTRY_SCHEMA_VERSION!r}. Missing "
+                            f"fields will fall back to defaults — re-record "
+                            f"the entry under v1.3 to clear this warning."
+                        )
                 return data
             logger.warning("run_history.json is not a JSON array — resetting")
             return []
@@ -857,6 +971,12 @@ class RunHistoryManager:
         for key in self._EXPECTED_FIELDS:
             entry[key] = run_data.get(key)
 
+        # Stage C amend BACKEND-B-003: anchor schema version on every
+        # entry we write. Preserve any version the caller passed in
+        # explicitly (e.g. test fixtures that simulate older formats).
+        if not entry.get("schema_version"):
+            entry["schema_version"] = self.CURRENT_ENTRY_SCHEMA_VERSION
+
         # Ensure a timestamp exists.
         if entry.get("timestamp") is None:
             entry["timestamp"] = datetime.now().isoformat()
@@ -881,6 +1001,10 @@ class RunHistoryManager:
             f"final_loss={entry.get('final_loss')}, "
             f"steps={entry.get('steps')}"
         )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback
+        # after on-disk persistence so a broken sink doesn't strand the
+        # in-memory entry.
+        self._fire_callback(entry)
         return entry
 
     def get_history(self) -> list[dict[str, Any]]:
@@ -955,6 +1079,9 @@ class RunHistoryManager:
             "loss_history": [],
             "merge_history": [],
             "export_paths": [],
+            # Stage C amend BACKEND-B-003: anchor schema version on every
+            # entry we write so a future reader can detect mismatch.
+            "schema_version": self.CURRENT_ENTRY_SCHEMA_VERSION,
         })
 
         history = self._load()
@@ -968,6 +1095,8 @@ class RunHistoryManager:
             f"Recorded run start: run_id={run_id} model={model_name} "
             f"session_kind={session_kind}"
         )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback.
+        self._fire_callback(entry)
         return entry
 
     def record_run_completed(
@@ -1040,6 +1169,9 @@ class RunHistoryManager:
                 "checkpoint_path": checkpoint_path,
                 "merge_history": merge_history or [],
                 "export_paths": [],
+                # Stage C amend BACKEND-B-003: anchor schema version on
+                # synthesized entries too.
+                "schema_version": self.CURRENT_ENTRY_SCHEMA_VERSION,
             })
             if extra:
                 entry.update(extra)
@@ -1050,6 +1182,8 @@ class RunHistoryManager:
         logger.info(
             f"Recorded run completed: run_id={run_id} final_loss={final_loss}"
         )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback.
+        self._fire_callback(entry)
         return entry
 
     def record_run_failed(
@@ -1106,6 +1240,9 @@ class RunHistoryManager:
                 "checkpoint_path": checkpoint_path,
                 "merge_history": [],
                 "export_paths": [],
+                # Stage C amend BACKEND-B-003: anchor schema version on
+                # synthesized entries too.
+                "schema_version": self.CURRENT_ENTRY_SCHEMA_VERSION,
             })
             if extra:
                 entry.update(extra)
@@ -1116,6 +1253,8 @@ class RunHistoryManager:
         logger.info(
             f"Recorded run failed: run_id={run_id} reason={failure_reason}"
         )
+        # Stage C amend BACKEND-B-016: fire the external-sink callback.
+        self._fire_callback(entry)
         return entry
 
     def update_run(
@@ -1227,10 +1366,92 @@ class RunHistoryManager:
         logger.info(f"Deleted run history entry: run_id={run_id}")
         return True
 
-    def in_progress_runs(self) -> list[dict[str, Any]]:
+    # Stage C amend BACKEND-B-006: default stale-threshold for in-progress
+    # entries. Sessions SIGKILLed before ``record_run_failed`` could fire
+    # leave ``status='running'`` on disk forever; the F-002 auto-resume
+    # path would otherwise pick up months-old orphans every time the
+    # operator started a fresh session in the same output dir. 24h is a
+    # generous floor — operators with genuinely long-running sessions can
+    # raise it via the ``stale_threshold_seconds`` kwarg.
+    DEFAULT_IN_PROGRESS_TTL_SECONDS: float = 24 * 60 * 60  # 24 hours
+
+    def in_progress_runs(
+        self,
+        stale_threshold_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         """Return runs that are currently in the ``running`` state.
 
         Used by the F-002 resume auto-detect path so a crashed multi-run
         can be picked up without an explicit ``--resume <run-id>``.
+
+        Stage C amend BACKEND-B-006: filter out stale entries whose
+        ``started_at`` is older than ``stale_threshold_seconds`` (default
+        24h). The pre-fix behavior auto-resumed any ``status='running'``
+        entry regardless of age, which produced confusing "No checkpoint
+        found for run_id=X" warnings when an operator's NEXT fresh session
+        unexpectedly latched onto a months-old orphan from a crashed
+        session whose checkpoints had since been cleaned up.
+
+        Args:
+            stale_threshold_seconds: Maximum age (in seconds) for an entry
+                to be considered live. Entries older than this are SKIPPED
+                from the returned list AND logged so the operator sees what
+                was filtered. Pass 0.0 to disable the filter entirely
+                (prior unbounded behavior). ``None`` uses
+                :attr:`DEFAULT_IN_PROGRESS_TTL_SECONDS`.
+
+        Returns:
+            List of run dicts in ``status='running'`` whose ``started_at``
+            is within the TTL.
         """
-        return [r for r in self._load() if r.get("status") == self.STATUS_RUNNING]
+        from datetime import datetime as _dt
+
+        if stale_threshold_seconds is None:
+            stale_threshold_seconds = self.DEFAULT_IN_PROGRESS_TTL_SECONDS
+
+        running = [
+            r for r in self._load()
+            if r.get("status") == self.STATUS_RUNNING
+        ]
+
+        if stale_threshold_seconds <= 0.0 or not running:
+            return running
+
+        now = _dt.now()
+        live: list[dict[str, Any]] = []
+        skipped = 0
+        for entry in running:
+            ts = entry.get("started_at") or entry.get("timestamp")
+            if not ts:
+                # No timestamp anchor — keep it (pre-lifecycle entries
+                # predate ``started_at``; better to surface than to drop).
+                live.append(entry)
+                continue
+            try:
+                parsed = _dt.fromisoformat(str(ts))
+            except (ValueError, TypeError):
+                # Unparseable timestamp — keep so the operator can triage
+                # rather than silently dropping a real session.
+                live.append(entry)
+                continue
+            age_seconds = (now - parsed).total_seconds()
+            if age_seconds <= stale_threshold_seconds:
+                live.append(entry)
+            else:
+                skipped += 1
+                logger.warning(
+                    f"in_progress_runs: skipping stale entry "
+                    f"run_id={entry.get('run_id')!r} age={age_seconds:.0f}s "
+                    f"(threshold={stale_threshold_seconds:.0f}s); the "
+                    f"process_id is unknown to this OS and the checkpoint "
+                    f"on disk may have been cleaned up. Re-run with "
+                    f"resume_from=<run-id> to force-pick this entry, OR "
+                    f"call ``delete_run({entry.get('run_id')!r})`` to clear it."
+                )
+        if skipped:
+            logger.info(
+                f"in_progress_runs: filtered {skipped} stale entries "
+                f"(threshold={stale_threshold_seconds:.0f}s); "
+                f"{len(live)} live."
+            )
+        return live

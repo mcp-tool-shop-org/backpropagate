@@ -48,6 +48,7 @@ __all__ = [
     "clear_request_context",
     "bind_run_context",
     "unbind_run_context",
+    "run_context",
     "LogContext",
     "STRUCTLOG_AVAILABLE",
 ]
@@ -460,6 +461,56 @@ def unbind_run_context(*keys: str) -> None:
         return
     target_keys = keys or ("run_id",)
     structlog.contextvars.unbind_contextvars(*target_keys)
+
+
+# Stage C amend BACKEND-B-019: context-manager wrapper that pairs
+# bind_run_context with an automatic unbind on exit. The legacy
+# bind/unbind primitives are still exported because:
+#   - existing call sites use them across try/finally blocks where
+#     refactoring to ``with`` would balloon the diff; and
+#   - structlog's contextvars API is itself imperative, so callers who
+#     need fine-grained control (e.g. binding mid-flow without an
+#     enclosing scope) still need the imperative form.
+# But for new call sites the context-manager form makes the bind/unbind
+# invariant automatic: a future contributor who adds a third bind key
+# inside ``with run_context(...)`` no longer needs to remember to also
+# add it to a matching unbind call; the cm tracks every key it bound
+# and unbinds exactly those on exit.
+class _RunContext:
+    """Stage C amend BACKEND-B-019: see :func:`run_context`."""
+
+    def __init__(self, run_id: str, **kwargs: Any) -> None:
+        self.run_id = run_id
+        self.extra = dict(kwargs)
+        self._bound_keys: tuple[str, ...] = ()
+
+    def __enter__(self) -> "_RunContext":
+        bind_run_context(self.run_id, **self.extra)
+        self._bound_keys = ("run_id",) + tuple(self.extra.keys())
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._bound_keys:
+            unbind_run_context(*self._bound_keys)
+
+
+def run_context(run_id: str, **kwargs: Any) -> _RunContext:
+    """Stage C amend BACKEND-B-019: context-manager wrapper around
+    :func:`bind_run_context` / :func:`unbind_run_context`.
+
+    Pairs bind on enter with unbind on exit so the bind/unbind invariant
+    is automatic — a future contributor adding a third bind key no
+    longer needs to remember to update a matching unbind call.
+
+    Example:
+        with run_context(run_id=run_id, session_kind="multi_run"):
+            do_work()
+        # run_id and session_kind unbound here, even if do_work raised.
+
+    Safe when structlog is unavailable (the inner bind/unbind become
+    no-ops; the context manager itself still works).
+    """
+    return _RunContext(run_id, **kwargs)
 
 
 # =============================================================================

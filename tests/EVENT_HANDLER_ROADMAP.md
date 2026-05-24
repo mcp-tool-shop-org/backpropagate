@@ -5,12 +5,16 @@
 This roadmap outlines the comprehensive testing strategy for event handlers and callbacks in the backpropagate codebase. The project uses a callback-based architecture for the training core (`trainer.py` / `multi_run.py` / `gpu_safety.py`) AND ships an ASGI WebSocket transport in the Reflex Web UI from v1.1.0 onward — see Section 9 for the WS auth middleware that gates that transport.
 
 **Current Coverage Analysis:**
-- TrainingCallback: ~40% covered (basic tests exist)
-- MultiRunTrainer callbacks: ~30% covered (partial)
-- GPUMonitor callbacks: ~50% covered (thread tests exist)
-- Event lifecycle: ~20% covered (integration gaps)
 
-**Target:** 85% coverage for all event systems
+The Jan-2026 baseline percentages cited here (TrainingCallback ~40%,
+MultiRunTrainer callbacks ~30%, GPUMonitor callbacks ~50%, event lifecycle
+~20%) are stale — `test_event_handlers.py` has grown substantially post
+v1.3 Wave 1 (TESTS-A-008 threading.Event fix, TESTS-A-009 JWT expiry
+patch). For the live numbers, see the per-test-file coverage report
+emitted by `pytest --cov=backpropagate` in CI (artifacts uploaded by
+`.github/workflows/ci.yml`).
+
+**Target:** 85% coverage for all event systems.
 
 ---
 
@@ -189,13 +193,17 @@ on_status: Optional[Callable[[GPUStatus], None]] = None
 | `test_cli_multirun_status_callback` | CLI status from on_run_complete | Missing |
 | `test_cli_verbose_mode_callbacks` | Verbose output uses callbacks | Missing |
 
-### 4.3 UI Integration (Priority: LOW - gradio dependent)
+<!--
+### 4.3 UI Integration — DELETED (TESTS-B-014, v1.3 Wave 3 Stage C)
 
-| Test | Description | Status |
-|------|-------------|--------|
-| `test_ui_training_progress_updates` | UI receives training events | Missing |
-| `test_ui_gpu_status_display` | UI updates from GPU callbacks | Missing |
-| `test_ui_multirun_dashboard` | Dashboard updates from callbacks | Missing |
+This section listed three Gradio-era UI integration tests. Gradio was
+deleted in v1.2.0 Wave 4.5 (`ui_gradio_legacy.py` / `theme_gradio_legacy.py`
+were removed; the canonical UI is now Reflex). The Reflex equivalents are
+tracked in `tests/COVERAGE_ROADMAP.md` section 5.1 and the v1.3 Wave 3
+Stage C tests at `tests/test_ui_states.py` cover the four Reflex state
+classes (TrainState, MultiRunState, ExportState, DatasetState) with smoke
+tests for defaults + setters + stub event handlers.
+-->
 
 ---
 
@@ -475,7 +483,7 @@ state-sync transport (Reflex's standard `/_event` path). The
 | Hardening additions (malformed headers, /ping bypass, cookie hardening) | `tests/test_auth_middleware.py` | Complete. |
 | Pre-accept cookie-expiry close + tampered-signature close (v1.3 Wave 1) | `tests/test_auth_middleware.py` | New — TESTS-A-005 + TESTS-A-006. |
 | HMAC `compare_digest` source-level invariant (v1.3 Wave 1) | `tests/test_auth_middleware.py` | New — TESTS-A-006 source inspection. |
-| CLI `--share` refuse-to-start | `tests/test_cli_extended.py::TestCmdUiNoMiddleware` | Complete. |
+| CLI `--share` refuse-to-start | `tests/test_cli_extended.py::TestCmdUI::test_cmd_ui_share_without_auth_still_refuses` | Complete. |
 | CLI `--host <non-loopback>` refuse-to-start (v1.3 Wave 1) | `tests/test_host_gate.py` | New — BRIDGE-A-002. |
 | ASGI helper infrastructure | `tests/helpers/asgi.py` + `tests/helpers/ws.py` | Complete; smoke-tested by the helper tests at the top of `test_auth_middleware.py`. |
 

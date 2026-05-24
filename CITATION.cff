@@ -26,7 +26,7 @@ references:
   - type: article
     title: "Single LoRA Continual Learning via Asymmetric Merging"
     authors:
-      - name: "(see arXiv listing)"
+      - name: "SLAO authors"
     url: "https://arxiv.org/abs/2512.23017"
     year: 2025
-    notes: "SLAO — the merge-between-runs technique that backpropagate's multi_run.py + slao.py implement to prevent catastrophic forgetting during extended fine-tuning campaigns."
+    notes: "SLAO — the merge-between-runs technique that backpropagate's multi_run.py + slao.py implement to prevent catastrophic forgetting during extended fine-tuning campaigns. Full author list at the arXiv URL above; this entry uses a collective name placeholder so CFF stays valid until the arXiv metadata is captured exhaustively."

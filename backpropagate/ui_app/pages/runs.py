@@ -209,7 +209,13 @@ def _run_row(run: dict) -> rx.Component:
 
 
 def _empty_state() -> rx.Component:
-    """Empty-state message — only renders when ``runs`` is empty AND no error."""
+    """Empty-state message - only renders when ``runs`` is empty AND no error.
+
+    FRONTEND-B-006 (Stage C humanization): the empty-state copy now names a
+    concrete next action (`backprop train ...`) instead of just "runs will
+    appear here." Norman 1988 affordance framing - tell the operator what to
+    do, not just what the screen is for.
+    """
     return rx.flex(
         rx.text(
             "No training runs recorded yet.",
@@ -217,8 +223,9 @@ def _empty_state() -> rx.Component:
             style={"color": "var(--bp-text-2)"},
         ),
         rx.text(
-            "Train a model from the Single run or Multi-run tab and runs "
-            "will appear here automatically.",
+            "Train a model to see it here. From the UI: open the Single run "
+            "or Multi-run tab and click Start. From the shell: run "
+            "`backprop train <model> <dataset.jsonl>` and refresh this page.",
             size="1",
             style={"color": "var(--bp-muted)"},
         ),
@@ -304,24 +311,34 @@ def runs_page() -> rx.Component:
                         ),
                         rx.fragment(),
                     ),
+                    # FRONTEND-B-006 (Stage C humanization): mutex between
+                    # error / empty-state / table. When an error is present
+                    # we render ONLY the callout above (no empty-state table
+                    # chrome below it). When there is no error and no rows,
+                    # we render the empty-state with its concrete next-action
+                    # copy. When there are rows, we render the table.
                     rx.cond(
-                        RunsState.runs.length() == 0,
+                        RunsState.error != "",
+                        rx.fragment(),
                         rx.cond(
-                            ~RunsState.loading & (RunsState.error == ""),
-                            _empty_state(),
-                            rx.fragment(),
-                        ),
-                        rx.flex(
-                            _table_header(),
-                            rx.foreach(RunsState.runs, _run_row),
-                            direction="column",
-                            width="100%",
-                            style={
-                                "background": "var(--bp-surface)",
-                                "border": "1px solid var(--bp-border)",
-                                "border_radius": "var(--bp-r-2)",
-                                "overflow": "hidden",
-                            },
+                            RunsState.runs.length() == 0,
+                            rx.cond(
+                                ~RunsState.loading,
+                                _empty_state(),
+                                rx.fragment(),
+                            ),
+                            rx.flex(
+                                _table_header(),
+                                rx.foreach(RunsState.runs, _run_row),
+                                direction="column",
+                                width="100%",
+                                style={
+                                    "background": "var(--bp-surface)",
+                                    "border": "1px solid var(--bp-border)",
+                                    "border_radius": "var(--bp-r-2)",
+                                    "overflow": "hidden",
+                                },
+                            ),
                         ),
                     ),
                     rx.cond(

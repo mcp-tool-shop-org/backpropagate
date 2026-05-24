@@ -177,6 +177,17 @@ class MultiRunConfig:
     # exceeding the ceiling. Default 0 = "no ceiling, current behavior."
     max_grad_accumulation: int = 0
 
+    # Stage C amend BACKEND-B-002: maximum wall-clock seconds the run loop
+    # waits for a GPU cooldown event before aborting. The pause polling loop
+    # at multi_run.py blocks while ``_gpu_pause_event`` is set. Without a
+    # ceiling, a wedged GPU (thermal-runaway sensor stuck high, daemon
+    # crash, driver hang) blocks the run forever and the operator's only
+    # escape is SIGINT — which is invisible in monitoring dashboards.
+    # Default 1800.0 = 30 minutes; set 0.0 to disable the timeout entirely
+    # (the prior unbounded behavior, preserved for operators who explicitly
+    # opt out).
+    max_pause_seconds: float = 1800.0
+
 
 # Backwards compatibility alias
 SpeedrunConfig = MultiRunConfig
@@ -317,26 +328,55 @@ class MultiRunTrainer:
               does not expose it directly but inherits the behaviour via
               its internal Trainer instance.
         """
-        # Build config
+        # Build config.
+        #
+        # Stage C amend BACKEND-B-010: when BOTH ``config`` and the
+        # convenience kwarg name the same field with different values,
+        # emit a single WARN line per conflict so the operator sees the
+        # silent precedence rule (convenience kwarg wins). Pre-fix, a
+        # user supplying ``config=MyConfig(num_runs=5)`` AND
+        # ``num_runs=10`` got num_runs=10 with no signal — a refactor
+        # that flipped one of the surfaces would change behavior
+        # invisibly. The fix is "warn, don't raise" because v1.4 is the
+        # promotion target for hard-fail semantics (per the recommended
+        # path in the audit). The warn includes the override direction
+        # so the operator can flip the call site cleanly.
+        explicit_config_supplied = config is not None
         self.config = config or MultiRunConfig()
 
+        def _warn_override(field: str, config_value: Any, kwarg_value: Any) -> None:
+            if explicit_config_supplied and config_value != kwarg_value:
+                logger.warning(
+                    f"MultiRunTrainer: convenience kwarg {field}={kwarg_value!r} "
+                    f"overrides config.{field}={config_value!r}. Pick ONE "
+                    f"source for this field — kwargs take precedence today "
+                    f"but v1.4 may promote this to a hard error."
+                )
+
         if num_runs is not None:
+            _warn_override("num_runs", self.config.num_runs, num_runs)
             self.config.num_runs = num_runs
         if steps_per_run is not None:
+            _warn_override("steps_per_run", self.config.steps_per_run, steps_per_run)
             self.config.steps_per_run = steps_per_run
         if samples_per_run is not None:
+            _warn_override("samples_per_run", self.config.samples_per_run, samples_per_run)
             self.config.samples_per_run = samples_per_run
         if checkpoint_dir is not None:
+            _warn_override("checkpoint_dir", self.config.checkpoint_dir, checkpoint_dir)
             self.config.checkpoint_dir = checkpoint_dir
         if merge_mode is not None:
             if isinstance(merge_mode, str):
                 try:
-                    self.config.merge_mode = MergeMode(merge_mode.lower())
+                    _resolved_mode = MergeMode(merge_mode.lower())
                 except ValueError:
                     raise ConfigurationError(
                         f"Invalid merge mode: '{merge_mode}'. Available: slao, simple"
                     ) from None
+                _warn_override("merge_mode", self.config.merge_mode, _resolved_mode)
+                self.config.merge_mode = _resolved_mode
             else:
+                _warn_override("merge_mode", self.config.merge_mode, merge_mode)
                 self.config.merge_mode = merge_mode
 
         self.model_name = model or settings.model.name
@@ -405,6 +445,13 @@ class MultiRunTrainer:
         # B-002: OOM-retry bookkeeping (lives across runs to detect a
         # cascading failure pattern; reset on each successful run).
         self._oom_consecutive_at_min_batch = 0
+
+        # Stage C amend BACKEND-B-015: session-wide OOM counter. NEVER
+        # resets — accumulates across the entire MultiRunTrainer.run()
+        # call so the final summary log can report "session: N OOMs
+        # survived across M runs" without losing signal when a clean
+        # run between OOM cascades resets ``_oom_consecutive_at_min_batch``.
+        self._session_oom_count: int = 0
 
         # Phase 4.3: Early stopping tracking
         self._validation_losses: list[float] = []
@@ -829,9 +876,52 @@ class MultiRunTrainer:
                 # Check if GPU pause is active (B-020: overheat protection).
                 # The monitor thread sets the event when overheating and clears it
                 # when the GPU is safe again. We poll here so the main thread blocks.
+                #
+                # Stage C amend BACKEND-B-002: bound the wait so a wedged GPU
+                # (sensor failure, daemon crash, thermal runaway with no
+                # recovery) doesn't block the run forever. Operator's escape
+                # was previously SIGINT; now a humanized error explains the
+                # condition and points at the lever (raise / disable the
+                # ceiling, or fix cooling).
                 if self._gpu_pause_event.is_set():
                     logger.info("Waiting for GPU cooldown before starting run...")
+                    pause_started = time.time()
+                    pause_ceiling = float(getattr(self.config, "max_pause_seconds", 0.0) or 0.0)
                     while self._gpu_pause_event.is_set() and not self._should_abort:
+                        if pause_ceiling > 0.0 and (time.time() - pause_started) > pause_ceiling:
+                            elapsed = time.time() - pause_started
+                            logger.error(
+                                f"GPU pause exceeded max_pause_seconds="
+                                f"{pause_ceiling:.0f}s (elapsed={elapsed:.0f}s, "
+                                f"run_id={self._run_id}, next run_index={run_idx}); "
+                                f"the cooldown event never cleared — likely a "
+                                f"wedged sensor, daemon crash, or thermal runaway "
+                                f"with no recovery. Aborting cleanly."
+                            )
+                            raise BackpropagateError(
+                                f"GPU cooldown wait exceeded max_pause_seconds="
+                                f"{pause_ceiling:.0f}s and the pause event never "
+                                f"cleared. The run loop will not proceed against "
+                                f"a GPU the monitor cannot confirm is safe.",
+                                code="RUNTIME_GPU_TEMPERATURE_CRITICAL",
+                                details={
+                                    "run_id": self._run_id,
+                                    "next_run_index": run_idx,
+                                    "elapsed_seconds": elapsed,
+                                    "max_pause_seconds": pause_ceiling,
+                                },
+                                suggestion=(
+                                    "Verify GPU cooling (nvidia-smi to confirm "
+                                    "temperature has actually recovered); if the "
+                                    "sensor is reporting bad data, restart the "
+                                    "GPU driver / nvidia-persistenced. To disable "
+                                    "the timeout entirely (prior unbounded "
+                                    "behavior), set max_pause_seconds=0 in "
+                                    "MultiRunConfig. To accept longer cooldowns, "
+                                    "raise the value (default 1800s = 30 min)."
+                                ),
+                                retryable=False,
+                            )
                         time.sleep(1.0)
 
                 # Phase 4.3: Use validation wrapper if validation or early stopping enabled
@@ -897,6 +987,20 @@ class MultiRunTrainer:
         # B-001: success path — emit run_ended explicitly. (The error path
         # already emitted run_ended inside the except above.)
         logger.info(f"run_ended run_id={self._run_id} status=ok")
+
+        # Stage C amend BACKEND-B-015: session-wide OOM summary. Surfaces
+        # the cumulative count even when each individual cascade was
+        # survived (so the per-cascade counter reset zero'd out the
+        # signal). Useful for post-mortem "did this session hit VRAM
+        # pressure?" diagnostics.
+        if self._session_oom_count > 0:
+            logger.info(
+                f"session_oom_summary run_id={self._run_id} "
+                f"total_oom_events={self._session_oom_count} "
+                f"runs_completed={len(self._runs)} "
+                f"(consider smaller model / shorter max_seq_length / "
+                f"4-bit quantization if this number is high for next session)"
+            )
 
         # Create final result
         total_duration = time.time() - start_time
@@ -1134,18 +1238,15 @@ class MultiRunTrainer:
                     loss_history[-1] if loss_history else 0.0
                 )
 
-                # Merge LoRA weights (B-008: passes run_id through for the
-                # divergence-trigger envelope)
-                if self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
-                    lora_state = self._get_lora_state_dict()
-                    merge_result = self._slao_merger.merge(
-                        lora_state,
-                        run_index=run_idx,
-                        run_id=self._run_id,
-                    )
-
-                # B-002: success resets the consecutive-OOM-at-floor counter.
-                self._oom_consecutive_at_min_batch = 0
+                # Stage C amend BACKEND-B-005: SLAO merge moved OUTSIDE
+                # this try block (below the loop break). The wrapping was
+                # too wide pre-fix — a SLAO_MERGE_DIVERGED exception would
+                # propagate through this except handler and a future
+                # SLAO error message that happens to contain "memory" or
+                # any other OOM-adjacent substring would be misclassified
+                # as an OOM and trigger a pointless batch-halving retry.
+                # Moving the merge below the break narrows the try-block
+                # scope to just trainer.train() + loss extraction.
                 break  # Successful run — exit retry loop
 
             except (KeyboardInterrupt, SystemExit):
@@ -1248,15 +1349,22 @@ class MultiRunTrainer:
                         self._trainer.gradient_accumulation = new_accum
                         self._oom_consecutive_at_min_batch = 0
                         oom_retries += 1
+                        # Stage C amend BACKEND-B-015: track session-wide
+                        # OOM count for the post-mortem summary line.
+                        self._session_oom_count += 1
                         continue  # Retry with new args
 
                     # Already at min batch — count toward the abort threshold.
                     self._oom_consecutive_at_min_batch += 1
                     oom_retries += 1
+                    # Stage C amend BACKEND-B-015: track session-wide
+                    # OOM count even when the retry budget is exhausted.
+                    self._session_oom_count += 1
                     logger.error(
                         f"OOM at batch=1 (run_id={self._run_id}) "
                         f"consecutive={self._oom_consecutive_at_min_batch}/"
-                        f"{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
+                        f"{self._OOM_MAX_RETRIES_AT_MIN_BATCH} "
+                        f"session_oom_count={self._session_oom_count}"
                     )
                     if self._oom_consecutive_at_min_batch >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
                         # Stage C BACKEND-B-003: use RUNTIME_OOM_RECOVERY_EXHAUSTED
@@ -1314,6 +1422,60 @@ class MultiRunTrainer:
                     self._aggregate_loss.extend(loss_history)
                     final_loss = loss_history[-1] if loss_history else 0.0
                 break
+
+        # Stage C amend BACKEND-B-005: SLAO merge OUTSIDE the OOM-retry
+        # try block. Pre-fix, a SLAO_MERGE_DIVERGED exception propagating
+        # out of the inner try could be misclassified by the OOM matcher
+        # (any future error message that happens to contain an OOM-
+        # adjacent substring would trigger a batch-halving retry on a
+        # divergence event — wrong recovery, wasted retries). Now the
+        # merge runs after the loop, with bookend log lines for triage,
+        # and its exceptions propagate cleanly out of _execute_run to
+        # the caller. Skip the merge on failed runs — merging against a
+        # broken/empty LoRA state would either produce nonsense or
+        # propagate a misleading error.
+        merge_result = None
+        if not run_failed and self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
+            logger.info(
+                f"merge_started run_id={self._run_id} run_index={run_idx} "
+                f"merge_mode=slao"
+            )
+            try:
+                lora_state = self._get_lora_state_dict()
+                merge_result = self._slao_merger.merge(
+                    lora_state,
+                    run_index=run_idx,
+                    run_id=self._run_id,
+                )
+                logger.info(
+                    f"merge_complete run_id={self._run_id} run_index={run_idx} "
+                    f"a_merged={merge_result.a_matrices_merged} "
+                    f"b_merged={merge_result.b_matrices_merged}"
+                )
+                # Stage C amend BACKEND-B-015: only reset the OOM
+                # consecutive-at-min-batch counter AFTER both train AND
+                # merge have succeeded. Pre-fix the reset happened
+                # inside the try block at the success path, so if the
+                # merge then raised, the next OOM cascade started with
+                # a clean counter and the cumulative "how many failures
+                # have we accumulated this session?" signal was lost.
+                self._oom_consecutive_at_min_batch = 0
+            except Exception as merge_exc:
+                logger.error(
+                    f"merge_failed run_id={self._run_id} run_index={run_idx} "
+                    f"exc={type(merge_exc).__name__}: {merge_exc}"
+                )
+                raise
+        elif not run_failed:
+            # No-merge run (simple mode or no merger). Reset the floor
+            # counter at the equivalent success boundary so behavior
+            # matches the SLAO path.
+            self._oom_consecutive_at_min_batch = 0
+        # NOTE on the run_failed path: we deliberately DO NOT reset the
+        # floor counter here. _session_oom_count below records the
+        # session-wide signal; the per-cascade counter is reset only on
+        # a true success so cascading failures across runs accumulate
+        # correctly through the abort threshold.
 
         # Save checkpoint (even on failure — preserves partial work)
         if self.config.save_every_run:
@@ -1405,15 +1567,69 @@ class MultiRunTrainer:
         Phase 4.3: Wraps _execute_run to add validation loss computation.
         Phase 5.3: Updates checkpoint manager with validation loss.
 
+        Stage C amend BACKEND-B-001: failed runs (``run_result.failed=True``,
+        e.g. after exhausted OOM recovery) leave the model in an indeterminate
+        state — its weights may be partially-restored from the pre-OOM
+        snapshot, may be the freshly-OOMed copy, and the per-run SFTTrainer
+        was del'd in the failure cleanup. Computing validation loss against
+        that model yields a value that's either NaN/inf or simply
+        non-comparable to the prior runs' val_losses; either way, threading
+        it into ``_best_val_loss`` / early-stop comparisons poisons the rest
+        of the session. The skip is explicit: ``validation_loss=None`` on
+        failed runs, and a humanized log line explains why.
+
+        Stage C amend BACKEND-B-001: NaN/inf guard on the val_loss itself.
+        If a validation forward pass returns a non-finite loss (e.g. mixed-
+        precision overflow on a recovered model), surface it but DO NOT let
+        it overwrite ``_best_val_loss`` — the next comparison would always
+        produce NaN and early-stop would never fire again.
+
         Returns:
             Tuple of (RunResult, validation_loss or None)
         """
+        import math as _math
+
         run_result = self._execute_run(run_idx, full_dataset, checkpoint_dir)
 
         # Compute validation loss if enabled
         val_loss = None
         if self.config.validate_every_run:
+            if run_result.failed:
+                # Stage C amend BACKEND-B-001: skip validation for failed runs.
+                # The model state is suspect; computing val_loss against it
+                # would produce a number that can never be meaningfully
+                # compared to subsequent runs' losses. Operators see this in
+                # the run record as ``validation_loss=None`` and in the log
+                # as the explanatory warning below.
+                logger.warning(
+                    f"Run {run_idx} failed ({run_result.failure_reason}); "
+                    f"skipping validation loss computation — model state "
+                    f"after failure is indeterminate and feeding val_loss "
+                    f"into early-stop / checkpoint scoring would poison "
+                    f"subsequent comparisons. validation_loss=None for "
+                    f"run_id={self._run_id}."
+                )
+                run_result.validation_loss = None
+                return run_result, None
+
             val_loss = self._compute_validation_loss(full_dataset, run_idx)
+
+            # Stage C amend BACKEND-B-001: NaN/inf guard. A non-finite
+            # val_loss (mixed-precision overflow, divergent gradient, etc.)
+            # surfaces here. Do NOT propagate it into ``_best_val_loss``;
+            # do NOT use it for checkpoint scoring. The run_result keeps the
+            # observed value so the operator's post-mortem can see it.
+            if val_loss is not None and not _math.isfinite(val_loss):
+                logger.warning(
+                    f"Run {run_idx} validation_loss is non-finite "
+                    f"({val_loss!r}); recording on run_result but NOT "
+                    f"threading into early-stop / checkpoint scoring to "
+                    f"avoid poisoning subsequent comparisons. "
+                    f"run_id={self._run_id}."
+                )
+                run_result.validation_loss = val_loss
+                return run_result, None
+
             run_result.validation_loss = val_loss
 
             # Phase 5.3: Update checkpoint with validation loss for smarter pruning
@@ -1950,8 +2166,27 @@ class MultiRunTrainer:
         complementary ``set()`` lives in :meth:`_on_gpu_critical` — together
         they implement the safety promise the docstring made and the
         original wiring forgot.
+
+        Stage C amend BACKEND-B-025: thread-safety contract for
+        ``_gpu_max_temp`` and ``_gpu_max_vram``.
+
+        These two attributes are mutated from the GPU monitor thread
+        (this callback) and read from the main thread at the end of each
+        run (``_execute_run`` populates RunResult). Under CPython's GIL,
+        single-attribute float assignment IS atomic — neither read sees
+        a torn float. The cross-attribute consistency is NOT atomic: a
+        main-thread read of ``(_gpu_max_temp, _gpu_max_vram)`` may
+        observe temp from update N and vram from update N+1. For these
+        ADVISORY metrics (post-mortem max values, not a real-time
+        decision input) the per-attribute atomicity is sufficient; we
+        deliberately do NOT add a threading.Lock here because the
+        contention cost on every poll outweighs the cross-attribute
+        consistency win for a non-load-bearing pair. v1.4 may revisit
+        this if a metrics dashboard needs strict pairing.
         """
-        # Track max values
+        # Track max values (per-attribute atomic under GIL; cross-attribute
+        # consistency is not guaranteed and deliberately not enforced —
+        # see contract above).
         if status.temperature_c and status.temperature_c > self._gpu_max_temp:
             self._gpu_max_temp = status.temperature_c
 
@@ -2031,6 +2266,24 @@ class MultiRunTrainer:
         model = self._trainer._model
         tokenizer = self._trainer._tokenizer
 
+        # Stage C amend BACKEND-B-017: defensive None-check on the model
+        # before any .eval() / forward call. A model can legitimately be
+        # None when a SLAO restore partially failed and the trainer is in
+        # a half-built state; the prior code would AttributeError deep in
+        # .eval(), producing a stack trace that pointed at "the validation
+        # loop" instead of the real root cause (a broken model). Return
+        # +inf so the early-stop / checkpoint-scoring math treats this
+        # run as worst-case and the operator's session moves on.
+        if model is None:
+            logger.warning(
+                f"_compute_validation_loss: model is None for run {run_idx} "
+                f"(run_id={self._run_id}); the trainer state is incomplete "
+                f"— likely a partially-failed SLAO restore. Returning +inf "
+                f"so this run is treated as worst-case for early-stop / "
+                f"checkpoint scoring; subsequent runs continue normally."
+            )
+            return float("inf")
+
         # Dedicated hold-out split: reserve the last 10% of the dataset for
         # validation. Training data (_get_data_chunk) draws indices from
         # [0, val_start) — wrap-around is constrained to the training pool by
@@ -2043,8 +2296,22 @@ class MultiRunTrainer:
 
         val_dataset = full_dataset.select(val_indices)
 
-        # Compute loss on validation set
-        model.eval()
+        # Compute loss on validation set.
+        #
+        # Stage C amend BACKEND-B-017: guard .eval() against AttributeError
+        # on a corrupt model object so we don't poison the model's training
+        # mode for the next run. If .eval() fails the model state is
+        # already broken; return +inf and let upstream early-stop logic
+        # see this as a worst-case run.
+        try:
+            model.eval()
+        except AttributeError as exc:
+            logger.warning(
+                f"_compute_validation_loss: model.eval() raised "
+                f"AttributeError ({exc}); model object is corrupt. "
+                f"Returning +inf so this run is treated as worst-case."
+            )
+            return float("inf")
         try:
             total_loss = 0.0
             count = 0
@@ -2099,8 +2366,23 @@ class MultiRunTrainer:
                         logger.warning(f"Skipped validation sample (error: {e})")
         finally:
             # Ensure model is restored to training mode on ANY exit path
-            # (normal completion, exception, KeyboardInterrupt, etc.)
-            model.train()
+            # (normal completion, exception, KeyboardInterrupt, etc.).
+            #
+            # Stage C amend BACKEND-B-017: guard against AttributeError +
+            # None — a corrupt model object from a partially-failed SLAO
+            # restore shouldn't poison the next run's exception trace with
+            # a misleading "validation loop" frame. Best-effort restore;
+            # if it can't run we log and move on.
+            try:
+                if model is not None:
+                    model.train()
+            except AttributeError as restore_exc:
+                logger.warning(
+                    f"_compute_validation_loss: model.train() restore "
+                    f"raised AttributeError ({restore_exc}); model object "
+                    f"is corrupt and could not be returned to training "
+                    f"mode. Next training step may behave unpredictably."
+                )
 
         if skipped > 0:
             logger.warning(f"Skipped {skipped} validation samples due to errors")

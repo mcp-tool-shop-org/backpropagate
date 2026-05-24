@@ -47,14 +47,38 @@ class TestPydanticAvailability:
 
 
 class TestFallbackEnvParsing:
-    """Tests for fallback environment variable parsing."""
+    """Tests for fallback environment variable parsing.
+
+    TESTS-B-008 (Stage C humanization): the prior ``test_get_env_with_value``
+    had an empty ``pass`` body that asserted nothing — a false-safety claim
+    that env-var read paths were covered. Replaced with an actual round-trip
+    via the public ``Settings`` surface (which exercises ``_get_env`` in
+    fallback mode and the env-prefix machinery in pydantic mode).
+    """
 
     def test_get_env_with_value(self):
-        """Environment variable retrieved correctly."""
-        with patch.dict(os.environ, {"BACKPROPAGATE_TEST_KEY": "test_value"}):
-            # Import functions that should be available in fallback
-            pass
-            # The fallback implementation uses _get_env internally
+        """Environment variable round-trips through Settings to a typed field.
+
+        Uses ``BACKPROPAGATE_TRAINING__MAX_STEPS=200`` because TrainingConfig
+        is one of the nested configs exercised in both pydantic and fallback
+        modes; if the env-var read path breaks, this assertion fires loudly
+        instead of silently passing.
+        """
+        from backpropagate.config import PYDANTIC_SETTINGS_AVAILABLE, Settings
+
+        with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__MAX_STEPS": "200"}):
+            s = Settings()
+            if PYDANTIC_SETTINGS_AVAILABLE:
+                # pydantic-settings uses env_nested_delimiter="__" so this
+                # env var maps to Settings().training.max_steps.
+                assert s.training.max_steps == 200, (
+                    f"Expected max_steps=200 from env var, got {s.training.max_steps}"
+                )
+            else:
+                # Fallback dataclass doesn't auto-wire the nested env var;
+                # validate the helper itself works correctly via _get_env.
+                from backpropagate.config import _get_env  # type: ignore[attr-defined]
+                assert _get_env("TRAINING__MAX_STEPS") == "200"
 
     def test_get_env_default(self):
         """Default value returned when env var missing."""
@@ -70,31 +94,82 @@ class TestFallbackEnvParsing:
 
 
 class TestFallbackTypeConversion:
-    """Tests for type conversion in fallback mode."""
+    """Tests for type conversion in fallback mode.
+
+    TESTS-B-008 (Stage C humanization): the prior tests asserted only
+    ``isinstance(x, int)`` / ``isinstance(x, float)`` / ``isinstance(x, bool)``
+    on the default values, so they would have passed unchanged even if the
+    env var was never read. Each test now asserts the actual converted
+    *value* changed after patching the env, so a regression in env-var
+    conversion fails loudly.
+    """
 
     def test_int_conversion(self):
-        """Integer environment variables converted correctly."""
-        from backpropagate.config import Settings
+        """Integer environment variables converted correctly.
+
+        Patching ``BACKPROPAGATE_TRAINING__MAX_STEPS=200`` should yield
+        ``s.training.max_steps == 200`` (not the default 100). If the
+        conversion machinery breaks, the value stays at the default and
+        this assertion fails — which is the point.
+        """
+        from backpropagate.config import PYDANTIC_SETTINGS_AVAILABLE, Settings
 
         with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__MAX_STEPS": "200"}):
-            # In pydantic mode this would work automatically
-            # In fallback mode we test defaults work
             s = Settings()
             assert isinstance(s.training.max_steps, int)
+            if PYDANTIC_SETTINGS_AVAILABLE:
+                # In pydantic mode, the env var is read and converted to int.
+                assert s.training.max_steps == 200, (
+                    f"Env var BACKPROPAGATE_TRAINING__MAX_STEPS=200 should "
+                    f"yield max_steps=200, got {s.training.max_steps}"
+                )
+            else:
+                # Fallback mode: nested env vars are not auto-wired into
+                # the dataclass — just verify the int default still parses
+                # cleanly and stays an int.
+                assert s.training.max_steps == 100
 
     def test_float_conversion(self):
-        """Float environment variables converted correctly."""
-        from backpropagate.config import Settings
+        """Float environment variables converted correctly.
 
-        s = Settings()
-        assert isinstance(s.training.learning_rate, float)
+        Patches ``BACKPROPAGATE_TRAINING__LEARNING_RATE=1e-3`` and asserts
+        the value actually changed from the 2e-4 default.
+        """
+        from backpropagate.config import PYDANTIC_SETTINGS_AVAILABLE, Settings
+
+        with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__LEARNING_RATE": "1e-3"}):
+            s = Settings()
+            assert isinstance(s.training.learning_rate, float)
+            if PYDANTIC_SETTINGS_AVAILABLE:
+                assert s.training.learning_rate == 1e-3, (
+                    f"Env var BACKPROPAGATE_TRAINING__LEARNING_RATE=1e-3 "
+                    f"should yield learning_rate=1e-3, got "
+                    f"{s.training.learning_rate}"
+                )
+            else:
+                # Fallback default is 2e-4
+                assert s.training.learning_rate == 2e-4
 
     def test_bool_conversion(self):
-        """Boolean environment variables converted correctly."""
-        from backpropagate.config import Settings
+        """Boolean environment variables converted correctly.
 
-        s = Settings()
-        assert isinstance(s.training.bf16, bool)
+        Patches ``BACKPROPAGATE_TRAINING__BF16=false`` and asserts the
+        value flipped from the True default. Covers the bool-truthiness
+        round-trip from string to typed field.
+        """
+        from backpropagate.config import PYDANTIC_SETTINGS_AVAILABLE, Settings
+
+        with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__BF16": "false"}):
+            s = Settings()
+            assert isinstance(s.training.bf16, bool)
+            if PYDANTIC_SETTINGS_AVAILABLE:
+                assert s.training.bf16 is False, (
+                    f"Env var BACKPROPAGATE_TRAINING__BF16=false should "
+                    f"yield bf16=False, got {s.training.bf16}"
+                )
+            else:
+                # Fallback default is True
+                assert s.training.bf16 is True
 
 
 # =============================================================================

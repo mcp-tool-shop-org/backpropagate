@@ -1,24 +1,25 @@
 """
-Backpropagate — Reflex state classes
+Backpropagate - Reflex state classes
 =====================================
 
-The ``rx.State`` subclasses that drive the four UI surfaces (Train, Multi-Run,
-Export, Dataset). Phase 1 stubs: the field definitions match the design digest
-contract, and the event handlers transition state without wiring to the
-training backend yet. Phase 3 of the migration plan replaces the stubs with
-real ``backpropagate.Trainer`` / ``backpropagate.MultiRunTrainer`` integration.
+The ``rx.State`` subclasses that drive the five UI surfaces (Train, Multi-Run,
+Export, Dataset, Runs). ``TrainState`` / ``MultiRunState`` / ``ExportState``
+remain pre-Phase-3 stubs for the backend-write side (Start training is still a
+placeholder until ``Trainer`` integration lands); ``DatasetState`` is real
+(file upload + size-cap streaming + validator) as of v1.2.0; ``RunsState`` is
+real (RunHistoryManager-backed read of on-disk run JSON) as of v1.2.0
+(FRONTEND-F-RUN-HISTORY-PAGE).
 
 The state classes are intentionally split (not one mega-class) so each
 surface's WebSocket bundle stays small. Reflex coalesces the per-class state
 into a single client connection automatically.
 
-A shared ``_TrainConfigMixin`` carries the Model + Training-shape + LoRA +
-Dataset config fields plus their validated setters; ``TrainState`` and
-``MultiRunState`` both inherit, so config typed on one surface persists when
-the operator switches to the other. The setters fan in for every numeric and
-path-shaped input; numeric clamps land in the setter (not the form) so the
-``Trainer`` hookup in Phase 3 sees validated state regardless of the input
-route.
+Config fields shared by ``TrainState`` and ``MultiRunState`` (Model, Training
+shape, LoRA, Dataset) are duplicated by design: Reflex's State metaclass only
+auto-registers event handlers DIRECTLY declared on the ``rx.State`` subclass
+(plain Python mixin inheritance is invisible to the framework's event-trigger
+scan, per 2026-05-22 verification). The setters route through module-level
+``_apply_*`` helpers so the duplicated fields share one validation contract.
 """
 
 from __future__ import annotations
@@ -424,14 +425,18 @@ class TrainState(rx.State):
     def start_training(self) -> None:
         """Stub handler for "Start training" button.
 
-        Transitions to ``loading`` and writes a placeholder event so the
-        skeleton's side rail visibly responds to the click. Phase 3 will
-        replace this with a real ``Trainer.train(...)`` call dispatched to
-        a background task.
+        Transitions to ``loading`` and APPENDS a placeholder event so the
+        skeleton's side rail visibly responds to the click without erasing
+        prior log lines (FRONTEND-B-LOW-EVENTS-APPEND, Stage C humanization
+        - the previous shape ``self.events = [...]`` overwrote any prior
+        events, which was confusing during repeated stop/start cycles).
+        Phase 3 will replace this with a real ``Trainer.train(...)`` call
+        dispatched to a background task.
         """
         self.run_state = "loading"
         self.events = [
-            {"t": "00:00:00", "level": "info", "msg": "[stub] training start clicked"}
+            *self.events,
+            {"t": "00:00:00", "level": "info", "msg": "[stub] training start clicked"},
         ]
 
     @rx.event
@@ -748,7 +753,17 @@ class DatasetState(rx.State):
         try:
             base = get_ui_output_dir()
         except Exception as exc:  # noqa: BLE001
-            self.upload_error = f"Output dir unavailable: {exc}"
+            # FRONTEND-B-007 (Stage C humanization): route the raw OSError /
+            # BackpropagateError through sanitize_error_for_user so the UI
+            # banner cannot leak operator paths (FB-011 invariant).
+            from .ui_security import sanitize_error_for_user
+
+            message, suggestion = sanitize_error_for_user(
+                exc, operation="resolving the UI output directory"
+            )
+            self.upload_error = (
+                message + (f" Try: {suggestion}" if suggestion else "")
+            )
             return
 
         upload_dir = base / "uploads"
@@ -771,18 +786,83 @@ class DatasetState(rx.State):
                 )
                 return
             filename = getattr(f, "filename", None) or "unnamed"
+            # FRONTEND-B-004 (Stage C humanization): stream-read in fixed-size
+            # chunks with a running size counter so the cap is enforced
+            # incrementally rather than after a full in-memory buffer. Peak
+            # memory per upload is bounded at max_bytes + _CHUNK regardless of
+            # what the client sends; a 10 GB rogue payload claiming to be a
+            # .jsonl is rejected after the first chunk over the cap rather
+            # than buffering the whole 10 GB.
+            #
+            # The fallback path covers reader objects that lack a chunked
+            # async read (the rx.upload framing exposes ``await f.read()`` as
+            # an all-bytes call; if the underlying reader is something else,
+            # we still bail safely).
+            _CHUNK = 1 << 20  # 1 MB per chunk
+            chunks: list[bytes] = []
+            size = 0
             try:
-                data = await f.read()
-            except Exception as exc:  # noqa: BLE001
-                self.upload_error = f"Could not read {filename}: {exc}"
-                return
+                # Probe for chunked-read support. ``read(n)`` returning bytes
+                # is the asyncio.StreamReader contract; rx.upload's wrapper
+                # supports it as of Reflex 0.9.x.
+                while True:
+                    chunk = await f.read(_CHUNK)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > max_bytes:
+                        # Drop already-buffered chunks; we never persist a
+                        # rejected upload.
+                        chunks.clear()
+                        self.upload_error = (
+                            f"Rejected {filename}: exceeds "
+                            f"{DEFAULT_SECURITY_CONFIG.max_upload_size_mb} MB "
+                            "cap (aborted mid-stream). Trim the file or "
+                            "increase BACKPROPAGATE_UI__MAX_UPLOAD_SIZE_MB."
+                        )
+                        return
+                    chunks.append(chunk)
+            except TypeError:
+                # Reader doesn't honor a chunk-size argument (e.g. a
+                # one-shot bytes object surfaced as a fake reader); fall
+                # back to a single read and the post-buffer size check.
+                try:
+                    data = await f.read()
+                except Exception as exc:  # noqa: BLE001
+                    from .ui_security import sanitize_error_for_user
 
-            if len(data) > max_bytes:
+                    message, suggestion = sanitize_error_for_user(
+                        exc, operation=f"reading upload '{filename}'"
+                    )
+                    self.upload_error = (
+                        message
+                        + (f" Try: {suggestion}" if suggestion else "")
+                    )
+                    return
+                if len(data) > max_bytes:
+                    self.upload_error = (
+                        f"Rejected {filename}: exceeds "
+                        f"{DEFAULT_SECURITY_CONFIG.max_upload_size_mb} MB cap. "
+                        "Trim the file or increase "
+                        "BACKPROPAGATE_UI__MAX_UPLOAD_SIZE_MB."
+                    )
+                    return
+                chunks = [data]
+            except Exception as exc:  # noqa: BLE001
+                # FRONTEND-B-007 (Stage C humanization): never echo raw OSError
+                # messages into the UI banner — operator paths leak via the
+                # exception repr.
+                from .ui_security import sanitize_error_for_user
+
+                message, suggestion = sanitize_error_for_user(
+                    exc, operation=f"reading upload '{filename}'"
+                )
                 self.upload_error = (
-                    f"Rejected {filename}: exceeds "
-                    f"{DEFAULT_SECURITY_CONFIG.max_upload_size_mb} MB cap."
+                    message + (f" Try: {suggestion}" if suggestion else "")
                 )
                 return
+
+            data = b"".join(chunks)
 
             # Stage to a temp file so FileValidator can run its file-on-disk
             # checks (extension + size + magic-bytes when enabled).
@@ -936,11 +1016,25 @@ class RunsState(rx.State):
             try:
                 rows = manager.list_runs(status=status, limit=self._DEFAULT_LIMIT)
             except ValueError as exc:
+                # ValueError is operator-actionable (bad filter value); the
+                # exception message itself is shaped for display.
                 self.error = f"Invalid filter: {exc}"
                 self.runs = []
                 return
             except Exception as exc:  # noqa: BLE001 — surface as operator string
-                self.error = f"Could not load runs: {exc}"
+                # FRONTEND-B-007 (Stage C humanization): route through
+                # sanitize_error_for_user so raw OSError / JSONDecodeError
+                # messages (which embed filesystem paths) don't leak into the
+                # UI banner. The full traceback is still logged server-side
+                # via the caller's logger.exception (FB-011 invariant).
+                from .ui_security import sanitize_error_for_user
+
+                message, suggestion = sanitize_error_for_user(
+                    exc, operation="loading run history"
+                )
+                self.error = (
+                    message + (f" Try: {suggestion}" if suggestion else "")
+                )
                 self.runs = []
                 return
 
@@ -985,12 +1079,44 @@ class RunsState(rx.State):
         finally:
             self.loading = False
 
+    # Canonical status set. Mirrors the values RunHistoryManager.list_runs
+    # accepts; the dropdown in pages/runs.py renders the same set. Update
+    # both surfaces together when adding a new status.
+    _STATUS_FILTER_VALUES: tuple[str, ...] = (
+        "",
+        "running",
+        "completed",
+        "failed",
+        "interrupted",
+    )
+
     @rx.event
     def set_status_filter(self, value: str) -> None:
-        """Update the status filter and reload."""
-        if value in ("", "running", "completed", "failed", "interrupted"):
+        """Update the status filter and reload.
+
+        Unknown values are silently discarded (the previous filter persists)
+        but logged at WARNING so the silent-drop is observable in operator
+        logs - FRONTEND-B-014 (Stage C humanization). A future status added
+        in RunHistoryManager but missing from this list would otherwise
+        present as 'filter does nothing' with no breadcrumb.
+
+        ``load_runs`` is only invoked when the value is accepted - the
+        previous code unconditionally reloaded even on rejection, which
+        produced a confusing double-trigger of the table.
+        """
+        if value in self._STATUS_FILTER_VALUES:
             self.status_filter = value
-        self.load_runs()
+            self.load_runs()
+            return
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "RunsState: status filter received unknown value %r "
+            "(keeping previous %r). Allowed values: %s",
+            value,
+            self.status_filter,
+            ", ".join(repr(v) for v in self._STATUS_FILTER_VALUES),
+        )
 
     @rx.event
     def set_output_dir_override(self, value: str) -> None:
@@ -1005,6 +1131,63 @@ class RunsState(rx.State):
     def clear_error(self) -> None:
         """Dismiss the error banner."""
         self.error = ""
+
+
+# ---------------------------------------------------------------------------
+# AuthBadgeState - backs the footer auth-badge UI
+# (FRONTEND-F-FOOTER-AUTH-BADGE, Stage C humanization).
+# ---------------------------------------------------------------------------
+#
+# Reads ``ui_security.get_auth_badge_context()`` at first access and exposes
+# the 6 fields the footer chip needs. The state is server-side only - the
+# fields are populated from env vars that the CLI exports BEFORE spawning the
+# Reflex subprocess, so the values are stable for the lifetime of the UI
+# process. No event handlers mutate the fields.
+#
+# Critically: this class READS the auth posture; it does NOT participate in
+# auth enforcement. The GHSA-f65r-h4g3-3h9h contracts (pre-accept WS cookie
+# validation, 4-mode resolution, constant-time compares, Host/Origin
+# allowlists) remain the exclusive responsibility of
+# ``ui_app/auth.py::basic_auth_transformer``.
+
+
+class AuthBadgeState(rx.State):
+    """State backing the footer auth-mode badge.
+
+    All 6 fields are populated at class-init from the env-var surface the
+    middleware also consumes (``ui_security.get_auth_badge_context``). They
+    are read-only from the operator's perspective: the badge reflects the
+    posture the CLI established at launch.
+    """
+
+    mode_key: str = ""
+    mode_color: str = "green"
+    mode_text: str = ""
+    hover_text: str = ""
+    bind_host: str = ""
+    bind_port: str = ""
+    reachable_from: str = ""
+
+    @rx.event
+    def refresh(self) -> None:
+        """Recompute the badge state from the current env.
+
+        Mounted on the chrome's footer ``on_mount`` so a refreshed env var
+        (rare - the CLI exports them once at launch) is reflected without a
+        process restart. The cost is one ``os.environ`` snapshot per page
+        load, which is dwarfed by every other request the Reflex backend
+        handles.
+        """
+        from .ui_security import get_auth_badge_context
+
+        ctx = get_auth_badge_context()
+        self.mode_key = ctx.mode_key
+        self.mode_color = ctx.mode_color
+        self.mode_text = ctx.mode_text
+        self.hover_text = ctx.hover_text
+        self.bind_host = ctx.bind_host
+        self.bind_port = ctx.bind_port
+        self.reachable_from = ctx.reachable_from
 
 
 __all__ = [
@@ -1022,4 +1205,5 @@ __all__ = [
     "ExportState",
     "DatasetState",
     "RunsState",
+    "AuthBadgeState",
 ]

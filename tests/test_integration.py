@@ -12,8 +12,6 @@ Tests cover:
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # =============================================================================
 # END-TO-END TRAINING TESTS
 # =============================================================================
@@ -449,63 +447,16 @@ class TestE2EExportAndInference:
 # =============================================================================
 # UI INTEGRATION TESTS
 # =============================================================================
-
-@pytest.mark.skip(
-    reason=(
-        "Gradio-era module-level ``backpropagate.ui.state`` global removed in "
-        "v1.1.0 (Reflex migration). The Reflex equivalent — rx.State classes "
-        "in backpropagate.ui_state — gets fresh integration tests in Phase 3."
-    )
-)
-class TestUITrainAndMonitor:
-    """Tests for UI training and monitoring integration.
-
-    DEPRECATED — see class-level pytest.mark.skip. The Reflex state model is
-    fundamentally different (rx.State subclasses, WebSocket coupling); these
-    tests will be rewritten as Reflex test-client assertions in Phase 3.
-    """
-
-    def test_ui_train_updates_state(self):
-        """Training through UI should update state."""
-        from backpropagate.ui import state
-
-        # Ensure clean state
-        state.is_training = False
-        state.trainer = None
-
-        # Test the state management
-        assert state.is_training is False
-
-        # Simulate training state change
-        state.is_training = True
-        assert state.is_training is True
-        state.is_training = False
-
-    def test_ui_state_tracks_loss_history(self):
-        """UI state should track loss history."""
-        from backpropagate.ui import state
-
-        # Simulate adding loss values
-        state.loss_history = []
-        state.loss_history.append(1.5)
-        state.loss_history.append(1.2)
-        state.loss_history.append(0.9)
-
-        assert len(state.loss_history) == 3
-        assert state.loss_history[-1] == 0.9
-
-    def test_ui_state_tracks_multi_run_progress(self):
-        """UI state should track multi-run progress."""
-        from backpropagate.ui import state
-
-        state.multi_run_is_running = True
-        state.multi_run_current_run = 3
-        state.multi_run_loss_history = [1.5, 1.3, 1.1, 0.9]
-        state.multi_run_run_boundaries = [2]
-
-        assert state.multi_run_is_running is True
-        assert state.multi_run_current_run == 3
-        assert len(state.multi_run_loss_history) == 4
+#
+# TESTS-B-010 (v1.3 Wave 3 Stage C, 2026-05-23): the prior
+# ``TestUITrainAndMonitor`` class was a class-level @pytest.mark.skip wrapping
+# three tests that referenced ``from backpropagate.ui import state`` — a
+# module that was deleted in v1.2.0 Wave 4.5 (Gradio removal). The skip
+# reason cited "Reflex equivalents in Phase 3"; that work landed in v1.3
+# Wave 3 Stage C as ``tests/test_ui_states.py`` (60 smoke tests covering
+# TrainState, MultiRunState, ExportState, DatasetState). The dead skip
+# class was removed so an auditor reading the suite doesn't see permanent
+# "TODO disguised as skip" entries.
 
 
 class TestUICheckpointListUpdates:
@@ -773,18 +724,34 @@ class TestGPUSafetyIntegration:
             temp_emergency=95.0,
         )
 
-        # Test warning condition
+        # Test warning condition. 85C is between temp_warning=80 and
+        # temp_critical=90, so _evaluate_condition MUST return WARNING.
+        # TESTS-B-013 (Stage C humanization): the prior assertion accepted
+        # WARNING-or-WARM, which papered over a misclassification regression
+        # (WARM is a less-severe state). Pin the exact expected condition so
+        # a downgrade in severity is caught.
         warning_status = GPUStatus(
             available=True,
             temperature_c=85.0,
         )
         condition, reason = _evaluate_condition(warning_status, config)
-        assert condition == GPUCondition.WARNING or condition == GPUCondition.WARM
+        assert condition == GPUCondition.WARNING, (
+            f"85C with temp_warning=80, temp_critical=90 must be WARNING, "
+            f"got {condition} (reason: {reason})"
+        )
 
-        # Test critical condition
+        # Test critical condition. 92C is above temp_critical=90 (and below
+        # temp_emergency=95), so _evaluate_condition MUST return CRITICAL.
+        # TESTS-B-013 (Stage C humanization): the prior assertion accepted
+        # WARNING-or-CRITICAL, which would have masked a regression where a
+        # critical-temp reading got misclassified as a mere warning — the
+        # exact class of bug the GPU safety system exists to prevent.
         critical_status = GPUStatus(
             available=True,
             temperature_c=92.0,
         )
         condition, reason = _evaluate_condition(critical_status, config)
-        assert condition in [GPUCondition.WARNING, GPUCondition.CRITICAL]
+        assert condition == GPUCondition.CRITICAL, (
+            f"92C with temp_critical=90 must be CRITICAL, "
+            f"got {condition} (reason: {reason})"
+        )

@@ -344,18 +344,61 @@ class TestCSRFProtection:
         assert "No CSRF token found" in msg
 
     def test_validate_expired_token(self):
-        """CSRFProtection rejects expired token."""
-        csrf = CSRFProtection(expiry_minutes=0)  # Immediate expiry
+        """CSRFProtection rejects expired token (TESTS-B-012 v1.3 Stage C:
+        deterministic clock).
+
+        Replaces the prior ``expiry_minutes=0 + time.sleep(0.1)`` pattern
+        which raced on slow Windows CI: the floor-division on ``age_minutes``
+        and the ~100ms sleep occasionally produced ``age_minutes == 0``
+        (not ``> 0``), letting the token through silently. This is the same
+        fix shape v1.3 Wave 1 TESTS-A-009 applied to the JWT sister test.
+
+        New pattern: mint a token at real time, then directly override its
+        ``created_at`` to a past timestamp. The internal cleanup pass in
+        ``validate_token`` then sees age >> expiry_minutes deterministically,
+        evicts the token, and the validation lookup returns "expired"
+        rather than the more-ambiguous "no csrf token found" we'd see if
+        the cleanup happened before our manipulation. Zero wall-clock sleep.
+
+        We bypass ``patch("time.time")`` here because the cleanup pass
+        inside validate_token would otherwise race with the patched/real
+        time depending on test infra; directly setting the stored
+        CSRFToken's created_at attribute gives a deterministic age WITHOUT
+        depending on patch ordering.
+        """
+        csrf = CSRFProtection(expiry_minutes=1)  # 1-minute window
         session_id = "session123"
+
+        # Mint the token at real time, then directly forge its created_at
+        # to a past timestamp so the age check deterministically fires.
         token = csrf.generate_token(session_id)
-
-        time.sleep(0.1)  # Wait for expiry
-
+        # 2 minutes past (> expiry_minutes=1) — age check fires before cleanup
+        # is reached, since _cleanup_expired runs at the top of validate
+        # and would evict the token, then the lookup misses. By forging
+        # created_at to JUST over the expiry boundary (not centuries ago),
+        # we still trigger the expiry branch deterministically — both
+        # cleanup AND the explicit age check would classify this as
+        # expired; the cleanup happens first so we hit the "no csrf token"
+        # message. We need to verify the failure case either way, so the
+        # assertion accepts either documented failure mode but pins that
+        # ``valid is False`` and a security-relevant message is returned.
+        # Use time.time() - (expiry_minutes*60 + 1) to ensure the age is
+        # past the expiry; the operator-facing outcome is identical
+        # (token rejected) so accepting both messages preserves the
+        # security contract test (cf. TESTS-B-020 which documents the
+        # disjunctive-message rationale).
+        csrf._tokens[session_id].created_at = time.time() - 120  # 2 min past
         valid, msg = csrf.validate_token(session_id, token)
 
         assert valid is False
-        # Token could be expired or cleaned up (both are valid outcomes)
-        assert "expired" in msg.lower() or "no csrf token" in msg.lower()
+        # The token's age is > expiry_minutes — either the cleanup pass
+        # evicted it (then lookup fails with "no csrf token found"), or
+        # the explicit age check fires ("expired"). Both are documented
+        # rejection paths; the security contract is that ``valid is False``.
+        # See TESTS-B-020 for the rationale on accepting both messages.
+        assert "expired" in msg.lower() or "no csrf token" in msg.lower(), (
+            f"Expected expiry-class rejection message, got {msg!r}"
+        )
 
     def test_validate_consumes_token(self):
         """CSRFProtection consumes token by default."""
@@ -387,16 +430,30 @@ class TestCSRFProtection:
         assert valid2 is True
 
     def test_cleanup_expired_tokens(self):
-        """CSRFProtection cleans up expired tokens."""
-        csrf = CSRFProtection(expiry_minutes=0)
+        """CSRFProtection cleans up expired tokens (TESTS-B-012 v1.3 Stage C:
+        deterministic clock).
 
-        # Generate some tokens
-        csrf.generate_token("session1")
-        csrf.generate_token("session2")
+        Same race fix as ``test_validate_expired_token`` above. The prior
+        ``expiry_minutes=0 + time.sleep(0.1)`` pattern occasionally flaked
+        on slow Windows CI because the cleanup pass uses ``(now - created_at)
+        / 60 > expiry_minutes``, and integer-second clock resolution could
+        leave the old tokens within the same "minute bucket" as the cleanup
+        call. New pattern: forge ``created_at`` far in the past during the
+        first two generate calls so the cleanup pass on the third call
+        deterministically evicts them.
+        """
+        csrf = CSRFProtection(expiry_minutes=1)
 
-        time.sleep(0.1)
+        # Mint two tokens with an ancient created_at by patching time.time
+        # during the generate calls. The cleanup pass on the third generate
+        # then sees age >> expiry_minutes and evicts them.
+        past = 1_000_000_000.0  # Sep 9 2001 — definitely past
+        with patch("backpropagate.ui_security.time.time", return_value=past):
+            csrf.generate_token("session1")
+            csrf.generate_token("session2")
 
-        # Generate new token (triggers cleanup)
+        # Real-clock generate — triggers _cleanup_expired which deterministically
+        # evicts session1 + session2 (their created_at is centuries in the past).
         csrf.generate_token("session3")
 
         # Old sessions should be cleaned up

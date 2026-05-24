@@ -33,7 +33,7 @@ backpropagate/
 └── ui_security.py       # Path-sandbox + file validation + denylist for UI writes
 ```
 
-The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pulls in Reflex `>= 0.9.2`. The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
+The UI is opt-in via the `[ui]` extra (`pip install backpropagate[ui]`) and pulls in Reflex per the `[ui]` extra pin in `pyproject.toml` (single source of truth — run `pip show reflex` after install for the resolved version). The v1.0 Gradio implementation (`ui_gradio_legacy.py` + `theme_gradio_legacy.py`) was preserved through v1.1.x as reference and removed in v1.2.0.
 
 ## CLI commands
 

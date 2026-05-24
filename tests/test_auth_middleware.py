@@ -57,9 +57,15 @@ from tests.helpers.ws import (  # noqa: E402
     make_ws_scope,
 )
 
-# Whether the middleware has actually landed. The frontend agent is wiring
-# ``basic_auth_transformer`` in ``backpropagate/ui_app/auth.py``. Until
-# that lands, every test in this module skips with a clear reason.
+# v1.2.0 SHIPPED the middleware (``basic_auth_transformer`` in
+# ``backpropagate/ui_app/auth.py``); the import below succeeds in every
+# install that has the ``[ui]`` extra. The ``requires_middleware`` skip
+# marker is RETAINED as a regression guard: an accidental refactor that
+# deletes or renames ``basic_auth_transformer`` would flip the import to
+# ImportError and every test below would skip with a clear reason instead
+# of failing at collection time. TESTS-B-018 (Stage C humanization)
+# updated the doc-strings to reflect ship status; do NOT delete the import
+# guard.
 try:
     from backpropagate.ui_app.auth import basic_auth_transformer  # noqa: F401
     _MIDDLEWARE_AVAILABLE = True
@@ -69,11 +75,13 @@ except ImportError:
 requires_middleware = pytest.mark.skipif(
     not _MIDDLEWARE_AVAILABLE,
     reason=(
-        "basic_auth_transformer has not yet landed in "
-        "backpropagate.ui_app.auth. The frontend agent's Wave 6 "
-        "implementation must merge before these tests can exercise the "
-        "real contract. The harness itself is verified by the helper "
-        "smoke tests below."
+        "basic_auth_transformer not importable from backpropagate.ui_app.auth "
+        "— this almost certainly means the [ui] extra is not installed, OR "
+        "the helper was accidentally deleted/renamed by a refactor (v1.2.0 "
+        "shipped it; absence post-v1.2.0 is a regression). Tests skip rather "
+        "than collection-fail so a headless install reports cleanly; the "
+        "harness itself is verified by the helper smoke tests at the top "
+        "of this module."
     ),
 )
 
@@ -182,7 +190,7 @@ def default_mode_middleware(monkeypatch):
     monkeypatch.delenv("BACKPROPAGATE_UI_SHARE_HOST", raising=False)
     monkeypatch.delenv("BACKPROPAGATE_UI_HOST_BIND", raising=False)
     if not _MIDDLEWARE_AVAILABLE:
-        pytest.skip("basic_auth_transformer has not landed yet")
+        pytest.skip("basic_auth_transformer not importable — install backpropagate[ui]")
     from backpropagate.ui_app.auth import basic_auth_transformer
     return basic_auth_transformer(stub_asgi_http_app)
 
@@ -202,7 +210,7 @@ def basic_mode_middleware(monkeypatch):
     monkeypatch.delenv("BACKPROPAGATE_UI_SHARE_HOST", raising=False)
     monkeypatch.delenv("BACKPROPAGATE_UI_HOST_BIND", raising=False)
     if not _MIDDLEWARE_AVAILABLE:
-        pytest.skip("basic_auth_transformer has not landed yet")
+        pytest.skip("basic_auth_transformer not importable — install backpropagate[ui]")
     from backpropagate.ui_app.auth import basic_auth_transformer
     return basic_auth_transformer(stub_asgi_http_app)
 
@@ -225,7 +233,7 @@ def shared_mode_middleware(monkeypatch):
     monkeypatch.delenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", raising=False)
     monkeypatch.delenv("BACKPROPAGATE_UI_HOST_BIND", raising=False)
     if not _MIDDLEWARE_AVAILABLE:
-        pytest.skip("basic_auth_transformer has not landed yet")
+        pytest.skip("basic_auth_transformer not importable — install backpropagate[ui]")
     from backpropagate.ui_app.auth import basic_auth_transformer
     return basic_auth_transformer(stub_asgi_http_app)
 
@@ -449,11 +457,12 @@ async def test_share_mode_adds_tunnel_to_allowlist(shared_mode_middleware):
 
 # Brief test 11: --share without --auth refuses to start (CLI contract)
 # This is enforced at CLI parse time, not in the middleware. Pinned in
-# test_cli_extended.py::TestCmdUiNoMiddleware. Document the cross-reference
-# here so an auditor knows it's covered.
-@pytest.mark.skip(reason="Pinned in tests/test_cli_extended.py — CLI-level guard, not middleware")
+# test_cli_extended.py::TestCmdUI::test_cmd_ui_share_without_auth_still_refuses
+# (and its alias test_cmd_ui_share_refuses_to_start). Document the
+# cross-reference here so an auditor knows it's covered.
+@pytest.mark.skip(reason="Pinned in tests/test_cli_extended.py::TestCmdUI — CLI-level guard, not middleware")
 def test_share_without_auth_refuses_to_start():
-    """Brief #11 — see test_cli_extended.py::TestCmdUiNoMiddleware."""
+    """Brief #11 — see test_cli_extended.py::TestCmdUI::test_cmd_ui_share_without_auth_still_refuses."""
 
 
 # Brief test 12: --host non-loopback without --auth refuses to start

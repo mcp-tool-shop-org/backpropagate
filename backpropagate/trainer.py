@@ -904,25 +904,58 @@ class Trainer:
             logger.debug("Applied Windows-specific fixes")
 
     def _detect_batch_size(self) -> int:
-        """Auto-detect optimal batch size based on available VRAM."""
+        """Auto-detect optimal batch size based on available VRAM.
+
+        Stage C amend BACKEND-B-009: log which branch fired so triage on
+        slow training doesn't have to grep for "PyTorch not available" to
+        disambiguate "I'm on a low-VRAM card" from "my CUDA query broke".
+        Every return path now emits a single line naming the resolved
+        tier + the reason for the fallback (if any).
+        """
         try:
             import torch
             if torch.cuda.is_available():
                 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 if vram_gb >= 24:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=>=24 -> batch_size=4"
+                    )
                     return 4
                 elif vram_gb >= 16:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=16-24 -> batch_size=2"
+                    )
                     return 2
                 elif vram_gb >= 12:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=12-16 -> batch_size=1"
+                    )
                     return 1
                 else:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=<12 -> batch_size=1"
+                    )
                     return 1
+            else:
+                logger.info(
+                    "_detect_batch_size: fell back to default batch_size=2 "
+                    "(reason=cuda_not_available — CPU/MPS run)"
+                )
         except ImportError:
-            logger.debug("PyTorch not available for batch size detection, using default")
+            logger.info(
+                "_detect_batch_size: fell back to default batch_size=2 "
+                "(reason=torch_not_installed)"
+            )
         except RuntimeError as e:
-            logger.debug(f"CUDA query failed for batch size detection: {e}")
+            logger.info(
+                f"_detect_batch_size: fell back to default batch_size=2 "
+                f"(reason=cuda_query_failed: {e})"
+            )
         except Exception as e:
-            logger.warning(f"Unexpected error detecting batch size: {type(e).__name__}: {e}")
+            logger.warning(
+                f"_detect_batch_size: fell back to default batch_size=2 "
+                f"(reason=unexpected_error: {type(e).__name__}: {e})"
+            )
         return 2  # Safe default
 
     def _cleanup_vram(self) -> None:
@@ -1223,16 +1256,50 @@ class Trainer:
                 resume_manager = RunHistoryManager(str(self.output_dir))
                 record = resume_manager.get_run(resume_from)
                 if record is not None:
-                    run_id_for_resume = str(record.get("run_id"))
-                    # The prior run's checkpoint_path is the directory we
-                    # told HF to write to. HF's own resume detection scans
-                    # that dir for ``checkpoint-<N>`` subfolders and picks
-                    # the latest, so we hand it the directory (not a
-                    # specific checkpoint-N path) — same convention TRL
-                    # uses when you pass ``resume_from_checkpoint=True``.
+                    # Stage C amend BACKEND-B-008: hoist the
+                    # checkpoint-path existence check BEFORE we mutate
+                    # the prior run_history entry's status to "running".
+                    # Pre-fix: the record was flipped to "running"
+                    # downstream and THEN the SFTTrainer choked on a
+                    # missing path, leaving the on-disk record in a
+                    # broken in-progress state pointing at a checkpoint
+                    # that no longer exists. The next resume auto-detect
+                    # would latch onto this zombie entry forever.
                     record_cp = record.get("checkpoint_path")
-                    if record_cp:
-                        resume_checkpoint_path = str(record_cp)
+                    if record_cp and not Path(str(record_cp)).exists():
+                        logger.warning(
+                            f"resume_from={resume_from!r}: prior "
+                            f"checkpoint path {record_cp!r} no longer "
+                            f"exists on disk. Marking the prior entry "
+                            f"as failed (reason='resume_checkpoint_missing') "
+                            f"and minting a FRESH run_id for this session "
+                            f"rather than mutating the prior record. "
+                            f"To recover the prior data, restore the "
+                            f"checkpoint directory and re-run with "
+                            f"resume_from={resume_from!r}."
+                        )
+                        try:
+                            resume_manager.record_run_failed(
+                                run_id=str(record.get("run_id")),
+                                failure_reason="resume_checkpoint_missing",
+                            )
+                        except Exception as fail_err:
+                            logger.warning(
+                                f"Failed to mark stale resume entry as "
+                                f"failed: {fail_err}"
+                            )
+                        # Fall through with run_id_for_resume=None — a
+                        # fresh run_id will be minted below.
+                    else:
+                        run_id_for_resume = str(record.get("run_id"))
+                        # The prior run's checkpoint_path is the directory we
+                        # told HF to write to. HF's own resume detection scans
+                        # that dir for ``checkpoint-<N>`` subfolders and picks
+                        # the latest, so we hand it the directory (not a
+                        # specific checkpoint-N path) — same convention TRL
+                        # uses when you pass ``resume_from_checkpoint=True``.
+                        if record_cp:
+                            resume_checkpoint_path = str(record_cp)
                 else:
                     logger.warning(
                         f"resume_from={resume_from!r} not found in run history; "

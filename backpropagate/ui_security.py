@@ -1451,6 +1451,184 @@ def get_health_status(
 
 
 # =============================================================================
+# AUTH BADGE CONTEXT (FRONTEND-F-FOOTER-AUTH-BADGE, Stage C humanization)
+# =============================================================================
+#
+# Read the same env-var surface that ``ui_app/auth.py::basic_auth_transformer``
+# consumes and produce a small, JSON-serializable description of the current
+# operator-facing posture. The footer auth badge in the Reflex UI reads this
+# at server boot and shows a colored chip with hover-text so the operator can
+# tell at a glance whether the instance is loopback-only / shared / network
+# and whether auth is wired.
+#
+# Load-bearing invariant: this function is READ-ONLY w.r.t. the auth decision.
+# It introspects env vars; it does NOT participate in middleware enforcement.
+# All four GHSA-f65r-h4g3-3h9h contracts (pre-accept WS cookie validation,
+# 4-mode resolution, constant-time compares, Host/Origin allowlists) remain
+# the exclusive responsibility of ``ui_app/auth.py``.
+
+
+@dataclass
+class AuthBadgeContext:
+    """Operator-facing auth posture summary for the footer badge.
+
+    Fields:
+
+    - ``mode_key``: machine identifier (``no_auth_local`` / ``token_local`` /
+      ``basic_local`` / ``basic_shared`` / ``basic_network`` / ``insecure``).
+      Stable across launches so the badge component can match on it.
+    - ``mode_color``: ``green`` / ``amber`` / ``red`` — drives the chip tint.
+    - ``mode_text``: short human label that appears in the chip (with the
+      leading emoji so it's still recognizable in a screen-reader). Limited
+      to ~24 chars so the chip fits the 32px footer height comfortably.
+    - ``hover_text``: full operator context ("bound to <host>:<port>;
+      reachable on <reach>; <auth>") — surfaces as both the tooltip and the
+      ``aria-label`` so vision-impaired operators get the same info.
+    - ``bind_host`` / ``bind_port``: resolved bind address (defaults to
+      ``localhost`` / ``7860`` when env vars are unset). Mirrored to the
+      hover-text but exposed as separate fields in case future surfaces want
+      them.
+    - ``reachable_from``: short description of who can reach this UI
+      (``loopback-only`` / ``LAN`` / ``public network``).
+    - ``auth_user``: the resolved username for Basic-auth modes (empty
+      string in token / no-auth modes). Read from the same
+      ``BACKPROPAGATE_UI_AUTH`` env var the middleware consumes, with the
+      password half DROPPED — only the username is suitable for surfacing.
+    """
+
+    mode_key: str
+    mode_color: str
+    mode_text: str
+    hover_text: str
+    bind_host: str
+    bind_port: str
+    reachable_from: str
+    auth_user: str
+
+
+def _classify_reach(bind_host: str, share_host: str) -> str:
+    """Bucket the bind into loopback / LAN / public for the hover text."""
+    if share_host:
+        return "public network"
+    if not bind_host or bind_host in ("localhost", "127.0.0.1", "::1"):
+        return "loopback-only"
+    if bind_host in ("0.0.0.0", "::"):
+        return "any local interface (LAN)"
+    return "LAN"
+
+
+def get_auth_badge_context(env: dict[str, str] | None = None) -> AuthBadgeContext:
+    """Compute the footer auth-badge context from the current env.
+
+    The mode-resolution logic mirrors ``ui_app/auth.py::_detect_mode`` so the
+    badge cannot disagree with the middleware. We re-derive (rather than
+    import) because ``ui_security`` predates ``ui_app`` in the dep DAG —
+    importing the auth module from here would create a circular dependency
+    and pull Reflex into modules that should stay framework-agnostic.
+
+    Args:
+        env: Optional env-var dict (mostly for testing); defaults to
+            ``os.environ`` snapshot at call time.
+
+    Returns:
+        An ``AuthBadgeContext`` with the 6 fields the badge component reads.
+    """
+    env = env if env is not None else dict(os.environ)
+    auth_creds = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
+    share_host = env.get("BACKPROPAGATE_UI_SHARE_HOST", "").strip()
+    host_bind = env.get("BACKPROPAGATE_UI_HOST_BIND", "").strip().lower()
+    launch_token = env.get("BACKPROPAGATE_UI_LAUNCH_TOKEN", "").strip()
+    port = env.get("BACKPROPAGATE_UI_PORT", "").strip() or "7860"
+
+    # Resolve effective bind host for display. If --host wasn't passed and
+    # we're not in share mode, we report loopback ("localhost") — that's what
+    # the operator sees in the browser bar.
+    if share_host:
+        display_host = share_host
+    elif host_bind and host_bind not in ("", "localhost", "127.0.0.1", "::1"):
+        display_host = host_bind
+    else:
+        display_host = "localhost"
+
+    reach = _classify_reach(host_bind, share_host)
+
+    # Extract the username half of BACKPROPAGATE_UI_AUTH (NEVER the password).
+    auth_user = ""
+    if auth_creds and ":" in auth_creds:
+        auth_user = auth_creds.split(":", 1)[0]
+
+    # Map (auth_creds, share_host, host_bind, launch_token) → posture.
+    # Order mirrors AuthMode resolution; the badge layers on the LAN /
+    # loopback distinction since the middleware folds both into PRODUCTION.
+    if auth_creds:
+        if share_host:
+            mode_key = "basic_shared"
+            mode_color = "amber"
+            mode_text = "Shared - Basic"
+            hover_text = (
+                f"bound to {display_host}:{port}; reachable on public network; "
+                f"HTTP Basic auth (user '{auth_user}')"
+            )
+        elif host_bind and host_bind not in ("", "localhost", "127.0.0.1", "::1"):
+            mode_key = "basic_network"
+            mode_color = "amber"
+            mode_text = "Network - Basic"
+            hover_text = (
+                f"bound to {display_host}:{port}; reachable on LAN; "
+                f"HTTP Basic auth (user '{auth_user}')"
+            )
+        else:
+            mode_key = "basic_local"
+            mode_color = "green"
+            mode_text = "Local - Basic"
+            hover_text = (
+                f"bound to {display_host}:{port}; loopback-only; "
+                f"HTTP Basic auth (user '{auth_user}')"
+            )
+    elif launch_token:
+        mode_key = "token_local"
+        mode_color = "green"
+        mode_text = "Local - token"
+        hover_text = (
+            f"bound to {display_host}:{port}; loopback-only; "
+            "URL-token authentication"
+        )
+    elif share_host or (host_bind and host_bind not in (
+        "", "localhost", "127.0.0.1", "::1"
+    )):
+        # Non-loopback bind with no auth — this state should be rejected by
+        # cli.py's refuse-to-start rails (FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h),
+        # but if the operator bypassed via direct ``reflex run``, the badge
+        # screams red so the misconfiguration is visible.
+        mode_key = "insecure"
+        mode_color = "red"
+        mode_text = "INSECURE - no auth"
+        hover_text = (
+            f"bound to {display_host}:{port}; reachable on {reach}; "
+            "NO AUTH - anyone with the URL has full access"
+        )
+    else:
+        mode_key = "no_auth_local"
+        mode_color = "green"
+        mode_text = "Local - no auth"
+        hover_text = (
+            f"bound to {display_host}:{port}; loopback-only; "
+            "no authentication"
+        )
+
+    return AuthBadgeContext(
+        mode_key=mode_key,
+        mode_color=mode_color,
+        mode_text=mode_text,
+        hover_text=hover_text,
+        bind_host=display_host,
+        bind_port=port,
+        reachable_from=reach,
+        auth_user=auth_user,
+    )
+
+
+# =============================================================================
 # REQUEST CONTEXT AND TRACING
 # =============================================================================
 

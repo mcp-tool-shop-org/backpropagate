@@ -784,18 +784,18 @@ class ExportState(rx.State):
         """
         cleaned = (value or "").strip()
         if not cleaned:
-            self.hub_token = ""
-            self.hub_token_error = ""
+            self.hub_token = ""  # nosec B105 — form-field clear, not a credential literal
+            self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
             return
         # HF tokens are ``hf_<40 base62 chars>``; we don't pin the exact
         # prefix because operators may use org-scoped tokens with a
         # different prefix. Sanity-check the length is in the expected
         # 30-100 char range so we catch "I pasted my username by accident".
         if len(cleaned) < 20 or len(cleaned) > 200:
-            self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"
+            self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"  # nosec B105 — operator-facing validation message, not a credential
             return
         self.hub_token = cleaned
-        self.hub_token_error = ""
+        self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
 
     @rx.event
     def push_to_hub(self) -> None:
@@ -853,7 +853,7 @@ class ExportState(rx.State):
                 f"on branch {self.hub_branch or 'main'}."
             )
             # Clear token after successful push.
-            self.hub_token = ""
+            self.hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
         except Exception as exc:  # noqa: BLE001 — operator-facing string
             # Sanitize the error so HF token / operator paths don't leak.
             try:
@@ -1480,7 +1480,7 @@ class RunDetailState(rx.State):
         try:
             route_run_id = str(self.router.page.params.get("rid", "") or "")
         except Exception:  # noqa: BLE001 — defensive
-            pass
+            pass  # nosec B110 — defensive route-param read; missing param falls back to ""
         if route_run_id:
             self.current_run_id = route_run_id
 

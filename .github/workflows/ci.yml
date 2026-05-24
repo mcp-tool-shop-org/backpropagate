@@ -36,8 +36,9 @@ jobs:
     # Multi-OS matrix: tests Linux on full Python sweep, plus Windows + macOS
     # smoke cells on 3.11 to catch path/multiprocessing/xformers-disable
     # regressions on platforms the library actively supports (CLAUDE.md:
-    # "First-class Windows support") and ships binaries for
-    # (release-binaries.yml: darwin-arm64 + win-x64).
+    # "First-class Windows support"). PyInstaller binary distribution was
+    # retired in v1.3 with the npm-launcher path; operators install via
+    # pipx / uv tool / pip on every supported OS.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:

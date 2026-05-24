@@ -625,10 +625,16 @@ class TestSLAOMergeIntegration:
 
         # Verify dimensions preserved using get_merged_lora (correct method name)
         merged_lora = merger.get_merged_lora()
-        if merged_lora:
-            for key, value in merged_lora.items():
-                assert key in sample_lora_state
-                assert value.shape == sample_lora_state[key].shape
+        assert merged_lora is not None, (
+            "SLAO merge MUST return a result on this fixture; None "
+            "indicates the merge path silently bailed (e.g., adapter "
+            "not found, scaling=0). Previously this test gated all "
+            "shape assertions behind `if merged_lora:` — making None "
+            "a silent pass and hiding any merge-path regression."
+        )
+        for key, value in merged_lora.items():
+            assert key in sample_lora_state
+            assert value.shape == sample_lora_state[key].shape
 
     def test_slao_accumulates_across_runs(self, sample_lora_state):
         """SLAO should accumulate changes across multiple runs."""
@@ -641,23 +647,32 @@ class TestSLAOMergeIntegration:
         merger.initialize(sample_lora_state)
 
         initial_lora = merger.get_merged_lora()
-        if initial_lora:
-            initial_state = {k: v.clone() for k, v in initial_lora.items()}
+        assert initial_lora is not None, (
+            "SLAO initial merge MUST return a result after initialize(); "
+            "None indicates a silent bail in the merge path. Previously "
+            "gated behind `if initial_lora:` which let None pass silently."
+        )
+        initial_state = {k: v.clone() for k, v in initial_lora.items()}
 
-            # Simulate 3 runs with different LoRA states
-            for _i in range(3):
-                new_state = {
-                    k: torch.randn_like(v)
-                    for k, v in sample_lora_state.items()
-                }
-                merger.merge(new_state)
+        # Simulate 3 runs with different LoRA states
+        for _i in range(3):
+            new_state = {
+                k: torch.randn_like(v)
+                for k, v in sample_lora_state.items()
+            }
+            merger.merge(new_state)
 
-            # After 3 merges, state should have changed
-            final_lora = merger.get_merged_lora()
-            if final_lora:
-                for key in initial_state:
-                    # States should be different after merging
-                    assert not torch.allclose(initial_state[key], final_lora[key])
+        # After 3 merges, state should have changed
+        final_lora = merger.get_merged_lora()
+        assert final_lora is not None, (
+            "SLAO merged state MUST be present after 3 merge() calls; "
+            "None here indicates the merge accumulator was wiped. "
+            "Previously gated behind `if final_lora:` which let None "
+            "pass silently — defeating the entire accumulation property."
+        )
+        for key in initial_state:
+            # States should be different after merging
+            assert not torch.allclose(initial_state[key], final_lora[key])
 
 
 # =============================================================================

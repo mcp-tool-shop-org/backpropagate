@@ -47,7 +47,7 @@
 - [x] `[all]` Version in manifest matches git tag (2026-05-23) — 1.2.0 = v1.2.0
 - [x] `[all]` Dependency scanning runs in CI (ecosystem-appropriate) (2026-02-27) — Bandit, pip-audit, Semgrep, Trivy (built-in secret scanner). TruffleHog removed v1.1.0 — see docs/ci-gates-triage-plan.md.
 - [x] `[all]` Automated dependency update mechanism exists (2026-02-27) — dependabot.yml monthly + groups
-- [ ] `[npm]` SKIP: not an npm package
+- [x] `[npm]` PASS: @mcptoolshop/backpropagate@1.2.0 published with Sigstore provenance (2026-05-23). v1.3 retires the npm distribution path — the package remains published as a friendly-error shim redirecting operators to pipx / uv tool / pip per `bin/backpropagate.js`.
 - [x] `[pypi]` `python_requires` set (2026-02-27) — >=3.10
 - [x] `[pypi]` Clean wheel + sdist build (2026-02-27) — hatchling, twine check in CI
 - [ ] `[vsix]` SKIP: not a VS Code extension

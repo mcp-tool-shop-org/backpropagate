@@ -6,7 +6,7 @@
 > pip-audit CRITICAL floor, Trivy CRITICAL floor, aggregate gate no longer
 > `continue-on-error`). The HIGH/MEDIUM/LOW transitive-CVE backlog
 > (14 ERROR-severity Trivy alerts incl. PyJWT CVE-2026-32597) is scheduled
-> for a P0 dep-sweep wave in v1.3 per `research/V1_3_BRIEF.md`. The text
+> for a P0 dep-sweep wave in v1.3 per the v1.3 brief. The text
 > below is preserved as the methodology blueprint — re-read when staging
 > any future gate re-tightening.
 >

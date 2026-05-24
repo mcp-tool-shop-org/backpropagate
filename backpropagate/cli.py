@@ -1300,6 +1300,20 @@ def cmd_ui(args: argparse.Namespace) -> int:
     * ``--host`` with a non-loopback bind without ``--auth`` — DNS-rebinding
       defense per DESIGN_BRIEF; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
 
+    ``--share`` (post-v1.3): exposes the UI via a cloudflared tunnel.
+    Wave 6 of v1.3 (BRIDGE-F-CLOUDFLARED) lands the tunneling implementation;
+    until that commit lands in this same v1.3 release, a transitional stderr
+    warning (printed after the refuse-to-start gate, before subprocess launch)
+    names the in-flight state and points at SSH port-forwarding as the interim
+    remote-access path. The transitional warning is removed by the Wave 6
+    agent when the cloudflared implementation lands.
+
+    ``--host`` (Wave 3.5, v1.3): the operator-supplied bind is now passed to
+    ``reflex run --backend-host``; previously the backend defaulted to
+    Reflex's ``backend_host="0.0.0.0"`` regardless of what the operator
+    asked for. The auth middleware's Host-header allowlist
+    (``BACKPROPAGATE_UI_HOST_BIND``) remains the load-bearing access check.
+
     Exit codes (Ship Gate B2):
         0   UI launched and exited cleanly (including Ctrl+C)
         1   user error — UI extra not installed OR malformed --auth shape
@@ -1473,6 +1487,31 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # Reflex's port convention: the frontend serves on --frontend-port and
     # the backend on --backend-port. We map --port to the frontend (what
     # users hit in the browser) and the backend gets port+1.
+    #
+    # BRIDGE-B-001 (Wave 3.5, v1.3): pass --backend-host through to the
+    # Reflex subprocess so the operator-requested bind actually takes effect.
+    # Without this, Reflex's default backend_host="0.0.0.0" (reflex_base.config)
+    # silently bound the FastAPI backend to ALL interfaces regardless of the
+    # operator's --host value — making --host advertise control it didn't
+    # deliver. The CLI's refuse-to-start gates (loopback-only without --auth)
+    # were the only thing standing between a default install and a LAN-exposed
+    # backend; passing --backend-host here makes the bind match what the
+    # operator asked for.
+    #
+    # Default (no --host): resolves to "127.0.0.1" so the backend is loopback
+    # by default — matches the loopback-first posture the CLI documents.
+    # When --host LAN-IP --auth user:pass passes the gate, the operator-
+    # supplied host flows through.
+    #
+    # Frontend bind caveat: the Reflex-generated .web/package.json uses
+    # `react-router dev --host` which binds 0.0.0.0 regardless of this
+    # backend-host knob. That is a frontend-domain follow-up — the load-
+    # bearing security on the backend (the FastAPI/uvicorn process where
+    # the API and WebSocket live) is now bound as the operator requested,
+    # and the auth middleware's Host-header allowlist + HTTP Basic check
+    # (BACKPROPAGATE_UI_HOST_BIND-driven) is the enforcement layer in either
+    # case.
+    backend_host = requested_host or "127.0.0.1"
     cmd = [
         sys.executable,
         "-m",
@@ -1482,7 +1521,42 @@ def cmd_ui(args: argparse.Namespace) -> int:
         str(args.port),
         "--backend-port",
         str(args.port + 1),
+        "--backend-host",
+        backend_host,
     ]
+
+    # BRIDGE-B-002 TRANSITIONAL (Wave 3.5, v1.3) — REMOVE WHEN
+    # `Wave 6 BRIDGE-F-CLOUDFLARED` LANDS. Reason: per the
+    # no-banner-documenting-no-op doctrine, a banner saying "this doesn't
+    # work" IS a doc-lie. This warning is acceptable ONLY because Wave 6
+    # (same v1.3 release) lands the real cloudflared implementation that
+    # makes the warning obsolete. The refuse-to-start gate at args.share +
+    # args.auth=None has already fired upstream; reaching this branch means
+    # --share was passed WITH --auth, so we surface the transitional state
+    # before subprocess launch. Wave 6 agent removal anchor — grep for the
+    # literal string `Wave 6 BRIDGE-F-CLOUDFLARED` to locate this block.
+    # Wave 6 agent: delete this entire block + the comment.
+    if args.share:
+        print(
+            "[--share] TRANSITIONAL: tunneling implementation is in flight "
+            "(v1.3 Wave 6 — cloudflared)",
+            file=sys.stderr,
+        )
+        print(
+            "[--share] until Wave 6 lands, --share validates the refuse-to-"
+            "start gate but does NOT establish a tunnel",
+            file=sys.stderr,
+        )
+        print(
+            "[--share] for remote access in the meantime: "
+            f"ssh -L {args.port}:localhost:{args.port} <host>",
+            file=sys.stderr,
+        )
+        print(
+            "[--share] this warning is removed when cloudflared implementation "
+            "lands (V1_3_BRIEF P1 BRIDGE-F-CLOUDFLARED)",
+            file=sys.stderr,
+        )
 
     try:
         print()
@@ -2675,9 +2749,9 @@ Exit codes (Ship Gate B2):
         "--share",
         action="store_true",
         help=(
-            "Expose the UI via a public tunnel. Requires --auth user:pass; "
-            "passing --share without --auth exits with "
-            "RUNTIME_UI_AUTH_NOT_ENFORCED."
+            "Expose the UI via a public tunnel (requires cloudflared; see "
+            "handbook/security.md). Requires --auth user:pass; passing "
+            "--share without --auth exits with RUNTIME_UI_AUTH_NOT_ENFORCED."
         ),
     )
     ui_parser.add_argument(

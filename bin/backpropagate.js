@@ -15,8 +15,9 @@
 // message reaches operators who still have `npm install -g backpropagate`
 // in their tooling.
 //
-// Tracked: docs/V1_3_BRIEF.md (D2 SPLIT — Wave 1 hotfix, Wave 5/6 deletes
-// .github/workflows/release-binaries.yml + the .spec files).
+// Tracked: D2 SPLIT in the v1.3 brief. Wave 1 landed the friendly-error
+// hotfix; Wave 3.5 deleted .github/workflows/release-binaries.yml; the
+// PyInstaller .spec files at the repo root remain pending (Wave 5/6).
 // ---------------------------------------------------------------------------
 
 process.stderr.write(

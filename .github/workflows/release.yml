@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write       # for GitHub Release creation
@@ -87,7 +88,7 @@ jobs:
       - name: Publish to npm with provenance (OIDC trusted publisher)
         run: npm publish --provenance --access public
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -107,10 +108,19 @@ jobs:
             echo "See CHANGELOG.md for details." >> "${NOTES_FILE}"
           fi
 
-          # Create the release. publish.yml + release-binaries.yml fire on the
-          # `release: published` event this triggers — they'll upload PyPI +
-          # Docker + PyInstaller binaries as the chain reaction.
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "Backpropagate ${GITHUB_REF_NAME}" \
-            --notes-file "${NOTES_FILE}" \
-            --verify-tag
+          # Create the release if it doesn't already exist. publish.yml fires
+          # on the `release: published` event — it'll upload PyPI + Docker as
+          # the chain reaction. (release-binaries.yml was retired in v1.3 —
+          # PyInstaller distribution is no longer part of the chain.)
+          # Skipping creation when the release exists
+          # makes this step idempotent (re-runs via workflow_dispatch, or
+          # second pushes of the same tag, no longer fail with HTTP 422
+          # "Release.tag_name already exists").
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; skipping create."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "Backpropagate ${GITHUB_REF_NAME}" \
+              --notes-file "${NOTES_FILE}" \
+              --verify-tag
+          fi

@@ -5,11 +5,13 @@ on:
     types: [published]
   workflow_dispatch:
 
-# Sister fix to release-binaries.yml: publish workflows must serialize,
-# not cancel. Cancelling a mid-flight twine upload leaves PyPI in a state
-# where the next retry fails with E409 ('File already exists') and needs
-# manual --skip-existing recovery. Group per release tag so distinct
-# tags run independently while same-tag re-fires queue safely.
+# Publish workflows must serialize, not cancel. Cancelling a mid-flight
+# twine upload leaves PyPI in a state where the next retry fails with E409
+# ('File already exists') and needs manual --skip-existing recovery. Group
+# per release tag so distinct tags run independently while same-tag
+# re-fires queue safely. (The companion release-binaries.yml workflow was
+# retired in v1.3 along with the npm-launcher distribution path; this
+# concurrency hardening still applies to twine + GHCR uploads here.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.release.tag_name || github.ref }}
   cancel-in-progress: false

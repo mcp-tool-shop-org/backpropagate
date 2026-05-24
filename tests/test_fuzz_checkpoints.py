@@ -170,17 +170,40 @@ class TestCheckpointManagerFuzz:
     )
     @settings(max_examples=50, deadline=None)
     def test_run_boundary_tracking(self, policy, run_indices):
-        """Run boundaries should be correctly tracked."""
+        """Run boundaries should be correctly tracked.
+
+        Property under test: when checkpoints are registered with
+        ``is_run_boundary=True`` exactly once per unique ``run_index`` (the
+        first time we see it), then EVERY persisted ``CheckpointInfo``
+        whose ``is_run_boundary`` flag is True must correspond to a
+        run_index that was actually registered with that flag in this
+        test. And, if pruning has not removed it, the first checkpoint
+        registered for each unique run must still bear the boundary flag.
+
+        Previously this test had zero ``assert`` statements — 50 examples
+        ran 50 no-ops. v1.3 Wave 3.5 (TESTS-B-006) restored the load-
+        bearing property checks.
+        """
         temp_dir = tempfile.mkdtemp()
         try:
             manager = CheckpointManager(temp_dir, policy)
 
-            seen_runs = set()
+            # Track which checkpoint path was registered as a boundary,
+            # plus the run_index → path mapping for the first registration
+            # of each run.
+            seen_runs: set[int] = set()
+            boundary_paths: set[str] = set()
+            first_path_per_run: dict[int, str] = {}
+            registered_boundary_runs: set[int] = set()
             for i, run_idx in enumerate(run_indices):
                 ckpt_path = os.path.join(temp_dir, f"ckpt_{i:03d}")
                 os.makedirs(ckpt_path, exist_ok=True)
 
                 is_boundary = run_idx not in seen_runs
+                if is_boundary:
+                    boundary_paths.add(ckpt_path)
+                    first_path_per_run[run_idx] = ckpt_path
+                    registered_boundary_runs.add(run_idx)
                 seen_runs.add(run_idx)
 
                 manager.register(
@@ -190,14 +213,54 @@ class TestCheckpointManagerFuzz:
                     is_run_boundary=is_boundary,
                 )
 
-            # Verify run boundaries are marked correctly
+            # Property 1: every checkpoint with is_run_boundary=True (that
+            # survived pruning) must trace back to a path we registered
+            # as a boundary in this test — the manager must NEVER fabricate
+            # boundary marks on its own.
             all_checkpoints = manager.list_checkpoints()
-            run_first_seen = {}
-            for cp in sorted(all_checkpoints, key=lambda x: x.timestamp):
-                if cp.run_index not in run_first_seen:
-                    run_first_seen[cp.run_index] = cp
-                    # First checkpoint of each run should be marked as boundary
-                    # (if we registered it that way)
+            for cp in all_checkpoints:
+                if cp.is_run_boundary:
+                    assert cp.path in boundary_paths, (
+                        f"Manager reports is_run_boundary=True for "
+                        f"checkpoint path={cp.path!r} run_index="
+                        f"{cp.run_index} which was NOT registered with "
+                        f"is_run_boundary=True. Boundary paths we "
+                        f"registered: {sorted(boundary_paths)}"
+                    )
+
+            # Property 2: if a first-registration for a run survived pruning,
+            # its is_run_boundary flag must still be True (the manager must
+            # NEVER strip a flag the caller set, even if the policy chooses
+            # not to PROTECT it from pruning — preserved-but-unprotected
+            # is still a valid state).
+            surviving_paths = {cp.path: cp for cp in all_checkpoints}
+            for run_idx, path in first_path_per_run.items():
+                if path in surviving_paths:
+                    cp = surviving_paths[path]
+                    assert cp.is_run_boundary is True, (
+                        f"First checkpoint for run_index={run_idx} at "
+                        f"path={path!r} survived pruning but lost its "
+                        f"is_run_boundary flag: cp.is_run_boundary="
+                        f"{cp.is_run_boundary!r}. Manager must not strip "
+                        f"caller-set flags."
+                    )
+                    assert cp.run_index == run_idx, (
+                        f"run_index mismatch on survived first-of-run "
+                        f"checkpoint: expected {run_idx}, got "
+                        f"{cp.run_index} at path={path!r}"
+                    )
+
+            # Property 3: boundary count is bounded by the number of
+            # unique run indices we ever marked as boundaries (pruning
+            # may reduce it, never inflate it).
+            boundary_count = sum(
+                1 for cp in all_checkpoints if cp.is_run_boundary
+            )
+            assert boundary_count <= len(registered_boundary_runs), (
+                f"Boundary count {boundary_count} exceeds the "
+                f"{len(registered_boundary_runs)} unique runs we ever "
+                f"marked as boundaries — manager invented boundaries."
+            )
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

@@ -104,6 +104,56 @@ jobs:
       - name: Publish to npm with provenance (OIDC trusted publisher)
         run: npm publish --provenance --access public
 
+      # CIDOCS-F-004 — CycloneDX SBOM generation, attached to the GH Release.
+      # Sigstore SBOM attestation already rides the `--provenance` flag on the
+      # `npm publish` step above; this step adds the SBOM artifact itself to
+      # the release so auditors can grep the dep tree without re-running
+      # `pip install` or `npm install`. The Python SBOM is generated from
+      # the package's installed dependency tree (cyclonedx-py environment
+      # mode — captures the full transitive closure that PyPI install
+      # actually pulls). The npm SBOM is generated from package.json.
+      # Both files are attached to the GH Release after creation.
+      - name: Set up Python for SBOM generation
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Generate CycloneDX SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # cyclonedx-bom (entrypoint: cyclonedx-py) is the maintained
+          # Python SBOM generator and the de-facto pick for CycloneDX in
+          # PyPA tooling. The `environment` subcommand walks the current
+          # venv's installed package list — install the package first so
+          # the tree matches what `pip install backpropagate` would pull.
+          pip install "cyclonedx-bom>=5.0.0"
+          # Install backpropagate WITHOUT optional extras so the SBOM
+          # tracks the published wheel's required-dep closure. Operators
+          # who install with [full] get extra packages; those are surfaced
+          # via pyproject.toml's optional-dependencies table, which the
+          # `requirements` subcommand below covers as a static manifest.
+          pip install .
+
+          # Wheel SBOM — actual installed dependency closure.
+          cyclonedx-py environment \
+            --output-format JSON \
+            --output-file backpropagate-sbom.cdx.json
+
+          # Optional: capture the npm shim's tree too (single dep on the
+          # friendly-error shim path; still useful for audit trail).
+          if command -v npm >/dev/null 2>&1 && [ -f package.json ]; then
+            npm install --no-audit --no-fund --no-save || true
+            # @cyclonedx/cyclonedx-npm requires only the lockfile; the
+            # repo doesn't commit one but `npm install` above creates one
+            # locally for this run.
+            npx --yes @cyclonedx/cyclonedx-npm \
+              --output-format JSON \
+              --output-file backpropagate-npm-sbom.cdx.json || \
+              echo "::warning::npm SBOM generation skipped (non-fatal)"
+          fi
+
       - name: Create GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,4 +189,24 @@ jobs:
               --title "Backpropagate ${GITHUB_REF_NAME}" \
               --notes-file "${NOTES_FILE}" \
               --verify-tag
+          fi
+
+      # CIDOCS-F-004 — attach SBOM(s) to the GH Release. Done AFTER the
+      # release exists per memory: release-yml-must-create-gh-release-
+      # before-uploading-assets (gh release upload to a missing release
+      # fails with "release not found"). `--clobber` keeps the upload
+      # idempotent on workflow_dispatch re-runs.
+      - name: Attach SBOMs to GH Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f backpropagate-sbom.cdx.json ]; then
+            gh release upload "${GITHUB_REF_NAME}" backpropagate-sbom.cdx.json --clobber
+          else
+            echo "::warning::backpropagate-sbom.cdx.json missing — SBOM step may have failed"
+          fi
+          if [ -f backpropagate-npm-sbom.cdx.json ]; then
+            gh release upload "${GITHUB_REF_NAME}" backpropagate-npm-sbom.cdx.json --clobber
           fi

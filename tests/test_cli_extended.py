@@ -1170,13 +1170,17 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(MagicMock(), "https://abc.trycloudflare.com"),
+        ):
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 host=None,
                 share=True,
                 auth="alice:secret123",
+                auth_file=None,
                 verbose=False,
             )
 
@@ -1186,9 +1190,9 @@ class TestCmdUI:
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
             assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
-            # The --share branch should also set BACKPROPAGATE_UI_SHARE_HOST
-            # (empty string placeholder until --share-host lands).
-            assert "BACKPROPAGATE_UI_SHARE_HOST" in call_env
+            # Wave 6a cloudflared wiring exports the parsed tunnel host
+            # (was an empty-string placeholder pre-v1.3).
+            assert call_env.get("BACKPROPAGATE_UI_SHARE_HOST") == "abc.trycloudflare.com"  # hostname only, not URL
 
     def test_cmd_ui_share_env_opt_out_no_longer_respected(self, capsys, monkeypatch):
         """BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false is now ignored.
@@ -1402,13 +1406,17 @@ class TestCmdUiEnforcementFlipped:
             "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
         )
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(MagicMock(), "https://abc.trycloudflare.com"),
+        ):
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
                 host=None,
                 share=True,
                 auth="alice:hunter2",
+                auth_file=None,
                 verbose=False,
             )
 
@@ -1418,7 +1426,7 @@ class TestCmdUiEnforcementFlipped:
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
             assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2"
-            assert "BACKPROPAGATE_UI_SHARE_HOST" in call_env
+            assert call_env.get("BACKPROPAGATE_UI_SHARE_HOST") == "abc.trycloudflare.com"  # hostname only, not URL
 
 
 # =============================================================================

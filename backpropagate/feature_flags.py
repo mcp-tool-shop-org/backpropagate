@@ -24,8 +24,17 @@ Installation commands for each feature:
     pip install backpropagate[validation]  # + Pydantic config validation
     pip install backpropagate[export]      # + GGUF export
     pip install backpropagate[monitoring]  # + WandB & system monitoring
+    pip install backpropagate[logging]     # + structlog (structured JSON logs)
+    pip install backpropagate[security]    # + PyJWT + cryptography (auth helpers)
     pip install backpropagate[standard]    # unsloth + ui (recommended)
+    pip install backpropagate[production]  # unsloth + ui + validation + logging + security
     pip install backpropagate[full]        # Everything
+
+BRIDGE-F-013 (v1.3 Wave 6a): the extras list above must stay in lockstep
+with ``pyproject.toml`` ``[project.optional-dependencies]``. ``[logging]``,
+``[security]``, and ``[production]`` shipped before the docstring was
+updated; closing the doc-lie keeps ``backprop info`` and the docstring
+agreeing on the install surface.
 """
 
 import functools

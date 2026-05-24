@@ -16,8 +16,11 @@
 // in their tooling.
 //
 // Tracked: D2 SPLIT in the v1.3 brief. Wave 1 landed the friendly-error
-// hotfix; Wave 3.5 deleted .github/workflows/release-binaries.yml; the
-// PyInstaller .spec files at the repo root remain pending (Wave 5/6).
+// hotfix; Wave 3.5 deleted .github/workflows/release-binaries.yml; Wave 6a
+// removed the PyInstaller .spec files at the repo root and added the v1.2.x
+// → v1.3 handbook migration page that walks operators from the
+// pre-deprecation `npm install -g backpropagate` install line to the
+// supported channels. The migration is complete in v1.3.
 // ---------------------------------------------------------------------------
 
 process.stderr.write(

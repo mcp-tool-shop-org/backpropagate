@@ -1,8 +1,88 @@
 """Pytest configuration and fixtures."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# =============================================================================
+# PYTEST-XDIST PARALLEL MODE (TESTS-F-003, v1.3 Wave 6a)
+# =============================================================================
+#
+# pytest-xdist is in dev deps but `pytest tests/` ran serial (~10 min for
+# the full 1987-test suite). CI gates that block PR merge wear that
+# latency on every push.
+#
+# TESTS-F-003 introduces an env-var-gated convention so:
+#
+#   * Local devs default to serial mode — easier ``--pdb`` / breakpoint
+#     debugging, less stdout interleaving, fewer surprises for
+#     contributors who haven't read this file.
+#   * CI sets ``BACKPROPAGATE_PYTEST_PARALLEL=1`` to opt into parallel
+#     execution.
+#
+# The actual ``-n auto --dist worksteal`` injection happens in
+# ``.github/workflows/ci.yml`` (test step reads the env var and
+# conditionally appends the flags). We do NOT attempt to mutate
+# ``sys.argv`` from this conftest because rootdir / subdir conftests
+# are loaded AFTER pytest has parsed argv (xdist's
+# ``pytest_configure`` runs against the already-parsed
+# ``numprocesses`` option). The only way to inject via a hook is via
+# a pytest plugin registered through entry-points, which would
+# require turning ``tests/`` into a published package — overkill for
+# a CI optimization. The env var is the contract; ci.yml is the
+# enforcement.
+#
+# Worker semantics (interpreted by ci.yml):
+#
+#   * ``BACKPROPAGATE_PYTEST_PARALLEL=1`` / ``=auto`` → ``-n auto``
+#     (one worker per CPU; matches the most common CI runner config).
+#   * ``BACKPROPAGATE_PYTEST_PARALLEL=N`` (integer) → ``-n N``.
+#   * unset / ``0`` / ``off`` / ``false`` / ``no`` → no injection,
+#     serial mode (default).
+#
+# Xdist-safety audit (recorded here so future contributors don't have
+# to re-derive it):
+#
+#   * No test in the suite owns global process-level resources (no
+#     fixed ports, no file-system singletons outside ``tmp_path``, no
+#     module-level state that survives across worker processes).
+#   * Tests that mutate ``os.environ`` go through ``monkeypatch.setenv``
+#     which is per-test; the few that touch ``os.environ`` directly
+#     (test_ui_security, test_windows_compat, test_config*) clean up
+#     in finally blocks.
+#   * ``threading`` use is intra-process (xdist parallelizes across
+#     PROCESSES, not threads).
+#   * The Hypothesis profile loader above runs once per worker process
+#     at import time — idempotent, safe.
+#
+# Future work (v1.4): if we add tests that truly cannot run in
+# parallel (port-bound integration, shared on-disk caches), mark them
+# with ``@pytest.mark.serial`` and add a custom
+# ``pytest_collection_modifyitems`` enforcement here. v1.3 ships
+# without that complexity because no such tests exist today.
+_PARALLEL_ENV = "BACKPROPAGATE_PYTEST_PARALLEL"
+
+
+def _resolve_parallel_workers() -> str | None:
+    """Return the xdist worker count string for the env var, or None.
+
+    Used internally by tests/regression tests that introspect the
+    parallel-mode contract. ``None`` means serial mode (the default).
+    """
+    raw = os.environ.get(_PARALLEL_ENV, "").strip().lower()
+    if not raw or raw in {"0", "off", "false", "no"}:
+        return None
+    try:
+        import xdist  # noqa: F401 — only checking importability
+    except ImportError:
+        return None
+    if raw in {"1", "auto"}:
+        return "auto"
+    try:
+        return str(int(raw))
+    except ValueError:
+        return "auto"
 
 # =============================================================================
 # HYPOTHESIS PROFILE (TESTS-B-010)

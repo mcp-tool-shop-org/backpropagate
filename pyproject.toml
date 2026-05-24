@@ -50,6 +50,8 @@ dependencies = [
     "bitsandbytes>=0.41.0",
     "tenacity>=8.0.0",
     "packaging>=21.0",  # Version parsing for security checks
+    "filelock>=3.0.0",  # Cross-platform advisory file locking for RunHistoryManager (BACKEND-F-012, v1.3 / Wave 6a). Transitive via huggingface_hub/datasets/torch/transformers but pinned explicitly so a future upstream drop never breaks the concurrent-write contract on run_history.json.
+    "argcomplete>=3.0.0",  # BRIDGE-F-005: shell completion (bash/zsh/fish) — small pure-Python; activates only when the operator runs `eval "$(register-python-argcomplete backprop)"`.
 ]
 
 [project.optional-dependencies]

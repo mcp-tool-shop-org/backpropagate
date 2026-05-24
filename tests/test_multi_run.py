@@ -2075,12 +2075,40 @@ class TestMultiRunResume:
         )
         assert trainer._maybe_resume(_Path(str(tmp_path))) == "aabbccddeeff"
 
-    def test_explicit_resume_from_missing_returns_none(self, tmp_path):
+    def test_explicit_resume_from_missing_raises(self, tmp_path):
+        """BACKEND-F-018 (Wave 6a): explicit resume_from miss is no
+        longer a silent fresh start. Mirrors the Wave 5.5 BACKEND-F-002
+        contract on the single-run Trainer.train path. The operator
+        passed resume_from expecting resumption; falling back silently
+        to a fresh run loses the resume intent and consumes GPU hours
+        producing a model the operator did not ask for.
+
+        Pre-F-018 this returned ``None`` and the run continued from
+        scratch. Now ``_maybe_resume`` raises ``InvalidSettingError`` so
+        the operator sees the actionable hint in the terminal."""
+        import pytest
+
+        from backpropagate.exceptions import InvalidSettingError
+
         config = MultiRunConfig(checkpoint_dir=str(tmp_path))
         trainer = MultiRunTrainer(
             model="m", config=config, resume_from="ghost"
         )
-        assert trainer._maybe_resume(_Path(str(tmp_path))) is None
+        with pytest.raises(InvalidSettingError) as excinfo:
+            trainer._maybe_resume(_Path(str(tmp_path)))
+        # The error message must name the requested run_id + the
+        # checkpoint_dir searched + the operator's next steps. These
+        # are the load-bearing diagnostic anchors per the F-018 fix
+        # shape (mirrors single-run F-002). The checkpoint_dir is
+        # formatted via ``{path!r}`` so we match the leaf name to stay
+        # robust across Windows (backslashes inside the repr quotes)
+        # vs POSIX (forward slashes inside the repr quotes) separator
+        # differences.
+        msg = str(excinfo.value) + " " + (excinfo.value.suggestion or "")
+        assert "ghost" in msg
+        assert tmp_path.name in msg
+        assert "backprop runs" in msg
+        assert "--checkpoint-dir" in msg
 
 
 class TestRestoreSessionState:
@@ -2332,3 +2360,159 @@ class TestPauseOnOverheatWiring:
             "pause_on_overheat=False MUST keep the event clear even on "
             "CRITICAL; the operator chose hard-fail-on-overheat semantics."
         )
+
+
+# =============================================================================
+# BACKEND-F-001 — abort callback fires (Wave 6a regression)
+# =============================================================================
+#
+# Cross-domain pin from Wave 5.5 BACKEND-F-001 fix
+# (backpropagate/multi_run.py::_build_abort_callback). The pre-fix
+# ``abort()`` flipped ``_should_abort=True`` but only the inter-run
+# loop honored it — an in-flight ``SFTTrainer.train()`` call ran to
+# completion (potentially hours) before the loop's next iteration. The
+# GPU emergency handler (``_on_gpu_emergency``) calls ``abort()``
+# expecting fast-fail; without the callback that safety contract was
+# silently broken.
+#
+# The fix builds an HF ``TrainerCallback`` whose ``on_step_end`` polls
+# ``trainer._should_abort`` and, when set, flips
+# ``control.should_training_stop = True`` (the documented HF contract
+# for cooperative cancellation). This test class pins both halves of
+# the contract — the "not aborting" path (control untouched) and the
+# "aborting" path (control flipped) — by simulating HF's ``on_step_end``
+# fire against a mock ``control`` object.
+class TestAbortCallback:
+    """BACKEND-F-001 regression: abort callback fires + flips control."""
+
+    def _build_callback(self, trainer):
+        """Helper: build the callback via the module-level factory.
+
+        Imports the private helper directly so the test doesn't depend
+        on the run-loop wiring (which would force a full mock of the
+        SFTTrainer + dataset). The factory's ``returns None`` branch
+        when transformers is unavailable is handled by skipping the
+        whole test; transformers is a hard dep of TRL so this branch
+        should never fire in practice on a CI runner with our deps
+        installed.
+        """
+        from backpropagate.multi_run import _build_abort_callback
+
+        cb = _build_abort_callback(trainer)
+        if cb is None:
+            pytest.skip(
+                "_build_abort_callback returned None — transformers "
+                "TrainerCallback unavailable. transformers is a hard "
+                "dep of TRL so this branch should never fire in CI; "
+                "skip honestly forward-pointing to the dep audit."
+            )
+        return cb
+
+    def test_callback_no_op_when_not_aborting(self):
+        """on_step_end MUST NOT flip control.should_training_stop when
+        ``_should_abort`` is False — the default state of a healthy run.
+
+        Pre-F-001 the callback didn't exist; this test pins the
+        no-side-effect contract on the new code path so a future
+        regression that fires the abort signal eagerly (e.g. on any
+        callback invocation rather than only when the flag is set) is
+        caught at unit-test time instead of at run time when the inner
+        SFTTrainer silently terminates.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+        assert trainer._should_abort is False
+
+        cb = self._build_callback(trainer)
+
+        # HF ``TrainerControl`` is the canonical type; we use a
+        # MagicMock with the same surface so the test doesn't pull in
+        # HF transformers' internals. The callback only reads / writes
+        # ``should_training_stop`` so a minimal stub is enough.
+        control = MagicMock()
+        control.should_training_stop = False
+
+        result = cb.on_step_end(
+            args=MagicMock(),
+            state=MagicMock(global_step=10),
+            control=control,
+        )
+
+        # Two invariants:
+        #
+        # 1. ``should_training_stop`` is not touched (still False — the
+        #    initial value the stub was constructed with).
+        # 2. The callback returns the same ``control`` object so HF's
+        #    contract is honored (HF passes the returned value through
+        #    to the next callback in the chain).
+        assert control.should_training_stop is False
+        assert result is control
+
+    def test_callback_flips_should_training_stop_when_aborting(self):
+        """on_step_end MUST flip ``control.should_training_stop = True``
+        when ``_should_abort`` is True. This is the load-bearing fix
+        from BACKEND-F-001: the inner SFTTrainer cooperative-cancellation
+        path that lets the run tear down within seconds of an abort
+        signal rather than running to completion.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+        trainer.abort("Test abort reason")
+        assert trainer._should_abort is True
+        assert trainer._abort_reason == "Test abort reason"
+
+        cb = self._build_callback(trainer)
+
+        control = MagicMock()
+        control.should_training_stop = False
+
+        result = cb.on_step_end(
+            args=MagicMock(),
+            state=MagicMock(global_step=42),
+            control=control,
+        )
+
+        assert control.should_training_stop is True, (
+            "BACKEND-F-001 contract violation: abort callback did NOT "
+            "flip control.should_training_stop. The inner SFTTrainer "
+            "will keep training to completion despite the abort "
+            "signal — the GPU emergency safety contract is broken."
+        )
+        assert result is control
+
+    def test_callback_idempotent_across_fires(self):
+        """Multiple ``on_step_end`` calls with ``_should_abort=True``
+        keep ``should_training_stop=True`` — no flip-flop, no
+        false-clear. HF Trainer fires the callback after every step;
+        the callback's behaviour MUST be a stable monotonic latch
+        (False → True transitions only) so the cooperative cancel
+        intent doesn't get unstuck by a stray False write.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+        cb = self._build_callback(trainer)
+
+        control = MagicMock()
+        control.should_training_stop = False
+
+        # Step 1: not aborting yet.
+        cb.on_step_end(args=MagicMock(), state=MagicMock(global_step=1), control=control)
+        assert control.should_training_stop is False
+
+        # Step 2: operator (or GPU emergency handler) aborts mid-run.
+        trainer.abort("simulated mid-run abort")
+        cb.on_step_end(args=MagicMock(), state=MagicMock(global_step=2), control=control)
+        assert control.should_training_stop is True
+
+        # Step 3: callback fires again — still True (no false-clear).
+        cb.on_step_end(args=MagicMock(), state=MagicMock(global_step=3), control=control)
+        assert control.should_training_stop is True
+
+    def test_callback_wired_at_module_scope(self):
+        """The factory is exposed at module scope (not nested inside a
+        method) so unit tests + future extensions can build the
+        callback without instantiating a full run loop. Pin the public
+        symbol so a refactor that hides it (e.g. closure inside
+        ``run()``) is caught at import time.
+        """
+        from backpropagate import multi_run
+
+        assert hasattr(multi_run, "_build_abort_callback")
+        assert callable(multi_run._build_abort_callback)

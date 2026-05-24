@@ -1,0 +1,72 @@
+name: OpenSSF Scorecard
+
+# CIDOCS-F-005 — OpenSSF Scorecard supply-chain scoring. Runs weekly +
+# on push to main (so a PR that lowers the score is visible within a
+# day), publishes SARIF to GitHub code scanning (Security tab) AND to
+# the public scorecard.dev dashboard. Source template:
+# https://github.com/ossf/scorecard-action — adapted to this repo's
+# action-SHA pinning + permissions hygiene conventions.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '0 6 * * 1'  # 06:00 UTC every Monday — quiet runner-pool window
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Declare default permissions as read-only. Each job re-grants the writes
+# it specifically needs — keeps the principle-of-least-privilege bar that
+# the rest of the v1.3 CI surface holds to.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Required for the Scorecard action's publish-results flow.
+      security-events: write
+      id-token: write     # publish-results to scorecard.dev via OIDC
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@05b42c624433fc40578a4040d5cf5e36ddca8cde  # v2.4.2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results: true forwards the scorecard run to scorecard.dev
+          # so the public dashboard tracks repo history week-over-week.
+          # Requires id-token: write above (OIDC token used to authenticate
+          # against scorecard.dev's API). Safe for public repos.
+          publish_results: true
+
+      # Upload the SARIF blob as an artifact for human grep. Useful when
+      # the GitHub Security tab takes a few minutes to reflect the new
+      # findings on a fresh enable.
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Upload SARIF to the GitHub code-scanning surface so Scorecard
+      # findings appear in the Security tab alongside Bandit / Semgrep /
+      # Trivy / pip-audit.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
+        with:
+          sarif_file: results.sarif

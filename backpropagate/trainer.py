@@ -1995,6 +1995,7 @@ class Trainer:
         path: str | None = None,
         save_merged: bool = False,
         run_id: str | None = None,
+        register_in_manifest: bool = True,
     ) -> str:
         """
         Save the trained model atomically.
@@ -2006,12 +2007,43 @@ class Trainer:
         missing — which raises a cryptic 'state_dict missing keys' on the
         next resume attempt).
 
+        BACKEND-F-007 (Wave 6a): on success the saved checkpoint is also
+        registered with a :class:`CheckpointManager` rooted at
+        ``self.output_dir`` so a later ``MultiRunTrainer`` pointed at the
+        same ``checkpoint_dir=<output_dir>`` can discover this checkpoint
+        via :meth:`CheckpointManager.find_latest_for_run_id` and resume
+        from it. Pre-F-007 the single-run save path wrote the PEFT
+        directory + the ``run_id`` correlation file but never appeared in
+        any manifest — an operator who trained single-run, then tried to
+        continue in multi-run mode, hit the silent-fresh-start failure
+        mode at the multi-run resume site because the manifest scan
+        returned no matching ``run_id``. Cross-trainer interop is now a
+        documented invariant: any checkpoint registered by a Trainer
+        can be resumed by a MultiRunTrainer pointing at the same
+        ``checkpoint_dir`` (specifically, the Trainer's ``output_dir``).
+        Operators using a separate ``checkpoint_dir`` for multi-run
+        (e.g. the default ``output_dir/multi_run``) should construct
+        the resuming MultiRunTrainer with
+        ``MultiRunConfig(checkpoint_dir=<single-run-trainer.output_dir>)``.
+
         Args:
             path: Output path (default: output_dir/lora)
             save_merged: Whether to save merged weights (larger but standalone)
             run_id: Optional correlation token (B-001) persisted into a
                 ``run_id`` file inside the saved checkpoint dir so operators
                 can grep by the same identifier across logs + manifests.
+            register_in_manifest: BACKEND-F-007 (Wave 6a) — when True
+                (default), the saved checkpoint is registered with a
+                :class:`CheckpointManager` rooted at ``self.output_dir``
+                so a later MultiRunTrainer pointed at the same
+                ``checkpoint_dir`` can discover and resume from it. Pass
+                False for ad-hoc / export-only saves where manifest
+                registration would pollute the resume-candidate set
+                (e.g. an operator saving a merged-weights snapshot for
+                upload that should never be considered as a resume
+                target). Registration failures are swallowed (logged
+                at WARN); the PEFT save itself is the load-bearing
+                contract.
 
         Returns:
             Path to saved model
@@ -2094,6 +2126,64 @@ class Trainer:
                 shutil.rmtree(partial_path, ignore_errors=True)
 
         logger.info(f"Model saved to: {output_path}")
+
+        # BACKEND-F-007 (Wave 6a): register the saved checkpoint in a
+        # CheckpointManager rooted at self.output_dir so a later
+        # MultiRunTrainer pointed at the same checkpoint_dir can
+        # discover this checkpoint via find_latest_for_run_id(run_id)
+        # and resume from it. The registration writes a single
+        # manifest.json entry next to the run_history.json that
+        # Trainer.train() already maintains; both files share the same
+        # output_dir so cross-trainer interop is a documented
+        # invariant. Failures are swallowed (logged at WARN) — the
+        # PEFT save is the load-bearing contract; the manifest entry
+        # is the cross-trainer convenience that lights up multi-run
+        # resume from a single-run checkpoint.
+        if register_in_manifest:
+            try:
+                from .checkpoints import CheckpointManager, CheckpointPolicy
+
+                # auto_prune=False so a single-run save into a manifest
+                # never silently deletes prior multi-run entries — the
+                # operator's pruning policy belongs to the MultiRunTrainer
+                # that owns the multi-run lifecycle, not to ad-hoc
+                # single-run saves.
+                cm_policy = CheckpointPolicy(auto_prune=False)
+                cm = CheckpointManager(
+                    checkpoint_dir=str(self.output_dir),
+                    policy=cm_policy,
+                )
+                # run_index=0 is the convention for single-run-saved
+                # checkpoints (multi-run uses 1-based per-run indices).
+                # is_run_boundary=True so retention policies that honor
+                # boundary checkpoints preserve this even if a later
+                # multi-run session prunes around it.
+                cm.register(
+                    run_index=0,
+                    checkpoint_path=str(output_path),
+                    training_loss=None,
+                    validation_loss=None,
+                    is_run_boundary=True,
+                    run_id=run_id,
+                )
+                logger.debug(
+                    f"Registered single-run checkpoint in manifest at "
+                    f"{self.output_dir} (run_id={run_id!r}); a later "
+                    f"MultiRunTrainer(checkpoint_dir={str(self.output_dir)!r}) "
+                    f"can resume from this checkpoint."
+                )
+            except Exception as reg_err:
+                logger.warning(
+                    f"BACKEND-F-007: failed to register checkpoint in "
+                    f"manifest at {self.output_dir}: {reg_err}. The PEFT "
+                    f"directory at {output_path} is intact; only the "
+                    f"cross-trainer resume index is missing. To re-build "
+                    f"it manually, instantiate CheckpointManager("
+                    f"checkpoint_dir={str(self.output_dir)!r}) and call "
+                    f"register(run_index=0, checkpoint_path="
+                    f"{str(output_path)!r}, run_id={run_id!r})."
+                )
+
         return str(output_path)
 
     def export(

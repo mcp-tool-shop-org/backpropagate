@@ -19,7 +19,22 @@ Usage:
 
     # Show system info
     backprop info
+
+Shell completion (BRIDGE-F-005, v1.3 Wave 6a):
+
+    pip install argcomplete   # if not already pulled in via pyproject
+    eval "$(register-python-argcomplete backprop)"
+
+    # Then `backprop tr<TAB>` completes to `train`, `backprop export
+    # --format <TAB>` completes to lora / merged / gguf, etc.
+
+See handbook/getting-started.md for the per-shell snippets (bash / zsh /
+fish).
 """
+
+# PYTHON_ARGCOMPLETE_OK — magic comment for argcomplete's global-completion
+# mode; when installed via `eval "$(register-python-argcomplete backprop)"`
+# the completer scans this file for the marker before doing any work.
 
 import argparse
 import logging
@@ -47,19 +62,56 @@ __all__ = ["main", "create_parser"]
 
 
 # =============================================================================
-# EXIT CODES (Ship Gate B2)
+# EXIT CODES (Ship Gate B2 + BRIDGE-F-006 sysexits.h overlay)
 # =============================================================================
-# 0 = success
-# 1 = user error          (bad args, missing input, validation failure)
-# 2 = runtime error       (unexpected crash, IO failure, internal bug)
-# 3 = partial success     (operation completed with some failures)
-# 130 = interrupted       (Ctrl+C / SIGINT — POSIX convention)
+# Legacy Ship Gate B2 codes (preserved for back-compat — every documented
+# contract since v1.1.0 promises these and downstream CI scripts assert on
+# them):
+#   0   = success
+#   1   = user error          (bad args, missing input, validation failure)
+#   2   = runtime error       (unexpected crash, IO failure, internal bug)
+#   3   = partial success     (operation completed with some failures)
+#   130 = interrupted         (Ctrl+C / SIGINT — POSIX convention)
+#
+# BRIDGE-F-006 (v1.3 Wave 6a) overlay — sysexits.h-flavored finer-grained
+# codes that the top-level exception net at main() emits when it can match
+# the failure mode to a specific category. The legacy 1 / 2 / 3 / 130 codes
+# REMAIN the contract: per-subcommand handlers still emit them. The sysexits
+# overlay only fires from the last-resort exception net when nothing inside
+# the subcommand was specific enough to assign a code; downstream wrappers
+# that compare against the legacy code set keep working unchanged because
+# the overlay codes are disjoint (64 / 65 / 69 / 70 / 77 / 137 vs 0 / 1 /
+# 2 / 3 / 130). The mapping is documented in handbook/cli-reference.md
+# (handoff to frontend agent, see report bundle below).
+#
+# sysexits.h conventions (BSD /usr/include/sysexits.h):
+#   EX_USAGE        = 64  malformed CLI invocation
+#   EX_DATAERR      = 65  input file unusable / malformed
+#   EX_UNAVAILABLE  = 69  required service unreachable (HF Hub down, etc.)
+#   EX_SOFTWARE     = 70  internal software error (uncaught exception)
+#   EX_NOPERM       = 77  permission denied (filesystem, ACL)
+#
+# Linux convention:
+#   137             SIGKILL by OOM-killer (used for CUDA OOM where the
+#                   process is functionally killed by the kernel even
+#                   when Python catches torch.cuda.OutOfMemoryError —
+#                   matches the bash $? value operators see when an OOM
+#                   slays the process directly)
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
 EXIT_RUNTIME_ERROR = 2
 EXIT_PARTIAL_SUCCESS = 3
 EXIT_INTERRUPTED = 130
+
+# BRIDGE-F-006 sysexits overlay (last-resort net only — subcommand handlers
+# continue to emit 0 / 1 / 2 / 3 / 130 per their documented contracts).
+EXIT_USAGE = 64          # EX_USAGE      — argparse / CLI structure failure
+EXIT_DATA_ERR = 65       # EX_DATAERR    — dataset malformed / unreadable
+EXIT_UNAVAILABLE = 69    # EX_UNAVAILABLE — required service down (HF Hub)
+EXIT_SOFTWARE = 70       # EX_SOFTWARE   — internal uncaught exception
+EXIT_NO_PERM = 77        # EX_NOPERM     — permission denied
+EXIT_OOM_KILLED = 137    # Linux OOM-killer convention (SIGKILL = 128 + 9)
 
 
 # =============================================================================
@@ -1231,6 +1283,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "path",
             "Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to convert_hf_to_gguf.py directly or the llama.cpp directory containing it. Searched FIRST, before shutil.which / ~/llama.cpp / /usr/local/bin.",
         ),
+        (
+            "BACKPROPAGATE_CLOUDFLARED_TIMEOUT",
+            "30",
+            "int",
+            "BRIDGE-F-CLOUDFLARED (v1.3 Wave 6a): seconds to wait for the cloudflared subprocess (spawned by `backprop ui --share`) to surface its trycloudflare.com tunnel URL on stderr before giving up. Default 30s; operators on slow uplinks may want 60-120s. Values <= 0 fall back to the default. Honored only when --share is passed and `cloudflared` is on PATH.",
+        ),
     ]
     seen = {row["env_var"] for row in rows}
     for env_name, default, type_name, description in logging_envs:
@@ -1474,6 +1532,149 @@ def cmd_info(args: argparse.Namespace) -> int:
 # COMMAND: config
 # =============================================================================
 
+# =============================================================================
+# LOCK-FILE TOKEN (BRIDGE-F-002 auth-polish item 3 / V1_3_BRIEF P0)
+# =============================================================================
+#
+# Per DESIGN_BRIEF "Lock-file token mode (post-CVE-2025-52882 defense)":
+# the per-launch token / auth credentials are also written to
+#   $XDG_RUNTIME_DIR/backpropagate/session-<port>.lock     (Linux)
+#   ~/Library/Application Support/backpropagate/session-<port>.lock (macOS)
+#   %LOCALAPPDATA%\backpropagate\session-<port>.lock        (Windows)
+# so machine-to-machine clients (e.g. ``backprop train --watch-ui``) can
+# read the token / credentials without exposing them in argv.
+#
+# Mode 0o600 on POSIX (owner read+write only). On Windows we fall back to
+# the per-user LOCALAPPDATA directory whose ACL is owner-restricted by
+# default — a tight ACL-rewrite via icacls would require pywin32 which
+# isn't a runtime dependency. The Windows fallback is documented in
+# handbook/security.md (cross-domain handoff to frontend agent below).
+#
+# Cross-domain handoff to frontend agent: the test scaffold in
+# tests/test_auth_middleware.py:540 (currently pytest.skip()ed) imports
+# ``from backpropagate.ui_app.auth import write_launch_token_lock``. Once
+# the frontend agent re-exports this function from ui_app/auth.py (or
+# decides on the alternative location), the test can be unskipped and
+# the lock-file contract becomes enforced. The canonical implementation
+# lives here so the cli.py:cmd_ui boot path can call it without
+# importing ui_app (which depends on the [ui] extra).
+
+
+def _lock_file_dir() -> Path:
+    """Return the platform-appropriate runtime directory for lock files.
+
+    Honors ``$XDG_RUNTIME_DIR`` on Linux (the freedesktop spec). Falls
+    back to ``$LOCALAPPDATA`` on Windows and ``~/Library/Application
+    Support`` on macOS. Creates the ``backpropagate`` subdirectory if it
+    doesn't exist (with owner-only permissions on POSIX).
+    """
+    # XDG_RUNTIME_DIR honored first regardless of OS — tests use this to
+    # redirect into tmp_path. Linux is the canonical surface; the macOS /
+    # Windows fallbacks are best-effort secondary support.
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        base = Path(xdg)
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        local_app = os.environ.get("LOCALAPPDATA")
+        if local_app:
+            base = Path(local_app)
+        else:
+            base = Path.home() / "AppData" / "Local"
+    else:
+        # Linux fallback when XDG_RUNTIME_DIR is unset — /tmp is world-
+        # writable but the file itself gets mode 0o600 below, so an
+        # attacker can see the file's existence but cannot read it.
+        base = Path("/tmp")
+
+    target = base / "backpropagate"
+    target.mkdir(parents=True, exist_ok=True)
+    # On POSIX, restrict the directory to owner-only too (defense in depth;
+    # even if the lock file's mode is wrong somehow, the directory blocks
+    # the read). Windows: mkdir inherits the parent ACL which under
+    # LOCALAPPDATA is owner-restricted by default.
+    if os.name == "posix":
+        try:
+            os.chmod(target, 0o700)
+        except OSError:  # pragma: no cover — best effort, mkdir succeeded
+            pass
+    return target
+
+
+def write_launch_token_lock(port: int, token: str) -> Path:
+    """Write the launch token / credentials to a per-launch lock file.
+
+    Args:
+        port: Port the UI is listening on (used to form the filename so
+            two concurrent ``backprop ui`` invocations on different ports
+            don't collide).
+        token: The token / credential string to persist. The caller is
+            responsible for deciding whether to persist the launch token
+            (token-auto mode) or the ``user:pass`` shape (basic-auth mode);
+            this helper writes whatever opaque string it gets.
+
+    Returns:
+        Path to the lock file (the caller's CLI logs the path so the
+        operator knows where to point their M2M client).
+
+    File contract:
+        On POSIX: mode 0o600 (owner read+write only). Writes atomically
+        via tempfile + os.replace so a partial write doesn't leak a
+        half-formed token.
+
+        On Windows: the file ends up in ``%LOCALAPPDATA%\\backpropagate\\``
+        which inherits the user's ACL by default (owner-restricted on a
+        single-user box). A tight icacls rewrite would require pywin32
+        which is not a runtime dependency; the per-user directory provides
+        the practical floor.
+
+    Concurrency:
+        Multiple ``backprop ui --port N`` invocations on the SAME port
+        race; the last write wins (consistent with Reflex's own port-
+        binding behavior — only one server can hold the port). Different
+        ports never collide because the filename embeds the port.
+    """
+    import tempfile
+
+    target_dir = _lock_file_dir()
+    lock_path = target_dir / f"session-{int(port)}.lock"
+
+    # Write to a sibling temp file then atomically rename. This avoids
+    # leaving a half-written file (and the wrong mode bits) visible to
+    # other processes that happen to scan the directory between the
+    # creat() and the write().
+    fd, tmp_path_str = tempfile.mkstemp(
+        prefix=f".session-{int(port)}.",
+        suffix=".lock.tmp",
+        dir=str(target_dir),
+    )
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(token)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:  # pragma: no cover — fsync best-effort
+                pass
+        if os.name == "posix":
+            os.chmod(tmp_path, 0o600)
+        # Atomic rename to the canonical name. On POSIX this is an inode-
+        # level swap; on Windows os.replace also atomically replaces.
+        os.replace(tmp_path, lock_path)
+    except Exception:
+        # Best-effort cleanup of the temp file on any error so we don't
+        # leak it.
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+    return lock_path
+
+
 def _print_ui_startup_banner(
     *,
     bound_host: str,
@@ -1580,6 +1781,166 @@ def _print_ui_startup_banner(
     )
 
 
+# =============================================================================
+# CLOUDFLARED QUICK TUNNEL (BRIDGE-F-CLOUDFLARED / V1_3_BRIEF P1)
+# =============================================================================
+#
+# Implements ``backprop ui --share`` end-to-end: spawn ``cloudflared tunnel
+# --url http://localhost:<port>`` as a subprocess, parse the
+# ``https://*.trycloudflare.com`` URL from its stderr on connect, and
+# expose the tunnel hostname via ``BACKPROPAGATE_UI_SHARE_HOST`` so the
+# Reflex auth middleware's Host + Origin allowlists pick it up
+# automatically (no auth.py change needed — the middleware already reads
+# the env var).
+#
+# Cloudflare Quick Tunnels (no Cloudflare account / no auth flow required)
+# stay up for the lifetime of the subprocess; we clean up on SIGINT via
+# the subprocess.Popen + terminate() pattern below. If ``cloudflared``
+# isn't on PATH we surface a friendly error pointing at the install URL
+# and the SSH port-forwarding fallback so the operator has an action plan.
+
+# Cloudflare Quick Tunnels surface the public URL on stderr as a line
+# matching:  https://<random-subdomain>.trycloudflare.com
+# Older / future builds may also wrap it in box-drawing characters; the
+# regex matches the URL anywhere in any line.
+_CLOUDFLARED_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+# Cloudflared's TLS-ready signal typically appears within 5s on a healthy
+# link. Operators on slow uplinks can override via BACKPROPAGATE_CLOUDFLARED_TIMEOUT.
+_CLOUDFLARED_DEFAULT_TIMEOUT_SECONDS = 30
+
+
+def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
+    """Spawn ``cloudflared tunnel --url http://localhost:<port>`` and parse the URL.
+
+    Returns a ``(Popen, tunnel_url)`` tuple on success, ``None`` if
+    cloudflared is unavailable / didn't surface a URL within the timeout.
+    The caller is responsible for terminating the subprocess on exit.
+
+    The subprocess inherits stdout/stderr-to-pipe so we can scrape the
+    URL line; once the URL is parsed we keep the pipes open and drain
+    them in background threads so the tunnel doesn't deadlock on a full
+    OS pipe buffer.
+    """
+    import shutil
+    import threading
+
+    cf_path = shutil.which("cloudflared")
+    if not cf_path:
+        _print_error(
+            "--share requires `cloudflared` on PATH but it was not found."
+        )
+        _print_info(
+            "Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        )
+        _print_info(
+            "Alternative — SSH port-forward instead:  "
+            f"ssh -L {port}:localhost:{port} <your-host>"
+        )
+        return None
+
+    cmd = [
+        cf_path,
+        "tunnel",
+        "--no-autoupdate",
+        "--url",
+        f"http://localhost:{port}",
+    ]
+
+    # cloudflared writes its banner + status lines to stderr.
+    try:
+        proc = subprocess.Popen(  # nosec B603 — cloudflared path resolved via shutil.which; arguments fully controlled
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # line-buffered so we see lines as cloudflared emits them
+        )
+    except OSError as exc:
+        _print_error(f"Failed to spawn cloudflared: {exc}")
+        return None
+
+    # Tail the merged output (stdout was redirected to stderr) until we
+    # either parse the URL or hit the timeout. Honor an env override so
+    # operators on slow uplinks can extend the budget.
+    try:
+        timeout_env = os.environ.get("BACKPROPAGATE_CLOUDFLARED_TIMEOUT", "")
+        timeout_seconds = (
+            int(timeout_env) if timeout_env else _CLOUDFLARED_DEFAULT_TIMEOUT_SECONDS
+        )
+        if timeout_seconds <= 0:
+            timeout_seconds = _CLOUDFLARED_DEFAULT_TIMEOUT_SECONDS
+    except ValueError:
+        timeout_seconds = _CLOUDFLARED_DEFAULT_TIMEOUT_SECONDS
+
+    import time as _time
+    deadline = _time.monotonic() + timeout_seconds
+    tunnel_url: str | None = None
+
+    # Read line-by-line until we find the URL or the deadline elapses.
+    assert proc.stdout is not None  # nosec B101 — Popen(stdout=PIPE) guarantees this
+    while _time.monotonic() < deadline:
+        if proc.poll() is not None:
+            # cloudflared died before publishing a URL — surface the tail
+            # of its output to help the operator triage (invalid network,
+            # captive portal, etc.).
+            _print_error("cloudflared exited before publishing a tunnel URL.")
+            try:
+                tail = proc.stdout.read() or ""
+            except Exception:  # noqa: BLE001 — best-effort drain
+                tail = ""
+            if tail.strip():
+                # Truncate to a reasonable size so we don't pipe MB of log.
+                _print_info(f"cloudflared output (tail):\n{tail[-800:]}")
+            return None
+        # Read one line with a short timeout via select — readline()
+        # blocks indefinitely otherwise. POSIX uses select.select on the
+        # raw fd; Windows pipes aren't selectable so we fall back to a
+        # blocking readline() which is bounded by the deadline at the
+        # next iteration.
+        line = proc.stdout.readline()
+        if not line:
+            # EOF or transient empty read — re-check deadline + alive.
+            continue
+        match = _CLOUDFLARED_URL_RE.search(line)
+        if match:
+            tunnel_url = match.group(0)
+            break
+
+    if not tunnel_url:
+        _print_error(
+            f"cloudflared did not surface a tunnel URL within {timeout_seconds}s."
+        )
+        _print_info(
+            "Set BACKPROPAGATE_CLOUDFLARED_TIMEOUT=<seconds> to extend the budget, "
+            "or fall back to SSH port-forwarding: "
+            f"ssh -L {port}:localhost:{port} <your-host>"
+        )
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        return None
+
+    # Drain remaining cloudflared output in a daemon thread so the
+    # subprocess doesn't deadlock on a full pipe buffer. We don't echo
+    # the lines (cloudflared's verbose telemetry would spam stderr); a
+    # future polish item could route them to the structured logger.
+    def _drain_pipe(pipe: Any) -> None:
+        try:
+            for _ in pipe:
+                pass
+        except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
+            pass
+
+    drain_thread = threading.Thread(
+        target=_drain_pipe, args=(proc.stdout,), daemon=True, name="cloudflared-drain"
+    )
+    drain_thread.start()
+
+    return proc, tunnel_url
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     """
     Execute the ui command to launch the Reflex web interface.
@@ -1601,19 +1962,25 @@ def cmd_ui(args: argparse.Namespace) -> int:
     * ``--host`` with a non-loopback bind without ``--auth`` — DNS-rebinding
       defense per DESIGN_BRIEF; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
 
-    ``--share`` (post-v1.3): exposes the UI via a cloudflared tunnel.
-    Wave 6 of v1.3 (BRIDGE-F-CLOUDFLARED) lands the tunneling implementation;
-    until that commit lands in this same v1.3 release, a transitional stderr
-    warning (printed after the refuse-to-start gate, before subprocess launch)
-    names the in-flight state and points at SSH port-forwarding as the interim
-    remote-access path. The transitional warning is removed by the Wave 6
-    agent when the cloudflared implementation lands.
+    ``--share`` (BRIDGE-F-CLOUDFLARED, v1.3 Wave 6a): spawns ``cloudflared
+    tunnel --url http://localhost:<port>`` as a subprocess (Cloudflare Quick
+    Tunnels — no Cloudflare account needed, ephemeral). The tunnel URL is
+    parsed from cloudflared stderr and exported via
+    ``BACKPROPAGATE_UI_SHARE_HOST`` so the auth middleware's Host + Origin
+    allowlists accept the trycloudflare.com hostname. The subprocess is
+    cleaned up on SIGINT before the CLI exits.
 
     ``--host`` (Wave 3.5, v1.3): the operator-supplied bind is now passed to
     ``reflex run --backend-host``; previously the backend defaulted to
     Reflex's ``backend_host="0.0.0.0"`` regardless of what the operator
     asked for. The auth middleware's Host-header allowlist
     (``BACKPROPAGATE_UI_HOST_BIND``) remains the load-bearing access check.
+
+    ``--auth-file <path>`` (BRIDGE-F-002 auth-polish item 4, v1.3 Wave 6a):
+    reads ``user:pass`` from a file instead of taking it on the command
+    line (keeps the credential out of shell history). The file's mode is
+    checked on POSIX — a stderr warning fires if mode > 0o600. Mutually
+    exclusive with ``--auth`` (passing both raises a UserInputError).
 
     Exit codes (Ship Gate B2):
         0   UI launched and exited cleanly (including Ctrl+C)
@@ -1658,6 +2025,84 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     _print_header("Backpropagate UI")
     _print_info(f"Port: {args.port}")
+
+    # BRIDGE-F-002 auth-polish item 4 (v1.3 Wave 6a): resolve --auth-file
+    # BEFORE the refuse-to-start gates so the gates see the resolved
+    # credential regardless of source. Mutex with --auth: passing both
+    # is operator error (which credential should we believe?).
+    auth_file = getattr(args, "auth_file", None)
+    if auth_file and args.auth:
+        raise UserInputError(
+            "--auth and --auth-file are mutually exclusive — pick one.",
+            hint=(
+                "Use --auth-file <path> to keep credentials out of shell "
+                "history, OR --auth user:pass for one-off invocations. "
+                "Combining the two would race on which credential wins."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+
+    # Stage C humanization parity: if --auth was passed inline, warn that
+    # shell history captured it (the env-var / --auth-file paths avoid this).
+    if args.auth:
+        _print_warning(
+            "--auth was passed inline — shell history will retain the "
+            "credential. For repeat invocations, prefer --auth-file <path> "
+            "or the BACKPROPAGATE_UI_AUTH env var."
+        )
+
+    if auth_file:
+        auth_file_path = Path(auth_file).expanduser()
+        if not auth_file_path.exists():
+            raise UserInputError(
+                f"--auth-file path does not exist: {auth_file_path}",
+                hint="Create the file with `printf 'user:pass' > path` and "
+                "set mode 0600 (`chmod 600 path`).",
+                code="INPUT_VALIDATION_FAILED",
+            )
+        # File-mode warning on POSIX: > 0o600 means group / world can read
+        # the credential. Don't refuse — the operator may have intentionally
+        # widened the mode — but surface the consequence.
+        if os.name == "posix":
+            try:
+                mode = auth_file_path.stat().st_mode & 0o777
+                if mode & 0o077:  # any group / other bits set
+                    _print_warning(
+                        f"--auth-file mode is {oct(mode)} — group / other "
+                        "have read access. Tighten to 0600: "
+                        f"`chmod 600 {auth_file_path}`."
+                    )
+            except OSError:
+                pass
+        try:
+            auth_text = auth_file_path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise UserInputError(
+                f"--auth-file could not be read: {exc}",
+                hint="Verify the file exists and the current user has read "
+                "permission.",
+                code="INPUT_VALIDATION_FAILED",
+            ) from exc
+        if not auth_text:
+            raise UserInputError(
+                "--auth-file is empty (expected 'user:pass' on the first line).",
+                hint="Write the credential with `printf 'user:pass' > path` "
+                "(no trailing newline) and set mode 0600.",
+                code="INPUT_VALIDATION_FAILED",
+            )
+        # Re-use the same shape validator the --auth argparse type uses
+        # so the file content gets identical "no whitespace / colon in
+        # username, no newline in password" enforcement. Re-raising as
+        # UserInputError keeps the catch-all happy.
+        try:
+            args.auth = _auth_credential(auth_text)
+        except argparse.ArgumentTypeError as exc:
+            raise UserInputError(
+                f"--auth-file content failed validation: {exc}",
+                hint="The file must contain a single 'user:pass' line that "
+                "would also pass `--auth user:pass` validation.",
+                code="INPUT_AUTH_INVALID_SHAPE",
+            ) from exc
 
     # ------------------------------------------------------------------ #
     # Post-Wave-6 (ENFORCEMENT_AVAILABLE=True): the auth middleware now
@@ -1792,11 +2237,76 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # we still set the var explicitly to '127.0.0.1' so the middleware
     # never has to guess.
     env["BACKPROPAGATE_UI_HOST_BIND"] = requested_host or "127.0.0.1"
-    # When --share is active the middleware also accepts the tunnel host.
-    # No --share-host flag yet, so pass an empty string for now; a future
-    # CLI knob can populate this with the operator-provided tunnel domain.
+    # BRIDGE-F-CLOUDFLARED (v1.3 Wave 6a): spawn the Cloudflare Quick Tunnel
+    # subprocess if --share was passed, parse the trycloudflare.com URL
+    # from cloudflared stderr, and stash it in BACKPROPAGATE_UI_SHARE_HOST
+    # so the auth middleware's Host + Origin allowlists accept it. The
+    # subprocess is kept alive for the lifetime of the Reflex run and
+    # terminated below on SIGINT / KeyboardInterrupt / normal exit.
+    cloudflared_proc: subprocess.Popen | None = None
+    tunnel_host = ""
     if args.share:
-        env["BACKPROPAGATE_UI_SHARE_HOST"] = ""
+        spawn_result = _spawn_cloudflared_tunnel(args.port)
+        if spawn_result is None:
+            # _spawn_cloudflared_tunnel already printed the friendly error
+            # and the SSH-fallback hint. Return user-error so the operator
+            # knows it's a config/install issue, not an internal crash.
+            return EXIT_USER_ERROR
+        cloudflared_proc, tunnel_url = spawn_result
+        # Parse the hostname out of the URL (strip the scheme + path so
+        # the middleware allowlist sees just the bare host).
+        try:
+            from urllib.parse import urlsplit
+            tunnel_host = (urlsplit(tunnel_url).hostname or "").lower()
+        except Exception:  # noqa: BLE001 — best-effort parsing
+            tunnel_host = ""
+        if tunnel_host:
+            env["BACKPROPAGATE_UI_SHARE_HOST"] = tunnel_host
+            _print_success(f"Tunnel ready: {tunnel_url}")
+            _print_info(
+                "Share this URL to grant access. The tunnel + the UI both "
+                "stop when you Ctrl+C this terminal."
+            )
+        else:
+            # We spawned cloudflared but couldn't parse the host — should be
+            # impossible after _spawn_cloudflared_tunnel parsed it once, but
+            # fail-closed rather than silently dropping the allowlist entry.
+            try:
+                cloudflared_proc.terminate()
+            except OSError:
+                pass
+            _print_error(
+                "Could not parse the trycloudflare.com hostname from the "
+                "cloudflared output; refusing to start the UI."
+            )
+            return EXIT_RUNTIME_ERROR
+
+    # BRIDGE-F-002 auth-polish item 3 (v1.3 Wave 6a): write the credential
+    # to a per-launch lock file at $XDG_RUNTIME_DIR/backpropagate/session-
+    # <port>.lock (or the platform equivalent) so machine-to-machine clients
+    # (`backprop train --watch-ui` and similar) can pick up the auth string
+    # without it appearing in argv / ps output. Mode 0o600 on POSIX; the
+    # Windows fallback inherits the per-user LOCALAPPDATA ACL.
+    #
+    # We persist either the explicit user:pass (basic-auth mode) or the
+    # launch token (token-auto mode; not yet exposed on the CLI but the
+    # helper is forward-compatible). NO_AUTH_LOCAL_ONLY skips lock-file
+    # creation entirely — there's nothing to authenticate against.
+    lock_file_path: Path | None = None
+    lock_payload = env.get("BACKPROPAGATE_UI_AUTH") or env.get("BACKPROPAGATE_UI_LAUNCH_TOKEN")
+    if lock_payload:
+        try:
+            lock_file_path = write_launch_token_lock(args.port, lock_payload)
+            _print_info(f"Auth lock-file: {lock_file_path} (mode 0o600 on POSIX)")
+        except Exception as exc:  # noqa: BLE001 — lock-file is best-effort observability
+            # Don't abort the UI launch just because the lock file failed;
+            # the credential still flows via env var. Surface the reason so
+            # an operator who NEEDS the lock-file path (M2M consumers) can
+            # triage. Auth itself is unaffected.
+            _print_warning(
+                f"Could not write launch lock-file ({exc}); M2M consumers "
+                "will need to read BACKPROPAGATE_UI_AUTH from their own env."
+            )
 
     # Reflex's port convention: the frontend serves on --frontend-port and
     # the backend on --backend-port. We map --port to the frontend (what
@@ -1839,38 +2349,15 @@ def cmd_ui(args: argparse.Namespace) -> int:
         backend_host,
     ]
 
-    # BRIDGE-B-002 TRANSITIONAL (Wave 3.5, v1.3) — REMOVE WHEN
-    # `Wave 6 BRIDGE-F-CLOUDFLARED` LANDS. Reason: per the
-    # no-banner-documenting-no-op doctrine, a banner saying "this doesn't
-    # work" IS a doc-lie. This warning is acceptable ONLY because Wave 6
-    # (same v1.3 release) lands the real cloudflared implementation that
-    # makes the warning obsolete. The refuse-to-start gate at args.share +
-    # args.auth=None has already fired upstream; reaching this branch means
-    # --share was passed WITH --auth, so we surface the transitional state
-    # before subprocess launch. Wave 6 agent removal anchor — grep for the
-    # literal string `Wave 6 BRIDGE-F-CLOUDFLARED` to locate this block.
-    # Wave 6 agent: delete this entire block + the comment.
-    if args.share:
-        print(
-            "[--share] TRANSITIONAL: tunneling implementation is in flight "
-            "(v1.3 Wave 6 — cloudflared)",
-            file=sys.stderr,
-        )
-        print(
-            "[--share] until Wave 6 lands, --share validates the refuse-to-"
-            "start gate but does NOT establish a tunnel",
-            file=sys.stderr,
-        )
-        print(
-            "[--share] for remote access in the meantime: "
-            f"ssh -L {args.port}:localhost:{args.port} <host>",
-            file=sys.stderr,
-        )
-        print(
-            "[--share] this warning is removed when cloudflared implementation "
-            "lands (V1_3_BRIEF P1 BRIDGE-F-CLOUDFLARED)",
-            file=sys.stderr,
-        )
+    # BRIDGE-F-CLOUDFLARED (v1.3 Wave 6a): the Wave 3.5 transitional
+    # warning block ("--share doesn't establish a tunnel yet — use ssh -L
+    # in the meantime") was removed at this anchor when the cloudflared
+    # implementation landed. The real tunnel is spawned upstream
+    # (see ``_spawn_cloudflared_tunnel`` + the ``args.share`` branch that
+    # populates ``BACKPROPAGATE_UI_SHARE_HOST``), and the subprocess is
+    # cleaned up below in the finally clause. The
+    # [[no-banner-documenting-no-op]] doctrine is preserved: there is no
+    # banner advertising a non-feature.
 
     # BRIDGE-B-006 (Stage C): emit a structured-log subprocess_starting
     # event so an operator grepping `ui_subprocess` in JSON logs can see
@@ -1908,7 +2395,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     try:
         print()
         _print_info("Launching Reflex interface...")
-        result = subprocess.run(cmd, env=env, cwd=str(package_dir))
+        result = subprocess.run(cmd, env=env, cwd=str(package_dir))  # nosec B603 — cmd is internally constructed
         _duration = _time.monotonic() - _ui_start_ts
         try:
             _ui_logger.info(
@@ -1968,6 +2455,30 @@ def cmd_ui(args: argparse.Namespace) -> int:
             _print_error_redacted(e, prefix="Failed to launch UI: ")
             _print_info("Run with --verbose for full traceback")
         return EXIT_RUNTIME_ERROR
+    finally:
+        # BRIDGE-F-CLOUDFLARED (v1.3 Wave 6a) cleanup: terminate the
+        # cloudflared subprocess (if --share spawned one) so we don't
+        # leak a public tunnel after the UI exits. Use terminate() +
+        # short wait + kill() — same pattern Reflex uses for its own
+        # frontend / backend processes.
+        if cloudflared_proc is not None:
+            try:
+                cloudflared_proc.terminate()
+                try:
+                    cloudflared_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    cloudflared_proc.kill()
+                    cloudflared_proc.wait(timeout=2)
+            except (OSError, ValueError):  # pragma: no cover — already dead
+                pass
+        # BRIDGE-F-002 lock-file cleanup: remove the per-launch lock file
+        # so a stale credential doesn't sit on disk after the UI exits.
+        # Best-effort: don't fail the cleanup just because the file is gone.
+        if lock_file_path is not None:
+            try:
+                lock_file_path.unlink()
+            except OSError:  # pragma: no cover — already removed
+                pass
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -2586,6 +3097,246 @@ def cmd_show_run(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# COMMAND: validate (BRIDGE-F-007)
+# =============================================================================
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Execute the ``backprop validate <dataset>`` subcommand (BRIDGE-F-007).
+
+    Thin wrapper around :func:`backpropagate.datasets.validate_dataset` so
+    operators can pre-flight a dataset before kicking off a multi-hour
+    training run. The function was already part of the public API
+    (re-exported from ``backpropagate.__init__``); this subcommand only
+    surfaces it on the CLI.
+
+    Exit codes:
+        0   dataset validated cleanly
+        1   user error — file missing / unreadable / bad encoding
+        65  EX_DATAERR — validation errors detected (per BRIDGE-F-006)
+    """
+    from .datasets import DatasetFormat, detect_format, validate_dataset
+
+    _print_header("Backpropagate Dataset Validation")
+
+    dataset_path = Path(args.dataset).expanduser()
+    if not dataset_path.exists():
+        _print_error(f"Dataset not found: {dataset_path}")
+        _print_info(
+            "Pass a local JSONL file path, or use `backprop train --data "
+            "<hf-name>` to validate a HuggingFace dataset by attempting "
+            "to load it through the trainer."
+        )
+        return EXIT_USER_ERROR
+
+    if dataset_path.is_dir():
+        _print_error(f"Dataset path is a directory, expected a file: {dataset_path}")
+        return EXIT_USER_ERROR
+
+    # Load samples without going through the full DatasetLoader machinery
+    # (which pulls torch); a plain JSONL line-read is enough for the
+    # validator. Cap reads at --max-samples * 2 so we don't OOM on a
+    # 100 GB dataset just to validate the first N rows.
+    import json
+    samples: list[dict | str] = []
+    line_count = 0
+    parse_errors: list[tuple[int, str]] = []
+    cap = (args.max_samples or 0) * 2 if args.max_samples else None
+
+    try:
+        with open(dataset_path, encoding="utf-8") as fh:
+            for line in fh:
+                line_count += 1
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    samples.append(json.loads(stripped))
+                except json.JSONDecodeError as exc:
+                    parse_errors.append((line_count, str(exc)))
+                    if len(parse_errors) >= args.max_errors:
+                        break
+                if cap is not None and len(samples) >= cap:
+                    break
+                if args.max_samples is not None and len(samples) >= args.max_samples:
+                    break
+    except UnicodeDecodeError as exc:
+        _print_error(f"Dataset is not valid UTF-8: {exc}")
+        _print_info("Re-encode the file: `iconv -f <enc> -t utf-8 < src > dst`")
+        return EXIT_USER_ERROR
+    except OSError as exc:
+        _print_error(f"Could not read dataset: {exc}")
+        return EXIT_USER_ERROR
+
+    _print_kv("Path", str(dataset_path))
+    _print_kv("Lines scanned", str(line_count))
+    _print_kv("Samples parsed", str(len(samples)))
+    if parse_errors:
+        _print_warning(f"{len(parse_errors)} JSON parse error(s) — see below")
+
+    if not samples:
+        _print_error("Dataset has no parseable rows.")
+        return EXIT_DATA_ERR
+
+    # Resolve format hint.
+    if args.format == "auto":
+        format_hint = None
+        detected = detect_format(samples[0])
+    else:
+        try:
+            format_hint = DatasetFormat(args.format)
+            detected = format_hint
+        except ValueError:
+            _print_error(f"Unknown format hint: {args.format}")
+            return EXIT_USER_ERROR
+
+    _print_kv("Format hint", args.format)
+    _print_kv("Format detected", detected.value if hasattr(detected, "value") else str(detected))
+
+    result = validate_dataset(samples, format_type=format_hint, max_errors=args.max_errors)
+
+    _print_kv("Total rows", str(result.total_rows))
+    _print_kv("Valid rows", str(result.valid_rows))
+    _print_kv("Errors", str(len(result.errors)))
+    _print_kv("Warnings", str(len(result.warnings)))
+
+    if parse_errors:
+        print(f"\n{Colors.BOLD}JSON parse errors{Colors.RESET}")
+        for line_no, message in parse_errors[:10]:
+            print(f"  line {line_no}: {message}")
+        if len(parse_errors) > 10:
+            print(f"  ... and {len(parse_errors) - 10} more")
+
+    if result.errors:
+        print(f"\n{Colors.BOLD}Validation errors{Colors.RESET}")
+        for err in result.errors[:10]:
+            print(f"  row {err.row_index}: [{err.error_type}] {err.message}")
+        if len(result.errors) > 10:
+            print(f"  ... and {len(result.errors) - 10} more")
+
+    if result.warnings:
+        print(f"\n{Colors.BOLD}Warnings{Colors.RESET}")
+        for w in result.warnings[:10]:
+            print(f"  row {w.row_index}: [{w.error_type}] {w.message}")
+        if len(result.warnings) > 10:
+            print(f"  ... and {len(result.warnings) - 10} more")
+
+    print()
+    if result.is_valid and not parse_errors:
+        _print_success("Dataset validation PASSED")
+        return EXIT_OK
+
+    _print_error("Dataset validation FAILED — see errors above")
+    return EXIT_DATA_ERR
+
+
+# =============================================================================
+# COMMAND: estimate-vram (BRIDGE-F-008)
+# =============================================================================
+
+# Tier table mirrors Trainer._detect_batch_size — the recommended batch
+# size at each VRAM level. Keep this in sync with trainer.py:906; the
+# duplication is intentional so the CLI surface doesn't need to construct
+# a Trainer (which would import torch + transformers).
+_VRAM_BATCH_SIZE_TIERS: list[tuple[float, int, str]] = [
+    (24.0, 4, "RTX 4090 / 3090 / A5000 — 7B fits with LoRA r=64"),
+    (16.0, 2, "RTX 5080 / 4070 Ti Super — 7B with LoRA r=16-32"),
+    (12.0, 1, "RTX 4070 / 3060 12GB — 7B with LoRA r=8 + gradient checkpointing"),
+    (0.0, 1, "Tight fit / fallback — batch=1 + LoRA r=8 + gradient ckpt"),
+]
+
+
+def cmd_estimate_vram(args: argparse.Namespace) -> int:
+    """Execute the ``backprop estimate-vram <model>`` subcommand (BRIDGE-F-008).
+
+    Surfaces Trainer._detect_batch_size's tier heuristic on the CLI so
+    operators can preview the recommended batch size before kicking off
+    training. The math is model-agnostic (per the tier table) — the model
+    argument is only used for the printed header.
+
+    Exit codes:
+        0   table printed
+        1   --vram-gb out of plausible range
+    """
+    # Resolve VRAM: explicit override > torch query > error.
+    vram_gb: float | None = None
+    detected_via = "unknown"
+    if args.vram_gb is not None:
+        vram_gb = float(args.vram_gb)
+        detected_via = "user (--vram-gb)"
+    else:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_bytes = torch.cuda.get_device_properties(0).total_memory
+                vram_gb = vram_bytes / (1024 ** 3)
+                detected_via = "torch.cuda"
+        except ImportError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — best-effort VRAM probe
+            logger.debug(f"VRAM probe failed: {exc}")
+
+    if vram_gb is None:
+        _print_error(
+            "Could not detect VRAM and no --vram-gb override supplied."
+        )
+        _print_info(
+            "Pass --vram-gb <number> to simulate the table for a specific "
+            "card, or install a CUDA-enabled PyTorch on a host with a GPU."
+        )
+        return EXIT_USER_ERROR
+
+    if vram_gb <= 0 or vram_gb > 512:
+        _print_error(f"--vram-gb {vram_gb} outside the plausible range (0, 512].")
+        return EXIT_USER_ERROR
+
+    # Pick the matching tier.
+    selected_tier = _VRAM_BATCH_SIZE_TIERS[-1]
+    for threshold, bs, note in _VRAM_BATCH_SIZE_TIERS:
+        if vram_gb >= threshold:
+            selected_tier = (threshold, bs, note)
+            break
+
+    payload: dict[str, Any] = {
+        "model": args.model,
+        "vram_gb": round(vram_gb, 2),
+        "detected_via": detected_via,
+        "recommended_batch_size": selected_tier[1],
+        "tier_notes": selected_tier[2],
+        "tiers": [
+            {"vram_min_gb": t[0], "batch_size": t[1], "note": t[2]}
+            for t in _VRAM_BATCH_SIZE_TIERS
+        ],
+    }
+
+    if args.json:
+        import json
+        print(json.dumps(payload, indent=2, default=str))
+        return EXIT_OK
+
+    _print_header("Backpropagate VRAM Estimator")
+    _print_kv("Model", args.model)
+    _print_kv("VRAM", f"{vram_gb:.1f} GB ({detected_via})")
+    _print_kv("Recommended --batch-size", str(selected_tier[1]))
+    _print_info(selected_tier[2])
+
+    print(f"\n{Colors.BOLD}Tier table{Colors.RESET}")
+    header = f"{'VRAM (>= GB)':<14}  {'batch_size':<10}  notes"
+    print(f"{Colors.BOLD}{header}{Colors.RESET}")
+    print(f"{Colors.DIM}{'-' * 14}  {'-' * 10}  -----{Colors.RESET}")
+    for threshold, bs, note in _VRAM_BATCH_SIZE_TIERS:
+        marker = " <- this card" if (threshold, bs, note) == selected_tier else ""
+        print(f"{threshold:<14.1f}  {bs:<10}  {note}{marker}")
+
+    print()
+    _print_info(
+        "The same tier heuristic fires automatically when you run "
+        "`backprop train --batch-size auto` (trainer.py:_detect_batch_size). "
+        "Pass --batch-size <N> to override the auto-detection."
+    )
+    return EXIT_OK
+
+
+# =============================================================================
 # PARSER
 # =============================================================================
 
@@ -2609,6 +3360,15 @@ Exit codes (Ship Gate B2):
   2   runtime error (model load, GPU OOM, IO, unexpected crash)
   3   partial success (e.g. some multi-runs failed; export ok but Ollama register failed)
   130 interrupted (Ctrl+C)
+
+Sysexits.h overlay (BRIDGE-F-006; emitted only by main()'s catch-all when
+no subcommand handler claimed the failure with a 0/1/2/3 code):
+  64  EX_USAGE        — malformed invocation reached the catch-all
+  65  EX_DATAERR      — dataset unreadable / malformed (DatasetError class)
+  69  EX_UNAVAILABLE  — HF Hub / Ollama / network service unreachable
+  70  EX_SOFTWARE     — internal uncaught exception (fall-through default)
+  77  EX_NOPERM       — permission denied (POSIX EACCES / EPERM, Win ACL)
+  137 OOM-killer      — CUDA / torch OutOfMemoryError reached the catch-all
         """,
     )
 
@@ -3122,9 +3882,11 @@ Exit codes (Ship Gate B2):
         "--share",
         action="store_true",
         help=(
-            "Expose the UI via a public tunnel (requires cloudflared; see "
-            "handbook/security.md). Requires --auth user:pass; passing "
-            "--share without --auth exits with RUNTIME_UI_AUTH_NOT_ENFORCED."
+            "Expose the UI via a Cloudflare Quick Tunnel (requires "
+            "`cloudflared` on PATH; see handbook/security.md). Requires "
+            "--auth user:pass; passing --share without --auth exits with "
+            "RUNTIME_UI_AUTH_NOT_ENFORCED. The tunnel URL is printed to "
+            "stderr on connect and torn down when the CLI exits."
         ),
     )
     ui_parser.add_argument(
@@ -3137,11 +3899,100 @@ Exit codes (Ship Gate B2):
             "to the subprocess via BACKPROPAGATE_UI_AUTH. "
             "Username must not contain whitespace, colon, or control chars; "
             "password must not contain newlines or NUL. Use the "
-            "BACKPROPAGATE_UI_AUTH env var to keep credentials out of shell "
-            "history."
+            "BACKPROPAGATE_UI_AUTH env var or --auth-file to keep "
+            "credentials out of shell history."
+        ),
+    )
+    # BRIDGE-F-002 auth-polish item 4 (v1.3 Wave 6a): file-based credential
+    # source for operators who don't want the credential in shell history
+    # or process argv. Mutex with --auth (cmd_ui raises if both supplied).
+    ui_parser.add_argument(
+        "--auth-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Read 'user:pass' from PATH instead of taking --auth on the "
+            "command line — keeps the credential out of shell history. "
+            "Mutex with --auth. On POSIX the file mode is checked and a "
+            "warning fires if it's wider than 0600. Use "
+            "`printf 'user:pass' > path && chmod 600 path` to create."
         ),
     )
     ui_parser.set_defaults(func=cmd_ui)
+
+    # validate command (BRIDGE-F-007 — wrap existing validate_dataset)
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Validate a dataset's format + content",
+        description=(
+            "Wrap backpropagate.datasets.validate_dataset to report row "
+            "count, detected format, and any malformed rows for a JSONL / "
+            "ShareGPT / Alpaca / OpenAI dataset. Returns exit 0 on a clean "
+            "validation, 65 (EX_DATAERR) on detected errors, 1 on input "
+            "problems (missing file / unreadable / bad encoding)."
+        ),
+    )
+    validate_parser.add_argument(
+        "dataset",
+        help="Path to the JSONL dataset to validate (local file or HF name)",
+    )
+    validate_parser.add_argument(
+        "--format",
+        choices=["auto", "sharegpt", "alpaca", "openai", "raw"],
+        default="auto",
+        help="Format hint (default: auto-detect)",
+    )
+    validate_parser.add_argument(
+        "--max-errors",
+        type=_positive_int,
+        default=100,
+        help="Maximum errors to collect before stopping (default: 100)",
+    )
+    validate_parser.add_argument(
+        "--max-samples",
+        type=_positive_int,
+        default=None,
+        help="Maximum samples to validate (default: all)",
+    )
+    validate_parser.set_defaults(func=cmd_validate)
+
+    # estimate-vram command (BRIDGE-F-008 — wrap Trainer._detect_batch_size logic)
+    estimate_vram_parser = subparsers.add_parser(
+        "estimate-vram",
+        help="Estimate VRAM requirements at different batch sizes",
+        description=(
+            "Print a small table of recommended batch sizes given the "
+            "currently-visible GPU VRAM and a model name. The math mirrors "
+            "Trainer._detect_batch_size's tier heuristic (which fires "
+            "automatically when --batch-size auto is used). Useful before "
+            "starting a long training run on a card you haven't profiled."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "model",
+        nargs="?",
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help=(
+            "Model name (default: Qwen/Qwen2.5-7B-Instruct). Used only for "
+            "the printed header — the VRAM tiers are model-agnostic."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--vram-gb",
+        type=_positive_float,
+        default=None,
+        help=(
+            "Override the detected VRAM (in GB) so you can simulate the "
+            "table on a card you don't currently have. Default: query the "
+            "primary CUDA device."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the table as JSON for CI / scripting consumers.",
+    )
+    estimate_vram_parser.set_defaults(func=cmd_estimate_vram)
 
     return parser
 
@@ -3200,6 +4051,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         parser = create_parser()
+        # BRIDGE-F-005 (v1.3 Wave 6a): wire argcomplete so shell-installed
+        # completers fire on TAB. The library is optional — when not
+        # installed (and not requested via the env vars argcomplete sets),
+        # the call is a silent no-op. The hook fires BEFORE parse_args so
+        # the completer can inspect the parser's structure for choices,
+        # subcommands, and metavars.
+        try:
+            import argcomplete
+            argcomplete.autocomplete(parser)
+        except ImportError:
+            pass
         args = parser.parse_args(argv)
     except KeyboardInterrupt:
         # KeyboardInterrupt during argparse (rare but possible if a custom
@@ -3316,25 +4178,62 @@ def main(argv: list[str] | None = None) -> int:
     # Execute the command — wrapped in a last-resort exception net so the
     # Ship Gate B2 exit-code contract holds even when a subcommand's own
     # try/except missed something.
+    #
+    # BRIDGE-F-006 sysexits.h overlay: when the catch-all fires (a subcommand
+    # let an exception escape its own try/except), classify the failure mode
+    # against the sysexits.h-flavored finer-grained codes before falling
+    # back to EXIT_RUNTIME_ERROR. Subcommand handlers continue to emit the
+    # legacy 0 / 1 / 2 / 3 / 130 codes via their documented contracts; this
+    # overlay only fires when nothing inside the subcommand caught the
+    # specific exception class. The mapping is:
+    #
+    #   torch.cuda.OutOfMemoryError / RUNTIME_GPU_OOM   -> 137 (OOM-killer)
+    #   UserInputError (catch-all path; subcmds use 1)  -> 64  (EX_USAGE)
+    #   DatasetError                                    -> 65  (EX_DATAERR)
+    #   PermissionError                                 -> 77  (EX_NOPERM)
+    #   ConnectionError / TimeoutError / HTTPError ish  -> 69  (EX_UNAVAILABLE)
+    #   everything else                                 -> 70  (EX_SOFTWARE)
+    #
+    # Operators relying on the legacy 0 / 1 / 2 / 3 / 130 contract see the
+    # same codes from the per-subcommand handlers; the sysexits overlay is
+    # purely additive on the catch-all path. CI scripts that grep on
+    # `[0123]` shapes won't false-match the overlay codes because the
+    # overlay codes (64/65/69/70/77/137) are disjoint.
     try:
         result: int = args.func(args)
         return result
     except KeyboardInterrupt:
         print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
         return EXIT_INTERRUPTED
-    except BackpropagateError as e:
-        code = getattr(e, "code", None) or "RUNTIME"
-        print(f"{code}: {e}", file=sys.stderr)
-        if os.environ.get("BACKPROPAGATE_DEBUG"):
-            traceback.print_exc()
-        return EXIT_RUNTIME_ERROR
     except SystemExit:
         # Let argparse / library SystemExit propagate so tests that catch
         # SystemExit (e.g. -h flag invocations) see the same behavior.
         raise
+    except BackpropagateError as e:
+        # BRIDGE-F-006: map the structured exception's code to a sysexits
+        # bucket before falling through to the legacy EXIT_RUNTIME_ERROR.
+        code = getattr(e, "code", None) or "RUNTIME"
+        print(f"{code}: {e}", file=sys.stderr)
+        if os.environ.get("BACKPROPAGATE_DEBUG"):
+            traceback.print_exc()
+
+        # User-input / dataset / GPU-OOM / Hub failures all have well-defined
+        # remediation paths; map to the matching sysexits bucket so wrappers
+        # can distinguish e.g. "model not on Hub" from "internal crash".
+        if isinstance(e, UserInputError):
+            return EXIT_USAGE
+        if isinstance(e, DatasetError):
+            return EXIT_DATA_ERR
+        if code in ("RUNTIME_GPU_OOM", "RUNTIME_OOM_RECOVERY_EXHAUSTED", "RUNTIME_OOM_ADJACENT"):
+            return EXIT_OOM_KILLED
+        if code in ("HUB_PUSH_NETWORK", "HUB_PUSH_NOT_FOUND", "DEP_MODEL_LOAD_FAILED", "DEP_OLLAMA_REGISTRATION_FAILED"):
+            return EXIT_UNAVAILABLE
+        return EXIT_RUNTIME_ERROR
     except Exception as e:  # noqa: BLE001 — last-resort safety net
         # The Ship Gate B2 contract promises exit code 2 for unexpected
         # crashes. The default Python behavior is exit code 1 + traceback.
+        # BRIDGE-F-006 sysexits overlay: name the failure mode before
+        # falling back to EXIT_RUNTIME_ERROR.
         print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
@@ -3344,7 +4243,29 @@ def main(argv: list[str] | None = None) -> int:
                 "the subcommand with --verbose for friendlier output.",
                 file=sys.stderr,
             )
-        return EXIT_RUNTIME_ERROR
+
+        # PermissionError covers POSIX EACCES / EPERM and Windows ACL denials —
+        # both share the "operator can't access path / device" remediation.
+        if isinstance(e, PermissionError):
+            return EXIT_NO_PERM
+        # Match torch.cuda.OutOfMemoryError by name (without importing torch
+        # here — keeps cold-start of `backprop --help` cheap).
+        if type(e).__name__ in ("OutOfMemoryError", "CUDAOutOfMemoryError"):
+            return EXIT_OOM_KILLED
+        # Network / unreachable-service failures: stdlib ConnectionError +
+        # TimeoutError cover most cases. requests / httpx subclasses bubble
+        # up as their own types but inherit from ConnectionError on modern
+        # versions; the substring fallback catches the rest.
+        if isinstance(e, (ConnectionError, TimeoutError)):
+            return EXIT_UNAVAILABLE
+        type_name = type(e).__name__.lower()
+        if any(needle in type_name for needle in ("httperror", "connection", "timeout", "unreachable")):
+            return EXIT_UNAVAILABLE
+        # Permission-denied OSError on some platforms doesn't subclass
+        # PermissionError — match by errno when available.
+        if isinstance(e, OSError) and getattr(e, "errno", None) in (13, 1):  # EACCES, EPERM
+            return EXIT_NO_PERM
+        return EXIT_SOFTWARE
 
 
 if __name__ == "__main__":

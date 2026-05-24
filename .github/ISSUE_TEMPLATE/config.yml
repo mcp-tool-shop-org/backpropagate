@@ -1,0 +1,15 @@
+# Disable the "Open a blank issue" link — push everyone into the bug /
+# feature templates above so the load-bearing context fields (run_id,
+# error code, backprop info, traceback) get collected up-front. Security
+# reports route to SECURITY.md per the published reporting policy.
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new
+    about: |
+      DO NOT open a public issue for security vulnerabilities. Use the
+      private advisory form linked here, or follow the reporting policy
+      in SECURITY.md.
+  - name: Documentation
+    url: https://mcp-tool-shop-org.github.io/backpropagate/
+    about: Handbook (error codes, env vars, CLI reference, troubleshooting).

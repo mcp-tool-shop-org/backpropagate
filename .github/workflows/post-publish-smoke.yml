@@ -1,0 +1,198 @@
+name: Post-Publish Smoke
+
+# CIDOCS-F-002 — close the gap between "publish workflow succeeded" and
+# "operators can actually install + run the published artifacts." Fires after
+# the Publish workflow completes successfully (PyPI + GHCR) and verifies a
+# `pip install backpropagate==<tag>` + `backprop --version` smoke on every
+# supported OS x Python combination, plus a `docker run` smoke against the
+# GHCR image.
+#
+# Failure mode: opens a GitHub Issue tagged 'ci' / 'post-publish-smoke' so the
+# maintainer sees the regression in the GitHub UI rather than relying on
+# the next downstream user-bug to surface it. This workflow does NOT gate
+# the publish (publish already finished); it gates the next release by
+# making the failure loud.
+
+on:
+  workflow_run:
+    workflows: ["Publish"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to smoke (e.g. v1.3.0). Defaults to latest GitHub Release.'
+        required: false
+        type: string
+
+concurrency:
+  group: post-publish-smoke-${{ github.event.workflow_run.head_branch || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+  issues: write
+
+jobs:
+  # Skip the matrix entirely if the upstream Publish run did not succeed.
+  # workflow_run fires on `completed` regardless of conclusion, so the gate
+  # is in this job's `if:`.
+  gate:
+    name: Gate on upstream Publish conclusion
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve tag to smoke
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag || '' }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            # workflow_run triggers when Publish completes — read the
+            # head_branch (which for a release-published run is the tag
+            # ref). Fall back to the latest GH release if that fails.
+            TAG="${{ github.event.workflow_run.head_branch }}"
+            if [ -z "${TAG}" ] || [ "${TAG}" = "main" ]; then
+              TAG=$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName --jq '.tagName')
+            fi
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Smoking tag=${TAG} version=${VERSION}"
+
+  pypi-smoke:
+    name: pip install on ${{ matrix.os }} py${{ matrix.python-version }}
+    needs: gate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: pip install backpropagate==${{ needs.gate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PyPI's CDN can lag the publish by a few minutes — retry up to
+          # five times with 30s backoff before declaring the install dead.
+          for attempt in 1 2 3 4 5; do
+            if pip install "backpropagate==${{ needs.gate.outputs.version }}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              echo "::error::pip install failed after 5 attempts"
+              exit 1
+            fi
+            echo "::warning::pip install attempt ${attempt} failed — sleeping 30s and retrying"
+            sleep 30
+          done
+
+      - name: backprop --version smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=$(backprop --version)
+          echo "${OUT}"
+          # The --version surface emits the package version somewhere in
+          # stdout; assert the tag's version appears so we catch a stale
+          # registry index or shadowed entry-point.
+          echo "${OUT}" | grep -F "${{ needs.gate.outputs.version }}"
+
+  docker-smoke:
+    name: docker run smoke
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: docker pull + run smoke
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ needs.gate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if docker pull "${IMAGE}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              echo "::error::docker pull failed after 5 attempts"
+              exit 1
+            fi
+            echo "::warning::docker pull attempt ${attempt} failed — sleeping 30s and retrying"
+            sleep 30
+          done
+          OUT=$(docker run --rm "${IMAGE}" --version)
+          echo "${OUT}"
+          echo "${OUT}" | grep -F "${{ needs.gate.outputs.version }}"
+
+  open-issue-on-failure:
+    name: Open issue on smoke failure
+    needs: [gate, pypi-smoke, docker-smoke]
+    if: always() && needs.gate.result == 'success' && (needs.pypi-smoke.result == 'failure' || needs.docker-smoke.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open / append issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          PYPI_RESULT: ${{ needs.pypi-smoke.result }}
+          DOCKER_RESULT: ${{ needs.docker-smoke.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TITLE="post-publish smoke red — ${TAG}"
+          BODY_FILE="$(mktemp)"
+          cat > "${BODY_FILE}" <<EOF
+          The post-publish smoke for \`${TAG}\` went red.
+
+          - Run URL: ${RUN_URL}
+          - PyPI install matrix: ${PYPI_RESULT}
+          - Docker pull + run:   ${DOCKER_RESULT}
+
+          The publish itself succeeded; this is post-publish observability.
+          The release is live on PyPI + GHCR — operators may already be hitting
+          the install failure. Triage:
+
+          1. Identify which matrix cell tripped (OS x Python or Docker).
+          2. If PyPI CDN was lagging, re-run via:
+             \`gh workflow run post-publish-smoke.yml -f tag=${TAG}\`
+          3. If the install or smoke is genuinely broken, cut a patch release.
+
+          Close this issue once the re-run passes.
+          EOF
+
+          EXISTING=$(gh issue list --state open --label post-publish-smoke --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "${EXISTING}" ] && [ "${EXISTING}" != "null" ]; then
+            gh issue comment "${EXISTING}" --body-file "${BODY_FILE}"
+            echo "Commented on existing post-publish-smoke issue #${EXISTING}"
+          else
+            gh issue create \
+              --title "${TITLE}" \
+              --body-file "${BODY_FILE}" \
+              --label "ci" \
+              --label "post-publish-smoke"
+          fi

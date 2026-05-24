@@ -543,11 +543,53 @@ class MultiRunTrainer:
         if self._resume_from:
             record = history.get_run(self._resume_from)
             if record is None:
-                logger.warning(
-                    f"resume_from={self._resume_from!r} not found in run history; "
-                    "starting fresh."
+                # BACKEND-F-018 (v1.3): mirror the Wave 5.5 BACKEND-F-002
+                # fix on the single-run path. The operator passed
+                # resume_from expecting resumption; falling back silently
+                # to a fresh multi-run under a NEW run_id drops the
+                # resume intent and consumes GPU hours producing a model
+                # the operator did not ask for. Pre-F-018 this site
+                # logged a WARN and returned None — easy to miss in a
+                # multi-hour session log, and the silent-divergence
+                # symptom would not surface until export / eval time.
+                #
+                # The error message names the requested run_id, the
+                # checkpoint_dir actually searched, and the operator's
+                # next steps so the failure is actionable in the
+                # terminal without grep'ing logs. INPUT_RESUME_NOT_FOUND
+                # was added to the error-codes catalog in Wave 5.5
+                # alongside the single-run fix.
+                raise InvalidSettingError(
+                    setting_name="resume_from",
+                    value=self._resume_from,
+                    expected=(
+                        f"a multi-run run_id present in the on-disk run "
+                        f"history under checkpoint_dir="
+                        f"{str(checkpoint_dir)!r}"
+                    ),
+                    suggestion=(
+                        f"resume_from={self._resume_from!r} was NOT found "
+                        f"in the multi-run history at "
+                        f"{str(checkpoint_dir)!r}. The resume lookup is "
+                        f"scoped to the configured checkpoint_dir (not a "
+                        f"global run_id index) and only matches sessions "
+                        f"recorded with session_kind='multi_run'. Next "
+                        f"steps:\n"
+                        f"  1) Run `backprop runs` to list run_ids "
+                        f"available under this checkpoint_dir.\n"
+                        f"  2) If the multi-run was trained under a "
+                        f"different checkpoint_dir, re-run with "
+                        f"`--checkpoint-dir <that-dir>` so the lookup "
+                        f"hits.\n"
+                        f"  3) If the run_id belongs to a single-run "
+                        f"session, use the single-run resume path "
+                        f"(`Trainer.train(resume_from=...)`) instead — "
+                        f"multi-run resume only picks up sessions saved "
+                        f"by another MultiRunTrainer.\n"
+                        f"  4) To start truly fresh under a NEW run_id, "
+                        f"omit resume_from (or pass resume_from='off')."
+                    ),
                 )
-                return None
             return str(record.get("run_id"))
 
         # Default: auto-detect an in-progress entry.
@@ -1578,9 +1620,20 @@ class MultiRunTrainer:
                 # <path>.partial and shutil.move()s it into place on success;
                 # the partial dir is removed if anything raises mid-write.
                 checkpoint_path = str(checkpoint_dir / f"run_{run_idx:03d}" / "lora")
+                # BACKEND-F-007 (Wave 6a): opt out of Trainer.save()'s
+                # auto-manifest registration here — multi-run owns its own
+                # CheckpointManager at ``checkpoint_dir`` (per-run indices,
+                # validation_loss-aware pruning) which we register against
+                # explicitly a few lines below. The Trainer-level manifest
+                # write would pollute self._trainer.output_dir/manifest.json
+                # with a series of run_index=0 entries that the multi-run
+                # resume path never consults; opting out keeps the canonical
+                # multi-run manifest at checkpoint_dir as the single source
+                # of truth for resume-candidate lookup.
                 self._trainer.save(
                     checkpoint_path,
                     run_id=self._run_id,
+                    register_in_manifest=False,
                 )
                 logger.info(f"Checkpoint saved: {checkpoint_path}")
 

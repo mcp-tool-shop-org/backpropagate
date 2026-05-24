@@ -1,0 +1,104 @@
+name: Nightly Train Smoke
+
+# v1.3 brief P1 — exercise the real Trainer.train() entry point on a tiny
+# CPU model nightly so a HuggingFace / trl / transformers / torch bump that
+# breaks model loading / dataset auto-detect / checkpoint writing /
+# run-history persistence trips the bell BEFORE the weekly release cut.
+#
+# The smoke is observability — it does NOT gate any release. On failure
+# the workflow opens a GitHub Issue tagged 'ci' / 'nightly-smoke' so the
+# maintainer sees the regression in the GitHub UI rather than as a buried
+# pytest red. Reasoning + runner contract: scripts/nightly_train_smoke.py.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'  # 04:00 UTC nightly — quiet runner-pool window
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-train-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write  # auto-open an issue when the smoke goes red
+
+jobs:
+  smoke:
+    name: CPU smoke (Qwen 0.5B, 1 step)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install backpropagate + CPU torch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # CPU-only torch wheels live on PyTorch's CPU index. Installing
+          # the package's full [dev] extra would pull GPU-CUDA torch
+          # transitively and add 2+ GB to the runner image for no smoke
+          # benefit.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e ".[dev]"
+
+      - name: Run nightly smoke
+        id: smoke
+        shell: bash
+        run: python scripts/nightly_train_smoke.py
+
+      - name: Open issue on smoke failure
+        if: failure() && steps.smoke.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          DATE_TAG="$(date -u +%Y-%m-%d)"
+          TITLE="nightly train smoke red — ${DATE_TAG}"
+          BODY_FILE="$(mktemp)"
+          cat > "${BODY_FILE}" <<EOF
+          The nightly \`Trainer.train(max_steps=1)\` CPU smoke went red on
+          \`${DATE_TAG}\`.
+
+          - Run URL: ${RUN_URL}
+          - Workflow: \`.github/workflows/nightly-train-smoke.yml\`
+          - Script:   \`scripts/nightly_train_smoke.py\`
+          - Schedule: 04:00 UTC
+
+          The smoke does NOT gate any release; it is an observability
+          forcing function for upstream HuggingFace / trl / transformers /
+          torch drift. Triage steps:
+
+          1. Open the run URL and grep the \`Run nightly smoke\` step for
+             the \`FAIL: <assertion>\` line that the runner prints to stderr.
+          2. If the failure is upstream (e.g. trl breaking change), pin
+             the affected dep in \`pyproject.toml\` or \`uv.lock\` and
+             re-run via \`gh workflow run nightly-train-smoke.yml\`.
+          3. If the failure is in \`backpropagate/trainer.py\` itself,
+             treat as a release-blocking regression.
+
+          Close this issue once the smoke is green again.
+          EOF
+
+          # Reuse an existing open smoke issue if present to avoid issue
+          # spam when the regression spans multiple nights.
+          EXISTING=$(gh issue list --state open --label nightly-smoke --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "${EXISTING}" ] && [ "${EXISTING}" != "null" ]; then
+            gh issue comment "${EXISTING}" --body-file "${BODY_FILE}"
+            echo "Commented on existing nightly-smoke issue #${EXISTING}"
+          else
+            gh issue create \
+              --title "${TITLE}" \
+              --body-file "${BODY_FILE}" \
+              --label "ci" \
+              --label "nightly-smoke"
+          fi

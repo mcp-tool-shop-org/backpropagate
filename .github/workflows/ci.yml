@@ -633,6 +633,15 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e ".[dev,full]"
+          # CIDOCS-F-006 (v1.4 Wave 6a) — verify.sh's `build` stage runs
+          # `python -m build` + `twine check dist/*`. Pre-Wave-6a these
+          # tools were missing from the verify-smoke environment; the
+          # soft-gate + permission-denied verify.sh masked the missing
+          # deps as a JSON parse failure. Strict-flip surfaced both. The
+          # dedicated `build` job (line 540) installs them; verify-smoke
+          # mirrors that install so the build + twine_check stages have
+          # the tooling they advertise.
+          pip install build twine
 
       - name: Run verify.sh --format=json
         id: verify

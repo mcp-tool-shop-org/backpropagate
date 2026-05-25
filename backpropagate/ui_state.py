@@ -866,8 +866,8 @@ class ExportState(rx.State):
         push handler raises a structured error if both reach it).
         """
         if not value or not value.strip():
-            self.hub_token_file_path = ""
-            self.hub_token_file_path_error = ""
+            self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+            self.hub_token_file_path_error = ""  # nosec B105 — error-message sentinel, not a password
             return
         cleaned, err = _validate_ui_path(value)
         self.hub_token_file_path = cleaned
@@ -1304,7 +1304,7 @@ class DatasetState(rx.State):
                     # Map enum to a short human badge — the Format group
                     # already binds ``detected_format`` and is None-safe.
                     self.detected_format = str(detected.value).capitalize()
-            except Exception:  # noqa: BLE001 — stats are advisory, never block upload
+            except Exception:  # noqa: BLE001  # nosec B110 — stats are advisory, never block upload
                 # Leave the grid empty rather than raising. The upload
                 # itself succeeded; a stats failure shouldn't surface as
                 # an upload error.

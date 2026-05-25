@@ -334,7 +334,7 @@ def _hub_group() -> rx.Component:
                         },
                     ),
                     rx.cond(
-                        ExportState.hub_token_file_path_error != "",
+                        ExportState.hub_token_file_path_error != "",  # nosec B105 — empty-string sentinel, not a password
                         rx.text(
                             ExportState.hub_token_file_path_error,
                             size="1",

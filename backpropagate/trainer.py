@@ -776,7 +776,7 @@ def _enforce_full_ft_param_ceiling(
                 for param in loaded_model.parameters():
                     try:
                         total += int(getattr(param, "numel", lambda: 0)())
-                    except Exception:
+                    except Exception:  # nosec B112 — best-effort per-param probe; one bad param shouldn't kill the count
                         continue
                 if total > 0:
                     estimated_billions = total / 1e9

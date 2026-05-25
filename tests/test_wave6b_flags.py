@@ -455,6 +455,273 @@ class TestWave6bReplaySubcommand:
             cli_parser.parse_args(["replay"])
 
 
+class TestCmdReplay:
+    """TESTS-A-003 (v1.4 Wave 2 amend): cmd_replay handler coverage.
+
+    Wave 1 audit flagged that TestWave6bReplaySubcommand pinned only
+    the parser shape — the handler at backpropagate/cli.py::cmd_replay
+    had zero direct coverage. A handler-level regression (missing
+    output_dir, unknown run_id, malformed --override, hyperparameter
+    misrouting) would not be caught.
+
+    Modelled on TestCmdResume (tests/test_cli.py:1702) which uses the
+    same RunHistoryManager seed + MagicMock patch pattern. Tests cover:
+
+    1. Missing output_dir → EXIT_USER_ERROR
+    2. Unknown run_id → EXIT_USER_ERROR (raises InvalidSettingError
+       internally, caught + mapped to user-error)
+    3. Original run with no dataset_info → EXIT_USER_ERROR
+    4. Happy path (single_run) → Trainer.train called with the
+       inherited hyperparameters
+    5. Happy path (multi_run) → MultiRunTrainer.run called
+    6. --override applies the override to the trainer kwargs
+    7. --override with non-whitelisted key → EXIT_USER_ERROR
+    """
+
+    def test_replay_missing_output_dir_returns_user_error(self, tmp_path):
+        """Missing --output directory → EXIT_USER_ERROR."""
+        from unittest.mock import MagicMock
+
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_replay
+
+        args = MagicMock()
+        args.output = str(tmp_path / "definitely-does-not-exist")
+        args.run_id = "abc"
+        args.override = None
+        args.cli_run_id = None
+        args.verbose = False
+
+        rc = cmd_replay(args)
+        assert rc == EXIT_USER_ERROR
+
+    def test_replay_unknown_run_id_returns_user_error(self, tmp_path):
+        """Unknown run_id under existing output_dir → EXIT_USER_ERROR.
+
+        Internally cmd_replay raises InvalidSettingError and catches it,
+        returning EXIT_USER_ERROR. The user-visible contract is the exit
+        code; the structured error is logged for support diagnostics.
+        """
+        from unittest.mock import MagicMock
+
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_replay
+
+        # tmp_path itself exists, so the missing-output-dir guard doesn't fire.
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "no-such-run"
+        args.override = None
+        args.cli_run_id = None
+        args.verbose = False
+
+        rc = cmd_replay(args)
+        assert rc == EXIT_USER_ERROR
+
+    def test_replay_record_without_dataset_info_returns_user_error(self, tmp_path):
+        """A record with dataset_info=None can't be replayed automatically."""
+        from unittest.mock import MagicMock
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="no-dataset-run",
+            model_name="m",
+            dataset_info=None,  # <- this is the case under test
+            hyperparameters={"max_steps": 50, "lora_r": 8},
+            session_kind="single_run",
+        )
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "no-dataset-run"
+        args.override = None
+        args.cli_run_id = None
+        args.verbose = False
+
+        rc = cmd_replay(args)
+        assert rc == EXIT_USER_ERROR
+
+    def test_replay_dispatches_single_run_with_hyperparameters(self, tmp_path):
+        """Single-run replay reconstructs Trainer with inherited hyperparameters."""
+        from unittest.mock import MagicMock, patch
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_OK, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="sr-replay",
+            model_name="test-model",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "max_steps": 75,
+                "lora_r": 32,
+                "learning_rate": 3e-4,
+            },
+            session_kind="single_run",
+        )
+
+        fake_trainer = MagicMock()
+        fake_run = MagicMock(final_loss=0.42)
+        fake_trainer.train.return_value = fake_run
+
+        with patch(
+            "backpropagate.trainer.Trainer",
+            return_value=fake_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "sr-replay"
+            args.override = None
+            args.cli_run_id = None
+            args.verbose = False
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        # Trainer instantiated with the inherited model + lora_r + lr.
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("model") == "test-model"
+        assert init_kwargs.get("lora_r") == 32
+        assert init_kwargs.get("learning_rate") == 3e-4
+        # train() was called with the dataset + steps from the record.
+        train_kwargs = fake_trainer.train.call_args.kwargs
+        assert train_kwargs.get("dataset") == "data.jsonl"
+        assert train_kwargs.get("steps") == 75
+
+    def test_replay_dispatches_multi_run(self, tmp_path):
+        """multi_run session_kind → MultiRunTrainer.run dispatched."""
+        from unittest.mock import MagicMock, patch
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_OK, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="mr-replay",
+            model_name="test-model",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "num_runs": 4,
+                "steps_per_run": 25,
+                "samples_per_run": 200,
+                "merge_mode": "slao",
+            },
+            session_kind="multi_run",
+        )
+
+        fake_mr_trainer = MagicMock()
+        fake_mr_trainer.run.return_value = MagicMock(total_runs=4, final_loss=0.12)
+
+        with patch(
+            "backpropagate.multi_run.MultiRunTrainer",
+            return_value=fake_mr_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "mr-replay"
+            args.override = None
+            args.cli_run_id = None
+            args.verbose = False
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        # MultiRunTrainer was constructed; MultiRunConfig carries the inherited fields.
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("model") == "test-model"
+        mr_config = init_kwargs.get("config")
+        assert mr_config is not None
+        # MultiRunConfig.num_runs / steps_per_run reflect the seeded record.
+        assert mr_config.num_runs == 4
+        assert mr_config.steps_per_run == 25
+        # run() was invoked with the dataset.
+        fake_mr_trainer.run.assert_called_once_with("data.jsonl")
+
+    def test_replay_override_applies_to_trainer_kwargs(self, tmp_path):
+        """--override lora_r=64 overrides the recorded lora_r=32.
+
+        BRIDGE-A-002 plumbing: the override list lands in Trainer
+        construction kwargs, not silently dropped. If a regression
+        dropped the override, the trainer would get the recorded
+        lora_r=32 instead of the operator's lora_r=64.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_OK, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="sr-override",
+            model_name="test-model",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "max_steps": 50,
+                "lora_r": 32,
+                "learning_rate": 2e-4,
+            },
+            session_kind="single_run",
+        )
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(final_loss=0.5)
+
+        with patch(
+            "backpropagate.trainer.Trainer",
+            return_value=fake_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "sr-override"
+            # argparse parses --override key=value into a list of (key, value) tuples.
+            args.override = [("lora_r", "64")]
+            args.cli_run_id = None
+            args.verbose = False
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        # The override propagated all the way through; coerced to int by
+        # cmd_replay's _coerce helper.
+        assert init_kwargs.get("lora_r") == 64, (
+            f"--override lora_r=64 must reach the Trainer constructor; "
+            f"got lora_r={init_kwargs.get('lora_r')} (recorded was 32)"
+        )
+
+    def test_replay_rejects_unknown_override_key(self, tmp_path):
+        """--override key=value with non-whitelisted key → EXIT_USER_ERROR.
+
+        Pins the operator-error-fails-loud contract: a typo'd
+        --override lr_rate (vs learning_rate) must NOT be silently
+        dropped; cmd_replay returns user-error so the operator sees
+        their typo at the CLI surface.
+        """
+        from unittest.mock import MagicMock
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="sr-bad-override",
+            model_name="test-model",
+            dataset_info="data.jsonl",
+            hyperparameters={"max_steps": 50, "lora_r": 16},
+            session_kind="single_run",
+        )
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "sr-bad-override"
+        # Non-whitelisted key (typo for "learning_rate").
+        args.override = [("lr_rate", "1e-4")]
+        args.cli_run_id = None
+        args.verbose = False
+
+        rc = cmd_replay(args)
+        assert rc == EXIT_USER_ERROR
+
+
 class TestWave6bExportRunsSubcommand:
     """`backprop export-runs --format=jsonl` (BRIDGE-8)."""
 

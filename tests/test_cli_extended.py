@@ -1273,6 +1273,267 @@ class TestCmdUI:
 
 
 # =============================================================================
+# TESTS-A-002 — Cloudflared subprocess shutdown (v1.4 Wave 2 amend)
+# =============================================================================
+#
+# v1.3 Wave 6a wired cloudflared as a Quick-Tunnel subprocess spawned by
+# cmd_ui when --share is passed. The happy-path tests at
+# test_cmd_ui_share_with_auth_allowed cover env-var propagation, but
+# nothing tests that the cloudflared subprocess gets cleaned up on the
+# various exit paths. A regression that dropped the .terminate() call
+# in cmd_ui's finally block would leak a public tunnel after every
+# Ctrl+C — operator footprint that is impossible to spot from logs.
+#
+# These tests mock _spawn_cloudflared_tunnel to return a MagicMock
+# whose .terminate() / .wait() / .poll() / .kill() are tracked, then
+# drive cmd_ui through KeyboardInterrupt, normal exit (0), and
+# RuntimeError paths. Each one MUST end with .terminate() called on
+# the tunnel mock. The shape mirrors the SIGKILL recovery pattern in
+# tests/test_e2e_chain.py::TestResumeAfterSigkill (subprocess-cleanup
+# discipline).
+# =============================================================================
+
+
+class TestCloudflaredShutdown:
+    """TESTS-A-002: --share spawns cloudflared; cleanup MUST run on every exit.
+
+    The finally block in cmd_ui calls cloudflared_proc.terminate() +
+    .wait(timeout=5) and falls back to .kill() if the wait times out.
+    These tests pin that cleanup contract across the three relevant
+    cmd_ui exit paths:
+
+    1. KeyboardInterrupt (operator Ctrl+C)
+    2. Normal subprocess.run return (reflex exited 0)
+    3. RuntimeError from subprocess.run (port-in-use, exec failure, etc.)
+
+    Each test injects a mock cloudflared subprocess whose .terminate()
+    is the load-bearing assertion. We also pin a 4th case for the
+    .wait() timeout path that escalates to .kill().
+    """
+
+    @staticmethod
+    def _mock_cloudflared_proc(wait_raises=None, poll_return=None):
+        """Build a MagicMock that quacks like a subprocess.Popen for cloudflared.
+
+        Defaults: .wait() returns 0 cleanly, .poll() returns None
+        (running). Pass wait_raises=subprocess.TimeoutExpired to
+        force the kill() fallback path.
+        """
+        proc = MagicMock()
+        proc.terminate = MagicMock()
+        proc.kill = MagicMock()
+        if wait_raises is not None:
+            proc.wait = MagicMock(side_effect=wait_raises)
+        else:
+            proc.wait = MagicMock(return_value=0)
+        proc.poll = MagicMock(return_value=poll_return)
+        return proc
+
+    @staticmethod
+    def _mock_subprocess_result(returncode: int = 0) -> MagicMock:
+        """Mirror TestCmdUI._mock_subprocess_result for consistency."""
+        result = MagicMock()
+        result.returncode = returncode
+        return result
+
+    def test_cloudflared_terminated_on_normal_exit(self, capsys):
+        """Reflex subprocess exits cleanly → cloudflared.terminate() called."""
+        from backpropagate.cli import cmd_ui
+
+        cloudflared_mock = self._mock_cloudflared_proc()
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+        # Normal exit should return 0.
+        assert result == 0
+        # The load-bearing assertion: cleanup ran.
+        cloudflared_mock.terminate.assert_called_once()
+        # And .wait(timeout=5) was used for the graceful join.
+        cloudflared_mock.wait.assert_called()
+
+    def test_cloudflared_terminated_on_keyboard_interrupt(self, capsys):
+        """Ctrl+C during reflex run → cloudflared.terminate() still called.
+
+        The KeyboardInterrupt branch in cmd_ui returns EXIT_OK (0) and
+        prints "UI stopped"; the finally clause MUST run terminate so
+        the public tunnel doesn't outlive the operator's terminal.
+        """
+        from backpropagate.cli import cmd_ui
+
+        cloudflared_mock = self._mock_cloudflared_proc()
+
+        with patch("backpropagate.cli.subprocess.run", side_effect=KeyboardInterrupt), patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
+        ):
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+        # KeyboardInterrupt path returns EXIT_OK (0).
+        assert result == 0
+        cloudflared_mock.terminate.assert_called_once()
+
+    def test_cloudflared_terminated_on_subprocess_runtime_error(self, capsys):
+        """RuntimeError from subprocess.run → cloudflared.terminate() still called.
+
+        Unhandled subprocess errors exit non-zero; the finally clause
+        MUST still terminate the tunnel. Without this assertion, a
+        regression that put cleanup inside a try-block-only would
+        silently leak tunnels on every reflex-startup failure.
+        """
+        from backpropagate.cli import cmd_ui
+
+        cloudflared_mock = self._mock_cloudflared_proc()
+
+        with patch(
+            "backpropagate.cli.subprocess.run",
+            side_effect=RuntimeError("port in use"),
+        ), patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
+        ):
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+        # RuntimeError exits EXIT_RUNTIME_ERROR (2).
+        assert result == 2
+        cloudflared_mock.terminate.assert_called_once()
+
+    def test_cloudflared_killed_when_terminate_wait_times_out(self, capsys):
+        """terminate() + wait(timeout=5) timing out → escalates to .kill().
+
+        The finally block uses the documented Popen graceful-shutdown
+        pattern: terminate first, wait up to 5s, kill on timeout. If
+        cloudflared ignores SIGTERM, the test pins the SIGKILL fallback.
+        """
+        import subprocess
+
+        from backpropagate.cli import cmd_ui
+
+        cloudflared_mock = self._mock_cloudflared_proc(
+            wait_raises=subprocess.TimeoutExpired(cmd="cloudflared", timeout=5),
+        )
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            cmd_ui(args)
+
+        # terminate() always called first.
+        cloudflared_mock.terminate.assert_called_once()
+        # On TimeoutExpired, kill() is the escalation.
+        cloudflared_mock.kill.assert_called_once()
+
+    def test_cloudflared_cleanup_swallows_oserror(self, capsys):
+        """If .terminate() raises OSError (already dead), cleanup must not crash.
+
+        Real-world: the cloudflared process may have already exited by
+        the time cmd_ui's finally clause runs. terminate() on a dead
+        Popen raises ProcessLookupError on POSIX / OSError on Windows.
+        The cleanup is wrapped in `except (OSError, ValueError)` so
+        these don't bubble up as a confusing post-shutdown crash.
+        """
+        from backpropagate.cli import cmd_ui
+
+        cloudflared_mock = self._mock_cloudflared_proc()
+        cloudflared_mock.terminate.side_effect = OSError("already dead")
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+            return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            # Must not raise.
+            result = cmd_ui(args)
+
+        # Normal exit returns 0; the OSError is swallowed.
+        assert result == 0
+        cloudflared_mock.terminate.assert_called_once()
+
+    def test_no_cloudflared_cleanup_when_share_false(self, capsys):
+        """Without --share, no cloudflared is spawned → no cleanup call attempted.
+
+        Negative control for the cleanup-path tests above: the finally
+        block guards on `cloudflared_proc is not None` so the
+        no-share path doesn't try to terminate a None.
+        """
+        from backpropagate.cli import cmd_ui
+
+        # If --share is False, _spawn_cloudflared_tunnel should NOT be
+        # called. We patch it anyway and assert call_count == 0 to pin
+        # this contract (a regression that called the spawn helper
+        # unconditionally would burn an extra subprocess on every
+        # non-share launch).
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel",
+        ) as mock_spawn:
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=False,
+                auth=None,
+                auth_file=None,
+                verbose=False,
+            )
+
+            result = cmd_ui(args)
+
+        assert result == 0
+        mock_spawn.assert_not_called()
+
+
+# =============================================================================
 # TESTS-B-006 — ENFORCEMENT_AVAILABLE flipped path (post-middleware contract)
 # =============================================================================
 #

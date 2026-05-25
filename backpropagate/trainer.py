@@ -637,9 +637,16 @@ class Trainer:
             by halving batch_size and doubling gradient_accumulation_steps
             (preserves effective batch). Aborts with
             RUNTIME_OOM_RECOVERY_EXHAUSTED after 3 consecutive failures at
-            batch=1 (the recovery loop ran out of options). The first
-            uncovered OOM itself still raises RUNTIME_GPU_OOM when
-            oom_recovery is False. Set False to hard-fail.
+            batch=1 (the recovery loop ran out of options). When False, the
+            first uncovered OOM surfaces as
+            ``TrainingError(code='RUNTIME_TRAINING_FAILED')`` — the original
+            ``torch.cuda.OutOfMemoryError`` is propagated through the
+            generic ``except RuntimeError`` catch-all and re-raised as a
+            structured ``TrainingError`` with the OOM as its ``__cause__``
+            (NOT as the ``RUNTIME_GPU_OOM`` code; that code exists in the
+            ERROR_CODES catalog but is not currently produced by any raise
+            site in the Python codebase). Set False to hard-fail on first
+            OOM with the structured-error envelope.
         unsloth_fallback: If True (default), fall back to
             AutoModelForCausalLM + get_peft_model when
             unsloth.FastLanguageModel.from_pretrained fails. Set False to

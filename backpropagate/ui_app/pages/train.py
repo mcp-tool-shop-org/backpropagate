@@ -20,6 +20,7 @@ from backpropagate.ui_state import TrainState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.group import Group
+from ..components.recovery_banner import BpRecoveryBanner
 
 
 def _label(text: str) -> rx.Component:
@@ -255,6 +256,62 @@ def _dataset_group() -> rx.Component:
     )
 
 
+def _recovery_banners() -> rx.Component:
+    """Most-recent ``ok`` / ``warn`` event banners (FRONTEND-A-004, v1.4 Wave 2).
+
+    The Train page surfaces the latest recovery-class event as an inline
+    ``BpRecoveryBanner``. Pre-v1.4 the component existed but no page
+    rendered it — the docstring at the top of this module promised
+    "Recovery banners (when applicable)" but the body never wired one.
+
+    Rendering rules:
+
+    - ``ok``-level event present → render the green "ok" banner. Operator
+      sees the good-news recovery (e.g. trainer resumed from an OOM
+      bisect, GPU temp dropped below threshold, checkpoint written after
+      a near-miss).
+    - ``warn``-level event present → render the amber "warn" banner.
+      Operator sees the heads-up condition (e.g. GPU temp approaching
+      threshold, dataset row skipped, batch auto-shrunk for VRAM).
+    - Both can render simultaneously — they convey different signals and
+      the operator benefits from seeing both.
+    - ``info``-level events are NOT surfaced as banners (would flood the
+      page during a normal run). They remain in the side-rail event log
+      via ``BpEventLog`` for operators who want the full timeline.
+    - ``err``-level events are NOT surfaced here either — hard failures
+      route through the structured error callout (``BpErrorCallout``,
+      consumed by the per-page inline error chrome in v1.4 Wave 2).
+
+    Per design digest §4e: recovery is good news, even if the original
+    event wasn't — never render in red.
+    """
+    return rx.flex(
+        rx.cond(
+            TrainState.latest_recovery_ok_msg != "",
+            BpRecoveryBanner(
+                variant="ok",
+                lead="Recovered.",
+                # body is the message; the lead is the canonical "this is
+                # a recovery" tag so screen readers get the framing first.
+                body=TrainState.latest_recovery_ok_msg,
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            TrainState.latest_recovery_warn_msg != "",
+            BpRecoveryBanner(
+                variant="warn",
+                lead="Heads-up.",
+                body=TrainState.latest_recovery_warn_msg,
+            ),
+            rx.fragment(),
+        ),
+        direction="column",
+        gap="2",
+        width="100%",
+    )
+
+
 def _next_steps_panel() -> rx.Component:
     """Post-run affordances — FRONTEND-10 (Wave 6b).
 
@@ -421,6 +478,13 @@ def train_page() -> rx.Component:
                         size="2",
                         style={"color": "var(--bp-muted)"},
                     ),
+                    # FRONTEND-A-004 (v1.4 Wave 2): wire BpRecoveryBanner so
+                    # the most-recent ok / warn event surfaces inline above
+                    # the form. Closes the docstring promise at the top of
+                    # this module ("Recovery banners (when applicable)") and
+                    # gets the canonical recovery surface that design digest
+                    # §4e specified onto the Train page.
+                    _recovery_banners(),
                     _model_group(),
                     _training_shape_group(),
                     _lora_group(),

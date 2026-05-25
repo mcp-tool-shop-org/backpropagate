@@ -32,7 +32,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--samples` | unset | Maximum samples to use from the dataset (must be > 0). |
 | `--batch-size` | `auto` | Per-device batch size. `auto` queries GPU VRAM. |
 | `--lr` | `2e-4` | Learning rate (must be > 0). |
-| `--lora-r` | `16` | LoRA rank (must be > 0). |
+| `--lora-r` | `256` | LoRA rank (must be > 0). v1.3 default; pass `--lora-preset=fast` for the v1.2.x rank-16 footprint. |
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
 | `--lora-preset` | `quality` | One of `quality` / `fast`. `quality` = rank 256 + all-linear + 10× LR (v1.3 default, matches full fine-tuning per Biderman 2024). `fast` = rank 16 + q+v + 1× LR (v1.2.x footprint). |
@@ -134,6 +134,27 @@ backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --oll
 | `--output`, `-o` | unset | Output directory (defaults to `<model_path>/<format>`). |
 | `--ollama` | off | After GGUF export, register with Ollama. |
 | `--ollama-name` | unset | Name to use when registering with Ollama. |
+| `--hub-token` | unset | HuggingFace Hub token for `--push` flow. Visible to `ps aux` + shell history — prefer `--hub-token-file` or `HF_TOKEN` env var on shared hosts. |
+| `--hub-token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--hub-token`. Mirrors v1.3 `--auth-file` pattern for keeping credentials off argv. |
+
+## `backprop push`
+
+Push a trained adapter or merged model to the HuggingFace Hub.
+
+```bash
+backprop push ./output/lora --repo alice/qwen-finetune
+backprop push ./output/lora --repo alice/qwen-finetune --token-file ~/.hf-token
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `local_path` (positional) | **required** | Path to the trained LoRA adapter or merged model directory. |
+| `--repo` | **required** | Target repo (`user/name` or `org/name`). |
+| `--token` | unset | HuggingFace Hub token. Visible to `ps aux` + shell history — prefer `--token-file` or `HF_TOKEN` env var on shared hosts. |
+| `--token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--token`. |
+| `--private` | off | Create the repo as private. |
+| `--include-base` | off | Push merged model including the base weights (LoRA-only push by default). |
+| `--verbose`, `-v` | off | Verbose logging during upload. |
 
 ## `backprop info`
 

@@ -80,6 +80,14 @@ class TestTrainStateDefaults:
         assert state.steps == 100
         assert state.batch_size == "auto"
         assert state.learning_rate == 2e-4
+        # TESTS-A-006 (v1.4 Wave 2 amend): TrainState.lora_r defaults to 16
+        # here, but the CLI argparse default is 256 (v1.3 BACKEND-1 quality
+        # preset per Biderman 2024 + Thinking Machines 2025). This divergence
+        # is intentional pending a product decision on whether ui_state.py
+        # defaults should be bumped to match the CLI quality preset. Tracked
+        # in WAVE_6A_TODO.md as a v1.5 candidate for the Wave 5 feature audit.
+        # The test pins the as-shipped UI default; do not silently update to
+        # 256 without the product-side change in ui_state.py:314 / :508.
         assert state.lora_r == 16
         assert state.lora_alpha == 32
         assert state.lora_dropout == 0.05
@@ -340,6 +348,12 @@ class TestMultiRunStateDefaults:
         assert state.steps == 100
         assert state.batch_size == "auto"
         assert state.learning_rate == 2e-4
+        # TESTS-A-006 (v1.4 Wave 2 amend): MultiRunState.lora_r defaults
+        # to 16 here, but the CLI argparse default is 256 (v1.3 BACKEND-1
+        # quality preset). The UI surface intentionally lags the CLI
+        # default pending a product decision (see test_ui_states.py:84
+        # for the same context on TrainState). Tracked in WAVE_6A_TODO.md
+        # as a v1.5 candidate for the Wave 5 feature audit.
         assert state.lora_r == 16
         assert state.lora_alpha == 32
         # Multi-Run specific

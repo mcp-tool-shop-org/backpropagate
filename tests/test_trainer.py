@@ -2082,6 +2082,7 @@ class TestHfTransientRetryLoop:
 # without requiring 200+ lines of trainer-test scaffolding.
 
 
+@pytest.mark.serial
 class TestRunIdCorrelation:
     """B-001: run_id propagates through the operator-visible log surface.
 
@@ -2095,6 +2096,13 @@ class TestRunIdCorrelation:
     That matches what an operator running ``backprop train ...`` actually
     sees in their terminal, which is the load-bearing observability
     surface the audit cares about.
+
+    TESTS-A-007 (v1.4 Wave 2 amend): marked @serial because each test
+    invokes ``configure_logging(...force=True)`` which mutates the
+    process-wide structlog configuration. Without serial scheduling,
+    two TestRunIdCorrelation tests on the same xdist worker could
+    interleave their configure_logging calls and capture records
+    through the wrong processor chain.
     """
 
     def test_bind_run_context_round_trip(self, capsys):
@@ -2228,8 +2236,15 @@ class TestRunIdCorrelation:
 # PrintLoggerFactory (see TestRunIdCorrelation docstring above).
 
 
+@pytest.mark.serial
 class TestTrainingLoggerCaplog:
-    """B-001 + observability: TrainingLogger emits structured records, not no-ops."""
+    """B-001 + observability: TrainingLogger emits structured records, not no-ops.
+
+    TESTS-A-007 (v1.4 Wave 2 amend): marked @serial because each test
+    invokes ``configure_logging(...force=True)`` which mutates the
+    process-wide structlog configuration (see TestRunIdCorrelation
+    above for the full reasoning).
+    """
 
     def test_log_step_emits_capturable_record(self, capsys):
         """``log_step(step, loss)`` produces an INFO record with the values."""

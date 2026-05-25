@@ -142,6 +142,56 @@ def _bind_chip() -> rx.Component:
     )
 
 
+def _auth_user_chip() -> rx.Component:
+    """Compact ``@username`` chip rendered for Basic-auth modes only.
+
+    FRONTEND-A-002 (v1.4 Wave 2): surfaces ``AuthBadgeState.auth_user``,
+    which ``ui_security.get_auth_badge_context`` populates from the
+    username half of ``BACKPROPAGATE_UI_AUTH`` (the password half is
+    NEVER read into state — only the username is suitable for display).
+
+    The chip only renders when ``auth_user`` is non-empty so the chrome
+    stays compact in the three non-Basic modes (no_auth_local /
+    token_local / insecure all set ``auth_user=""``). Same muted styling
+    as the bind chip so the username sits visually subordinate to the
+    auth-mode label.
+
+    aria-hidden for the same reason as the bind chip: the operator-facing
+    hover-text already names the username in plain English ("HTTP Basic
+    auth (user 'alice')"), so the screen reader gets that single canonical
+    string via the badge's ``aria_label``.
+    """
+    return rx.cond(
+        AuthBadgeState.auth_user != "",
+        rx.flex(
+            rx.text(
+                "·",
+                size="1",
+                style={
+                    "color": "var(--bp-muted-2)",
+                    "font_size": "10px",
+                },
+                aria_hidden="true",
+            ),
+            rx.text(
+                "@" + AuthBadgeState.auth_user,
+                size="1",
+                class_name="bp-num",
+                style={
+                    "font_family": "var(--bp-mono)",
+                    "font_size": "10px",
+                    "color": "var(--bp-muted-2)",
+                    "letter_spacing": "0.01em",
+                },
+                aria_hidden="true",
+            ),
+            gap="1",
+            align="center",
+        ),
+        rx.fragment(),
+    )
+
+
 def BpAuthBadge() -> rx.Component:
     """Render the footer auth-mode badge.
 
@@ -159,6 +209,14 @@ def BpAuthBadge() -> rx.Component:
     (``host:port (reach)``) right after the mode label so the three
     ``AuthBadgeState`` bind fields are actually surfaced. Pre-fix they
     were populated but never read.
+
+    FRONTEND-A-002 (v1.4 Wave 2): badge now also renders a compact
+    ``@username`` chip (``_auth_user_chip``) for the three Basic-auth
+    modes so the operator can see WHICH credential pair is active
+    without hovering for the tooltip. Closes the
+    ``AuthBadgeContext.auth_user`` dead-state — the field was populated
+    by ``get_auth_badge_context`` but never copied into ``AuthBadgeState``
+    or rendered.
     """
     return rx.tooltip(
         rx.badge(
@@ -178,6 +236,7 @@ def BpAuthBadge() -> rx.Component:
                     style={"font_size": "11px"},
                 ),
                 _bind_chip(),
+                _auth_user_chip(),
                 gap="1",
                 align="center",
             ),

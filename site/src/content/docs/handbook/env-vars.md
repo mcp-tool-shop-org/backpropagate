@@ -91,7 +91,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `BACKPROPAGATE_LORA__R` | `16` | LoRA rank. |
+| `BACKPROPAGATE_LORA__R` | `256` | LoRA rank. v1.3 default (was 16 in v1.2.x — pass `--lora-preset=fast` on the CLI for the v1.2.x rank-16 footprint). |
 | `BACKPROPAGATE_LORA__LORA_ALPHA` | `32` | LoRA scaling factor. |
 | `BACKPROPAGATE_LORA__LORA_DROPOUT` | `0.05` | LoRA dropout rate. |
 | `BACKPROPAGATE_LORA__USE_GRADIENT_CHECKPOINTING` | `unsloth` | `unsloth` / `true` / `false`. |

@@ -29,6 +29,7 @@ import reflex as rx
 from backpropagate.ui_state import RunDetailState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.error_callout import BpErrorCallout
 from ..components.loss_chart import BpLossChart
 
 
@@ -357,17 +358,72 @@ def _log_viewer() -> rx.Component:
 
 
 def _action_panel() -> rx.Component:
-    """Diff / Replay / Delete / Export action row.
+    """Diff / Replay / Delete / Export action row — all 4 V1_3_BRIEF actions.
 
-    Each button shells out to the bridge subcommand via the state's handler.
-    The diff button requires the user to type the other run id; v1.3
-    ergonomics MVP — v1.4 might add a picker.
+    Each button shells out to the bridge subcommand via the state's handler:
+
+    - **Diff** (FRONTEND-A-001, v1.4 Wave 2): inline form with a text input
+      for the comparison run id + Compare button. Wires
+      ``RunDetailState.diff_against`` end-to-end — pre-v1.4, the handler
+      existed but no UI control invoked it (closed the producer-without-
+      consumer dead-state). The result / error surfaces via the same
+      ``action_result`` / ``action_error`` panes the other actions use.
+    - **Replay** — dry-runs the bridge ``replay`` subcommand so the
+      operator sees the resolved hyperparams before re-launching.
+    - **Export this run** — invokes ``backprop export-runs --run-id <id>
+      --format jsonl`` for a single-run JSONL dump.
+    - **Delete run** — invokes ``backprop delete-run <id> --yes``.
+
+    The diff form is rendered above the action row so the operator's eye
+    lands on it first when arriving at the panel after a multi-run pass.
     """
     return rx.flex(
         rx.text(
             "Actions",
             size="3",
             style={"color": "var(--bp-text)", "font_weight": "500"},
+        ),
+        # FRONTEND-A-001 (v1.4 Wave 2): Diff form — text input + Compare
+        # button. Wired to ``RunDetailState.set_diff_other_run_id`` for the
+        # input and ``diff_with_input`` for the submit. The form sits above
+        # the action row so it doesn't crowd the other 3 destructive /
+        # heavy-shell-out actions.
+        rx.flex(
+            rx.text(
+                "Diff against another run",
+                size="1",
+                style={
+                    "color": "var(--bp-text-2)",
+                    "font_size": "11px",
+                    "text_transform": "uppercase",
+                    "letter_spacing": "0.06em",
+                },
+            ),
+            rx.flex(
+                rx.input(
+                    placeholder="other run id (full or prefix)",
+                    value=RunDetailState.diff_other_run_id,
+                    on_change=RunDetailState.set_diff_other_run_id,
+                    size="2",
+                    style={"flex_grow": "1", "min_width": "0"},
+                    aria_label="Comparison run id for diff (full or prefix)",
+                ),
+                rx.button(
+                    "Compare",
+                    on_click=RunDetailState.diff_with_input,
+                    variant="soft",
+                    color_scheme="teal",
+                    size="2",
+                    aria_label="Diff this run against the comparison run id",
+                ),
+                direction="row",
+                gap="2",
+                width="100%",
+                align="center",
+            ),
+            direction="column",
+            gap="1",
+            width="100%",
         ),
         rx.flex(
             rx.button(
@@ -425,22 +481,30 @@ def _action_panel() -> rx.Component:
         ),
         rx.cond(
             RunDetailState.action_error != "",
+            # FRONTEND-A-004 (v1.4 Wave 2): consolidated via ``BpErrorCallout``.
+            # Pre-fix this rolled its own ``rx.flex`` chrome with a peach
+            # border; now uses the canonical component (same as runs /
+            # models) so action failures share ARIA semantics + design-
+            # digest-conformant styling. The Dismiss button stays outside
+            # the component (the callout itself is content-only — wrapping
+            # state-bound dismiss would couple the component to a state
+            # surface it doesn't own).
             rx.flex(
-                rx.text(
-                    RunDetailState.action_error,
-                    size="1",
-                    style={"color": "var(--bp-peach)", "font_size": "11px"},
+                BpErrorCallout(
+                    code="UI · RUN-DETAIL",
+                    title="Action failed",
+                    message=RunDetailState.action_error,
                 ),
-                rx.button("Dismiss", on_click=RunDetailState.clear_action_message, variant="ghost", size="1"),
-                direction="row",
+                rx.button(
+                    "Dismiss",
+                    on_click=RunDetailState.clear_action_message,
+                    variant="ghost",
+                    size="1",
+                    style={"align_self": "flex-end"},
+                ),
+                direction="column",
                 gap="2",
-                align="center",
-                padding="3",
-                style={
-                    "background": "var(--bp-surface-2)",
-                    "border": "1px solid var(--bp-peach)",
-                    "border_radius": "var(--bp-r-2)",
-                },
+                width="100%",
             ),
             rx.fragment(),
         ),

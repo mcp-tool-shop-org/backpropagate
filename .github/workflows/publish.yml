@@ -1,8 +1,22 @@
 name: Publish
 
+# Triggers — the load-bearing one for the auto-chain is `workflow_run`:
+#  * `release: published` does NOT fire when the Release was created by
+#    `release.yml` using `secrets.GITHUB_TOKEN` (well-documented GH platform
+#    behavior to prevent workflow-author loops). v1.3.0 required a manual
+#    `gh workflow run publish.yml --ref v1.3.0` because of this. The
+#    `workflow_run` trigger gated on `Release.conclusion == 'success'`
+#    (mirrors the pattern post-publish-smoke.yml uses) closes the chain.
+#  * `release: published` retained for manual hand-cut Releases (gh release
+#    create from the maintainer's terminal — attributed to a user, fires
+#    the event normally).
+#  * `workflow_dispatch` retained for re-run-from-UI on transient failure.
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 # Publish workflows must serialize, not cancel. Cancelling a mid-flight
@@ -23,6 +37,11 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # When triggered by workflow_run, only proceed if the upstream Release
+    # workflow succeeded. release: published / workflow_dispatch invocations
+    # set workflow_run to null, which evaluates this expression to truthy
+    # (we only want to short-circuit FAILED workflow_run events).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 

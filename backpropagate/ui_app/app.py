@@ -44,7 +44,12 @@ except Exception as _exc:  # noqa: BLE001
 # the sequence in order (first entry is the innermost wrap, last entry is
 # the outermost / network-facing wrap). See ``middleware/__init__.py`` for
 # the chain-ordering rationale.
-from .middleware import healthz_middleware, rate_limit_middleware, request_logging_middleware
+from .middleware import (
+    healthz_middleware,
+    rate_limit_middleware,
+    request_logging_middleware,
+    security_headers_middleware,
+)
 from .pages.dataset import dataset_page
 from .pages.export import export_page
 from .pages.models import models_page
@@ -104,8 +109,18 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 # sequence in order and applies each entry as ``asgi_app = entry(asgi_app)``
 # (verified against ``reflex==0.9.2.post1`` via inspect.getsource(rx.App)).
 # So the FIRST entry is the innermost wrap (closest to Reflex), and the
-# LAST entry is the outermost (network-facing). The desired runtime order
-# when a request arrives is:
+# LAST entry is the outermost (network-facing).
+#
+# v1.4 Wave 2 (FRONTEND-A-003): add ``security_headers_middleware`` as a
+# FIFTH layer — sibling of request_logging, stamps OWASP headers
+# (Content-Security-Policy, X-Frame-Options, X-Content-Type-Options,
+# Referrer-Policy, Permissions-Policy, X-XSS-Protection) on every HTTP
+# response leaving the server. Wired INSIDE request_logging so the log
+# line reflects the bytes that actually went on the wire, AFTER auth so
+# even 401 / 403 responses ship hardened. Continuation of the v1.2.0
+# GHSA-f65r-h4g3-3h9h narrative (defense-in-depth on the browser side).
+#
+# Desired runtime order when a request arrives (outermost → innermost):
 #
 #     healthz_middleware               (outermost — /healthz early-exit;
 #                                       orchestrator probe never touches auth
@@ -113,14 +128,16 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 #       → rate_limit_middleware        (fast-fail 429 before auth so brute-
 #                                       force can't exhaust HMAC budget)
 #         → basic_auth_transformer     (UNCHANGED — GHSA contracts intact)
-#           → request_logging_mw       (innermost — log line carries the
-#                                       resolved auth state)
-#             → Reflex
+#           → request_logging_mw       (structured log w/ resolved auth state)
+#             → security_headers_mw    (NEW — stamps OWASP headers on
+#                                       responses leaving the server, AFTER
+#                                       auth so even 401/403 are hardened)
+#               → Reflex
 #
-# Which in api_transformer sequence-order is:
+# Which in api_transformer sequence-order (innermost first, outermost last) is:
 #
-#     (request_logging, basic_auth, rate_limit, healthz)
-#       innermost first ──────────────────────────► outermost last
+#     (security_headers, request_logging, basic_auth, rate_limit, healthz)
+#       innermost first ──────────────────────────────────────► outermost last
 #
 # FRONTEND-F-001 (Wave 5.5): bind ``appearance`` to ``rx.color_mode`` so
 # the Radix theme re-tints whenever the operator toggles theme OR the
@@ -139,6 +156,7 @@ app = rx.App(
     theme=rx.theme(appearance=rx.color_mode, **RADIX_THEME),
     stylesheets=STYLESHEETS,
     api_transformer=(
+        security_headers_middleware,
         request_logging_middleware,
         basic_auth_transformer,
         rate_limit_middleware,

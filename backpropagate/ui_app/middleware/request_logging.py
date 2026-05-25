@@ -153,14 +153,23 @@ def request_logging_middleware(asgi_app: Callable) -> Callable:
             msg_type = message.get("type")
             if msg_type == "http.response.start":
                 status_holder["code"] = int(message.get("status", 0))
-            elif msg_type == "websocket.close":
-                # Pre-accept close gives us the close code; post-accept closes
-                # are also logged but with the close code instead of 0.
-                status_holder["code"] = int(message.get("code", 0))
-            elif msg_type == "websocket.accept" and not status_holder["code"]:
+            elif msg_type == "websocket.accept":
                 # WS upgrade accepted — log code 101 (Switching Protocols)
-                # to match the HTTP-level shape operators expect.
+                # to match the HTTP-level shape operators expect. Sticky:
+                # a post-accept ``websocket.close`` (normal-close-after-accept
+                # pattern, including the test stub's immediate close at code
+                # 1000) must NOT overwrite this — the request-log records the
+                # upgrade outcome, not the eventual close. Per module
+                # docstring: "WS close code if pre-accept-rejected" only.
                 status_holder["code"] = 101
+            elif msg_type == "websocket.close":
+                # Pre-accept close: status is empty → record the close code
+                # (the upgrade was rejected). Post-accept close: status is
+                # already 101 → keep it (the upgrade succeeded; what happens
+                # on the channel afterwards is out of scope for this log
+                # field, which mirrors HTTP request-line semantics).
+                if not status_holder["code"]:
+                    status_holder["code"] = int(message.get("code", 0))
             await send(message)
 
         try:

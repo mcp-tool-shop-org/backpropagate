@@ -21,7 +21,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 | Code | Raised when | Fix |
 |------|-------------|-----|
 | `INPUT_VALIDATION_FAILED` | A user-supplied argument or flag failed validation (e.g. `steps=0`, malformed `--auth`). | Re-read the suggestion in stderr; fix the offending argument. |
-| `INPUT_AUTH_REQUIRED` | `backprop ui --share` was invoked without `--auth user:password`. | Pass `--auth user:password`, or set `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` to explicitly opt out (you will see a loud warning). |
+| `INPUT_AUTH_REQUIRED` | An operation required `--auth` credentials (or `BACKPROPAGATE_UI_AUTH=user:pass`) but they were not supplied. | Pass `--auth user:password` on the CLI, or set `BACKPROPAGATE_UI_AUTH=user:pass` in the environment. See [handbook/security.md](/backpropagate/handbook/security/) for the full auth contract. |
 | `INPUT_AUTH_INVALID_SHAPE` | The credentials passed to the UI launcher are not a `username:password` tuple. | Use the format `--auth username:password` (single colon, no spaces). |
 | `INPUT_DATASET_INVALID` | The dataset is malformed in a way that doesn't fit a more specific code. | Inspect the file; ensure each line is valid JSON for JSONL inputs. |
 | `INPUT_DATASET_NOT_FOUND` | The dataset path does not exist. | Check the path is spelled correctly and the file exists. Relative paths resolve against the current working directory. |
@@ -50,6 +50,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 |------|-------------|-----|
 | `RUNTIME_TRAINING_FAILED` | Training failed in a way that doesn't fit a more specific code. | Re-run with `--verbose` to see the unredacted traceback. |
 | `RUNTIME_TRAINING_ABORTED` | Training was aborted (user interrupt, GPU pause/abort, etc.). The error includes `steps_completed` and the last `checkpoint_path` so you can resume. | If the abort was from GPU temperature or VRAM pressure, fix the underlying issue and resume from the checkpoint. |
+| `RUNTIME_UI_AUTH_NOT_ENFORCED` | `backprop ui --share` (or `--host <non-loopback>`) was invoked without `--auth user:password`. The v1.2.0+ contract refuses to start the UI rather than expose an unauthenticated tunnel. (The pre-v1.2.0 `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` opt-out is a **no-op** under the Reflex UI — held only for forward-compat with the Gradio era — and will not relax this gate.) | Pass `--auth user:password`, or use SSH port-forwarding instead (`ssh -L 7860:localhost:7860 <host>`). See [handbook/security.md](/backpropagate/handbook/security/) for the full threat model and the four supported auth modes. |
 | `RUNTIME_EXPORT_FAILED` | Export failed in a way that doesn't fit a more specific code. | Re-run with `--verbose`; verify the model loaded cleanly first. |
 | `RUNTIME_LORA_EXPORT_FAILED` | LoRA adapter export failed. | Confirm the trainer actually has LoRA adapters attached (i.e. `trainer.train()` ran). |
 | `RUNTIME_GGUF_EXPORT_FAILED` | GGUF export failed. | Install the export extra: `pip install backpropagate[export]`. On first run, `llama-cpp-python` may need CMake + Visual C++ Build Tools (Windows). |

@@ -62,6 +62,13 @@ def _scan_emitted_codes(source_root: pathlib.Path) -> dict[str, list[str]]:
     - Test files (``test_*.py``, ``*_test.py``)
     - Legacy modules (``*_legacy.py``)
     - The ``__pycache__`` tree (Path.rglob already skips it but be explicit)
+    - The ``ui_app/`` Reflex tree — ``BpErrorCallout(code="UI · MODELS", ...)``
+      uses ``code=`` as a display-label kwarg per the design digest §4d
+      reading order (code · title · message · hint · action); these are
+      UI chrome strings, not exception codes. Wired in v1.4 Wave 2 by
+      FRONTEND-A-004 (BpErrorCallout consolidation in runs / models /
+      run_detail pages). The catalog discipline applies to exception
+      raisers, not Reflex component display labels.
 
     Only matches literal string constants in keyword position. Dynamic
     code strings (``code=some_var``) are NOT detected — they would defeat
@@ -75,6 +82,8 @@ def _scan_emitted_codes(source_root: pathlib.Path) -> dict[str, list[str]]:
         if "_legacy" in name:
             continue
         if "__pycache__" in py.parts:
+            continue
+        if "ui_app" in py.parts:
             continue
         try:
             tree = ast.parse(py.read_text(encoding="utf-8"))

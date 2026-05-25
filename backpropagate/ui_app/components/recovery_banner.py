@@ -26,8 +26,8 @@ _VARIANTS: dict[str, tuple[str, str]] = {
 
 def BpRecoveryBanner(
     variant: str = "info",
-    lead: str = "",
-    body: str = "",
+    lead: str | rx.Var[str] = "",
+    body: str | rx.Var[str] = "",
 ) -> rx.Component:
     """Render an inline recovery banner.
 
@@ -35,11 +35,14 @@ def BpRecoveryBanner(
     ----------
     variant:
         One of ``"info"``, ``"warn"``, ``"ok"``. Unknown variants fall back
-        to info.
+        to info. Static at composition time; not state-bound.
     lead:
-        Bold lead-in. What happened. Required.
+        Bold lead-in. What happened. May be a literal ``str`` or a Reflex
+        ``Var[str]`` bound to component state.
     body:
-        Plain body. Why. Optional.
+        Plain body. Why. Optional. May be a literal ``str`` or a Reflex
+        ``Var[str]`` bound to component state (e.g.
+        ``TrainState.latest_recovery_ok_msg``).
     """
     color, icon_url = _VARIANTS.get(variant, _VARIANTS["info"])
 

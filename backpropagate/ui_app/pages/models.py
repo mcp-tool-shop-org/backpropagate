@@ -25,6 +25,7 @@ import reflex as rx
 from backpropagate.ui_state import ModelsState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.error_callout import BpErrorCallout
 
 
 def _eyebrow_style() -> dict:
@@ -221,22 +222,17 @@ def _empty_state() -> rx.Component:
 
 
 def _error_callout() -> rx.Component:
-    return rx.flex(
-        rx.text(
-            ModelsState.error,
-            size="2",
-            style={"color": "var(--bp-peach)", "flex_grow": "1"},
-        ),
-        direction="row",
-        align="center",
-        gap="2",
-        padding="3",
-        width="100%",
-        style={
-            "background": "var(--bp-surface-2)",
-            "border": "1px solid var(--bp-peach)",
-            "border_radius": "var(--bp-r-2)",
-        },
+    """Inline error banner — consolidated via ``BpErrorCallout``.
+
+    FRONTEND-A-004 (v1.4 Wave 2): pre-fix this rolled its own ``rx.flex``
+    chrome (mirrored from runs.py). Now uses the canonical
+    ``BpErrorCallout`` so the error surface shares ARIA semantics and
+    design-digest-conformant styling with runs / run-detail.
+    """
+    return BpErrorCallout(
+        code="UI · MODELS",
+        title="Could not load model cache",
+        message=ModelsState.error,
     )
 
 

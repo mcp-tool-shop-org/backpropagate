@@ -17,25 +17,75 @@ def test_settings_import():
     assert isinstance(settings, Settings)
 
 
-def test_settings_defaults():
-    """Test default configuration values."""
+def test_settings_defaults_pin_user_facing_contract():
+    """Pin the operator-facing default configuration.
+
+    These defaults are what a user gets when they run ``Trainer()``
+    with no overrides. They are reproduced in the README, the
+    handbook's Quick Start, and the v1.3 release notes. A silent drift
+    here is a documentation drift everywhere — the assertion messages
+    name the doctrine each default carries so a failed diff reads as
+    "what changed and why it matters" instead of just two numbers.
+    """
     from backpropagate import settings
 
-    # Model defaults
-    assert "Qwen" in settings.model.name or "qwen" in settings.model.name.lower()
-    assert settings.model.load_in_4bit is True
-    assert settings.model.max_seq_length == 2048
+    # Model defaults — Qwen 2.5 is the default model family
+    assert "Qwen" in settings.model.name or "qwen" in settings.model.name.lower(), (
+        f"Default model family drifted from Qwen: settings.model.name="
+        f"{settings.model.name!r}. The Quick Start README + handbook "
+        f"document Qwen as the default; switching families is a "
+        f"user-visible behavior change."
+    )
+    assert settings.model.load_in_4bit is True, (
+        f"settings.model.load_in_4bit default flipped from True to "
+        f"{settings.model.load_in_4bit}. 4-bit load is what makes 7B "
+        f"trainable on 16GB VRAM (RTX 5080 baseline); flipping it "
+        f"breaks the headline 'one-line 7B fine-tune' promise."
+    )
+    assert settings.model.max_seq_length == 2048, (
+        f"settings.model.max_seq_length default drifted: expected 2048, "
+        f"got {settings.model.max_seq_length}. This is the documented "
+        f"context length; bumping it raises VRAM cost for every default "
+        f"install."
+    )
 
     # Training defaults
-    assert settings.training.learning_rate == 2e-4
-    assert settings.training.per_device_train_batch_size == 2
-    assert settings.training.gradient_accumulation_steps == 4
+    assert settings.training.learning_rate == 2e-4, (
+        f"settings.training.learning_rate default drifted: expected "
+        f"2e-4, got {settings.training.learning_rate}. The v1.3 LoRA "
+        f"preset story (BACKEND-1) calibrates around 2e-4 as the "
+        f"'quality' default; changing it without updating the preset "
+        f"matrix breaks the documented behavior."
+    )
+    assert settings.training.per_device_train_batch_size == 2, (
+        f"per_device_train_batch_size default drifted: expected 2, got "
+        f"{settings.training.per_device_train_batch_size}. The 'fits "
+        f"7B on 16GB' contract assumes batch=2 + grad-accum=4."
+    )
+    assert settings.training.gradient_accumulation_steps == 4, (
+        f"gradient_accumulation_steps default drifted: expected 4, got "
+        f"{settings.training.gradient_accumulation_steps}. Effective "
+        f"batch is 2 * 4 = 8; changing one half without the other "
+        f"breaks documented convergence."
+    )
 
     # LoRA defaults — v1.3 BACKEND-1: bumped from rank 16 (q+v target,
     # 1x LR) to rank 256 (all-linear target). Operators who want the
     # old behavior pass --lora-preset=fast.
-    assert settings.lora.r == 256
-    assert settings.lora.lora_alpha == 512
+    assert settings.lora.r == 256, (
+        f"settings.lora.r default drifted from the v1.3 BACKEND-1 "
+        f"'quality' contract: expected 256, got {settings.lora.r}. v1.3 "
+        f"bumped from rank 16 (q+v target) to rank 256 (all-linear "
+        f"target) to ship a stronger out-of-box result. If you're "
+        f"reverting to rank 16, that's a v2.0-grade default change — "
+        f"update the handbook lora_presets.md + RUNTIME tab simultaneously."
+    )
+    assert settings.lora.lora_alpha == 512, (
+        f"settings.lora.lora_alpha default drifted: expected 512 (2x r), "
+        f"got {settings.lora.lora_alpha}. The 2:1 alpha:r ratio is the "
+        f"documented effective-LR coupling; breaking it changes "
+        f"convergence behavior without notice."
+    )
 
 
 def test_feature_flags():
@@ -162,16 +212,47 @@ class TestLoRAConfig:
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        assert config.r == 256
-        assert config.lora_alpha == 512
-        assert config.lora_dropout == 0.05
-        assert config.use_gradient_checkpointing == "unsloth"
-        assert config.random_state == 42
+        assert config.r == 256, (
+            f"LoRAConfig.r default drifted from v1.3 BACKEND-1 'quality' "
+            f"contract: expected 256, got {config.r}. The rank 16 → 256 "
+            f"bump is sourced from Biderman 2024 + Thinking Machines "
+            f"2025; reverting requires updating the handbook + cli "
+            f"parser default + trainer init test simultaneously."
+        )
+        assert config.lora_alpha == 512, (
+            f"LoRAConfig.lora_alpha default drifted: expected 512 (2x r), "
+            f"got {config.lora_alpha}. The 2:1 ratio is documented "
+            f"effective-LR coupling."
+        )
+        assert config.lora_dropout == 0.05, (
+            f"LoRAConfig.lora_dropout default drifted: expected 0.05, "
+            f"got {config.lora_dropout}."
+        )
+        assert config.use_gradient_checkpointing == "unsloth", (
+            f"LoRAConfig.use_gradient_checkpointing default drifted from "
+            f"'unsloth' (the optimized path) to "
+            f"{config.use_gradient_checkpointing!r}."
+        )
+        assert config.random_state == 42, (
+            f"LoRAConfig.random_state default drifted from 42 to "
+            f"{config.random_state}. Determinism on first-run results "
+            f"breaks when this changes."
+        )
         # v1.3 BACKEND-3 / BACKEND-6: new fields default OFF for
         # backward-compat with v1.2 behavior. Operators opt in via
         # --use-dora / --init-lora-weights {pissa,loftq}.
-        assert config.use_dora is False
-        assert config.init_lora_weights == "default"
+        assert config.use_dora is False, (
+            f"LoRAConfig.use_dora default flipped from False to "
+            f"{config.use_dora}. v1.3 BACKEND-3 chose opt-in for DoRA "
+            f"to preserve v1.2 behavior; flipping the default is a "
+            f"breaking change without a CHANGELOG note."
+        )
+        assert config.init_lora_weights == "default", (
+            f"LoRAConfig.init_lora_weights drifted from 'default' to "
+            f"{config.init_lora_weights!r}. v1.3 BACKEND-6 added "
+            f"pissa/loftq as opt-in; flipping the default breaks "
+            f"backward-compat with v1.2 first-run weights."
+        )
 
     def test_lora_config_target_modules(self):
         """Test LoRAConfig target_modules default.

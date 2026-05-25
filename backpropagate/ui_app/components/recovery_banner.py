@@ -96,4 +96,10 @@ def BpRecoveryBanner(
         },
         role="status",
         aria_live="polite",
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): aria_atomic="true"
+        # makes screen readers announce the entire banner (lead + body) as a
+        # single coherent unit when its content changes — otherwise some AT
+        # would only announce the changed run of text, stripping the
+        # "Recovered." / "Heads-up." framing that gives the message context.
+        aria_atomic="true",
     )

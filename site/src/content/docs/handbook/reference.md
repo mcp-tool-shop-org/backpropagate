@@ -78,7 +78,7 @@ All settings can be overridden via environment variables with the `BACKPROPAGATE
 ```bash
 BACKPROPAGATE_MODEL__NAME=Qwen/Qwen2.5-7B-Instruct
 BACKPROPAGATE_TRAINING__LEARNING_RATE=2e-4
-BACKPROPAGATE_LORA__R=32
+BACKPROPAGATE_LORA__R=256  # v1.3+ quality preset default; pass 16 for the v1.2.x footprint
 ```
 
 Backpropagate also reads from a `.env` file if present. Install the `[validation]` extra for full Pydantic-powered config with type checking.
@@ -87,16 +87,18 @@ See [Environment variables](/backpropagate/handbook/env-vars/) for the complete 
 
 ## Training presets
 
-Built-in presets for common scenarios (these are `TRAINING_PRESETS` — multi-run loop hyperparameters; they predate the v1.3 `LORA_PRESETS` namespace which governs LoRA shape only and is referenced via `--lora-preset`):
+> **Two preset namespaces exist, and they BOTH use the names `"fast"` and `"quality"`.** They control different things and have different defaults. If you reach for a preset called `"quality"`, you almost certainly want **`--lora-preset=quality`** (the LoRA-shape preset — rank 256, all-linear, 10× LR — the v1.3 default). The table below is the OTHER namespace: `TRAINING_PRESETS`, which governs multi-run loop hyperparameters (run count, samples-per-run, etc.) and predates the v1.3 `LORA_PRESETS`. A namespace rename is tracked for v1.5 (see [WAVE_5_FEATURE_AUDIT_NOTES.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/WAVE_5_FEATURE_AUDIT_NOTES.md#training_presets-vs-lora_presets-namespace-collision-operator-trap-class)).
+
+Built-in presets for common multi-run scenarios (`TRAINING_PRESETS`):
 
 | Preset | LoRA r | Eff. Batch | LR | Runs | Use case |
 |--------|--------|-----------|-----|------|----------|
 | `fast-3b` | 8 | 8 | 5e-4 | 3 | Rapid iteration with 3B models |
 | `fast` | 8 | 8 | 5e-4 | 3 | Quick testing with 7B models |
-| `balanced` | 16 | 16 | 2e-4 | 5 | Recommended default |
-| `quality` | 32 | 32 | 1e-4 | 10 | Maximum training effectiveness |
+| `balanced` | 16 | 16 | 2e-4 | 5 | Recommended default for a balanced multi-run |
+| `quality` | 32 | 32 | 1e-4 | 10 | Maximum multi-run training effectiveness — note this is **rank 32**, NOT the LoRA-shape `--lora-preset=quality` which is rank 256 |
 
-> Note: `TRAINING_PRESETS["quality"]` (rank 32, above) is distinct from `LORA_PRESETS["quality"]` (rank 256 + all-linear + 10× LR, the v1.3 LoRA-shape default). The names collide for historical reasons; the v1.3 `--lora-preset=quality` / `--lora-preset=fast` flag controls LoRA shape only. See [CLI reference](/backpropagate/handbook/cli-reference/) for the LoRA preset table.
+For the LoRA-shape preset (rank 256 vs rank 16, all-linear vs q+v), see [CLI reference → `--lora-preset`](/backpropagate/handbook/cli-reference/) and the [`training.md` Trainer parameters table](/backpropagate/handbook/training/#trainer-parameters). The two namespaces compose: you can pick a multi-run preset for the loop AND a `--lora-preset` for the architecture independently.
 
 ```python
 from backpropagate.config import get_preset

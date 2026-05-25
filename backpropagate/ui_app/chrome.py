@@ -174,6 +174,12 @@ def BpHeader() -> rx.Component:
             "border_bottom": "1px solid var(--bp-border)",
             "flex_shrink": "0",
         },
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): landmark role so
+        # screen reader users can jump to the header. Pairs with the
+        # ``role="navigation"`` on BpLeftNav and ``role="contentinfo"`` on
+        # BpFooter — Radix doesn't auto-emit semantic landmarks on flex
+        # boxes, so we surface them explicitly.
+        role="banner",
     )
 
 
@@ -256,6 +262,13 @@ def BpLeftNav(active: str = "train") -> rx.Component:
             "flex_shrink": "0",
             "overflow_y": "auto",
         },
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): landmark role so
+        # screen readers + keyboard users can jump straight to the primary
+        # navigation. ``aria_label`` distinguishes it from any future
+        # secondary nav (e.g. side rail). The individual nav items already
+        # carry ``aria_current="page"`` on the active row.
+        role="navigation",
+        aria_label="Primary",
     )
 
 
@@ -399,6 +412,12 @@ def BpSideRail() -> rx.Component:
             "overflow_y": "auto",
             "flex_shrink": "0",
         },
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): landmark role so
+        # screen reader users can jump to the live-run sidebar. "Complementary"
+        # is the canonical HTML landmark for related-but-secondary content
+        # alongside the main scroll area.
+        role="complementary",
+        aria_label="Live run status",
     )
 
 
@@ -483,4 +502,9 @@ def BpFooter() -> rx.Component:
             "flex_shrink": "0",
         },
         on_mount=AuthBadgeState.refresh,
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): landmark role so
+        # screen reader users can jump to the footer (auth badge / handbook
+        # link / version). Pairs with ``role="banner"`` on BpHeader and
+        # ``role="navigation"`` on BpLeftNav.
+        role="contentinfo",
     )

@@ -431,3 +431,279 @@ class TestRunsState:
         state.error = "something went wrong"
         state.clear_error()
         assert state.error == ""
+
+
+# =============================================================================
+# BACKEND-B-003 ENTRY-LEVEL schema_version MISMATCH WARN PATH
+# =============================================================================
+
+
+class TestRunHistoryEntrySchemaVersionWarn:
+    """Pin BACKEND-B-003 entry-level schema_version mismatch contract.
+
+    v1.3 added ``RunHistoryManager.CURRENT_ENTRY_SCHEMA_VERSION`` (string
+    "1.0") plus a "warn-once-per-unique-version" loop in ``_load`` at
+    backpropagate/checkpoints.py:983-1000. Coverage gap (Wave 3.5
+    TESTS-B-004): the entry-level WARN was never exercised. Every
+    existing test seeded entries WITHOUT a ``schema_version`` key OR
+    with no entries at all, so the warn-once branch was dead-coverage.
+
+    These tests pin:
+
+      1. Legacy v1.0 entries lacking ``schema_version`` AND
+         ``session_kind`` (the brief-named "session_kind=None" scenario)
+         load without raising AND fire the missing-version WARN exactly
+         once via the "0.0" implicit baseline.
+      2. Future-version entries (``schema_version='99.0'``) emit the
+         same WARN and load anyway (fail-loud-but-keep-going).
+      3. Warn-once dedup works: two entries at the SAME mismatched
+         version produce ONE WARN, not two (the ``seen_versions`` set
+         in the source).
+      4. Mixed-version entries (one legacy, one future) emit TWO WARNs
+         — one per unique mismatched version.
+
+    Why this matters: operators correlate weird ``backprop runs``
+    output to schema age via these log lines. If someone silently
+    drops the WARN (refactor, log-level demotion to DEBUG) the
+    mixed-version diagnosability disappears and v1.2 → v1.3 migration
+    bugs become invisible.
+    """
+
+    def _seed(self, output_dir: Path, entries: list[dict]) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "run_history.json").write_text(
+            json.dumps(entries), encoding="utf-8"
+        )
+
+    def test_legacy_entry_missing_schema_and_session_kind_loads_with_warn(
+        self, tmp_path, caplog
+    ):
+        """BACKEND-B-003: a pre-v1.3 entry (no schema_version, no
+        session_kind) must load AND fire the warn-once line.
+
+        This is the brief's "legacy v1.0 run-history entry" scenario —
+        an entry written by an older build that never grew the
+        schema_version field. The source defaults missing version to
+        "0.0" so the operator sees the gap on the next list_runs call.
+        """
+        from backpropagate.checkpoints import RunHistoryManager
+
+        self._seed(tmp_path, [
+            {
+                # No schema_version, no session_kind — legacy v1.0 shape
+                "run_id": "legacy-run-001",
+                "status": "completed",
+                "model_name": "qwen-7b",
+                "started_at": "2026-01-01T00:00:00+00:00",
+            }
+        ])
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            mgr = RunHistoryManager(str(tmp_path))
+            runs = mgr.list_runs()
+
+        assert len(runs) == 1, (
+            "BACKEND-B-003 contract: legacy entries (no schema_version) "
+            "MUST load non-fatally. Got "
+            f"{len(runs)} runs instead of 1. If a future refactor wants "
+            "to refuse legacy entries, ship a real migrator first."
+        )
+        # session_kind missing is tolerated — no crash on access through
+        # the public list_runs surface
+        assert runs[0]["run_id"] == "legacy-run-001"
+
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "schema_version" in r.getMessage()
+        ]
+        assert len(version_warns) == 1, (
+            "BACKEND-B-003 warn-once contract violated: legacy entry "
+            "(missing schema_version, defaults to '0.0') must emit "
+            f"exactly one WARN. Got {len(version_warns)} WARN records. "
+            f"All warns: {[r.getMessage() for r in caplog.records]!r}"
+        )
+        msg = version_warns[0].getMessage()
+        assert "0.0" in msg, (
+            f"Legacy-entry WARN must surface the '0.0' fallback so "
+            f"operators recognize a pre-anchor row; got: {msg!r}"
+        )
+
+    def test_future_version_entry_loads_with_warn(self, tmp_path, caplog):
+        """BACKEND-B-003: future schema_version ('99.0') WARNs but loads.
+
+        Forward-compat is best-effort: an entry written by a newer
+        build than this one is parsed with field-defaults and surfaces
+        a WARN so the operator knows downgrade-on-read happened.
+        """
+        from backpropagate.checkpoints import RunHistoryManager
+
+        self._seed(tmp_path, [
+            {
+                "schema_version": "99.0",
+                "run_id": "future-run-002",
+                "status": "completed",
+                "model_name": "qwen-7b",
+                "started_at": "2026-05-01T00:00:00+00:00",
+                "session_kind": "single",
+            }
+        ])
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            mgr = RunHistoryManager(str(tmp_path))
+            runs = mgr.list_runs()
+
+        assert len(runs) == 1, (
+            "BACKEND-B-003 forward-compat contract: future-version "
+            f"entries must load. Got {len(runs)} instead of 1."
+        )
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "schema_version" in r.getMessage()
+        ]
+        assert len(version_warns) == 1, (
+            "Future-version entry must emit exactly one mismatch WARN; "
+            f"got {len(version_warns)}."
+        )
+        msg = version_warns[0].getMessage()
+        assert "99.0" in msg, (
+            f"Future-version WARN must name the on-disk version so "
+            f"operators see the gap direction; got: {msg!r}"
+        )
+
+    def test_warn_once_dedup_two_entries_same_mismatched_version(
+        self, tmp_path, caplog
+    ):
+        """BACKEND-B-003: ``seen_versions`` dedups WARNs per unique version.
+
+        Pins the ``ver not in seen_versions: seen_versions.add(ver)``
+        guard at checkpoints.py:992-993. Two legacy entries should
+        produce ONE WARN, not two — otherwise an old history file with
+        hundreds of legacy rows floods the log on every list call.
+        """
+        from backpropagate.checkpoints import RunHistoryManager
+
+        self._seed(tmp_path, [
+            {
+                "run_id": "legacy-a",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "run_id": "legacy-b",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": "2026-01-02T00:00:00+00:00",
+            },
+        ])
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            mgr = RunHistoryManager(str(tmp_path))
+            mgr.list_runs()
+
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "schema_version" in r.getMessage()
+        ]
+        assert len(version_warns) == 1, (
+            "BACKEND-B-003 warn-once dedup violated: two legacy entries "
+            "at the same implicit '0.0' version must produce ONE WARN "
+            f"(the seen_versions set should dedup). Got {len(version_warns)}. "
+            "Without dedup, a 100-row legacy history floods the log."
+        )
+
+    def test_mixed_version_entries_warn_per_unique_version(
+        self, tmp_path, caplog
+    ):
+        """BACKEND-B-003: one legacy + one future ⇒ TWO distinct WARNs.
+
+        Confirms the dedup is PER UNIQUE VERSION, not "warn at most
+        once total." A mixed-version writer scenario (v1.2 wrote a
+        row, v1.99 wrote another, v1.3 reads both) should surface
+        BOTH version gaps so the operator sees the full picture.
+        """
+        from backpropagate.checkpoints import RunHistoryManager
+
+        self._seed(tmp_path, [
+            {
+                # Legacy — no schema_version, will fall back to "0.0"
+                "run_id": "legacy-run",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                # Future version
+                "schema_version": "99.0",
+                "run_id": "future-run",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": "2026-01-02T00:00:00+00:00",
+                "session_kind": "single",
+            },
+        ])
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            mgr = RunHistoryManager(str(tmp_path))
+            mgr.list_runs()
+
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "schema_version" in r.getMessage()
+        ]
+        msgs = [r.getMessage() for r in version_warns]
+        assert len(version_warns) == 2, (
+            "BACKEND-B-003: mixed-version entries must produce one WARN "
+            f"PER UNIQUE mismatched version (here '0.0' and '99.0'). "
+            f"Got {len(version_warns)} WARNs. Messages: {msgs!r}"
+        )
+        # Both unique versions named across the warn set
+        combined = " ".join(msgs)
+        assert "0.0" in combined, (
+            f"Legacy version '0.0' missing from warn set; got: {msgs!r}"
+        )
+        assert "99.0" in combined, (
+            f"Future version '99.0' missing from warn set; got: {msgs!r}"
+        )
+
+    def test_current_version_entry_is_silent_no_warn(
+        self, tmp_path, caplog
+    ):
+        """BACKEND-B-003 happy-path: matching schema_version emits NO WARN.
+
+        Pinning the silent half so a future refactor that fires WARN on
+        every load is caught — flood = signal-blindness.
+        """
+        from backpropagate.checkpoints import RunHistoryManager
+
+        self._seed(tmp_path, [
+            {
+                "schema_version": RunHistoryManager.CURRENT_ENTRY_SCHEMA_VERSION,
+                "run_id": "current-run",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": "2026-05-01T00:00:00+00:00",
+                "session_kind": "single",
+            }
+        ])
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            mgr = RunHistoryManager(str(tmp_path))
+            mgr.list_runs()
+
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "schema_version" in r.getMessage()
+        ]
+        assert not version_warns, (
+            "BACKEND-B-003 happy-path: an entry at the current "
+            f"schema_version='{RunHistoryManager.CURRENT_ENTRY_SCHEMA_VERSION}' "
+            f"must NOT emit a mismatch WARN. Got: "
+            f"{[r.getMessage() for r in version_warns]!r}. "
+            "Spurious WARNs on every load bury the real signal."
+        )

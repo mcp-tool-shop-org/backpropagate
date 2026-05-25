@@ -325,40 +325,51 @@ def _hub_group() -> rx.Component:
                 ),
                 rx.cond(
                     ExportState.hub_message != "",
-                    rx.flex(
-                        rx.text(
-                            ExportState.hub_message,
-                            size="1",
+                    # FRONTEND-B-014-EXTENDED (Stage C accessibility): wrap
+                    # the hub-status row in role=status / aria_live=polite so
+                    # screen readers announce push outcomes (pushing /
+                    # success / failure). aria_atomic ensures the entire
+                    # message is read as one unit, not just the changed run
+                    # of text.
+                    rx.box(
+                        rx.flex(
+                            rx.text(
+                                ExportState.hub_message,
+                                size="1",
+                                style={
+                                    "color": rx.cond(
+                                        ExportState.hub_status == "error",
+                                        "var(--bp-peach)",
+                                        "var(--bp-teal)",
+                                    ),
+                                    "font_family": "var(--bp-mono)",
+                                    "font_size": "11px",
+                                    "flex_grow": "1",
+                                },
+                            ),
+                            rx.button(
+                                "Dismiss",
+                                on_click=ExportState.clear_hub_status,
+                                variant="ghost",
+                                size="1",
+                            ),
+                            direction="row",
+                            align="center",
+                            gap="2",
+                            padding="3",
                             style={
-                                "color": rx.cond(
+                                "background": "var(--bp-surface-2)",
+                                "border": rx.cond(
                                     ExportState.hub_status == "error",
-                                    "var(--bp-peach)",
-                                    "var(--bp-teal)",
+                                    "1px solid var(--bp-peach)",
+                                    "1px solid var(--bp-teal)",
                                 ),
-                                "font_family": "var(--bp-mono)",
-                                "font_size": "11px",
-                                "flex_grow": "1",
+                                "border_radius": "var(--bp-r-2)",
                             },
                         ),
-                        rx.button(
-                            "Dismiss",
-                            on_click=ExportState.clear_hub_status,
-                            variant="ghost",
-                            size="1",
-                        ),
-                        direction="row",
-                        align="center",
-                        gap="2",
-                        padding="3",
-                        style={
-                            "background": "var(--bp-surface-2)",
-                            "border": rx.cond(
-                                ExportState.hub_status == "error",
-                                "1px solid var(--bp-peach)",
-                                "1px solid var(--bp-teal)",
-                            ),
-                            "border_radius": "var(--bp-r-2)",
-                        },
+                        role="status",
+                        aria_live="polite",
+                        aria_atomic="true",
                     ),
                     rx.fragment(),
                 ),

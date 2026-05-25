@@ -113,6 +113,14 @@ class MergeResult:
     b_norm_before: float | None = None
     b_norm_after: float | None = None
 
+    # Stage C BACKEND-B-007: count of LoRA keys that appeared in this run's
+    # new_lora_state but were NOT in the running accumulator. On run 1 the
+    # accumulator is empty so every key is "new" — uninformative — and we
+    # leave it at 0 (only counted on run >= 2 where drift is meaningful).
+    # A non-zero value on run >= 2 is operator-actionable: inspect the
+    # upstream run's target_modules + peft version for drift.
+    new_keys_added: int = 0
+
 
 # =============================================================================
 # CORE SLAO FUNCTIONS
@@ -724,13 +732,48 @@ class SLAOMerger:
         first_bad_key: str | None = None
         first_bad_kind: str | None = None  # "lora_A" / "lora_B" / "other"
 
+        # Stage C BACKEND-B-007: track new-key drift across runs. The
+        # expectation is that lora_A / lora_B parameter shapes are stable
+        # across runs of the same multi-run session — target_modules is
+        # fixed at trainer construction, and the PEFT adapter shape doesn't
+        # legitimately grow mid-session. A new key appearing on run >= 2 is
+        # almost always config drift (target_modules changed between runs)
+        # or a PEFT-version skew that renamed a tensor. Pre-fix, these new
+        # keys were silently cloned into the accumulator with no breadcrumb
+        # — operators triaging "why did my accumulator have 200 params at
+        # run end but only 196 at run 1" had nothing to grep. We emit a
+        # WARN per new key (run >= 2 only; first-run is the natural seed
+        # phase) and surface the running total on MergeResult so the post-
+        # mortem signal lives next to the merge counters.
+        new_keys_added = 0
+
         # Merge each parameter
         for key, new_value in new_lora_state.items():
             if not isinstance(new_value, torch.Tensor):
                 continue
 
             if key not in self._merged_state:
-                # New parameter - just copy
+                # New parameter — clone into the accumulator. On run >= 2
+                # this is unexpected (see BACKEND-B-007 comment above); we
+                # log so the drift is visible without raising, because
+                # operators legitimately experimenting with target_modules
+                # may have a reason. The threshold is left to the operator;
+                # >5 new keys on run >= 2 is a strong "almost certainly a
+                # config drift bug" signal worth a louder line.
+                if self._run_index >= 2:
+                    new_keys_added += 1
+                    logger.warning(
+                        "SLAO merge: new LoRA key appeared at run=%d "
+                        "(key=%r, shape=%s). This is usually a config-"
+                        "drift symptom — target_modules changed between "
+                        "runs, or peft was upgraded mid-session and "
+                        "renamed a tensor. Cloning the new key in without "
+                        "merging; inspect the LoRA config of the upstream "
+                        "run if you didn't expect this.",
+                        self._run_index,
+                        key,
+                        tuple(new_value.shape),
+                    )
                 self._merged_state[key] = new_value.clone()
                 continue
 
@@ -866,14 +909,22 @@ class SLAOMerger:
             a_norm_after=a_norm_after,
             b_norm_before=b_norm_before,
             b_norm_after=b_norm_after,
+            # Stage C BACKEND-B-007: surface the new-key drift count so
+            # post-mortem analysis of merge_history.json can spot the
+            # signal next to the per-run merge counters.
+            new_keys_added=new_keys_added,
         )
 
         if self.config.save_merge_history:
             self._merge_history.append(result)
 
+        # Stage C BACKEND-B-007: include new_keys_added in the summary
+        # line so the post-mortem signal is visible in tail-the-log
+        # workflows without parsing merge_history.json.
         logger.info(
             f"SLAO merge complete: run={self._run_index}, scale={scale:.4f}, "
             f"A={a_count}, B={b_count}, time={merge_time:.3f}s"
+            + (f", new_keys={new_keys_added}" if new_keys_added > 0 else "")
         )
 
         return result
@@ -1153,9 +1204,30 @@ class SLAOMerger:
                     "layer_scale_late", self.config.layer_scale_late
                 )
             except json.JSONDecodeError as e:
-                logger.warning(f"Corrupted merge history file, using defaults: {e}")
+                # Stage C humanization: name what's intact (LoRA weights)
+                # and what isn't (the merge-history metadata). The merger
+                # is still usable; it just lost the per-run breadcrumbs.
+                logger.warning(
+                    "merge_history.json is corrupted at %s: %s. "
+                    "Continuing with default SLAOConfig values; the "
+                    "underlying LoRA weights are unaffected. The "
+                    "per-run merge history (run_index, scale_factor, "
+                    "norms) is lost from the on-disk record but the "
+                    "in-memory merger continues from the last saved "
+                    "state. To recover the missing history, retain the "
+                    "prior checkpoint dir or re-run from an earlier "
+                    "boundary checkpoint.",
+                    load_dir / "merge_history.json",
+                    e,
+                )
             except Exception as e:
-                logger.warning(f"Failed to load merge history: {e}")
+                logger.warning(
+                    "Failed to load merge_history.json at %s: %s. "
+                    "Continuing with default SLAOConfig; LoRA weights "
+                    "are unaffected.",
+                    load_dir / "merge_history.json",
+                    e,
+                )
 
         logger.info(f"SLAO merger loaded from {load_dir}, run_index={self._run_index}")
 

@@ -5,6 +5,8 @@ sidebar:
   order: 3
 ---
 
+Once your training run finishes, the trained adapter sits on disk as a LoRA — small, fast to load, but useless without a runtime that knows how to apply it on top of the base model. This page covers the three things you can do next: keep the LoRA as a LoRA (smallest output, requires the base at inference), merge the LoRA back into the base model (standalone, larger), or convert to GGUF for Ollama / llama.cpp / LM Studio. The recommended path is GGUF + Ollama — one CLI invocation goes from "training done" to "I can chat with my finetune."
+
 ## Export to GGUF
 
 ```python

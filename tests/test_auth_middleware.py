@@ -273,7 +273,11 @@ async def test_default_mode_redirects_token_to_clean_url(default_mode_middleware
             params={"token": "test-token-32-hex-chars"},
             follow_redirects=False,
         )
-        assert response.status_code == 302
+        assert response.status_code == 302, (
+            f"Default-mode auth with correct token must redirect (302) "
+            f"to scrub the token from URL history; got "
+            f"{response.status_code}. Body: {response.text[:200]!r}"
+        )
         location = response.headers.get("location", "")
         assert "token=" not in location, (
             "Redirect Location must not echo the token (browser-history leak)"
@@ -287,7 +291,13 @@ async def test_wrong_token_returns_401(default_mode_middleware):
     """Brief #3 — GET /?token=<garbage> returns 401."""
     async with make_asgi_client(default_mode_middleware, base_url=_LOOPBACK_BASE_URL) as client:
         response = await client.get("/", params={"token": "wrong-token-value"})
-        assert response.status_code == 401
+        assert response.status_code == 401, (
+            f"Wrong token must yield 401 (auth required), not "
+            f"{response.status_code}. If you're seeing 200, the token "
+            f"comparison may be using == instead of hmac.compare_digest "
+            f"(timing-attack vector). If you're seeing 500, the rejection "
+            f"path is raising instead of returning a clean 401."
+        )
 
 
 # Brief test 4: basic auth accepts correct creds
@@ -299,7 +309,13 @@ async def test_basic_auth_accepts_correct_creds(basic_mode_middleware):
         response = await client.get(
             "/", headers=basic_auth_header("alice", "hunter2")
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, (
+            f"Basic auth with correct creds (alice/hunter2 per fixture) "
+            f"must accept the request and yield 200, got "
+            f"{response.status_code}. Body: {response.text[:200]!r}. "
+            f"If you're seeing 401, check the AUTH_KEYS env-var parsing "
+            f"or hmac.compare_digest path."
+        )
 
 
 # Brief test 5: basic auth rejects wrong password
@@ -311,9 +327,19 @@ async def test_basic_auth_rejects_wrong_password(basic_mode_middleware):
         response = await client.get(
             "/", headers=basic_auth_header("alice", "WRONG")
         )
-        assert response.status_code == 401
+        assert response.status_code == 401, (
+            f"Basic auth with wrong password must yield 401, got "
+            f"{response.status_code}. Body: {response.text[:200]!r}. "
+            f"A 200 here means the password comparison is broken — "
+            f"defense in depth depends on this gate."
+        )
         # WWW-Authenticate is RFC 7235 mandatory on 401
-        assert "www-authenticate" in {k.lower() for k in response.headers}
+        assert "www-authenticate" in {k.lower() for k in response.headers}, (
+            f"401 response missing WWW-Authenticate header (RFC 7235 "
+            f"mandatory). Browsers won't show the basic-auth prompt "
+            f"without it. Headers received: "
+            f"{list(response.headers.keys())!r}"
+        )
 
 
 # Brief test 6: WS upgrade requires cookie — measured pre-accept
@@ -683,12 +709,14 @@ async def test_ws_pre_accept_close_on_expired_cookie(basic_mode_middleware, monk
     """
     # Mint a structurally-valid cookie value, then poison the embedded
     # expiry by re-signing with an exp deep in the past.
-    from backpropagate.ui_app import auth as auth_module
-
-    secret = auth_module._derive_secret(dict(monkeypatch.delenv and {}))  # type: ignore[misc]
+    # Wave 3.5 TESTS-B-005: removed redundant pre-init that was overwritten
+    # immediately below (the dict(monkeypatch.delenv and {}) idiom evaluated to
+    # _derive_secret({}) and was masked by a `# type: ignore[misc]`).
     # Use the actual env-derivation path so the secret matches what the
     # middleware will compute under the fixture.
     import os as _os
+
+    from backpropagate.ui_app import auth as auth_module
     secret = auth_module._derive_secret({"BACKPROPAGATE_UI_AUTH": _os.environ.get("BACKPROPAGATE_UI_AUTH", "")})
 
     # The cookie format is <user>:<exp>:<sig>. Backdate exp by a year.
@@ -793,5 +821,13 @@ async def test_ws_tampered_cookie_signature_closes_pre_accept(basic_mode_middlew
         "Tampered-signature cookie reached websocket.accept() — the HMAC "
         "verify gate is broken."
     )
-    assert recorder.closed is True
-    assert recorder.close_code == 4401
+    assert recorder.closed is True, (
+        "Tampered-signature cookie did NOT trigger ws.close — middleware "
+        "auth gate may be permissive on HMAC mismatch."
+    )
+    assert recorder.close_code == 4401, (
+        f"Tampered-cookie close used the wrong WS close code: expected "
+        f"4401 (auth-required, per the documented WS_CLOSE_* contract in "
+        f"handbook/auth.md), got {recorder.close_code}. Operators rely on "
+        f"4401 to distinguish auth failures from network drops."
+    )

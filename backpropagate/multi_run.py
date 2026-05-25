@@ -1276,9 +1276,35 @@ class MultiRunTrainer:
         if run_idx > 1:
             self._prepare_for_next_run(run_idx)
 
-        # Pre-tokenize for Windows
+        # Pre-tokenize for Windows.
+        #
+        # Stage C BACKEND-B-009: log the OS-conditional decision once so a
+        # post-mortem comparing a Windows multi-run vs a Linux multi-run
+        # can confirm "both saw the same tokenization path" via one grep
+        # instead of an artifact-diff. The loss curve shape on the same
+        # dataset CAN differ between OSes here (pre-tokenized chunk vs
+        # tokenize-on-the-fly inside SFTTrainer), and operators reproducing
+        # a Windows-only loss anomaly need this breadcrumb to triage.
         if os.name == "nt" and settings.windows.pre_tokenize:
+            logger.info(
+                "Pre-tokenization: applied (os.name=nt, windows.pre_tokenize=True) "
+                "for chunk of %d samples (run_idx=%d, run_id=%s)",
+                len(chunk_dataset),
+                run_idx,
+                self._run_id,
+            )
             chunk_dataset = self._trainer._pre_tokenize(chunk_dataset)
+        else:
+            logger.info(
+                "Pre-tokenization: deferred to SFTTrainer "
+                "(os.name=%s, windows.pre_tokenize=%s) for chunk of %d samples "
+                "(run_idx=%d, run_id=%s)",
+                os.name,
+                settings.windows.pre_tokenize,
+                len(chunk_dataset),
+                run_idx,
+                self._run_id,
+            )
 
         # B-019: reset GPU tracking BEFORE the run so the snapshot at the end
         # reflects ONLY this run's window (eliminates the GPU-monitor-races-
@@ -1419,10 +1445,22 @@ class MultiRunTrainer:
                     current_batch = self._trainer.batch_size
                     current_accum = self._trainer.gradient_accumulation
                     effective = current_batch * current_accum
+                    # Stage C humanization: structured event fields so
+                    # operators can grep `event=oom_recovery_` across a
+                    # session to correlate the start / adjust / exhaust
+                    # phases. [[grep-all-instances]] — same shape as the
+                    # parallel trainer.py:1914 site.
                     logger.warning(
-                        f"OOM detected on run {run_idx} (run_id={self._run_id}) "
-                        f"batch={current_batch} grad_accum={current_accum} "
-                        f"effective_batch={effective}: {exc}"
+                        "event=oom_recovery_started run_id=%s run_index=%d "
+                        "attempt=%d batch_size=%d grad_accum=%d "
+                        "effective_batch=%d exc=%s",
+                        self._run_id,
+                        run_idx,
+                        oom_retries + 1,
+                        current_batch,
+                        current_accum,
+                        effective,
+                        exc,
                     )
 
                     # Free everything we can before retrying.
@@ -1483,10 +1521,21 @@ class MultiRunTrainer:
                                 cause=exc,
                             ) from exc
 
+                        # Stage C humanization: structured event with the
+                        # effective-batch invariant called out explicitly.
+                        # Parallel to trainer.py:1926. [[grep-all-instances]].
                         logger.warning(
-                            f"OOM recovery: halving batch_size {current_batch}->{new_batch}, "
-                            f"doubling gradient_accumulation {current_accum}->{new_accum} "
-                            f"(effective batch preserved at {new_batch * new_accum})"
+                            "event=oom_recovery_adjust run_id=%s run_index=%d "
+                            "attempt=%d batch_size=%d->%d grad_accum=%d->%d "
+                            "effective_batch=%d (preserved). "
+                            "Retrying with halved batch + doubled accumulation; "
+                            "no operator action required.",
+                            self._run_id,
+                            run_idx,
+                            oom_retries + 1,
+                            current_batch, new_batch,
+                            current_accum, new_accum,
+                            new_batch * new_accum,
                         )
                         self._trainer.batch_size = new_batch
                         self._trainer.gradient_accumulation = new_accum
@@ -1503,11 +1552,22 @@ class MultiRunTrainer:
                     # Stage C amend BACKEND-B-015: track session-wide
                     # OOM count even when the retry budget is exhausted.
                     self._session_oom_count += 1
+                    # Stage C humanization: keep the structured event
+                    # field shape consistent. [[grep-all-instances]].
                     logger.error(
-                        f"OOM at batch=1 (run_id={self._run_id}) "
-                        f"consecutive={self._oom_consecutive_at_min_batch}/"
-                        f"{self._OOM_MAX_RETRIES_AT_MIN_BATCH} "
-                        f"session_oom_count={self._session_oom_count}"
+                        "event=oom_recovery_at_floor run_id=%s run_index=%d "
+                        "attempt=%d consecutive_at_min_batch=%d/%d "
+                        "session_oom_count=%d. "
+                        "batch_size is already 1; we cannot halve further. "
+                        "If %d more consecutive OOMs hit, recovery aborts "
+                        "with RUNTIME_OOM_RECOVERY_EXHAUSTED.",
+                        self._run_id,
+                        run_idx,
+                        oom_retries,
+                        self._oom_consecutive_at_min_batch,
+                        self._OOM_MAX_RETRIES_AT_MIN_BATCH,
+                        self._session_oom_count,
+                        max(0, self._OOM_MAX_RETRIES_AT_MIN_BATCH - self._oom_consecutive_at_min_batch),
                     )
                     if self._oom_consecutive_at_min_batch >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
                         # Stage C BACKEND-B-003: use RUNTIME_OOM_RECOVERY_EXHAUSTED
@@ -1665,7 +1725,32 @@ class MultiRunTrainer:
                     )
                     # Note: auto_prune happens inside register() if enabled
             except Exception as save_err:
-                logger.error(f"Failed to save checkpoint for run {run_idx}: {save_err}")
+                # Stage C BACKEND-B-012 humanization: the prior log was a
+                # bare ERROR line. Operators watching `on_run_complete` saw
+                # a successful train+merge with checkpoint_path=None and
+                # had no way to distinguish "save was never attempted
+                # (save_every_run=False)" from "save attempted but failed."
+                # Surface run_id, the path we attempted, and the
+                # operator-actionable next step in a single structured
+                # line. We deliberately do NOT raise (save failures are
+                # observability concerns, not training-aborts — the run
+                # itself succeeded), but the line shape gives triage tools
+                # something to grep on.
+                logger.error(
+                    "Failed to save checkpoint for run %d (run_id=%s, "
+                    "attempted_path=%s): %s. The training run itself "
+                    "completed and the in-memory model is intact; only "
+                    "the on-disk checkpoint is missing. To recover the "
+                    "current weights, call trainer.save(<path>) on the "
+                    "MultiRunTrainer's underlying ._trainer once the "
+                    "session completes; to retry per-run saves, verify "
+                    "free disk space and write permission on "
+                    "checkpoint_dir, then re-run from this run_index.",
+                    run_idx,
+                    self._run_id,
+                    checkpoint_path,
+                    save_err,
+                )
                 checkpoint_path = None
 
         duration = time.time() - run_start

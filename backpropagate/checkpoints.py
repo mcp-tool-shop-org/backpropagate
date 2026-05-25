@@ -294,7 +294,21 @@ class CheckpointManager:
             logger.debug(f"Saved manifest with {len(self._checkpoints)} checkpoints")
             return True
         except Exception as e:
-            logger.error(f"Failed to save manifest: {e}")
+            # Stage C humanization: name what the failure does and does
+            # not affect. The manifest is best-effort metadata; the
+            # on-disk checkpoints themselves (PEFT directories) are
+            # unaffected. Operator next-step is to verify free disk
+            # space + write permission on checkpoint_dir.
+            logger.error(
+                "Failed to save checkpoint manifest at %s: %s. "
+                "On-disk checkpoint directories are unaffected; only the "
+                "resume-candidate index is missing. Verify free disk "
+                "space and write permission on %s, then run the next "
+                "save to re-populate the manifest.",
+                self._manifest_path,
+                e,
+                self._manifest_path.parent,
+            )
             # Best-effort cleanup of the temp file so the dir stays tidy.
             try:
                 if tmp_path.exists():
@@ -694,7 +708,29 @@ class CheckpointManager:
             # Get lowest scored non-protected checkpoint
             prunable = self._get_prunable_checkpoints()
             if not prunable:
-                logger.warning("Cannot prune further - all remaining checkpoints are protected")
+                # Stage C humanization: name what's blocking the prune so
+                # the operator can decide whether to relax the policy or
+                # raise the size cap. The protected set is the union of
+                # keep_final + keep_run_boundaries + keep_best_n +
+                # explicitly-protected entries; pre-fix the operator had
+                # to read the source to know what "protected" meant.
+                logger.warning(
+                    "Cannot prune further: all %d remaining checkpoints "
+                    "are protected by CheckpointPolicy (keep_final=%s, "
+                    "keep_run_boundaries=%s, keep_best_n=%d, plus any "
+                    "explicitly-protected entries). Total size %.1f GB "
+                    "exceeds max_size_gb=%.1f. Options: (1) raise "
+                    "max_size_gb, (2) lower keep_best_n / disable "
+                    "keep_run_boundaries in CheckpointPolicy, or (3) "
+                    "manually unprotect specific checkpoints via "
+                    "CheckpointManager.unprotect(<path>).",
+                    len(self._checkpoints),
+                    self.policy.keep_final,
+                    self.policy.keep_run_boundaries,
+                    self.policy.keep_best_n,
+                    sum(cp.size_bytes for cp in self._checkpoints) / (1024**3),
+                    max_size_gb,
+                )
                 break
 
             # Sort by score and prune lowest

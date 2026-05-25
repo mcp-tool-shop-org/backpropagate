@@ -1486,9 +1486,33 @@ class Trainer:
         # Load dataset
         train_dataset = self._load_dataset(dataset, samples)
 
-        # Pre-tokenize for Windows safety
+        # Pre-tokenize for Windows safety.
+        #
+        # Stage C BACKEND-B-009: log the OS-conditional decision once so a
+        # post-mortem comparing a Windows train() run vs a Linux train()
+        # run can confirm via one grep ("both took the pre_tokenize path"
+        # or "both deferred"). The loss curve shape can differ between
+        # paths because pre-tokenize chunks ahead of training while the
+        # SFTTrainer-deferred path tokenizes on the fly; reproducibility
+        # across OSes hinges on the operator knowing which one fired.
+        # (run_id is minted below; this log fires before that point so we
+        # don't thread it here — a follow-up log line at run_id mint time
+        # carries the correlation token.)
         if os.name == "nt" and settings.windows.pre_tokenize:
+            logger.info(
+                "Pre-tokenization: applied (os.name=nt, windows.pre_tokenize=True) "
+                "for dataset of %d samples",
+                len(train_dataset),
+            )
             train_dataset = self._pre_tokenize(train_dataset)
+        else:
+            logger.info(
+                "Pre-tokenization: deferred to SFTTrainer "
+                "(os.name=%s, windows.pre_tokenize=%s) for dataset of %d samples",
+                os.name,
+                settings.windows.pre_tokenize,
+                len(train_dataset),
+            )
 
         # F-005: resolve report_to once for this train() call. The auto-mode
         # picks up wandb / tensorboard / mlflow if their packages are installed
@@ -1887,9 +1911,24 @@ class Trainer:
                     current_batch = self.batch_size
                     current_accum = self.gradient_accumulation
                     effective = current_batch * current_accum
+                    # Stage C humanization: structured fields
+                    # (event=oom_recovery_started, attempt=N, batch_size,
+                    # grad_accum, effective_batch) so an operator grepping
+                    # `event=oom_recovery_` can correlate the start /
+                    # adjust / exhaust phases of one recovery episode.
+                    # Recovery is GOOD news (the system handled it) so we
+                    # name what's happening + what changes, not just that
+                    # something broke.
                     logger.warning(
-                        f"OOM detected (run_id={run_id}) batch={current_batch} "
-                        f"grad_accum={current_accum} effective={effective}: {exc}"
+                        "event=oom_recovery_started run_id=%s attempt=%d "
+                        "batch_size=%d grad_accum=%d effective_batch=%d "
+                        "exc=%s",
+                        run_id,
+                        oom_retries + 1,
+                        current_batch,
+                        current_accum,
+                        effective,
+                        exc,
                     )
 
                     gc.collect()
@@ -1902,9 +1941,25 @@ class Trainer:
                     if current_batch > 1:
                         new_batch = max(1, current_batch // 2)
                         new_accum = max(1, current_accum * 2)
+                        # Stage C humanization: name the recovery delta in
+                        # operator-readable terms — the effective batch is
+                        # PRESERVED, so the LR schedule and gradient
+                        # statistics stay equivalent; only peak VRAM
+                        # changes. Operators tuning batch_size deserve to
+                        # see this invariant called out so they don't
+                        # think the recovery secretly changed their
+                        # effective hyperparameters.
                         logger.warning(
-                            f"OOM recovery: halving batch {current_batch}->{new_batch}, "
-                            f"doubling grad_accum {current_accum}->{new_accum}"
+                            "event=oom_recovery_adjust run_id=%s attempt=%d "
+                            "batch_size=%d->%d grad_accum=%d->%d "
+                            "effective_batch=%d (preserved). "
+                            "Retrying with halved batch + doubled accumulation; "
+                            "no operator action required.",
+                            run_id,
+                            oom_retries + 1,
+                            current_batch, new_batch,
+                            current_accum, new_accum,
+                            new_batch * new_accum,
                         )
                         self.batch_size = new_batch
                         self.gradient_accumulation = new_accum
@@ -1915,9 +1970,21 @@ class Trainer:
                     # Already at floor.
                     oom_consecutive_at_min += 1
                     oom_retries += 1
+                    # Stage C humanization: keep the structured-event
+                    # field shape consistent across the recovery family
+                    # (started / adjust / floor / exhausted) so post-
+                    # mortem grep correlates one episode end-to-end.
                     logger.error(
-                        f"OOM at batch=1 consecutive="
-                        f"{oom_consecutive_at_min}/{self._OOM_MAX_RETRIES_AT_MIN_BATCH}"
+                        "event=oom_recovery_at_floor run_id=%s attempt=%d "
+                        "consecutive_at_min_batch=%d/%d. "
+                        "batch_size is already 1; we cannot halve further. "
+                        "If %d more consecutive OOMs hit, recovery aborts "
+                        "with RUNTIME_OOM_RECOVERY_EXHAUSTED.",
+                        run_id,
+                        oom_retries,
+                        oom_consecutive_at_min,
+                        self._OOM_MAX_RETRIES_AT_MIN_BATCH,
+                        max(0, self._OOM_MAX_RETRIES_AT_MIN_BATCH - oom_consecutive_at_min),
                     )
                     if oom_consecutive_at_min >= self._OOM_MAX_RETRIES_AT_MIN_BATCH:
                         # Stage C BACKEND-B-005: pass code/details/cause via
@@ -2069,15 +2136,42 @@ class Trainer:
                 )
             error_msg = str(e).lower()
             if "out of memory" in error_msg or "cuda" in error_msg:
+                # Stage C humanization: name the recovery levers in
+                # priority order. Most operators hit this from "model
+                # too big for VRAM" which is fixed by batch + gradient
+                # checkpointing; mention quantization for the case where
+                # those don't suffice.
                 raise TrainingError(
                     f"GPU error during training: {e}",
-                    suggestion="Try reducing batch_size or using gradient_checkpointing"
+                    suggestion=(
+                        "Recovery options, cheapest first: "
+                        "(1) reduce --batch-size (halve and re-run); "
+                        "(2) enable gradient_checkpointing (saves "
+                        "~30%% VRAM at ~20%% speed cost); "
+                        "(3) lower max_seq_length if your dataset has "
+                        "outlier-long samples; "
+                        "(4) use a smaller model (7B -> 3B) or 4-bit "
+                        "quantization. Set Trainer(oom_recovery=True, "
+                        "default) to enable automatic batch-halving."
+                    ),
                 ) from e
             if callback and callback.on_error:
                 callback.on_error(e)
             raise TrainingError(
                 f"Training failed: {e}",
-                suggestion="Check model/dataset compatibility and package versions (trl, transformers, peft). Run with --verbose for full traceback.",
+                suggestion=(
+                    "Recovery checklist: "
+                    "(1) run with --verbose for the full traceback so "
+                    "you can see the exception below the wrapper; "
+                    "(2) check package versions match the supported "
+                    "matrix — `pip show trl transformers peft accelerate`; "
+                    "(3) for tokenization errors, inspect the first 5 "
+                    "rows of your dataset for malformed JSON / missing "
+                    "fields; "
+                    "(4) for OOM / CUDA errors, see the dedicated "
+                    "RUNTIME_GPU_* codes via "
+                    "`backprop info --error-codes`."
+                ),
             ) from e
         except Exception as e:
             duration = time.time() - start_time
@@ -2094,7 +2188,23 @@ class Trainer:
                 )
             if callback and callback.on_error:
                 callback.on_error(e)
-            raise TrainingError(f"Training failed: {e}") from e
+            # Stage C humanization: never raise a bare TrainingError
+            # without a suggestion — at the outer-except catch-all an
+            # operator hits the WORST error message in the codebase (no
+            # context, no remediation). Even a generic "run with
+            # --verbose" is better than nothing.
+            raise TrainingError(
+                f"Training failed: {e}",
+                suggestion=(
+                    "An unexpected exception escaped the training loop. "
+                    "Run with --verbose to see the full traceback "
+                    "(the wrapped exception is the one with the real "
+                    "diagnostic). If the failure is reproducible, file "
+                    "a bug at "
+                    "https://github.com/mcp-tool-shop-org/backpropagate/issues "
+                    "with the traceback + your training command."
+                ),
+            ) from e
         finally:
             # B-001: emit run_ended with status and release the context-var
             # binding so the thread doesn't carry our run_id into the next
@@ -2324,7 +2434,19 @@ class Trainer:
         from .exceptions import CheckpointError
 
         if not self._is_loaded:
-            raise TrainingError("No model loaded. Call load_model() or train() first.")
+            # Stage C humanization: name the typical operator workflow
+            # that recovers from this state. Pre-fix the message was
+            # correct but terse; an operator looking at the traceback for
+            # the first time may not know which method to call when.
+            raise TrainingError(
+                "Cannot save: no model is loaded in this Trainer instance. "
+                "Call trainer.load_model() to load the configured base model, "
+                "OR call trainer.train(dataset=...) which loads-then-trains "
+                "in one step. If you intended to save the merged weights of "
+                "a previously-trained adapter, instantiate a fresh Trainer "
+                "with the same model name and call load_model() before save().",
+                code="RUNTIME_TRAINING_FAILED",
+            )
 
         # Wave 3.5 BACKEND-B-004: tripwire warning for the load-then-save-
         # without-train workflow. Pre-fix, an operator who did
@@ -2376,6 +2498,28 @@ class Trainer:
                 "save", str(partial_path),
                 f"Failed to create partial directory: {e}"
             ) from e
+
+        # Stage C BACKEND-B-001: humanize the silent merged→LoRA-only
+        # downgrade. Pre-fix, an operator who explicitly asked for merged
+        # weights (`save_merged=True`) while training without Unsloth got a
+        # LoRA adapter on disk with no diagnosis — they'd discover the
+        # mismatch at inference / deployment time. We log a structured
+        # warning that names the WHY (transformers Trainer can't do an
+        # in-place merge) and points at TWO concrete migration paths:
+        # re-train with Unsloth (the default), or call `backprop export`
+        # with `--format merged` after this save. Tone per the same shape
+        # as the Wave 3.5 BACKEND-B-004 untrained-save warning:
+        # actionable + terse + names the next step.
+        if save_merged and not self.use_unsloth:
+            logger.warning(
+                "save_merged=True was requested but use_unsloth=False — "
+                "the underlying transformers Trainer does not support an "
+                "in-place merge. Saving the LoRA adapter instead. To get "
+                "merged weights, either re-train with use_unsloth=True "
+                "(the default), or run `backprop export %s --format merged` "
+                "after this save.",
+                output_path,
+            )
 
         try:
             if save_merged and self.use_unsloth:
@@ -2510,7 +2654,19 @@ class Trainer:
         )
 
         if not self._is_loaded:
-            raise TrainingError("No model loaded. Call load_model() or train() first.")
+            # Stage C humanization: same pattern as save() — name the
+            # recovery workflow. [[grep-all-instances]] applied across
+            # the 3 sites in trainer.py that share this guard.
+            raise TrainingError(
+                "Cannot export: no model is loaded in this Trainer instance. "
+                "Call trainer.load_model() first to load the configured base "
+                "model + any saved adapter; then trainer.export(format=...) "
+                "writes the on-disk artifact. To export from an existing "
+                "checkpoint without re-training, instantiate Trainer with "
+                "the same model name + load_model() and the saved adapter "
+                "is picked up automatically.",
+                code="RUNTIME_EXPORT_FAILED",
+            )
 
         output_path = Path(output_dir or self.output_dir / format)
 
@@ -2553,7 +2709,20 @@ class Trainer:
     def push_to_hub(self, repo_id: str, private: bool = True) -> None:
         """Push model to HuggingFace Hub."""
         if not self._is_loaded:
-            raise TrainingError("No model loaded. Call load_model() or train() first.")
+            # Stage C humanization: same pattern as save() / export() —
+            # name the recovery workflow. [[grep-all-instances]] —
+            # all 3 in-trainer.py "No model loaded" sites updated
+            # together.
+            raise TrainingError(
+                "Cannot push to Hub: no model is loaded in this Trainer "
+                "instance. Call trainer.load_model() to load the base "
+                "model + any saved adapter, OR run trainer.train() to "
+                "produce the in-memory adapter, before push_to_hub(). "
+                "For a Hub-only push without re-training, use "
+                f"`backprop export <adapter-dir> --format merged "
+                f"--push-to-hub --repo-id {repo_id}` from the CLI.",
+                code="RUNTIME_TRAINING_FAILED",
+            )
 
         self._model.push_to_hub(repo_id, private=private)
         self._tokenizer.push_to_hub(repo_id, private=private)

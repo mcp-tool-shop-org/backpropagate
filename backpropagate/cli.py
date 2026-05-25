@@ -922,10 +922,23 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
 
         # Some MultiRunResult shapes carry a ``failed_runs`` counter — if any
         # runs failed but a final checkpoint exists, surface as partial success.
+        #
+        # NEW-STAGE-C-3 (humanization): the partial-success warning previously
+        # only named the count. An operator running `backprop multi-run`
+        # overnight returns to "3/5 runs failed (partial success)" and has
+        # no breadcrumb to which runs failed or why. The follow-up hint
+        # points at `backprop runs --status failed` so the operator can
+        # locate the failed run_ids without grepping logs from memory.
         failed_runs = getattr(result, "failed_runs", 0) or 0
         if failed_runs > 0:
             _print_warning(
-                f"{failed_runs}/{result.total_runs} runs failed (partial success)"
+                f"{failed_runs}/{result.total_runs} runs failed (partial success). "
+                "The merged checkpoint still uses the successful runs."
+            )
+            _print_info(
+                "Next step: `backprop runs --status failed --output "
+                f"{args.output}` to see which run_ids failed; "
+                "`backprop show-run <run_id>` for per-run failure_reason."
             )
             return EXIT_PARTIAL_SUCCESS
 
@@ -1053,11 +1066,68 @@ def _warn_token_on_argv(flag_name: str) -> None:
     Mirrors the v1.3 cmd_ui ``--auth`` warning at cli.py ~2129. Centralised
     so cmd_push and cmd_export emit byte-identical copy and a future
     operator-facing tweak lands in one spot.
+
+    BRIDGE-B-008 (Stage C humanization — calibration fix): the env-var path
+    used to be sold as flat-out "safer than argv" but it is only safer along
+    ONE axis (it doesn't show in `ps aux`). HF_TOKEN exported in a shell
+    profile is still visible to every child process and to anyone who can
+    read the shell history file. ``--hub-token-file`` is the actually-safe
+    floor (file mode 0600 + not inherited by spawned children); the env var
+    is the convenience escape hatch with calibrated language so the operator
+    chooses based on real consequences. See ``_warn_env_token_calibration``
+    for the symmetric one-shot stderr note when the token is sourced from
+    HF_TOKEN / HUGGING_FACE_HUB_TOKEN itself.
     """
     _print_warning(
         f"{flag_name} was passed on the command line — shell history "
-        f"and `ps aux` will retain the credential. Prefer "
-        f"--hub-token-file <path> or the HF_TOKEN env var."
+        f"and `ps aux` will retain the credential. Safer: "
+        f"--hub-token-file <path> (mode 0600, not inherited by spawned "
+        f"processes). The HF_TOKEN env var avoids `ps aux` but is still "
+        f"visible to spawned children and persists in shell history if "
+        f"exported from a profile."
+    )
+
+
+# BRIDGE-B-008 (Stage C humanization): track whether we've already emitted
+# the env-var token calibration note this process so a single CLI invocation
+# (cmd_push + cmd_export in a chain, or multi-push CI loops) doesn't repeat
+# the same stderr line. Suppressible via BACKPROPAGATE_QUIET_TOKEN_HINT=1.
+_ENV_TOKEN_CALIBRATION_WARNED = False
+
+
+def _warn_env_token_calibration() -> None:
+    """One-shot calibration note when the HF token is sourced from the env.
+
+    Pre-Stage-C the CLI's framing was 'env vars are safer than argv', which is
+    only true on the ``ps aux`` axis. The full safety floor for an HF token
+    is ``--hub-token-file`` (mode 0600, dies with the parent shell, NOT
+    inherited by spawned children). This helper surfaces the calibrated
+    consequence so the operator chooses the right surface for their threat
+    model — Lee & See 2004 trust-calibration framing applied to credential
+    handling.
+
+    Suppress via ``BACKPROPAGATE_QUIET_TOKEN_HINT=1`` for CI / scripted
+    invocations that have already decided. The flag is module-state so a
+    long-running notebook only sees the note on the first push.
+    """
+    global _ENV_TOKEN_CALIBRATION_WARNED
+    if _ENV_TOKEN_CALIBRATION_WARNED:
+        return
+    if os.environ.get("BACKPROPAGATE_QUIET_TOKEN_HINT") == "1":
+        _ENV_TOKEN_CALIBRATION_WARNED = True
+        return
+    if not (
+        os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    ):
+        return
+    _ENV_TOKEN_CALIBRATION_WARNED = True
+    _print_info(
+        "Using HF_TOKEN from the environment. Safety floor: the env var is "
+        "visible to every process spawned by this shell and persists in "
+        "shell history if exported from a profile. For a tighter floor "
+        "use `--hub-token-file <path>` (mode 0600 on POSIX, not inherited "
+        "by spawned children). Suppress this note with "
+        "BACKPROPAGATE_QUIET_TOKEN_HINT=1."
     )
 
 
@@ -1105,7 +1175,17 @@ def cmd_export(args: argparse.Namespace) -> int:
     # Null-byte rejection up front — Path.resolve on some platforms will raise
     # a less-helpful OSError and obscure the real cause.
     if "\x00" in str(args.model_path):
-        _print_error("Model path contains null byte")
+        # NEW-STAGE-C-4 (humanization): name the next step. NUL in a path
+        # only happens via a misconfigured CI variable, a copy-paste from
+        # a binary blob, or shell-history corruption. The hint covers all
+        # three with one re-check.
+        _print_error("Model path contains an embedded NUL (U+0000) byte.")
+        _print_info(
+            "NUL in a filename usually means the value was sourced from a "
+            "misconfigured env var, a binary paste, or shell-history "
+            "corruption. Re-type the path manually (do not paste) and try "
+            "again."
+        )
         return EXIT_USER_ERROR
 
     # BRIDGE-B-002: reuse main()'s cli_run_id so a single token correlates
@@ -1140,7 +1220,14 @@ def cmd_export(args: argparse.Namespace) -> int:
     try:
         model_path_raw = Path(args.model_path).expanduser()
     except (OSError, ValueError) as e:
+        # NEW-STAGE-C-4 (humanization): name the next step.
         _print_error(f"Invalid model path: {e}")
+        _print_info(
+            "Pass an existing directory like `./output/lora` (a trained "
+            "LoRA adapter dir from `backprop train --output ./output`). "
+            "Common causes: ~ left literal on Windows, glob unexpanded, "
+            "trailing whitespace from a paste."
+        )
         return EXIT_USER_ERROR
 
     try:
@@ -1159,14 +1246,36 @@ def cmd_export(args: argparse.Namespace) -> int:
                 allowed_base=cwd_resolved,
             )
     except PathTraversalError as e:
+        # NEW-STAGE-C-4: name the next step. The safe_path layer fires this
+        # when the path tries to escape the cwd sandbox via '..' segments.
         _print_error(f"Security error: {e}")
+        _print_info(
+            "Pass an absolute path if the model truly lives outside the "
+            "current working directory (the CLI will warn but accept it), "
+            "or cd into the directory containing the model first."
+        )
         return EXIT_USER_ERROR
     except FileNotFoundError:
+        # NEW-STAGE-C-4: name the next step. Most common cause is wrong cwd
+        # for a relative path or a typo in the model dir name.
         _print_error(f"Model path not found: {args.model_path}")
+        _print_info(
+            "Verify the path exists and the LoRA training has completed. "
+            "`ls ./output` lists training output directories produced by "
+            "`backprop train`. If the model is on Hugging Face Hub, the "
+            "export subcommand expects a LOCAL adapter dir; pull the "
+            "adapter with `huggingface-cli download <repo>` first."
+        )
         return EXIT_USER_ERROR
     except (OSError, ValueError) as e:
         # Malformed path (null byte, invalid drive letter, bad UNC, etc.)
+        # NEW-STAGE-C-4: name the next step.
         _print_error(f"Invalid model path: {e}")
+        _print_info(
+            "Common causes: invalid drive letter on Windows (e.g. 'M:'), "
+            "malformed UNC path (\\\\server\\share), trailing whitespace "
+            "from a paste, embedded NUL byte."
+        )
         return EXIT_USER_ERROR
 
     # Validate / resolve the output directory inside the current working
@@ -1200,10 +1309,26 @@ def cmd_export(args: argparse.Namespace) -> int:
                 allowed_base=cwd_resolved,
             )
     except PathTraversalError as e:
+        # NEW-STAGE-C-4 (humanization): name the next step. The --output
+        # value tried to escape the cwd sandbox via '..' segments. Operators
+        # who legitimately want to write outside cwd should pass an
+        # absolute path (the CLI warns but accepts it).
         _print_error(f"Security error: output path escapes its allowed base: {e}")
+        _print_info(
+            "Pass an absolute --output path if you intend to write outside "
+            "the current working directory (the CLI warns but accepts it), "
+            "or remove any '..' segments from the relative path."
+        )
         return EXIT_USER_ERROR
     except (OSError, ValueError) as e:
+        # NEW-STAGE-C-4: name the next step.
         _print_error(f"Invalid output path: {e}")
+        _print_info(
+            "Pass a directory path that the current user can create / "
+            "write into. The export creates the directory if it doesn't "
+            "exist; common causes are read-only filesystem mounts, "
+            "Windows drive letters with no medium, malformed UNC paths."
+        )
         return EXIT_USER_ERROR
 
     _print_info(f"Model: {model_path}")
@@ -1260,7 +1385,16 @@ def cmd_export(args: argparse.Namespace) -> int:
                 output_root=output_dir.parent,
             )
         else:
-            _print_error(f"Unknown format: {args.format}")
+            # NEW-STAGE-C-4 (humanization): name the next step. argparse's
+            # choices= constraint catches the common case at parse time;
+            # this branch fires only if the dispatcher table is mutated
+            # post-parse (rare; defensive). Hint enumerates the supported
+            # formats so the operator can pick one immediately.
+            _print_error(f"Unknown format: {args.format!r}")
+            _print_info(
+                "Supported: --format lora (default) / merged / gguf. "
+                "See `backprop export --help` for the full flag list."
+            )
             return EXIT_USER_ERROR
 
         _print_success("Export complete!")
@@ -1272,7 +1406,17 @@ def cmd_export(args: argparse.Namespace) -> int:
         if args.ollama and args.format == "gguf":
             print()
             ollama_name = args.ollama_name or model_path.name
-            _print_info(f"Registering with Ollama as '{ollama_name}'...")
+            # NEW-STAGE-C-1 (humanization): name the time budget on the
+            # ``Registering with Ollama`` banner. Ollama copies + indexes the
+            # GGUF blob into its own model store (~15s for a quantized 3B,
+            # 30-120s for 7B q4_k_m on consumer NVMe; multiple minutes on
+            # spinning disks). Pre-fix the operator saw a single info line
+            # then 1-2 minutes of silence — same wedged-tool-vs-working-tool
+            # ambiguity that C-CLI-002 closed for the model-load phase.
+            _print_info(
+                f"==> Registering with Ollama as '{ollama_name}' "
+                "(blob copy + index; ~15s for 3B, 30s-2min for 7B)..."
+            )
 
             if register_with_ollama(result.path, ollama_name):
                 _print_success(f"Registered with Ollama: {ollama_name}")
@@ -1281,7 +1425,25 @@ def cmd_export(args: argparse.Namespace) -> int:
                 # Export succeeded; only the optional Ollama step failed.
                 # Treat as partial success so callers can distinguish from
                 # outright failure.
-                _print_error("Failed to register with Ollama")
+                #
+                # NEW-STAGE-C-1: name the most likely next step instead of
+                # the bare "Failed to register with Ollama" line. The
+                # register_with_ollama helper itself only returns False on
+                # the legacy `return True/False` path; structured failures
+                # raise OllamaRegistrationError and never reach here, but
+                # we still want operators to see an actionable hint when
+                # the legacy path fires.
+                _print_error(
+                    "Failed to register with Ollama "
+                    f"('{ollama_name}' was NOT created)."
+                )
+                _print_info(
+                    "Next step: verify the Ollama daemon is running "
+                    "(`ollama list` should not error). If it isn't, start "
+                    "it (`ollama serve`) and re-run with the same "
+                    "--ollama-name. Re-run with --verbose for the full "
+                    "ollama-CLI stderr if the daemon was already running."
+                )
                 return EXIT_PARTIAL_SUCCESS
 
         # F-001: one-shot export + Hub push.
@@ -1315,9 +1477,26 @@ def cmd_export(args: argparse.Namespace) -> int:
                 resolved_hub_token = _read_hub_token_file(
                     hub_token_file, flag_name="--hub-token-file"
                 )
+            # BRIDGE-B-008 (Stage C humanization): when neither --hub-token nor
+            # --hub-token-file was passed, the push falls back to the HF_TOKEN
+            # / HUGGING_FACE_HUB_TOKEN env var. Surface the calibrated safety
+            # consequence so the operator chooses based on real exposure, not
+            # on which surface the CLI happens to warn about.
+            if resolved_hub_token is None:
+                _warn_env_token_calibration()
 
             print()
-            _print_info(f"==> Pushing to Hugging Face Hub: {args.push_to_hub}")
+            # NEW-STAGE-C-2 (humanization): name the time budget on the Hub
+            # push banner. Adapter-only push of a LoRA r=256 export is
+            # ~10-30s; a merged 7B model is 8-25 GB and takes 2-8 minutes on
+            # a consumer uplink. Without the budget the operator can't tell
+            # if a 4-minute silence is normal or a network wedge. Same
+            # phase-banner shape as cmd_train / cmd_export's model-load
+            # banners so the cross-subcommand affordance stays uniform.
+            _print_info(
+                f"==> Pushing to Hugging Face Hub: {args.push_to_hub} "
+                "(adapter-only ~10-30s; merged 7B ~2-8min on a consumer uplink)..."
+            )
             # For directory exports the local upload root is output_dir; for
             # the single-file GGUF case it's the GGUF's parent.
             local_root = (
@@ -1523,6 +1702,28 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "int",
             "BRIDGE-F-CLOUDFLARED (v1.3 Wave 6a): seconds to wait for the cloudflared subprocess (spawned by `backprop ui --share`) to surface its trycloudflare.com tunnel URL on stderr before giving up. Default 30s; operators on slow uplinks may want 60-120s. Values <= 0 fall back to the default. Honored only when --share is passed and `cloudflared` is on PATH.",
         ),
+        # BRIDGE-B-008 (v1.4 Wave 4 Stage C humanization): suppress the
+        # one-shot HF-token calibration note when the token is sourced
+        # from HF_TOKEN / HUGGING_FACE_HUB_TOKEN. Set to '1' for CI /
+        # scripted invocations that have already decided on the env-var
+        # path. Anything other than '1' leaves the note enabled.
+        (
+            "BACKPROPAGATE_QUIET_TOKEN_HINT",
+            "",
+            "bool",
+            "v1.4 Wave 4 (Stage C): suppress the one-shot 'HF_TOKEN from environment' calibration note emitted by `backprop push` / `backprop export --push-to-hub` when neither --token nor --token-file is supplied. Default: the note fires once per process. Set to '1' in CI to silence after you've calibrated. Anything other than '1' leaves the note on.",
+        ),
+        # BRIDGE-B-014 (v1.4 Wave 4 Stage C humanization): suppress the
+        # one-shot WARN when BACKPROPAGATE_DEFER_FEATURE_DETECTION is set
+        # at module import. Useful for long-running notebooks that
+        # deliberately defer detection and don't want the WARN repeating
+        # on every refresh_features() call.
+        (
+            "BACKPROPAGATE_DEFER_FEATURE_QUIET",
+            "",
+            "bool",
+            "v1.4 Wave 4 (Stage C): suppress the one-shot WARN emitted when BACKPROPAGATE_DEFER_FEATURE_DETECTION is set at module import. Set to '1' after you've confirmed the deferred-detection behavior is intended. Anything other than '1' leaves the WARN on.",
+        ),
     ]
     seen = {row["env_var"] for row in rows}
     for env_name, default, type_name, description in logging_envs:
@@ -1615,7 +1816,16 @@ def cmd_info(args: argparse.Namespace) -> int:
         rows = _enumerate_env_vars()
         if getattr(args, "json", False):
             import json
-            print(json.dumps(rows, indent=2, default=str))
+            # BRIDGE-B-013 (Stage C): inject schema_version on each row so
+            # the --json envelope is uniformly versioned without changing
+            # the top-level list shape (consumers expecting a list keep
+            # working byte-identically). Per-row injection is the additive
+            # path for a JSON-array surface — wrapping in {schema_version,
+            # rows} would be a breaking change.
+            versioned_rows = [
+                {**row, "schema_version": CLI_JSON_SCHEMA_VERSION} for row in rows
+            ]
+            print(json.dumps(versioned_rows, indent=2, default=str))
             return EXIT_OK
 
         # Compute aligned column widths so the table stays scannable.
@@ -1655,7 +1865,13 @@ def cmd_info(args: argparse.Namespace) -> int:
 
         from . import __version__ as backprop_version
 
+        # BRIDGE-B-013 (Stage C): schema_version field for consistency with
+        # the rest of the --json surface. ``info --json`` is the canonical
+        # payload pasted into support tickets; downstream triage tooling
+        # can pin against the version field once a breaking shape change
+        # forces a bump.
         payload: dict[str, Any] = {
+            "schema_version": CLI_JSON_SCHEMA_VERSION,
             "backpropagate_version": backprop_version,
             "python_version": sys_info.get("python_version"),
             "platform": sys_info.get("platform"),
@@ -2056,12 +2272,36 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     URL line; once the URL is parsed we keep the pipes open and drain
     them in background threads so the tunnel doesn't deadlock on a full
     OS pipe buffer.
+
+    BRIDGE-B-002 + BRIDGE-B-010 (Stage C humanization): structured-log
+    events fire at each lifecycle phase so JSON-log consumers can
+    correlate a hung tunnel with the rest of the launch sequence —
+    matching the ``hub_push_started`` / ``hub_push_complete`` shape in
+    export.py. Each cloudflared output line is also routed to the
+    structured logger at DEBUG level so
+    ``BACKPROPAGATE_LOG_LEVEL=DEBUG backprop ui --share`` surfaces
+    cloudflared's own view (edge selection, retry attempts, packet-loss
+    warnings) without spamming normal INFO-level operation.
     """
     import shutil
     import threading
 
+    # BRIDGE-B-002: lazy import of the structured logger so the cold path
+    # for `backprop --help` doesn't pull structlog. Errors here are
+    # observability-only — they must NEVER abort the tunnel launch.
+    from .logging_config import get_logger as _cf_get_logger
+    _cf_logger = _cf_get_logger(__name__)
+
     cf_path = shutil.which("cloudflared")
     if not cf_path:
+        try:
+            _cf_logger.info(
+                "cloudflared_unavailable",
+                reason="not_on_path",
+                port=port,
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
+            pass
         _print_error(
             "--share requires `cloudflared` on PATH but it was not found."
         )
@@ -2092,8 +2332,36 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
             bufsize=1,  # line-buffered so we see lines as cloudflared emits them
         )
     except OSError as exc:
+        try:
+            _cf_logger.info(
+                "cloudflared_spawn_failed",
+                reason=str(exc),
+                port=port,
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
+        # NEW-STAGE-C-4 (humanization): name the next step. OSError on
+        # Popen is rare once shutil.which() found the binary — usually
+        # means a stale binary, missing shared libs, or fs ACL block.
         _print_error(f"Failed to spawn cloudflared: {exc}")
+        _print_info(
+            "Verify the binary executes: `cloudflared --version`. If the "
+            "version probe fails too, reinstall cloudflared from "
+            "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ "
+            "or fall back to SSH port-forwarding: "
+            f"`ssh -L {port}:localhost:{port} <your-host>`."
+        )
         return None
+
+    try:
+        _cf_logger.info(
+            "cloudflared_spawn_started",
+            port=port,
+            cloudflared_path=cf_path,
+            pid=proc.pid,
+        )
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
 
     # Tail the merged output (stdout was redirected to stderr) until we
     # either parse the URL or hit the timeout. Honor an env override so
@@ -2124,6 +2392,15 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
                 tail = proc.stdout.read() or ""
             except Exception:  # noqa: BLE001 — best-effort drain
                 tail = ""
+            try:
+                _cf_logger.info(
+                    "cloudflared_exited_pre_url",
+                    returncode=proc.returncode,
+                    port=port,
+                    tail_chars=len(tail),
+                )
+            except Exception:  # noqa: BLE001  # nosec B110
+                pass
             if tail.strip():
                 # Truncate to a reasonable size so we don't pipe MB of log.
                 _print_info(f"cloudflared output (tail):\n{tail[-800:]}")
@@ -2137,12 +2414,30 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
         if not line:
             # EOF or transient empty read — re-check deadline + alive.
             continue
+        # BRIDGE-B-010 (Stage C): route every cloudflared output line to
+        # the structured logger at DEBUG. Operators triaging "my tunnel
+        # keeps dropping" see edge selection / packet-loss warnings under
+        # BACKPROPAGATE_LOG_LEVEL=DEBUG; default INFO operation is
+        # unaffected (DEBUG events are filtered out).
+        try:
+            _cf_logger.debug("cloudflared_event", line=line.rstrip())
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         match = _CLOUDFLARED_URL_RE.search(line)
         if match:
             tunnel_url = match.group(0)
             break
 
     if not tunnel_url:
+        try:
+            _cf_logger.info(
+                "cloudflared_timeout",
+                port=port,
+                timeout_seconds=timeout_seconds,
+                cloudflared_alive=(proc.poll() is None),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         _print_error(
             f"cloudflared did not surface a tunnel URL within {timeout_seconds}s."
         )
@@ -2157,14 +2452,30 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
             pass
         return None
 
+    try:
+        _cf_logger.info(
+            "cloudflared_url_parsed",
+            port=port,
+            tunnel_url=tunnel_url,
+        )
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
+
     # Drain remaining cloudflared output in a daemon thread so the
-    # subprocess doesn't deadlock on a full pipe buffer. We don't echo
-    # the lines (cloudflared's verbose telemetry would spam stderr); a
-    # future polish item could route them to the structured logger.
+    # subprocess doesn't deadlock on a full pipe buffer.
+    #
+    # BRIDGE-B-010 (Stage C): the post-URL drain now also routes each line
+    # to the structured logger at DEBUG so `BACKPROPAGATE_LOG_LEVEL=DEBUG`
+    # surfaces cloudflared's full lifecycle (edge selection changes,
+    # reconnect attempts, packet-loss warnings). At INFO the events are
+    # filtered out so normal operation isn't spammed.
     def _drain_pipe(pipe: Any) -> None:
         try:
-            for _ in pipe:
-                pass
+            for line in pipe:
+                try:
+                    _cf_logger.debug("cloudflared_event", line=line.rstrip())
+                except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
+                    pass
         except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
             pass
 
@@ -2279,11 +2590,21 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     # Stage C humanization parity: if --auth was passed inline, warn that
     # shell history captured it (the env-var / --auth-file paths avoid this).
+    #
+    # BRIDGE-B-008 (Stage C calibration — [[grep-all-instances-when-fixing
+    # -pattern]]): same calibration fix as cmd_push / cmd_export's
+    # _warn_token_on_argv — the env-var path is safer along ONE axis (no
+    # `ps aux`) but is still visible to spawned children and persists in
+    # shell history if exported from a profile. --auth-file is the actual
+    # safety floor.
     if args.auth:
         _print_warning(
-            "--auth was passed inline — shell history will retain the "
-            "credential. For repeat invocations, prefer --auth-file <path> "
-            "or the BACKPROPAGATE_UI_AUTH env var."
+            "--auth was passed inline — shell history and `ps aux` will "
+            "retain the credential. Safer: --auth-file <path> (mode 0600, "
+            "not inherited by spawned processes). The BACKPROPAGATE_UI_AUTH "
+            "env var avoids `ps aux` but is still visible to spawned "
+            "children and persists in shell history if exported from a "
+            "profile."
         )
 
     if auth_file:
@@ -2630,6 +2951,28 @@ def cmd_ui(args: argparse.Namespace) -> int:
     try:
         print()
         _print_info("Launching Reflex interface...")
+        # BRIDGE-B-004 (Stage C humanization): Reflex compiles its JS frontend
+        # on first launch (~10-30s; cached on subsequent starts). Without a
+        # phase banner the operator sees 'open the URL to start' immediately
+        # but the browser tab gets connection-refused for the next half
+        # minute — the silence reads like the tool is wedged. Symmetric with
+        # cmd_train / cmd_export's '==> Loading model (this may take 30s-3min)'
+        # banners. The structured-log peer event 'ui_subprocess_phase_launching'
+        # fires alongside so JSON consumers see the same lifecycle marker.
+        _print_info(
+            "==> Reflex compiling frontend (first start may take 30-60s; "
+            "subsequent starts are cached). Open the URL after the "
+            "'App running at' line appears."
+        )
+        try:
+            _ui_logger.info(
+                "ui_subprocess_phase_launching",
+                host_bind=backend_host,
+                port=args.port,
+                first_start_hint_seconds=60,
+            )
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass
         result = subprocess.run(cmd, env=env, cwd=str(package_dir))  # nosec B603 — cmd is internally constructed
         _duration = _time.monotonic() - _ui_start_ts
         try:
@@ -2696,31 +3039,77 @@ def cmd_ui(args: argparse.Namespace) -> int:
         # leak a public tunnel after the UI exits. Use terminate() +
         # short wait + kill() — same pattern Reflex uses for its own
         # frontend / backend processes.
+        #
+        # BRIDGE-B-012 (Stage C humanization): emit a structured event at
+        # each termination phase so an operator triaging "did the tunnel
+        # actually stop?" can grep ``cloudflared_terminated`` in JSON logs
+        # alongside the spawn / url_parsed events. Stays DEBUG when the
+        # process was already dead (common; the SIGINT propagated cleanly)
+        # and INFO when we had to escalate to SIGKILL.
         if cloudflared_proc is not None:
             try:
                 cloudflared_proc.terminate()
                 try:
                     cloudflared_proc.wait(timeout=5)
+                    try:
+                        _ui_logger.debug(
+                            "cloudflared_terminated",
+                            method="SIGTERM",
+                            returncode=cloudflared_proc.returncode,
+                        )
+                    except Exception:  # noqa: BLE001  # nosec B110
+                        pass
                 except subprocess.TimeoutExpired:
                     cloudflared_proc.kill()
                     try:
                         cloudflared_proc.wait(timeout=2)
+                        try:
+                            _ui_logger.info(
+                                "cloudflared_terminated",
+                                method="SIGKILL_after_SIGTERM",
+                                returncode=cloudflared_proc.returncode,
+                            )
+                        except Exception:  # noqa: BLE001  # nosec B110
+                            pass
                     except subprocess.TimeoutExpired:
                         # SIGKILL also didn't bring it down within 2s —
                         # rare zombie state. We've sent SIGKILL, so the
                         # kernel will reap it eventually; do not propagate
                         # the timeout into the finally block (the user just
                         # Ctrl+C'd; they shouldn't see a confusing trace).
-                        pass
+                        try:
+                            _ui_logger.info(
+                                "cloudflared_terminated",
+                                method="SIGKILL_zombie",
+                                returncode=None,
+                            )
+                        except Exception:  # noqa: BLE001  # nosec B110
+                            pass
             except (OSError, ValueError):  # pragma: no cover — already dead
                 pass
         # BRIDGE-F-002 lock-file cleanup: remove the per-launch lock file
         # so a stale credential doesn't sit on disk after the UI exits.
         # Best-effort: don't fail the cleanup just because the file is gone.
+        #
+        # BRIDGE-B-012 (Stage C humanization): emit a structured cleanup
+        # event so the operator's JSON log shows the full lifecycle
+        # (ui_subprocess_starting → ui_subprocess_exit → ui_lock_file_cleanup).
+        # Pre-fix an operator suspecting "my M2M client still authenticates
+        # against a stale token" had no signal that the cleanup ran.
         if lock_file_path is not None:
+            _removed = False
             try:
                 lock_file_path.unlink()
+                _removed = True
             except OSError:  # pragma: no cover — already removed
+                pass
+            try:
+                _ui_logger.debug(
+                    "ui_lock_file_cleanup",
+                    path=str(lock_file_path),
+                    removed=_removed,
+                )
+            except Exception:  # noqa: BLE001  # nosec B110
                 pass
 
 
@@ -2861,7 +3250,17 @@ def cmd_resume(args: argparse.Namespace) -> int:
     manager = RunHistoryManager(str(history_dir))
     record = manager.get_run(args.run_id)
     if record is None:
+        # NEW-STAGE-C-4 (humanization): name the next step — same shape as
+        # the cmd_diff_runs / cmd_replay InvalidSettingError suggestion
+        # block. Operators commonly hit this with a typo'd run_id prefix
+        # or a run trained under a different --output dir.
         _print_error(f"No run matching '{args.run_id}' in {history_dir}")
+        _print_info(
+            "Next step: `backprop runs --output <dir>` to list available "
+            "run_ids; widen the prefix if your first 8 characters collide "
+            "with multiple runs; or re-run with `--output <other-dir>` "
+            "if the run was trained under a different output directory."
+        )
         return EXIT_USER_ERROR
 
     run_id = str(record.get("run_id"))
@@ -3005,6 +3404,24 @@ def cmd_push(args: argparse.Namespace) -> int:
             if e.suggestion:
                 _print_info(f"Suggestion: {e.suggestion}")
             return EXIT_USER_ERROR
+    # BRIDGE-B-008 (Stage C humanization): cmd_push symmetric calibration —
+    # when neither --token nor --token-file is supplied the push falls back
+    # to the HF_TOKEN env var. Same one-shot stderr note as the cmd_export
+    # --push-to-hub path so the framing stays uniform across subcommands.
+    if resolved_token is None:
+        _warn_env_token_calibration()
+
+    # NEW-STAGE-C-2 (humanization, cmd_push parity): same time-budget banner
+    # shape as the cmd_export --push-to-hub branch. cmd_push is the
+    # standalone surface (existing checkpoint → Hub); the cmd_export
+    # branch is the one-shot (export → push) — both run the same
+    # push_to_hub helper, so both should show the same operator-facing
+    # phase-banner.
+    print()
+    _print_info(
+        f"==> Pushing to Hugging Face Hub: {args.repo} "
+        "(adapter-only ~10-30s; merged 7B ~2-8min on a consumer uplink)..."
+    )
 
     try:
         url = push_to_hub(
@@ -3099,7 +3516,18 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
 
     if args.json:
         import json
-        print(json.dumps(runs, indent=2, default=str))
+        # BRIDGE-B-013 (Stage C): inject schema_version on each run so the
+        # ``list-runs --json`` array surface stays a list (additive) while
+        # carrying the version contract. ``runs --json`` (BRIDGE-F-001)
+        # is the canonical UI consumer's data-API and uses a top-level
+        # envelope; ``list-runs --json`` is the deprecated legacy form
+        # (SUBCOMMAND_TIERS["list-runs"] = "deprecated-prefer-runs") so
+        # the simpler per-row injection is the right shape — keeps the
+        # tail-end of the deprecation window stable.
+        versioned = [
+            {**r, "schema_version": CLI_JSON_SCHEMA_VERSION} for r in runs
+        ]
+        print(json.dumps(versioned, indent=2, default=str))
         return EXIT_OK
 
     if not runs:
@@ -3136,6 +3564,23 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
 # Schema version for ``backprop runs --json`` output. Bump on breaking
 # changes to the dict shape — additive field additions stay at "1".
 RUNS_JSON_SCHEMA_VERSION = "1"
+
+# BRIDGE-B-013 (Stage C humanization): centralised schema_version for every
+# ``--json``-emitting CLI subcommand so UI / CI consumers can detect a
+# breaking shape change across the full surface (diff-runs, show-run,
+# export-runs, info, info --env-vars, info --error-codes, estimate-vram,
+# runs). Pre-fix only ``runs`` carried a schema_version field — peers
+# emitted bare JSON dicts and the operator had no way to tell whether a
+# future shape change was additive or breaking. Each per-payload constant
+# wraps its emitter so a focused bump on one surface doesn't require
+# editing every other emitter; the central name is shared so the contract
+# stays uniform across subcommands.
+#
+# Bumping policy (matches RUNS_JSON_SCHEMA_VERSION):
+#   * Additive field additions  -> stay at "1"
+#   * Field removal / rename    -> bump to "2", document migration
+#   * Top-level shape change    -> bump to "2", document migration
+CLI_JSON_SCHEMA_VERSION = "1"
 
 
 def _build_runs_payload(
@@ -3303,12 +3748,30 @@ def cmd_show_run(args: argparse.Namespace) -> int:
     manager = RunHistoryManager(str(history_dir))
     run = manager.get_run(args.run_id)
     if run is None:
+        # NEW-STAGE-C-4 (humanization): match the cmd_resume / cmd_diff_runs
+        # / cmd_replay next-step shape so the run-history error surface is
+        # uniform across subcommands.
         _print_error(f"No run matching '{args.run_id}' in {history_dir}")
+        _print_info(
+            "Next step: `backprop runs --output <dir>` to list available "
+            "run_ids; widen the prefix if your first 8 characters collide "
+            "with multiple runs; or re-run with `--output <other-dir>` "
+            "if the run was trained under a different output directory."
+        )
         return EXIT_USER_ERROR
 
     if args.json:
         import json
-        print(json.dumps(run, indent=2, default=str))
+        # BRIDGE-B-013 (Stage C): inject schema_version as an ADDITIVE
+        # peer field on the run dict so UI / CI consumers can detect
+        # breaking shape changes uniformly across ``runs --json`` /
+        # ``diff-runs --format=json`` / ``show-run --json``. Additive-only
+        # to preserve byte-identical structure for the documented fields;
+        # consumers that don't read schema_version see the same dict
+        # shape they saw pre-fix.
+        payload = dict(run)
+        payload["schema_version"] = CLI_JSON_SCHEMA_VERSION
+        print(json.dumps(payload, indent=2, default=str))
         return EXIT_OK
 
     _print_header(f"Run {str(run.get('run_id') or '-')[:12]}")
@@ -3509,7 +3972,11 @@ def cmd_diff_runs(args: argparse.Namespace) -> int:
 
     if args.format == "json":
         import json
+        # BRIDGE-B-013 (Stage C): schema_version field so UI / CI consumers
+        # can detect breaking shape changes uniformly across the --json
+        # surface. See CLI_JSON_SCHEMA_VERSION docstring for the bump policy.
         payload = {
+            "schema_version": CLI_JSON_SCHEMA_VERSION,
             "run_a": {
                 "run_id": run_a.get("run_id"),
                 "started_at": run_a.get("started_at"),
@@ -4004,19 +4471,29 @@ def cmd_export_runs(args: argparse.Namespace) -> int:
     if getattr(args, "to", None):
         out_path = Path(args.to).expanduser()
 
+    # BRIDGE-B-013 (Stage C): emit schema_version on EACH JSONL record so
+    # downstream consumers can detect breaking shape changes uniformly with
+    # the rest of the --json surface. Additive: pre-fix consumers that
+    # ignore unknown keys keep working byte-identically on the
+    # post-fix payload; new consumers can branch on schema_version.
+    def _versioned(entry: dict[str, Any]) -> dict[str, Any]:
+        record = dict(entry)
+        record["schema_version"] = CLI_JSON_SCHEMA_VERSION
+        return record
+
     try:
         if out_path is not None:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 for entry in runs:
-                    fh.write(json.dumps(entry, default=str))
+                    fh.write(json.dumps(_versioned(entry), default=str))
                     fh.write("\n")
             _print_success(
                 f"Exported {len(runs)} run(s) to {out_path}"
             )
         else:
             for entry in runs:
-                print(json.dumps(entry, default=str))
+                print(json.dumps(_versioned(entry), default=str))
             # Banner goes to stderr so it doesn't pollute a piped jq
             # consumer reading stdout.
             print(
@@ -4229,7 +4706,11 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
             selected_tier = (threshold, bs, note)
             break
 
+    # BRIDGE-B-013 (Stage C): schema_version field for parity with the rest
+    # of the --json surface. Additive — pre-fix consumers that ignore
+    # unknown keys see the same payload shape they did before.
     payload: dict[str, Any] = {
+        "schema_version": CLI_JSON_SCHEMA_VERSION,
         "model": args.model,
         "vram_gb": round(vram_gb, 2),
         "detected_via": detected_via,
@@ -4320,10 +4801,48 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # train command
+    #
+    # NEW-STAGE-C-5 (humanization): epilog with the load-bearing flag
+    # combinations operators ask about most: smallest-footprint training,
+    # max-quality training, OOM recovery, resume after crash, monitoring.
+    # Each example answers a discrete operator question; the v1.3 --lora
+    # -preset / --use-dora knobs are documented inline so operators don't
+    # have to read the per-flag --help for the recommended starting point.
     train_parser = subparsers.add_parser(
         "train",
         help="Train a model",
         description="Fine-tune an LLM on your dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Smallest VRAM footprint (12-16 GB VRAM) — v1.2 default preset
+  backprop train --data my_data.jsonl --steps 100 --lora-preset fast
+
+  # Max quality (v1.3 default) — 16+ GB VRAM, rank 256 all-linear LoRA
+  backprop train --data my_data.jsonl --steps 100  # uses --lora-preset quality
+
+  # DoRA: rank 8 ~= rank 32 LoRA quality, zero inference overhead
+  backprop train --data my_data.jsonl --steps 100 --use-dora --lora-r 8
+
+  # PiSSA init: recovers some QLoRA quantization loss
+  backprop train --data my_data.jsonl --steps 100 --init-lora-weights pissa
+
+  # Resume a crashed run (preserves the original run_id in run_history.json)
+  backprop train --resume <run_id> --output ./output
+
+  # HuggingFace dataset (auto-detects ShareGPT / Alpaca / OpenAI / raw text)
+  backprop train --data HuggingFaceH4/ultrachat_200k --steps 100
+
+  # Custom model + LoRA rank
+  backprop train --model Qwen/Qwen2.5-7B-Instruct --data my_data.jsonl --lora-r 16
+
+Tips:
+  * The CLI prints a short cli_run_id on startup; grep it across logs +
+    run_history.json to correlate the whole session.
+  * `backprop estimate-vram` previews the auto-selected batch size for
+    your card before you kick off a multi-hour run.
+  * `backprop validate <file>` pre-flights a JSONL dataset before training.
+        """,
     )
     train_parser.add_argument(
         "--model", "-m",
@@ -4587,10 +5106,48 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     multi_parser.set_defaults(func=cmd_multi_run)
 
     # export command
+    #
+    # NEW-STAGE-C-5 (humanization): epilog with the load-bearing format
+    # combinations — LoRA adapter only, merged base+adapter, GGUF for
+    # Ollama, GGUF + Ollama registration, GGUF + push-to-Hub. Each combo
+    # answers a discrete operator question (deploy to llama.cpp, deploy
+    # to Ollama daemon, ship to HF) so naming them up front saves a trip
+    # through `--help` permutations.
     export_parser = subparsers.add_parser(
         "export",
         help="Export a trained model",
         description="Export model to LoRA, merged, or GGUF format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # LoRA adapter only (small, fast, requires base model at inference)
+  backprop export ./output/lora --format lora
+
+  # Merged base + adapter (full standalone model; ~8-15 GB for 7B)
+  backprop export ./output/lora --format merged
+
+  # GGUF q4_k_m for llama.cpp / LM Studio (~4-5 GB for 7B)
+  backprop export ./output/lora --format gguf --quantization q4_k_m
+
+  # GGUF + auto-register with the local Ollama daemon
+  backprop export ./output/lora --format gguf --ollama --ollama-name my-finetune
+  # then:  ollama run my-finetune
+
+  # One-shot export + push to Hugging Face Hub
+  backprop export ./output/lora --format gguf --push-to-hub alice/qwen-finetune
+
+  # Same, with the token from a file (mode 0600; not in shell history / `ps aux`)
+  backprop export ./output/lora --format gguf --push-to-hub alice/qwen-finetune \\
+      --hub-token-file ~/.hf-token
+
+Quantization tradeoffs (fastest -> smallest):
+  f16     full precision (largest, best quality)
+  q8_0    8-bit (best quality below f16)
+  q5_k_m  5-bit (~3.5 GB for 7B; high quality)
+  q4_k_m  4-bit (~4 GB for 7B; recommended balance)
+  q4_0    4-bit (fastest decode, slightly lower quality than q4_k_m)
+  q2_k    2-bit (smallest, noticeable quality loss)
+        """,
     )
     export_parser.add_argument(
         "model_path",
@@ -4660,8 +5217,10 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         help=(
             "HF token override for --push-to-hub (default: env / cached "
             "login). NOTE: passing the token on the command line leaks it "
-            "to `ps aux` and shell history — prefer --hub-token-file or "
-            "the HF_TOKEN env var for repeat invocations."
+            "to `ps aux` and shell history — safer: --hub-token-file (mode "
+            "0600, not inherited by spawned processes). The HF_TOKEN env "
+            "var avoids `ps aux` but is still visible to spawned children "
+            "and persists in shell history if exported from a profile."
         ),
     )
     # BRIDGE-A-004 (v1.4): file-based HF token resolution. Mirrors the v1.3
@@ -4811,8 +5370,10 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
             "HF token (defaults to $HF_TOKEN, $HUGGING_FACE_HUB_TOKEN, or "
             "~/.cache/huggingface/token from `huggingface-cli login`). "
             "NOTE: passing the token on the command line leaks it to "
-            "`ps aux` and shell history — prefer --token-file or the "
-            "HF_TOKEN env var for repeat invocations."
+            "`ps aux` and shell history — safer: --token-file (mode 0600, "
+            "not inherited by spawned processes). The HF_TOKEN env var "
+            "avoids `ps aux` but is still visible to spawned children and "
+            "persists in shell history if exported from a profile."
         ),
     )
     # BRIDGE-A-004 (v1.4): file-based HF token resolution. See the
@@ -5081,11 +5642,39 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     export_runs_parser.set_defaults(func=cmd_export_runs)
 
     # ui command
+    #
+    # NEW-STAGE-C-5 (humanization): epilog with the load-bearing flag
+    # combinations — local-only (default), LAN-reachable with auth, public
+    # cloudflared tunnel with auth, file-based auth. The combinations have
+    # been a frequent source of "I tried --share but it 'didn't work'"
+    # because operators expected --share alone to expose the UI, but the
+    # auth-required gate (which v1.2 introduced) refuses that.
     ui_parser = subparsers.add_parser(
         "ui",
         help="Launch the Reflex web interface",
         description="Launch the Reflex (Radix UI) web interface for training, "
                     "export, and monitoring. Requires `pip install backpropagate[ui]`.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Local-only (loopback bind; no auth needed)
+  backprop ui --port 7862
+
+  # LAN-reachable with HTTP basic auth (DNS-rebinding defense requires --auth)
+  backprop ui --host 0.0.0.0 --auth alice:s3cret
+
+  # Public cloudflared Quick Tunnel (auth REQUIRED — v1.2 closed the
+  # public-no-auth bug). Requires `cloudflared` on PATH.
+  backprop ui --share --auth alice:s3cret
+
+  # Credential from file (mode 0600 on POSIX; keeps the password out of
+  # shell history and `ps aux`). Mutually exclusive with --auth.
+  printf 'alice:s3cret' > /tmp/ui.auth && chmod 600 /tmp/ui.auth
+  backprop ui --auth-file /tmp/ui.auth
+
+Suppress the startup banner:  BACKPROPAGATE_UI_QUIET=1 backprop ui
+Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui --share --auth ...
+        """,
     )
     ui_parser.add_argument(
         "--port", "-p",
@@ -5121,9 +5710,12 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
             "or a non-loopback --host is passed. Credentials are forwarded "
             "to the subprocess via BACKPROPAGATE_UI_AUTH. "
             "Username must not contain whitespace, colon, or control chars; "
-            "password must not contain newlines or NUL. Use the "
-            "BACKPROPAGATE_UI_AUTH env var or --auth-file to keep "
-            "credentials out of shell history."
+            "password must not contain newlines or NUL. "
+            "Safer alternatives for repeat invocations: --auth-file (mode "
+            "0600, not inherited by spawned processes — strictest); the "
+            "BACKPROPAGATE_UI_AUTH env var (avoids `ps aux` but persists "
+            "in shell history if exported from a profile and is visible "
+            "to spawned children)."
         ),
     )
     # BRIDGE-F-002 auth-polish item 4 (v1.3 Wave 6a): file-based credential

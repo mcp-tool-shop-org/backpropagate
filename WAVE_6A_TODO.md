@@ -65,3 +65,13 @@
 
 ## From v1.4 Wave 2 tests (TESTS-A-008..023 — Wave 1 MEDIUM/LOW absorption)
 - The Wave 1 TESTS audit surfaced 16 MEDIUM/LOW findings (TESTS-A-008 through TESTS-A-023) covering: stale Gradio-era CSP tests (`test_security_advanced.py:765`), zero-assertion tests in `test_multi_run.py:752` + `test_main_entry.py:50` + `test_e2e_chain.py:286`, cold-start race in `test_callback_integration.py:312` (100ms ceiling), 12 sleep-based assertions in `test_callback_integration.py` that should use the deterministic-Event pattern from `test_gpu_monitor_to_multirun_integration`, paged-Adam optimizer end-to-end coverage gap, auth-badge state reactivity coverage gap, ERROR_CODES catalog content-completeness gap, and the doc-pointer skip tests in `test_auth_middleware.py:463/473/527`. Per the v1.4 advisor's MEDIUM/LOW absorption decision, these are not Wave 2 scope and are tracked here as the v1.5 (or later) test-quality sweep batch.
+
+## From v1.4 Wave 3 Stage B tests (TESTS-B-016 — TestConfigureLogging serial-marker)
+
+Stage C amend (Wave 3.5) declined to flip the `@pytest.mark.serial` flag on these classes mid-wave because (a) the change touches test execution semantics under xdist (additive defense, but still a behavior change), and (b) WAVE_6A_TODO TESTS-A-007 next batch already anchors this scope. Concrete targets (named here so Wave 6a doesn't re-audit):
+
+- `tests/test_logging_config.py::TestConfigureLogging` — 9 `configure_logging(force=True)` calls; conftest.py identifies `force=True` as a process-global mutation per the serial-marker contract.
+- `tests/test_logging_config.py::TestGetLogger` — `get_logger` auto-configures logging when `_configured=False`; ditto the process-global mutation.
+- `tests/test_logging_config.py::TestLogContext` and `tests/test_logging_config.py::TestStructlogAvailable` — same audit shape.
+
+Wave 6a action: add `@pytest.mark.serial` to all four classes (mirrors the Wave 2 pattern on `TestRunIdCorrelation` + `TestTrainingLoggerCaplog`), then flip the `BACKPROPAGATE_PYTEST_PARALLEL` env knob on in CI. Without the marker, parallel mode produces flaky 'level mismatch' failures the moment xdist schedules two of these classes on different workers.

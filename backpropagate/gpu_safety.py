@@ -442,6 +442,7 @@ def wait_for_safe_gpu(
     config: GPUSafetyConfig | None = None,
     max_wait_seconds: float = 300.0,
     check_interval: float = 10.0,
+    abort_event: threading.Event | None = None,
 ) -> bool:
     """
     Wait for GPU to reach safe conditions.
@@ -449,24 +450,54 @@ def wait_for_safe_gpu(
     Useful after a critical condition is detected to allow cooldown.
 
     .. warning::
-        This function blocks with ``time.sleep()``. Call it from a background
-        thread, never from a UI event handler or an async event loop directly.
+        This function blocks the calling thread for up to ``max_wait_seconds``.
+        Call it from a background thread, never from a UI event handler or an
+        async event loop directly. Pass ``abort_event`` to make the wait
+        interruptible (see below).
 
     Args:
         device_index: GPU device index
         config: Safety configuration
         max_wait_seconds: Maximum time to wait
         check_interval: Seconds between checks
+        abort_event: Stage C BACKEND-B-014 humanization — optional
+            ``threading.Event``. When set externally (e.g. from
+            ``MultiRunTrainer.abort()``), the wait returns ``False``
+            promptly without waiting out the remaining
+            ``check_interval``. Pre-fix the wait was uninterruptible:
+            an operator clicking "Abort" during a cooldown wait saw no
+            effect until the cooldown finished. When ``None`` (the
+            default), behavior is byte-identical to pre-fix
+            (``time.sleep`` poll).
 
     Returns:
-        True if GPU became safe, False if timeout
+        True if GPU became safe, False if timeout OR abort_event was set
     """
     config = config or GPUSafetyConfig()
     start_time = time.time()
 
-    logger.info("Waiting for GPU to reach safe temperature...")
+    logger.info(
+        "Waiting for GPU to reach safe temperature "
+        "(max_wait=%.0fs, check_interval=%.0fs, device=%d)...",
+        max_wait_seconds,
+        check_interval,
+        device_index,
+    )
 
     while (time.time() - start_time) < max_wait_seconds:
+        # Stage C BACKEND-B-014 humanization: honor the abort signal at
+        # the top of the loop so an operator-issued abort during a
+        # multi-minute cooldown returns promptly with a clear log line.
+        if abort_event is not None and abort_event.is_set():
+            elapsed = time.time() - start_time
+            logger.info(
+                "GPU cooldown wait aborted by external signal after "
+                "%.0fs (max_wait_seconds=%.0f).",
+                elapsed,
+                max_wait_seconds,
+            )
+            return False
+
         status = get_gpu_status(device_index, config)
 
         if status.condition in (GPUCondition.SAFE, GPUCondition.WARM):
@@ -484,12 +515,30 @@ def wait_for_safe_gpu(
         else:
             logger.info(f"Waiting for safe GPU ({remaining:.0f}s remaining)")
 
-        time.sleep(check_interval)
+        # Stage C BACKEND-B-014 humanization: when an abort_event is
+        # provided, use Event.wait(check_interval) so the abort cuts the
+        # current sleep short. The return value of Event.wait() is True
+        # iff the event was set during the wait; we re-check at the top
+        # of the loop for consistency with the no-abort_event branch.
+        if abort_event is not None:
+            if abort_event.wait(check_interval):
+                continue  # let the top-of-loop check handle the return
+        else:
+            time.sleep(check_interval)
 
+    # Stage C BACKEND-B-014 humanization: name the operator's options in
+    # priority order — disk-cheap fixes first (close apps, raise interval),
+    # then config knobs, then hardware.
     logger.error(
-        f"GPU did not reach safe temperature within {max_wait_seconds}s. "
-        "Try: reduce batch_size, check GPU cooling, close other GPU applications, "
-        "or increase cooldown timeout"
+        "GPU did not reach safe temperature within %.0fs. "
+        "Next steps (in order of cost): "
+        "(1) close other GPU applications and re-try; "
+        "(2) raise --cooldown-timeout or MultiRunConfig.max_pause_seconds "
+        "if the GPU is in fact cooling but slower than expected; "
+        "(3) reduce --batch-size to lower steady-state heat; "
+        "(4) verify case airflow / fan curves with `nvidia-smi -q -d "
+        "TEMPERATURE` over a stable workload.",
+        max_wait_seconds,
     )
     return False
 
@@ -648,12 +697,26 @@ class GPUMonitor:
 
         elif status.condition == GPUCondition.CRITICAL:
             self._critical_count += 1
-            logger.error(f"GPU CRITICAL: {status.condition_reason}")
+            # Stage C humanization: name what CRITICAL means in operator
+            # terms — temperature crossed the configured critical
+            # threshold, training auto-pauses if pause_on_overheat=True,
+            # the operator's next step is to verify cooling and
+            # potentially lower batch_size for next session.
+            logger.error(
+                "GPU CRITICAL: %s. Training will auto-pause if "
+                "MultiRunConfig.pause_on_overheat=True (default). To "
+                "recover: improve case airflow / fan curves, lower "
+                "--batch-size for next session, or raise GPUSafetyConfig "
+                "critical_temp_c if the threshold is overly conservative "
+                "for your card.",
+                status.condition_reason,
+            )
 
             if self.config.log_warnings:
                 logger.warning(
-                    f"Critical condition #{self._critical_count}: "
-                    f"Consider pausing training"
+                    "Critical GPU condition #%d this session: "
+                    "consider pausing training if not already auto-paused.",
+                    self._critical_count,
                 )
 
             if self.on_critical:

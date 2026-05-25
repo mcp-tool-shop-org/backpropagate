@@ -211,9 +211,23 @@ class TestLoRAConfig:
         from backpropagate.config import LoRAConfig
 
         config = LoRAConfig()
-        assert config.r == 256
-        assert config.lora_alpha == 512
-        assert config.lora_dropout == 0.05
+        assert config.r == 256, (
+            f"LoRAConfig.r default drifted from v1.3 BACKEND-1 contract: "
+            f"expected 256, got {config.r}. Quality preset = rank 256 "
+            f"+ all-linear; fast preset = rank 16 + q+v target. If you "
+            f"are reverting, update test_cli.py + test_trainer.py + "
+            f"test_wave6b_flags.py + handbook in the same PR."
+        )
+        assert config.lora_alpha == 512, (
+            f"LoRAConfig.lora_alpha default drifted: expected 512 "
+            f"(2x r=256 per v1.3 BACKEND-1), got {config.lora_alpha}. "
+            f"The 2:1 alpha:r ratio is the documented effective-LR "
+            f"coupling — breaking it changes convergence silently."
+        )
+        assert config.lora_dropout == 0.05, (
+            f"LoRAConfig.lora_dropout default drifted: expected 0.05, "
+            f"got {config.lora_dropout}."
+        )
         # target_modules accepts "all-linear" (str) OR a list of names;
         # the v1.3 default is the wildcard string.
         assert (

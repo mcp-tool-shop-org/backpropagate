@@ -1,13 +1,22 @@
 # Contributing to Backpropagate
 
-Thank you for your interest in contributing to Backpropagate! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Backpropagate. This document covers the local dev loop, what a "good first contribution" looks like, the swarm-and-amend cadence we use for larger work, and the issue / PR conventions.
+
+## What a good first contribution looks like
+
+- **Fix a Stage-A or Stage-B finding from a dogfood-swarm audit.** Each release has a `swarms/` JSON corpus under `dogfood-labs/swarms/`; pick a MEDIUM/LOW item nobody's claimed and submit a PR with the fix + a targeted regression test. Wave audit JSON is the canonical "good first issue" board for this repo.
+- **Add a recipe to the handbook.** If you used Backpropagate to do something the [Recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/) doesn't yet cover, write up the paste-and-run version. Even a 15-line recipe + 4 sentences of context is high-leverage.
+- **Add a test for a corner you noticed wasn't covered.** Coverage floor is 50%, but several files sit at 60–80% and there are real gaps. `pytest --cov=backpropagate --cov-report=html` then `open htmlcov/index.html` shows you which lines are uncovered.
+- **Triage a stale issue or open Discussion.** Repro the bug, attach a minimal example, and confirm the error code — that drops the maintainer's triage cost dramatically.
+
+If you're not sure what to pick up, start a thread in [Discussions → Ideas](https://github.com/mcp-tool-shop-org/backpropagate/discussions/categories/ideas) and the maintainer will point at something matched to your interests.
 
 ## Development Setup
 
 ### Prerequisites
 
-- Python 3.10+
-- CUDA-capable GPU (for full testing)
+- Python 3.10+ (3.11 is the most-tested floor; 3.10 reaches upstream EOL October 2026 and will be dropped in v1.4)
+- CUDA-capable GPU (for full testing — many tests are CPU-only and run fine on macOS / non-GPU Linux for triage)
 - Git
 
 ### Installation
@@ -28,6 +37,21 @@ pip install -e ".[dev,full]"
 # Install pre-commit hooks
 pre-commit install
 ```
+
+### The local dev loop
+
+The four commands the CI runs on every PR — run them locally before pushing and you'll catch ~95% of CI failures:
+
+```bash
+ruff check backpropagate/                                   # lint (~1s)
+mypy backpropagate/ --ignore-missing-imports                # type check (~10s)
+pytest tests/ -m "not gpu and not slow and not integration" # tests (~30s on a 16-core box)
+python scripts/check_doc_drift.py                           # doc-drift gate (~1s)
+```
+
+The full suite (`pytest tests/`) runs ~2000 tests in 30–60 seconds; the `not gpu and not slow and not integration` filter skips ~20 GPU-bound tests that need a CUDA card. For coverage: `pytest --cov=backpropagate --cov-report=term-missing tests/` (or `html` for the rendered surface). If you just touched one file, `pytest tests/test_<that_file>.py` runs in <5 seconds.
+
+The drift gate is load-bearing — it cross-checks env var names, CLI flag names, error codes, and a few specific value drifts across `backpropagate/**/*.py`, the handbook (`site/src/content/docs/handbook/*.md`), and `llms.txt`. If it fires, the message names which surface is out of sync. Per the v1.3 [[grep-all-instances-when-fixing-pattern]] doctrine, when you fix one drift instance, grep the rest of the repo for siblings — Wave 3.5 found 4 sibling drift sites across 5 handbook files via this approach.
 
 ## Code Style
 
@@ -196,6 +220,19 @@ To keep the path self-healing on a fresh repo, freshly-renamed label, or after a
 | `mutmut-baseline` | `mutmut.yml` baseline-refresh PRs | `#FBCA04` (yellow) |
 
 If you want to retire one of these, drop the matching `gh label create` line from the bootstrap step in the workflow rather than relying on the label not existing on the repo.
+
+## Dogfood-swarm rhythm
+
+Backpropagate's larger releases are built as multi-wave parallel audits rather than one big PR. Each wave produces a JSON audit corpus (under `swarms/<release>/wave-<N>/`); the corpus seeds the next wave's amend work. The release cycle typically runs:
+
+1. **Wave 1 — Stage A audit.** 5 parallel agents audit the codebase across backend / bridge / frontend / tests / ci-docs. Output: a JSON file per agent listing findings classified CRITICAL / HIGH / MEDIUM / LOW.
+2. **Wave 2 — Stage A amend.** 5 parallel agents fix the CRITICAL / HIGH findings from Wave 1. Output: a PR with the closures + targeted regression tests.
+3. **Wave 3 — Stage B audit.** Repeat audit against the Wave 2 amend to surface anything Wave 1 missed or that Wave 2 introduced. Wave 3.5 is a smaller follow-up amend when Stage B finds anything Stage-A-caliber.
+4. **Wave 4 — Stage C humanization.** Cross-cutting copy / UX / docs pass. The audit is "does this read for the first-time operator?" not "is this technically correct?"
+5. **Wave 5 — Feature audit.** Forward-looking — what new capabilities should land in this release.
+6. **Wave 6 — Foundation features.** The actual feature build, gated on the audit closures from earlier waves.
+
+If you're contributing during a wave, the coordinator will say so in the issue. Most contributions land outside the wave structure as one-off PRs — the swarm cadence is for the maintainer's coordination convenience, not a barrier to drive-by contributions.
 
 ## Questions?
 

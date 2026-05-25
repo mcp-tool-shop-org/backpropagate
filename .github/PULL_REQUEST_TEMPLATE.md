@@ -1,14 +1,21 @@
 <!--
-Thanks for contributing to backpropagate! Please fill in the sections
-below — the swarm PRs from v1.3 (#92 / #93 / #95 / #103 / #104) are
-good reference shape if you want an example.
+Thanks for contributing to backpropagate! Fill in the sections below.
+The reviewer is looking for: what changed (so they know what they're
+reviewing), why (so they can sanity-check the design), what you tested
+(so they know which regression class you de-risked), and whether
+anything is breaking (so it lands in CHANGELOG + migration page). The
+swarm PRs from v1.3 (#92 / #93 / #95 / #103 / #104) are good reference
+shape if you want a worked example.
 -->
 
 ## Summary
 
-<!-- One paragraph: what changed, and why. Lead with the user-facing
-intent (operator pain closed / feature added / regression fixed), not
-the file list. -->
+<!-- One paragraph. Lead with the OPERATOR-facing intent (what pain
+closed / what feature shipped / what regression fixed), not the file
+list. "Operators previously saw X; now see Y" beats "Refactored
+function Z". The diff already tells the reviewer which files changed —
+this section tells them why. -->
+
 
 ## Test plan
 
@@ -62,6 +69,14 @@ glance. -->
 - [ ] Changes coverage floor or test count
   - [ ] Updated `pyproject.toml` `[tool.coverage.report].fail_under`
         and / or ran `scripts/repin_test_count.sh`
+- [ ] **`[[grep-all-instances-when-fixing-pattern]]`** — if this PR fixes
+      a pattern on one site (e.g. value drift on one handbook page, a
+      silent-green `if`-guard on one test, a missing `try/finally` on one
+      function), confirm you've grepped the whole tree for siblings and
+      either fixed them in this PR or filed a follow-up. Wave 3.5 found 4
+      sibling handbook drift sites + 2 sibling bridge sites when applying
+      this doctrine — the cost of one extra grep is low; the cost of
+      missing a sibling is a Stage-B repeat audit.
 
 ## Notes for the reviewer
 

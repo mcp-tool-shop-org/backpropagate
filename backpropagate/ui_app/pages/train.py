@@ -284,31 +284,44 @@ def _recovery_banners() -> rx.Component:
 
     Per design digest §4e: recovery is good news, even if the original
     event wasn't — never render in red.
+
+    FRONTEND-B-008 (Stage C polish): the outer ``rx.flex`` only renders
+    when at least one banner has content. Pre-fix the column container
+    rendered on every Train page mount even when both messages were
+    empty (no DOM children, but a 100%-width styled flex with gap
+    still emitted) — a minor layout-cost noise the Stage B audit
+    surfaced. Now the entire outer flex collapses to a fragment when
+    both messages are empty.
     """
-    return rx.flex(
-        rx.cond(
-            TrainState.latest_recovery_ok_msg != "",
-            BpRecoveryBanner(
-                variant="ok",
-                lead="Recovered.",
-                # body is the message; the lead is the canonical "this is
-                # a recovery" tag so screen readers get the framing first.
-                body=TrainState.latest_recovery_ok_msg,
+    return rx.cond(
+        (TrainState.latest_recovery_ok_msg != "")
+        | (TrainState.latest_recovery_warn_msg != ""),
+        rx.flex(
+            rx.cond(
+                TrainState.latest_recovery_ok_msg != "",
+                BpRecoveryBanner(
+                    variant="ok",
+                    lead="Recovered.",
+                    # body is the message; the lead is the canonical "this is
+                    # a recovery" tag so screen readers get the framing first.
+                    body=TrainState.latest_recovery_ok_msg,
+                ),
+                rx.fragment(),
             ),
-            rx.fragment(),
-        ),
-        rx.cond(
-            TrainState.latest_recovery_warn_msg != "",
-            BpRecoveryBanner(
-                variant="warn",
-                lead="Heads-up.",
-                body=TrainState.latest_recovery_warn_msg,
+            rx.cond(
+                TrainState.latest_recovery_warn_msg != "",
+                BpRecoveryBanner(
+                    variant="warn",
+                    lead="Heads-up.",
+                    body=TrainState.latest_recovery_warn_msg,
+                ),
+                rx.fragment(),
             ),
-            rx.fragment(),
+            direction="column",
+            gap="2",
+            width="100%",
         ),
-        direction="column",
-        gap="2",
-        width="100%",
+        rx.fragment(),
     )
 
 
@@ -346,7 +359,7 @@ def _next_steps_panel() -> rx.Component:
                         variant="soft",
                         color_scheme="teal",
                         size="2",
-                        aria_label="Convert this adapter to GGUF for Ollama / llama.cpp",
+                        aria_label="Convert this adapter to GGUF for Ollama or llama.cpp",
                     ),
                     href="/export",
                 ),
@@ -400,6 +413,12 @@ def _next_steps_panel() -> rx.Component:
                 "border": "1px solid var(--bp-teal)",
                 "border_radius": "var(--bp-r-2)",
             },
+            # FRONTEND-B-014-EXTENDED (Stage C accessibility): tag the post-run
+            # affordances as a labeled region so screen readers announce the
+            # context when the operator tabs into the cluster after the run
+            # completes.
+            role="region",
+            aria_label="Run complete — next steps",
         ),
         rx.fragment(),
     )

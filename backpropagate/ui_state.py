@@ -1452,7 +1452,24 @@ class AuthBadgeState(rx.State):
         process restart. The cost is one ``os.environ`` snapshot per page
         load, which is dwarfed by every other request the Reflex backend
         handles.
+
+        FRONTEND-B-006 (v1.4 Wave 4 Stage C humanization): the footer renders
+        on EVERY route, so ``on_mount=AuthBadgeState.refresh`` previously
+        fired on every page navigation. The env vars are stable for the
+        process lifetime (the CLI exports them once at launch), so re-
+        snapshotting on every nav is wasted server work + a small WS round-
+        trip that flickers the chip on slow connections. We now early-exit
+        when ``mode_key`` is already populated, making the badge refresh
+        once-per-WS-session in steady state. The CLI is free to call
+        ``refresh()`` explicitly if it rotates env vars mid-process; the
+        early-exit only suppresses the per-nav repeat.
         """
+        if self.mode_key:
+            # Badge state was populated on the first footer mount of this
+            # WS session; the env-var surface is stable so the second mount
+            # would produce identical state. Skip the snapshot.
+            return
+
         from .ui_security import get_auth_badge_context
 
         ctx = get_auth_badge_context()
@@ -1548,6 +1565,16 @@ class RunDetailState(rx.State):
     # Action panel — last shell-out result (for the operator-facing toast).
     action_result: str = ""
     action_error: str = ""
+    # FRONTEND-B-014-EXTENDED (v1.4 Wave 4 Stage C humanization): action-in-
+    # flight state for the diff / replay / delete / export shell-outs. The
+    # handlers run synchronously and can block up to 30s (diff/replay/delete)
+    # or 60s (export). Pre-fix the operator clicked the button and saw NO
+    # feedback until the subprocess returned — a long, silent gap that read
+    # as a frozen UI. The action panel now branches on this Var to render an
+    # inline spinner + "Running …" copy so the operator knows the shell-out
+    # is in flight. Set to a short human label (e.g. ``"diff-runs"``) at the
+    # start of each handler and cleared at the end via try/finally.
+    action_in_flight: str = ""
 
     # FRONTEND-A-001 (v1.4 Wave 2): comparison run id for the Diff button.
     # Pre-fix ``diff_against`` was a fully-implemented handler with no UI
@@ -1574,13 +1601,20 @@ class RunDetailState(rx.State):
         Mirrors the input-state-then-handler pattern Train/Multi-Run use for
         every config field.
         """
+        # FRONTEND-B-002 (Stage C humanization): clear ``action_result`` on
+        # both validation-failure branches. Pre-fix, a previous Replay /
+        # Export success could sit next to a fresh Diff validation error,
+        # rendering two contradictory action-panel messages at once. Mirrors
+        # the OTHER-field-clear pattern already used in ``diff_against``.
         if not self.diff_other_run_id:
             self.action_error = "Enter a comparison run id."
+            self.action_result = ""
             return
         if self.diff_other_run_id == self.current_run_id:
             self.action_error = (
                 "Comparison run id must differ from the current run id."
             )
+            self.action_result = ""
             return
         self.diff_against(self.diff_other_run_id)
 
@@ -1763,6 +1797,11 @@ class RunDetailState(rx.State):
         if not cmd:
             self.action_error = "`backprop` CLI not found on PATH."
             return
+        # FRONTEND-B-014-EXTENDED (Stage C humanization): mark the shell-out
+        # as in flight so the action panel renders an inline spinner. Cleared
+        # in the finally so a thrown exception still leaves the UI in a
+        # consistent state.
+        self.action_in_flight = "diff-runs"
         try:
             result = subprocess.run(
                 [cmd, "diff-runs", self.current_run_id, other_run_id],
@@ -1779,6 +1818,8 @@ class RunDetailState(rx.State):
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
             self.action_error = f"diff-runs failed: {exc}"
+        finally:
+            self.action_in_flight = ""
 
     @rx.event
     def replay(self) -> None:
@@ -1797,6 +1838,8 @@ class RunDetailState(rx.State):
         if not cmd:
             self.action_error = "`backprop` CLI not found on PATH."
             return
+        # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
+        self.action_in_flight = "replay"
         try:
             result = subprocess.run(
                 [cmd, "replay", self.current_run_id, "--dry-run"],
@@ -1817,6 +1860,8 @@ class RunDetailState(rx.State):
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
             self.action_error = f"replay --dry-run failed: {exc}"
+        finally:
+            self.action_in_flight = ""
 
     @rx.event
     def delete_run(self) -> None:
@@ -1835,6 +1880,8 @@ class RunDetailState(rx.State):
         if not cmd:
             self.action_error = "`backprop` CLI not found on PATH."
             return
+        # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
+        self.action_in_flight = "delete-run"
         try:
             result = subprocess.run(
                 [cmd, "delete-run", self.current_run_id, "--yes"],
@@ -1860,6 +1907,8 @@ class RunDetailState(rx.State):
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
             self.action_error = f"delete-run failed: {exc}"
+        finally:
+            self.action_in_flight = ""
 
     @rx.event
     def export_run(self) -> None:
@@ -1874,6 +1923,8 @@ class RunDetailState(rx.State):
         if not cmd:
             self.action_error = "`backprop` CLI not found on PATH."
             return
+        # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
+        self.action_in_flight = "export-runs"
         try:
             result = subprocess.run(
                 [cmd, "export-runs", "--run-id", self.current_run_id, "--format", "jsonl"],
@@ -1890,6 +1941,8 @@ class RunDetailState(rx.State):
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
             self.action_error = f"export-runs failed: {exc}"
+        finally:
+            self.action_in_flight = ""
 
     @rx.event
     def clear_action_message(self) -> None:

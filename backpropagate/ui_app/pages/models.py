@@ -264,17 +264,25 @@ def models_page() -> rx.Component:
                     ),
                     rx.cond(
                         ModelsState.loading,
-                        rx.flex(
-                            rx.spinner(size="2"),
-                            rx.text(
-                                "Loading…",
-                                size="2",
-                                style={"color": "var(--bp-muted)"},
+                        # FRONTEND-B-014 (Stage C accessibility): wrap the
+                        # spinner in role=status / aria_live=polite so screen
+                        # readers announce the loading state. Mirrors the
+                        # runs.py and run_detail.py fixes.
+                        rx.box(
+                            rx.flex(
+                                rx.spinner(size="2"),
+                                rx.text(
+                                    "Loading model cache…",
+                                    size="2",
+                                    style={"color": "var(--bp-muted)"},
+                                ),
+                                direction="row",
+                                gap="2",
+                                align="center",
+                                padding="4",
                             ),
-                            direction="row",
-                            gap="2",
-                            align="center",
-                            padding="4",
+                            role="status",
+                            aria_live="polite",
                         ),
                         rx.fragment(),
                     ),

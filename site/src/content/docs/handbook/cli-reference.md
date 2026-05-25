@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-The `backprop` CLI exposes the subcommands below. Run `backprop <subcommand> --help` for the canonical flag list from argparse; this page mirrors that with descriptions and defaults. Run `backprop --help` for the complete list (additional subcommands `push` / `resume` / `list-runs` / `show-run` / `runs` are documented in their own pages and via `--help`).
+The `backprop` CLI exposes the subcommands below — every flag, every default, and the full exit-code contract. Run `backprop --help` for the complete subcommand list and `backprop <subcommand> --help` for the canonical argparse output of a specific subcommand. A few subcommands (`resume`, `list-runs`, `show-run`, `runs`, `info`, `config`) get mentioned here in passing and are fully covered by `--help` rather than getting a dedicated table.
 
 ## Exit codes (Ship Gate B2)
 

@@ -23,15 +23,33 @@
 // supported channels. The migration is complete in v1.3.
 // ---------------------------------------------------------------------------
 
+// BRIDGE-B (Stage C humanization): the shim's WHOLE job is the friendly-error
+// path. Three rules the message has to satisfy:
+//   1. Name the next step (every error names the next step).
+//   2. Make the install commands copy-paste-runnable on the operator's host
+//      (no shell quoting that fails on cmd.exe, no `sudo` prefix that
+//      misleads on Windows).
+//   3. Stay calibrated — the v1.2 PyInstaller-bin build failed 3 times so
+//      v1.3 redirected operators to PyPI / pipx / uv; the message names the
+//      channels in preference order (isolated > shared > root-installable).
 process.stderr.write(
-  "npm distribution of backpropagate is deprecated.\n" +
+  "npm distribution of backpropagate is deprecated as of v1.3.\n" +
   "\n" +
-  "Install via one of the supported channels:\n" +
-  "  pipx install backpropagate   (recommended — isolated venv)\n" +
-  "  uv tool install backpropagate\n" +
-  "  pip install backpropagate\n" +
+  "Next step — install from PyPI via one of these channels (pick one):\n" +
+  "  pipx install backpropagate         # recommended on macOS/Linux (isolated venv, on PATH)\n" +
+  "  uv tool install backpropagate      # recommended on Windows (uv handles venv + PATH)\n" +
+  "  pip install backpropagate          # plain pip (use inside a venv)\n" +
   "\n" +
-  "Optional extras (UI / GGUF export / monitoring) are documented at:\n" +
-  "  https://github.com/mcp-tool-shop-org/backpropagate#installation\n"
+  "Verify the install:  backprop --version\n" +
+  "\n" +
+  "Optional extras (Reflex UI, GGUF export, monitoring) — pick one bundle:\n" +
+  "  pipx install 'backpropagate[standard]'    # unsloth + ui (recommended)\n" +
+  "  pipx install 'backpropagate[full]'        # everything\n" +
+  "  pipx install 'backpropagate[ui]'          # just the Reflex web UI\n" +
+  "\n" +
+  "Getting started + extras documentation:\n" +
+  "  https://mcp-tool-shop-org.github.io/backpropagate/handbook/getting-started/\n" +
+  "Source + issues:\n" +
+  "  https://github.com/mcp-tool-shop-org/backpropagate\n"
 );
 process.exit(2);

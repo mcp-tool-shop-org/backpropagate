@@ -185,16 +185,41 @@ jobs:
           - PyPI install matrix: ${PYPI_RESULT}
           - Docker pull + run:   ${DOCKER_RESULT}
 
-          The publish itself succeeded; this is post-publish observability.
-          The release is live on PyPI + GHCR — operators may already be hitting
-          the install failure. Triage:
+          ## What this means
 
-          1. Identify which matrix cell tripped (OS x Python or Docker).
-          2. If PyPI CDN was lagging, re-run via:
-             \`gh workflow run post-publish-smoke.yml -f tag=${TAG}\`
-          3. If the install or smoke is genuinely broken, cut a patch release.
+          The publish itself succeeded — \`${TAG}\` is live on PyPI + GHCR right now.
+          This issue is the post-publish observability surface: the workflow ran
+          \`pip install backpropagate==${TAG#v}\` + \`backprop --version\` across the
+          {ubuntu, macos, windows} × {3.10, 3.11, 3.12, 3.13} matrix plus a
+          \`docker run\` smoke against GHCR, and at least one cell failed. Operators
+          may already be hitting the same install failure.
 
-          Close this issue once the re-run passes.
+          ## Triage
+
+          1. **Open the run URL above and find the failing cell(s).** The
+             \`Annotations\` tab shows the failing step + log excerpt for each
+             matrix entry. Common patterns:
+             - **PyPI CDN lag** — index returns 404 for \`${TAG#v}\` because the
+               CDN hasn't propagated yet. Already retried 5× with 30s backoff
+               before this issue fired, so a real lag is rare but possible.
+             - **GHCR pull failure** — image \`ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}\`
+               not yet visible. Same retry shape as PyPI.
+             - **Real install break** — a transitive dep, a Python-version-specific
+               syntax issue, or a missing platform wheel. Read the failing log
+               carefully; the install error message is the canonical signal.
+
+          2. **If PyPI / GHCR was lagging, re-run the smoke** once you've waited
+             a few minutes:
+
+             \`\`\`bash
+             gh workflow run post-publish-smoke.yml -f tag=${TAG}
+             \`\`\`
+
+          3. **If the install or smoke is genuinely broken, cut a patch release.**
+             Don't unpublish \`${TAG}\` — operators already have it cached. Roll
+             forward to the next patch with the fix.
+
+          Close this issue once the re-run passes (or the patch release smoke goes green).
           EOF
 
           EXISTING=$(gh issue list --state open --label post-publish-smoke --json number --jq '.[0].number' 2>/dev/null || true)

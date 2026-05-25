@@ -193,8 +193,22 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "retryable": "sometimes",
     },
     "RUNTIME_UI_AUTH_NOT_ENFORCED": {
-        "description": "Web UI authentication was requested but the runtime does not yet enforce it.",
-        "default_hint": "Until middleware lands, do not pass --auth or --share. Use SSH port-forwarding for remote access: ssh -L 7860:localhost:7860 <host>",
+        "description": "Web UI authentication is required for this bind / share configuration but cannot be enforced (either --auth is missing on a non-loopback / --share configuration, or the auth middleware is unavailable in the current runtime).",
+        # Stage C humanization: the pre-v1.2.0 hint said "Until middleware
+        # lands, do not pass --auth or --share." That referred to the
+        # v1.1 era; v1.2.0 shipped the Reflex auth middleware and the
+        # code now serves the post-ship contract: ``--share`` and
+        # non-loopback ``--host`` REQUIRE ``--auth user:pass`` (which the
+        # middleware then enforces). The hint update names the operator's
+        # two real options on each axis.
+        "default_hint": (
+            "Pass --auth user:pass to enable the auth middleware "
+            "(required for --share and non-loopback --host post-v1.2.0). "
+            "OR drop --share / set --host 127.0.0.1 to keep the UI on "
+            "loopback only. For remote access without exposing the UI, "
+            "use SSH port-forwarding: ssh -L 7862:localhost:7862 <host>. "
+            "See handbook/security.md for the full auth contract."
+        ),
         "retryable": "no",
     },
     "UI_OUTPUT_DIR_FORBIDDEN": {
@@ -464,6 +478,31 @@ class BackpropagateError(Exception):
             logger.debug(
                 "BackpropagateError instance has no stable `code`: "
                 "class=%s message=%r",
+                self.__class__.__name__,
+                message,
+            )
+        elif code not in ERROR_CODES:
+            # Stage C BACKEND-B-017 humanization: catch typo'd / drifted
+            # codes at construction time so a `code='RUNTIME_GPU_OOO'`
+            # typo at a raise site doesn't land silently in run_history.json
+            # + structured logs (where it'd miss every `backprop info
+            # --error-codes` grep + every dashboard filter). The catalog
+            # at exceptions.py:ERROR_CODES is the single source of truth;
+            # an unknown code here is a contributor error worth surfacing.
+            # WARN (not raise) so a load-bearing user surface doesn't go
+            # red over a code drift — the exception still gets raised with
+            # the typo'd code preserved for the original caller.
+            logger.warning(
+                "BackpropagateError instantiated with unknown code=%r "
+                "(class=%s, message=%r). This code is not in the "
+                "ERROR_CODES catalog at backpropagate.exceptions and "
+                "won't have a hint / retryable entry in `backprop info "
+                "--error-codes`. Add the code to ERROR_CODES first, OR "
+                "use one of the existing canonical codes — common "
+                "siblings: RUNTIME_TRAINING_FAILED, "
+                "STATE_CHECKPOINT_INVALID, DEP_MODEL_LOAD_FAILED. "
+                "Check for typos (e.g. RUNTIME_GPU_OOO vs RUNTIME_GPU_OOM).",
+                code,
                 self.__class__.__name__,
                 message,
             )

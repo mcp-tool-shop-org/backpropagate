@@ -18,7 +18,25 @@
   - **Option A** (honor the documented contract): add a raise site in the `oom_recovery=False` branch of `trainer.py` (around line 1861) that wraps the OOM into `GPUMemoryError()` (which already carries `code='RUNTIME_GPU_OOM'`) before re-raising. Symmetric change in `multi_run.py` for the single-run path. Updates: keep README + translations + handbook unchanged.
   - **Option B** (retire the dead code): remove `RUNTIME_GPU_OOM` from `ERROR_CODES`, remove `GPUMemoryError` class + `__all__` + `backpropagate/__init__.py` re-export, update `cli.py:5120` to drop the code from the exit-code-mapping tuple, update `README.md` line 320 + 7 translations, update `handbook/error-codes.md`, `handbook/troubleshooting.md`, `handbook/troubleshooting-cuda.md`, `llms.txt`, and `tests/test_exceptions.py` (multiple test cases reference the class). Update the stale test comment at `tests/test_trainer.py:1623`.
 
-  Inline TODO_WAVE_6A markers placed in `exceptions.py` at both the `RUNTIME_GPU_OOM` `ERROR_CODES` entry and the `GPUMemoryError` class docstring.
+  **LOCKED: Option A** (advisor 2026-05-25, post-Wave-2 review). Reasoning:
+  - Better operator UX: "OOM specifically, here's the recovery path" beats generic "training failed." Operators reading logs / troubleshooting / error-codes catalog expect a named carrier; bare-raise to RUNTIME_TRAINING_FAILED breaks that expectation.
+  - Couples naturally with BACKEND-A-003 + A-004 multi-run refactor (both touch the OOM call sites). Wave 6a does one careful pass instead of two.
+  - Narrative alignment: v1.3 + v1.4 are about "make the runtime match the docs," not the reverse. Option B would be the deferring anti-pattern — same shape as v1.3's "ship banner-documenting-no-op" temptation that the swarm explicitly rejected via [[no-banner-documenting-no-op]].
+  - Estimated scope: ~30 lines + tests at Wave 6a; folds into the BACKEND-A-003/A-004 refactor cleanly.
+
+  Inline TODO_WAVE_6A markers placed in `exceptions.py` at both the `RUNTIME_GPU_OOM` `ERROR_CODES` entry and the `GPUMemoryError` class docstring. Both retain the symbols intact — Option A lock means they survive Wave 6a; the refactor adds the raise site, not the symbol removal.
+
+  ### Split-state acknowledgment (v1.4 Wave 2 → Wave 6a)
+
+  Wave 2's BACKEND-A-001/A-002 amend brought the library-internal docstrings (`Trainer.__init__` / `MultiRunTrainer.__init__`) into alignment with current runtime behavior (RUNTIME_TRAINING_FAILED fires, not RUNTIME_GPU_OOM). The user-facing surface (README / handbook / 7 translations / llms.txt / cli exit-code mapper) still promises RUNTIME_GPU_OOM.
+
+  **This is a deliberate split-state**, tolerable through Stage B → Stage C → Wave 6a because:
+
+  1. The docstring docs operate at the library-internals level (what callers see in IDEs / `help()` / `inspect.signature`); after Wave 2 they are honest about current runtime.
+  2. The user-facing surface promises the FUTURE state after Option A lands — RUNTIME_GPU_OOM as a real raised code. When Wave 6a Option A ships, the user-facing surface becomes accurate WITHOUT changes; the "wrap OOM at raise site" effect alone collapses the split-state forward.
+  3. Fallback path: if Wave 6a Option A ever has to revert (it won't; this is a hedge), Stage C amend would fix the user-facing surface to match the (now-honest) docstrings — Option B compressed retroactively. Either way the split-state collapses by Wave 6a or Wave-6a-fallback.
+
+  **The Wave 2 split-state is logged here so the reasoning survives into V1_4_POSTMORTEM.** Treating it as a doc-lie would be wrong — docstrings now reflect reality, user-facing surface reflects committed-future-state. The lock on Option A is what makes the user-facing surface a promise, not a lie.
 
 ## From Wave 2 bridge (BRIDGE-A-002 follow-up — symbolic threading observation)
 - **BRIDGE-A-002 follow-up** — `cmd_train` (cli.py ~617), `cmd_multi_run` (cli.py ~820), and now `cmd_replay` (cli.py ~3573) all assemble a `wave6b_candidate_kwargs` dict for the five Wave 6b knobs (`use_dora` / `packing` / `init_lora_weights` / `lora_preset` / `optim`) and then filter via `inspect.signature(Trainer.__init__).parameters` / `dataclasses.fields(MultiRunConfig)`. Today the `Trainer.__init__` signature (trainer.py:696) does NOT name any of those five kwargs, and `MultiRunConfig` (multi_run.py:170) does NOT name them either — the trainer reads them from `settings.lora.*` / `settings.data.*` via pydantic-settings (env vars), so the introspection filter silently drops all five at every call site. The CLI flags are NOT inert (the env-var path reaches the trainer at module init); the per-invocation kwarg-threading path is symbolic until trainer.py + multi_run.py grow them as explicit constructor kwargs. Wave 6a / 6b work: add the five kwargs to `Trainer.__init__` AND `MultiRunConfig` so the operator's flag value flows through end-to-end per-invocation instead of relying on the process-global settings layer. Once that lands, all three call sites' introspection filters start threading the override through correctly (no further CLI changes needed — the defensive filter is the whole point).

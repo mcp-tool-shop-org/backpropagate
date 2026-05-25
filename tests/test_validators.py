@@ -226,20 +226,25 @@ class TestValidateRepoId:
     # -- control characters + backslash ---------------------------------------
 
     def test_rejects_embedded_nul(self):
-        with pytest.raises(ExportError, match="control character or backslash"):
+        # v1.4 Stage C BRIDGE-B-011/B-017: split the control-char vs backslash
+        # error paths so each names the operator's next step.
+        with pytest.raises(ExportError, match="contains a control character"):
             _validate_repo_id("alice/foo\x00bar")
 
     def test_rejects_embedded_newline(self):
-        with pytest.raises(ExportError, match="control character or backslash"):
+        with pytest.raises(ExportError, match="contains a control character"):
             _validate_repo_id("alice/foo\nbar")
 
     def test_rejects_embedded_carriage_return(self):
-        with pytest.raises(ExportError, match="control character or backslash"):
+        with pytest.raises(ExportError, match="contains a control character"):
             _validate_repo_id("alice/foo\rbar")
 
     def test_rejects_backslash(self):
         """Backslash inside repo_id is a Windows-path-traversal smell."""
-        with pytest.raises(ExportError, match="control character or backslash"):
+        # v1.4 Stage C BRIDGE-B-017: the backslash branch now names the
+        # canonical separator (forward slash) and the Windows-shell
+        # auto-correct gotcha.
+        with pytest.raises(ExportError, match="contains a backslash"):
             _validate_repo_id("alice\\evil/bar")
 
     # -- whitespace -----------------------------------------------------------

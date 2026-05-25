@@ -142,10 +142,35 @@ def _validate_repo_id(repo_id: str) -> None:
         err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
         raise err
 
-    if any(ch in repo_id for ch in ("\x00", "\n", "\r", "\\")):
+    # BRIDGE-B-017 (Stage C humanization): split the backslash check from the
+    # control-char check so a Windows operator typing 'alice\qwen-finetune'
+    # (typo for forward-slash) sees a targeted "use forward slash" suggestion
+    # instead of being told to "strip embedded control chars / backslashes"
+    # — which doesn't name the likely fix. HF Hub repo identifiers use POSIX
+    # forward-slash separators, period; the targeted hint lets the operator
+    # close the loop in one step.
+    if "\\" in repo_id:
         err = ExportError(
-            f"repo_id '{repo_id}' contains a control character or backslash",
-            suggestion="Strip embedded control chars / backslashes from --repo.",
+            f"repo_id '{repo_id}' contains a backslash. Hugging Face Hub "
+            "repo identifiers use forward slashes between owner and name.",
+            suggestion=(
+                "Replace '\\' with '/' — e.g. `--repo alice/qwen-finetune` "
+                "(not `alice\\qwen-finetune`). Windows shells often "
+                "auto-correct path separators; quote the value if needed."
+            ),
+        )
+        err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
+        raise err
+
+    if any(ch in repo_id for ch in ("\x00", "\n", "\r")):
+        err = ExportError(
+            f"repo_id '{repo_id}' contains a control character (NUL / "
+            "newline / CR).",
+            suggestion=(
+                "Strip the embedded control character from --repo. If the "
+                "value was pasted from another tool, retype it manually "
+                "to avoid carrying invisible whitespace."
+            ),
         )
         err.code = "HUB_PUSH_INVALID_REPO"  # type: ignore[attr-defined]
         raise err
@@ -1464,8 +1489,46 @@ def create_modelfile(
 
     Returns:
         Path to the created Modelfile
+
+    Raises:
+        ExportError: when ``gguf_path`` or ``system_prompt`` contains an
+            embedded NUL / newline / CR. The Modelfile format treats these
+            as statement separators, so silently accepting them would either
+            corrupt the FROM/SYSTEM directive (CR / LF inside a quoted
+            string) or open a SYSTEM-injection surface (extra PARAMETER /
+            SYSTEM lines past the parser). Code is
+            ``INPUT_VALIDATION_FAILED``, matching ``_validate_model_name``.
     """
     gguf_path = Path(gguf_path).resolve()
+
+    # BRIDGE-B-011 (Stage C — [[grep-all-instances-when-fixing-pattern]]):
+    # _validate_model_name (export.py:91) already rejects NUL / \n / \r in
+    # the Ollama model name on the same Modelfile-corruption rationale —
+    # apply the same rule to BOTH inputs that flow into Modelfile body
+    # text. POSIX filesystems permit \n inside legal filenames; without
+    # this check a path like /tmp/foo\n.gguf would split the FROM line
+    # and the surviving fragments would parse as separate Ollama directives.
+    # The error names the offending field so an operator can triage which
+    # input was bad.
+    def _reject_modelfile_unsafe(value: str, *, field: str) -> None:
+        for ch, ch_name in (("\x00", "NUL"), ("\n", "newline"), ("\r", "CR")):
+            if ch in value:
+                raise ExportError(
+                    f"{field} contains a {ch_name} character; the Ollama "
+                    "Modelfile format treats it as a statement separator "
+                    "and the file would split into multiple directives.",
+                    suggestion=(
+                        f"Strip the embedded {ch_name} from {field}. "
+                        "If the value comes from a path with an unusual "
+                        "filename, rename the file before exporting. If "
+                        "from --system-prompt, remove the line break."
+                    ),
+                    code="INPUT_VALIDATION_FAILED",
+                )
+
+    _reject_modelfile_unsafe(str(gguf_path), field="gguf_path")
+    if system_prompt is not None:
+        _reject_modelfile_unsafe(system_prompt, field="system_prompt")
 
     if output_path:
         modelfile_path = Path(output_path)

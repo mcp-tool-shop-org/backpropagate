@@ -61,6 +61,11 @@ def _upload_group() -> rx.Component:
             ),
             id="dataset_upload",
             multiple=False,
+            # FRONTEND-B-014-EXTENDED (Stage C accessibility): aria_label
+            # describes the drop affordance for screen readers — they'd
+            # otherwise hear only "click to upload" from the underlying
+            # button. Maintains parity with the form's other named controls.
+            aria_label="Upload a training dataset (JSONL / Alpaca / ShareGPT / OpenAI)",
             accept={
                 "application/json": [".json"],
                 "application/jsonl": [".jsonl"],
@@ -79,12 +84,21 @@ def _upload_group() -> rx.Component:
                 "cursor": "pointer",
             },
         ),
+        # FRONTEND-B-014-EXTENDED (Stage C accessibility): wrap the inline
+        # upload-error text in role=alert so the screen reader announces
+        # validation failures (extension / size / magic-bytes / sanitize-
+        # filename rejects) at the same time the operator sees them turn
+        # peach. ``role="alert"`` implies aria_live=assertive which is
+        # appropriate for an actionable validation error.
         rx.cond(
             DatasetState.upload_error != "",
-            rx.text(
-                DatasetState.upload_error,
-                size="1",
-                style={"color": "var(--bp-peach)", "font_size": "11px"},
+            rx.box(
+                rx.text(
+                    DatasetState.upload_error,
+                    size="1",
+                    style={"color": "var(--bp-peach)", "font_size": "11px"},
+                ),
+                role="alert",
             ),
             rx.fragment(),
         ),

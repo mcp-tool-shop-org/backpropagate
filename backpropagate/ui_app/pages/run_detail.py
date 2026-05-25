@@ -414,6 +414,11 @@ def _action_panel() -> rx.Component:
                     variant="soft",
                     color_scheme="teal",
                     size="2",
+                    # FRONTEND-B-014-EXTENDED (Stage C humanization): match
+                    # the action-row disabled-while-in-flight pattern so the
+                    # operator can't queue a Compare on top of a running
+                    # diff / replay / export / delete.
+                    disabled=RunDetailState.action_in_flight != "",
                     aria_label="Diff this run against the comparison run id",
                 ),
                 direction="row",
@@ -432,6 +437,10 @@ def _action_panel() -> rx.Component:
                 variant="soft",
                 color_scheme="teal",
                 size="2",
+                # FRONTEND-B-014-EXTENDED (Stage C humanization): disable
+                # the action buttons while ANY shell-out is in flight so a
+                # second click can't queue an overlapping subprocess.
+                disabled=RunDetailState.action_in_flight != "",
                 aria_label="Dry-run a replay of this run via the CLI",
             ),
             rx.button(
@@ -440,6 +449,7 @@ def _action_panel() -> rx.Component:
                 variant="soft",
                 color_scheme="teal",
                 size="2",
+                disabled=RunDetailState.action_in_flight != "",
                 aria_label="Export this run to a JSONL file via the CLI",
             ),
             rx.button(
@@ -448,11 +458,57 @@ def _action_panel() -> rx.Component:
                 variant="soft",
                 color_scheme="red",
                 size="2",
+                disabled=RunDetailState.action_in_flight != "",
                 aria_label="Delete this run from history via the CLI",
             ),
             direction="row",
             gap="2",
             wrap="wrap",
+        ),
+        # FRONTEND-B-014-EXTENDED (Stage C humanization): inline "Running
+        # <subcommand>…" status row while a shell-out is in flight. The
+        # diff / replay / delete / export handlers each block synchronously
+        # for up to 30-60s; pre-fix the operator clicked the button and saw
+        # NO feedback until the subprocess returned (the panel read as a
+        # frozen UI). aria_live=polite announces the running state to screen
+        # readers; the spinner gives sighted operators the visible cue.
+        rx.cond(
+            RunDetailState.action_in_flight != "",
+            rx.box(
+                rx.flex(
+                    rx.spinner(size="2"),
+                    rx.text(
+                        "Running ",
+                        size="2",
+                        style={"color": "var(--bp-muted)"},
+                    ),
+                    rx.text(
+                        RunDetailState.action_in_flight,
+                        size="2",
+                        style={
+                            "color": "var(--bp-peach)",
+                            "font_family": "var(--bp-mono)",
+                        },
+                    ),
+                    rx.text(
+                        "… (this can take up to a minute)",
+                        size="2",
+                        style={"color": "var(--bp-muted)"},
+                    ),
+                    direction="row",
+                    gap="2",
+                    align="center",
+                    padding="3",
+                    style={
+                        "background": "var(--bp-surface-2)",
+                        "border": "1px dashed var(--bp-border)",
+                        "border_radius": "var(--bp-r-2)",
+                    },
+                ),
+                role="status",
+                aria_live="polite",
+            ),
+            rx.fragment(),
         ),
         rx.cond(
             RunDetailState.action_result != "",
@@ -583,13 +639,25 @@ def run_detail_page() -> rx.Component:
                 rx.flex(
                     rx.cond(
                         RunDetailState.loading,
-                        rx.flex(
-                            rx.spinner(size="2"),
-                            rx.text("Loading…", size="2", style={"color": "var(--bp-muted)"}),
-                            direction="row",
-                            gap="2",
-                            align="center",
-                            padding="4",
+                        # FRONTEND-B-014 (Stage C accessibility): wrap loading
+                        # row in role=status / aria_live so AT users hear the
+                        # state on page mount. Pre-fix the spinner was visually
+                        # present but silent for screen readers.
+                        rx.box(
+                            rx.flex(
+                                rx.spinner(size="2"),
+                                rx.text(
+                                    "Loading run details…",
+                                    size="2",
+                                    style={"color": "var(--bp-muted)"},
+                                ),
+                                direction="row",
+                                gap="2",
+                                align="center",
+                                padding="4",
+                            ),
+                            role="status",
+                            aria_live="polite",
                         ),
                         rx.fragment(),
                     ),

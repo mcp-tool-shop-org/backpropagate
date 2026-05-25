@@ -297,7 +297,7 @@ jobs:
                       if 'CRITICAL' in score:
                           critical.append(f\"{pkg.get('name')}: {v.get('id')} ({stype}={score})\")
           if critical:
-              print('::error::pip-audit CRITICAL severity findings:')
+              print('::error::pip-audit CRITICAL severity findings — release-blocking. Bump the offending dep in pyproject.toml + uv.lock; the GitHub Security tab also lists each advisory with the patched-version link.')
               for c in critical:
                   print('  -', c)
               sys.exit(1)
@@ -616,7 +616,7 @@ jobs:
             fi
           done
           if [ ${#failed[@]} -gt 0 ]; then
-            echo "::error::Security scanners failed: ${failed[*]}"
+            echo "::error::Security scanners failed: ${failed[*]} — open each scanner's job above for the per-finding output. Bandit / pip-audit / Trivy gate on CRITICAL findings; Semgrep is advisory but a 'failure' status here means the scan itself errored (rate-limit, network, etc.) and should be re-run."
             exit 1
           fi
           echo "All security scanners passed."

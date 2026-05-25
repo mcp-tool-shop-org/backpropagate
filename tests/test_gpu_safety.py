@@ -41,18 +41,63 @@ class TestGPUCondition:
 
 
 class TestGPUSafetyConfig:
-    """Tests for GPUSafetyConfig dataclass."""
+    """Pin GPUSafetyConfig auto-pause thresholds.
 
-    def test_default_values(self):
-        """Should have sensible default thresholds."""
+    These thresholds are load-bearing safety: a runaway training job
+    hits ``temp_emergency`` (95.0 C) and gets force-killed to protect
+    the card. Bumping any threshold without a CHANGELOG note changes
+    the safety envelope every user is implicitly trusting. Failed
+    diffs surface what changed AND what physical envelope it shifts.
+    """
+
+    def test_default_thresholds_pin_thermal_and_vram_safety_envelope(self):
+        """Defaults: temp 80/90/95 C, VRAM 90/95 %, 5 s poll interval.
+
+        Thresholds in degrees Celsius:
+          - temp_warning=80   — log warning, training continues
+          - temp_critical=90  — pause+cooldown loop until safe
+          - temp_emergency=95 — kill process to protect hardware
+
+        VRAM thresholds in percent:
+          - vram_warning=90   — log warning
+          - vram_critical=95  — abort current step to avoid OOM-kill
+
+        If you're tightening any of these, that's a user-facing safety
+        change — update handbook/gpu-safety.md + CHANGELOG in the same PR.
+        """
         config = GPUSafetyConfig()
 
-        assert config.temp_warning == 80.0
-        assert config.temp_critical == 90.0
-        assert config.temp_emergency == 95.0
-        assert config.vram_warning == 90.0
-        assert config.vram_critical == 95.0
-        assert config.check_interval == 5.0
+        assert config.temp_warning == 80.0, (
+            f"GPU temp_warning threshold drifted: expected 80.0 C, got "
+            f"{config.temp_warning}. Below the 90 C critical band; this "
+            f"is the 'log only, keep training' boundary."
+        )
+        assert config.temp_critical == 90.0, (
+            f"GPU temp_critical threshold drifted: expected 90.0 C, got "
+            f"{config.temp_critical}. This is where the training loop "
+            f"PAUSES until temp drops back below temp_warning."
+        )
+        assert config.temp_emergency == 95.0, (
+            f"GPU temp_emergency threshold drifted: expected 95.0 C, got "
+            f"{config.temp_emergency}. This is the hardware-protect "
+            f"kill point — bumping it risks thermal damage; lowering it "
+            f"causes false-positive aborts. RTX 5080 spec is 88 C "
+            f"throttle / 100 C max."
+        )
+        assert config.vram_warning == 90.0, (
+            f"GPU vram_warning threshold drifted: expected 90.0 %, got "
+            f"{config.vram_warning}."
+        )
+        assert config.vram_critical == 95.0, (
+            f"GPU vram_critical threshold drifted: expected 95.0 %, got "
+            f"{config.vram_critical}. This is the abort-step boundary "
+            f"to keep us out of OOM-killer range."
+        )
+        assert config.check_interval == 5.0, (
+            f"GPU monitor check_interval drifted: expected 5.0 s, got "
+            f"{config.check_interval}. Below 5 s = busy-loop; above "
+            f"5 s = miss transient thermal spikes."
+        )
 
     def test_custom_values(self):
         """Should accept custom threshold values."""

@@ -216,13 +216,37 @@ def _detect_features() -> None:
     Honors the ``BACKPROPAGATE_DEFER_FEATURE_DETECTION`` env var as an opt-out
     for power users who want the absolute-fastest CLI startup; when set, all
     features remain ``False`` until :func:`refresh_features` is called.
+
+    BRIDGE-B-014 (Stage C humanization): when deferral is enabled the
+    detection is genuinely skipped, but FEATURES stays a dict of all-False
+    booleans — meaning ``require_feature('ui')`` will fail loudly even on
+    a host that actually has the extra installed. Pre-fix, the operator
+    saw the standard "Install with: pip install backpropagate[ui]" hint
+    and was sent to re-install software they already had. The deferral
+    is surfaced at WARN level so an operator who set the env var and
+    forgot has a breadcrumb back to ``refresh_features()``. ``ensure_feature``
+    and ``require_feature`` also auto-refresh on first use (see below).
     """
     global FEATURES
 
     if os.environ.get("BACKPROPAGATE_DEFER_FEATURE_DETECTION"):
-        logger.debug(
-            "Feature detection deferred via BACKPROPAGATE_DEFER_FEATURE_DETECTION"
-        )
+        # WARN-level emission so the deferral is visible without being
+        # spammy. Notebook / long-running consumers who set the env var
+        # deliberately suppress with BACKPROPAGATE_DEFER_FEATURE_QUIET=1.
+        if not os.environ.get("BACKPROPAGATE_DEFER_FEATURE_QUIET"):
+            logger.warning(
+                "Feature detection deferred via "
+                "BACKPROPAGATE_DEFER_FEATURE_DETECTION. All FEATURES are "
+                "False until refresh_features() runs. The CLI auto-refreshes "
+                "on the first require_feature() / ensure_feature() call so "
+                "interactive sessions Just Work; suppress this warning with "
+                "BACKPROPAGATE_DEFER_FEATURE_QUIET=1 once you've calibrated."
+            )
+        else:
+            logger.debug(
+                "Feature detection deferred via "
+                "BACKPROPAGATE_DEFER_FEATURE_DETECTION (quiet mode)."
+            )
         return
 
     # Unsloth feature — find_spec only, never actually imports unsloth
@@ -438,6 +462,35 @@ def list_missing_features() -> dict[str, str]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _maybe_refresh_for_deferral(feature: str) -> None:  # noqa: ARG001 — feature kept for caller-symmetry (require_feature passes it through)
+    """Auto-refresh feature detection on first use when deferral is active.
+
+    BRIDGE-B-014 (Stage C humanization): pre-fix, an operator who set
+    ``BACKPROPAGATE_DEFER_FEATURE_DETECTION=1`` (typical notebook /
+    long-running-process opt-in) saw every ``require_feature`` /
+    ``ensure_feature`` call fail with the misleading
+    "Install with: pip install backpropagate[ui]" hint — even on a host
+    where the [ui] extra was genuinely installed. The deferral was
+    designed to skip the detection at module import only, but the
+    consequence (FEATURES all-False until manual refresh_features())
+    silently traps the unwary.
+
+    Now we lazily refresh on first ``require_feature`` / ``ensure_feature``
+    miss IF deferral was enabled AND the FEATURES dict still looks
+    pristine (all-False — the canonical "deferred and never refreshed"
+    state). After the auto-refresh the caller sees the truthful FEATURE
+    state, so the standard install-hint path only fires when the feature
+    really isn't installed.
+    """
+    if not os.environ.get("BACKPROPAGATE_DEFER_FEATURE_DETECTION"):
+        return
+    # If ANY feature is True the deferral has already been refreshed; nothing
+    # to do (and skipping the second call keeps the WARN one-shot).
+    if any(FEATURES.values()):
+        return
+    refresh_features()
+
+
 def require_feature(feature: str) -> Callable[[F], F]:
     """
     Decorator to require a feature for a function.
@@ -456,6 +509,12 @@ def require_feature(feature: str) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # BRIDGE-B-014 (Stage C): auto-refresh on first miss when the
+            # deferral env var was set — prevents the misleading
+            # "install [feature]" hint when the feature is genuinely
+            # installed and only the detection was skipped.
+            if not FEATURES.get(feature, False):
+                _maybe_refresh_for_deferral(feature)
             if not FEATURES.get(feature, False):
                 hint = INSTALL_HINTS.get(feature, f"pip install backpropagate[{feature}]")
                 desc = FEATURE_DESCRIPTIONS.get(feature, "")
@@ -493,6 +552,9 @@ def ensure_feature(feature: str) -> None:
     Raises:
         FeatureNotAvailable: If the feature is not installed
     """
+    # BRIDGE-B-014 (Stage C): symmetric auto-refresh — see require_feature.
+    if not FEATURES.get(feature, False):
+        _maybe_refresh_for_deferral(feature)
     if not FEATURES.get(feature, False):
         raise FeatureNotAvailable(feature)
 

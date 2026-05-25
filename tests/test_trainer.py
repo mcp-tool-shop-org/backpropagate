@@ -20,9 +20,24 @@ class TestTrainerInit:
 
         assert trainer.model_name is not None
         # v1.3 BACKEND-1: LoRAConfig defaults bumped to rank 256 + all-linear.
-        assert trainer.lora_r == 256
-        assert trainer.lora_alpha == 512
-        assert trainer._is_loaded is False
+        assert trainer.lora_r == 256, (
+            f"Trainer default lora_r drifted from v1.3 BACKEND-1 "
+            f"'quality' contract: expected 256, got {trainer.lora_r}. "
+            f"This is the Trainer instance read; if it disagrees with "
+            f"LoRAConfig defaults, the Trainer.__init__ ingestion path "
+            f"has a bug. v1.5 TESTS-A-006 sweep watches UI / CLI "
+            f"divergence on this same field."
+        )
+        assert trainer.lora_alpha == 512, (
+            f"Trainer default lora_alpha drifted: expected 512, got "
+            f"{trainer.lora_alpha}. Pinned alongside lora_r so the 2:1 "
+            f"ratio breaks loud."
+        )
+        assert trainer._is_loaded is False, (
+            f"Fresh Trainer instance should not be loaded; "
+            f"_is_loaded={trainer._is_loaded!r}. Eager-load on __init__ "
+            f"breaks the 'cheap-to-construct, costly-to-load' contract."
+        )
 
     def test_trainer_custom_parameters(self):
         """Test Trainer with custom parameters."""
@@ -153,7 +168,7 @@ class TestTrainerSave:
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
 
-        with pytest.raises(TrainingError, match="No model loaded"):
+        with pytest.raises(TrainingError, match="no model is loaded"):
             trainer.save()
 
     def test_save_with_model(self, temp_dir):
@@ -267,7 +282,7 @@ class TestTrainerExport:
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer(output_dir=str(temp_dir))
 
-        with pytest.raises((RuntimeError, Exception), match="No model loaded"):
+        with pytest.raises((RuntimeError, Exception), match="no model is loaded"):
             trainer.export()
 
     def test_export_lora(self, temp_dir):
@@ -328,7 +343,7 @@ class TestTrainerPushToHub:
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-        with pytest.raises((RuntimeError, Exception), match="No model loaded"):
+        with pytest.raises((RuntimeError, Exception), match="no model is loaded"):
             trainer.push_to_hub("test/repo")
 
     def test_push_to_hub_calls_model(self):
@@ -980,22 +995,46 @@ class TestLoRARankConfiguration:
     """Tests for custom r, alpha LoRA values."""
 
     def test_lora_rank_default(self):
-        """Default LoRA rank should be 256 (v1.3 BACKEND-1 quality bump)."""
+        """Default LoRA rank pinned to 256 (v1.3 BACKEND-1 quality bump).
+
+        Three pinning sites for this same contract — config.py LoRAConfig
+        defaults, CLI parser --lora-r default, and Trainer instance read.
+        All three MUST agree. If one drifts, the v1.5 TESTS-A-006
+        cross-domain audit will catch the divergence; this test catches
+        the Trainer half.
+        """
         from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-        assert trainer.lora_r == 256
+        assert trainer.lora_r == 256, (
+            f"v1.3 BACKEND-1 contract violated: Trainer default lora_r "
+            f"expected 256, got {trainer.lora_r}. Check LoRAConfig "
+            f"defaults in backpropagate/config.py — Trainer reads from "
+            f"there. Cross-check test_config.py + test_cli.py if you're "
+            f"intentionally changing this default."
+        )
 
     def test_lora_alpha_default(self):
-        """Default LoRA alpha should be 512 (v1.3 BACKEND-1 alpha = 2 * r)."""
+        """Default LoRA alpha pinned to 512 (v1.3 BACKEND-1 alpha = 2*r).
+
+        The 2:1 alpha:r coupling is the documented effective-LR scaling.
+        Breaking it (e.g. alpha=256 with r=256) silently halves the
+        adapter's effective learning rate and changes convergence
+        behavior without a CHANGELOG note.
+        """
         from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
             trainer = Trainer()
 
-        assert trainer.lora_alpha == 512
+        assert trainer.lora_alpha == 512, (
+            f"v1.3 BACKEND-1 contract violated: Trainer default "
+            f"lora_alpha expected 512 (= 2 * r=256), got "
+            f"{trainer.lora_alpha}. If you changed lora_alpha, the 2:1 "
+            f"ratio doctrine in handbook/lora_presets.md needs updating."
+        )
 
     def test_lora_rank_custom(self):
         """Custom LoRA rank should be applied."""

@@ -230,25 +230,65 @@ def _empty_state() -> rx.Component:
     concrete next action (`backprop train ...`) instead of just "runs will
     appear here." Norman 1988 affordance framing - tell the operator what to
     do, not just what the screen is for.
+
+    FRONTEND-B-014-EXTENDED (v1.4 Wave 4 Stage C humanization): the empty-
+    state now distinguishes the "filter is active and returned zero rows"
+    case from the "no runs at all" case so the operator's next action is
+    unambiguous. Pre-fix, an operator who filtered by "failed" against a
+    successful-only history saw "No training runs recorded yet. Train a
+    model to see it here…" — confusingly wrong; runs DID exist, just none
+    matching the filter.
     """
-    return rx.flex(
-        rx.text(
-            "No training runs recorded yet.",
-            size="2",
-            style={"color": "var(--bp-text-2)"},
+    return rx.cond(
+        RunsState.status_filter != "",
+        # Filter is active — name THAT as the cause and offer a one-click
+        # reset rather than telling the operator to train a new model.
+        rx.flex(
+            rx.text(
+                "No runs match this filter.",
+                size="2",
+                style={"color": "var(--bp-text-2)"},
+            ),
+            rx.text(
+                "The status filter is hiding any runs in the other states. "
+                "Reset the filter to see everything, or pick a different "
+                "status from the dropdown above.",
+                size="1",
+                style={"color": "var(--bp-muted)"},
+            ),
+            rx.button(
+                "Reset filter",
+                on_click=lambda: RunsState.set_status_filter(""),
+                variant="soft",
+                color_scheme="teal",
+                size="1",
+                aria_label="Clear the run-history status filter",
+            ),
+            direction="column",
+            gap="2",
+            padding="6",
+            align="center",
+            width="100%",
         ),
-        rx.text(
-            "Train a model to see it here. From the UI: open the Single run "
-            "or Multi-run tab and click Start. From the shell: run "
-            "`backprop train <model> <dataset.jsonl>` and refresh this page.",
-            size="1",
-            style={"color": "var(--bp-muted)"},
+        rx.flex(
+            rx.text(
+                "No training runs recorded yet.",
+                size="2",
+                style={"color": "var(--bp-text-2)"},
+            ),
+            rx.text(
+                "Train a model to see it here. From the UI: open the Single run "
+                "or Multi-run tab and click Start. From the shell: run "
+                "`backprop train <model> <dataset.jsonl>` and refresh this page.",
+                size="1",
+                style={"color": "var(--bp-muted)"},
+            ),
+            direction="column",
+            gap="2",
+            padding="6",
+            align="center",
+            width="100%",
         ),
-        direction="column",
-        gap="2",
-        padding="6",
-        align="center",
-        width="100%",
     )
 
 
@@ -322,17 +362,27 @@ def runs_page() -> rx.Component:
                     ),
                     rx.cond(
                         RunsState.loading,
-                        rx.flex(
-                            rx.spinner(size="2"),
-                            rx.text(
-                                "Loading runs…",
-                                size="2",
-                                style={"color": "var(--bp-muted)"},
+                        # FRONTEND-B-014 (Stage C accessibility): the loading
+                        # row is now wrapped in role="status" / aria_live so
+                        # AT users hear "Loading runs" when the page mounts.
+                        # Mirrors the recovery-banner pattern (also role=status
+                        # / aria_live=polite) so the loading affordance reads
+                        # consistently across the UI.
+                        rx.box(
+                            rx.flex(
+                                rx.spinner(size="2"),
+                                rx.text(
+                                    "Loading runs…",
+                                    size="2",
+                                    style={"color": "var(--bp-muted)"},
+                                ),
+                                direction="row",
+                                gap="2",
+                                align="center",
+                                padding="4",
                             ),
-                            direction="row",
-                            gap="2",
-                            align="center",
-                            padding="4",
+                            role="status",
+                            aria_live="polite",
                         ),
                         rx.fragment(),
                     ),

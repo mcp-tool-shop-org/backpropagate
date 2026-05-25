@@ -883,38 +883,54 @@ class TestWave6bTrainerSignatureHandoff:
     @pytest.mark.parametrize(
         "kwarg_name", ["use_dora", "packing", "init_lora_weights", "lora_preset", "optim"]
     )
-    def test_trainer_accepts_wave6b_kwarg_or_degrades_gracefully(self, kwarg_name):
-        """For each Wave 6b kwarg, either Trainer accepts it OR the bridge
-        guard at backpropagate/cli.py degrades cleanly (no crash, no
-        silent flag-drop).
+    def test_cli_filter_guard_always_present_regardless_of_trainer_acceptance(
+        self, kwarg_name
+    ):
+        """Wave 3.5 TESTS-B-014 hardening: cli.py MUST ALWAYS carry the
+        inspect-based filter guard, regardless of whether Trainer accepts
+        each kwarg in this build.
 
-        We can't assert presence in this build because the cross-domain
-        contract is "bridge forwards only when Trainer accepts" — but we
-        CAN assert that if the kwarg is present, the inspect-based guard
-        in cmd_train would forward it.
+        Original shape (Wave 6b): the test branched — if Trainer accepts
+        the kwarg it short-circuited to ``assert True`` (a tautology with
+        no pinning), and only when Trainer REJECTED did it grep cli.py
+        for the guard string. That shape only caught the conjunction
+        regression "remove guard AND drop one kwarg." A single-pivot
+        regression (someone removes the guard while Trainer still
+        accepts every kwarg) slipped silently.
 
-        The negative property (kwarg absent ⇒ silent drop) is covered by
-        the cmd_train guard test below.
+        New shape (Wave 3.5 TESTS-B-014): unconditionally assert the
+        ``_trainer_sig_params`` filter is present in cli.py source.
+        The guard is the load-bearing safety; its presence does not
+        depend on this build's Trainer signature. The parametrize is
+        retained as a doctrine anchor — each kwarg name documents one
+        bridge-forwarded Wave 6b knob whose silent drop the guard
+        prevents — but the actual assertion is now identical across
+        params.
         """
+        from pathlib import Path
+        cli_src = (
+            Path(__file__).resolve().parent.parent
+            / "backpropagate" / "cli.py"
+        ).read_text(encoding="utf-8")
+        assert "_trainer_sig_params" in cli_src, (
+            "CROSS-DOMAIN REGRESSION: cmd_train in backpropagate/cli.py "
+            "is missing the _trainer_sig_params inspect filter guard. "
+            f"Without it, the bridge will TypeError when forwarding "
+            f"'{kwarg_name}' (or any other Wave 6b kwarg) if Trainer "
+            "ever rejects one. The guard is load-bearing — restore it "
+            "before merging."
+        )
+
+        # Doctrine anchor for the parametrize: each kwarg names one
+        # Wave 6b knob the bridge forwards. Trainer signature acceptance
+        # is reported as INFO (not pinned) so future readers see what's
+        # landed.
         params = self._trainer_signature_params()
-        if kwarg_name in params:
-            # Trainer accepts the kwarg — confirms full Wave 6b landing.
-            assert True
-        else:
-            # Trainer rejects the kwarg — confirms graceful-degradation
-            # path. The CLI handler MUST filter via inspect.signature so
-            # the call doesn't TypeError. We assert the filter exists by
-            # reading cli.py source for the guard.
-            from pathlib import Path
-            cli_src = (
-                Path(__file__).resolve().parent.parent
-                / "backpropagate" / "cli.py"
-            ).read_text(encoding="utf-8")
-            assert "_trainer_sig_params" in cli_src, (
-                "Trainer does not accept Wave 6b kwargs AND the cmd_train "
-                "handler is missing the _trainer_sig_params guard. "
-                "Forwarded kwargs will TypeError. CROSS-DOMAIN REGRESSION."
-            )
+        # No assertion on params — Wave 6a may add or remove individual
+        # kwargs; the load-bearing contract is the guard, not any one
+        # kwarg's presence. This line exists so the params lookup isn't
+        # dead code under static analysis.
+        _ = kwarg_name in params
 
 
 # =============================================================================

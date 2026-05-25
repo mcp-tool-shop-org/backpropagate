@@ -84,7 +84,7 @@ For models 3B and smaller, full fine-tuning (not just LoRA) is feasible on 16GB 
 
 ## What Backpropagate is NOT for
 
-Honest scope helps everyone. Backpropagate doesn't do these things, and trying to make it do them would be a worse experience than reaching for the right tool:
+If your use case is below, you'll have a better time with a different library — Backpropagate is not the right pick and trying to make it work would cost more than just reaching for the right tool. Reading this section before you start saves the install-and-bounce cycle:
 
 - **Full-parameter fine-tuning of 7B+ models** — Backpropagate uses LoRA / QLoRA, which trains a small adapter rather than updating every weight. For models 7B and larger, full fine-tuning needs 24GB+ of GPU memory and doesn't fit on a 16GB consumer card. For models 3B and smaller, full fine-tuning IS feasible on 16GB; a `mode="full"` option is planned for v1.4. The bigger picture: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at 67% of the compute — so for the work most operators actually want, you don't lose anything by sticking with LoRA. If you genuinely need full fine-tuning of a 7B+ model, use HuggingFace `transformers.Trainer` directly on a 24GB+ card.
 - **DPO / PPO / GRPO / preference tuning** — Backpropagate does single-stage supervised fine-tuning only. For preference learning, use TRL directly or LLaMA-Factory.
@@ -331,12 +331,12 @@ When something fails, Backpropagate prints a line at startup like `run_started r
 
 A good bug report includes:
 
-1. **The `run_id`** — the UUID printed at startup.
-2. **The error code** — the `[CODE_NAME]: message` line in stderr. See [error codes](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) for the catalog.
-3. **The redacted command line.** Stderr is automatically redacted (Bearer tokens, `sk-*`, `hf_*`, AWS keys, `password=` / `token=` pairs are scrubbed) — safe to paste. For the full unredacted traceback, re-run with `--verbose`, but review before posting.
-4. **Python / PyTorch versions, GPU model, OS.** `backprop info` prints all of this in one go.
+1. **The `run_id`** — the UUID printed at startup. One UUID lets a maintainer correlate every log line, every checkpoint, and every Weights & Biases entry for that exact run.
+2. **The error code** — the `[CODE_NAME]: message` line in stderr. See [error codes](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) for the catalog of stable codes.
+3. **The redacted traceback.** Stderr is automatically redacted in non-verbose mode (Bearer tokens, `sk-*`, `hf_*`, AWS keys, `password=` / `token=` / `api_key=` pairs are scrubbed) — safe to paste. For the full unredacted traceback, re-run with `BACKPROPAGATE_DEBUG=1` (or `--verbose`); review before posting.
+4. **The `backprop info` output.** One command prints Python / PyTorch / CUDA / GPU model / VRAM / OS / installed extras — everything the maintainer needs to bisect a platform-specific regression.
 
-Questions, ideas, or "is this expected" threads belong in [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Security issues should be reported privately via the [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) form — see [SECURITY.md](SECURITY.md) for the policy.
+The [bug report template](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) prompts for each of these explicitly so triage moves fast. Questions, ideas, or "is this expected?" threads belong in [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Security issues should be reported privately via the [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) form — see [SECURITY.md](SECURITY.md) for the policy and response timelines.
 
 ## Privacy
 

@@ -24,16 +24,23 @@ If you are on Windows, Backpropagate handles the common PyTorch/CUDA pitfalls au
 
 ## 3. Installation
 
-Install Backpropagate with the recommended extras:
+Install Backpropagate with the recommended extras. `pipx` is the recommended install path — it puts Backpropagate in its own isolated environment with PATH integration, so you don't have to manage a virtualenv:
 
 ```bash
-pip install backpropagate[standard]
+pipx install "backpropagate[standard]"
 ```
 
-This gives you the core library plus Unsloth (2x faster training) and the Reflex (Radix UI) web interface. If you only want the Python API with no extras:
+This gives you the core library plus Unsloth (2× faster training) and the Reflex web interface. Other isolated install paths:
 
 ```bash
-pip install backpropagate
+uv tool install "backpropagate[standard]"   # uv's equivalent, faster install
+pip install "backpropagate[standard]"        # if you already manage a venv
+```
+
+If you only want the Python API with no extras:
+
+```bash
+pipx install backpropagate
 ```
 
 Verify the install:

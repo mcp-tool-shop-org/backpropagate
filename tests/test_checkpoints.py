@@ -67,18 +67,56 @@ def create_dummy_checkpoint(base_dir: Path, name: str, size_kb: int = 1) -> Path
 # =============================================================================
 
 class TestCheckpointPolicyDefaults:
-    """Tests for CheckpointPolicy default values."""
+    """Pin CheckpointPolicy default values.
 
-    def test_checkpoint_policy_defaults(self):
-        """Verify default values (keep_best_n=3, keep_final=True, etc.)."""
+    These defaults are an operator-facing contract: a user who passes
+    no ``policy=`` to ``CheckpointManager`` is implicitly opting into
+    the values here. Silently bumping ``max_total`` or flipping
+    ``auto_prune`` would change disk usage on every existing install.
+    Tests fail-loud if any default drifts.
+    """
+
+    def test_default_keep_best_n_is_3_and_max_total_10(self):
+        """Defaults: keep_best_n=3, keep_final=True, max_total=10, auto_prune=True.
+
+        Bumping any of these is a user-visible behavior change (disk
+        usage + retained-checkpoint count). If you intentionally change
+        a default, update this test AND the handbook's Checkpoint
+        Management page in the same PR.
+        """
         policy = CheckpointPolicy()
 
-        assert policy.keep_best_n == 3
-        assert policy.keep_final is True
-        assert policy.keep_run_boundaries is False
-        assert policy.max_total == 10
-        assert policy.min_improvement == 0.0
-        assert policy.auto_prune is True
+        assert policy.keep_best_n == 3, (
+            f"CheckpointPolicy default keep_best_n drifted: expected 3, "
+            f"got {policy.keep_best_n}. Operators rely on this default; "
+            f"bumping it changes disk usage on every existing install."
+        )
+        assert policy.keep_final is True, (
+            f"CheckpointPolicy default keep_final flipped from True to "
+            f"{policy.keep_final}. The 'final checkpoint is never pruned' "
+            f"contract is load-bearing for resume-from-final flows."
+        )
+        assert policy.keep_run_boundaries is False, (
+            f"CheckpointPolicy default keep_run_boundaries flipped from "
+            f"False to {policy.keep_run_boundaries}. SLAO multi-run "
+            f"opts-in to boundary retention; the single-run default is "
+            f"off to keep disk usage predictable."
+        )
+        assert policy.max_total == 10, (
+            f"CheckpointPolicy default max_total drifted: expected 10, "
+            f"got {policy.max_total}. This is the hard upper bound on "
+            f"retained checkpoints regardless of keep_best_n / keep_final."
+        )
+        assert policy.min_improvement == 0.0, (
+            f"CheckpointPolicy default min_improvement drifted: expected "
+            f"0.0 (every val-loss improvement counts), got "
+            f"{policy.min_improvement}."
+        )
+        assert policy.auto_prune is True, (
+            f"CheckpointPolicy default auto_prune flipped from True to "
+            f"{policy.auto_prune}. Auto-prune-on by default is load-bearing "
+            f"for the 'one-call register, never run out of disk' UX."
+        )
 
     def test_checkpoint_policy_custom_values(self):
         """Custom policy configuration."""
@@ -868,6 +906,189 @@ class TestManifestPersistence:
         assert "updated" in data
         # Should be a valid ISO format timestamp
         datetime.fromisoformat(data["updated"])
+
+
+# =============================================================================
+# BACKEND-B-003 MANIFEST SCHEMA-VERSION WARN PATH
+# =============================================================================
+
+class TestManifestVersionMismatchWarn:
+    """Pin the BACKEND-B-003 manifest schema-version WARN contract.
+
+    v1.3 added ``CheckpointManager.CURRENT_MANIFEST_VERSION`` and the
+    fail-loud-but-keep-going log on ``_load_manifest`` when the on-disk
+    ``version`` field doesn't match this build's expected version.
+    Coverage gap (Wave 3.5 TESTS-B-003): every existing test loaded
+    manifests at the current version, so the WARN branch was never
+    exercised. These tests pin:
+
+      1. Mismatch (disk_version != CURRENT_MANIFEST_VERSION) emits the
+         WARN log with both versions named.
+      2. Mismatch is non-fatal — manifest is still parsed, checkpoints
+         load.
+      3. Missing version field defaults to "0.0" (per the .get() fallback
+         in checkpoints.py:230) and surfaces the WARN.
+      4. Matching version is SILENT — no warn line on the happy path.
+
+    Why this matters: the WARN is what operators correlate weird
+    post-resume behavior to schema age. If the message ever silently
+    regresses (typo, refactor that drops one half of the version pair,
+    log-level change to DEBUG) we want the test to fail-loud naming the
+    contract.
+    """
+
+    def _write_manifest(self, temp_dir: Path, version: str | None) -> None:
+        """Helper: write a minimal manifest with the given on-disk version.
+
+        Passing ``None`` for ``version`` simulates a pre-v1.0 manifest
+        that predates the ``version`` field entirely.
+        """
+        manifest_data: dict = {
+            "updated": "2026-01-18T10:00:00",
+            "policy": {"keep_best_n": 3, "keep_final": True},
+            "checkpoints": [
+                {
+                    "run_index": 0,
+                    "path": str(temp_dir / "cp0"),
+                    "validation_loss": 0.5,
+                    "training_loss": 0.6,
+                    "timestamp": "2026-01-18T09:00:00",
+                    "is_run_boundary": False,
+                    "is_final": True,
+                    "size_bytes": 1024,
+                    "protected": False,
+                }
+            ],
+        }
+        if version is not None:
+            manifest_data["version"] = version
+
+        manifest_path = temp_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest_data))
+
+    def test_old_disk_version_emits_warn(self, temp_checkpoint_dir, caplog):
+        """BACKEND-B-003: disk_version='0.5' (older than 1.0) MUST WARN.
+
+        Asserts the warning text names BOTH the disk version AND the
+        expected version so an operator can grep the log for the actual
+        schema gap without re-reading source.
+        """
+        self._write_manifest(temp_checkpoint_dir, version="0.5")
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            CheckpointManager(str(temp_checkpoint_dir))
+
+        warn_records = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "version" in r.getMessage().lower()
+        ]
+        assert warn_records, (
+            "BACKEND-B-003 contract violated: no WARN emitted when manifest "
+            "disk_version='0.5' != CURRENT_MANIFEST_VERSION='1.0'. "
+            "Operators rely on this log to correlate weird post-resume "
+            f"behavior with schema age. caplog records: {caplog.records!r}"
+        )
+        msg = warn_records[0].getMessage()
+        assert "0.5" in msg, (
+            f"BACKEND-B-003 WARN text must name the on-disk version so "
+            f"operators see the actual gap; got: {msg!r}"
+        )
+        assert "1.0" in msg, (
+            f"BACKEND-B-003 WARN text must name the expected version so "
+            f"operators see the gap direction; got: {msg!r}"
+        )
+
+    def test_mismatch_is_non_fatal_load_still_succeeds(
+        self, temp_checkpoint_dir, caplog
+    ):
+        """BACKEND-B-003: WARN is fail-loud-but-keep-going, NOT raise.
+
+        v1.3 chose to log + continue rather than refuse the load; a real
+        migrator is deferred to v1.4. This test pins that choice — if
+        someone later promotes the mismatch to an exception, this test
+        fails and forces an explicit migration contract.
+        """
+        self._write_manifest(temp_checkpoint_dir, version="0.5")
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            manager = CheckpointManager(str(temp_checkpoint_dir))
+
+        checkpoints = manager.list_checkpoints()
+        assert len(checkpoints) == 1, (
+            "BACKEND-B-003 contract: version mismatch must be non-fatal "
+            f"(load + parse continue). Expected 1 checkpoint, got "
+            f"{len(checkpoints)}. If you intentionally promoted mismatch "
+            "to an exception, update this test AND ship a migrator."
+        )
+        assert checkpoints[0].run_index == 0, (
+            "Checkpoint payload must survive the WARN path unchanged."
+        )
+
+    def test_missing_version_field_defaults_to_zero_and_warns(
+        self, temp_checkpoint_dir, caplog
+    ):
+        """BACKEND-B-003: pre-v1.0 manifests (no version field) WARN as '0.0'.
+
+        Pins the ``data.get("version") or "0.0"`` fallback at
+        checkpoints.py:230. Pre-v1.0 manifests existed before the version
+        field was added; loading them should surface the gap so
+        operators see "your manifest predates the schema anchor."
+        """
+        self._write_manifest(temp_checkpoint_dir, version=None)
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            manager = CheckpointManager(str(temp_checkpoint_dir))
+
+        warn_records = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "version" in r.getMessage().lower()
+        ]
+        assert warn_records, (
+            "BACKEND-B-003 contract: pre-v1.0 manifests (no 'version' key) "
+            "must surface a WARN via the '0.0' fallback. The .get() "
+            "fallback at checkpoints.py:230 exists precisely for this case."
+        )
+        msg = warn_records[0].getMessage()
+        assert "0.0" in msg, (
+            f"Missing-version fallback must surface as '0.0' so operators "
+            f"recognize a pre-anchor manifest; got: {msg!r}"
+        )
+        # Load is still non-fatal
+        assert len(manager.list_checkpoints()) == 1
+
+    def test_current_version_is_silent_no_warn(
+        self, temp_checkpoint_dir, caplog
+    ):
+        """BACKEND-B-003 happy-path: matching version emits NO WARN.
+
+        The contract is fail-loud-on-mismatch, silent-on-match. If a
+        future refactor accidentally fires WARN on every load, operator
+        logs flood with false positives and the real schema-gap signal
+        gets buried. This test pins the silent half.
+        """
+        self._write_manifest(
+            temp_checkpoint_dir,
+            version=CheckpointManager.CURRENT_MANIFEST_VERSION,
+        )
+
+        with caplog.at_level("WARNING", logger="backpropagate.checkpoints"):
+            CheckpointManager(str(temp_checkpoint_dir))
+
+        version_warns = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "version" in r.getMessage().lower()
+            and "manifest" in r.getMessage().lower()
+        ]
+        assert not version_warns, (
+            "BACKEND-B-003 happy-path violated: matching "
+            f"version='{CheckpointManager.CURRENT_MANIFEST_VERSION}' must "
+            "NOT emit a version-mismatch WARN. Spurious WARNs on every "
+            f"load bury the real schema-gap signal. Got: "
+            f"{[r.getMessage() for r in version_warns]!r}"
+        )
 
 
 # =============================================================================

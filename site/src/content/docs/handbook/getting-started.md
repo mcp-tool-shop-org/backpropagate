@@ -14,10 +14,17 @@ sidebar:
 ## Installation
 
 ```bash
-pip install backpropagate[standard]    # Recommended: unsloth + ui
+# Recommended: isolated venv with PATH integration (no conflicts with system Python)
+pipx install "backpropagate[standard]"
+
+# Alternative isolated installer (same shape, different tool)
+uv tool install "backpropagate[standard]"
+
+# Standard pip (if you manage your own venv)
+pip install "backpropagate[standard]"
 ```
 
-Other install options:
+The `[standard]` extra is the right default for most operators — Unsloth (2× faster training) + the Reflex web UI. Drop the bracket if you only want the core Python API:
 
 | Extra | What you get |
 |-------|-------------|
@@ -29,7 +36,7 @@ Other install options:
 | `[monitoring]` | WandB + system monitoring |
 | `[logging]` | Structured logging via structlog |
 | `[security]` | JWT auth + token generation |
-| `[standard]` | unsloth + ui (recommended) |
+| `[standard]` | unsloth + ui (recommended default) |
 | `[production]` | unsloth + ui + validation + logging + security |
 | `[full]` | Everything |
 
@@ -135,7 +142,7 @@ To verify the adapter loaded cleanly, run `backprop info` — it lists which opt
 
 ## Troubleshooting
 
-If something failed during installation or first run, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's a symptoms-first reverse index keyed by what you actually saw in stderr.
+If something failed during installation or first run, head to the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's a symptoms-first reverse index keyed by what you actually saw in stderr. For CUDA-specific issues (OOM, CUBLAS, driver mismatch), see the dedicated [CUDA troubleshooting page](/backpropagate/handbook/troubleshooting-cuda/). For the full unredacted traceback when filing a bug, re-run with `BACKPROPAGATE_DEBUG=1` (or `--verbose`) — but review the output for any secrets before posting (Bearer tokens, `sk-*`, `hf_*`, AWS keys, `password=` / `token=` are auto-redacted in non-verbose mode, but the verbose mode disables redaction).
 
 ## Upgrading from v1.1.x
 

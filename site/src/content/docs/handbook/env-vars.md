@@ -25,6 +25,8 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BACKPROPAGATE_DEFER_FEATURE_DETECTION` | unset | When set (any truthy value), feature detection at startup is skipped — every optional dep flag stays `False` until you call `refresh_features()` explicitly. Use for the absolute-fastest CLI startup; pays the cost on first real use. |
+| `BACKPROPAGATE_DEFER_FEATURE_QUIET` | unset | Suppresses the one-shot import-time WARN that fires when `BACKPROPAGATE_DEFER_FEATURE_DETECTION` is active. v1.4 Stage C added the WARN so operators aren't surprised by the deferred-detection auto-refresh path; set this var to `1` if you've internalized the trade-off and want quiet startup. |
+| `BACKPROPAGATE_QUIET_TOKEN_HINT` | unset | Suppresses the one-shot stderr note that fires when `cmd_push` falls back to `HF_TOKEN` env var (because no `--token` / `--token-file` was passed). v1.4 Stage C added the note to calibrate the "env var vs file" safety trade-off; set this var to `1` to silence after you've calibrated. |
 | `BACKPROPAGATE_DEBUG` | unset | When set to any truthy value, the top-level CLI exception net prints the full Python traceback in addition to the one-line error message. Off by default to keep operator-facing failures short; flip to `1` when filing a bug report. |
 
 ## UI sandbox (FB-003)

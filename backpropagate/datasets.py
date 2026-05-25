@@ -1117,6 +1117,46 @@ def deduplicate_minhash(
             "datasketch required for minhash deduplication: pip install datasketch"
         )
 
+    # Stage C BACKEND-B-008 humanization: surface the expected memory
+    # footprint before the dedup pass for large datasets. Each MinHash
+    # holds ~``num_perm`` 64-bit ints plus Python object overhead, ~1KB
+    # per MinHash at num_perm=128. A 1M-sample dataset thus costs ~1GB
+    # just for the hashes; on a 16GB RAM workstation that can OOM the
+    # host process well before training starts. We log at INFO for big
+    # batches and WARN at the "this almost certainly won't fit" line.
+    sample_count = len(samples)
+    estimated_mb = sample_count * num_perm * 8 / (1024 * 1024)
+    if sample_count >= 100_000:
+        # The 100K-sample threshold is the "this is going to take a
+        # noticeable amount of time and memory; the operator deserves a
+        # heads-up" line. 1GB-of-MinHashes territory.
+        logger.info(
+            "deduplicate_minhash: estimated %.0fMB working memory "
+            "for %d samples at num_perm=%d (MinHash storage; LSH index "
+            "adds ~30%% on top). For dataset sizes >> 1M consider "
+            "shuffling + chunking the dataset and running dedup per "
+            "chunk if RAM is tight.",
+            estimated_mb,
+            sample_count,
+            num_perm,
+        )
+    if sample_count * num_perm > 100_000_000:
+        # Heuristic: when MinHash storage alone clears ~800MB we're in
+        # workstation-RAM trouble. Warn loud + name the operator's
+        # options (lower num_perm trades dedup precision for memory;
+        # chunked dedup trades correctness-at-cluster-boundaries for
+        # memory). Pre-fix this OOMed silently.
+        logger.warning(
+            "deduplicate_minhash: %d samples at num_perm=%d will "
+            "allocate ~%.0fMB just for the MinHash array. This may "
+            "exhaust RAM on a typical 16GB workstation. To proceed, "
+            "either lower num_perm (e.g. 64 — reduces precision near "
+            "the threshold cutoff), shuffle + chunk the dataset and "
+            "run dedup per chunk, or run on a larger-RAM machine. To "
+            "skip dedup entirely, pass dedup=False at the caller.",
+            sample_count, num_perm, estimated_mb,
+        )
+
     # Stage C amend BACKEND-B-007: phase 1 — build every MinHash up front.
     # No insert side effects in this pass so the per-sample minhash is
     # purely a function of its text.
@@ -1848,7 +1888,28 @@ class DatasetLoader:
             raise ValueError(f"Failed to load dataset: {e}") from e
 
     def _load_jsonl(self, path: Path) -> list[dict[Any, Any] | str]:
-        """Load JSONL file."""
+        """Load JSONL file.
+
+        Stage C BACKEND-B-015 humanization: pre-fix this emitted one
+        ``logger.warning`` per bad line, which on a corrupt 1M-line file
+        produces 500K WARN log lines and blows stderr buffers / log
+        shipping. We now log the FIRST few per-line warnings verbatim (so
+        the operator gets concrete diagnostic data on which lines failed
+        and why), then suppress the rest while tracking the count. The
+        post-loop summary line names the total skip count, the percentage,
+        and the actionable next step. The function still raises
+        DatasetParseError when 100% of non-empty lines fail (already
+        load-bearing — preserved).
+        """
+        # Threshold for verbose per-line WARN. The first N failures emit a
+        # full diagnostic line (line number + JSON error); subsequent
+        # failures are counted but silent until the post-loop summary.
+        # Tuned for "operator gets enough signal to find the bad rows" but
+        # "tail -f never floods" — 20 is large enough to capture a
+        # repeating pattern, small enough to fit in a single screen of
+        # output.
+        _VERBOSE_WARN_CEILING = 20
+
         samples: list[dict[Any, Any] | str] = []
         total_lines = 0
         skipped_lines = 0
@@ -1862,18 +1923,67 @@ class DatasetLoader:
                     samples.append(json.loads(line))
                 except json.JSONDecodeError as e:
                     skipped_lines += 1
-                    logger.warning(f"Invalid JSON on line {line_num}: {e}")
+                    if skipped_lines <= _VERBOSE_WARN_CEILING:
+                        logger.warning(f"Invalid JSON on line {line_num}: {e}")
+                    elif skipped_lines == _VERBOSE_WARN_CEILING + 1:
+                        # One-shot transition line so the operator knows
+                        # subsequent failures are being counted but
+                        # suppressed. Same shape as the curl/apt patterns.
+                        logger.warning(
+                            "JSONL parse: more than %d invalid lines in %s; "
+                            "suppressing per-line warnings — final count "
+                            "will be reported in the load summary.",
+                            _VERBOSE_WARN_CEILING,
+                            path.name,
+                        )
 
         if total_lines > 0 and not samples:
             raise DatasetParseError(
                 f"All {total_lines} non-empty lines in {path.name} failed JSON parsing. "
-                "File may be corrupted or not in JSONL format."
+                "File may be corrupted or not in JSONL format.",
+                path=str(path),
+                suggestion=(
+                    "Inspect the first failing line above for the JSON "
+                    "decode error (unescaped quotes, BOM, wrong encoding, "
+                    "or non-JSONL format are common causes). If the file "
+                    "is one big JSON object/array, save it as .json (not "
+                    ".jsonl) and reload — DatasetLoader auto-detects the "
+                    "extension. To convert a CSV / parquet source into "
+                    "JSONL, see the conversion examples in "
+                    "handbook/recipes.md."
+                ),
             )
 
         if total_lines > 0 and skipped_lines > total_lines * 0.5:
+            # Stage C BACKEND-B-015 humanization: name the operator's next
+            # step — verify encoding / format before training proceeds on
+            # the surviving rows. Pre-fix the warning was diagnostic-only
+            # ("high parse failure rate") with no actionable hint.
             logger.warning(
-                f"High parse failure rate: {skipped_lines}/{total_lines} lines "
-                f"({skipped_lines * 100 // total_lines}%) failed in {path.name}"
+                "High JSONL parse failure rate: %d/%d lines (%d%%) failed in %s. "
+                "Training will proceed on the %d surviving samples — verify "
+                "this is the dataset you intended. Common causes: file is a "
+                "single JSON document (rename .jsonl → .json), wrong encoding "
+                "(re-save as UTF-8 without BOM), or trailing-comma / "
+                "unescaped-quote rows that need cleanup. See "
+                "handbook/troubleshooting.md for the JSONL recovery recipe.",
+                skipped_lines,
+                total_lines,
+                skipped_lines * 100 // total_lines,
+                path.name,
+                len(samples),
+            )
+        elif skipped_lines > _VERBOSE_WARN_CEILING:
+            # When skip count is below the 50%-failure ceiling but did
+            # exceed the verbose-WARN ceiling, surface a single summary
+            # so the suppressed-per-line count isn't invisible.
+            logger.warning(
+                "JSONL load: %d/%d lines failed parsing in %s; "
+                "kept %d samples.",
+                skipped_lines,
+                total_lines,
+                path.name,
+                len(samples),
             )
 
         return samples

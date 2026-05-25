@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -222,7 +223,15 @@ def check_torch_security() -> bool:
 # Now the check fires once at module import, with a threading.Lock guarding
 # the bookkeeping flag for symmetry with the rest of the module.
 _torch_security_checked: bool = False
-_torch_security_lock = __import__("threading").Lock()
+# Stage C BACKEND-B-019 humanization: use the regular `threading.Lock()`
+# bound to the module-top `import threading` instead of the
+# `__import__("threading")` hack. Functionally identical; just easier to
+# grep / static-analyze. Subprocesses get their own check by design (each
+# subprocess re-imports backpropagate.security with a fresh
+# _torch_security_checked=False), so duplicate WARNs across subprocess
+# boundaries are expected — they're the safety bookkeeping firing once
+# per process, which is the intended contract.
+_torch_security_lock = threading.Lock()
 
 
 def _ensure_torch_security_checked() -> None:

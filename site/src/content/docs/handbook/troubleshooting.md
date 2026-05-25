@@ -74,6 +74,22 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 **Fix:** Lower `--samples` on the CLI (or `samples_per_run=` in the Python API) below the reported training pool size, OR pass a larger dataset, OR disable validation with `validate_every_run=False, early_stopping=False`.
 
+## "Multi-run training reported success but the model didn't actually learn" (v1.3.x only)
+
+**Symptom:** A multi-run finishes with `status=completed`, no exceptions raised, but the final adapter performs the same as the base model on your eval. Loss curves for run 2+ look flat compared to run 1.
+
+**Why (v1.3.x bug):** `MultiRunTrainer._compute_validation_loss` left the model stuck in `eval()` mode after a `CUDA out of memory` (or any exception escaping the validation loop). The next training pass silently produced no gradient updates — operators saw "training completed" but the model didn't learn anything new.
+
+**Fix:** Upgrade to v1.4 (`pip install -U backpropagate`). The validation body is now wrapped in `try ... finally: model.train()`, so the train-mode invariant is restored even on exception. If you have a v1.3.x multi-run that may have hit this, re-run on v1.4 from a clean checkpoint — the on-disk adapter for run 2+ is effectively untrained. See [BACKEND-B-003 in the v1.4 CHANGELOG](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#unreleased) for the full bug write-up.
+
+## "I called `.save()` and the adapter looks tiny / random"
+
+**Symptom:** `trainer.save("./out")` wrote a `.safetensors` file but the resulting LoRA performs like the base model. Or you copy-pasted an example that called `trainer.load_model()` then `.save()` without ever calling `.train()`.
+
+**Why:** `.save()` writes whatever LoRA weights are currently in memory — including the initial (random / zero) weights if `.train()` never ran.
+
+**Fix (v1.4):** Look in your stderr for a WARN line like `Trainer.save() called before train() — writing init-weight LoRA adapter to <path>`. v1.4 emits this cue at every `save()` call where `_has_trained=False`. The save still completes (no exception), so existing tooling that pre-creates output dirs still works — but the warning tells you what happened. If you see it, call `trainer.train(...)` before `trainer.save(...)`. See BACKEND-B-004 in the v1.4 CHANGELOG.
+
 ## "Unsloth import failed, falling back to transformers"
 
 **Symptom:** Warning at startup: *Unsloth load failed (...); falling back to transformers + PEFT. Set Trainer(unsloth_fallback=False) to disable.*

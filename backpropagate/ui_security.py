@@ -2915,6 +2915,23 @@ def get_gradio_csp(report_only: bool = False) -> ContentSecurityPolicy:
     Returns:
         ContentSecurityPolicy instance
     """
+    # FRONTEND-B-007 (v1.4 Wave 4 Stage C humanization): emit a
+    # DeprecationWarning so any downstream caller importing the Gradio
+    # name sees an audit-trail rather than silent grandfathering onto
+    # the historical Gradio-era allowlist. ``stacklevel=2`` points the
+    # warning at the caller of ``get_gradio_csp``, not this function.
+    # Wave 6a will retire ``DEFAULT_GRADIO_CSP`` / ``get_gradio_csp``
+    # outright per ``V1_4_BRIEF`` item 7; until then, this warning is
+    # the operator-facing migration nudge.
+    import warnings as _warnings
+
+    _warnings.warn(
+        "get_gradio_csp / DEFAULT_GRADIO_CSP are deprecated as of v1.4; "
+        "use get_reflex_csp / DEFAULT_REFLEX_CSP for the Reflex UI. "
+        "Wave 6a will remove the gradio-named symbols.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     config = CSPConfig(
         script_src=DEFAULT_GRADIO_CSP.script_src.copy(),
         style_src=DEFAULT_GRADIO_CSP.style_src.copy(),

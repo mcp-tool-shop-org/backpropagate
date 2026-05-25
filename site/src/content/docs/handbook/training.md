@@ -5,6 +5,8 @@ sidebar:
   order: 2
 ---
 
+This page is the canonical reference for the training surface — every `Trainer(...)` parameter, every `multi_run` knob, every callback hook, every preset, every dataset format Backpropagate auto-detects. If you're just getting started, head to [Getting Started](/backpropagate/handbook/getting-started/) for the 3-line API and an end-to-end first run. If you have a specific operator goal in mind (resume after OOM, push to Hub, multi-GPU, diff two runs), see [Recipes](/backpropagate/handbook/recipes/) for paste-and-run snippets.
+
 ## Basic training
 
 ```python
@@ -60,6 +62,11 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | `train_on_responses` | `True` (auto-disabled on Windows) | Compute loss only on assistant responses. See note below. |
 | `oom_recovery` | `True` | B-002 graceful OOM handling: catch `torch.cuda.OutOfMemoryError`, halve batch size, clear cache, retry. Up to 3 retries at the minimum batch size. Set `False` to make OOM a hard failure. |
 | `unsloth_fallback` | `True` | B-010 graceful degradation: if `use_unsloth=True` but Unsloth's loader raises (e.g. a broken nightly), fall back to plain `transformers` + `peft`. Set `False` to make Unsloth failures hard-fail. |
+| `use_dora` | `False` | v1.3 BACKEND-1 — enable DoRA (Weight-Decomposed Low-Rank Adaptation). Rank-8 DoRA matches rank-32 LoRA quality (+2.8% on LLaMA-7B); merges to zero inference overhead. Requires `peft>=0.10`. |
+| `packing` | `True` | v1.3 BACKEND-1 — sample packing (combine short sequences into single batches). Default ON gives 1.7-3× throughput on variable-length conversational datasets. Set `False` if you hit packing-incompatible behavior. |
+| `init_lora_weights` | `"default"` | v1.3 BACKEND-1 — one of `"default"` / `"pissa"` / `"loftq"`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
+| `optim` | `None` (auto) | v1.3 BACKEND-1 — optimizer string. `None` auto-picks `"paged_adamw_8bit"` on consumer GPUs (<24GB VRAM, per [arXiv:2509.12229](https://arxiv.org/abs/2509.12229) RTX 4060 study), `"adamw_torch_fused"` otherwise. Override with `"adamw_torch"` / `"paged_adamw_8bit"` / `"adamw_8bit"` etc. |
+| `lora_preset` | `"quality"` | v1.3 BACKEND-1 — one of `"quality"` (rank 256 + all-linear + 10× LR, default) or `"fast"` (rank 16 + q+v + 1× LR, v1.2.x footprint). Per [Biderman 2024](https://arxiv.org/abs/2405.09673), `"quality"` matches full fine-tuning on most post-training tasks. |
 
 ### `train_on_responses` on Windows
 

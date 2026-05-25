@@ -2466,16 +2466,30 @@ class MultiRunTrainer:
         # mode for the next run. If .eval() fails the model state is
         # already broken; return +inf and let upstream early-stop logic
         # see this as a worst-case run.
+        #
+        # Wave 3.5 BACKEND-B-003: the model.eval() call MUST live inside
+        # the try/finally pair whose finally restores model.train() — pre-
+        # fix the eval() succeeded outside the try block, so if ANY
+        # exception fired between the eval() success and the for-loop
+        # entry (e.g. an exotic dataset iterator raising in __iter__,
+        # `with torch.no_grad():` failing in a partially-corrupt CUDA
+        # context, an asynchronous interrupt mid-statement), the model
+        # stayed in eval mode forever. Subsequent training runs would
+        # then silently train with disabled dropout / disabled BN-stat
+        # updates, degrading quality without any error. The fix moves
+        # eval() to the FIRST statement of the try block so the finally
+        # at the bottom always fires on the success-of-eval branch.
         try:
-            model.eval()
-        except AttributeError as exc:
-            logger.warning(
-                f"_compute_validation_loss: model.eval() raised "
-                f"AttributeError ({exc}); model object is corrupt. "
-                f"Returning +inf so this run is treated as worst-case."
-            )
-            return float("inf")
-        try:
+            try:
+                model.eval()
+            except AttributeError as exc:
+                logger.warning(
+                    f"_compute_validation_loss: model.eval() raised "
+                    f"AttributeError ({exc}); model object is corrupt. "
+                    f"Returning +inf so this run is treated as worst-case."
+                )
+                return float("inf")
+
             total_loss = 0.0
             count = 0
             skipped = 0

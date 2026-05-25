@@ -98,7 +98,7 @@ A successful first run prints something like:
 ```
 run_started run_id=8f3a2c1d-9e4b-4c5a-...
 Trainer initialized: Qwen/Qwen2.5-7B-Instruct
-  LoRA: r=16, alpha=32
+  LoRA: r=256, alpha=512
   Batch: 2, LR: 0.0002
   Degradation knobs: oom_recovery=True, unsloth_fallback=True
 Training: [####################] 100% loss=0.42  steps=100
@@ -115,7 +115,7 @@ my-model/
 └── tokenizer.json            <- copied from the base model
 ```
 
-To know it worked: `adapter_model.safetensors` should be ~50–200 MB (rank 16 LoRA on a 7B base), and `backprop info` should show no errors. If the loss decreased over the run (you'll see logging lines every 10 steps), the model learned something.
+To know it worked: `adapter_model.safetensors` should be a few hundred MB to ~1.5 GB on a 7B base (v1.3 default is rank 256 + all-linear; pass `--lora-preset=fast` for the v1.2.x rank-16 ~50–200 MB footprint), and `backprop info` should show no errors. If the loss decreased over the run (you'll see logging lines every 10 steps), the model learned something.
 
 If something went wrong, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's keyed by what you actually saw in stderr.
 

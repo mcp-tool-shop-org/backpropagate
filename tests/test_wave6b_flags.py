@@ -721,6 +721,74 @@ class TestCmdReplay:
         rc = cmd_replay(args)
         assert rc == EXIT_USER_ERROR
 
+    def test_replay_multi_run_override_applies_to_mr_trainer_kwargs(self, tmp_path):
+        """--override use_dora=true overrides the recorded value on a multi_run replay.
+
+        BRIDGE-B-001 plumbing (v1.4 Wave 3.5): the multi_run branch of
+        cmd_replay (cli.py:3786-3852) must mirror the single_run branch's
+        VAR_KEYWORD detection so a MagicMock-patched MultiRunTrainer that
+        advertises ``(*args, **kwargs)`` doesn't get its Wave 6b override
+        kwargs silently filtered out. Pre-fix, the multi_run branch built
+        ``_mr_trainer_params`` from a regular ``signature().parameters`` set
+        without checking for VAR_KEYWORD; a MagicMock's catch-all kwargs
+        signature produces an empty set, so every Wave 6b override was
+        dropped on the multi_run path while the single_run path passed
+        them through correctly. Sibling-pattern instance of the Wave 2
+        coordinator fix on the single_run branch; flagged by Wave 3 Stage B
+        audit under the locked
+        [[grep-all-instances-when-fixing-pattern]] doctrine.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import EXIT_OK, cmd_replay
+
+        manager = RunHistoryManager(str(tmp_path))
+        manager.record_run_started(
+            run_id="mr-override",
+            model_name="test-model",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "num_runs": 3,
+                "steps_per_run": 50,
+                "samples_per_run": 500,
+                "use_dora": False,
+            },
+            session_kind="multi_run",
+        )
+
+        fake_mr_trainer = MagicMock()
+        fake_mr_trainer.run.return_value = MagicMock(
+            total_runs=3, final_loss=0.4, aborted=False
+        )
+
+        with patch(
+            "backpropagate.multi_run.MultiRunTrainer",
+            return_value=fake_mr_trainer,
+        ) as mock_cls:
+            args = MagicMock()
+            args.output = str(tmp_path)
+            args.run_id = "mr-override"
+            # argparse parses --override key=value into a list of (key, value) tuples.
+            # use_dora is whitelisted (BRIDGE Wave 6b additions in
+            # _REPLAY_ALLOWED_OVERRIDE_KEYS at cli.py:3610).
+            args.override = [("use_dora", "true")]
+            args.cli_run_id = None
+            args.verbose = False
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        # The override propagated all the way through; coerced to bool by
+        # cmd_replay's _coerce helper. Pre-BRIDGE-B-001 this was None / missing.
+        assert init_kwargs.get("use_dora") is True, (
+            f"--override use_dora=true must reach the MultiRunTrainer "
+            f"constructor on a multi_run replay; got "
+            f"use_dora={init_kwargs.get('use_dora')!r} (recorded was False). "
+            f"BRIDGE-B-001 regression: the VAR_KEYWORD detection on the "
+            f"multi_run branch was lost or broken."
+        )
+
 
 class TestWave6bExportRunsSubcommand:
     """`backprop export-runs --format=jsonl` (BRIDGE-8)."""

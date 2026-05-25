@@ -837,6 +837,19 @@ class Trainer:
         self._is_loaded = False
         self._training_runs: list[TrainingRun] = []
 
+        # Wave 3.5 BACKEND-B-004: track whether train() actually completed at
+        # least once. Pre-fix, an operator who called load_model() then save()
+        # WITHOUT train() got a freshly-initialized LoRA adapter on disk —
+        # rank-r Gaussian-noise weights per PEFT defaults (Biderman 2024 /
+        # Thinking Machines 2025) — saved as if it were a trained checkpoint.
+        # The save itself is technically valid (operators may want to verify
+        # the base model loaded right), but the silence makes it indistinguishable
+        # from a successfully-trained save. _has_trained gates a tripwire
+        # warning in .save() that names the situation and points at .train()
+        # as the typical next step. Set to True at the end of .train() after
+        # the successful training run is appended to self._training_runs.
+        self._has_trained: bool = False
+
         # Apply Windows fixes
         self._apply_windows_fixes()
 
@@ -1974,6 +1987,15 @@ class Trainer:
 
             self._training_runs.append(run)
 
+            # Wave 3.5 BACKEND-B-004: flip the tripwire flag now that an
+            # actual SFTTrainer.train() invocation has completed and produced
+            # a TrainingRun. Set here (after the run is appended) rather
+            # than at train()-entry so a failed train() still trips the
+            # save() warning — the failure may have left the adapter
+            # weights in an indeterminate state, which is exactly the
+            # situation operators benefit from being warned about.
+            self._has_trained = True
+
             if callback and callback.on_complete:
                 try:
                     callback.on_complete(run)
@@ -2303,6 +2325,27 @@ class Trainer:
 
         if not self._is_loaded:
             raise TrainingError("No model loaded. Call load_model() or train() first.")
+
+        # Wave 3.5 BACKEND-B-004: tripwire warning for the load-then-save-
+        # without-train workflow. Pre-fix, an operator who did
+        # ``Trainer(...).load_model(); trainer.save("./out")`` got a
+        # freshly-initialized LoRA adapter on disk — rank-r Gaussian-noise
+        # weights from PEFT init defaults — saved as if it were a trained
+        # checkpoint. The save itself is technically valid (the operator
+        # may legitimately be verifying the base model loaded right), but
+        # the silence makes the untrained save indistinguishable from a
+        # successfully-trained save. We warn instead of blocking because
+        # the "save the base model to verify it loaded right" workflow is
+        # a real operator pattern; the warning is a tripwire that names
+        # the situation and points at .train() as the typical next step.
+        if not self._has_trained:
+            logger.warning(
+                "Saving a loaded but untrained model — Trainer.train() was "
+                "never called. The on-disk adapter weights are init values, "
+                "not learned weights. If this is intentional (e.g. verifying "
+                "base-model load), ignore this warning. If you meant to train "
+                "first, call trainer.train(dataset=...) before save()."
+            )
 
         output_path = Path(path or self.output_dir / "lora")
         partial_path = output_path.with_name(output_path.name + ".partial")

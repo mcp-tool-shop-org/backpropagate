@@ -48,8 +48,8 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `model` | `Qwen/Qwen2.5-7B-Instruct` | HuggingFace model name or local path |
-| `lora_r` | 16 | LoRA rank |
-| `lora_alpha` | 32 | LoRA scaling factor |
+| `lora_r` | 256 | LoRA rank (must be > 0). v1.3 quality preset; pass --lora-preset=fast for v1.2.x rank-16. |
+| `lora_alpha` | 512 | LoRA scaling factor (alpha = 2 * r convention; v1.3 quality preset. Pass `--lora-preset=fast` for the v1.2.x alpha=32). |
 | `lora_dropout` | 0.05 | LoRA dropout rate |
 | `learning_rate` | 2e-4 | Learning rate |
 | `batch_size` | `"auto"` | Per-device batch size (auto-detects from VRAM) |

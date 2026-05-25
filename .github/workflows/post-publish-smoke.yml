@@ -154,6 +154,18 @@ jobs:
     if: always() && needs.gate.result == 'success' && (needs.pypi-smoke.result == 'failure' || needs.docker-smoke.result == 'failure')
     runs-on: ubuntu-latest
     steps:
+      - name: Ensure required labels exist
+        # CIDOCS-B-001 — gh issue create silently no-ops if the labels
+        # don't exist on the repo. Bootstrap them idempotently before any
+        # issue-creation path so the failure-observability surface is
+        # actually reachable on a fresh repo / freshly-renamed label.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh label create "ci" --description "Continuous integration related issues" --color "0E8A16" --force 2>/dev/null || true
+          gh label create "post-publish-smoke" --description "Issues from post-publish smoke test" --color "FBCA04" --force 2>/dev/null || true
+
       - name: Open / append issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

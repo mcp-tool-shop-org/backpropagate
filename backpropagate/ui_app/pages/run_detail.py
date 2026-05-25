@@ -537,6 +537,42 @@ def _not_found() -> rx.Component:
     )
 
 
+def _was_deleted() -> rx.Component:
+    """FRONTEND-B-001 (v1.4 Wave 3.5): post-successful-delete chrome.
+
+    Renders when ``RunDetailState.was_deleted`` is true — distinct from
+    ``_not_found()`` (unknown-id navigation surface). The pre-fix code
+    set ``not_found=True`` after a successful delete which latched the
+    operator into the not-found chrome and stranded the success message
+    in ``action_result`` behind a template that never displays it. This
+    chrome shows the deletion confirmation + an explicit "Back to runs
+    list" button so the next action is unambiguous.
+    """
+    return rx.flex(
+        rx.text(
+            "Run deleted.",
+            size="4",
+            style={"color": "var(--bp-text)", "font_weight": "500"},
+        ),
+        rx.text(
+            RunDetailState.action_result,
+            size="2",
+            style={"color": "var(--bp-muted)"},
+        ),
+        rx.button(
+            rx.icon("arrow-left", size=16),
+            "Back to runs list",
+            on_click=lambda: rx.redirect("/runs"),
+            variant="soft",
+            style={"margin_top": "8px"},
+        ),
+        direction="column",
+        gap="3",
+        padding="6",
+        align="center",
+    )
+
+
 def run_detail_page() -> rx.Component:
     """The ``/runs/[run_id]`` route."""
     return rx.flex(
@@ -557,19 +593,31 @@ def run_detail_page() -> rx.Component:
                         ),
                         rx.fragment(),
                     ),
+                    # FRONTEND-B-001 (v1.4 Wave 3.5): branch on
+                    # ``was_deleted`` FIRST so a successful delete renders
+                    # the "Run deleted." confirmation chrome, NOT the
+                    # "Run not found" surface. The two states are
+                    # distinct user-facing situations (the run was just
+                    # removed by THIS operator vs. an unknown id arrived
+                    # via navigation) and must not collapse into one
+                    # template.
                     rx.cond(
-                        RunDetailState.not_found,
-                        _not_found(),
-                        rx.flex(
-                            _metadata_header(),
-                            _metrics_chart(),
-                            _hyperparam_table(),
-                            _checkpoint_list(),
-                            _log_viewer(),
-                            _action_panel(),
-                            direction="column",
-                            gap="4",
-                            width="100%",
+                        RunDetailState.was_deleted,
+                        _was_deleted(),
+                        rx.cond(
+                            RunDetailState.not_found,
+                            _not_found(),
+                            rx.flex(
+                                _metadata_header(),
+                                _metrics_chart(),
+                                _hyperparam_table(),
+                                _checkpoint_list(),
+                                _log_viewer(),
+                                _action_panel(),
+                                direction="column",
+                                gap="4",
+                                width="100%",
+                            ),
                         ),
                     ),
                     direction="column",

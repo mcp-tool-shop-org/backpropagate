@@ -99,9 +99,12 @@ def _resolve_auth_context(env: dict[str, str]) -> tuple[str, str]:
     in opportunistically — request-logging runs AFTER the auth middleware in
     the ASGI chain, so by the time we emit, the request has already passed
     the auth gate. We cannot easily reach back into auth's local ``authed_user``
-    variable from here, so the user field is left empty for now; a v1.4
-    enhancement would have auth populate a scope key (e.g.
-    ``scope['_bp_auth_user']``) that this middleware then reads.
+    variable from here, so the user field is left empty. The scope-key
+    enhancement (``scope['_bp_auth_user']`` written by auth, read here) is a
+    v1.5 candidate — v1.4 ships with the empty user field on this surface;
+    the audit logger in ``auth.py`` still records ``auth_user`` on its own
+    per-request line so identity is not lost, just absent from this
+    request-logging line.
     """
     try:
         from ..auth import _detect_mode

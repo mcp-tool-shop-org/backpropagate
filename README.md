@@ -78,7 +78,9 @@ Here's the practical envelope on a 16GB card (RTX 4080 / 5080 / 4070 Ti Super):
 | Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | Comfortable. Full sequence length, room to spare. |
 | Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | Standard. ~7-8 GB. Backpropagate's default presets. |
 | Llama-3 13B | QLoRA + sample packing | Tight but works. Use shorter sequences. |
-| Mixtral 8x7B (47B total parameters) | AQLM 2-bit + LoRA | Experimental in v1.4. The largest model you can touch on a 16GB card. |
+| Mixtral 8x7B (47B total parameters) | AQLM 2-bit + LoRA | Planned for v1.5 — see V1_5_BRIEF when posted. |
+
+AQLM 2-bit quantization (`quant_method="aqlm"` experimental opt-in for Mixtral-8x7B on 16GB) was scoped for v1.4 and is now planned for v1.5. The `aqlm` library is mature; the v1.4 wave-budget prioritized full fine-tuning support for ≤3B models (`mode="full"`) over adding a new quantization backend. See V1_5_BRIEF when posted for the v1.5 implementation plan.
 
 For models 3B and smaller, full fine-tuning (not just LoRA) is feasible on 16GB and is planned as a `mode="full"` option for v1.4. For 7B+ models, full fine-tuning needs a 24GB+ GPU — consider an A100 cloud rental, or stick with LoRA, which recent research shows matches full fine-tuning quality on most post-training tasks anyway (see [the anti-pitch section](#what-backpropagate-is-not-for) for citations).
 

@@ -1188,6 +1188,33 @@ def cmd_export(args: argparse.Namespace) -> int:
         )
         return EXIT_USER_ERROR
 
+    # BRIDGE-F-001 (Wave 5.5 Path D escalation): reject --ollama with a
+    # non-gguf --format up front. Pre-fix this combination silently no-op'd
+    # the Ollama registration step — the LoRA/merged export ran to completion
+    # and the operator saw "Export complete!" but Ollama never received the
+    # model, because the registration gate at the bottom of the handler
+    # short-circuits on ``args.format == "gguf"``. Same Stage-A-caliber CLI
+    # contract violation as the v1.1 export bypass: operator asked for X,
+    # CLI silently complied with PART of X.
+    #
+    # Mirrors the --hub-token / --hub-token-file mutex (line ~1462 below)
+    # and the v1.3 --auth-file / --auth mutex (cmd_ui, ~line 2580): early
+    # raise with two named migration paths so the operator can resolve the
+    # incompatibility without re-reading --help.
+    if args.ollama and args.format != "gguf":
+        raise UserInputError(
+            f"--ollama requires --format=gguf (got --format={args.format}). "
+            "Ollama can only register GGUF-quantized models; LoRA adapters "
+            "and merged checkpoints are not Ollama-importable.",
+            hint=(
+                "Re-run with --format=gguf to combine export + Ollama "
+                f"registration in one step, OR drop --ollama / --ollama-name "
+                f"to perform a --format={args.format}-only export without "
+                "Ollama registration."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+
     # BRIDGE-B-002: reuse main()'s cli_run_id so a single token correlates
     # CLI output / structured logs / model_card.md / Hub push metadata.
     cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex

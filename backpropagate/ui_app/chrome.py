@@ -241,8 +241,13 @@ def BpLeftNav(active: str = "train") -> rx.Component:
     FRONTEND-B-011 (Stage C truth-in-advertising): the Settings link was
     removed in v1.3 because the /settings route is not yet registered in
     ``ui_app/app.py`` (Reflex returns a generic not-found page on click).
-    The link returns when the Settings surface ships (currently scoped to
-    a v1.4 follow-up); shipping a visible dead link is operator-hostile.
+    The Settings surface did NOT land in v1.4 either — per the Wave 5
+    feature audit (FRONTEND-F-015) the route is now a v1.5 candidate
+    homing theme toggle + default-output-dir + default-quantization +
+    default-lora-preset + BACKPROPAGATE_UI_* env-var inspector + auth-
+    token rotation (FRONTEND-F-007). The link returns when /settings is
+    registered in ``ui_app/app.py``; shipping a visible dead link is
+    operator-hostile.
     """
     return rx.flex(
         rx.flex(

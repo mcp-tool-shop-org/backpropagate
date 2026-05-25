@@ -87,9 +87,11 @@ See [Environment variables](/backpropagate/handbook/env-vars/) for the complete 
 
 ## Training presets
 
-> **Two preset namespaces exist, and they BOTH use the names `"fast"` and `"quality"`.** They control different things and have different defaults. If you reach for a preset called `"quality"`, you almost certainly want **`--lora-preset=quality`** (the LoRA-shape preset — rank 256, all-linear, 10× LR — the v1.3 default). The table below is the OTHER namespace: `TRAINING_PRESETS`, which governs multi-run loop hyperparameters (run count, samples-per-run, etc.) and predates the v1.3 `LORA_PRESETS`. A namespace rename is tracked for v1.5 (see [WAVE_5_FEATURE_AUDIT_NOTES.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/WAVE_5_FEATURE_AUDIT_NOTES.md#training_presets-vs-lora_presets-namespace-collision-operator-trap-class)).
+> **Two preset namespaces exist, and they BOTH use the names `"fast"` and `"quality"`.** They control different things and have different defaults. If you reach for a preset called `"quality"`, you almost certainly want **`--lora-preset=quality`** (the LoRA-shape preset — rank 256, all-linear, 10× LR — the v1.3 default). The table below is the OTHER namespace: `MULTI_RUN_PRESETS`, which governs multi-run loop hyperparameters (run count, samples-per-run, etc.) and predates the v1.3 `LORA_PRESETS`.
 
-Built-in presets for common multi-run scenarios (`TRAINING_PRESETS`):
+> **Rename note (v1.4):** the multi-run-loop preset table was renamed from `TRAINING_PRESETS` → `MULTI_RUN_PRESETS` in v1.4 to disambiguate from `LORA_PRESETS`. The legacy `TRAINING_PRESETS` name still resolves from `backpropagate.config` via a module-level `__getattr__` shim and emits a `DeprecationWarning`. **The 3-version cycle:** v1.4 → `DeprecationWarning` · v1.5 → `UserWarning` · v1.6 → removed. New code should import `MULTI_RUN_PRESETS`; see [migrations → v1.3 → v1.4](/backpropagate/handbook/migrations/#v13--v14) for the full operator narrative. The Wave 5 audit that surfaced the collision lives at [WAVE_5_FEATURE_AUDIT_NOTES.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/WAVE_5_FEATURE_AUDIT_NOTES.md#training_presets-vs-lora_presets-namespace-collision-operator-trap-class).
+
+Built-in presets for common multi-run scenarios (`MULTI_RUN_PRESETS`):
 
 | Preset | LoRA r | Eff. Batch | LR | Runs | Use case |
 |--------|--------|-----------|-----|------|----------|

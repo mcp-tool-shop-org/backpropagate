@@ -6,8 +6,30 @@ Production-hardened security utilities used by the Reflex web interface
 (canonical from v1.1.0). The helpers were originally authored against Gradio
 in v1.0; several still carry ``gradio`` in their names for back-compatibility
 (``safe_gradio_handler``, ``DEFAULT_GRADIO_CSP``, etc.) and the underlying
-behavior is framework-agnostic. v1.3 plans a symbol rename with deprecation
-aliases so downstream consumers get a graceful migration path.
+behavior is framework-agnostic.
+
+**v1.4 symbol rename (FRONTEND, Wave 6a foundation).** The Gradio-prefixed
+public names were renamed to framework-agnostic canonical names. The legacy
+names continue to resolve via module-level ``__getattr__`` and emit a
+``DeprecationWarning`` pointing operators at the new symbol. The
+deprecation cycle is locked at three versions (advisor 2026-05-25 Q4):
+
+* **v1.4** — ``DeprecationWarning`` on legacy name access (this release).
+* **v1.5** — escalates to ``UserWarning`` for higher operator visibility.
+* **v1.6** — legacy names removed; access raises ``AttributeError``.
+
+| Legacy (v1.0 Gradio era) | Canonical (v1.4+) |
+|---|---|
+| ``safe_gradio_handler`` | ``safe_ui_handler`` |
+| ``raise_gradio_error`` | ``raise_ui_error`` |
+| ``raise_gradio_warning`` | ``raise_ui_warning`` |
+| ``raise_gradio_info`` | ``raise_ui_info`` |
+| ``RequestContext.from_gradio_request`` | ``RequestContext.from_request`` |
+| ``DEFAULT_GRADIO_CSP`` | ``DEFAULT_REFLEX_CSP`` (see FRONTEND-A-003 Wave 2) |
+| ``get_gradio_csp`` | ``get_reflex_csp`` (see FRONTEND-A-003 Wave 2) |
+
+See ``site/src/content/docs/handbook/migrations.md`` for the full operator
+migration narrative.
 
 Based on:
 - Trail of Bits Gradio 5 Security Audit (https://huggingface.co/blog/gradio-5-security)
@@ -34,7 +56,7 @@ Usage:
         EnhancedRateLimiter,
         FileValidator,
         validate_and_log_request,
-        raise_gradio_error,
+        raise_ui_error,
         get_health_status,
         RequestContext,
     )
@@ -114,11 +136,14 @@ __all__ = [
     "ALLOWED_MODEL_EXTENSIONS",
     "DANGEROUS_EXTENSIONS",
     "validate_file_magic",
-    # Gradio error helpers
-    "raise_gradio_error",
-    "raise_gradio_warning",
-    "raise_gradio_info",
-    "safe_gradio_handler",
+    # UI error helpers — canonical v1.4+ names (framework-agnostic).
+    # Legacy Gradio-prefixed names continue to resolve via module-level
+    # __getattr__ + emit DeprecationWarning (v1.4) → UserWarning (v1.5) →
+    # AttributeError (v1.6). See module docstring for the rename table.
+    "raise_ui_error",
+    "raise_ui_warning",
+    "raise_ui_info",
+    "safe_ui_handler",
     # Request validation
     "validate_and_log_request",
     "sanitize_filename",
@@ -923,19 +948,29 @@ def sanitize_filename(filename: str) -> str:
 
 
 # =============================================================================
-# GRADIO ERROR HELPERS
+# UI ERROR HELPERS (framework-agnostic; v1.4 rename of gradio_* names)
 # =============================================================================
+#
+# Authored against Gradio in v1.0; v1.1.0 migrated the canonical UI to Reflex
+# but the helpers stayed framework-agnostic — they wrap whatever ``gr.*`` the
+# module's import-time fallback resolved to (real Gradio when installed,
+# ``_GradioShim`` otherwise). The v1.4 rename drops the ``gradio_`` prefix
+# from the public names while preserving the legacy names as deprecation
+# aliases (see module-level ``__getattr__`` near the file footer).
 
-def raise_gradio_error(
+def raise_ui_error(
     message: str,
     duration: int | None = 10,
     title: str = "Error",
     log: bool = True,
 ) -> None:
     """
-    Raise a Gradio error with proper formatting.
+    Raise a UI error with proper formatting.
 
-    Use this instead of returning error strings for better UX.
+    Use this instead of returning error strings for better UX. The
+    function name lost the ``gradio_`` prefix in v1.4; the
+    ``raise_gradio_error`` legacy alias keeps working with a
+    ``DeprecationWarning`` until v1.6.
 
     Args:
         message: Error message to display
@@ -952,16 +987,18 @@ def raise_gradio_error(
     raise gr.Error(message, duration=duration, title=title)
 
 
-def raise_gradio_warning(
+def raise_ui_warning(
     message: str,
     duration: int | None = 5,
     title: str = "Warning",
     log: bool = True,
 ) -> None:
     """
-    Show a Gradio warning (non-blocking).
+    Show a UI warning (non-blocking).
 
-    Unlike gr.Error, this does NOT halt execution.
+    Unlike gr.Error, this does NOT halt execution. The function name lost
+    the ``gradio_`` prefix in v1.4; the ``raise_gradio_warning`` legacy
+    alias keeps working with a ``DeprecationWarning`` until v1.6.
 
     Args:
         message: Warning message
@@ -975,13 +1012,17 @@ def raise_gradio_warning(
     gr.Warning(message, duration=duration, title=title)
 
 
-def raise_gradio_info(
+def raise_ui_info(
     message: str,
     duration: int | None = 3,
     title: str = "Info",
 ) -> None:
     """
-    Show a Gradio info message (non-blocking).
+    Show a UI info message (non-blocking).
+
+    The function name lost the ``gradio_`` prefix in v1.4; the
+    ``raise_gradio_info`` legacy alias keeps working with a
+    ``DeprecationWarning`` until v1.6.
 
     Args:
         message: Info message
@@ -994,13 +1035,13 @@ def raise_gradio_info(
 F = TypeVar('F', bound=Callable[..., Any])
 
 
-def safe_gradio_handler(
+def safe_ui_handler(
     operation_name: str = "operation",
     rate_limiter: EnhancedRateLimiter | None = None,
     log_errors: bool = True,
 ) -> Callable[[F], F]:
     """
-    Decorator to wrap Gradio handlers with security features.
+    Decorator to wrap UI handlers with security features.
 
     Features:
     - Converts exceptions to gr.Error for proper UI display
@@ -1008,8 +1049,13 @@ def safe_gradio_handler(
     - Security event logging
     - Request validation
 
+    The decorator was renamed from ``safe_gradio_handler`` in v1.4
+    (Reflex is canonical from v1.1.0 — the Gradio prefix no longer
+    matched the framework). The ``safe_gradio_handler`` legacy alias
+    keeps working with a ``DeprecationWarning`` until v1.6.
+
     Usage:
-        @safe_gradio_handler("training", rate_limiter=training_limiter)
+        @safe_ui_handler("training", rate_limiter=training_limiter)
         def start_training(...):
             ...
     """
@@ -1649,12 +1695,20 @@ class RequestContext:
     user_id: str | None = None
 
     @classmethod
-    def from_gradio_request(
+    def from_request(
         cls,
         request: gr.Request | None = None,
         operation: str | None = None,
     ) -> "RequestContext":
-        """Create context from a Gradio request."""
+        """Create context from a UI request.
+
+        Renamed from ``from_gradio_request`` in v1.4 — the helper is
+        framework-agnostic (the ``gr.Request`` type hint is satisfied by
+        any object with a ``client`` attribute, which Starlette / FastAPI
+        / Reflex requests all provide). The legacy
+        ``RequestContext.from_gradio_request`` keeps working with a
+        ``DeprecationWarning`` until v1.6.
+        """
         request_id = str(uuid.uuid4())[:8]
         client_ip = _extract_client_ip(request)
 
@@ -1664,6 +1718,35 @@ class RequestContext:
             timestamp=time.time(),
             operation=operation,
         )
+
+    # Legacy alias for the v1.0-era ``from_gradio_request`` classmethod.
+    # The classmethod's __getattr__ contract is preserved on the dataclass
+    # itself — ``RequestContext.from_gradio_request(...)`` still resolves
+    # but emits a DeprecationWarning. We can't use module-level __getattr__
+    # for class attributes, so the deprecation shim lives here as a
+    # classmethod that warns + delegates.
+    @classmethod
+    def from_gradio_request(
+        cls,
+        request: gr.Request | None = None,
+        operation: str | None = None,
+    ) -> "RequestContext":
+        """DEPRECATED v1.4 alias for :meth:`from_request`.
+
+        Emits ``DeprecationWarning`` and delegates to the canonical
+        ``from_request`` classmethod. Removed in v1.6 per the rename
+        cycle locked in advisor 2026-05-25 Q4.
+        """
+        import warnings as _warnings
+
+        _warnings.warn(
+            "'RequestContext.from_gradio_request' is deprecated in v1.4; "
+            "use 'RequestContext.from_request' instead. v1.5 escalates to "
+            "UserWarning; v1.6 removes the legacy name.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.from_request(request=request, operation=operation)
 
     def to_log_dict(self) -> dict[str, Any]:
         """Get dictionary for logging extra fields."""
@@ -3259,3 +3342,66 @@ def validate_auth_shape(auth: Any) -> None:
 # name from ui.py — those imports will be updated, but the alias prevents
 # transient breakage during the migration.
 _validate_auth_shape = validate_auth_shape
+
+
+# =============================================================================
+# LEGACY ALIAS SHIM (v1.4 rename — see module docstring for the cycle)
+# =============================================================================
+#
+# Wave 6a foundation (V1_4_BRIEF item 7) — drop the ``gradio_`` prefix from
+# the public UI-error helpers + classmethod, keeping the legacy names alive
+# via module-level ``__getattr__``. The shim emits a ``DeprecationWarning``
+# pointing operators at the new symbol so downstream consumers see an
+# audit-trail rather than silent grandfathering.
+#
+# Deprecation cycle (locked advisor 2026-05-25 Q4):
+#   v1.4 → DeprecationWarning (silent by default; visible under -W default)
+#   v1.5 → UserWarning (visible to every Python process; harder to ignore)
+#   v1.6 → AttributeError (legacy names removed entirely)
+#
+# ``DEFAULT_GRADIO_CSP`` + ``get_gradio_csp`` are NOT in this table — they
+# keep the existing in-place ``DeprecationWarning`` shape from Wave 2
+# FRONTEND-A-003 + Stage C FRONTEND-B-007 (the canonical replacements are
+# ``DEFAULT_REFLEX_CSP`` + ``get_reflex_csp``, not a third ``DEFAULT_UI_*``
+# name). The constant continues to live in module globals because it's
+# referenced by ``get_gradio_csp()``'s internal ``.copy()`` calls.
+#
+# ``RequestContext.from_gradio_request`` is NOT in this table either — it's
+# a classmethod, not a module-level symbol, so the deprecation shim lives
+# on the dataclass itself (see :meth:`RequestContext.from_gradio_request`
+# above).
+
+_LEGACY_ALIASES: dict[str, str] = {
+    "safe_gradio_handler": "safe_ui_handler",
+    "raise_gradio_error": "raise_ui_error",
+    "raise_gradio_warning": "raise_ui_warning",
+    "raise_gradio_info": "raise_ui_info",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Module-level legacy-alias resolver (PEP 562).
+
+    Resolves a v1.0-era ``gradio_``-prefixed symbol to its v1.4 canonical
+    name while emitting a ``DeprecationWarning`` so the operator sees the
+    migration nudge in stderr. ``stacklevel=2`` points the warning at the
+    caller of the import / attribute access, not this function.
+
+    Anything not in ``_LEGACY_ALIASES`` raises ``AttributeError`` per the
+    PEP 562 contract (so ``hasattr`` / ``getattr`` with default still work
+    naturally).
+    """
+    if name in _LEGACY_ALIASES:
+        new_name = _LEGACY_ALIASES[name]
+        import warnings as _warnings
+
+        _warnings.warn(
+            f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
+            f"v1.5 escalates to UserWarning; v1.6 removes the legacy name.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new_name]
+    raise AttributeError(
+        f"module 'backpropagate.ui_security' has no attribute {name!r}"
+    )

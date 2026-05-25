@@ -246,6 +246,27 @@ class MultiRunConfig:
     # opt out).
     max_pause_seconds: float = 1800.0
 
+    # v1.4 BRIDGE-A-002 follow-up (Wave 6a foundation): per-invocation
+    # overrides for the five Wave 6b knobs (Trainer constructor mirrors —
+    # ``use_dora`` / ``packing`` / ``init_lora_weights`` / ``lora_preset`` /
+    # ``optim``). ``cmd_multi_run`` (cli.py ~820) + ``cmd_replay`` (cli.py
+    # ~4280) assemble a ``wave6b_candidate_kwargs`` dict and filter via
+    # ``dataclasses.fields(MultiRunConfig)`` — pre-fix these five keys were
+    # silently dropped because the dataclass did not name them. Now declared
+    # as explicit fields with ``None`` defaults; the per-invocation override
+    # is forwarded to the inner ``Trainer`` constructor in
+    # ``MultiRunTrainer.__init__`` so the SFTConfig assembled by
+    # ``_build_sft_config`` reads the per-invocation values from
+    # ``self._trainer.packing`` / ``self._trainer.optim`` etc. When the
+    # field is ``None``, the inner Trainer falls back to the settings layer
+    # (``settings.lora.use_dora`` / ``settings.data.packing`` / etc.),
+    # preserving pre-Wave-6a env-var-driven behavior byte-identically.
+    use_dora: bool | None = None
+    packing: bool | None = None
+    init_lora_weights: str | None = None  # "default" | "pissa" | "loftq"
+    lora_preset: str | None = None  # "fast" | "quality"
+    optim: str | None = None  # passthrough to TrainingArguments.optim
+
 
 # Backwards compatibility alias
 SpeedrunConfig = MultiRunConfig
@@ -359,15 +380,17 @@ class MultiRunTrainer:
                 3 consecutive OOMs at batch=1 the session aborts with a
                 structured error (code=RUNTIME_OOM_RECOVERY_EXHAUSTED — the
                 recovery loop ran out of options). When False, the first
-                uncovered OOM is recorded as ``run_failed=True`` with
-                ``str(exc)`` as the failure_reason and the session continues
-                to the next run; no exception propagates out of
-                ``_execute_run`` for that case (the OOM is treated as a
-                per-run failure, not a session-aborting one) and in
-                particular ``RUNTIME_GPU_OOM`` is NOT raised by this path
-                (that code exists in the ERROR_CODES catalog but is not
-                currently produced by any raise site here). Set False to
-                make OOMs fail the individual run and continue.
+                uncovered OOM is recorded as ``run_failed=True`` with the
+                ``RUNTIME_GPU_OOM`` code prefixed onto the failure_reason
+                (Wave 6a RUNTIME_GPU_OOM Option A multi-run symmetric: the
+                code surface that operators grep for IS produced — the
+                contract carrier is ``run_result.failure_reason``, not a
+                raise site, because the multi-run contract is "record +
+                continue to the next run," not "session-abort"). Failed
+                runs (run_failed=True) also skip the checkpoint save +
+                manifest register branch (Wave 6a BACKEND-B-002) so a
+                future resume cannot latch onto post-failure model state.
+                Set False to make OOMs fail the individual run and continue.
             on_run_start: Callback when run starts
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)
@@ -894,11 +917,27 @@ class MultiRunTrainer:
         try:
             # Initialize trainer
             logger.info(f"Initializing trainer with {self.model_name}")
+            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): forward the Wave 6b
+            # overrides from MultiRunConfig fields to the inner Trainer
+            # constructor. Each field defaults to ``None`` on the dataclass;
+            # when None the Trainer constructor falls back to
+            # ``settings.lora.*`` / ``settings.data.*`` / ``settings.training.*``
+            # (env-var driven). When set, the per-invocation override flows
+            # through to ``_build_sft_config`` via the inner Trainer's
+            # instance attributes (``self._trainer.packing``,
+            # ``self._trainer.optim``) so the multi-run path threads the
+            # operator's flag value end-to-end (matches the cmd_multi_run
+            # CLI introspection-filter contract).
             self._trainer = Trainer(
                 model=self.model_name,
                 learning_rate=self.config.initial_lr,
                 train_on_responses=True,  # FT-010: same quality optimization as single-run
                 report_to=self._report_to_intent,  # F-005
+                use_dora=self.config.use_dora,
+                packing=self.config.packing,
+                init_lora_weights=self.config.init_lora_weights,
+                lora_preset=self.config.lora_preset,
+                optim=self.config.optim,
             )
             self._trainer.load_model()
 
@@ -1248,8 +1287,23 @@ class MultiRunTrainer:
         :attr:`_OOM_MAX_RETRIES_AT_MIN_BATCH` consecutive OOMs at
         ``batch_size==1`` the session is aborted with a structured error
         pointing the operator at smaller-model / shorter-seq remediations.
+
+        Wave 6a BACKEND-A-003 / A-004 / B-002 + RUNTIME_GPU_OOM Option A:
+        the SFTConfig + train_on_responses_only application path delegates to
+        the shared :func:`_build_sft_config` / :func:`_apply_train_on_responses_only`
+        helpers in trainer.py so the multi-run path picks up the same v1.3
+        paged-optim / Ada bf16/fp16 autodetection + Unsloth response-masking
+        as the single-run path. Failed runs skip the checkpoint save +
+        manifest register branch (B-002). The oom_recovery=False raise site
+        wraps the OOM as ``GPUMemoryError(code='RUNTIME_GPU_OOM')`` so the
+        documented contract holds.
         """
-        from trl import SFTConfig, SFTTrainer
+        from trl import SFTTrainer
+
+        from .trainer import (
+            _apply_train_on_responses_only,
+            _build_sft_config,
+        )
 
         run_start = time.time()
 
@@ -1342,36 +1396,47 @@ class MultiRunTrainer:
         # batch_size hits 1 (the floor). At the floor, _OOM_MAX_RETRIES_AT_MIN_BATCH
         # consecutive OOMs trigger session abort.
         while True:
-            # Build training args inside the loop so a retry picks up the
-            # halved batch / doubled accumulation.
-            training_args = SFTConfig(
+            # Wave 6a BACKEND-A-003: SFTConfig assembly is delegated to the
+            # shared :func:`_build_sft_config` helper in trainer.py so the
+            # multi-run path inherits the same v1.3 BACKEND-5 paged-optim
+            # autodetection + BACKEND-7 Ada bf16/fp16 selection that
+            # ``Trainer.train()`` applies. Pre-Wave-6a, this site built
+            # SFTConfig inline with ``optim=settings.training.optim`` and
+            # ``bf16=settings.training.bf16`` raw — bypassing both detectors.
+            # Per-run + per-retry-only fields (learning_rate, warmup_steps,
+            # seed offset, lr_scheduler_type="cosine", logging_steps=10) are
+            # threaded explicitly so the multi-run-specific behavior is
+            # preserved.
+            #
+            # Stage C BACKEND-B-003: per-retry seed offset. When an OOM
+            # retry fires, ``oom_retries > 0`` and the seed shifts so the
+            # per-batch shuffle order changes — an outlier-long sample that
+            # triggered the OOM at position N no longer lands at position N
+            # on the next attempt. The offset is deterministic given
+            # (run_idx, oom_retries) so the retry is itself reproducible.
+            training_args = _build_sft_config(
                 output_dir=str(checkpoint_dir / f"run_{run_idx:03d}"),
                 per_device_train_batch_size=self._trainer.batch_size,
                 gradient_accumulation_steps=self._trainer.gradient_accumulation,
                 max_steps=self.config.steps_per_run,
                 learning_rate=lr,
                 warmup_steps=self.config.warmup_steps_per_run,
-                optim=settings.training.optim,
+                max_seq_length=self._trainer.max_seq_length,
+                seed=settings.training.seed + run_idx + oom_retries * 1000,
                 lr_scheduler_type="cosine",
                 logging_steps=10,
-                bf16=settings.training.bf16,
-                fp16=settings.training.fp16,
-                overwrite_output_dir=True,
-                dataloader_num_workers=0 if os.name == "nt" else 4,
                 report_to=report_to_resolved,  # F-005
                 run_name=run_name,
-                # Stage C BACKEND-B-003: per-retry seed offset. When an OOM
-                # retry fires, ``oom_retries > 0`` and the seed shifts so the
-                # per-batch shuffle order changes — an outlier-long sample that
-                # triggered the OOM at position N no longer lands at position N
-                # on the next attempt. We keep the global ``settings.training.seed``
-                # untouched so reproducibility for clean runs is preserved; the
-                # offset is deterministic given (run_idx, oom_retries) so the
-                # retry is itself reproducible.
-                seed=settings.training.seed + run_idx + oom_retries * 1000,
-                # SFT-specific args (TRL 0.24+)
-                max_length=self._trainer.max_seq_length,
-                packing=settings.data.packing,
+                # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the
+                # constructor-resolved per-invocation overrides from the
+                # inner Trainer instance through to the helper, mirroring
+                # the single-run train() call site. Pre-fix the multi-run
+                # path read ``settings.data.packing`` / ``settings.training.optim``
+                # directly, silently bypassing the per-invocation overrides
+                # that the CLI introspection filter (cmd_multi_run /
+                # cmd_replay) now passes through.
+                packing=self._trainer.packing,
+                optim=self._trainer.optim,
             )
 
             # BACKEND-F-001: wire the abort callback into the inner
@@ -1388,6 +1453,23 @@ class MultiRunTrainer:
                 train_dataset=chunk_dataset,
                 args=training_args,
                 callbacks=sft_callbacks,
+            )
+
+            # Wave 6a BACKEND-A-004: apply Unsloth's train_on_responses_only
+            # masking before training. Pre-Wave-6a, this site silently
+            # skipped the masking step despite the docstring claim at
+            # multi_run.py:893 (``train_on_responses=True``) — multi-run
+            # users training on conversational data got full-conversation
+            # loss leakage. The shared helper centralizes the
+            # Windows-skip / Unsloth-missing / detection-failure paths so
+            # Trainer.train() and this site stay byte-equivalent on
+            # masking behavior.
+            trainer, _resolved_markers = _apply_train_on_responses_only(
+                trainer,
+                self._trainer._tokenizer,
+                enabled=self._trainer._train_on_responses,
+                use_unsloth=self._trainer.use_unsloth,
+                response_markers_override=self._trainer._response_markers_override,
             )
 
             try:
@@ -1607,8 +1689,31 @@ class MultiRunTrainer:
                     break
 
                 # Non-OOM exception (or OOM with oom_recovery=False).
+                #
+                # Wave 6a RUNTIME_GPU_OOM Option A (multi-run symmetric): if
+                # the failure was an OOM (strict or adjacent) AND the operator
+                # opted out of recovery, prefix the failure_reason with the
+                # structured ``RUNTIME_GPU_OOM`` code so post-mortem log greps
+                # find the documented contract surface. We deliberately do
+                # NOT raise here — the multi-run contract documents OOM-with-
+                # oom_recovery=False as a per-run failure that records into
+                # the RunResult and continues to the next run (see
+                # MultiRunTrainer.__init__ docstring). The symmetric
+                # raise-as-GPUMemoryError lives in Trainer.train() because
+                # the single-run contract IS "raise on OOM"; this site's
+                # contract is "record + continue." Both routes now name
+                # RUNTIME_GPU_OOM in their structured output.
                 run_failed = True
-                failure_reason = f"{type(exc).__name__}: {exc}"
+                is_oom_no_recovery = (
+                    not self.oom_recovery
+                    and (strict_oom or adjacent_matched)
+                )
+                if is_oom_no_recovery:
+                    failure_reason = (
+                        f"RUNTIME_GPU_OOM: {type(exc).__name__}: {exc}"
+                    )
+                else:
+                    failure_reason = f"{type(exc).__name__}: {exc}"
                 logger.error(f"Run {run_idx} failed: {failure_reason}")
 
                 # Salvage any partial loss history from the trainer state
@@ -1680,8 +1785,26 @@ class MultiRunTrainer:
         # a true success so cascading failures across runs accumulate
         # correctly through the abort threshold.
 
-        # Save checkpoint (even on failure — preserves partial work)
-        if self.config.save_every_run:
+        # Save checkpoint.
+        #
+        # Wave 6a BACKEND-B-002: gate the save+register branch on
+        # ``not run_failed`` in addition to ``save_every_run``. Pre-Wave-6a
+        # the branch was gated on ``self.config.save_every_run`` alone, so a
+        # failed run (OOM at floor / non-OOM exception) still wrote its
+        # post-failure model state to disk AND registered it with the
+        # CheckpointManager — a subsequent resume could then latch onto the
+        # broken state. The docstring above (line 1683) used to say "even on
+        # failure — preserves partial work" but the manifest registration
+        # makes the resume-target semantics wrong: the post-failure adapter
+        # is NOT a valid resume candidate (an OOM may have left the optimizer
+        # state inconsistent with the model state; a non-OOM exception left
+        # the inner SFTTrainer in an unspecified state). Skipping the save
+        # on failure preserves the contract "manifest entries are resume-safe."
+        # Operators who genuinely want to inspect a failed run's partial
+        # state can still call ``self._trainer.save(...)`` directly from a
+        # post-run callback — the multi-run loop just stops registering
+        # broken states as resume candidates.
+        if self.config.save_every_run and not run_failed:
             try:
                 # B-006: atomic write. Trainer.save() now writes into
                 # <path>.partial and shutil.move()s it into place on success;

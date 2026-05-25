@@ -298,21 +298,15 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
         "retryable": "no",
     },
-    # v1.4 Wave 2 backend: TODO_WAVE_6A — RUNTIME_GPU_OOM is currently
-    # never produced by any raise site in the Python codebase. The trainer.py
-    # OOM path with oom_recovery=False bare-raises torch.cuda.OutOfMemoryError
-    # into the outer `except RuntimeError` handler, which wraps it as
-    # TrainingError(code='RUNTIME_TRAINING_FAILED'). The multi_run.py path
-    # records run_failed=True without raising. The exit-code mapper at
-    # cli.py:5120 still references this code; the README + 7 translations +
-    # handbook/error-codes.md + handbook/troubleshooting.md still document it
-    # as the user-facing OOM signal. Consider EITHER (a) removing this entry
-    # + GPUMemoryError class + downstream docs/translations as part of the
-    # Wave 6a multi-run refactor, OR (b) wiring a raise site so the
-    # documented contract holds (the README + cli.py exit-code mapping treat
-    # the existence of this code as load-bearing). The Wave 6a refactor is
-    # the natural home for the decision because the multi-run _execute_run
-    # rewrite touches both OOM-handling call sites.
+    # Wave 6a RUNTIME_GPU_OOM Option A activated 2026-05-25: the raise site
+    # in trainer.py:Trainer.train() oom_recovery=False branch (search for
+    # ``Wave 6a RUNTIME_GPU_OOM Option A``) wraps the OOM into a
+    # ``GPUMemoryError`` (which carries this code) before re-raising. The
+    # multi-run symmetric writes ``RUNTIME_GPU_OOM:`` into
+    # ``RunResult.failure_reason`` when oom_recovery=False and an OOM hits
+    # (multi-run contract is "record + continue," not "raise"). README +
+    # 7 translations + handbook/error-codes.md + handbook/troubleshooting.md
+    # + cli.py exit-code mapper now describe behavior that actually fires.
     "RUNTIME_GPU_OOM": {
         "description": "GPU ran out of memory (VRAM).",
         "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
@@ -1021,21 +1015,23 @@ class GPUNotAvailableError(GPUError):
 class GPUMemoryError(GPUError):
     """GPU memory (VRAM) error.
 
-    .. note::
-        v1.4 Wave 2 backend: TODO_WAVE_6A — this class is defined and
-        exported (``__all__``, public ``__init__`` re-export) but no
-        raise site in the Python codebase actually constructs it. The
-        OOM paths in ``trainer.py`` (oom_recovery=False) and
-        ``multi_run.py`` (oom_recovery=False) currently bare-raise the
-        underlying ``torch.cuda.OutOfMemoryError`` and let the outer
-        handlers re-wrap it as ``TrainingError(code=
-        'RUNTIME_TRAINING_FAILED')`` or record it as
-        ``run_failed=True``. The decision to either (a) remove this
-        class as part of the Wave 6a multi-run refactor or (b) wire a
-        raise site so the documented ``RUNTIME_GPU_OOM`` contract
-        holds (README + 7 translations + handbook docs + cli.py exit-
-        code mapper still reference this code as load-bearing) is
-        deferred to that refactor.
+    Raised by ``Trainer.train()`` when an OOM (or OOM-adjacent CUDA error)
+    fires AND ``oom_recovery=False`` — the operator opted out of the
+    recovery loop and asked for hard-fail semantics. The original
+    ``torch.cuda.OutOfMemoryError`` is chained as ``__cause__``. Carries
+    ``code='RUNTIME_GPU_OOM'`` which the cli.py exit-code mapper routes
+    to exit 137 (EXIT_OOM_KILLED).
+
+    Distinct from the recovery-exhausted path, which raises
+    ``TrainingError(code='RUNTIME_OOM_RECOVERY_EXHAUSTED')`` — that path
+    DID attempt halve-batch retries and ran out of options. This class
+    fires only on the "no retry attempted" branch.
+
+    The multi-run path (``MultiRunTrainer._execute_run``) does NOT raise
+    this class — multi-run contract is "record + continue to the next
+    run," so OOMs with oom_recovery=False land as ``run_failed=True``
+    with ``failure_reason="RUNTIME_GPU_OOM: ..."`` instead. Both routes
+    surface the same code; the difference is propagation shape.
     """
 
     def __init__(

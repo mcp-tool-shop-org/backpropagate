@@ -91,7 +91,13 @@ class TestDataloaderZeroWorkers:
         from backpropagate import trainer as trainer_module
 
         src = inspect.getsource(trainer_module)
-        assert 'dataloader_num_workers=0 if os.name == "nt"' in src, (
+        # v1.4 Wave 6a refactor: SFTConfig assembly extracted to
+        # _build_sft_config() helper; the conditional now lives there as a
+        # dict literal `"dataloader_num_workers": 0 if os.name == "nt" else 4`.
+        # The literal text shifted from kwarg-style (=0) to dict-key-style (: 0)
+        # without changing the guard semantics. Test matches the canonical
+        # source form post-refactor.
+        assert '"dataloader_num_workers": 0 if os.name == "nt" else 4' in src, (
             "Windows dataloader-workers guard missing from trainer.py — the "
             "load-bearing 'os.name == nt else 4' conditional that prevents "
             "Windows multiprocessing crashes has been removed or renamed."

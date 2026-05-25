@@ -14,6 +14,8 @@ import logging
 import os
 from unittest import mock
 
+import pytest
+
 from backpropagate.logging_config import (
     STRUCTLOG_AVAILABLE,
     LogContext,
@@ -25,8 +27,19 @@ from backpropagate.logging_config import (
 )
 
 
+@pytest.mark.serial
 class TestConfigureLogging:
-    """Tests for configure_logging function."""
+    """Tests for configure_logging function.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial because every
+    test in this class calls ``configure_logging(...force=True)`` which
+    mutates the process-wide structlog configuration (and the
+    ``logging_config._configured`` module flag). Adjacent tests on the
+    same xdist worker could otherwise interleave their force-configure
+    calls and capture records through the wrong processor chain. See
+    ``tests/conftest.py`` ``pytest_collection_modifyitems`` for the
+    xdist_group pinning that gives the marker real scheduling power.
+    """
 
     def setup_method(self):
         """Reset logging state before each test."""
@@ -93,8 +106,18 @@ class TestConfigureLogging:
         # Should complete without error
 
 
+@pytest.mark.serial
 class TestGetLogger:
-    """Tests for get_logger function."""
+    """Tests for get_logger function.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial because the
+    setup_method resets ``logging_config._configured = False`` and the
+    tests call ``get_logger()`` which auto-configures structlog when
+    ``_configured`` is False (see ``logging_config.py:get_logger``
+    body — calls ``configure_logging()`` on a False flag). That is the
+    same process-global mutation shape covered by the serial-marker
+    contract on TestConfigureLogging.
+    """
 
     def setup_method(self):
         """Reset logging state before each test."""
@@ -151,8 +174,18 @@ class TestGetLogger:
             pass
 
 
+@pytest.mark.serial
 class TestGetStandardLogger:
-    """Tests for get_standard_logger function."""
+    """Tests for get_standard_logger function.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial per the
+    grep-doctrine sibling of TestGetLogger above — the setup_method
+    resets ``logging_config._configured = False`` and
+    ``get_standard_logger`` calls ``configure_logging()`` on a False
+    flag (see ``logging_config.py:get_standard_logger`` body). Same
+    process-global mutation shape as TestGetLogger; the marker keeps
+    both classes pinned to the serial xdist_group.
+    """
 
     def setup_method(self):
         """Reset logging state before each test."""
@@ -178,8 +211,21 @@ class TestGetStandardLogger:
         assert lc._configured is True
 
 
+@pytest.mark.serial
 class TestLogContext:
-    """Tests for LogContext context manager."""
+    """Tests for LogContext context manager.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial because
+    ``LogContext.__enter__`` calls ``structlog.contextvars.bind_contextvars``
+    and ``__exit__`` calls ``unbind_contextvars`` — structlog's
+    contextvars sit on top of Python's ``contextvars`` module, which
+    binds at process-context scope within a worker. If an adjacent
+    test on the same xdist worker reads contextvars mid-suite (e.g.
+    via ``add_request_context`` / ``clear_request_context``), a stale
+    LogContext binding could leak into its assertions. The marker
+    pins this class into the serial group so the bind/unbind cycles
+    run sequentially with any other contextvar-touching tests.
+    """
 
     def test_log_context_enter_exit(self):
         """LogContext can be entered and exited."""
@@ -235,7 +281,20 @@ class TestClearRequestContext:
 
 
 class TestStructlogAvailable:
-    """Tests for STRUCTLOG_AVAILABLE constant."""
+    """Tests for STRUCTLOG_AVAILABLE constant.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): EXEMPT from @pytest.mark.serial
+    by deliberate audit. The two tests in this class only READ
+    ``STRUCTLOG_AVAILABLE`` (a boolean constant set at module import
+    time) — no ``configure_logging`` call, no ``structlog.configure``
+    call, no ``lc._configured`` reset, no root-handler swap. Per the
+    ``[[no-banner-documenting-no-op]]`` doctrine, applying the serial
+    marker to a pure-read test class would be a no-op marker — the
+    convention is "marker applied because the test mutates process-
+    global state, not just in case." If a future test in this class
+    grows a mutation (e.g. force-reload of the structlog module), add
+    ``@pytest.mark.serial`` then.
+    """
 
     def test_structlog_available_is_bool(self):
         """STRUCTLOG_AVAILABLE is a boolean."""
@@ -250,8 +309,16 @@ class TestStructlogAvailable:
             assert STRUCTLOG_AVAILABLE is False
 
 
+@pytest.mark.serial
 class TestTrainingLogger:
-    """Tests for TrainingLogger class."""
+    """Tests for TrainingLogger class.
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial because
+    setup_method calls ``configure_logging(level="DEBUG", force=True)``
+    on every test, which mutates the process-wide structlog config.
+    Same audit shape as TestConfigureLogging — the marker keeps the
+    force-reconfigure calls sequential on a single xdist worker.
+    """
 
     def setup_method(self):
         """Reset logging state before each test."""
@@ -519,8 +586,18 @@ class TestModuleExports:
             assert hasattr(lc, name), f"Export {name} not found in module"
 
 
+@pytest.mark.serial
 class TestFallbackLogging:
-    """Tests for fallback standard logging (when structlog unavailable)."""
+    """Tests for fallback standard logging (when structlog unavailable).
+
+    TESTS-A-007 (v1.4 Wave 6a follow-up): marked @serial because every
+    test clears ``logging.getLogger().handlers`` (the stdlib root logger,
+    a process-global) and calls ``_configure_standard_logging`` which
+    attaches a fresh handler. Adjacent tests on the same xdist worker
+    could otherwise see records routed through stale handlers or no
+    handler at all. Same audit shape as TestConfigureLogging — the
+    marker keeps the root-handler swaps sequential on a single worker.
+    """
 
     def test_configure_standard_logging(self):
         """_configure_standard_logging works correctly."""

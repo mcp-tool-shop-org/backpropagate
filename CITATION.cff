@@ -10,7 +10,9 @@ url: "https://mcp-tool-shop-org.github.io/backpropagate/"
 # version + date-released are kept in lockstep with pyproject.toml's [project].version
 # and the matching CHANGELOG.md section. Update both fields at release time
 # (Dependabot does not bump CFF). The pre-release coordinator script
-# scripts/prep_release.sh (planned, v1.4) will eventually validate this.
+# scripts/prep_release.sh (landed v1.4 Wave 6a, CIDOCS-F-025) bumps both
+# fields from pyproject.toml's [project].version + the current UTC date
+# and validates the references: list before the publish chain runs.
 version: 1.3.0
 date-released: 2026-05-24
 license: MIT

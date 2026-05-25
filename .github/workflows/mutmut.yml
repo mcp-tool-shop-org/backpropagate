@@ -26,6 +26,19 @@ name: Mutation testing (mutmut)
 # / `schedule` in a follow-up once the baseline is stable for two
 # release cycles (avoid noisy false-positive ratchets while contributors
 # learn the surface).
+#
+# CIDOCS-F-022 (v1.4 Wave 6a) — baseline-bootstrap procedure.
+# The first run after this workflow lands has no .github/mutmut-baseline.txt
+# checked into main; the "Capture surviving-count" step records a new
+# baseline locally on the runner and the "Update baseline (if changed)"
+# step opens a PR seeding the file. Operator action: trigger one
+# workflow_dispatch run post-merge:
+#
+#     gh workflow run mutmut.yml -R mcp-tool-shop-org/backpropagate
+#
+# Review the resulting baseline-update PR (auto-opened) before merging
+# — that's the gate point that prevents silent ratcheting of the
+# surviving-mutation count.
 
 on:
   workflow_dispatch:

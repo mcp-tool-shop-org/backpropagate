@@ -62,7 +62,7 @@ All settings overridable via BACKPROPAGATE_* prefix; nested keys use double unde
 - BACKPROPAGATE_UI__OUTPUT_DIR (default ~/.backpropagate/ui-outputs; denylist-validated against /etc, ~/.ssh, etc.)
 - BACKPROPAGATE_MODEL__NAME (default Qwen/Qwen2.5-7B-Instruct), BACKPROPAGATE_TRAINING__LEARNING_RATE, BACKPROPAGATE_LORA__R (v1.3 default 256, was 16)
 - BACKPROPAGATE_UI_REQUEST_LOG (1 = emit structured access log per request; opt-in)
-- BACKPROPAGATE_UI_RATE_LIMIT_REQ_PER_MIN / BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN (defaults 100 / 10)
+- BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN / BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN (defaults 100 / 10)
 - Group prefixes: MODEL__, LORA__, TRAINING__, DATA__, UI__, WINDOWS__, MULTIRUN__, SECURITY__
 
 Full reference: https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/

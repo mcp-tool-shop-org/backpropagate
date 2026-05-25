@@ -56,11 +56,33 @@ import pytest
 #   * The Hypothesis profile loader above runs once per worker process
 #     at import time — idempotent, safe.
 #
-# Future work (v1.4): if we add tests that truly cannot run in
-# parallel (port-bound integration, shared on-disk caches), mark them
-# with ``@pytest.mark.serial`` and add a custom
-# ``pytest_collection_modifyitems`` enforcement here. v1.3 ships
-# without that complexity because no such tests exist today.
+# v1.4 Wave 2 (TESTS-A-007): the @pytest.mark.serial convention is now
+# applied to tests that mutate process-global state:
+#
+#   * ``structlog.configure(force=True)`` — overwrites the process-wide
+#     structlog configuration; concurrent tests on the same xdist worker
+#     can see records routed through the wrong processor chain.
+#   * Singleton ``._instance`` reset — e.g. ``SecurityLogger._instance``,
+#     ``SessionManager._instance``. The class-level autouse fixtures
+#     already protect within a class, but cross-class adjacency on the
+#     same worker is still a race surface in parallel mode.
+#   * ``configure_logging(...force=True)`` from
+#     ``backpropagate.logging_config`` — same shape as the structlog
+#     case (forces a reconfiguration of the print-logger factory).
+#
+# Apply via ``@pytest.mark.serial`` on the class or test function. The
+# marker is registered in ``pyproject.toml`` ``[tool.pytest.ini_options]``
+# ``markers`` (declared so ``--strict-markers`` doesn't reject it).
+#
+# Enforcement: this conftest registers a ``pytest_collection_modifyitems``
+# hook (below) that uses xdist's ``xdist_group`` to bin all
+# ``serial``-marked tests into a single group; xdist then schedules
+# every test in the group on the SAME worker (serialising them
+# w.r.t. each other) while still parallelising the rest of the suite.
+#
+# The registration is best-effort — if xdist is not installed (serial
+# mode), the marker still works as a documentation hint but provides
+# no scheduling guarantee (because there is no scheduler).
 _PARALLEL_ENV = "BACKPROPAGATE_PYTEST_PARALLEL"
 
 
@@ -770,3 +792,63 @@ def async_callback_collector():
         return AsyncCallbackCollector(expected_count=expected_count)
 
     return _create_collector
+
+
+# =============================================================================
+# SERIAL-MARKER ENFORCEMENT (TESTS-A-007, v1.4 Wave 2)
+# =============================================================================
+#
+# Tests that mutate process-global state (structlog config, singleton
+# instances, env vars without monkeypatch) cannot safely run concurrently
+# with other tests on the same xdist worker. The @pytest.mark.serial
+# marker is the operator-facing convention; this hook gives it real
+# scheduling power by pinning every serial-marked test to the same
+# xdist_group, which xdist then runs sequentially on a single worker.
+#
+# Side-effects:
+#   * In serial mode (xdist absent / no -n): marker is documentation only.
+#   * In parallel mode (-n auto): all serial-marked tests run on a
+#     single worker; the rest of the suite continues to parallelise.
+#   * Tests already marked with their own xdist_group keep their group
+#     (we only add xdist_group if the test has serial but NO existing
+#     xdist_group marker).
+#
+# A best-effort warning fires when more than ~50 tests carry the serial
+# marker — that's a smell suggesting parallel mode would benefit from
+# breaking the serial bucket into multiple xdist_groups (e.g.
+# "shared-structlog" + "shared-singleton-X"). The warning is emitted to
+# stderr at collection time, not via the pytest API, to keep the hook
+# side-effect-free for unrelated runs.
+
+
+def pytest_collection_modifyitems(config, items):
+    """Pin every ``@pytest.mark.serial`` test to a single xdist_group.
+
+    Without this hook, the ``serial`` marker is documentation only:
+    xdist's scheduler doesn't know that two serial-marked tests should
+    not run concurrently across workers. By assigning them all to the
+    same xdist_group, xdist serialises them on a single worker.
+    """
+    serial_count = 0
+    for item in items:
+        if "serial" not in item.keywords:
+            continue
+        serial_count += 1
+        # Skip if the test already has an xdist_group marker (it explicitly
+        # opted into a more specific group; respect the author's choice).
+        if any(
+            m.name == "xdist_group" for m in item.iter_markers()
+        ):
+            continue
+        # Apply the catch-all serial group.
+        item.add_marker(pytest.mark.xdist_group(name="serial"))
+
+    if serial_count > 50:  # pragma: no cover — collection-time heuristic
+        import sys
+        print(
+            f"[conftest] WARNING: {serial_count} tests are marked @serial. "
+            f"Consider splitting into smaller xdist_groups (e.g. by which "
+            f"global resource they share) so the serial bucket doesn't "
+            f"become a long pole in parallel mode.",
+            file=sys.stderr,
+        )

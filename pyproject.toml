@@ -1,5 +1,9 @@
 [build-system]
-requires = ["hatchling"]
+# hatchling>=1.27 required for PEP 639 license-expression form ('license = "MIT"' as SPDX expression).
+# Older hatchling silently downgrades to Metadata-Version 2.1 and emits empty License-Expression, which
+# PyPI then renders as 'License: None' (root cause of v1.3.0 PyPI page showing Author/License = None).
+# Verify post-build: `python -m build && twine check dist/* && tar -xOf dist/backpropagate-*.tar.gz '*/PKG-INFO' | grep -E 'License|Author'`
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -254,6 +258,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests that require GPU or external services",
     "hypothesis: marks property-based tests",
+    "serial: marks tests that mutate process-global state and must run sequentially under pytest-xdist (see tests/conftest.py pytest_collection_modifyitems — pinned to xdist_group='serial')",
     # TESTS-B-011 (v1.3 Wave 3 Stage C): the prior 'gpu' marker was declared
     # here but never applied to a single test (verified via
     # ``pytest --collect-only -m gpu`` returning 0 tests). Removed to keep

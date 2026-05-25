@@ -446,8 +446,19 @@ class TestSanitizeFilenameEnhanced:
         assert ".txt" in result, "Extension should be preserved"
 
 
+@pytest.mark.serial
 class TestSecurityLogger:
-    """Tests for SecurityLogger."""
+    """Tests for SecurityLogger.
+
+    TESTS-A-007 (v1.4 Wave 2 amend): marked @serial because the class
+    mutates the process-wide ``SecurityLogger._instance`` singleton
+    via the autouse fixture. The fixture clears the singleton within
+    the class, but xdist could schedule a TestSecurityLogger test
+    adjacent to an unrelated test that ALSO imports SecurityLogger
+    (e.g. for a one-off integration assertion) and the unrelated test
+    would see a None instance mid-run. Serial scheduling avoids that
+    cross-class race.
+    """
 
     @pytest.fixture(autouse=True)
     def _reset_security_logger(self):
@@ -721,8 +732,15 @@ class TestEnvConfigOverride:
         assert config.training_rate_limit == 3
 
 
+@pytest.mark.serial
 class TestSessionManager:
-    """Tests for session management."""
+    """Tests for session management.
+
+    TESTS-A-007 (v1.4 Wave 2 amend): marked @serial — same shape as
+    TestSecurityLogger above (singleton ``SessionManager._instance``
+    is mutated via the autouse fixture; serial scheduling protects
+    cross-class adjacency under xdist).
+    """
 
     @pytest.fixture(autouse=True)
     def _reset_session_manager(self):

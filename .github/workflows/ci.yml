@@ -621,53 +621,10 @@ jobs:
           fi
           echo "All security scanners passed."
 
-  # --- GitHub Pages deployment (merged from pages.yml) ---
-  # Only runs on push to main when site/** changes
-
-  build-site:
-    name: Build site
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
-        with:
-          node-version: 22
-
-      - name: Install site dependencies
-        working-directory: site
-        run: npm ci
-
-      - name: Build site
-        working-directory: site
-        run: npm run build
-
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
-        with:
-          path: site/dist
-
-  deploy-site:
-    name: Deploy site to GitHub Pages
-    needs: build-site
-    runs-on: ubuntu-latest
-    # Override the workflow-level cancel-in-progress for Pages deploys.
-    # GitHub Pages allows ONE in-flight deployment per repo; cancelling
-    # a deploy mid-upload poisons the next deploy attempt with "a
-    # deployment is already in progress" for 5-15 minutes. The literal
-    # group 'pages' (not interpolated with github.ref) serializes
-    # against EVERY Pages deploy in the repo, matching the server-side
-    # invariant GitHub Pages enforces.
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5
+  # GitHub Pages deployment moved to .github/workflows/pages-deploy.yml in
+  # v1.4 Wave 2 (CIDOCS-A-008). The prior in-ci.yml form combined a
+  # workflow-level paths: filter with a job-level if: gate, which created a
+  # silent chain-reaction failure: a push touching non-site files would skip
+  # build-site, and deploy-site (depends on build-site) would skip with it.
+  # The dedicated workflow has paths: [site/**] at the workflow level
+  # (cleaner gating) plus workflow_dispatch for one-click self-heal redeploy.

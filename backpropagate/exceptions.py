@@ -284,6 +284,21 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
         "retryable": "no",
     },
+    # v1.4 Wave 2 backend: TODO_WAVE_6A — RUNTIME_GPU_OOM is currently
+    # never produced by any raise site in the Python codebase. The trainer.py
+    # OOM path with oom_recovery=False bare-raises torch.cuda.OutOfMemoryError
+    # into the outer `except RuntimeError` handler, which wraps it as
+    # TrainingError(code='RUNTIME_TRAINING_FAILED'). The multi_run.py path
+    # records run_failed=True without raising. The exit-code mapper at
+    # cli.py:5120 still references this code; the README + 7 translations +
+    # handbook/error-codes.md + handbook/troubleshooting.md still document it
+    # as the user-facing OOM signal. Consider EITHER (a) removing this entry
+    # + GPUMemoryError class + downstream docs/translations as part of the
+    # Wave 6a multi-run refactor, OR (b) wiring a raise site so the
+    # documented contract holds (the README + cli.py exit-code mapping treat
+    # the existence of this code as load-bearing). The Wave 6a refactor is
+    # the natural home for the decision because the multi-run _execute_run
+    # rewrite touches both OOM-handling call sites.
     "RUNTIME_GPU_OOM": {
         "description": "GPU ran out of memory (VRAM).",
         "default_hint": "Reduce --batch-size, enable gradient checkpointing, or use a smaller model.",
@@ -965,7 +980,24 @@ class GPUNotAvailableError(GPUError):
 
 
 class GPUMemoryError(GPUError):
-    """GPU memory (VRAM) error."""
+    """GPU memory (VRAM) error.
+
+    .. note::
+        v1.4 Wave 2 backend: TODO_WAVE_6A — this class is defined and
+        exported (``__all__``, public ``__init__`` re-export) but no
+        raise site in the Python codebase actually constructs it. The
+        OOM paths in ``trainer.py`` (oom_recovery=False) and
+        ``multi_run.py`` (oom_recovery=False) currently bare-raise the
+        underlying ``torch.cuda.OutOfMemoryError`` and let the outer
+        handlers re-wrap it as ``TrainingError(code=
+        'RUNTIME_TRAINING_FAILED')`` or record it as
+        ``run_failed=True``. The decision to either (a) remove this
+        class as part of the Wave 6a multi-run refactor or (b) wire a
+        raise site so the documented ``RUNTIME_GPU_OOM`` contract
+        holds (README + 7 translations + handbook docs + cli.py exit-
+        code mapper still reference this code as load-bearing) is
+        deferred to that refactor.
+    """
 
     def __init__(
         self,

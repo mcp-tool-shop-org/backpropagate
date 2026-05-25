@@ -358,9 +358,16 @@ class MultiRunTrainer:
                 (preserving effective batch size) and the run retries. After
                 3 consecutive OOMs at batch=1 the session aborts with a
                 structured error (code=RUNTIME_OOM_RECOVERY_EXHAUSTED — the
-                recovery loop ran out of options; the first uncovered OOM
-                itself still surfaces as RUNTIME_GPU_OOM when oom_recovery is
-                False). Set False to make OOMs hard-fail the run.
+                recovery loop ran out of options). When False, the first
+                uncovered OOM is recorded as ``run_failed=True`` with
+                ``str(exc)`` as the failure_reason and the session continues
+                to the next run; no exception propagates out of
+                ``_execute_run`` for that case (the OOM is treated as a
+                per-run failure, not a session-aborting one) and in
+                particular ``RUNTIME_GPU_OOM`` is NOT raised by this path
+                (that code exists in the ERROR_CODES catalog but is not
+                currently produced by any raise site here). Set False to
+                make OOMs fail the individual run and continue.
             on_run_start: Callback when run starts
             on_run_complete: Callback when run completes
             on_step: Callback on each step (run_idx, step, loss)

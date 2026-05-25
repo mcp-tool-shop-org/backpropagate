@@ -128,11 +128,12 @@ _LOGGING_SETUP_FAIL_REASON = ""
 # =============================================================================
 # SUBCOMMAND STABILITY TIERS (BRIDGE-B-017 Stage C)
 # =============================================================================
-# Centralized registry of subcommand stability so:
-#   1. The CLI can print a one-line deprecation hint when an operator invokes
-#      a subcommand whose tier is "deprecated-prefer-X".
-#   2. `backprop info --subcommand-tiers` (v1.4 scaffolding) can dump the
-#      registry for CI scripts that want to grep for upcoming removals.
+# Centralized registry of subcommand stability so the CLI can print a
+# one-line deprecation hint when an operator invokes a subcommand whose
+# tier is "deprecated-prefer-X". (A future `backprop info --subcommand-tiers`
+# scaffolding entry was considered but never registered on info_parser — do
+# NOT reference such a flag in operator-facing copy until it ships, per
+# [[no-banner-documenting-no-op]].)
 #
 # Tiers:
 #   stable                   — Part of the documented contract; no removal
@@ -938,6 +939,92 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# BRIDGE-A-004 (v1.4): HF token file resolver — shared by cmd_export and
+# cmd_push so `--hub-token-file <path>` / `--token-file <path>` keeps the
+# credential off the argv surface (where it leaks to `ps aux` + shell
+# history). Mirrors the v1.3 `--auth-file` pattern from cmd_ui (cli.py
+# ~2137): existence check, mode-0600 verification on POSIX, content read,
+# UserInputError on any failure mode so the catch-all in the calling
+# handler emits a friendly redacted message instead of a stack trace.
+# =============================================================================
+
+def _read_hub_token_file(path_str: str, *, flag_name: str) -> str:
+    """Read an HF token from a file at ``path_str``.
+
+    Mirrors the v1.3 ``--auth-file`` pattern in cmd_ui: existence check,
+    mode-0600 verification on POSIX (warn, don't refuse, when widened),
+    content read with a clear error on empty/unreadable files. Returns
+    the stripped token string. Raises ``UserInputError`` on any failure
+    so the catch-all in cmd_push / cmd_export emits a friendly redacted
+    message instead of a stack trace.
+
+    Args:
+        path_str: Operator-provided path to the token file.
+        flag_name: The CLI flag name to surface in error messages
+            (``--hub-token-file`` for cmd_push, ``--hub-token-file`` for
+            cmd_export — kept as a kwarg so future callers can pass a
+            different flag spelling without changing the helper).
+    """
+    token_path = Path(path_str).expanduser()
+    if not token_path.exists():
+        raise UserInputError(
+            f"{flag_name} path does not exist: {token_path}",
+            hint=(
+                f"Create the file with `printf 'hf_xxx' > {token_path}` "
+                f"(no trailing newline) and set mode 0600: "
+                f"`chmod 600 {token_path}`."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+    # File-mode warning on POSIX: > 0o600 means group / world can read
+    # the credential. Don't refuse — the operator may have intentionally
+    # widened the mode — but surface the consequence.
+    if os.name == "posix":
+        try:
+            mode = token_path.stat().st_mode & 0o777
+            if mode & 0o077:  # any group / other bits set
+                _print_warning(
+                    f"{flag_name} mode is {oct(mode)} — group / other have "
+                    f"read access. Tighten to 0600: `chmod 600 {token_path}`."
+                )
+        except OSError:
+            pass
+    try:
+        token_text = token_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise UserInputError(
+            f"{flag_name} could not be read: {exc}",
+            hint="Verify the file exists and the current user has read "
+            "permission.",
+            code="INPUT_VALIDATION_FAILED",
+        ) from exc
+    if not token_text:
+        raise UserInputError(
+            f"{flag_name} is empty (expected the HF token on the first line).",
+            hint=(
+                f"Write the token with `printf 'hf_xxx' > {token_path}` "
+                f"(no trailing newline) and set mode 0600."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+    return token_text
+
+
+def _warn_token_on_argv(flag_name: str) -> None:
+    """Emit the shared 'credential on argv' warning for HF-token flags.
+
+    Mirrors the v1.3 cmd_ui ``--auth`` warning at cli.py ~2129. Centralised
+    so cmd_push and cmd_export emit byte-identical copy and a future
+    operator-facing tweak lands in one spot.
+    """
+    _print_warning(
+        f"{flag_name} was passed on the command line — shell history "
+        f"and `ps aux` will retain the credential. Prefer "
+        f"--hub-token-file <path> or the HF_TOKEN env var."
+    )
+
+
+# =============================================================================
 # COMMAND: export
 # =============================================================================
 
@@ -1164,6 +1251,34 @@ def cmd_export(args: argparse.Namespace) -> int:
         if getattr(args, "push_to_hub", None):
             from .export import push_to_hub as _hub_push
 
+            # BRIDGE-A-004 (v1.4): resolve --hub-token-file before push so
+            # the token never has to be argv-visible. Mutex with --hub-token
+            # mirrors the v1.3 --auth-file / --auth pattern (passing both
+            # races on which credential wins). If --hub-token IS set, emit
+            # the shared shell-history warning so the operator sees the
+            # safer paths (file / env var / cached login).
+            inline_hub_token = getattr(args, "hub_token", None)
+            hub_token_file = getattr(args, "hub_token_file", None)
+            if inline_hub_token and hub_token_file:
+                raise UserInputError(
+                    "--hub-token and --hub-token-file are mutually exclusive — "
+                    "pick one.",
+                    hint=(
+                        "Use --hub-token-file <path> to keep the token out of "
+                        "shell history, OR --hub-token <token> for one-off "
+                        "invocations. Combining the two would race on which "
+                        "credential wins."
+                    ),
+                    code="INPUT_VALIDATION_FAILED",
+                )
+            if inline_hub_token:
+                _warn_token_on_argv("--hub-token")
+            resolved_hub_token: str | None = inline_hub_token
+            if hub_token_file:
+                resolved_hub_token = _read_hub_token_file(
+                    hub_token_file, flag_name="--hub-token-file"
+                )
+
             print()
             _print_info(f"==> Pushing to Hugging Face Hub: {args.push_to_hub}")
             # For directory exports the local upload root is output_dir; for
@@ -1175,7 +1290,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 url = _hub_push(
                     local_path=local_root,
                     repo_id=args.push_to_hub,
-                    token=getattr(args, "hub_token", None),
+                    token=resolved_hub_token,
                     private=getattr(args, "hub_private", False),
                 )
                 _print_success(f"Pushed to Hub: {url}")
@@ -2551,7 +2666,15 @@ def cmd_ui(args: argparse.Namespace) -> int:
                     cloudflared_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     cloudflared_proc.kill()
-                    cloudflared_proc.wait(timeout=2)
+                    try:
+                        cloudflared_proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # SIGKILL also didn't bring it down within 2s —
+                        # rare zombie state. We've sent SIGKILL, so the
+                        # kernel will reap it eventually; do not propagate
+                        # the timeout into the finally block (the user just
+                        # Ctrl+C'd; they shouldn't see a confusing trace).
+                        pass
             except (OSError, ValueError):  # pragma: no cover — already dead
                 pass
         # BRIDGE-F-002 lock-file cleanup: remove the per-launch lock file
@@ -2815,11 +2938,42 @@ def cmd_push(args: argparse.Namespace) -> int:
     if args.include_base:
         _print_info("Including base model files (--include-base)")
 
+    # BRIDGE-A-004 (v1.4): resolve --token-file before push so the token
+    # never has to be argv-visible. Mutex with --token mirrors the v1.3
+    # --auth-file / --auth pattern (passing both races on which credential
+    # wins). If --token IS set, emit the shared shell-history warning so
+    # the operator sees the safer paths (file / env var / cached login).
+    inline_token = getattr(args, "token", None)
+    token_file = getattr(args, "token_file", None)
+    if inline_token and token_file:
+        raise UserInputError(
+            "--token and --token-file are mutually exclusive — pick one.",
+            hint=(
+                "Use --token-file <path> to keep the token out of shell "
+                "history, OR --token <token> for one-off invocations. "
+                "Combining the two would race on which credential wins."
+            ),
+            code="INPUT_VALIDATION_FAILED",
+        )
+    if inline_token:
+        _warn_token_on_argv("--token")
+    resolved_token: str | None = inline_token
+    if token_file:
+        try:
+            resolved_token = _read_hub_token_file(
+                token_file, flag_name="--token-file"
+            )
+        except UserInputError as e:
+            _print_error(f"{e.message}")
+            if e.suggestion:
+                _print_info(f"Suggestion: {e.suggestion}")
+            return EXIT_USER_ERROR
+
     try:
         url = push_to_hub(
             local_path=local_path,
             repo_id=args.repo,
-            token=args.token,
+            token=resolved_token,
             private=args.private,
             include_base=args.include_base,
         )
@@ -3571,6 +3725,24 @@ def cmd_replay(args: argparse.Namespace) -> int:
         hp[key] = _coerce(key, value)
 
     try:
+        # BRIDGE-A-002 (v1.4): the cmd_replay --override whitelist accepts the
+        # five Wave 6b keys (use_dora / packing / init_lora_weights /
+        # lora_preset / optim), but pre-fix we built the trainer kwargs from
+        # a hand-picked subset that silently dropped them. The pattern below
+        # mirrors cmd_train (cli.py ~617) and cmd_multi_run (cli.py ~820):
+        # build a candidate dict from the full hp keyspace AFTER overrides
+        # have been applied, then filter via inspect.signature on the
+        # installed Trainer / dataclasses.fields on MultiRunConfig so a
+        # backend version that hasn't landed a Wave 6b kwarg cleanly
+        # degrades to "no-op for that flag" instead of crashing on
+        # TypeError. Pre-Wave-6b builds preserve their byte-identical
+        # behaviour; backend versions that DO accept the kwarg now see the
+        # operator's override flow through end-to-end.
+        import dataclasses as _dc
+        import inspect as _inspect
+
+        _wave6b_keys = ("use_dora", "packing", "init_lora_weights", "lora_preset", "optim")
+
         # Single-run replay: the multi-run replay path is symmetrically
         # supported but uses the MultiRunTrainer constructor. We default
         # to single-run when session_kind is unset for forward-compat.
@@ -3584,10 +3756,37 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 "merge_mode": MergeMode(hp.get("merge_mode") or "slao"),
                 "checkpoint_dir": str(history_dir),
             }
+            # BRIDGE-A-002: thread Wave 6b override keys through to
+            # MultiRunConfig fields / MultiRunTrainer kwargs. Same split as
+            # cmd_multi_run: a key that lives on MultiRunConfig goes via
+            # mr_config_kwargs; a key that lives on MultiRunTrainer.__init__
+            # goes via mr_trainer_kwargs; keys present in neither degrade
+            # to no-op (matches the cmd_multi_run defensive scaffolding).
+            try:
+                _mr_cfg_fields = {f.name for f in _dc.fields(MultiRunConfig)}
+            except (TypeError, ValueError):
+                _mr_cfg_fields = set()
+            try:
+                _mr_trainer_params = set(_inspect.signature(MultiRunTrainer.__init__).parameters)
+            except (TypeError, ValueError):
+                _mr_trainer_params = set()
+            mr_wave6b_candidate_kwargs: dict[str, Any] = {
+                k: hp[k] for k in _wave6b_keys if k in hp
+            }
+            mr_wave6b_cfg_kwargs = {
+                k: v for k, v in mr_wave6b_candidate_kwargs.items()
+                if k in _mr_cfg_fields
+            }
+            mr_wave6b_trainer_kwargs = {
+                k: v for k, v in mr_wave6b_candidate_kwargs.items()
+                if k not in _mr_cfg_fields and k in _mr_trainer_params
+            }
+            mr_config_kwargs.update(mr_wave6b_cfg_kwargs)
             mr_config = MultiRunConfig(**mr_config_kwargs)
             mr_trainer = MultiRunTrainer(
                 model=model,
                 config=mr_config,
+                **mr_wave6b_trainer_kwargs,
             )
             mr_result = mr_trainer.run(dataset)
             print()
@@ -3613,15 +3812,33 @@ def cmd_replay(args: argparse.Namespace) -> int:
         if "lora_dropout" in hp:
             sr_trainer_kwargs["lora_dropout"] = float(hp["lora_dropout"])
 
+        # BRIDGE-A-002 (v1.4): merge Wave 6b override keys into the candidate
+        # kwargs BEFORE the signature filter so the next block drops any
+        # field the installed Trainer can't absorb. Pre-fix these five keys
+        # were silently dropped even when the operator passed them via
+        # --override. The filter below is the same defensive net used by
+        # cmd_train (cli.py ~617): keys outside Trainer.__init__.parameters
+        # are filtered out — keeps mocked-Trainer test runs working AND
+        # forward-compatible with backend builds that DO accept them.
+        for _w6b_key in _wave6b_keys:
+            if _w6b_key in hp:
+                sr_trainer_kwargs[_w6b_key] = hp[_w6b_key]
+
         # Filter to keys the installed Trainer constructor actually
         # accepts so a backend version that has dropped a field doesn't
-        # blow up the replay. Defensive try/except keeps mocked-Trainer
-        # test runs working (degrades to "pass all kwargs through, let
-        # Trainer raise if anything is wrong").
-        import inspect as _inspect
+        # blow up the replay. Defensive: (a) a non-introspectable Trainer
+        # (e.g. a test MagicMock with no spec) advertises ``(*args, **kwargs)``
+        # so we MUST NOT filter — its catch-all kwargs accept anything; (b)
+        # try/except keeps the path working even if signature inspection
+        # raises (unusual C-extension cases).
         try:
-            _trainer_params = set(_inspect.signature(Trainer.__init__).parameters)
-            sr_trainer_kwargs = {k: v for k, v in sr_trainer_kwargs.items() if k in _trainer_params}
+            _sig = _inspect.signature(Trainer.__init__)
+            _has_var_keyword = any(
+                p.kind == _inspect.Parameter.VAR_KEYWORD for p in _sig.parameters.values()
+            )
+            if not _has_var_keyword:
+                _trainer_params = set(_sig.parameters)
+                sr_trainer_kwargs = {k: v for k, v in sr_trainer_kwargs.items() if k in _trainer_params}
         except (TypeError, ValueError):
             pass
 
@@ -4091,6 +4308,18 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         default=2e-4,
         help="Learning rate (default: 2e-4; must be > 0)",
     )
+    # BRIDGE-A-003 (v1.4): --lora-r default 256 matches LoraConfig.r in
+    # config.py (both the pydantic-settings branch at config.py:268 AND the
+    # dataclass fallback at config.py:646 default to 256). If you change
+    # this value, ALSO update:
+    #   * config.py:268 (BaseSettings branch LoraConfig.r)
+    #   * config.py:646 (dataclass fallback LoraConfig.r)
+    #   * site/src/content/docs/handbook/cli-reference.md (--lora-r row)
+    #   * site/src/content/docs/handbook/env-vars.md (BACKPROPAGATE_LORA__R)
+    # so the argparse default / settings default / handbook table stay in
+    # lockstep. Drift between these surfaces is the [[no-banner-documenting
+    # -no-op]] adjacent pattern audited in v1.4 (BRIDGE-A-003) — an operator
+    # reading the handbook is told one default and the runtime applies another.
     train_parser.add_argument(
         "--lora-r",
         type=_positive_int,
@@ -4366,7 +4595,29 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     export_parser.add_argument(
         "--hub-token",
         default=None,
-        help="HF token override for --push-to-hub (default: env / cached login).",
+        help=(
+            "HF token override for --push-to-hub (default: env / cached "
+            "login). NOTE: passing the token on the command line leaks it "
+            "to `ps aux` and shell history — prefer --hub-token-file or "
+            "the HF_TOKEN env var for repeat invocations."
+        ),
+    )
+    # BRIDGE-A-004 (v1.4): file-based HF token resolution. Mirrors the v1.3
+    # cmd_ui --auth-file pattern (cli.py ~2137): existence check, mode-0600
+    # warning on POSIX, content read in cmd_export's _read_hub_token_file
+    # helper. Mutually exclusive with --hub-token (passing both is operator
+    # error — see _read_hub_token_file). Keeps the token off argv where
+    # `ps aux` and shell history would otherwise retain it.
+    export_parser.add_argument(
+        "--hub-token-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a file containing the HF token on the first line "
+            "(replaces --hub-token; keeps the credential out of shell "
+            "history and `ps aux`). Set mode 0600 on POSIX. Mutually "
+            "exclusive with --hub-token."
+        ),
     )
     export_parser.add_argument(
         "--hub-private",
@@ -4496,7 +4747,24 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         default=None,
         help=(
             "HF token (defaults to $HF_TOKEN, $HUGGING_FACE_HUB_TOKEN, or "
-            "~/.cache/huggingface/token from `huggingface-cli login`)."
+            "~/.cache/huggingface/token from `huggingface-cli login`). "
+            "NOTE: passing the token on the command line leaks it to "
+            "`ps aux` and shell history — prefer --token-file or the "
+            "HF_TOKEN env var for repeat invocations."
+        ),
+    )
+    # BRIDGE-A-004 (v1.4): file-based HF token resolution. See the
+    # symmetrical --hub-token-file on the export subparser for the design
+    # rationale. Mutually exclusive with --token.
+    push_parser.add_argument(
+        "--token-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a file containing the HF token on the first line "
+            "(replaces --token; keeps the credential out of shell history "
+            "and `ps aux`). Set mode 0600 on POSIX. Mutually exclusive "
+            "with --token."
         ),
     )
     push_parser.add_argument(
@@ -5027,8 +5295,10 @@ def main(argv: list[str] | None = None) -> int:
     # BRIDGE-B-017 (Stage C): print a deprecation hint when an operator
     # invokes a subcommand whose stability tier is "deprecated-prefer-X".
     # The hint is purely advisory — the deprecated subcommand still runs.
-    # Operators piping `backprop info --subcommand-tiers` can grep for
-    # upcoming removals.
+    # (BRIDGE-A-001, v1.4): the legacy hint pointed at a never-registered
+    # `backprop info --subcommand-tiers` flag — stripped to avoid the
+    # [[no-banner-documenting-no-op]] tripwire. If that introspection
+    # surface lands later, restore the pointer at that time.
     cmd_name = getattr(args, "command", None)
     tier = SUBCOMMAND_TIERS.get(cmd_name or "", "stable")
     if tier.startswith("deprecated"):
@@ -5038,7 +5308,7 @@ def main(argv: list[str] | None = None) -> int:
             preferred = "the replacement subcommand"
         print(
             f"[deprecation] `backprop {cmd_name}` is deprecated; prefer "
-            f"`backprop {preferred}`. See `backprop info --subcommand-tiers`.",
+            f"`backprop {preferred}`.",
             file=sys.stderr,
         )
 

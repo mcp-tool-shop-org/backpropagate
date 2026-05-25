@@ -28,7 +28,7 @@ trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ```bash
-backprop ollama register ./output/lora --name my-model
+backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 ollama run my-model
 ```
 

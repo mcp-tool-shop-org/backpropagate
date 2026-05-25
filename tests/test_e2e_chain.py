@@ -228,6 +228,7 @@ class TestE2EFullChain:
             f"line). Captured text: {modelfile_text!r}"
         )
 
+    @pytest.mark.serial
     def test_train_export_register_chain_emits_expected_log_events(self, temp_dir):
         """Each chain stage emits the expected structured log event.
 
@@ -239,6 +240,12 @@ class TestE2EFullChain:
 
         We capture the events into a list via a structlog-capture fixture
         and assert the chain emits at least one event with each known shape.
+
+        TESTS-A-007 (v1.4 Wave 2 amend): marked @serial because this test
+        calls ``structlog.configure(...)`` which mutates the process-wide
+        structlog configuration. The try/finally guards process-end cleanup
+        but two adjacent tests on the same xdist worker could still
+        interleave their configure() calls; serial scheduling prevents that.
         """
         pytest.importorskip("structlog")
         import structlog

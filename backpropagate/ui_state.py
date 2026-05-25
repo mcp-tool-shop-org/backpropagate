@@ -365,6 +365,63 @@ class TrainState(rx.State):
         """
         return self.run_state in ("done", "error")
 
+    # ---- Recovery-banner Vars (FRONTEND-A-004, v1.4 Wave 2) -----------------
+    #
+    # The Train page surfaces the MOST RECENT ``ok`` / ``warn`` event as a
+    # ``BpRecoveryBanner``. Pre-fix the component existed but no page rendered
+    # it (the docstring at pages/train.py:6 even claimed "Recovery banners
+    # (when applicable)" but the body never wired one). The component takes
+    # plain Python strings for the variant (color + icon are looked up at
+    # component-build time, not via Vars), so the three variants are exposed
+    # as three separate Vars and the page renders three conditional banners.
+    #
+    # "Most recent" means walking the events list in reverse and returning
+    # the first ok / warn entry; if none, return an empty string and the
+    # page's ``rx.cond`` keeps the banner unmounted.
+
+    @rx.var
+    def latest_recovery_ok_msg(self) -> str:
+        """Message of the most recent ``ok``-level event, or empty.
+
+        Drives the Train page's "good news" recovery banner — e.g. trainer
+        successfully resumed from an OOM bisect, GPU temp dropped below
+        threshold, checkpoint was written after a near-miss.
+        """
+        for ev in reversed(self.events):
+            if isinstance(ev, dict) and ev.get("level") == "ok":
+                return str(ev.get("msg") or "")
+        return ""
+
+    @rx.var
+    def latest_recovery_warn_msg(self) -> str:
+        """Message of the most recent ``warn``-level event, or empty.
+
+        Drives the Train page's "heads-up" recovery banner — e.g. GPU temp
+        approaching threshold, dataset row skipped, batch auto-shrunk for
+        VRAM. Distinct from ``err``: warn is a recovered-or-recoverable
+        condition; err is a hard failure (rendered via the structured
+        error callout instead).
+        """
+        for ev in reversed(self.events):
+            if isinstance(ev, dict) and ev.get("level") == "warn":
+                return str(ev.get("msg") or "")
+        return ""
+
+    @rx.var
+    def latest_recovery_info_msg(self) -> str:
+        """Message of the most recent ``info``-level event, or empty.
+
+        Drives the Train page's neutral-tint banner — e.g. "trainer started",
+        "dataset loaded", "exporting adapter". This one fires for routine
+        lifecycle events; the page renders it at lower visual weight than
+        ok / warn (or the page may opt to hide it entirely — see the
+        train.py wiring rationale).
+        """
+        for ev in reversed(self.events):
+            if isinstance(ev, dict) and ev.get("level") == "info":
+                return str(ev.get("msg") or "")
+        return ""
+
     # ---- Setters (FRONTEND-A-002 + FRONTEND-B-002) -------------------------
 
     @rx.event
@@ -1377,6 +1434,14 @@ class AuthBadgeState(rx.State):
     bind_host: str = ""
     bind_port: str = ""
     reachable_from: str = ""
+    # FRONTEND-A-002 (v1.4 Wave 2): wire ``ctx.auth_user`` end-to-end.
+    # Pre-fix the field was populated on the context dataclass but discarded
+    # in ``refresh()``; the auth-mode label said "Basic" but the operator
+    # could not see WHICH credential pair was active from the badge alone
+    # (had to hover for the tooltip text). Surfacing the username as a
+    # separate chip mirrors the bind-host chip pattern from Wave 5.5 and
+    # closes the producer-without-consumer dead-state.
+    auth_user: str = ""
 
     @rx.event
     def refresh(self) -> None:
@@ -1398,6 +1463,13 @@ class AuthBadgeState(rx.State):
         self.bind_host = ctx.bind_host
         self.bind_port = ctx.bind_port
         self.reachable_from = ctx.reachable_from
+        # FRONTEND-A-002 (v1.4 Wave 2): mirror ``ctx.auth_user`` into state so
+        # the footer badge can render it as a visible "@username" suffix on
+        # the three Basic-auth modes (basic_local / basic_shared /
+        # basic_network). The non-Basic modes (no_auth_local / token_local /
+        # insecure) populate this with the empty string and the badge
+        # component skips the chip via ``rx.cond``.
+        self.auth_user = ctx.auth_user
 
 
 # ---------------------------------------------------------------------------
@@ -1464,6 +1536,41 @@ class RunDetailState(rx.State):
     # Action panel — last shell-out result (for the operator-facing toast).
     action_result: str = ""
     action_error: str = ""
+
+    # FRONTEND-A-001 (v1.4 Wave 2): comparison run id for the Diff button.
+    # Pre-fix ``diff_against`` was a fully-implemented handler with no UI
+    # control invoking it (the brief promised 4 action buttons; only 3
+    # shipped). The Diff form on ``run_detail.py:_action_panel`` writes into
+    # this field via ``set_diff_other_run_id``; the Compare button calls
+    # ``diff_against`` with the current value. Form lives next to the
+    # primary action row so the operator never leaves the page to compare.
+    diff_other_run_id: str = ""
+
+    @rx.event
+    def set_diff_other_run_id(self, value: str) -> None:
+        """Update the comparison-run-id text input (FRONTEND-A-001)."""
+        # Strip whitespace so a copy-pasted run id with trailing whitespace
+        # doesn't trip RunHistoryManager's exact-id lookup downstream.
+        self.diff_other_run_id = (value or "").strip()
+
+    @rx.event
+    def diff_with_input(self) -> None:
+        """Form submit handler — calls ``diff_against`` with the input value.
+
+        Thin wrapper so the Compare button can be a plain ``on_click`` rather
+        than needing to thread the input's local var through the closure.
+        Mirrors the input-state-then-handler pattern Train/Multi-Run use for
+        every config field.
+        """
+        if not self.diff_other_run_id:
+            self.action_error = "Enter a comparison run id."
+            return
+        if self.diff_other_run_id == self.current_run_id:
+            self.action_error = (
+                "Comparison run id must differ from the current run id."
+            )
+            return
+        self.diff_against(self.diff_other_run_id)
 
     @rx.event
     def load_run(self) -> None:

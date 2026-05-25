@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **README hero example no longer references non-existent `backprop ollama register` subcommand.** The opening 3-line copy-pasteable bash block (the FIRST runnable snippet operators read) was advertising a subcommand that does not exist in `backpropagate/cli.py` — operators hit `argparse error: argument command: invalid choice: 'ollama'` on the first invocation. Replaced with the working `backprop export ... --ollama --ollama-name my-model` form already documented at README line 270. Translated READMEs (`README.{es,fr,hi,it,ja,pt-BR,zh}.md`) defer to Phase 10 polyglot-mcp re-translation. (CIDOCS-A-001)
+- **PyPI metadata propagation: hatchling pinned to `>=1.27`.** v1.3.0's PyPI page rendered `Author: None` and `License: None` because the `license = "MIT"` PEP 639 SPDX-expression shape requires `hatchling>=1.27`. Older hatchling silently downgraded to Metadata-Version 2.1 and emitted an empty License-Expression, which PyPI then renders as `None`. The pin closes this; verify post-build with `python -m build && twine check dist/* && tar -xOf dist/backpropagate-*.tar.gz '*/PKG-INFO' | grep -E 'License\|Author'`. (CIDOCS-A-002)
+- **`publish.yml` now fires on the `release.yml`-completed chain.** The prior `release: types: [published]` trigger never fired when the release was created by `release.yml` using `GITHUB_TOKEN` (well-documented GH platform behavior to prevent workflow loops). v1.3.0 required manual `gh workflow run publish.yml --ref v1.3.0`. Added `workflow_run: workflows: [Release] types: [completed]` trigger gated on `github.event.workflow_run.conclusion == 'success'` (mirrors the pattern `post-publish-smoke.yml` already uses). Manual `release: published` + `workflow_dispatch` retained for hand-cut releases. (CIDOCS-A-003)
+- **`llms.txt` env-var name corrected: `BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN` (was `..._REQ_PER_MIN`).** LLM agents consuming `llms.txt` to drive backpropagate were setting an env var that does not exist; the rate-limit cap silently reverted to default. The actual var is `BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN` (defined in `backpropagate/ui_app/middleware/rate_limit.py:58`). Also added the WebSocket cap (`BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN`, default 10). (CIDOCS-A-006)
+- **Handbook `cli-reference.md --lora-r` default corrected: `256` (was stale `16`).** v1.3 shipped the quality-preset rank-256 default in `cli.py:4097` and in `LoRAConfig.r` (`config.py:268`); the handbook table still showed the v1.2.x footprint rank. (CIDOCS-A-004)
+- **Handbook `env-vars.md BACKPROPAGATE_LORA__R` default corrected: `256` (was stale `16`).** Mirrors the `--lora-r` argparse default and the `LoRAConfig.r` Pydantic default. All three surfaces (env-vars, cli-reference, README) now agree. (CIDOCS-A-005)
+- **`error-codes.md INPUT_AUTH_REQUIRED` row renamed to `RUNTIME_UI_AUTH_NOT_ENFORCED` with corrected fix advice.** The prior row advised `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` opt-out — that env var is a no-op under the v1.1+ Reflex UI (held only for forward-compat with the Gradio era). Operators trying to use it would silently no-op. New fix advice: pass `--auth user:password` or use SSH port-forwarding (see `handbook/security.md`). The actual error code raised in v1.2.0+ is `RUNTIME_UI_AUTH_NOT_ENFORCED`. (CIDOCS-A-007)
+
+### Changed
+
+- **GitHub Pages deploy split into dedicated `pages-deploy.yml` workflow.** The prior `build-site` + `deploy-site` jobs lived in `ci.yml` and combined the workflow-level `paths:` filter with a job-level `if:` gate, creating a silent chain-reaction failure: pushes touching non-site files would not run `build-site`, so `deploy-site` (which depends on it) would skip. Site drift between the repo and deployed pages could persist for weeks unnoticed. The dedicated workflow has `paths: [site/**]` at the workflow level (cleaner gating) plus `workflow_dispatch` for manual self-heal redeploys. (CIDOCS-A-008)
+- **`doc-drift.yml` actions SHA-pinned.** The prior `actions/checkout@v4` + `actions/setup-python@v6` references bypassed the v1.1.0-era "every third-party GitHub Action SHA-pinned" convention. Now matches the canonical pins used in `ci.yml` and `publish.yml`. (CIDOCS-A-009)
+
 ## [1.3.0] - 2026-05-24
 
 ### Fixed

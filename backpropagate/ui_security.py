@@ -154,9 +154,12 @@ __all__ = [
     # Content Security Policy (2026)
     "CSPConfig",
     "ContentSecurityPolicy",
-    "DEFAULT_GRADIO_CSP",
-    "get_gradio_csp",
+    "DEFAULT_GRADIO_CSP",  # deprecated in v1.4 — use DEFAULT_REFLEX_CSP for new wiring
+    "DEFAULT_REFLEX_CSP",  # FRONTEND-A-003 (v1.4 Wave 2): Reflex/Next.js-tuned default
+    "get_gradio_csp",  # deprecated in v1.4 — use get_reflex_csp for new wiring
+    "get_reflex_csp",  # FRONTEND-A-003 (v1.4 Wave 2): factory used by security_headers_middleware
     "apply_security_headers",
+    "security_headers_dict",  # FRONTEND-A-003 (v1.4 Wave 2): ASGI-shape helper
     # Framework-agnostic helpers (moved from ui.py during Reflex migration v1.1.0)
     "safe_markdown_fence",
     "sanitize_error_for_user",
@@ -2838,7 +2841,11 @@ class ContentSecurityPolicy:
         return headers
 
 
-# Default CSP for Gradio apps
+# DEPRECATED (v1.4): the Reflex UI no longer uses this — it's preserved as
+# a back-compat alias for downstream callers that ``from ui_security import
+# DEFAULT_GRADIO_CSP``. The v1.4 rename in V1_4_BRIEF item 7 will retire the
+# "gradio" prefix across this module; until then, prefer ``DEFAULT_REFLEX_CSP``
+# for any new wiring (see ``backpropagate/ui_app/middleware/security_headers.py``).
 DEFAULT_GRADIO_CSP = CSPConfig(
     script_src=["'self'", "'unsafe-eval'"],  # Gradio needs eval for dynamic components
     style_src=["'self'", "'unsafe-inline'"],  # Gradio uses inline styles
@@ -2850,9 +2857,57 @@ DEFAULT_GRADIO_CSP = CSPConfig(
 )
 
 
+# FRONTEND-A-003 (v1.4 Wave 2): Reflex-tuned CSP for the production
+# middleware wired into ``ui_app/app.py::rx.App(api_transformer=...)``.
+#
+# Differences from ``DEFAULT_GRADIO_CSP`` and the load-bearing reasons:
+#
+# - ``script_src=['self', 'unsafe-eval', 'unsafe-inline']`` — Reflex's
+#   Next.js shell ships an inline bootstrap ``<script>`` block per page
+#   (the standard ``__NEXT_DATA__`` hydration payload + Reflex's own
+#   per-page Var-binding script). Without ``'unsafe-inline'`` the entire
+#   UI is blocked before the WS connects. ``'unsafe-eval'`` is still
+#   needed for Reflex's runtime Var → DOM expression machinery (same
+#   as Gradio, different mechanism).
+# - ``style_src`` unchanged from Gradio — Reflex uses inline styles for
+#   the Radix theme + per-component CSS variables (the TOKENS_CSS
+#   ``<style>`` tag rx.el.style injects on every page).
+# - ``img_src=['self', 'data:', 'blob:', 'https:']`` — Reflex serves
+#   bundled SVG icons from /icons (self) and the chrome's auth-badge
+#   chip can carry inline SVG data URIs. ``blob:`` is needed for
+#   client-rendered chart exports / file-download affordances.
+# - ``connect_src=['self', 'ws:', 'wss:']`` — Reflex's /_event WS
+#   endpoint is on the same origin. ``ws:`` covers loopback; ``wss:``
+#   covers the documented cloudflared-tunnel / reverse-proxy deploy
+#   shapes. HF API is NOT included — the UI never directly calls
+#   huggingface.co from the browser (model downloads happen server-
+#   side in the trainer process; the UI only consumes WS frames).
+# - ``font_src=['self', 'data:']`` — Reflex's stylesheet bundle inlines
+#   the Inter / JetBrains Mono webfonts (Wave 5.5 design-token doc), so
+#   we don't need Google Fonts. Dropping the Google Fonts allowance
+#   tightens the surface and removes a third-party network dependency
+#   the UI doesn't actually use.
+# - ``object-src='none'`` and ``frame-ancestors='self'`` — same as
+#   Gradio. No plugin objects; no iframe-embedding outside same-origin.
+DEFAULT_REFLEX_CSP = CSPConfig(
+    script_src=["'self'", "'unsafe-eval'", "'unsafe-inline'"],
+    style_src=["'self'", "'unsafe-inline'"],
+    img_src=["'self'", "data:", "blob:", "https:"],
+    font_src=["'self'", "data:"],
+    connect_src=["'self'", "ws:", "wss:"],
+    frame_ancestors=["'self'"],
+    object_src=["'none'"],
+)
+
+
 def get_gradio_csp(report_only: bool = False) -> ContentSecurityPolicy:
     """
     Get a CSP configured for Gradio apps.
+
+    DEPRECATED (v1.4): the Reflex UI uses ``get_reflex_csp`` instead. This
+    helper is preserved for back-compat with any downstream caller that
+    imported the Gradio name. The v1.4 rename in V1_4_BRIEF item 7 will
+    retire the "gradio" prefix across this module.
 
     Args:
         report_only: If True, only report violations (don't enforce)
@@ -2873,6 +2928,36 @@ def get_gradio_csp(report_only: bool = False) -> ContentSecurityPolicy:
     return ContentSecurityPolicy(config)
 
 
+def get_reflex_csp(report_only: bool = False) -> ContentSecurityPolicy:
+    """Get a CSP configured for the Reflex UI (FRONTEND-A-003, v1.4 Wave 2).
+
+    Returns a ``ContentSecurityPolicy`` seeded from ``DEFAULT_REFLEX_CSP``.
+    See that constant's docstring for the per-directive rationale.
+
+    Args:
+        report_only: If True, only report violations (don't enforce). Use
+            during a deployment shakeout to log violations to console
+            (``Content-Security-Policy-Report-Only`` header) without
+            breaking the UI on a missing directive.
+
+    Returns:
+        ContentSecurityPolicy instance — wired into the new
+        ``security_headers_middleware`` (sibling of ``request_logging``,
+        AFTER auth, BEFORE Reflex in the chain).
+    """
+    config = CSPConfig(
+        script_src=DEFAULT_REFLEX_CSP.script_src.copy(),
+        style_src=DEFAULT_REFLEX_CSP.style_src.copy(),
+        img_src=DEFAULT_REFLEX_CSP.img_src.copy(),
+        font_src=DEFAULT_REFLEX_CSP.font_src.copy(),
+        connect_src=DEFAULT_REFLEX_CSP.connect_src.copy(),
+        frame_ancestors=DEFAULT_REFLEX_CSP.frame_ancestors.copy(),
+        object_src=DEFAULT_REFLEX_CSP.object_src.copy(),
+        report_only=report_only,
+    )
+    return ContentSecurityPolicy(config)
+
+
 # =============================================================================
 # MIDDLEWARE HELPERS FOR GRADIO
 # =============================================================================
@@ -2884,14 +2969,20 @@ def apply_security_headers(
     """
     Apply security headers to a response object.
 
-    Works with various response types (Gradio, FastAPI, etc.)
+    Works with various response types (Gradio, FastAPI, etc.).
 
     Args:
         response: Response object with headers attribute
-        csp: ContentSecurityPolicy instance (default: Gradio-compatible)
+        csp: ContentSecurityPolicy instance. When ``None``, defaults to
+            :func:`get_reflex_csp` — the v1.4 Reflex-tuned CSP (FRONTEND-A-003).
+            Pre-v1.4 the default was :func:`get_gradio_csp`, which permitted
+            ``https://huggingface.co`` and ``https://fonts.gstatic.com``
+            (Gradio era); those are no longer needed in the Reflex era.
+            Callers that need the legacy default can pass
+            ``csp=get_gradio_csp()`` explicitly.
     """
     if csp is None:
-        csp = get_gradio_csp()
+        csp = get_reflex_csp()
 
     headers = csp.get_all_security_headers()
 
@@ -2901,6 +2992,32 @@ def apply_security_headers(
     elif hasattr(response, "set_header"):
         for name, value in headers.items():
             response.set_header(name, value)
+
+
+def security_headers_dict(csp: ContentSecurityPolicy | None = None) -> dict[str, str]:
+    """Return the full security-header dict for ASGI-level emission.
+
+    FRONTEND-A-003 (v1.4 Wave 2): ``apply_security_headers`` mutates a
+    response object (Starlette / FastAPI / Gradio shape). ASGI middlewares
+    instead manipulate the ``headers`` list on the
+    ``http.response.start`` message — they have no response object to
+    mutate. This helper exposes the same set of headers (CSP +
+    X-Content-Type-Options + X-Frame-Options + X-XSS-Protection +
+    Referrer-Policy + Permissions-Policy) as a plain dict so the ASGI
+    middleware can encode them as ``(name_bytes, value_bytes)`` tuples.
+
+    Args:
+        csp: ContentSecurityPolicy instance. ``None`` uses the v1.4
+            Reflex-tuned default (same as ``apply_security_headers``).
+
+    Returns:
+        Dict of header name -> value. All values are plain ASCII; the
+        ASGI middleware is responsible for ``.encode("ascii")`` on both
+        sides.
+    """
+    if csp is None:
+        csp = get_reflex_csp()
+    return csp.get_all_security_headers()
 
 
 # =============================================================================

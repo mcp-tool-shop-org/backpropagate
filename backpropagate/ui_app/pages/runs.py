@@ -33,6 +33,7 @@ import reflex as rx
 from backpropagate.ui_state import RunsState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
+from ..components.error_callout import BpErrorCallout
 
 
 def _label(text: str) -> rx.Component:
@@ -252,29 +253,39 @@ def _empty_state() -> rx.Component:
 
 
 def _error_callout() -> rx.Component:
-    """Inline error banner — peach background, click to dismiss."""
+    """Inline error banner — consolidated via ``BpErrorCallout``.
+
+    FRONTEND-A-004 (v1.4 Wave 2): pre-fix this rolled its own
+    ``rx.flex`` chrome with a peach border + Dismiss button — the
+    canonical ``BpErrorCallout`` (components/error_callout.py) existed
+    but no page imported it. Now uses the canonical component so the
+    error surface shares ARIA semantics + design-digest-conformant
+    styling across pages.
+
+    ``BpErrorCallout`` already renders ``rx.callout.root`` with
+    ``color_scheme="red"`` (which carries the accessible role + the
+    correct contrast across light/dark themes), so the inline chrome
+    here collapses to a single Component + a Dismiss button below.
+    The Dismiss button stays in this wrapper (not the component) so
+    other consumers of ``BpErrorCallout`` don't auto-acquire a
+    state-bound Dismiss they don't have a handler for.
+    """
     return rx.flex(
-        rx.text(
-            RunsState.error,
-            size="2",
-            style={"color": "var(--bp-peach)", "flex_grow": "1"},
+        BpErrorCallout(
+            code="UI · RUNS",
+            title="Could not load run history",
+            message=RunsState.error,
         ),
         rx.button(
             "Dismiss",
             on_click=RunsState.clear_error,
             variant="ghost",
             size="1",
+            style={"align_self": "flex-end"},
         ),
-        direction="row",
-        align="center",
+        direction="column",
         gap="2",
-        padding="3",
         width="100%",
-        style={
-            "background": "var(--bp-surface-2)",
-            "border": "1px solid var(--bp-peach)",
-            "border_radius": "var(--bp-r-2)",
-        },
     )
 
 

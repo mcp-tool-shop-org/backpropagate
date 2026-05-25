@@ -423,6 +423,13 @@ class TestCmdTrain:
             samples=None,
             batch_size="auto",
             lr=2e-4,
+            # TESTS-A-005 (v1.4 Wave 2 amend): lora_r=16 is an intentional
+            # non-default fixture value. This test asserts data-validation
+            # behaviour (the `data=None` returns EXIT_USER_ERROR), NOT the
+            # CLI default (which is 256 per v1.3 BACKEND-1 — see
+            # test_cli.py:58 which pins args.lora_r == 256 for the parser).
+            # The fixture-Namespace stays at 16 to keep this test isolated
+            # from default-value drift.
             lora_r=16,
             output="./output",
             no_unsloth=True,
@@ -1562,6 +1569,7 @@ class TestCmdPush:
         args.local_path = str(tmp_path / "missing")
         args.repo = "alice/m"
         args.token = None
+        args.token_file = None
         args.private = False
         args.include_base = False
         args.verbose = False
@@ -1579,6 +1587,7 @@ class TestCmdPush:
         args.local_path = str(local)
         args.repo = None
         args.token = None
+        args.token_file = None
         args.private = False
         args.include_base = False
         args.verbose = False
@@ -1596,6 +1605,7 @@ class TestCmdPush:
         args.local_path = str(local)
         args.repo = "alice/m"
         args.token = None
+        args.token_file = None
         args.private = False
         args.include_base = False
         args.verbose = False
@@ -1627,6 +1637,7 @@ class TestCmdPush:
         args.local_path = str(local)
         args.repo = "alice/m"
         args.token = None
+        args.token_file = None
         args.private = False
         args.include_base = False
         args.verbose = False
@@ -1650,6 +1661,7 @@ class TestCmdPush:
         args.local_path = str(local)
         args.repo = "alice/m"
         args.token = None
+        args.token_file = None
         args.private = False
         args.include_base = False
         args.verbose = False

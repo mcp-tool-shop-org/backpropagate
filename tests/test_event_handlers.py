@@ -138,10 +138,15 @@ class TestTrainingCallbackIntegration:
 
         callback = TrainingCallback(on_step=on_step)
 
-        # Simulate what happens during training
-        if callback.on_step:
-            callback.on_step(1, 2.5)
-            callback.on_step(2, 2.3)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — the on_step
+        # field was set explicitly 5 lines above so a guarding `if`
+        # condition was dead code that silently swallowed regressions
+        # (a no-op truthy sentinel would have passed the `if` and made the
+        # test green with zero assertions). If the dataclass field default
+        # ever changes to something non-falsy, the AttributeError on the
+        # direct call surfaces the regression loudly.
+        callback.on_step(1, 2.5)
+        callback.on_step(2, 2.3)
 
         assert len(received_args) == 2
         assert received_args[0] == (1, 2.5)
@@ -200,8 +205,9 @@ class TestTrainingCallbackIntegration:
         mock_run = MagicMock(spec=TrainingRun)
         mock_run.final_loss = 0.5
 
-        if callback.on_complete:
-            callback.on_complete(mock_run)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — on_complete
+        # was set explicitly above, the guarding `if` was dead code.
+        callback.on_complete(mock_run)
 
         assert len(received_runs) == 1
         assert received_runs[0].final_loss == 0.5
@@ -218,8 +224,9 @@ class TestTrainingCallbackIntegration:
         callback = TrainingCallback(on_error=on_error)
 
         test_error = ValueError("Test error")
-        if callback.on_error:
-            callback.on_error(test_error)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — on_error was
+        # set explicitly above, the guarding `if` was dead code.
+        callback.on_error(test_error)
 
         assert len(received_errors) == 1
         assert received_errors[0] is test_error
@@ -236,8 +243,9 @@ class TestTrainingCallbackIntegration:
 
         callback = TrainingCallback(on_save=on_save)
 
-        if callback.on_save:
-            callback.on_save("/path/to/checkpoint")
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — on_save was
+        # set explicitly above, the guarding `if` was dead code.
+        callback.on_save("/path/to/checkpoint")
 
         assert len(received_paths) == 1
         assert received_paths[0] == "/path/to/checkpoint"
@@ -253,11 +261,15 @@ class TestTrainingCallbackIntegration:
 
         errors_caught = []
 
-        # Simulate trainer's safe invocation pattern
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — on_step was
+        # set explicitly above; the prior `if callback.on_step:` guard was
+        # dead code that would silently pass with zero assertions if a
+        # regression made the default a truthy no-op. The try/except still
+        # mirrors the trainer's safe-invocation pattern (this test exists
+        # to pin that callers can wrap callbacks in try/except).
         for i in range(3):
             try:
-                if callback.on_step:
-                    callback.on_step(i, 0.5)
+                callback.on_step(i, 0.5)
             except Exception as e:
                 errors_caught.append(e)
 
@@ -873,9 +885,11 @@ class TestGPUMonitorEventDispatch:
             on_status=on_status,
         )
 
-        # Manually invoke the callback
-        if monitor.on_status:
-            monitor.on_status(gpu_status_safe)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — on_status
+        # was set explicitly in the constructor above, so the prior
+        # `if monitor.on_status:` guard was dead code that silently
+        # swallowed regressions.
+        monitor.on_status(gpu_status_safe)
 
         assert len(received) == 1
         assert received[0].temperature_c == 60.0
@@ -905,8 +919,9 @@ class TestGPUMonitorEventDispatch:
             condition_reason="Temperature WARNING: 82.0°C",
         )
 
-        if monitor.on_warning:
-            monitor.on_warning(warning_status)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — guard
+        # was dead code (on_warning set explicitly in constructor above).
+        monitor.on_warning(warning_status)
 
         assert len(received) == 1
         assert received[0].condition == GPUCondition.WARNING
@@ -925,8 +940,9 @@ class TestGPUMonitorEventDispatch:
             on_critical=on_critical,
         )
 
-        if monitor.on_critical:
-            monitor.on_critical(gpu_status_critical)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — guard
+        # was dead code (on_critical set explicitly in constructor above).
+        monitor.on_critical(gpu_status_critical)
 
         assert len(received) == 1
         assert received[0].condition == GPUCondition.CRITICAL
@@ -945,8 +961,9 @@ class TestGPUMonitorEventDispatch:
             on_emergency=on_emergency,
         )
 
-        if monitor.on_emergency:
-            monitor.on_emergency(gpu_status_emergency)
+        # TESTS-A-004 (v1.4 Wave 2 amend): direct invocation — guard
+        # was dead code (on_emergency set explicitly in constructor above).
+        monitor.on_emergency(gpu_status_emergency)
 
         assert len(received) == 1
         assert received[0].condition == GPUCondition.EMERGENCY

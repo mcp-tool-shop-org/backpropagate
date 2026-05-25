@@ -300,6 +300,76 @@ def _hub_group() -> rx.Component:
                     direction="column",
                     width="100%",
                 ),
+                # FRONTEND-F-004 (v1.4 Wave 6b features): surface the two CLI
+                # flags Wave 2 BRIDGE-A-004 added but the UI form was missing
+                # — ``--token-file`` (mode-0600 path; mutually exclusive with
+                # the inline token above) and ``--include-base`` (push merged
+                # base weights, not just LoRA adapter). The CLI's mutual-
+                # exclusion + safety calibration is mirrored in
+                # ExportState.push_to_hub.
+                rx.flex(
+                    _label("Token-file path (mutually exclusive with token above)"),
+                    rx.input(
+                        placeholder="~/.config/backpropagate/hf-token",
+                        value=ExportState.hub_token_file_path,
+                        on_change=ExportState.set_hub_token_file_path,
+                        size="2",
+                        style={"width": "100%"},
+                        aria_label=(
+                            "Path to a file containing the HF token (mode-0600 "
+                            "recommended). Mutually exclusive with the token "
+                            "input field above."
+                        ),
+                    ),
+                    rx.text(
+                        "Safer than the inline token field — the path is "
+                        "validated here; the file is read at push time so "
+                        "the credential never enters the WS state. Mode "
+                        "0600 (rw owner-only) is recommended; widened modes "
+                        "trigger a stderr warning, not a hard error.",
+                        size="1",
+                        style={
+                            "color": "var(--bp-muted)",
+                            "font_size": "11px",
+                        },
+                    ),
+                    rx.cond(
+                        ExportState.hub_token_file_path_error != "",
+                        rx.text(
+                            ExportState.hub_token_file_path_error,
+                            size="1",
+                            style={
+                                "color": "var(--bp-peach)",
+                                "font_size": "11px",
+                            },
+                        ),
+                        rx.fragment(),
+                    ),
+                    direction="column",
+                    width="100%",
+                ),
+                rx.flex(
+                    rx.checkbox(
+                        "Include base model weights (push merged model)",
+                        checked=ExportState.hub_include_base,
+                        on_change=ExportState.set_hub_include_base,
+                    ),
+                    rx.text(
+                        "Default (off) uploads only the LoRA adapter files. "
+                        "Turn on to push every file in the source directory "
+                        "— useful when the source is a merged model export "
+                        "and you want the base weights uploaded too. The "
+                        "upload size grows by the size of the base model.",
+                        size="1",
+                        style={
+                            "color": "var(--bp-muted)",
+                            "font_size": "11px",
+                        },
+                    ),
+                    direction="column",
+                    gap="2",
+                    align="start",
+                ),
                 rx.flex(
                     rx.button(
                         rx.cond(

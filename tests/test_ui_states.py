@@ -867,3 +867,418 @@ class TestAppStateTheme:
             "ui_app/app.py, where it is wired to rx.color_mode so DOM "
             "mutation actually fires."
         )
+
+
+# =============================================================================
+# TESTS-F-004 (v1.4 Wave 6b): RunDetailState — was_deleted +
+# action_in_flight pinning.
+# =============================================================================
+#
+# Wave 3.5 FRONTEND-B-001 introduced ``was_deleted`` (a deletion-specific
+# success surface separate from ``not_found``). Pre-fix, a successful
+# ``delete_run`` shell-out set ``not_found = True`` — latching the page
+# into the "Run not found" chrome (designed for unknown-id navigations)
+# and stranding the success message in ``action_result`` behind a template
+# that never displays it.
+#
+# Stage C FRONTEND-B-014-EXTENDED introduced ``action_in_flight`` for the
+# diff/replay/delete/export shell-outs. Pre-fix the operator clicked the
+# button and saw NO feedback until the subprocess returned — a long silent
+# gap that read as a frozen UI. The handlers now set ``action_in_flight``
+# at the start and clear it via try/finally so a thrown exception still
+# leaves the UI in a consistent state.
+#
+# These pin: defaults, delete_run success/failure mutations,
+# action_in_flight presence + always-cleared invariant, and load_run's
+# was_deleted reset on remount.
+#
+# All tests stub ``shutil.which`` + ``subprocess.run`` so no real CLI is
+# invoked.
+
+
+class TestRunDetailStateDefaults:
+    """Default field values for the per-run drill-down state."""
+
+    def test_initial_was_deleted_false(self):
+        """Wave 3.5 FRONTEND-B-001: ``was_deleted`` defaults to False so
+        the deletion-confirmation chrome only renders after a successful
+        delete_run handler.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        assert hasattr(state, "was_deleted"), (
+            "Wave 3.5 FRONTEND-B-001 regression: RunDetailState is "
+            "missing the was_deleted field. The template's branch on "
+            "was_deleted BEFORE not_found has nothing to read."
+        )
+        assert state.was_deleted is False, (
+            f"FRONTEND-B-001: RunDetailState.was_deleted must default "
+            f"to False; got {state.was_deleted!r}. A True default "
+            f"would render the 'Run deleted.' chrome unconditionally."
+        )
+
+    def test_initial_not_found_false(self):
+        """``not_found`` defaults to False — separate surface from
+        ``was_deleted`` per FRONTEND-B-001 disambiguation.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        assert state.not_found is False
+
+    def test_initial_action_in_flight_empty(self):
+        """Stage C FRONTEND-B-014-EXTENDED: ``action_in_flight``
+        defaults to empty string (no shell-out active on first render).
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        assert hasattr(state, "action_in_flight"), (
+            "Stage C FRONTEND-B-014-EXTENDED regression: "
+            "RunDetailState is missing the action_in_flight field. "
+            "The action panel's spinner / 'Running ...' chrome has "
+            "nothing to bind to."
+        )
+        assert state.action_in_flight == "", (
+            f"action_in_flight must default to '' (no active shell-out); "
+            f"got {state.action_in_flight!r}."
+        )
+
+    def test_initial_action_result_and_error_empty(self):
+        """Both action-panel surfaces start empty."""
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        assert state.action_result == ""
+        assert state.action_error == ""
+
+
+class TestRunDetailStateDeleteRun:
+    """Wave 3.5 FRONTEND-B-001 + Stage C FRONTEND-B-014-EXTENDED: delete
+    handler mutations.
+    """
+
+    def _make_subprocess_mock(self, *, returncode: int, stdout: str = "", stderr: str = ""):
+        """Build a ``subprocess.run``-like return value."""
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.returncode = returncode
+        result.stdout = stdout
+        result.stderr = stderr
+        return result
+
+    def test_delete_run_success_sets_was_deleted_true(self, monkeypatch):
+        """A successful ``delete_run`` shell-out sets ``was_deleted=True``
+        AND ``action_result`` (the deletion-confirmation chrome) AND
+        clears ``action_error``.
+
+        Pins the post-fix contract: the page renders 'Run deleted.' with
+        a Back-to-runs affordance, NOT the not-found chrome.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "abc12345"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(returncode=0, stdout="ok"),
+        )
+
+        state.delete_run()
+
+        assert state.was_deleted is True, (
+            "Wave 3.5 FRONTEND-B-001 regression: a successful "
+            "delete_run shell-out must set was_deleted=True so the "
+            "template renders the deletion-confirmation chrome."
+        )
+        assert state.action_error == "", (
+            "Successful delete_run must clear action_error so a "
+            "stale prior error doesn't render alongside the success."
+        )
+        assert "deleted" in state.action_result.lower(), (
+            f"Successful delete_run must populate action_result with a "
+            f"human-readable confirmation; got {state.action_result!r}."
+        )
+        # FRONTEND-B-001 explicitly pins the not_found surface STAYS
+        # False on a successful delete (the chrome branches on
+        # was_deleted BEFORE not_found, so a stale True here would
+        # render the wrong chrome).
+        assert state.not_found is False, (
+            "FRONTEND-B-001 regression: successful delete_run set "
+            "not_found=True. Pre-fix that latched the page into "
+            "the 'Run not found' chrome and stranded the success "
+            "message. The fix MUST keep not_found=False."
+        )
+
+    def test_delete_run_failure_does_not_set_was_deleted(self, monkeypatch):
+        """A failing shell-out leaves ``was_deleted=False`` so the
+        not-found / error chrome can render correctly.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "abc12345"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(
+                returncode=1, stderr="run not found"
+            ),
+        )
+
+        state.delete_run()
+
+        assert state.was_deleted is False, (
+            "Failed delete_run must NOT set was_deleted=True. The "
+            "deletion-confirmation chrome only renders on success."
+        )
+        assert state.action_error != "", (
+            "Failed delete_run must populate action_error so the "
+            "operator sees the failure surface."
+        )
+
+    def test_load_run_resets_was_deleted_on_remount(self, monkeypatch, tmp_path):
+        """``load_run`` clears ``was_deleted`` so navigating from a
+        just-deleted run's URL to a different run id doesn't carry the
+        'Run deleted.' surface forward.
+
+        Pins the FRONTEND-B-001 remount-clear contract documented at
+        ui_state.py:1653-1657.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.was_deleted = True  # simulate post-delete state
+        state.current_run_id = "newrunid"
+
+        # load_run reaches into the filesystem via get_ui_output_dir →
+        # RunHistoryManager; we don't need a real run record because we
+        # only care that was_deleted gets reset early in the handler.
+        # Force the "no history directory" early-return so the handler
+        # short-circuits cleanly after the was_deleted reset.
+        nonexistent = tmp_path / "no-history-dir"
+        # Don't create it — load_run takes the `if not history_dir.exists()`
+        # branch and returns early, but ONLY after was_deleted = False.
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: nonexistent,
+        )
+
+        state.load_run()
+
+        assert state.was_deleted is False, (
+            "FRONTEND-B-001 regression: load_run did NOT reset "
+            "was_deleted on remount. Navigating from a just-deleted "
+            "run's URL to a different run id must not carry the "
+            "deletion-confirmation chrome forward. See ui_state.py:1657."
+        )
+
+
+class TestRunDetailStateActionInFlight:
+    """Stage C FRONTEND-B-014-EXTENDED: action_in_flight + try/finally
+    clear contract.
+    """
+
+    def _make_subprocess_mock(self, *, returncode: int, stdout: str = "", stderr: str = ""):
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.returncode = returncode
+        result.stdout = stdout
+        result.stderr = stderr
+        return result
+
+    def test_action_in_flight_cleared_after_successful_delete(self, monkeypatch):
+        """After a successful delete shell-out the field is cleared
+        (via try/finally) so the spinner stops rendering.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-delete"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(returncode=0),
+        )
+
+        state.delete_run()
+
+        assert state.action_in_flight == "", (
+            "Stage C FRONTEND-B-014-EXTENDED regression: "
+            "action_in_flight not cleared after a successful "
+            "delete_run shell-out. The try/finally at "
+            "ui_state.py:1920 MUST clear the field on every exit "
+            "path so the spinner stops rendering."
+        )
+
+    def test_action_in_flight_cleared_after_failed_delete(self, monkeypatch):
+        """After a failing shell-out the field is STILL cleared via
+        try/finally. Pre-fix the failure path could leave the spinner
+        stuck.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-delete-fail"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(
+                returncode=1, stderr="boom"
+            ),
+        )
+
+        state.delete_run()
+
+        assert state.action_in_flight == "", (
+            "FRONTEND-B-014-EXTENDED regression: action_in_flight "
+            "not cleared after a FAILED delete_run shell-out. The "
+            "try/finally clear must fire on every exit path, "
+            "including the rc != 0 branch."
+        )
+
+    def test_action_in_flight_cleared_when_subprocess_raises(self, monkeypatch):
+        """If ``subprocess.run`` raises (TimeoutExpired / OSError), the
+        finally MUST still clear ``action_in_flight``.
+
+        The handler at ui_state.py:1918 catches TimeoutExpired + OSError
+        in the except block; the finally at :1920 runs regardless. Pre-
+        FRONTEND-B-014-EXTENDED there was no finally — an exception
+        left action_in_flight latched forever, freezing the spinner.
+        """
+        import subprocess
+
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-raise"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+
+        def _raise(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=["backprop"], timeout=30)
+
+        monkeypatch.setattr("subprocess.run", _raise)
+
+        state.delete_run()  # handler swallows TimeoutExpired
+
+        assert state.action_in_flight == "", (
+            "FRONTEND-B-014-EXTENDED regression: action_in_flight "
+            "not cleared when subprocess.run raised TimeoutExpired. "
+            "The try/finally MUST fire on the exception path so the "
+            "spinner doesn't latch forever."
+        )
+        assert state.action_error != "", (
+            "Exception path must populate action_error so the "
+            "operator sees what went wrong."
+        )
+
+    def test_action_in_flight_cleared_after_diff_against(self, monkeypatch):
+        """The same try/finally contract holds for diff_against
+        (sibling handler at ui_state.py:1832).
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-diff-a"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(
+                returncode=0, stdout="diff output"
+            ),
+        )
+
+        state.diff_against("rid-diff-b")
+
+        assert state.action_in_flight == "", (
+            "FRONTEND-B-014-EXTENDED regression on diff_against: "
+            "action_in_flight not cleared after successful diff-runs "
+            "shell-out. The grep-all-instances doctrine "
+            "[[grep-all-instances-when-fixing-pattern]] requires this "
+            "contract to hold across all 4 action handlers "
+            "(diff/replay/delete/export)."
+        )
+
+    def test_action_in_flight_cleared_after_replay(self, monkeypatch):
+        """The same try/finally contract holds for replay (sibling
+        handler at ui_state.py:1874).
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-replay"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(
+                returncode=0, stdout="replay dry-run ok"
+            ),
+        )
+
+        state.replay()
+
+        assert state.action_in_flight == "", (
+            "FRONTEND-B-014-EXTENDED regression on replay: "
+            "action_in_flight not cleared after the replay --dry-run "
+            "shell-out."
+        )
+
+    def test_action_in_flight_cleared_after_export_run(self, monkeypatch):
+        """The same try/finally contract holds for export_run (sibling
+        handler at ui_state.py:1955).
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.current_run_id = "rid-export"
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+        )
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *args, **kwargs: self._make_subprocess_mock(
+                returncode=0, stdout='{"run_id":"rid-export"}'
+            ),
+        )
+
+        state.export_run()
+
+        assert state.action_in_flight == "", (
+            "FRONTEND-B-014-EXTENDED regression on export_run: "
+            "action_in_flight not cleared after the export-runs "
+            "shell-out."
+        )

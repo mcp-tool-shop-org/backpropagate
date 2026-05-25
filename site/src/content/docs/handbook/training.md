@@ -67,6 +67,7 @@ The `Trainer` constructor accepts optional overrides for all key hyperparameters
 | `init_lora_weights` | `"default"` | v1.3 BACKEND-1 — one of `"default"` / `"pissa"` / `"loftq"`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
 | `optim` | `None` (auto) | v1.3 BACKEND-1 — optimizer string. `None` auto-picks `"paged_adamw_8bit"` on consumer GPUs (<24GB VRAM, per [arXiv:2509.12229](https://arxiv.org/abs/2509.12229) RTX 4060 study), `"adamw_torch_fused"` otherwise. Override with `"adamw_torch"` / `"paged_adamw_8bit"` / `"adamw_8bit"` etc. |
 | `lora_preset` | `"quality"` | v1.3 BACKEND-1 — one of `"quality"` (rank 256 + all-linear + 10× LR, default) or `"fast"` (rank 16 + q+v + 1× LR, v1.2.x footprint). Per [Biderman 2024](https://arxiv.org/abs/2405.09673), `"quality"` matches full fine-tuning on most post-training tasks. |
+| `mode` | `"lora"` | **v1.4** — one of `"lora"` (the default — low-rank adapter) or `"full"` (full fine-tuning — every weight updated). `"full"` is supported only for models up to 3B parameters on consumer 16GB GPUs; bigger models raise `FullFinetuneModelTooLargeError` (`RUNTIME_FULL_FT_MODEL_TOO_LARGE`). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math + the recovery decision tree. |
 
 ### `train_on_responses` on Windows
 

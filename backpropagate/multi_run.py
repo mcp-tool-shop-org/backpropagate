@@ -160,6 +160,93 @@ def _build_abort_callback(trainer: "MultiRunTrainer") -> Any:
     return _AbortCallback(trainer)
 
 
+def _build_multi_run_step_callback(
+    trainer: "MultiRunTrainer", run_idx: int
+) -> Any:
+    """v1.4 BACKEND-F-003 (Wave 6b features): bridge MultiRunTrainer.on_step
+    into the HF TrainerCallback API.
+
+    Pre-Wave-6b, the ``on_step`` callback exposed on
+    ``MultiRunTrainer.__init__`` was a dead surface — declared, stored on
+    ``self.on_step``, but never invoked anywhere in ``_execute_run`` or the
+    inner SFTTrainer. Operators wiring a per-step progress bar / live loss
+    chart / external logger via on_step got a silent no-op for every step.
+
+    The fix mirrors the single-run F-003 bridge pattern in
+    ``trainer.py:_build_trl_bridge_callback``: a private TrainerCallback
+    subclass that polls HF's ``on_log`` for the latest loss entry and
+    forwards ``(run_idx, step, loss)`` to the user's
+    :class:`MultiRunTrainer.on_step` callable. Same callback isolation
+    contract — a buggy user callback is logged at WARN and training
+    continues (no exception propagates out of the bridge).
+
+    Returns ``None`` when transformers is unavailable OR when no on_step
+    callback was supplied; the caller skips this entry in the callbacks
+    list in that case.
+    """
+    if trainer.on_step is None:
+        return None
+    try:
+        from transformers import TrainerCallback as _HFTrainerCallback
+    except Exception as exc:
+        logger.debug(
+            f"_build_multi_run_step_callback: transformers TrainerCallback "
+            f"unavailable ({exc!r}); on_step will not fire for run {run_idx}."
+        )
+        return None
+
+    class _StepCallback(_HFTrainerCallback):  # type: ignore[misc, valid-type]
+        """HF callback that forwards (run_idx, step, loss) to on_step."""
+
+        def __init__(self, multi_run_trainer: "MultiRunTrainer", run_index: int) -> None:
+            super().__init__()
+            self._mrt = multi_run_trainer
+            self._run_index = run_index
+
+        def on_log(  # noqa: D401
+            self,
+            args: Any,  # noqa: ANN401, ARG002
+            state: Any,  # noqa: ANN401
+            control: Any,  # noqa: ANN401, ARG002
+            logs: dict | None = None,
+            **_kwargs: Any,
+        ) -> None:
+            on_step = self._mrt.on_step
+            if on_step is None:
+                return
+            # Prefer the explicit ``logs`` dict, fall back to
+            # ``state.log_history`` tail (older transformers builds).
+            loss_val: float | None = None
+            if isinstance(logs, dict) and "loss" in logs:
+                try:
+                    loss_val = float(logs["loss"])
+                except (TypeError, ValueError):
+                    loss_val = None
+            if loss_val is None:
+                history = getattr(state, "log_history", None) or []
+                for entry in reversed(history[-5:]):
+                    if isinstance(entry, dict) and "loss" in entry:
+                        try:
+                            loss_val = float(entry["loss"])
+                            break
+                        except (TypeError, ValueError):
+                            continue
+            if loss_val is None:
+                # No usable loss in this log batch (e.g. eval-only entry).
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            try:
+                on_step(self._run_index, step, loss_val)
+            except Exception as cb_error:  # noqa: BLE001 — user callback isolation
+                logger.warning(
+                    f"on_step callback raised error "
+                    f"(run_index={self._run_index} step={step} "
+                    f"loss={loss_val:.4f}): {cb_error}"
+                )
+
+    return _StepCallback(trainer, run_idx)
+
+
 class MergeMode(Enum):
     """LoRA merge mode between runs."""
     SIMPLE = "simple"   # Load previous, continue training
@@ -266,6 +353,18 @@ class MultiRunConfig:
     init_lora_weights: str | None = None  # "default" | "pissa" | "loftq"
     lora_preset: str | None = None  # "fast" | "quality"
     optim: str | None = None  # passthrough to TrainingArguments.optim
+
+    # v1.4 BACKEND-F-008 (Wave 6b features): training mode forwarded to the
+    # inner Trainer instance. ``"lora"`` (default) preserves pre-Wave-6b
+    # multi-run behavior byte-identically; ``"full"`` enables full
+    # fine-tuning for models <=3B parameters. mode='full' on a model >3B
+    # raises RUNTIME_FULL_FT_MODEL_TOO_LARGE at MultiRunTrainer
+    # construction time via the inner Trainer's construction-time gate
+    # (and again at the inner Trainer's load_model() time as belt-and-
+    # braces). The full-FT optimizer + gradient_checkpointing + LR
+    # divisor logic lives in the shared ``_build_sft_config`` helper so
+    # multi-run inherits the same contract end-to-end.
+    mode: str = "lora"
 
 
 # Backwards compatibility alias
@@ -938,6 +1037,12 @@ class MultiRunTrainer:
                 init_lora_weights=self.config.init_lora_weights,
                 lora_preset=self.config.lora_preset,
                 optim=self.config.optim,
+                # v1.4 BACKEND-F-008 (Wave 6b features): forward the multi-run
+                # mode setting to the inner Trainer. mode='full' on a model
+                # >3B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE here (Trainer
+                # construction); mode='lora' (default) preserves byte-
+                # identical pre-Wave-6b multi-run behavior.
+                mode=self.config.mode,
             )
             self._trainer.load_model()
 
@@ -1437,6 +1542,12 @@ class MultiRunTrainer:
                 # cmd_replay) now passes through.
                 packing=self._trainer.packing,
                 optim=self._trainer.optim,
+                # v1.4 BACKEND-F-008 (Wave 6b features): thread the
+                # multi-run-configured mode (default ``"lora"``) through to
+                # the helper. Single source of truth: the inner Trainer's
+                # ``self.mode`` instance attribute (mirrors the
+                # ``packing`` / ``optim`` threading pattern above).
+                mode=self._trainer.mode,
             )
 
             # BACKEND-F-001: wire the abort callback into the inner
@@ -1444,8 +1555,21 @@ class MultiRunTrainer:
             # via control.should_training_stop, not just between runs.
             # Rebuilt per-attempt so the OOM retry path picks up a fresh
             # adapter bound to the new SFTTrainer instance.
+            #
+            # v1.4 BACKEND-F-003 (Wave 6b features): also wire the
+            # per-step on_step callback bridge. Pre-Wave-6b the
+            # ``on_step`` surface was a dead callback (declared on
+            # MultiRunTrainer.__init__, stored on self.on_step, but never
+            # invoked). The bridge polls HF on_log for the latest loss
+            # entry and forwards (run_idx, step, loss) to the user
+            # callable; returns None when no on_step is configured (so
+            # callers without the callback see byte-identical behavior).
             _abort_cb = _build_abort_callback(self)
-            sft_callbacks = [_abort_cb] if _abort_cb is not None else None
+            _step_cb = _build_multi_run_step_callback(self, run_idx)
+            _bridge_callbacks: list[Any] = [
+                cb for cb in (_abort_cb, _step_cb) if cb is not None
+            ]
+            sft_callbacks = _bridge_callbacks if _bridge_callbacks else None
 
             trainer = SFTTrainer(
                 model=self._trainer._model,
@@ -1995,11 +2119,20 @@ class MultiRunTrainer:
             run_result.validation_loss = val_loss
 
             # Phase 5.3: Update checkpoint with validation loss for smarter pruning
+            #
+            # v1.4 BACKEND-F-004 (Wave 6b features): wrap the
+            # validation-loss-update manifest save in the same cross-process
+            # lock as the in-class CheckpointManager mutators (register /
+            # prune / protect). Concurrent multi-run sessions otherwise
+            # race on this write.
             if self._checkpoint_manager:
                 for cp in self._checkpoint_manager.list_checkpoints():
                     if cp.run_index == run_idx and cp.validation_loss is None:
                         cp.validation_loss = val_loss
-                        self._checkpoint_manager._save_manifest()
+                        with self._checkpoint_manager._locked_manifest_write(
+                            "validation_loss_update"
+                        ):
+                            self._checkpoint_manager._save_manifest()
                         break
 
         return run_result, val_loss
@@ -2675,7 +2808,7 @@ class MultiRunTrainer:
         # already broken; return +inf and let upstream early-stop logic
         # see this as a worst-case run.
         #
-        # Wave 3.5 BACKEND-B-003: the model.eval() call MUST live inside
+        # Wave 3.5 BACKEND-B-003: the eval() call MUST live inside
         # the try/finally pair whose finally restores model.train() — pre-
         # fix the eval() succeeded outside the try block, so if ANY
         # exception fired between the eval() success and the for-loop

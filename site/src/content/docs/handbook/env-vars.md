@@ -20,6 +20,8 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_LOG_JSON` | auto-detect | `true` forces JSON logs, `false` forces console. Auto-detects from TTY by default (JSON when piped, console when interactive). |
 | `BACKPROPAGATE_LOG_FILE` | unset | Path to a file to mirror logs into. If unset, logs go to stderr only. |
 
+**v1.4 CLI flag overlay:** the root parser exposes `--log-level`, `--log-format=json|console`, and `--log-file=<path>` flags that override these env vars for one invocation (CLI flag wins when both are set). See [CLI reference → Root-parser flags](/backpropagate/handbook/cli-reference/#root-parser-flags-apply-to-every-subcommand). The env vars stay the canonical surface for persistent / `.env`-file-based config.
+
 ## CLI / runtime opt-outs
 
 | Variable | Default | What it does |

@@ -130,10 +130,11 @@ _LOGGING_SETUP_FAIL_REASON = ""
 # =============================================================================
 # Centralized registry of subcommand stability so the CLI can print a
 # one-line deprecation hint when an operator invokes a subcommand whose
-# tier is "deprecated-prefer-X". (A future `backprop info --subcommand-tiers`
-# scaffolding entry was considered but never registered on info_parser — do
-# NOT reference such a flag in operator-facing copy until it ships, per
-# [[no-banner-documenting-no-op]].)
+# tier is "deprecated-prefer-X". The introspection surface
+# `backprop info --subcommand-tiers` (BRIDGE-F-015, v1.4 Wave 6b) prints
+# this registry — operator-facing copy MAY now point at it (the
+# [[no-banner-documenting-no-op]] tripwire is cleared because the flag
+# is real). The deprecation hint emitter at the bottom of main() uses it.
 #
 # Tiers:
 #   stable                   — Part of the documented contract; no removal
@@ -168,6 +169,14 @@ SUBCOMMAND_TIERS: dict[str, str] = {
     "diff-runs": "experimental",
     "replay": "experimental",
     "export-runs": "experimental",
+    "validate": "stable",
+    "estimate-vram": "stable",
+    # BRIDGE Wave 6b (v1.4 Item 1) — ollama nested subparser. The PARENT
+    # entry `ollama` covers the noun; the per-action subcommands ride
+    # along under the same tier. Marked 'experimental' so the contract
+    # (nested-subparser shape + per-action exit-code mapping) can absorb
+    # iteration in v1.5 before promoting to 'stable'.
+    "ollama": "experimental",
 }
 
 
@@ -648,6 +657,11 @@ def cmd_train(args: argparse.Namespace) -> int:
             "init_lora_weights": getattr(args, "init_lora_weights", "default"),
             "lora_preset": getattr(args, "lora_preset", "quality"),
             "optim": getattr(args, "optim", "auto"),
+            # BRIDGE Wave 6b cross-domain (v1.4): --mode threads to
+            # Trainer(mode=...). The introspection filter below drops the
+            # kwarg silently when the installed Trainer doesn't accept
+            # it (pre-Wave-6b builds), so this flag is forward-compatible.
+            "mode": getattr(args, "mode", "lora"),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -880,6 +894,12 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             "init_lora_weights": getattr(args, "init_lora_weights", "default"),
             "lora_preset": getattr(args, "lora_preset", "quality"),
             "optim": getattr(args, "optim", "auto"),
+            # BRIDGE Wave 6b cross-domain (v1.4): --mode threads to
+            # MultiRunConfig OR MultiRunTrainer (whichever the installed
+            # backend accepts). The dataclass-fields / inspect filters
+            # below route the kwarg to the right binding point and drop
+            # it silently when the installed build doesn't accept it.
+            "mode": getattr(args, "mode", "lora"),
         }
         wave6b_cfg_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -1833,6 +1853,56 @@ def cmd_info(args: argparse.Namespace) -> int:
         print_error_code_catalog()
         return EXIT_OK
 
+    # BRIDGE-F-015 (v1.4 Wave 6b): ``backprop info --subcommand-tiers`` prints
+    # the SUBCOMMAND_TIERS registry (stable / experimental / deprecated) as
+    # an aligned table OR (with --json) as a versioned JSON payload. Closes
+    # the [[no-banner-documenting-no-op]] tripwire flagged by Wave 1 — the
+    # dict existed but had no operator surface.
+    if getattr(args, "subcommand_tiers", False):
+        emit_json = bool(getattr(args, "json", False))
+        if emit_json:
+            import json
+
+            print(json.dumps(
+                {
+                    "schema_version": CLI_JSON_SCHEMA_VERSION,
+                    "subcommand_tiers": dict(SUBCOMMAND_TIERS),
+                },
+                indent=2,
+                default=str,
+            ))
+            return EXIT_OK
+
+        _print_header("Backpropagate Subcommand Tiers")
+        if not SUBCOMMAND_TIERS:
+            _print_info("(no entries)")
+            return EXIT_OK
+        name_w = max(len("SUBCOMMAND"), max(len(name) for name in SUBCOMMAND_TIERS))
+        tier_w = max(len("TIER"), max(len(tier) for tier in SUBCOMMAND_TIERS.values()))
+        header = f"{'SUBCOMMAND':<{name_w}}  {'TIER':<{tier_w}}"
+        print(f"{Colors.BOLD}{header}{Colors.RESET}")
+        print(f"{Colors.DIM}{'-' * name_w}  {'-' * tier_w}{Colors.RESET}")
+        # Sort by tier (stable first, then experimental, then deprecated)
+        # then by name within the tier so the output is deterministic.
+        tier_rank = {"stable": 0, "experimental": 1}
+        for name, tier in sorted(
+            SUBCOMMAND_TIERS.items(),
+            key=lambda kv: (tier_rank.get(kv[1], 2), kv[0]),
+        ):
+            color = (
+                Colors.GREEN if tier == "stable"
+                else Colors.YELLOW if tier == "experimental"
+                else Colors.RED
+            )
+            print(f"{name:<{name_w}}  {color}{tier:<{tier_w}}{Colors.RESET}")
+        print()
+        _print_info(
+            "stable    — documented contract, no removal planned.\n"
+            "        experimental — may change shape between minor versions; pin the exact version.\n"
+            "        deprecated-prefer-X — will be removed in a future major; use `X` instead."
+        )
+        return EXIT_OK
+
     # BRIDGE-F-003: ``backprop info --env-vars`` enumerates every
     # BACKPROPAGATE_* env var the runtime reads, with defaults + descriptions.
     # The data is introspected from the pydantic-settings models in
@@ -1892,6 +1962,31 @@ def cmd_info(args: argparse.Namespace) -> int:
 
         from . import __version__ as backprop_version
 
+        # BRIDGE-F-010 (v1.4 Wave 6b): describe the active logging
+        # configuration (level / format / file / json_var_set) so support
+        # payloads make it obvious whether the operator's env / flag wiring
+        # took effect. Read from the live env vars (which the root
+        # --log-level / --log-format / --log-file flags overwrite in main()
+        # before configure_logging fires), so the snapshot reflects what
+        # was ACTUALLY applied — not what the operator typed.
+        _log_level = os.environ.get("BACKPROPAGATE_LOG_LEVEL", "INFO").upper()
+        _log_json_env = os.environ.get("BACKPROPAGATE_LOG_JSON", "").lower()
+        if _log_json_env == "true":
+            _log_format = "json"
+        elif _log_json_env == "false":
+            _log_format = "console"
+        else:
+            # Auto-detect mirrors logging_config._should_use_json — JSON
+            # when stderr is not a TTY (CI pipes), console otherwise.
+            _log_format = "console" if sys.stderr.isatty() else "json"
+        _log_file = os.environ.get("BACKPROPAGATE_LOG_FILE") or None
+        logging_block = {
+            "level": _log_level,
+            "format": _log_format,
+            "file": _log_file,
+            "json_var_set": bool(_log_json_env),
+        }
+
         # BRIDGE-B-013 (Stage C): schema_version field for consistency with
         # the rest of the --json surface. ``info --json`` is the canonical
         # payload pasted into support tickets; downstream triage tooling
@@ -1914,6 +2009,7 @@ def cmd_info(args: argparse.Namespace) -> int:
                 "learning_rate": settings.training.learning_rate,
                 "output_dir": settings.training.output_dir,
             },
+            "logging": logging_block,
         }
         print(json.dumps(payload, indent=2, default=str))
         return EXIT_OK
@@ -3451,12 +3547,19 @@ def cmd_push(args: argparse.Namespace) -> int:
     )
 
     try:
+        # BRIDGE-F-014 (v1.4 Wave 6b): forward --hub-revision /
+        # --hub-commit-message through to ``push_to_hub`` (the underlying
+        # huggingface_hub.upload_folder already accepts both). Pre-fix
+        # operators could not push to a non-default branch from the CLI
+        # without monkey-patching the export module.
         url = push_to_hub(
             local_path=local_path,
             repo_id=args.repo,
             token=resolved_token,
             private=args.private,
             include_base=args.include_base,
+            revision=getattr(args, "hub_revision", None),
+            commit_message=getattr(args, "hub_commit_message", None),
         )
     except ExportError as e:
         code = getattr(e, "code", None)
@@ -4106,6 +4209,10 @@ _REPLAY_ALLOWED_OVERRIDE_KEYS: frozenset[str] = frozenset({
     "init_lora_weights",
     "lora_preset",
     "optim",
+    # BRIDGE Wave 6b cross-domain (v1.4): replay can override the training
+    # mode to e.g. re-run a LoRA recipe at full fine-tuning settings (or
+    # vice versa) without re-typing the full hyperparameter set.
+    "mode",
 })
 
 
@@ -4122,6 +4229,10 @@ def cmd_replay(args: argparse.Namespace) -> int:
     ``--override key=value`` (repeatable) lets the operator tweak specific
     hyperparameters without losing the rest of the recorded context.
 
+    v1.4 BRIDGE Wave 6b (BRIDGE-F-007 follow-up): ``--json`` emits a
+    machine-readable payload (with ``schema_version``) on completion so
+    CI pipelines can attribute replay outcomes without scraping stderr.
+
     Exit codes:
         0   replay completed successfully
         1   missing run_id, missing history dir, or invalid --override
@@ -4135,7 +4246,10 @@ def cmd_replay(args: argparse.Namespace) -> int:
     from .logging_config import bind_run_context, get_logger
     from .trainer import Trainer, TrainingCallback
 
-    _print_header("Backpropagate Replay")
+    emit_json = bool(getattr(args, "json", False))
+
+    if not emit_json:
+        _print_header("Backpropagate Replay")
 
     cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
     cli_run_id = cli_run_id_full[:12]
@@ -4272,7 +4386,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         import dataclasses as _dc
         import inspect as _inspect
 
-        _wave6b_keys = ("use_dora", "packing", "init_lora_weights", "lora_preset", "optim")
+        _wave6b_keys = ("use_dora", "packing", "init_lora_weights", "lora_preset", "optim", "mode")
 
         # Single-run replay: the multi-run replay path is symmetrically
         # supported but uses the MultiRunTrainer constructor. We default
@@ -4345,6 +4459,25 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 **mr_wave6b_trainer_kwargs,
             )
             mr_result = mr_trainer.run(dataset)
+            if emit_json:
+                import json as _json
+                payload: dict[str, Any] = {
+                    "schema_version": CLI_JSON_SCHEMA_VERSION,
+                    "session_kind": "multi_run",
+                    "original_run_id": original_run_id,
+                    "replay_cli_run_id": cli_run_id_full,
+                    "model": model,
+                    "dataset": dataset,
+                    "overrides": overrides,
+                    "total_runs": mr_result.total_runs,
+                    "final_loss": (
+                        float(mr_result.final_loss)
+                        if isinstance(mr_result.final_loss, (int, float))
+                        else None
+                    ),
+                }
+                print(_json.dumps(payload, indent=2, default=str))
+                return EXIT_OK
             print()
             _print_success("Replay (multi-run) complete!")
             _print_kv("Total runs", str(mr_result.total_runs))
@@ -4409,6 +4542,26 @@ def cmd_replay(args: argparse.Namespace) -> int:
             callback=callback,
         )
         sr_trainer.save(args.output)
+        if emit_json:
+            import json as _json
+            new_run_id = getattr(run, "run_id", None)
+            payload = {
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "session_kind": "single_run",
+                "original_run_id": original_run_id,
+                "replay_cli_run_id": cli_run_id_full,
+                "new_run_id": str(new_run_id) if new_run_id else None,
+                "model": model,
+                "dataset": dataset,
+                "overrides": overrides,
+                "final_loss": (
+                    float(run.final_loss)
+                    if isinstance(run.final_loss, (int, float))
+                    else None
+                ),
+            }
+            print(_json.dumps(payload, indent=2, default=str))
+            return EXIT_OK
         print()
         _print_success("Replay complete!")
         _print_kv("Final loss", f"{run.final_loss:.4f}")
@@ -4546,6 +4699,11 @@ def cmd_validate(args: argparse.Namespace) -> int:
     (re-exported from ``backpropagate.__init__``); this subcommand only
     surfaces it on the CLI.
 
+    v1.4 BRIDGE Wave 6b (BRIDGE-F-007 follow-up): ``--json`` emits a
+    machine-readable payload with ``schema_version`` so CI pipelines /
+    Reflex UI consumers can branch on validation outcomes without
+    grepping the human-readable surface.
+
     Exit codes:
         0   dataset validated cleanly
         1   user error — file missing / unreadable / bad encoding
@@ -4553,20 +4711,41 @@ def cmd_validate(args: argparse.Namespace) -> int:
     """
     from .datasets import DatasetFormat, detect_format, validate_dataset
 
-    _print_header("Backpropagate Dataset Validation")
+    emit_json = bool(getattr(args, "json", False))
+
+    if not emit_json:
+        _print_header("Backpropagate Dataset Validation")
 
     dataset_path = Path(args.dataset).expanduser()
     if not dataset_path.exists():
-        _print_error(f"Dataset not found: {dataset_path}")
-        _print_info(
-            "Pass a local JSONL file path, or use `backprop train --data "
-            "<hf-name>` to validate a HuggingFace dataset by attempting "
-            "to load it through the trainer."
-        )
+        if emit_json:
+            import json as _json
+            print(_json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "is_valid": False,
+                "error": "dataset_not_found",
+            }, default=str))
+        else:
+            _print_error(f"Dataset not found: {dataset_path}")
+            _print_info(
+                "Pass a local JSONL file path, or use `backprop train --data "
+                "<hf-name>` to validate a HuggingFace dataset by attempting "
+                "to load it through the trainer."
+            )
         return EXIT_USER_ERROR
 
     if dataset_path.is_dir():
-        _print_error(f"Dataset path is a directory, expected a file: {dataset_path}")
+        if emit_json:
+            import json as _json
+            print(_json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "is_valid": False,
+                "error": "dataset_path_is_directory",
+            }, default=str))
+        else:
+            _print_error(f"Dataset path is a directory, expected a file: {dataset_path}")
         return EXIT_USER_ERROR
 
     # Load samples without going through the full DatasetLoader machinery
@@ -4597,21 +4776,52 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 if args.max_samples is not None and len(samples) >= args.max_samples:
                     break
     except UnicodeDecodeError as exc:
-        _print_error(f"Dataset is not valid UTF-8: {exc}")
-        _print_info("Re-encode the file: `iconv -f <enc> -t utf-8 < src > dst`")
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "is_valid": False,
+                "error": "not_utf8",
+                "detail": str(exc),
+            }, default=str))
+        else:
+            _print_error(f"Dataset is not valid UTF-8: {exc}")
+            _print_info("Re-encode the file: `iconv -f <enc> -t utf-8 < src > dst`")
         return EXIT_USER_ERROR
     except OSError as exc:
-        _print_error(f"Could not read dataset: {exc}")
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "is_valid": False,
+                "error": "read_failed",
+                "detail": str(exc),
+            }, default=str))
+        else:
+            _print_error(f"Could not read dataset: {exc}")
         return EXIT_USER_ERROR
 
-    _print_kv("Path", str(dataset_path))
-    _print_kv("Lines scanned", str(line_count))
-    _print_kv("Samples parsed", str(len(samples)))
-    if parse_errors:
-        _print_warning(f"{len(parse_errors)} JSON parse error(s) — see below")
+    if not emit_json:
+        _print_kv("Path", str(dataset_path))
+        _print_kv("Lines scanned", str(line_count))
+        _print_kv("Samples parsed", str(len(samples)))
+        if parse_errors:
+            _print_warning(f"{len(parse_errors)} JSON parse error(s) — see below")
 
     if not samples:
-        _print_error("Dataset has no parseable rows.")
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "is_valid": False,
+                "error": "no_parseable_rows",
+                "lines_scanned": line_count,
+                "parse_errors": [
+                    {"line": ln, "message": msg} for ln, msg in parse_errors
+                ],
+            }, default=str))
+        else:
+            _print_error("Dataset has no parseable rows.")
         return EXIT_DATA_ERR
 
     # Resolve format hint.
@@ -4623,13 +4833,63 @@ def cmd_validate(args: argparse.Namespace) -> int:
             format_hint = DatasetFormat(args.format)
             detected = format_hint
         except ValueError:
-            _print_error(f"Unknown format hint: {args.format}")
+            if emit_json:
+                print(json.dumps({
+                    "schema_version": CLI_JSON_SCHEMA_VERSION,
+                    "dataset": str(dataset_path),
+                    "is_valid": False,
+                    "error": "unknown_format_hint",
+                    "format_hint": args.format,
+                }, default=str))
+            else:
+                _print_error(f"Unknown format hint: {args.format}")
             return EXIT_USER_ERROR
 
-    _print_kv("Format hint", args.format)
-    _print_kv("Format detected", detected.value if hasattr(detected, "value") else str(detected))
+    if not emit_json:
+        _print_kv("Format hint", args.format)
+        _print_kv("Format detected", detected.value if hasattr(detected, "value") else str(detected))
 
     result = validate_dataset(samples, format_type=format_hint, max_errors=args.max_errors)
+
+    if emit_json:
+        # Machine-readable payload — additive schema_version per
+        # BRIDGE-B-013 / CLI_JSON_SCHEMA_VERSION contract.
+        payload: dict[str, Any] = {
+            "schema_version": CLI_JSON_SCHEMA_VERSION,
+            "dataset": str(dataset_path),
+            "lines_scanned": line_count,
+            "samples_parsed": len(samples),
+            "format_hint": args.format,
+            "format_detected": (
+                detected.value if hasattr(detected, "value") else str(detected)
+            ),
+            "total_rows": result.total_rows,
+            "valid_rows": result.valid_rows,
+            "is_valid": bool(result.is_valid and not parse_errors),
+            "parse_errors": [
+                {"line": ln, "message": msg} for ln, msg in parse_errors
+            ],
+            "errors": [
+                {
+                    "row_index": err.row_index,
+                    "error_type": err.error_type,
+                    "message": err.message,
+                }
+                for err in result.errors
+            ],
+            "warnings": [
+                {
+                    "row_index": w.row_index,
+                    "error_type": w.error_type,
+                    "message": w.message,
+                }
+                for w in result.warnings
+            ],
+        }
+        print(json.dumps(payload, indent=2, default=str))
+        if result.is_valid and not parse_errors:
+            return EXIT_OK
+        return EXIT_DATA_ERR
 
     _print_kv("Total rows", str(result.total_rows))
     _print_kv("Valid rows", str(result.valid_rows))
@@ -4733,12 +4993,55 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
             selected_tier = (threshold, bs, note)
             break
 
+    # BRIDGE Wave 6b cross-domain (v1.4): when --lora-r / --batch-size are
+    # passed (or --mode=full), additionally compute a per-config estimate
+    # via the backend's module-level :func:`estimate_vram`. The tier table
+    # is the "general fit" view; the per-config estimate is the
+    # "will THIS config OOM" view. Both ship side-by-side.
+    per_config_estimate: dict[str, Any] | None = None
+    mode = getattr(args, "mode", "lora")
+    cli_lora_r = getattr(args, "lora_r", None)
+    cli_batch_size = getattr(args, "batch_size", None)
+    if cli_batch_size is not None or mode == "full":
+        try:
+            from .trainer import estimate_vram as _estimate_vram
+            estimate = _estimate_vram(
+                model=args.model,
+                mode=mode,
+                lora_r=cli_lora_r if cli_lora_r is not None else 16,
+                batch_size=cli_batch_size if cli_batch_size is not None else 1,
+            )
+            # Coerce the dataclass-shaped estimate into a dict for JSON /
+            # human-readable rendering. Defensive: accept either a dict
+            # (test double) or an object with the expected attributes
+            # (production VRAMEstimate dataclass).
+            if isinstance(estimate, dict):
+                per_config_estimate = dict(estimate)
+            else:
+                per_config_estimate = {
+                    field: getattr(estimate, field, None)
+                    for field in (
+                        "total_gb",
+                        "model_weights_gb",
+                        "lora_adapter_gb",
+                        "optimizer_state_gb",
+                        "activations_gb",
+                        "overhead_gb",
+                        "param_count_billions",
+                        "mode",
+                        "notes",
+                    )
+                }
+        except Exception as exc:  # noqa: BLE001 — best effort
+            logger.debug(f"per-config VRAM estimate failed: {exc}")
+
     # BRIDGE-B-013 (Stage C): schema_version field for parity with the rest
     # of the --json surface. Additive — pre-fix consumers that ignore
     # unknown keys see the same payload shape they did before.
     payload: dict[str, Any] = {
         "schema_version": CLI_JSON_SCHEMA_VERSION,
         "model": args.model,
+        "mode": mode,
         "vram_gb": round(vram_gb, 2),
         "detected_via": detected_via,
         "recommended_batch_size": selected_tier[1],
@@ -4747,6 +5050,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
             {"vram_min_gb": t[0], "batch_size": t[1], "note": t[2]}
             for t in _VRAM_BATCH_SIZE_TIERS
         ],
+        "per_config_estimate": per_config_estimate,
     }
 
     if args.json:
@@ -4768,6 +5072,25 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
         marker = " <- this card" if (threshold, bs, note) == selected_tier else ""
         print(f"{threshold:<14.1f}  {bs:<10}  {note}{marker}")
 
+    if per_config_estimate is not None:
+        print(f"\n{Colors.BOLD}Per-config estimate ({mode}){Colors.RESET}")
+        _format = lambda v: (f"{v:.2f} GB" if isinstance(v, (int, float)) else "-")  # noqa: E731
+        _print_kv("Total VRAM (est.)", _format(per_config_estimate.get("total_gb")))
+        _print_kv("Model weights", _format(per_config_estimate.get("model_weights_gb")))
+        if mode == "lora":
+            _print_kv("LoRA adapter", _format(per_config_estimate.get("lora_adapter_gb")))
+        _print_kv("Optimizer state", _format(per_config_estimate.get("optimizer_state_gb")))
+        _print_kv("Activations", _format(per_config_estimate.get("activations_gb")))
+        _print_kv("Overhead margin", _format(per_config_estimate.get("overhead_gb")))
+        _print_kv("Params (B)", str(per_config_estimate.get("param_count_billions") or "-"))
+        total = per_config_estimate.get("total_gb")
+        if isinstance(total, (int, float)) and total > vram_gb:
+            _print_warning(
+                f"Estimated total ({total:.2f} GB) exceeds detected VRAM "
+                f"({vram_gb:.1f} GB) — likely OOM. Reduce --batch-size or "
+                "--lora-r."
+            )
+
     print()
     _print_info(
         "The same tier heuristic fires automatically when you run "
@@ -4778,22 +5101,288 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# COMMAND: ollama register|list|rm (BRIDGE Wave 6b Item 1 / Decision 4)
+# =============================================================================
+#
+# These three handlers back the ``backprop ollama register|list|rm`` nested
+# subparser shipped in v1.4 Wave 6b. They expose existing helpers in
+# ``backpropagate.export`` on the CLI surface so operators with an already-
+# exported GGUF can register / list / remove Ollama models without going
+# back through ``backprop export`` (the one-shot ``--ollama`` flag form on
+# the export subparser remains for the "export + register in one step"
+# path; the new triad is for "I already exported, just register" / "what
+# do I have registered" / "drop this one".)
+#
+# Architectural deviation note (load-bearing — must NOT be "fixed"):
+# Every other subcommand in backpropagate is flat (`backprop train`,
+# `backprop export`, etc.). The ollama triad is intentionally NESTED
+# (`backprop ollama register`, not `backprop ollama-register`) because:
+#
+#   1. Upstream Ollama itself uses the same shape: ``ollama create``,
+#      ``ollama list``, ``ollama rm``. Mirroring that 1:1 keeps the
+#      learning surface zero — operators paste ``ollama list`` from a
+#      tutorial, prefix it with ``backprop ``, and it works.
+#
+#   2. Closes CIDOCS-A-001 retroactively. The README hero example
+#      `backprop ollama register ./output/lora --name my-model` (invented
+#      by the README author and flagged as a doc-lie in Wave 1) becomes
+#      a real subcommand. The doc-lie self-cures by feature-pass.
+#
+#   3. The three subcommands share a domain (the Ollama daemon, the
+#      model name allowlist, the "is the daemon running" error class)
+#      — grouping them under a single noun is closer to the actual
+#      shape of the operator's mental model than three flat verbs
+#      sprinkled at the top level.
+#
+# This is the FIRST nested-subparser in the CLI; ``[[grep-all-instances
+# -when-fixing-pattern]]`` was honored — no sibling pattern existed to
+# generalise. The handbook (cli-reference.md) records this rationale so
+# future maintainers don't refactor it back to flat.
+
+def cmd_ollama_register(args: argparse.Namespace) -> int:
+    """Execute ``backprop ollama register <path>`` (BRIDGE Wave 6b Item 1).
+
+    Thin wrapper around :func:`backpropagate.export.register_with_ollama`
+    so an operator who has already produced a GGUF (via a prior
+    ``backprop export``) can register it without re-exporting. Exposes
+    the same ``--ollama-name`` / ``--modelfile`` knobs as the one-shot
+    ``backprop export --ollama`` flag form.
+
+    Exit codes:
+        0   model registered successfully
+        1   user error (missing GGUF, malformed --name, daemon not installed)
+        2   runtime error (registration crashed mid-stream)
+        69  EX_UNAVAILABLE (Ollama daemon not running)
+    """
+    from .export import register_with_ollama
+
+    _print_header("Backpropagate Ollama Register")
+
+    gguf_path = Path(args.path).expanduser()
+    if not gguf_path.exists():
+        _print_error(f"GGUF path does not exist: {gguf_path}")
+        _print_info(
+            "Pass a path to a GGUF file (or a directory containing one) "
+            "produced by `backprop export --format gguf`."
+        )
+        return EXIT_USER_ERROR
+
+    # Allow a directory: pick the first *.gguf inside it (the export
+    # writes a single GGUF per call, so the disambiguation surface is
+    # narrow). Surface the resolution so the operator can spot a wrong
+    # directory before the registration fires.
+    if gguf_path.is_dir():
+        gguf_files = sorted(gguf_path.glob("*.gguf"))
+        if not gguf_files:
+            _print_error(f"No *.gguf file found in directory: {gguf_path}")
+            _print_info(
+                "Either point at the GGUF file directly, or re-run "
+                "`backprop export --format gguf` to produce one."
+            )
+            return EXIT_USER_ERROR
+        if len(gguf_files) > 1:
+            _print_warning(
+                f"Multiple GGUF files in {gguf_path}; using {gguf_files[0].name}"
+            )
+        gguf_path = gguf_files[0]
+
+    # Default name: derive from the GGUF file's stem so a bare
+    # ``backprop ollama register ./model.gguf`` produces a model named
+    # "model". Operators can override via --name.
+    model_name = args.name or gguf_path.stem
+    _print_info(f"GGUF: {gguf_path}")
+    _print_info(f"Name: {model_name}")
+
+    try:
+        success = register_with_ollama(gguf_path, model_name)
+    except BackpropagateError as e:
+        _print_error(f"Registration failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        # Map daemon-unreachable to EX_UNAVAILABLE so wrappers can
+        # distinguish "user passed a bad name" from "service is down".
+        code = getattr(e, "code", None)
+        if code == "DEP_OLLAMA_REGISTRATION_FAILED":
+            return EXIT_UNAVAILABLE
+        if code == "INPUT_VALIDATION_FAILED":
+            return EXIT_USER_ERROR
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:  # noqa: BLE001
+        if args.verbose:
+            _print_error(f"Registration failed: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Registration failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
+
+    if success:
+        _print_success(f"Registered with Ollama: {model_name}")
+        _print_info(f"Run with: ollama run {model_name}")
+        return EXIT_OK
+
+    # register_with_ollama returns False only when the ``ollama`` CLI is
+    # missing on PATH (the wrapper raises on every other failure mode).
+    # Surface a structured hint instead of "False" being the user-facing
+    # output.
+    _print_error("Ollama CLI not found on PATH.")
+    _print_info(
+        "Install Ollama from https://ollama.com and ensure `ollama` is "
+        "on PATH (then run `ollama serve` to start the daemon)."
+    )
+    return EXIT_UNAVAILABLE
+
+
+def cmd_ollama_list(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """Execute ``backprop ollama list`` (BRIDGE Wave 6b Item 1).
+
+    Thin wrapper around :func:`backpropagate.export.list_ollama_models`.
+    Reports every model the local Ollama daemon has registered.
+    """
+    from .export import list_ollama_models
+
+    _print_header("Backpropagate Ollama Models")
+
+    models = list_ollama_models()
+
+    if not models:
+        # Distinguish "no models" from "daemon not running" — the helper
+        # currently returns [] in both cases. Check shutil.which here so
+        # the empty-list payload tells the operator WHICH situation they
+        # are in.
+        import shutil
+        if not shutil.which("ollama"):
+            _print_warning("Ollama CLI not found on PATH.")
+            _print_info(
+                "Install from https://ollama.com and ensure `ollama` is "
+                "on PATH."
+            )
+            return EXIT_UNAVAILABLE
+        _print_info("No models registered with Ollama.")
+        _print_info(
+            "Register one with `backprop ollama register <gguf-path> "
+            "--name <name>` or via `backprop export --ollama`."
+        )
+        return EXIT_OK
+
+    print(f"{Colors.BOLD}MODEL{Colors.RESET}")
+    print(f"{Colors.DIM}-----{Colors.RESET}")
+    for name in models:
+        print(name)
+    print()
+    _print_info(f"Listed {len(models)} model(s).")
+    return EXIT_OK
+
+
+def cmd_ollama_rm(args: argparse.Namespace) -> int:
+    """Execute ``backprop ollama rm <name>`` (BRIDGE Wave 6b Item 1).
+
+    Thin wrapper around :func:`backpropagate.export.remove_ollama_model`.
+    Removes a model from the local Ollama daemon by name.
+    """
+    from .export import remove_ollama_model
+
+    _print_header("Backpropagate Ollama Remove")
+
+    _print_info(f"Removing: {args.name}")
+
+    try:
+        success = remove_ollama_model(args.name)
+    except BackpropagateError as e:
+        _print_error(f"Removal failed: {e.message}")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        code = getattr(e, "code", None)
+        if code == "DEP_OLLAMA_REGISTRATION_FAILED":
+            return EXIT_UNAVAILABLE
+        if code == "INPUT_VALIDATION_FAILED":
+            return EXIT_USER_ERROR
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:  # noqa: BLE001
+        if args.verbose:
+            _print_error(f"Removal failed: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Removal failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
+
+    if success:
+        _print_success(f"Removed from Ollama: {args.name}")
+        return EXIT_OK
+
+    # Soft-fail path: the ollama CLI was not on PATH. Surface as
+    # EX_UNAVAILABLE so wrappers can distinguish from a hard user error.
+    _print_error("Ollama CLI not found on PATH.")
+    _print_info(
+        "Install Ollama from https://ollama.com and ensure `ollama` is "
+        "on PATH."
+    )
+    return EXIT_UNAVAILABLE
+
+
+# =============================================================================
 # PARSER
 # =============================================================================
 
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
+    # BRIDGE-F-011 (v1.4 Wave 6b): root --help epilog enumerates ALL 18
+    # subcommands grouped by workflow (training / inspection / export /
+    # ollama / ui) so an operator running `backprop --help` sees every
+    # available verb at a glance. Pre-fix the epilog listed only 5 of 18
+    # subcommands (the original v1.0 set) — operators discovering the v1.3
+    # additions (replay / diff-runs / validate / estimate-vram / runs /
+    # export-runs / push / resume) had to grep `backprop --help 2>&1` or
+    # read source. The new layout is workflow-grouped (not alphabetical)
+    # because operators looking for "how do I export to Ollama" want to
+    # see the ollama-triad and `export --ollama` flag form side-by-side.
     parser = argparse.ArgumentParser(
         prog="backprop",
         description="Backpropagate - Headless LLM Fine-Tuning",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Subcommands (grouped by workflow):
+
+  Training:
+    train           Train a model (single run)
+    multi-run       SLAO multi-run training with LoRA merging
+    resume          Resume a crashed / interrupted training run
+    replay          Re-run an existing run with the same config (fresh run_id)
+
+  Inspection:
+    info            Show system info, error catalog, env vars, tier table
+    config          View / modify configuration
+    list-runs       List recorded runs (human table) — deprecated, prefer `runs`
+    runs            Run history as versioned JSON (UI data API)
+    show-run        Detail for a single run
+    diff-runs       Side-by-side comparison of two runs
+    export-runs     Bulk export of run history (JSONL)
+    validate        Pre-flight a JSONL dataset before training
+    estimate-vram   Pre-flight VRAM tier table for a model / GPU
+
+  Export:
+    export          Export trained model (LoRA / merged / GGUF)
+    push            Push a local export to the Hugging Face Hub
+
+  Ollama (new in v1.4):
+    ollama register Register an existing GGUF with the local Ollama daemon
+    ollama list     List models registered with Ollama
+    ollama rm       Remove a model from Ollama
+
+  UI:
+    ui              Launch the Reflex (Radix UI) web interface
+
+Quick examples:
   backprop train --data my_data.jsonl --steps 100
   backprop multi-run --data ultrachat --runs 5
-  backprop export ./output/lora --format gguf
+  backprop export ./output/lora --format gguf --ollama --ollama-name my-model
+  backprop ollama list
   backprop ui --port 7862
-  backprop info
+  backprop info --error-codes
+  backprop info --subcommand-tiers
 
 Exit codes (Ship Gate B2):
   0   success
@@ -4823,6 +5412,50 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         "--verbose", "-v",
         action="store_true",
         help="Show verbose output including stack traces",
+    )
+
+    # BRIDGE-F-002 (v1.4 Wave 6b): root-level logging-config flags. Pre-fix the
+    # three structured-logging knobs (level / format / file) were env-var only
+    # via BACKPROPAGATE_LOG_LEVEL / BACKPROPAGATE_LOG_JSON / BACKPROPAGATE_LOG_FILE.
+    # Operators could not tweak per-invocation logging from the CLI surface;
+    # they had to export the env var first or wrap with `env` -- both surprising.
+    #
+    # Precedence (standard): CLI flag > env var > default. The wiring lives
+    # in ``main()`` — when a flag is set the corresponding env var is
+    # overwritten on os.environ for THIS process only. Env-var consumers
+    # (configure_logging _get_log_level / _should_use_json / _get_log_file)
+    # see the new value transparently.
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=None,
+        help=(
+            "Override the structured-logging level for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_LEVEL=<level> but scoped to the "
+            "current process. CLI flag wins over env var when both are set. "
+            "Default: DEBUG when --verbose is passed, else INFO."
+        ),
+    )
+    parser.add_argument(
+        "--log-format",
+        choices=["console", "json"],
+        default=None,
+        help=(
+            "Override the structured-logging format for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_JSON=true/false but scoped to the "
+            "current process. Default: console when stderr is a TTY, json "
+            "otherwise (auto-detect)."
+        ),
+    )
+    parser.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Append structured logs to PATH (in addition to stderr). "
+            "Equivalent to BACKPROPAGATE_LOG_FILE=<path> but scoped to the "
+            "current process."
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -4989,6 +5622,28 @@ Tips:
             "needs."
         ),
     )
+    # BRIDGE Wave 6b cross-domain item (v1.4): wire --mode through to
+    # Trainer(mode=...). The BACKEND agent ships the Python-side mode='full'
+    # kwarg and the implementation (gradient_checkpointing, paged_adamw_8bit,
+    # 10x-lower default LR, 3B param ceiling). This CLI flag is the operator
+    # surface; the introspection filter at cmd_train silently drops the
+    # kwarg if the installed Trainer doesn't accept it (pre-Wave-6b
+    # builds), so the flag is forward-compatible.
+    #
+    # Default 'lora' preserves byte-identical behavior for callers who do
+    # not set the flag — 'full' is opt-in only.
+    train_parser.add_argument(
+        "--mode",
+        choices=["lora", "full"],
+        default="lora",
+        help=(
+            "Training mode. 'lora' (default) = LoRA adapter training "
+            "(rank, alpha, dropout govern). 'full' = full fine-tuning "
+            "(no adapter; trains all params). Full FT is consumer-feasible "
+            "up to ~3B params on 16GB cards; the backend refuses full FT "
+            "on larger models. (16GB study-swarm Wave 6b)"
+        ),
+    )
     train_parser.add_argument(
         "--output", "-o",
         default="./output",
@@ -5111,6 +5766,21 @@ Tips:
             "Optimizer. 'auto' picks paged_adamw_8bit on consumer GPUs "
             "(<24GB VRAM), adamw_torch otherwise. Override for specific "
             "needs."
+        ),
+    )
+    # BRIDGE Wave 6b cross-domain item (v1.4): mirror of train_parser's
+    # --mode flag for multi-run. Defaults to 'lora' for backward-compat;
+    # multi-run with mode='full' is supported as long as the BACKEND
+    # MultiRunTrainer accepts the kwarg (introspection filter at
+    # cmd_multi_run drops it gracefully when the build hasn't landed).
+    multi_parser.add_argument(
+        "--mode",
+        choices=["lora", "full"],
+        default="lora",
+        help=(
+            "Training mode. 'lora' (default) = LoRA adapter training. "
+            "'full' = full fine-tuning. See `backprop train --help` for "
+            "the full mode contract."
         ),
     )
     multi_parser.add_argument(
@@ -5312,6 +5982,23 @@ Quantization tradeoffs (fastest -> smallest):
             "sharing in support tickets or feeding to grep / jq in CI scripts."
         ),
     )
+    # BRIDGE-F-015 (v1.4 Wave 6b): expose SUBCOMMAND_TIERS via
+    # ``backprop info --subcommand-tiers``. Pre-fix the dict was defined at
+    # cli.py:151 + read by the deprecation-hint emitter but had no operator
+    # surface — Wave 1 audits flagged this as a [[no-banner-documenting-no-op]]
+    # tripwire because cmd_ui / cmd_export comments had referenced the
+    # never-registered flag. Wave 6b closes the loop: the flag is now real
+    # and the tier dict is reachable from the CLI.
+    info_parser.add_argument(
+        "--subcommand-tiers",
+        action="store_true",
+        help=(
+            "Print the SUBCOMMAND_TIERS table (stable / experimental / "
+            "deprecated-prefer-X) and exit. Useful when operators want to "
+            "know which subcommands carry which stability promises before "
+            "wiring them into automation."
+        ),
+    )
     info_parser.set_defaults(func=cmd_info)
 
     # config command
@@ -5428,6 +6115,42 @@ Quantization tradeoffs (fastest -> smallest):
         help=(
             "Push the entire directory (base model + adapter). Default: "
             "adapter-only upload (smaller, faster, more useful)."
+        ),
+    )
+    # BRIDGE-F-014 (v1.4 Wave 6b): expose two HF Hub knobs the underlying
+    # huggingface_hub.HfApi.upload_folder / upload_file already accept but
+    # which were not surfaced on the CLI:
+    #
+    #   --hub-revision <branch>      — push to a non-default branch (typically
+    #                                  "dev" / "experiment" / a PR-branch).
+    #                                  HF Hub auto-creates the branch if it
+    #                                  doesn't exist; defaults to ``main``
+    #                                  when omitted (Hub's own default).
+    #
+    #   --hub-commit-message <msg>   — custom commit message instead of the
+    #                                  ``"Upload via backpropagate"`` default
+    #                                  baked into ``push_to_hub``.
+    #
+    # Both thread through to ``backpropagate.export.push_to_hub`` which
+    # already accepts ``revision=`` / ``commit_message=`` kwargs (see
+    # export.py:448-459) — Wave 6b only exposes them on the CLI surface.
+    push_parser.add_argument(
+        "--hub-revision",
+        metavar="BRANCH",
+        default=None,
+        help=(
+            "Push to a non-default branch (e.g. 'dev', 'experiment'). "
+            "HF Hub auto-creates the branch if it doesn't yet exist. "
+            "Default: 'main'."
+        ),
+    )
+    push_parser.add_argument(
+        "--hub-commit-message",
+        metavar="MSG",
+        default=None,
+        help=(
+            "Custom commit message for the upload (default: "
+            "'Upload via backpropagate')."
         ),
     )
     push_parser.set_defaults(func=cmd_push)
@@ -5620,6 +6343,18 @@ Quantization tradeoffs (fastest -> smallest):
             "fail loudly so a typo doesn't silently inherit the original."
         ),
     )
+    # BRIDGE-F-007 (v1.4 Wave 6b features): --json emits the replay's
+    # outcome (original_run_id / new_run_id / final_loss / overrides) as a
+    # versioned payload so CI / dashboards can chart replay-vs-original
+    # without scraping stderr. Carries schema_version per CLI_JSON_SCHEMA_VERSION.
+    replay_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit replay outcome (original_run_id / new_run_id / final_loss / "
+            "overrides) as JSON (with schema_version)."
+        ),
+    )
     replay_parser.set_defaults(func=cmd_replay)
 
     # export-runs command (BRIDGE Wave 6b)
@@ -5796,6 +6531,17 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         default=None,
         help="Maximum samples to validate (default: all)",
     )
+    # BRIDGE-F-007 (v1.4 Wave 6b features): --json adds machine-readable
+    # validation output for CI / Reflex UI consumers. Carries the standard
+    # CLI_JSON_SCHEMA_VERSION field so a future shape bump is detectable.
+    validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit validation result as JSON (with schema_version). "
+            "Suitable for CI gates and the Reflex UI's pre-flight checker."
+        ),
+    )
     validate_parser.set_defaults(func=cmd_validate)
 
     # estimate-vram command (BRIDGE-F-008 — wrap Trainer._detect_batch_size logic)
@@ -5829,12 +6575,164 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "primary CUDA device."
         ),
     )
+    # BRIDGE Wave 6b cross-domain (v1.4): per-config VRAM estimate via
+    # BACKEND's module-level :func:`estimate_vram` helper. When --lora-r /
+    # --batch-size / --mode are passed the CLI returns the structured
+    # estimate (model_weights / adapter / optimizer / activations / total)
+    # in addition to the tier table. The tier table is the "what's safe in
+    # general" view; the per-config estimate is the "will THIS config OOM"
+    # view. Both surfaces ship side-by-side so operators get both signals
+    # in one invocation.
+    estimate_vram_parser.add_argument(
+        "--lora-r",
+        type=_positive_int,
+        default=None,
+        help=(
+            "LoRA rank. When set with --batch-size, triggers the per-config "
+            "VRAM estimate via the backend's :func:`estimate_vram`. Ignored "
+            "with --mode=full."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--batch-size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Per-device batch size. When set with --lora-r (or --mode=full), "
+            "triggers the per-config VRAM estimate."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--mode",
+        choices=["lora", "full"],
+        default="lora",
+        help=(
+            "Training mode for the per-config estimate. 'lora' (default) "
+            "or 'full'. Full FT uses gradient_checkpointing=True so the "
+            "activation memory scales as sqrt(num_layers)."
+        ),
+    )
     estimate_vram_parser.add_argument(
         "--json",
         action="store_true",
         help="Emit the table as JSON for CI / scripting consumers.",
     )
     estimate_vram_parser.set_defaults(func=cmd_estimate_vram)
+
+    # ollama command (BRIDGE Wave 6b Item 1 / Wave 5 Decision 4) —
+    # nested subparser mirroring upstream Ollama CLI shape:
+    # ``backprop ollama {register,list,rm}``. See the architectural-
+    # deviation note above cmd_ollama_register for why nesting is correct
+    # here (and must not be flattened to ``backprop ollama-register``
+    # etc. in a future cleanup).
+    ollama_parser = subparsers.add_parser(
+        "ollama",
+        help="Manage Ollama models (register / list / rm)",
+        description=(
+            "Manage local Ollama daemon models. Mirrors upstream Ollama "
+            "CLI shape: `ollama create`, `ollama list`, `ollama rm`. "
+            "Nested subparser deviates from backpropagate's flat-verb "
+            "convention — see handbook/cli-reference.md for the rationale."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Register an already-exported GGUF with the local Ollama daemon
+  backprop ollama register ./output/lora/model.gguf --name my-model
+  # then:  ollama run my-model
+
+  # See what's registered
+  backprop ollama list
+
+  # Drop a model
+  backprop ollama rm my-model
+
+For the one-shot export+register path use `backprop export --format gguf
+--ollama --ollama-name <name>` instead; the triad above is for the case
+where you already have a GGUF and only need the Ollama-side wiring.
+        """,
+    )
+    ollama_subparsers = ollama_parser.add_subparsers(
+        dest="ollama_command",
+        title="ollama subcommands",
+        help="Available ollama actions",
+    )
+
+    # backprop ollama register <path> [--name N] [--modelfile P]
+    ollama_register_parser = ollama_subparsers.add_parser(
+        "register",
+        help="Register an existing GGUF with the local Ollama daemon",
+        description=(
+            "Register an already-exported GGUF file (produced by "
+            "`backprop export --format gguf`) with the local Ollama "
+            "daemon. Equivalent to `ollama create` against a hand-"
+            "written Modelfile; the helper writes the Modelfile, "
+            "invokes `ollama create`, and cleans up."
+        ),
+    )
+    ollama_register_parser.add_argument(
+        "path",
+        help=(
+            "Path to a GGUF file (or a directory containing one) produced "
+            "by `backprop export --format gguf`."
+        ),
+    )
+    ollama_register_parser.add_argument(
+        "--name",
+        default=None,
+        help=(
+            "Ollama model name (default: derived from the GGUF filename "
+            "stem). Allowed: ASCII letters, digits, '.', '_', '-', ':' "
+            "(first char must be alphanumeric); max 128 chars."
+        ),
+    )
+    ollama_register_parser.add_argument(
+        "--modelfile",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Reserved for v1.5+: custom Modelfile path. v1.4 always "
+            "auto-generates the Modelfile next to the GGUF."
+        ),
+    )
+    ollama_register_parser.set_defaults(func=cmd_ollama_register)
+
+    # backprop ollama list
+    ollama_list_parser = ollama_subparsers.add_parser(
+        "list",
+        help="List models registered with Ollama",
+        description=(
+            "List every model the local Ollama daemon has registered. "
+            "Calls `ollama list` and parses the first column."
+        ),
+    )
+    ollama_list_parser.set_defaults(func=cmd_ollama_list)
+
+    # backprop ollama rm <name>
+    ollama_rm_parser = ollama_subparsers.add_parser(
+        "rm",
+        help="Remove a model from Ollama",
+        description=(
+            "Remove a registered model from the local Ollama daemon. "
+            "Calls `ollama rm <name>` after validating the name with the "
+            "same allowlist `backprop ollama register` uses."
+        ),
+    )
+    ollama_rm_parser.add_argument(
+        "name",
+        help="Ollama model name to remove (run `backprop ollama list` to see).",
+    )
+    ollama_rm_parser.set_defaults(func=cmd_ollama_rm)
+
+    # When `backprop ollama` is invoked with no subcommand, print the
+    # ollama subparser's help text. argparse doesn't surface this
+    # automatically with the dest='ollama_command' pattern; we wire it
+    # via a default func that prints the usage and exits 1.
+    def _ollama_no_subcommand(args: argparse.Namespace) -> int:  # noqa: ARG001
+        ollama_parser.print_help(sys.stderr)
+        return EXIT_USER_ERROR
+
+    ollama_parser.set_defaults(func=_ollama_no_subcommand)
 
     return parser
 
@@ -5916,6 +6814,27 @@ def main(argv: list[str] | None = None) -> int:
     # event stream; otherwise honour BACKPROPAGATE_LOG_LEVEL (default INFO).
     verbose = bool(getattr(args, "verbose", False))
 
+    # BRIDGE-F-002 (v1.4 Wave 6b): apply root-level --log-level / --log-format /
+    # --log-file flags by overwriting the corresponding env vars BEFORE
+    # configure_logging fires. The configure_logging path reads these env vars
+    # transparently — see logging_config._get_log_level / _should_use_json /
+    # _get_log_file. The overwrite is process-scoped (os.environ.update) so it
+    # does not leak to the operator's shell after backprop exits. CLI flag
+    # wins over env var per the standard precedence rule (CLI > env > default).
+    _log_level_flag = getattr(args, "log_level", None)
+    if _log_level_flag:
+        os.environ["BACKPROPAGATE_LOG_LEVEL"] = _log_level_flag
+    _log_format_flag = getattr(args, "log_format", None)
+    if _log_format_flag:
+        # _should_use_json reads "true" / "false" from the env var; map the
+        # operator-facing console/json names onto that contract.
+        os.environ["BACKPROPAGATE_LOG_JSON"] = (
+            "true" if _log_format_flag == "json" else "false"
+        )
+    _log_file_flag = getattr(args, "log_file", None)
+    if _log_file_flag:
+        os.environ["BACKPROPAGATE_LOG_FILE"] = _log_file_flag
+
     # BRIDGE-B-013 (Stage C): track logging-setup failures so the operator
     # sees a stderr WARN line at the end of main() naming the reason.
     # Pre-fix this was a silent ``except Exception: pass`` — a typo'd
@@ -5976,10 +6895,10 @@ def main(argv: list[str] | None = None) -> int:
     # BRIDGE-B-017 (Stage C): print a deprecation hint when an operator
     # invokes a subcommand whose stability tier is "deprecated-prefer-X".
     # The hint is purely advisory — the deprecated subcommand still runs.
-    # (BRIDGE-A-001, v1.4): the legacy hint pointed at a never-registered
-    # `backprop info --subcommand-tiers` flag — stripped to avoid the
-    # [[no-banner-documenting-no-op]] tripwire. If that introspection
-    # surface lands later, restore the pointer at that time.
+    # (v1.4 BRIDGE-F-015): the introspection surface
+    # `backprop info --subcommand-tiers` now exists, so the hint can
+    # point operators at it for the full picture without re-triggering
+    # the [[no-banner-documenting-no-op]] tripwire.
     cmd_name = getattr(args, "command", None)
     tier = SUBCOMMAND_TIERS.get(cmd_name or "", "stable")
     if tier.startswith("deprecated"):
@@ -5989,7 +6908,8 @@ def main(argv: list[str] | None = None) -> int:
             preferred = "the replacement subcommand"
         print(
             f"[deprecation] `backprop {cmd_name}` is deprecated; prefer "
-            f"`backprop {preferred}`.",
+            f"`backprop {preferred}`. Run `backprop info --subcommand-tiers` "
+            f"to see the full stability table.",
             file=sys.stderr,
         )
 

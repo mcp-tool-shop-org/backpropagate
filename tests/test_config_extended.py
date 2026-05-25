@@ -587,18 +587,29 @@ class TestEnvOverrides:
         """Model name can be overridden via env var."""
         from backpropagate.config import reload_settings
 
-        with patch.dict(os.environ, {"BACKPROPAGATE_MODEL__NAME": "custom/model"}):
+        try:
+            with patch.dict(os.environ, {"BACKPROPAGATE_MODEL__NAME": "custom/model"}):
+                reload_settings()
+                # In pydantic mode, this would work
+                # In fallback mode, defaults are used
+        finally:
+            # Restore the module-level singleton so this test doesn't
+            # pollute subsequent tests that read settings.model.name.
             reload_settings()
-            # In pydantic mode, this would work
-            # In fallback mode, defaults are used
 
     def test_learning_rate_override(self):
         """Learning rate can be overridden via env var."""
         from backpropagate.config import reload_settings
 
-        with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__LEARNING_RATE": "1e-5"}):
+        try:
+            with patch.dict(os.environ, {"BACKPROPAGATE_TRAINING__LEARNING_RATE": "1e-5"}):
+                reload_settings()
+                # Test that the system handles this
+        finally:
+            # Restore the module-level singleton so this test doesn't
+            # pollute subsequent tests that read settings.training.learning_rate
+            # (e.g. mode='full' tests asserting the default LR / 10 divisor).
             reload_settings()
-            # Test that the system handles this
 
 
 # =============================================================================

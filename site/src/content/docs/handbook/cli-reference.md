@@ -7,6 +7,20 @@ sidebar:
 
 The `backprop` CLI exposes the subcommands below — every flag, every default, and the full exit-code contract. Run `backprop --help` for the complete subcommand list and `backprop <subcommand> --help` for the canonical argparse output of a specific subcommand. A few subcommands (`resume`, `list-runs`, `show-run`, `runs`, `info`, `config`) get mentioned here in passing and are fully covered by `--help` rather than getting a dedicated table.
 
+## Root-parser flags (apply to every subcommand)
+
+These flags are accepted on the root `backprop` parser, BEFORE the subcommand name. They take precedence over the matching `BACKPROPAGATE_LOG_*` env vars when both are set.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--verbose`, `-v` | off | Show verbose output including unredacted stack traces. Same as `BACKPROPAGATE_DEBUG=1`. |
+| `--version`, `-V` | n/a | Print version string and exit. |
+| `--log-level` | `INFO` | **v1.4** — one of `DEBUG` / `INFO` / `WARNING` / `ERROR`. Overrides `BACKPROPAGATE_LOG_LEVEL` for this invocation. CLI flag wins when both are set. |
+| `--log-format` | `console` | **v1.4** — one of `json` / `console`. `json` emits one JSON object per log record (for log aggregators / `jq` consumers); `console` emits the human-readable structlog rendering. Overrides `BACKPROPAGATE_LOG_JSON`. |
+| `--log-file` | unset (stderr only) | **v1.4** — write logs to `PATH` in addition to stderr. Parent directory created if missing. Overrides `BACKPROPAGATE_LOG_FILE`. |
+
+Example: `backprop --log-level=DEBUG --log-format=json train --data my.jsonl --steps 100 2> session.log` emits structured JSON log records to stderr for the whole training run, captured via shell redirection.
+
 ## Exit codes (Ship Gate B2)
 
 | Code | Meaning |
@@ -40,6 +54,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--no-packing` | (packing ON by default) | Disable sample packing. Default ON gives 1.7-3× throughput; disable only if you hit packing-incompatible behavior. |
 | `--init-lora-weights` | `default` | One of `default` / `pissa` / `loftq`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
 | `--optim` | auto | Optimizer string. `auto` picks `paged_adamw_8bit` on consumer GPUs (<24GB VRAM), `adamw_torch_fused` otherwise. Override with `adamw_torch` / `paged_adamw_8bit` / `adamw_8bit` etc. |
+| `--mode` | `lora` | **v1.4** — one of `lora` / `full`. `lora` (the default) trains a low-rank adapter; `full` updates every weight of the base model. `full` is supported only for models up to 3B parameters on consumer 16GB cards — picking `--mode=full` with a >3B model exits `2` with `[RUNTIME_FULL_FT_MODEL_TOO_LARGE]` naming `--mode=lora` + the three sub-3B presets (Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B) as the recovery options. See [full fine-tuning →](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math and the Biderman 2024 / Thinking Machines 2025 citations. |
 
 The CLI default aligns with `config.py`'s `ModelConfig.name` as of v1.3 (F-018). Pass `--model unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to opt into the pre-quantized variant, but only with the `[unsloth]` extra installed.
 
@@ -65,6 +80,7 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--no-packing` | (packing ON by default) | Same as `backprop train`. |
 | `--init-lora-weights` | `default` | Same as `backprop train`. |
 | `--optim` | auto | Same as `backprop train`. |
+| `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 3B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
 
 ## `backprop diff-runs` (v1.3, experimental)
 
@@ -95,7 +111,8 @@ backprop replay <run_id> [--output ./output] [--override KEY=VALUE]
 |------|---------|-------------|
 | `run_id` (positional) | **required** | The run_id to replay (or any unambiguous prefix). |
 | `--output`, `-o` | `./output` | Output directory. |
-| `--override` | unset | Repeatable `KEY=VALUE`. Override a single hyperparameter (whitelist: `seed`, `learning_rate`, `lr`, `batch_size`, `gradient_accumulation`, `max_steps`, `steps`, `samples`, `lora_r`, `lora_alpha`, `lora_dropout`, `use_dora`, `packing`, `init_lora_weights`, `lora_preset`, `optim`). Unknown keys fail loudly. |
+| `--override` | unset | Repeatable `KEY=VALUE`. Override a single hyperparameter (whitelist: `seed`, `learning_rate`, `lr`, `batch_size`, `gradient_accumulation`, `max_steps`, `steps`, `samples`, `lora_r`, `lora_alpha`, `lora_dropout`, `use_dora`, `packing`, `init_lora_weights`, `lora_preset`, `optim`, `mode`). Unknown keys fail loudly. |
+| `--json` | off | **v1.4** — emit a JSON payload describing the replay (new `run_id`, the resolved config, each override applied) under a `schema_version` field. Useful for CI flows that need to chain on a previously-recorded run. |
 
 Inherits seed / learning_rate / batch_size / gradient_accumulation / max_steps / lora_r from the recorded entry. Supports both single-run and multi-run session_kinds.
 
@@ -137,6 +154,45 @@ backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --oll
 | `--hub-token` | unset | HuggingFace Hub token for `--push` flow. Visible to `ps aux` + shell history — prefer `--hub-token-file` or `HF_TOKEN` env var on shared hosts. |
 | `--hub-token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--hub-token`. Mirrors v1.3 `--auth-file` pattern for keeping credentials off argv. |
 
+## `backprop ollama` (v1.4)
+
+Register / list / unregister local Ollama models without re-exporting. v1.3.x's only path to Ollama was the one-shot `backprop export --ollama --ollama-name <name>` form — operators who had already exported a GGUF (or wanted to undo a registration) had to drop into the upstream `ollama` CLI directly.
+
+```bash
+# Register an already-exported GGUF (or LoRA adapter) with the local daemon
+backprop ollama register ./output/lora.gguf --name my-finetune
+
+# List currently-registered models (mirrors `ollama list`)
+backprop ollama list
+
+# Unregister a model (mirrors `ollama rm`)
+backprop ollama rm my-finetune
+```
+
+### Architectural deviation note
+
+`backprop ollama` is the one nested subparser in the otherwise-flat backpropagate CLI. The deviation is intentional and operator-facing: operators who already know `ollama create` / `ollama list` / `ollama rm` get the same grammar one prefix deeper, which matches their muscle memory rather than re-cutting the same operations as flat backpropagate subcommands. The existing `backprop export --ollama --ollama-name <name>` one-shot path stays untouched as the "I just trained, register in one command" surface; the new triad is for the "I already exported earlier, just register" case.
+
+For maintainers: the nesting is the documented exception. Future Ollama-adjacent subcommands (e.g. `backprop ollama pull`, `backprop ollama push-to-registry`) extend the same nested group; non-Ollama subcommands stay flat under the root parser.
+
+### `backprop ollama register`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `path` (positional) | **required** | Path to an already-exported GGUF file OR a LoRA adapter directory. When given a LoRA dir, the subcommand exports to GGUF q4_k_m as a side-effect (same code path as `backprop export --ollama`). |
+| `--name` | derived from path basename | Name to register the model under in Ollama. Quoted in `ollama run <name>` afterwards. |
+| `--modelfile` | unset | Path to a custom Ollama Modelfile. Default builds a minimal Modelfile from the GGUF path; pass `--modelfile <path>` to use your own template (system prompt, parameters, etc.). |
+
+Exit codes: `0` on successful registration, `1` on user error (path doesn't exist, name collision with `--no-overwrite`), `2` on daemon failure (`DEP_OLLAMA_REGISTRATION_FAILED`).
+
+### `backprop ollama list`
+
+No flags. Enumerates the currently-registered model names by calling the Ollama daemon HTTP API at `localhost:11434`. Exit `0` on success, `2` on daemon unreachable.
+
+### `backprop ollama rm <name>`
+
+Unregister a model. Exit `0` on success, `1` if the model name doesn't exist in the daemon, `2` on daemon unreachable.
+
 ## `backprop push`
 
 Push a trained adapter or merged model to the HuggingFace Hub.
@@ -154,6 +210,8 @@ backprop push ./output/lora --repo alice/qwen-finetune --token-file ~/.hf-token
 | `--token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--token`. |
 | `--private` | off | Create the repo as private. |
 | `--include-base` | off | Push merged model including the base weights (LoRA-only push by default). |
+| `--hub-revision` | unset (default branch) | **v1.4** — push to a named branch / revision in the target repo. Plumbed through to `HfApi.upload_folder(revision=...)`. Useful for per-experiment branches or pushing to a `dev` branch for review-before-promote. |
+| `--hub-commit-message` | `"Upload model"` | **v1.4** — override the default upload commit subject. Useful for tying a CI-pushed model to the workflow run that produced it (e.g. `--hub-commit-message "ci: $GITHUB_RUN_ID"`). |
 | `--verbose`, `-v` | off | Verbose logging during upload. |
 
 ## `backprop info`
@@ -162,9 +220,18 @@ Print Python / PyTorch / CUDA / GPU details and which optional features are avai
 
 ```bash
 backprop info
+backprop info --json | jq .logging
+backprop info --subcommand-tiers
 ```
 
-No flags. Useful first command after install — confirms the env is wired up before you launch a long training.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | off | Emit the full info payload as JSON under a `schema_version` field. v1.4 adds a `logging: {level, format, file, has_handler}` block surfacing the active log config (the new root-parser `--log-*` flags feed this). |
+| `--subcommand-tiers` | off | **v1.4** — print the `SUBCOMMAND_TIERS` registry (which subcommands are `stable` / `experimental` / `deprecated-prefer-X`). Pair with `--json` to consume the table programmatically. |
+| `--env-vars` | off | Print every `BACKPROPAGATE_*` env var the current process is reading. |
+| `--error-codes` | off | Print the full `ERROR_CODES` catalog. |
+
+Useful first command after install — confirms the env is wired up before you launch a long training. The `--json` surface makes `backprop info` a one-shot diagnostic for support tickets: `backprop info --json > info.json` captures Python / Torch / CUDA / GPU / logging / feature flags in a structured shape that's safe to attach.
 
 ## `backprop config`
 
@@ -234,6 +301,7 @@ backprop validate my_data.jsonl --format sharegpt --max-errors 50
 | `--format` | `auto` | Format hint: `auto` / `sharegpt` / `alpaca` / `openai` / `raw`. Default auto-detects from the first row. |
 | `--max-errors` | `100` | Maximum errors to collect before stopping (saves time on a thoroughly-broken dataset). |
 | `--max-samples` | unset (all) | Maximum samples to validate (caps reads at `max_samples * 2` so a 100 GB file doesn't OOM during validation). |
+| `--json` | off | **v1.4** — emit a JSON payload (`dataset`, `format_detected`, `total_samples`, `errors[]`) under a `schema_version` field instead of the human-readable banner. Useful for CI consumers and `jq` pipelines. |
 
 Exit codes: `0` on clean validation, `1` on input problem (missing file / unreadable / bad encoding), `65` (`EX_DATAERR`) on detected validation errors.
 

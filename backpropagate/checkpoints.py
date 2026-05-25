@@ -188,10 +188,25 @@ class CheckpointManager:
     # real migrator; v1.3 just fails-loud-but-keeps-going on mismatch.
     CURRENT_MANIFEST_VERSION = "1.0"
 
+    # v1.4 BACKEND-F-004 (Wave 6b features): cross-platform advisory file
+    # locking around _save_manifest, mirroring the RunHistoryManager
+    # BACKEND-F-012 pattern. Two operators running ``backprop multi-run``
+    # against the same checkpoint_dir race on manifest.json: both load →
+    # both mutate → both save, last writer wins, the earlier writer's
+    # registration is silently discarded AND under unlucky timing the
+    # on-disk JSON ends up truncated mid-write because two json.dump calls
+    # interleave on the same .tmp file. The lock serializes the
+    # load+mutate+save cycle. 30s ceiling — the per-mutation critical
+    # section is sub-millisecond in practice; anything approaching the
+    # floor signals a stuck holder and the operator should triage rather
+    # than wait quietly.
+    DEFAULT_LOCK_TIMEOUT_SECONDS: float = 30.0
+
     def __init__(
         self,
         checkpoint_dir: str,
         policy: CheckpointPolicy | None = None,
+        lock_timeout_seconds: float | None = None,
     ):
         """
         Initialize the checkpoint manager.
@@ -199,17 +214,93 @@ class CheckpointManager:
         Args:
             checkpoint_dir: Directory where checkpoints are stored
             policy: Retention policy (uses defaults if not provided)
+            lock_timeout_seconds: BACKEND-F-004 (v1.4 Wave 6b) — maximum
+                wait for the cross-platform ``filelock`` advisory lock
+                around ``_save_manifest`` writes. Mirrors the
+                BACKEND-F-012 RunHistoryManager pattern. Defaults to
+                :attr:`DEFAULT_LOCK_TIMEOUT_SECONDS` (30s). Pass 0 to
+                disable the timeout (block forever) — useful for
+                orchestrators that prefer queuing over failing fast. On
+                timeout the helper logs a structured error and proceeds
+                without serialization rather than failing the save (the
+                manifest is best-effort observability metadata; the
+                on-disk PEFT directories are the load-bearing artifact).
         """
         self.checkpoint_dir = Path(checkpoint_dir)
         self.policy = policy or CheckpointPolicy()
         self._checkpoints: list[CheckpointInfo] = []
         self._manifest_path = self.checkpoint_dir / self.MANIFEST_FILE
+        # v1.4 BACKEND-F-004 (Wave 6b features): lock-file sibling of the
+        # manifest. ``.lock`` suffix follows the ``filelock`` convention
+        # and lets housekeeping tooling distinguish lock files from
+        # source-of-truth JSON.
+        self._lock_path = self.checkpoint_dir / f"{self.MANIFEST_FILE}.lock"
+        self._lock_timeout_seconds = (
+            self.DEFAULT_LOCK_TIMEOUT_SECONDS
+            if lock_timeout_seconds is None
+            else float(lock_timeout_seconds)
+        )
 
         # Create directory if needed
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Load existing manifest
         self._load_manifest()
+
+    @contextlib.contextmanager
+    def _locked_manifest_write(self, operation: str) -> Iterator[bool]:
+        """v1.4 BACKEND-F-004 (Wave 6b features): cross-platform file lock
+        around the load+mutate+save cycle for the manifest.
+
+        Mirrors :meth:`RunHistoryManager._locked_mutate` (Wave 6a
+        BACKEND-F-012). Yields True when the lock was acquired (caller
+        proceeds with the critical section); yields False when
+        acquisition timed out OR ``filelock`` is unavailable in a
+        stripped install. False does NOT block the write — the caller
+        proceeds without serialization, preserving the prior behavior.
+
+        Args:
+            operation: Short tag for the log line on timeout
+                (e.g. "register", "prune", "force_prune").
+        """
+        if not _FILELOCK_AVAILABLE or FileLock is None:
+            # Degraded fallback: stripped install with no filelock. Log at
+            # DEBUG (matches the RunHistoryManager pattern) and proceed
+            # without serialization.
+            logger.debug(
+                f"CheckpointManager._locked_manifest_write({operation}): "
+                f"filelock unavailable; proceeding without cross-process "
+                f"serialization. Concurrent writes from a second process "
+                f"may race."
+            )
+            yield True
+            return
+
+        effective_timeout = self._lock_timeout_seconds
+        if effective_timeout <= 0:
+            effective_timeout = -1
+
+        lock = FileLock(str(self._lock_path), timeout=effective_timeout)
+        try:
+            with lock:
+                yield True
+        except FileLockTimeout:
+            logger.error(
+                f"CheckpointManager._locked_manifest_write({operation}): "
+                f"lock acquisition timed out after "
+                f"{self._lock_timeout_seconds:.1f}s on {self._lock_path!s}. "
+                f"A concurrent writer is either still holding the lock "
+                f"(legitimate contention) or crashed mid-critical-section "
+                f"(stuck lock). If you have verified no live process is "
+                f"writing to {self._manifest_path!s}, manually removing "
+                f"{self._lock_path!s} will clear the stuck holder. "
+                f"Proceeding WITHOUT serialization (manifest save is "
+                f"best-effort observability metadata; on-disk PEFT "
+                f"directories are unaffected)."
+            )
+            # Proceed without the lock — manifest save is best-effort and
+            # operator's PEFT dirs are the load-bearing artifact.
+            yield False
 
     def _load_manifest(self) -> None:
         """Load checkpoint manifest from disk.
@@ -395,14 +486,17 @@ class CheckpointManager:
         )
 
         self._checkpoints.append(info)
-        try:
-            if not self._save_manifest():
-                logger.warning(
-                    "Manifest save failed after registering checkpoint — "
-                    "in-memory state may diverge from disk"
-                )
-        except Exception as e:
-            logger.warning(f"Manifest save error after registering checkpoint: {e}")
+        # v1.4 BACKEND-F-004 (Wave 6b features): cross-process lock around
+        # the manifest save. Mirrors RunHistoryManager BACKEND-F-012.
+        with self._locked_manifest_write("register"):
+            try:
+                if not self._save_manifest():
+                    logger.warning(
+                        "Manifest save failed after registering checkpoint — "
+                        "in-memory state may diverge from disk"
+                    )
+            except Exception as e:
+                logger.warning(f"Manifest save error after registering checkpoint: {e}")
 
         val_str = f"{validation_loss:.4f}" if validation_loss is not None else "N/A"
         logger.info(
@@ -546,14 +640,18 @@ class CheckpointManager:
             except Exception as e:
                 logger.error(f"Failed to prune checkpoint {cp.path}: {e}")
 
-        try:
-            if not self._save_manifest():
-                logger.warning(
-                    "Manifest save failed after pruning — "
-                    "in-memory state may diverge from disk"
-                )
-        except Exception as e:
-            logger.warning(f"Manifest save error after pruning: {e}")
+        # v1.4 BACKEND-F-004 (Wave 6b features): cross-process lock around
+        # the manifest save after pruning. Concurrent prunes from a sibling
+        # process can otherwise interleave manifest writes.
+        with self._locked_manifest_write("prune"):
+            try:
+                if not self._save_manifest():
+                    logger.warning(
+                        "Manifest save failed after pruning — "
+                        "in-memory state may diverge from disk"
+                    )
+            except Exception as e:
+                logger.warning(f"Manifest save error after pruning: {e}")
 
         logger.info(
             f"Pruned {len(pruned)} checkpoints, "
@@ -614,11 +712,14 @@ class CheckpointManager:
         for cp in self._checkpoints:
             if cp.run_index == run_index:
                 cp.protected = True
-                try:
-                    if not self._save_manifest():
-                        logger.warning("Manifest save failed after protecting checkpoint")
-                except Exception as e:
-                    logger.warning(f"Manifest save error after protecting checkpoint: {e}")
+                # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
+                # protect-then-save mutation.
+                with self._locked_manifest_write("protect_checkpoint"):
+                    try:
+                        if not self._save_manifest():
+                            logger.warning("Manifest save failed after protecting checkpoint")
+                    except Exception as e:
+                        logger.warning(f"Manifest save error after protecting checkpoint: {e}")
                 logger.info(f"Protected checkpoint: run={run_index}")
                 return True
         return False
@@ -636,11 +737,14 @@ class CheckpointManager:
         for cp in self._checkpoints:
             if cp.run_index == run_index:
                 cp.protected = False
-                try:
-                    if not self._save_manifest():
-                        logger.warning("Manifest save failed after unprotecting checkpoint")
-                except Exception as e:
-                    logger.warning(f"Manifest save error after unprotecting checkpoint: {e}")
+                # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
+                # unprotect-then-save mutation.
+                with self._locked_manifest_write("unprotect_checkpoint"):
+                    try:
+                        if not self._save_manifest():
+                            logger.warning("Manifest save failed after unprotecting checkpoint")
+                    except Exception as e:
+                        logger.warning(f"Manifest save error after unprotecting checkpoint: {e}")
                 logger.info(f"Unprotected checkpoint: run={run_index}")
                 return True
         return False
@@ -662,11 +766,15 @@ class CheckpointManager:
             logger.info(f"Removed orphaned manifest entry: {cp.path}")
 
         if orphaned:
-            try:
-                if not self._save_manifest():
-                    logger.warning("Manifest save failed after cleaning orphaned entries")
-            except Exception as e:
-                logger.warning(f"Manifest save error after cleaning orphaned entries: {e}")
+            # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
+            # orphan-cleanup manifest save so a concurrent register doesn't
+            # race the cleanup write.
+            with self._locked_manifest_write("cleanup_orphaned"):
+                try:
+                    if not self._save_manifest():
+                        logger.warning("Manifest save failed after cleaning orphaned entries")
+                except Exception as e:
+                    logger.warning(f"Manifest save error after cleaning orphaned entries: {e}")
 
         return len(orphaned)
 
@@ -775,11 +883,16 @@ class CheckpointManager:
                 f"with the manifest.json + this log line."
             )
 
-        try:
-            if not self._save_manifest():
-                logger.warning("Manifest save failed after force prune")
-        except Exception as e:
-            logger.warning(f"Manifest save error after force prune: {e}")
+        # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
+        # force-prune-to-size manifest save. Same shape as the prune()
+        # path so concurrent prune/force_prune from sibling processes
+        # serialize through the lock.
+        with self._locked_manifest_write("force_prune_to_size"):
+            try:
+                if not self._save_manifest():
+                    logger.warning("Manifest save failed after force prune")
+            except Exception as e:
+                logger.warning(f"Manifest save error after force prune: {e}")
         return pruned
 
 

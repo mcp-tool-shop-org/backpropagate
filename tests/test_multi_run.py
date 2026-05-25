@@ -2894,3 +2894,221 @@ class TestWave6aMultiRunTrainerDocstringMentionsRuntimeGpuOom:
             "the docstring said this code is NOT produced — now "
             "it IS produced (via failure_reason prefix)."
         )
+
+
+# =============================================================================
+# TESTS-F-003 (v1.4 Wave 6b): pin the Wave 3.5 BACKEND-B-003 model.eval()
+# try/finally restore contract.
+#
+# Pre-fix, ``_compute_validation_loss`` called ``model.eval()`` OUTSIDE the
+# try block whose finally restored ``model.train()``. If ANY exception fired
+# between the eval() success and the for-loop entry (an exotic dataset
+# iterator raising in ``__iter__``, ``with torch.no_grad():`` failing in a
+# partially-corrupt CUDA context, a KeyboardInterrupt mid-statement), the
+# model stayed in eval mode forever. Subsequent training runs would then
+# silently train with disabled dropout / disabled BN-stat updates,
+# degrading quality without any error.
+#
+# The fix (Wave 3.5) moved ``model.eval()`` INSIDE the try block as the
+# first statement so the finally at the bottom always fires on the
+# success-of-eval branch. The inner try-except catches Exception, so the
+# easiest path to exercise the outer finally is to raise a non-Exception
+# (KeyboardInterrupt) or to have an exception fire before the inner try
+# (e.g. ``with torch.no_grad():`` itself raising).
+# =============================================================================
+
+
+class TestWave6bComputeValidationLossTryFinally:
+    """Wave 3.5 BACKEND-B-003: ``_compute_validation_loss`` restores
+    ``model.train()`` in the finally block even when an exception fires
+    in the validation loop.
+    """
+
+    def _build_trainer_with_mock_model(self):
+        """Construct a MultiRunTrainer with a MagicMock-backed inner Trainer.
+
+        The mock model + tokenizer let us observe whether ``model.train()``
+        was called via the finally on any exit path. We force validation
+        active so ``_get_validation_holdout`` reserves a non-zero slice
+        (otherwise the early-return at total_samples=0 would skip the
+        try/finally entirely).
+        """
+        config = MultiRunConfig(
+            num_runs=1,
+            validate_every_run=True,  # force _validation_active() = True
+            validation_samples=2,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        # Inner _trainer must have ._model + ._tokenizer attributes (the
+        # code reads from these). MagicMock observes calls so we can pin
+        # the train() restore.
+        mock_inner_trainer = MagicMock()
+        mock_model = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_inner_trainer._model = mock_model
+        mock_inner_trainer._tokenizer = mock_tokenizer
+        trainer._trainer = mock_inner_trainer
+        trainer._run_id = "test-run-finally"
+        return trainer, mock_model
+
+    def test_compute_validation_loss_restores_train_mode_on_keyboard_interrupt(self):
+        """Wave 3.5 BACKEND-B-003: a KeyboardInterrupt raised mid-loop
+        must NOT leave the model in eval mode.
+
+        The inner ``try: ... except Exception:`` catches Exception
+        subclasses but NOT BaseException (KeyboardInterrupt /
+        SystemExit). Pre-fix, KeyboardInterrupt during the for-loop
+        bypassed the inner except AND ran past the outer block without a
+        finally — leaving the model stuck in eval(). The fix's outer
+        try/finally must restore train() even on KeyboardInterrupt.
+        """
+        trainer, mock_model = self._build_trainer_with_mock_model()
+
+        # Use real classes for the dataset surfaces — MagicMock's dunder
+        # support (``__len__`` + ``__iter__``) is delicate and behaves
+        # differently depending on whether the dunder is set on the type
+        # or the instance. A pair of small concrete classes is clearer.
+        class _BrokenSubset:
+            def __iter__(self):
+                raise KeyboardInterrupt("operator cancelled mid-validation")
+
+        class _FullDataset:
+            def __len__(self):
+                return 100
+
+            def select(self, indices):  # noqa: ARG002 — fixture signature
+                return _BrokenSubset()
+
+        full_dataset = _FullDataset()
+
+        with pytest.raises(KeyboardInterrupt):
+            trainer._compute_validation_loss(full_dataset, run_idx=0)
+
+        # Wave 3.5 BACKEND-B-003 contract: model.train() called in finally.
+        assert mock_model.train.called, (
+            "Wave 3.5 BACKEND-B-003 regression: model.train() was NOT "
+            "called after KeyboardInterrupt during the validation loop. "
+            "The outer try/finally in _compute_validation_loss "
+            "(multi_run.py:2752) MUST restore train() on ANY exit path. "
+            "Pre-fix the model stayed in eval mode forever, silently "
+            "degrading subsequent training runs."
+        )
+        # And eval() WAS called (the fix moved it INSIDE the try block;
+        # if it had stayed outside, the test would still pass with eval
+        # called, but the restore would have skipped — we pin both).
+        assert mock_model.eval.called, (
+            "Test sanity check: model.eval() must be called before the "
+            "for-loop raises so we know we're exercising the try/finally "
+            "restore path, not a pre-eval early-return path."
+        )
+
+    def test_compute_validation_loss_restores_train_mode_on_unexpected_exception(self):
+        """Symmetric pin for a non-Keyboard Exception that bypasses the
+        inner sample try-except (e.g. ``with torch.no_grad()`` raising
+        in a corrupt CUDA context).
+
+        We patch ``torch.no_grad`` to raise on entry — the inner
+        for-loop's try-except never gets a chance to swallow it.
+        """
+        trainer, mock_model = self._build_trainer_with_mock_model()
+
+        # Real classes for the dataset (same shape as the KeyboardInterrupt
+        # case but the subset is non-broken — the failure point is
+        # ``with torch.no_grad():`` itself).
+        class _EmptySubset:
+            def __iter__(self):
+                return iter([])
+
+        class _FullDataset:
+            def __len__(self):
+                return 100
+
+            def select(self, indices):  # noqa: ARG002
+                return _EmptySubset()
+
+        full_dataset = _FullDataset()
+
+        # torch.no_grad() raising on context-manager enter simulates a
+        # corrupt CUDA context. Because this fires INSIDE the outer try,
+        # the finally at multi_run.py:2752 must still restore train().
+        # Use a custom exception type so we know precisely what surfaces.
+        class _CudaCorruption(RuntimeError):
+            pass
+
+        # ``import torch`` is local to ``_compute_validation_loss``;
+        # patch ``torch.no_grad`` itself (the module is sys.modules-level)
+        # so the local-import sees our patched attr. This is the standard
+        # pattern for local imports.
+        with patch("torch.no_grad", side_effect=_CudaCorruption("simulated corrupt CUDA context")):
+            with pytest.raises(_CudaCorruption):
+                trainer._compute_validation_loss(full_dataset, run_idx=0)
+
+        assert mock_model.train.called, (
+            "Wave 3.5 BACKEND-B-003 regression: model.train() was NOT "
+            "called after a non-Exception (or non-sample-loop-caught) "
+            "error in _compute_validation_loss. The outer try/finally "
+            "(multi_run.py:2752) MUST restore train() on ANY exit path."
+        )
+
+    def test_compute_validation_loss_eval_inside_try_block(self):
+        """Source-level pin: the ``model.eval()`` call site MUST be
+        inside the outer try block (the one whose finally restores
+        train()). A regression that moves eval() back outside the try
+        would silently re-introduce the BACKEND-B-003 footgun.
+
+        We grep the source string instead of executing because executing
+        the buggy version produces the same observable result (model in
+        eval) but ONLY on the specific exception types we test for; a
+        source-level pin catches the broader pattern.
+        """
+        from pathlib import Path
+
+        multi_run_src = (
+            Path(__file__).resolve().parent.parent
+            / "backpropagate" / "multi_run.py"
+        ).read_text(encoding="utf-8")
+
+        # Find the _compute_validation_loss method.
+        marker = "def _compute_validation_loss("
+        idx = multi_run_src.find(marker)
+        assert idx >= 0, (
+            "Wave 3.5 BACKEND-B-003 regression: "
+            "_compute_validation_loss method removed from multi_run.py."
+        )
+        # Locate the next 'def ' AFTER our method (or end-of-file).
+        next_def = multi_run_src.find("\n    def ", idx + len(marker))
+        method_src = multi_run_src[idx:next_def if next_def > 0 else len(multi_run_src)]
+
+        # The fix's shape: 'try:' must appear BEFORE 'model.eval()' in
+        # the method body (both inside the same containing scope).
+        eval_idx = method_src.find("model.eval()")
+        # The outermost try block is the one whose finally restores
+        # train(); find the LAST 'try:' that precedes the model.eval()
+        # call — there should be at least ONE try block opening before
+        # the eval() call site. The BACKEND-B-003 fix moved eval()
+        # inside such a block.
+        preceding = method_src[:eval_idx]
+        assert "try:" in preceding, (
+            "Wave 3.5 BACKEND-B-003 SOURCE-LEVEL regression: "
+            "model.eval() in _compute_validation_loss is no longer "
+            "preceded by a 'try:' block within the method. The outer "
+            "try/finally restoring model.train() requires eval() to "
+            "live INSIDE the try block. Pre-fix shape (eval() outside "
+            "the try) silently strands the model in eval mode whenever "
+            "the for-loop bails on a non-Exception or pre-loop error. "
+            "Restore the multi_run.py:2814 'try: try: model.eval()' "
+            "shape before merging."
+        )
+        # And the method must carry a 'finally:' that restores train().
+        assert "finally:" in method_src, (
+            "Wave 3.5 BACKEND-B-003 regression: "
+            "_compute_validation_loss is missing a 'finally:' block. "
+            "Without it nothing restores model.train() after the "
+            "validation loop exits via an exception."
+        )
+        assert "model.train()" in method_src, (
+            "Wave 3.5 BACKEND-B-003 regression: "
+            "_compute_validation_loss no longer calls model.train() "
+            "anywhere; the finally restore is gone."
+        )

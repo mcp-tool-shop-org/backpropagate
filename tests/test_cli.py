@@ -1528,6 +1528,507 @@ class TestCmdShowRun:
 
 
 # =============================================================================
+# TESTS-F-005 (v1.4 Wave 6b): BRIDGE-B-013 (Stage C) schema_version
+# pinning across every CLI ``--json`` emitter.
+# =============================================================================
+#
+# Pre-Stage-C only ``runs --json`` carried a schema_version field — peers
+# (info, info --env-vars, list-runs, show-run, diff-runs, export-runs,
+# estimate-vram) emitted bare JSON dicts/arrays so a future shape change
+# was indistinguishable from an additive field addition. The Stage C fix
+# at backpropagate/cli.py:3610 introduced ``CLI_JSON_SCHEMA_VERSION = "1"``
+# and threaded it onto every emitter as an additive field.
+#
+# Per the inherited doctrine ratchet
+# [[grep-all-instances-when-fixing-pattern]], we pin schema_version on ALL
+# documented --json emitters here (not just one) so a partial regression
+# that drops the field on one surface gets caught.
+#
+# Emitters covered:
+#   1. backprop info --json                      (top-level field)
+#   2. backprop info --env-vars --json           (per-row injection)
+#   3. backprop list-runs --json                 (per-row injection)
+#   4. backprop runs --json                      (top-level field;
+#                                                  RUNS_JSON_SCHEMA_VERSION
+#                                                  twin)
+#   5. backprop show-run --json                  (additive peer)
+#   6. backprop diff-runs --format=json          (top-level field)
+#   7. backprop export-runs (JSONL stdout)       (per-record field)
+#   8. backprop estimate-vram --json             (top-level field)
+#
+# NOTE: `backprop info --error-codes` emits a plaintext catalog table
+# (not JSON) — there is no `--error-codes --json` emitter to pin today.
+# When that surface lands the matching test should be added here.
+# =============================================================================
+
+
+class TestCliJsonSchemaVersion:
+    """Pin every documented ``--json`` emitter ships a schema_version field.
+
+    The contract: ``CLI_JSON_SCHEMA_VERSION`` is the canonical name in
+    ``backpropagate.cli``; every emitter must thread it into the output.
+    The constant is "1" today; the bump policy lives in the docstring at
+    cli.py:3595.
+    """
+
+    def test_cli_json_schema_version_constant_exists(self):
+        """The shared constant is importable from cli.py."""
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION
+
+        assert isinstance(CLI_JSON_SCHEMA_VERSION, str), (
+            f"CLI_JSON_SCHEMA_VERSION must be a string; got "
+            f"{type(CLI_JSON_SCHEMA_VERSION).__name__}."
+        )
+        assert CLI_JSON_SCHEMA_VERSION, (
+            "CLI_JSON_SCHEMA_VERSION must be non-empty."
+        )
+
+    def test_info_json_carries_schema_version(self, capsys):
+        """``backprop info --json`` has schema_version at top level."""
+        import argparse
+        import json as _json
+
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_info
+
+        args = argparse.Namespace(
+            error_codes=False,
+            env_vars=False,
+            json=True,
+            verbose=False,
+        )
+        rc = cmd_info(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert "schema_version" in payload, (
+            "BRIDGE-B-013 regression: ``backprop info --json`` is "
+            "missing the schema_version field. cli.py:1900 should "
+            "set payload['schema_version'] = CLI_JSON_SCHEMA_VERSION."
+        )
+        assert payload["schema_version"] == CLI_JSON_SCHEMA_VERSION, (
+            f"info --json schema_version drifted from the shared "
+            f"constant: payload={payload['schema_version']!r} vs "
+            f"constant={CLI_JSON_SCHEMA_VERSION!r}."
+        )
+
+    def test_info_env_vars_json_carries_schema_version_on_each_row(self, capsys):
+        """``backprop info --env-vars --json`` injects schema_version
+        on each row (the surface is a JSON array, not a dict envelope).
+        """
+        import argparse
+        import json as _json
+
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_info
+
+        args = argparse.Namespace(
+            error_codes=False,
+            env_vars=True,
+            json=True,
+            verbose=False,
+        )
+        rc = cmd_info(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert isinstance(payload, list), (
+            f"info --env-vars --json shape changed; expected list, "
+            f"got {type(payload).__name__}."
+        )
+        assert payload, "info --env-vars --json produced empty list; cannot pin schema_version."
+        for row in payload:
+            assert "schema_version" in row, (
+                "BRIDGE-B-013 regression: ``info --env-vars --json`` "
+                "row is missing schema_version. Per-row injection "
+                "lives at cli.py:1853."
+            )
+            assert row["schema_version"] == CLI_JSON_SCHEMA_VERSION
+
+    def test_list_runs_json_carries_schema_version_per_row(self, tmp_path, capsys):
+        """``backprop list-runs --json`` injects schema_version per row."""
+        import json as _json
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_list_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="lr-schema", model_name="m")
+        mgr.record_run_completed(run_id="lr-schema", final_loss=0.42)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = None
+        args.limit = 20
+        args.json = True
+
+        rc = cmd_list_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert isinstance(payload, list)
+        assert payload, "list-runs --json produced empty list."
+        for row in payload:
+            assert "schema_version" in row, (
+                "BRIDGE-B-013 regression: list-runs --json row is "
+                "missing schema_version. Per-row injection lives at "
+                "cli.py:3555."
+            )
+            assert row["schema_version"] == CLI_JSON_SCHEMA_VERSION
+
+    def test_runs_json_carries_schema_version_top_level(self, tmp_path, capsys):
+        """``backprop runs --json`` carries schema_version at the
+        top level (BRIDGE-F-001 — predates the BRIDGE-B-013 sweep but
+        uses the same contract name via ``RUNS_JSON_SCHEMA_VERSION``).
+        """
+        import json as _json
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import RUNS_JSON_SCHEMA_VERSION, cmd_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="runs-schema", model_name="m")
+        mgr.record_run_completed(run_id="runs-schema", final_loss=0.1)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.status = None
+        args.limit = 20
+        args.json = True
+
+        rc = cmd_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload.get("schema_version") == RUNS_JSON_SCHEMA_VERSION, (
+            f"BRIDGE-F-001 regression: runs --json schema_version = "
+            f"{payload.get('schema_version')!r}; expected "
+            f"{RUNS_JSON_SCHEMA_VERSION!r}."
+        )
+
+    def test_show_run_json_carries_schema_version(self, tmp_path, capsys):
+        """``backprop show-run --json`` has schema_version as an
+        additive peer field on the run dict.
+        """
+        import json as _json
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_show_run
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(run_id="sr-schema", model_name="m")
+        mgr.record_run_completed(run_id="sr-schema", final_loss=0.2)
+
+        args = MagicMock()
+        args.output = str(tmp_path)
+        args.run_id = "sr-schema"
+        args.json = True
+
+        rc = cmd_show_run(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload.get("schema_version") == CLI_JSON_SCHEMA_VERSION, (
+            "BRIDGE-B-013 regression: show-run --json schema_version "
+            "missing or drifted. Additive injection lives at "
+            f"cli.py:3800. payload={payload.get('schema_version')!r}."
+        )
+
+    def test_diff_runs_format_json_carries_schema_version(self, tmp_path, capsys):
+        """``backprop diff-runs --format=json`` has schema_version at
+        the top level alongside ``run_a`` / ``run_b`` / ``diff``.
+        """
+        import argparse
+        import json as _json
+        from datetime import datetime, timezone
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_diff_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr._save([
+            {
+                "run_id": "diff-a",
+                "status": "completed",
+                "model_name": "m-a",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "final_loss": 0.5,
+            },
+            {
+                "run_id": "diff-b",
+                "status": "completed",
+                "model_name": "m-b",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "final_loss": 0.4,
+            },
+        ])
+
+        args = argparse.Namespace(
+            run_id_a="diff-a",
+            run_id_b="diff-b",
+            output=str(tmp_path),
+            format="json",
+        )
+        rc = cmd_diff_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload.get("schema_version") == CLI_JSON_SCHEMA_VERSION, (
+            "BRIDGE-B-013 regression: diff-runs --format=json "
+            "schema_version missing or drifted. Top-level injection "
+            f"lives at cli.py:4006. payload={payload.get('schema_version')!r}."
+        )
+
+    def test_export_runs_jsonl_carries_schema_version_per_record(self, tmp_path, capsys):
+        """``backprop export-runs`` emits one JSONL row per run, each
+        with a schema_version field. Per-record injection (additive)
+        keeps consumers that ignore unknown keys working byte-identically.
+        """
+        import argparse
+        import json as _json
+        from datetime import datetime, timezone
+
+        from backpropagate.checkpoints import RunHistoryManager
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_export_runs
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr._save([
+            {
+                "run_id": "exp-a",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "run_id": "exp-b",
+                "status": "completed",
+                "model_name": "m",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ])
+
+        args = argparse.Namespace(
+            output=str(tmp_path),
+            format="jsonl",
+            to=None,
+            status=None,
+        )
+        rc = cmd_export_runs(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        assert len(lines) == 2
+        for ln in lines:
+            record = _json.loads(ln)
+            assert record.get("schema_version") == CLI_JSON_SCHEMA_VERSION, (
+                "BRIDGE-B-013 regression: export-runs JSONL record "
+                "missing schema_version. Per-record injection lives "
+                "at cli.py:4508. "
+                f"record_keys={sorted(record.keys())!r}."
+            )
+
+    def test_estimate_vram_json_carries_schema_version(self, capsys):
+        """``backprop estimate-vram --json`` has schema_version at top
+        level alongside model + vram_gb + tiers.
+        """
+        import argparse
+        import json as _json
+
+        from backpropagate.cli import CLI_JSON_SCHEMA_VERSION, cmd_estimate_vram
+
+        args = argparse.Namespace(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            vram_gb=16.0,  # bypass torch.cuda probe
+            json=True,
+        )
+        rc = cmd_estimate_vram(args)
+        out = capsys.readouterr().out
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload.get("schema_version") == CLI_JSON_SCHEMA_VERSION, (
+            "BRIDGE-B-013 regression: estimate-vram --json "
+            "schema_version missing or drifted. Top-level injection "
+            f"lives at cli.py:4740. payload={payload.get('schema_version')!r}."
+        )
+
+
+# =============================================================================
+# TESTS-F-006 (v1.4 Wave 6b): BRIDGE-A-004 (Wave 2) _read_hub_token_file
+# direct coverage.
+# =============================================================================
+#
+# Wave 2 BRIDGE-A-004 added ``backprop push --hub-token-file <path>`` /
+# ``backprop export --hub-token-file <path>`` plumbing to keep the HF
+# token off the argv surface (where it leaks to ``ps aux`` + shell
+# history). The helper at cli.py:1001 owns the error-path discipline:
+# existence check, mode-0600 verification on POSIX (warn, don't refuse),
+# content read with a clear error on empty/unreadable files. Returns the
+# stripped token; raises UserInputError on any failure mode so the
+# catch-all in cmd_push / cmd_export emits a friendly redacted message
+# instead of a stack trace.
+#
+# Pre-Wave-6b TESTS-F-006 the helper had ZERO direct coverage — its 6
+# error paths could regress silently. This file pins each one.
+# =============================================================================
+
+
+class TestReadHubTokenFile:
+    """Direct tests for ``_read_hub_token_file`` (Wave 2 BRIDGE-A-004)."""
+
+    def test_happy_path_returns_stripped_token(self, tmp_path):
+        """File exists + has token ⇒ returns the stripped string."""
+        import os
+
+        from backpropagate.cli import _read_hub_token_file
+
+        token_path = tmp_path / "hf_token"
+        token_path.write_text("hf_abc123\n", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(token_path, 0o600)
+
+        result = _read_hub_token_file(str(token_path), flag_name="--hub-token-file")
+        assert result == "hf_abc123", (
+            f"_read_hub_token_file must strip trailing whitespace; "
+            f"got {result!r}."
+        )
+
+    def test_missing_path_raises_user_input_error(self, tmp_path):
+        """Non-existent path ⇒ UserInputError with named-path hint."""
+        from backpropagate.cli import _read_hub_token_file
+        from backpropagate.exceptions import UserInputError
+
+        missing_path = tmp_path / "does_not_exist"
+
+        with pytest.raises(UserInputError) as exc_info:
+            _read_hub_token_file(str(missing_path), flag_name="--hub-token-file")
+
+        message = str(exc_info.value)
+        # The error message must name the path so the operator sees
+        # WHICH file is missing (vs a generic 'file not found').
+        assert str(missing_path) in message, (
+            f"Wave 2 BRIDGE-A-004 contract: missing-path error must "
+            f"name the resolved path. Got message: {message!r}."
+        )
+        # Code is the validation-failure code so cli.py's catch-all
+        # emits the right exit code (EXIT_USER_ERROR).
+        assert getattr(exc_info.value, "code", None) == "INPUT_VALIDATION_FAILED", (
+            f"_read_hub_token_file raised UserInputError without "
+            f"code='INPUT_VALIDATION_FAILED'; got "
+            f"{getattr(exc_info.value, 'code', None)!r}."
+        )
+
+    def test_empty_file_raises_user_input_error(self, tmp_path):
+        """Empty file ⇒ UserInputError naming what was expected."""
+        import os
+
+        from backpropagate.cli import _read_hub_token_file
+        from backpropagate.exceptions import UserInputError
+
+        token_path = tmp_path / "empty_token"
+        token_path.write_text("", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(token_path, 0o600)
+
+        with pytest.raises(UserInputError) as exc_info:
+            _read_hub_token_file(str(token_path), flag_name="--hub-token-file")
+
+        message = str(exc_info.value)
+        assert "empty" in message.lower(), (
+            f"Empty-file error must use the word 'empty' so the "
+            f"operator's regex can match. Got message: {message!r}."
+        )
+
+    def test_whitespace_only_file_treated_as_empty(self, tmp_path):
+        """A file with ONLY whitespace strips to empty ⇒ same error."""
+        import os
+
+        from backpropagate.cli import _read_hub_token_file
+        from backpropagate.exceptions import UserInputError
+
+        token_path = tmp_path / "whitespace_token"
+        token_path.write_text("   \n\t\n", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(token_path, 0o600)
+
+        with pytest.raises(UserInputError):
+            _read_hub_token_file(str(token_path), flag_name="--hub-token-file")
+
+    def test_trailing_newline_stripped(self, tmp_path):
+        """``\\n``-terminated file ⇒ token returned without the newline."""
+        import os
+
+        from backpropagate.cli import _read_hub_token_file
+
+        token_path = tmp_path / "newline_token"
+        token_path.write_text("hf_xyz789\n", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(token_path, 0o600)
+
+        result = _read_hub_token_file(str(token_path), flag_name="--hub-token-file")
+        assert result == "hf_xyz789", (
+            f"Trailing newline must be stripped from the returned "
+            f"token (the HF API would 401 on a token with embedded "
+            f"newline). Got: {result!r}."
+        )
+        assert "\n" not in result, (
+            f"Returned token must not contain newlines; got: {result!r}"
+        )
+
+    def test_world_readable_mode_emits_warning_but_returns_token(self, tmp_path, capsys):
+        """POSIX only: mode 0644 ⇒ warning emits + token returned.
+
+        The mode check is advisory (operators may have intentionally
+        widened the mode). The helper warns via _print_warning but does
+        NOT refuse to read.
+        """
+        import os
+
+        if os.name != "posix":
+            pytest.skip("File-mode check is POSIX-only")
+
+        from backpropagate.cli import _read_hub_token_file
+
+        token_path = tmp_path / "world_readable_token"
+        token_path.write_text("hf_widemode\n", encoding="utf-8")
+        os.chmod(token_path, 0o644)
+
+        result = _read_hub_token_file(str(token_path), flag_name="--hub-token-file")
+
+        # The token is still returned — the mode check is advisory.
+        assert result == "hf_widemode"
+
+        # Warning fires on stdout / stderr (depending on _print_warning's
+        # destination). We assert the warning text references chmod or
+        # the mode so the operator sees the consequence.
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "chmod" in combined.lower() or "mode" in combined.lower(), (
+            "Wave 2 BRIDGE-A-004 contract: a world-readable token "
+            "file must surface a warning that names 'chmod' or 'mode' "
+            "so the operator sees the security consequence. Captured "
+            f"output: stdout={captured.out!r}, stderr={captured.err!r}."
+        )
+
+    def test_user_input_error_message_carries_flag_name(self, tmp_path):
+        """The ``flag_name`` kwarg threads into the error message so an
+        operator sees which flag's path was bad (``--hub-token-file``
+        vs a future spelling like ``--token-file``).
+        """
+        from backpropagate.cli import _read_hub_token_file
+        from backpropagate.exceptions import UserInputError
+
+        missing_path = tmp_path / "absent"
+
+        with pytest.raises(UserInputError) as exc_info:
+            _read_hub_token_file(str(missing_path), flag_name="--token-file")
+
+        message = str(exc_info.value)
+        assert "--token-file" in message, (
+            f"flag_name kwarg must surface in the error message so "
+            f"the operator sees which flag rejected the path; got "
+            f"{message!r}."
+        )
+
+
+# =============================================================================
 # F-001 push CLI TESTS
 # =============================================================================
 

@@ -17,23 +17,33 @@ trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ## Key API (Python)
-- `Trainer(model, lora_r=256, lora_alpha=32, learning_rate=2e-4, batch_size="auto", oom_recovery=True, unsloth_fallback=True, use_dora=False, packing=True, init_lora_weights="default", optim=None)` — v1.3 defaults bump `lora_r` from 16 to 256 (Biderman 2024 / Thinking Machines 2025) with all-linear target; pass `lora_preset="fast"` for the legacy rank-16 / q+v footprint. `packing=True` is the default; pass `packing=False` to opt out. `optim=None` auto-detects `"paged_adamw_8bit"` on RTX 40/50-series cards.
+- `Trainer(model, lora_r=256, lora_alpha=32, learning_rate=2e-4, batch_size="auto", oom_recovery=True, unsloth_fallback=True, use_dora=False, packing=True, init_lora_weights="default", optim=None, mode="lora")` — v1.3 defaults bump `lora_r` from 16 to 256 (Biderman 2024 / Thinking Machines 2025) with all-linear target; pass `lora_preset="fast"` for the legacy rank-16 / q+v footprint. `packing=True` is the default; pass `packing=False` to opt out. `optim=None` auto-detects `"paged_adamw_8bit"` on RTX 40/50-series cards. **v1.4** adds `mode="lora"|"full"` — `"full"` enables full fine-tuning for ≤3B models on consumer 16GB GPUs; >3B raises `RUNTIME_FULL_FT_MODEL_TOO_LARGE`.
 - `trainer.train(dataset, steps=100, samples=1000)` -> `TrainingRun` (has `run_id`)
 - `trainer.save(path)` -- save LoRA adapter
 - `trainer.export(format, quantization)` -- export to GGUF
+- `trainer.estimate_vram(mode="lora", lora_r=256, batch_size=2, max_seq_length=2048)` -- **v1.4** structured VRAM estimate returning `VRAMEstimate` (total_gb + per-consumer breakdown). Pre-flight a config before .train() to answer "will this OOM?"
 - `trainer.multi_run(dataset, num_runs=5, steps_per_run=100, merge_mode="slao")` -- multi-run SLAO; `RunResult.run_id` is the correlation token
 - `register_with_ollama(gguf_path, name)` -- register model with Ollama
 - `check_gpu_safe()` / `get_gpu_status()` / `GPUMonitor` -- GPU health monitoring
 - `BackpropagateError.to_dict()` -- structured envelope `{type, code, message, retryable, suggestion, details, cause}`
 
 ## Key CLI Commands
-- `backprop train --data <file> --model <name> --steps N [--lora-preset {quality,fast}] [--use-dora] [--no-packing] [--init-lora-weights {default,pissa,loftq}] [--optim <name>]`
-- `backprop multi-run --data <file> --runs N --steps N --samples N` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
+
+Root-parser flags (apply to every subcommand): `--verbose`, `--version`, `--log-level=DEBUG|INFO|WARNING|ERROR`, `--log-format=json|console`, `--log-file=<path>` (CLI flag wins over the `BACKPROPAGATE_LOG_LEVEL` / `BACKPROPAGATE_LOG_JSON` / `BACKPROPAGATE_LOG_FILE` env vars when both are set). v1.4.
+
+- `backprop train --data <file> --model <name> --steps N [--lora-preset {quality,fast}] [--use-dora] [--no-packing] [--init-lora-weights {default,pissa,loftq}] [--optim <name>] [--mode {lora,full}]` -- v1.4 adds `--mode=full` for ≤3B models
+- `backprop multi-run --data <file> --runs N --steps N --samples N [--mode {lora,full}]` (the underlying field is `samples_per_run`; the actual CLI flag is `--samples`)
 - `backprop diff-runs <run-a> <run-b> [--format json]` -- side-by-side diff of two completed runs
-- `backprop replay <run-id> [--override key=value]` -- re-run with the same config + dataset
+- `backprop replay <run-id> [--override key=value] [--json]` -- re-run with the same config + dataset; `--json` (v1.4) emits schema_version-tagged payload
 - `backprop export-runs --format jsonl` -- bulk export of run history for offline analytics
-- `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>`
-- `backprop info` -- system info and feature detection
+- `backprop validate <dataset> [--json]` -- pre-flight a JSONL dataset; `--json` (v1.4) emits schema_version-tagged payload
+- `backprop estimate-vram [<model>] [--vram-gb N] [--json]` -- VRAM tier-table preview (v1.3); pairs with the Python `Trainer.estimate_vram()` API
+- `backprop export <path> --format gguf --quantization q4_k_m --ollama --ollama-name <name>` -- one-shot export+register
+- `backprop ollama register <path> [--name <name>] [--modelfile <path>]` -- **v1.4** register an already-exported GGUF / LoRA adapter (nested subparser group matching upstream `ollama` CLI grammar)
+- `backprop ollama list` -- **v1.4** enumerate registered models
+- `backprop ollama rm <name>` -- **v1.4** unregister a model
+- `backprop push <path> --repo <user/name> [--token-file <path>] [--include-base] [--hub-revision <branch>] [--hub-commit-message <msg>]` -- push to HF Hub; v1.4 adds `--hub-revision` + `--hub-commit-message`
+- `backprop info [--json] [--subcommand-tiers] [--env-vars] [--error-codes]` -- system info / SUBCOMMAND_TIERS registry / env vars / error catalog. `--subcommand-tiers` is v1.4; `--json` payload v1.4 adds a `logging` block.
 - `backprop ui --port 7862 [--share --auth USER:PASS]` -- launch Reflex (Radix UI) web UI; `--share` (and `--host <non-loopback>`) require `--auth` as a hard error per v1.2.0 (GHSA-f65r-h4g3-3h9h); no env-var opt-out. v1.3 adds real `cloudflared`-based tunneling for `--share`
 - `backprop config` -- show resolved configuration
 
@@ -48,6 +58,7 @@ Every exception carries a code drawn from prefixes INPUT_/CONFIG_/DEP_/RUNTIME_/
 - DEP_MODEL_LOAD_FAILED (retryable), DEP_GPU_NOT_AVAILABLE, DEP_OLLAMA_REGISTRATION_FAILED (retryable)
 - RUNTIME_TRAINING_FAILED, RUNTIME_TRAINING_ABORTED, RUNTIME_EXPORT_FAILED, RUNTIME_LORA_EXPORT_FAILED, RUNTIME_GGUF_EXPORT_FAILED, RUNTIME_MERGE_EXPORT_FAILED
 - RUNTIME_GPU_ERROR, RUNTIME_GPU_OOM (auto-recovered when oom_recovery=True), RUNTIME_GPU_TEMPERATURE_CRITICAL (retryable), RUNTIME_GPU_MONITORING_FAILED
+- RUNTIME_FULL_FT_MODEL_TOO_LARGE (v1.4 — mode="full" requested for >3B model; recovery: mode="lora" or smaller preset)
 - RUNTIME_SLAO_ERROR, RUNTIME_SLAO_MERGE_FAILED, SLAO_MERGE_DIVERGED
 - PEFT_API_INCOMPATIBLE, UI_OUTPUT_DIR_FORBIDDEN
 - STATE_CHECKPOINT_INVALID, STATE_SLAO_CHECKPOINT_INVALID

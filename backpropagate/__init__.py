@@ -250,6 +250,7 @@ from .export import (
     list_ollama_models,
     push_to_hub,
     register_with_ollama,
+    remove_ollama_model,
     write_model_card,
 )
 from .feature_flags import (
@@ -553,6 +554,7 @@ __all__ = [
     "create_modelfile",
     "register_with_ollama",
     "list_ollama_models",
+    "remove_ollama_model",
     "push_to_hub",
     "write_model_card",
     "generate_model_card",

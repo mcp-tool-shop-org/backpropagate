@@ -110,8 +110,8 @@ export const config: SiteConfig = {
           desc: 'Single LoRA Continual Learning via Asymmetric Merging (arXiv:2512.23017) prevents catastrophic forgetting during extended fine-tuning campaigns via orthogonal init, asymmetric A/B handling, and time-aware scaling. Checkpoint-and-resume keeps long runs recoverable after crashes.',
         },
         {
-          title: 'LoRA + QLoRA + Unsloth',
-          desc: 'Supports LoRA, QLoRA (4-bit), and Unsloth-accelerated training. Mix quantization levels per layer. Export to GGUF at any quantization: q2_k, q4_k_m, q8_0, or f16.',
+          title: 'LoRA + QLoRA + full FT + Unsloth',
+          desc: 'Supports LoRA, QLoRA (4-bit), and (v1.4) full fine-tuning for ≤3B models on consumer 16GB GPUs. Unsloth-accelerated training. Mix quantization levels per layer. Export to GGUF at any quantization: q2_k, q4_k_m, q8_0, or f16.',
         },
       ],
     },

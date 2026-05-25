@@ -17,7 +17,10 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Handbook',
-          autogenerate: { directory: 'handbook' },
+          // Wave 6a.0 (v1.4): starlight 0.39 removed top-level `autogenerate`
+          // on sidebar groups; the autogenerate config now lives inside `items`.
+          // See [[astro-6-upgrade-gotchas]] doctrine (Sovereign repo 2026-05-19).
+          items: [{ autogenerate: { directory: 'handbook' } }],
         },
       ],
       customCss: ['./src/styles/starlight-custom.css'],

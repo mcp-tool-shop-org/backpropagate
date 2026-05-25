@@ -622,6 +622,209 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
     return _BackpropCallbackAdapter(user_callback)
 
 
+# =============================================================================
+# SHARED SFTCONFIG BUILDER (Wave 6a BACKEND-A-003 / A-004 — multi-run refactor)
+# =============================================================================
+# Pre-Wave-6a, ``MultiRunTrainer._execute_run`` built its own ``SFTConfig`` +
+# ``SFTTrainer`` inline (multi_run.py:1347), bypassing the v1.3 BACKEND-5 / 7
+# autodetection that ``Trainer.train()`` applied: consumer-card paged-optim
+# upgrade (``_detect_optim_for_card``) and Ada-class bf16/fp16 selection
+# (``_detect_optimal_dtype``). It also bypassed Unsloth's
+# ``train_on_responses_only`` masking despite the docstring claim. The Wave 6a
+# refactor extracts the SFTConfig assembly + the train_on_responses_only
+# application into shared module-level helpers so both call sites converge
+# on the same defaults. Single source of truth = anti-drift.
+#
+# Why module-level (not a static method on Trainer): MultiRunTrainer needs to
+# call this without instantiating a separate Trainer, and the static-method
+# form would put a hidden coupling on Trainer's MRO. Plain functions stay
+# easy to mock in tests too.
+
+
+def _build_sft_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    packing: bool = False,
+    # v1.4 BRIDGE-A-002 follow-up (Wave 6a): optional per-invocation
+    # optim override. When None the helper falls back to
+    # ``settings.training.optim`` (preserves the pre-Wave-6a env-var path
+    # for callers who don't supply the override). Both call sites (single
+    # run train() + multi-run _execute_run) now thread the Trainer's
+    # ``self.optim`` through so the per-invocation kwarg flows
+    # end-to-end.
+    optim: str | None = None,
+) -> Any:
+    """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
+
+    The helper resolves two GPU-dependent fields automatically so call sites
+    cannot drift apart:
+
+    * ``optim`` — via :meth:`Trainer._detect_optim_for_card`. Operators on
+      consumer cards (< 24GB VRAM) get ``paged_adamw_8bit`` automatically
+      (v1.3 BACKEND-5); explicit operator overrides on ``settings.training.optim``
+      are honored. The detector is a pure function of the configured value
+      so the resolution is stable across OOM retries.
+    * ``bf16`` / ``fp16`` — via :meth:`Trainer._detect_optimal_dtype`. Ada and
+      Hopper cards prefer bf16 over fp16 (v1.3 BACKEND-7); pre-Ampere cards
+      get fp16. Explicit operator override (``--fp16``) is honored.
+
+    Everything else is plumbed through unchanged. ``save_steps`` and
+    ``weight_decay`` are optional so multi-run can omit them — the SFTConfig
+    constructor's defaults then govern.
+
+    Parameters:
+        output_dir: Where SFTTrainer writes checkpoints.
+        per_device_train_batch_size: Per-device batch size.
+        gradient_accumulation_steps: Gradient accumulation.
+        max_steps: Maximum training steps.
+        learning_rate: Optimizer learning rate.
+        warmup_steps: Warmup steps (run-scoped in multi-run, session-scoped
+            in single-run).
+        max_seq_length: Maximum input sequence length.
+        seed: RNG seed. Multi-run passes ``settings.training.seed +
+            run_idx + oom_retries * 1000`` for per-retry shuffle reorder
+            (Stage C BACKEND-B-003); single-run passes the unmodified seed.
+        lr_scheduler_type: e.g. ``"cosine"``, ``"linear"``, ``"constant"``.
+        logging_steps: Logging cadence.
+        save_steps: Save cadence (optional). When None, the SFTConfig
+            default governs.
+        weight_decay: AdamW weight decay (optional). When None, the
+            SFTConfig default governs.
+        report_to: Pre-resolved report_to value (string, list, or ``"none"``).
+        run_name: W&B / experiment-tracker run name.
+        packing: Whether SFTTrainer should pack sequences.
+
+    Returns:
+        A configured ``SFTConfig`` instance.
+    """
+    from trl import SFTConfig
+
+    # v1.4 BRIDGE-A-002 follow-up (Wave 6a): honor the per-invocation
+    # ``optim`` override when supplied (forwarded by Trainer.train() /
+    # MultiRunTrainer._execute_run via the Trainer instance's ``self.optim``,
+    # which the constructor pre-resolved from operator kwarg OR
+    # ``settings.training.optim``). When ``optim`` is None we read
+    # ``settings.training.optim`` directly (pre-Wave-6a behavior preserved
+    # for callers that don't thread the per-invocation override).
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "overwrite_output_dir": True,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        # SFT-specific args (TRL 0.27+ moved these from SFTTrainer to SFTConfig)
+        "max_length": max_seq_length,
+        "packing": packing,
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    return SFTConfig(**kwargs)
+
+
+def _apply_train_on_responses_only(
+    sft_trainer: Any,
+    tokenizer: Any,
+    *,
+    enabled: bool,
+    use_unsloth: bool,
+    response_markers_override: tuple[str, str] | None = None,
+) -> tuple[Any, tuple[str, str] | None]:
+    """Apply Unsloth's ``train_on_responses_only`` masking to an SFTTrainer.
+
+    Returns ``(wrapped_trainer, resolved_markers)``. When the masking does
+    not apply (Windows / non-Unsloth path / disabled / Unsloth missing /
+    detection failed), the original ``sft_trainer`` is returned unchanged
+    and ``resolved_markers`` is ``None``.
+
+    Centralizes the v1.4 Wave 6a BACKEND-A-004 fix: pre-refactor, only
+    ``Trainer.train()`` applied this masking and ``MultiRunTrainer._execute_run``
+    silently skipped it (so multi-run users training on conversational data
+    got loss leakage onto the user prompt). Both call sites now share this
+    single application path so a future change to the masking surface stays
+    in lockstep.
+
+    Parameters:
+        sft_trainer: The freshly-constructed ``SFTTrainer`` to wrap.
+        tokenizer: The tokenizer (for marker auto-detection when the operator
+            did not supply ``response_markers_override``).
+        enabled: Operator's ``train_on_responses`` intent (typically
+            ``Trainer._train_on_responses``).
+        use_unsloth: Whether the underlying model load went through Unsloth
+            (the masker is an Unsloth utility; non-Unsloth runs cannot mask).
+        response_markers_override: Explicit ``(instruction_part, response_part)``
+            tuple, bypassing detection. None ⇒ auto-detect via
+            :func:`_detect_chat_markers`.
+    """
+    if not (use_unsloth and enabled):
+        return sft_trainer, None
+    if os.name == "nt":
+        logger.warning(
+            "train_on_responses_only disabled on Windows (multiprocessing issues) "
+            "- training will compute loss on full conversations including user prompts, "
+            "which may reduce fine-tuning quality"
+        )
+        return sft_trainer, None
+    try:
+        from unsloth.chat_templates import train_on_responses_only
+        # F-014: derive markers from the tokenizer's chat template so
+        # Llama 3 / Gemma / Qwen / ChatML all work; explicit operator
+        # override wins.
+        if response_markers_override is not None:
+            instruction_part, response_part = response_markers_override
+            logger.info(
+                f"train_on_responses_only: using operator override "
+                f"instruction={instruction_part!r} response={response_part!r}"
+            )
+        else:
+            instruction_part, response_part = _detect_chat_markers(tokenizer)
+        wrapped = train_on_responses_only(
+            sft_trainer,
+            instruction_part=instruction_part,
+            response_part=response_part,
+            num_proc=1,  # Single process to avoid Windows issues
+        )
+        logger.info("Applied train_on_responses_only optimization")
+        return wrapped, (instruction_part, response_part)
+    except ImportError:
+        logger.warning("train_on_responses_only not available in this Unsloth version")
+        return sft_trainer, None
+    except Exception as e:
+        logger.warning(f"Failed to apply train_on_responses_only: {e}")
+        return sft_trainer, None
+
+
 class Trainer:
     """
     Headless LLM fine-tuning trainer with smart defaults.
@@ -639,14 +842,16 @@ class Trainer:
             RUNTIME_OOM_RECOVERY_EXHAUSTED after 3 consecutive failures at
             batch=1 (the recovery loop ran out of options). When False, the
             first uncovered OOM surfaces as
-            ``TrainingError(code='RUNTIME_TRAINING_FAILED')`` — the original
-            ``torch.cuda.OutOfMemoryError`` is propagated through the
-            generic ``except RuntimeError`` catch-all and re-raised as a
-            structured ``TrainingError`` with the OOM as its ``__cause__``
-            (NOT as the ``RUNTIME_GPU_OOM`` code; that code exists in the
-            ERROR_CODES catalog but is not currently produced by any raise
-            site in the Python codebase). Set False to hard-fail on first
-            OOM with the structured-error envelope.
+            ``GPUMemoryError(code='RUNTIME_GPU_OOM')`` with the original
+            ``torch.cuda.OutOfMemoryError`` (or OOM-adjacent
+            ``RuntimeError``) chained as ``__cause__`` — Wave 6a Option A
+            activated this raise site so the documented
+            ``RUNTIME_GPU_OOM`` contract (README + handbook + cli.py
+            exit-code mapper + llms.txt) actually fires from the Python
+            codebase. Distinct from the recovery-exhausted path which
+            still raises ``TrainingError(code=
+            'RUNTIME_OOM_RECOVERY_EXHAUSTED')``. Set False to hard-fail
+            on first OOM with the structured-error envelope.
         unsloth_fallback: If True (default), fall back to
             AutoModelForCausalLM + get_peft_model when
             unsloth.FastLanguageModel.from_pretrained fails. Set False to
@@ -726,6 +931,27 @@ class Trainer:
         # short-circuit the probe — useful when the detection misfires on an
         # exotic model or when an operator wants to mask a custom turn label.
         response_markers: tuple[str, str] | None = None,
+        # v1.4 BRIDGE-A-002 follow-up (Wave 6a foundation): the five Wave 6b
+        # knobs were previously env-var-only via ``settings.lora.*`` /
+        # ``settings.data.*`` / ``settings.training.*``. The CLI handlers
+        # (cmd_train / cmd_multi_run / cmd_replay) all assembled a
+        # ``wave6b_candidate_kwargs`` dict and filtered via
+        # ``inspect.signature(Trainer.__init__)`` — which silently dropped
+        # every key because the constructor signature didn't name them. Now
+        # they are explicit constructor parameters with ``None`` defaults;
+        # when set they override the settings layer for THIS Trainer
+        # instance, when None the ``settings.lora.*`` / ``settings.data.*``
+        # / ``settings.training.*`` paths remain the source of truth
+        # (preserves v1.3 byte-identical behavior for callers who do not
+        # pass these kwargs). Note: ``lora_preset`` is stored for
+        # introspection / future overlay wiring — no consumer in trainer.py
+        # currently reads it, but threading the value preserves operator
+        # intent across the CLI introspection filter.
+        use_dora: bool | None = None,
+        packing: bool | None = None,
+        init_lora_weights: str | None = None,  # "default" | "pissa" | "loftq"
+        lora_preset: str | None = None,  # "fast" | "quality" — stored for future overlay wiring
+        optim: str | None = None,  # passthrough to TrainingArguments.optim (via _detect_optim_for_card)
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -824,6 +1050,50 @@ class Trainer:
         # multi-run trainer (and operator callers) can introspect.
         self.oom_recovery = oom_recovery
         self.unsloth_fallback = unsloth_fallback
+
+        # v1.4 BRIDGE-A-002 follow-up (Wave 6a foundation): resolve the five
+        # Wave 6b knobs from per-invocation kwarg (if not None) OR fall back
+        # to the settings layer (env-var path). Same ``is not None`` pattern
+        # as the load-bearing fields above so legitimate ``False`` /
+        # ``"default"`` values are not mis-treated as "unset". The mapping
+        # to settings paths is canonical:
+        #   * ``use_dora`` → ``settings.lora.use_dora`` (default False)
+        #   * ``packing`` → ``settings.data.packing`` (default True per
+        #     v1.3 BACKEND-4)
+        #   * ``init_lora_weights`` → ``settings.lora.init_lora_weights``
+        #     (default "default")
+        #   * ``optim`` → ``settings.training.optim`` (default
+        #     "adamw_8bit")
+        # ``lora_preset`` does NOT have a settings path today — there is no
+        # ``settings.lora.preset`` field; the preset shape (rank /
+        # target_modules / lr_mult) is applied via the
+        # ``LORA_PRESETS["fast"|"quality"]`` overlay at the call site
+        # (currently a future-wiring slot — see ``backpropagate/config.py``
+        # ``LORA_PRESETS`` + ``get_lora_preset``). The kwarg is stored on
+        # ``self.lora_preset`` so the CLI introspection filter passes it
+        # through, preserving operator intent for the overlay-wiring slot
+        # to consume in a follow-up. When None we default to "quality" to
+        # match the v1.3 BACKEND-1 default contract documented in
+        # ``LoRAConfig``.
+        self.use_dora = use_dora if use_dora is not None else settings.lora.use_dora
+        self.packing = packing if packing is not None else settings.data.packing
+        self.init_lora_weights = (
+            init_lora_weights
+            if init_lora_weights is not None
+            else settings.lora.init_lora_weights
+        )
+        self.lora_preset = lora_preset if lora_preset is not None else "quality"
+        # ``optim="auto"`` is a CLI sentinel meaning "let the trainer pick"
+        # (--optim accepts {auto, adamw_torch, paged_adamw_8bit, adamw_8bit}
+        # with default "auto"). Treat it as equivalent to None so the
+        # settings fallback fires and ``_detect_optim_for_card`` sees the
+        # actual configured default ("adamw_8bit") for the consumer-card
+        # paged-optim upgrade decision. Without this, "auto" would
+        # passthrough verbatim and TRL/HF would reject it.
+        if optim is not None and optim != "auto":
+            self.optim = optim
+        else:
+            self.optim = settings.training.optim
 
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
@@ -1307,13 +1577,17 @@ class Trainer:
         }
         # v1.3 BACKEND-3: forward use_dora only when True so we don't
         # tickle the kwarg on an older Unsloth that may not accept it.
-        if getattr(settings.lora, "use_dora", False):
+        # v1.4 BRIDGE-A-002 follow-up (Wave 6a): read from ``self.use_dora``
+        # which the constructor resolved to either the operator's
+        # per-invocation kwarg OR ``settings.lora.use_dora`` (env-var
+        # default). Same shape for ``self.init_lora_weights``.
+        if self.use_dora:
             lora_kwargs["use_dora"] = True
         # v1.3 BACKEND-6: forward init_lora_weights only when the
         # operator picked something other than the PEFT default. PEFT
         # accepts the string {"pissa", "loftq"} OR the bool True
         # (default-initialization). Map "default" -> True per the PEFT API.
-        _init_w = getattr(settings.lora, "init_lora_weights", "default")
+        _init_w = self.init_lora_weights
         if _init_w and _init_w != "default":
             lora_kwargs["init_lora_weights"] = _init_w
         try:
@@ -1387,9 +1661,12 @@ class Trainer:
             "bias": "none",
             "task_type": "CAUSAL_LM",
         }
-        if getattr(settings.lora, "use_dora", False):
+        # v1.4 BRIDGE-A-002 follow-up (Wave 6a): same instance-attr reads
+        # as the Unsloth branch so the constructor's settings-fallback
+        # resolution is honored uniformly across both load paths.
+        if self.use_dora:
             lora_kwargs["use_dora"] = True
-        _init_w = getattr(settings.lora, "init_lora_weights", "default")
+        _init_w = self.init_lora_weights
         if _init_w and _init_w != "default":
             # PEFT's init_lora_weights accepts {True, False, "gaussian",
             # "pissa", "loftq"}; the trainer's surface only exposes
@@ -1463,7 +1740,7 @@ class Trainer:
         """
         import time
 
-        from trl import SFTConfig, SFTTrainer
+        from trl import SFTTrainer
 
         # Validate inputs
         if steps is not None:
@@ -1626,39 +1903,34 @@ class Trainer:
         run_id = run_id_for_resume or uuid.uuid4().hex
         run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
 
-        # v1.3 BACKEND-5 / BACKEND-7: resolve optim + (bf16, fp16) for
-        # the actual card so consumer GPUs get the paged optimizer
-        # automatically and Ada cards prefer bf16 over fp16. The
-        # resolvers honor explicit operator overrides; only the
-        # documented defaults get auto-upgraded.
-        resolved_optim = self._detect_optim_for_card(settings.training.optim)
-        resolved_bf16, resolved_fp16 = self._detect_optimal_dtype(
-            settings.training.bf16, settings.training.fp16
-        )
-
-        # Training arguments (TRL 0.27+ uses SFTConfig)
-        training_args = SFTConfig(
+        # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: SFTConfig assembly
+        # is delegated to the module-level :func:`_build_sft_config` helper so
+        # the same defaults reach the MultiRunTrainer call site. The helper
+        # owns the consumer-card paged-optim upgrade + Ada bf16/fp16 selection;
+        # operator overrides on ``settings.training.*`` are honored.
+        training_args = _build_sft_config(
             output_dir=str(self.output_dir),
             per_device_train_batch_size=self.batch_size,
             gradient_accumulation_steps=self.gradient_accumulation,
             max_steps=steps or settings.training.max_steps,
             learning_rate=self.learning_rate,
-            weight_decay=settings.training.weight_decay,
             warmup_steps=settings.training.warmup_steps,
-            optim=resolved_optim,
+            max_seq_length=self.max_seq_length,
+            seed=settings.training.seed,
             lr_scheduler_type=settings.training.lr_scheduler_type,
             logging_steps=settings.training.logging_steps,
             save_steps=settings.training.save_steps,
-            bf16=resolved_bf16,
-            fp16=resolved_fp16,
-            seed=settings.training.seed,
-            overwrite_output_dir=True,
-            dataloader_num_workers=0 if os.name == "nt" else 4,
+            weight_decay=settings.training.weight_decay,
             report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
             run_name=run_name,
-            # SFT-specific args (moved from SFTTrainer in TRL 0.27+)
-            max_length=self.max_seq_length,
-            packing=settings.data.packing,
+            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the constructor-
+            # resolved instance attributes (per-invocation kwarg OR settings
+            # fallback) through to the helper. Pre-fix the helper read
+            # ``settings.data.packing`` / ``settings.training.optim`` directly,
+            # silently bypassing the per-invocation override path that the
+            # CLI introspection filter now passes through.
+            packing=self.packing,
+            optim=self.optim,
         )
 
         # F-003: build the HF-TrainerCallback bridge ONCE for this train()
@@ -1680,48 +1952,25 @@ class Trainer:
         )
 
         # Apply train_on_responses_only if using Unsloth (Phase 1.1 optimization)
-        # This focuses loss only on assistant responses, not user prompts
-        # NOTE: Disabled on Windows due to multiprocessing issues that can crash the system
+        # This focuses loss only on assistant responses, not user prompts.
+        #
+        # Wave 6a BACKEND-A-004: the application is delegated to the
+        # module-level :func:`_apply_train_on_responses_only` helper so the
+        # MultiRunTrainer call site picks up the same masking (pre-Wave-6a,
+        # the multi-run path silently skipped this step despite the docstring
+        # claim — loss leaked back onto the user prompt for multi-run users).
         #
         # F-014: track the resolved (instruction, response) marker pair so the
         # hyperparameters dict built further down can persist it into run
         # history (auditable post-mortem when a probe falls back to ChatML on
         # a non-ChatML tokenizer).
-        resolved_response_markers: tuple[str, str] | None = None
-        if self.use_unsloth and self._train_on_responses and os.name != "nt":
-            try:
-                from unsloth.chat_templates import train_on_responses_only
-                # F-014: derive markers from the tokenizer's chat template so
-                # Llama 3 / Gemma / Qwen / ChatML all work; explicit operator
-                # override wins. Pre-fix this hardcoded ChatML markers, which
-                # silently no-op'd on every non-Qwen-family tokenizer (loss
-                # then leaked back onto the user prompt — opposite of intent).
-                if self._response_markers_override is not None:
-                    instruction_part, response_part = self._response_markers_override
-                    logger.info(
-                        f"train_on_responses_only: using operator override "
-                        f"instruction={instruction_part!r} response={response_part!r}"
-                    )
-                else:
-                    instruction_part, response_part = _detect_chat_markers(self._tokenizer)
-                resolved_response_markers = (instruction_part, response_part)
-                self._trainer = train_on_responses_only(
-                    self._trainer,
-                    instruction_part=instruction_part,
-                    response_part=response_part,
-                    num_proc=1,  # Single process to avoid Windows issues
-                )
-                logger.info("Applied train_on_responses_only optimization")
-            except ImportError:
-                logger.warning("train_on_responses_only not available in this Unsloth version")
-            except Exception as e:
-                logger.warning(f"Failed to apply train_on_responses_only: {e}")
-        elif self._train_on_responses and os.name == "nt":
-            logger.warning(
-                "train_on_responses_only disabled on Windows (multiprocessing issues) "
-                "- training will compute loss on full conversations including user prompts, "
-                "which may reduce fine-tuning quality"
-            )
+        self._trainer, resolved_response_markers = _apply_train_on_responses_only(
+            self._trainer,
+            self._tokenizer,
+            enabled=self._train_on_responses,
+            use_unsloth=self.use_unsloth,
+            response_markers_override=self._response_markers_override,
+        )
 
         # Train
         # B-001: ``run_id`` (the UUID4 correlation token) was minted above
@@ -1793,32 +2042,33 @@ class Trainer:
                     # Re-create SFTTrainer with current batch / accum on retry.
                     # (The first iteration uses the trainer built above.)
                     if oom_retries > 0:
-                        training_args = SFTConfig(
+                        # Wave 6a BACKEND-A-003: re-build via the shared helper
+                        # so the OOM-retry path inherits the same paged/bf16
+                        # upgrades as the first attempt. The detectors are
+                        # pure functions of the configured value, so the
+                        # resolution is stable across retries.
+                        training_args = _build_sft_config(
                             output_dir=str(self.output_dir),
                             per_device_train_batch_size=self.batch_size,
                             gradient_accumulation_steps=self.gradient_accumulation,
                             max_steps=steps or settings.training.max_steps,
                             learning_rate=self.learning_rate,
-                            weight_decay=settings.training.weight_decay,
                             warmup_steps=settings.training.warmup_steps,
-                            # v1.3 BACKEND-5 / BACKEND-7: re-resolve per
-                            # retry so the OOM-recovery path inherits the
-                            # same paged/bf16 upgrades as the first attempt.
-                            # Pure functions of the configured value, so
-                            # the resolution is stable across retries.
-                            optim=resolved_optim,
+                            max_seq_length=self.max_seq_length,
+                            seed=settings.training.seed,
                             lr_scheduler_type=settings.training.lr_scheduler_type,
                             logging_steps=settings.training.logging_steps,
                             save_steps=settings.training.save_steps,
-                            bf16=resolved_bf16,
-                            fp16=resolved_fp16,
-                            seed=settings.training.seed,
-                            overwrite_output_dir=True,
-                            dataloader_num_workers=0 if os.name == "nt" else 4,
+                            weight_decay=settings.training.weight_decay,
                             report_to=report_to,  # F-005: same resolution on retry.
                             run_name=run_name,
-                            max_length=self.max_seq_length,
-                            packing=settings.data.packing,
+                            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): same
+                            # per-invocation threading as the first attempt
+                            # so the OOM-retry path inherits the operator's
+                            # ``packing`` / ``optim`` overrides instead of
+                            # silently reverting to the settings layer.
+                            packing=self.packing,
+                            optim=self.optim,
                         )
                         # F-003: rebuild the bridge for each OOM retry so the
                         # adapter is bound to the fresh SFTTrainer instance.
@@ -1902,7 +2152,35 @@ class Trainer:
                                 )
                                 break
 
-                    if not self.oom_recovery or not is_oom:
+                    if not self.oom_recovery and is_oom:
+                        # Wave 6a RUNTIME_GPU_OOM Option A: wrap the OOM at
+                        # the raise site so the documented contract holds
+                        # end-to-end (README + handbook + cli.py exit-code
+                        # mapper + llms.txt all promise this code; pre-Wave-6a
+                        # the raise site re-raised the bare RuntimeError and
+                        # the outer ``except RuntimeError`` handler around
+                        # line 2440 wrapped it as
+                        # ``TrainingError(code='RUNTIME_TRAINING_FAILED')``).
+                        # Operators with oom_recovery=False now see a
+                        # structured GPUMemoryError with the OOM as
+                        # ``__cause__``. Distinct from
+                        # RUNTIME_OOM_RECOVERY_EXHAUSTED (which fires on the
+                        # path that DID retry and ran out of options).
+                        from .exceptions import GPUMemoryError as _GPUMemErr
+
+                        raise _GPUMemErr(
+                            suggestion=(
+                                "OOM hit with oom_recovery=False — the trainer "
+                                "did not attempt batch_size halving. To survive "
+                                "transient spikes automatically, reconstruct "
+                                "the Trainer with oom_recovery=True (the "
+                                "default). For a permanent fix, reduce "
+                                "batch_size, enable gradient_checkpointing, "
+                                "shorten max_seq_length, or apply 4-bit / 8-bit "
+                                "quantization."
+                            ),
+                        ) from exc
+                    if not is_oom:
                         raise
 
                     # OOM-specific recovery.

@@ -107,6 +107,233 @@ class TestTrainerInit:
         assert trainer.batch_size == 2  # Safe default
 
 
+class TestTrainerWave6bKwargs:
+    """BRIDGE-A-002 follow-up (v1.4 Wave 6a): per-invocation Wave 6b knobs.
+
+    The five Wave 6b knobs (use_dora, packing, init_lora_weights,
+    lora_preset, optim) were previously env-var-only via settings.lora.* /
+    settings.data.* / settings.training.*. Wave 6a foundation declares
+    them as explicit Trainer.__init__ kwargs so the CLI introspection
+    filter (cmd_train / cmd_multi_run / cmd_replay) threads them through
+    to the constructor instead of silently dropping them.
+
+    Contract preservation: kwarg=None falls back to settings (pre-fix
+    byte-identical behavior); kwarg=value overrides settings.
+    """
+
+    def test_use_dora_explicit_override(self):
+        """Trainer(use_dora=True) sets self.use_dora True."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(use_dora=True)
+
+        assert trainer.use_dora is True
+
+    def test_use_dora_none_falls_back_to_settings(self):
+        """Trainer(use_dora=None) reads settings.lora.use_dora."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(use_dora=None)
+
+        # Settings default in v1.3 LoRAConfig is False.
+        assert trainer.use_dora == settings.lora.use_dora
+
+    def test_packing_explicit_override(self):
+        """Trainer(packing=False) sets self.packing False (overrides settings)."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(packing=False)
+
+        assert trainer.packing is False
+
+    def test_packing_none_falls_back_to_settings(self):
+        """Trainer(packing=None) reads settings.data.packing."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(packing=None)
+
+        # Settings default in v1.3 BACKEND-4 is True.
+        assert trainer.packing == settings.data.packing
+
+    def test_init_lora_weights_explicit_override(self):
+        """Trainer(init_lora_weights='pissa') threads the string through."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(init_lora_weights="pissa")
+
+        assert trainer.init_lora_weights == "pissa"
+
+    def test_init_lora_weights_none_falls_back_to_settings(self):
+        """Trainer(init_lora_weights=None) reads settings.lora.init_lora_weights."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(init_lora_weights=None)
+
+        assert trainer.init_lora_weights == settings.lora.init_lora_weights
+
+    def test_lora_preset_explicit_override(self):
+        """Trainer(lora_preset='fast') sets self.lora_preset='fast'."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(lora_preset="fast")
+
+        assert trainer.lora_preset == "fast"
+
+    def test_lora_preset_none_defaults_to_quality(self):
+        """Trainer(lora_preset=None) defaults to 'quality' (v1.3 BACKEND-1).
+
+        There is no ``settings.lora.preset`` field — the preset is a
+        future-overlay slot. None defaults to "quality" to match the v1.3
+        BACKEND-1 default contract (rank 256 + all-linear).
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(lora_preset=None)
+
+        assert trainer.lora_preset == "quality"
+
+    def test_optim_explicit_override(self):
+        """Trainer(optim='adamw_torch') threads the string through."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(optim="adamw_torch")
+
+        assert trainer.optim == "adamw_torch"
+
+    def test_optim_none_falls_back_to_settings(self):
+        """Trainer(optim=None) reads settings.training.optim."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(optim=None)
+
+        assert trainer.optim == settings.training.optim
+
+    def test_optim_auto_sentinel_falls_back_to_settings(self):
+        """Trainer(optim='auto') treats 'auto' as None-equivalent.
+
+        The CLI's --optim flag accepts 'auto' as a sentinel meaning
+        "let the trainer pick" (see cli.py:4983). The constructor maps
+        'auto' to the settings fallback so ``_detect_optim_for_card``
+        sees the actual configured default ('adamw_8bit') instead of
+        passing the literal 'auto' string to TRL/HF.
+        """
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(optim="auto")
+
+        assert trainer.optim == settings.training.optim
+
+    def test_all_five_wave6b_kwargs_introspectable(self):
+        """Trainer.__init__ signature names all 5 Wave 6b kwargs.
+
+        This is the LOAD-BEARING test for BRIDGE-A-002 follow-up — pre-fix
+        the introspection filter in cmd_train / cmd_multi_run / cmd_replay
+        silently dropped these keys because they were not in the
+        signature. The filter is correct; the constructor was the gap.
+        """
+        import inspect
+
+        from backpropagate.trainer import Trainer
+
+        sig = inspect.signature(Trainer.__init__)
+        params = set(sig.parameters)
+
+        for kwarg in ("use_dora", "packing", "init_lora_weights", "lora_preset", "optim"):
+            assert kwarg in params, (
+                f"Trainer.__init__ signature is missing Wave 6b kwarg "
+                f"{kwarg!r}. The CLI introspection filter at cmd_train "
+                f"(cli.py:644) / cmd_multi_run (cli.py:877) / cmd_replay "
+                f"(cli.py:4275) silently drops keys outside this signature."
+            )
+
+    def test_cmd_train_threads_use_dora_to_trainer(self):
+        """End-to-end: cmd_train --use-dora → Trainer(use_dora=True).
+
+        Verifies the CLI introspection filter at cmd_train correctly
+        passes the Wave 6b kwarg through to the Trainer constructor now
+        that the signature names it. Pre-fix, this kwarg was silently
+        dropped by the filter (the only path was the BACKPROPAGATE_LORA__
+        env var).
+        """
+        import argparse
+
+        from backpropagate.cli import cmd_train
+
+        # Build a Namespace that emulates argparse output for
+        # `backprop train --data dummy.jsonl --use-dora`.
+        args = argparse.Namespace(
+            data="dummy.jsonl",
+            model="test/model",
+            lora_r=16,
+            lr=2e-4,
+            batch_size="auto",
+            output="./output",
+            no_unsloth=True,
+            steps=1,
+            samples=1,
+            use_dora=True,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        # Capture the kwargs that the Trainer constructor receives so we
+        # can assert use_dora=True flowed through end-to-end. We DO NOT
+        # actually train — short-circuit by raising from the
+        # constructor capture so the CLI handler returns EXIT_RUNTIME_ERROR
+        # via the catch-all (cmd_train's try/except envelope).
+        captured: dict = {}
+
+        class _SentinelStop(Exception):
+            pass
+
+        def _capturing_trainer_init(self, *args, **kwargs):
+            captured.update(kwargs)
+            raise _SentinelStop("captured kwargs; halting test path")
+
+        # cmd_train imports Trainer via ``from .trainer import Trainer`` at
+        # the top of the function body, so the patch target is the canonical
+        # module path, not ``backpropagate.cli.Trainer``.
+        with patch("backpropagate.trainer.Trainer.__init__", _capturing_trainer_init), \
+             patch("torch.cuda.is_available", return_value=False):
+            # cmd_train catches all exceptions and returns an exit code; we
+            # don't care which because we only assert the captured kwargs.
+            try:
+                cmd_train(args)
+            except _SentinelStop:
+                # Defensive: the catch-all in cmd_train should swallow this,
+                # but if any wrapper bypasses it we still want the test to
+                # check captured kwargs.
+                pass
+
+        assert captured.get("use_dora") is True, (
+            f"cmd_train did not thread --use-dora through to Trainer "
+            f"constructor; captured kwargs were: {captured!r}. Pre-fix "
+            f"the introspection filter silently dropped this key because "
+            f"Trainer.__init__ did not name it."
+        )
+
+
 class TestTrainerWindowsFixes:
     """Tests for Windows-specific fixes."""
 
@@ -1487,12 +1714,16 @@ class TestReportToFeatureFlags:
 #
 # CHANGELOG.md L33 documents Trainer(oom_recovery=True) (default-on) that
 # halves batch_size and doubles gradient_accumulation_steps on
-# torch.cuda.OutOfMemoryError, and aborts after _OOM_MAX_RETRIES_AT_MIN_BATCH
-# consecutive failures at batch_size=1 with TrainingError(code='RUNTIME_GPU_OOM').
+# torch.cuda.OutOfMemoryError. Two distinct OOM paths surface structured codes:
+#   * oom_recovery=False (no retry attempted) — Wave 6a Option A wraps the OOM
+#     into GPUMemoryError(code='RUNTIME_GPU_OOM').
+#   * oom_recovery=True but recovery exhausts after _OOM_MAX_RETRIES_AT_MIN_BATCH
+#     consecutive failures at batch_size=1 — raises
+#     TrainingError(code='RUNTIME_OOM_RECOVERY_EXHAUSTED').
 #
 # These tests pin the load-bearing v1.1.0 contract by mocking SFTTrainer to
 # raise an OOM-shaped RuntimeError ("out of memory" — caught by the substring
-# check at trainer.py:1027-1028 because torch.cuda.OutOfMemoryError is hard
+# check at trainer.py:_is_oom because torch.cuda.OutOfMemoryError is hard
 # to instantiate without CUDA) on the first N .train() calls.
 
 
@@ -1589,7 +1820,12 @@ class TestOOMAutoRecovery:
         assert run is not None
 
     def test_oom_at_min_batch_aborts_with_runtime_gpu_oom(self, temp_dir):
-        """N consecutive OOMs at batch_size=1 => TrainingError RUNTIME_GPU_OOM."""
+        """N consecutive OOMs at batch_size=1 => TrainingError RUNTIME_OOM_RECOVERY_EXHAUSTED.
+
+        Test name kept for backwards compat with grep-by-name workflows; the
+        contract pinned here is the recovery-exhausted path (more specific
+        code than RUNTIME_GPU_OOM, which fires only on the no-retry path).
+        """
         from backpropagate.exceptions import TrainingError
         from backpropagate.trainer import Trainer
 
@@ -1631,17 +1867,19 @@ class TestOOMAutoRecovery:
         )
 
     def test_oom_recovery_false_reraises_immediately(self, temp_dir):
-        """oom_recovery=False => first OOM re-raises, no halving.
+        """oom_recovery=False => first OOM re-raises as GPUMemoryError.
 
-        Note on the wrapping: the OOM-shaped RuntimeError raised inside the
-        retry loop escapes that loop unchanged when oom_recovery=False (see
-        trainer.py:1030-1031), then the OUTER ``except RuntimeError`` handler
-        at trainer.py:1189 wraps it into a ``TrainingError`` with a "GPU
-        error during training" prefix because the message matches
-        "out of memory". The test pins both shapes — re-raise IS observable
-        as a TrainingError, but the orig RuntimeError is the ``__cause__``.
+        Wave 6a RUNTIME_GPU_OOM Option A: the OOM at the
+        ``oom_recovery=False`` branch is now wrapped into a structured
+        ``GPUMemoryError(code='RUNTIME_GPU_OOM')`` at trainer.py
+        (search for ``Wave 6a RUNTIME_GPU_OOM Option A``). The original
+        ``RuntimeError`` survives as ``__cause__``. Distinct from the
+        recovery-exhausted path which raises
+        ``TrainingError(code='RUNTIME_OOM_RECOVERY_EXHAUSTED')`` — that
+        only fires when oom_recovery=True AND the recovery loop ran out
+        of halve-batch options.
         """
-        from backpropagate.exceptions import TrainingError
+        from backpropagate.exceptions import GPUMemoryError
 
         trainer = self._setup_trainer(
             temp_dir, oom_recovery=False, initial_batch=4, initial_accum=1
@@ -1655,12 +1893,17 @@ class TestOOMAutoRecovery:
              patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
              patch("trl.SFTTrainer", side_effect=script.factory), \
              patch("trl.SFTConfig"), \
-             pytest.raises(TrainingError) as exc_info:
+             pytest.raises(GPUMemoryError) as exc_info:
             trainer.train("dummy_dataset", steps=10)
 
         # The original OOM RuntimeError is the cause; the recovery loop did
-        # not retry. (If recovery HAD run, we'd see code='RUNTIME_GPU_OOM'
-        # from the retries-exhausted path, not the generic "GPU error" prefix.)
+        # not retry. (If recovery HAD run AND exhausted, we'd see
+        # code='RUNTIME_OOM_RECOVERY_EXHAUSTED' on a TrainingError instead.)
+        assert getattr(exc_info.value, "code", None) == "RUNTIME_GPU_OOM", (
+            f"Expected GPUMemoryError(code='RUNTIME_GPU_OOM'); got "
+            f"code={getattr(exc_info.value, 'code', None)!r} "
+            f"message={exc_info.value!s}"
+        )
         assert isinstance(exc_info.value.__cause__, RuntimeError), (
             f"Expected __cause__ to be the original OOM RuntimeError; got "
             f"{type(exc_info.value.__cause__).__name__}"
@@ -2474,4 +2717,336 @@ class TestResumeFromStrictMiss:
             "mention `backprop runs` — the operator can't discover the "
             "recovery command from the error alone. "
             f"suggestion={suggestion!r}"
+        )
+
+
+# =============================================================================
+# WAVE 6A REFACTOR — SHARED SFTCONFIG BUILDER + RUNTIME_GPU_OOM OPTION A
+# =============================================================================
+#
+# These tests pin the four contracts closed in Wave 6a foundation:
+#
+#   BACKEND-A-003: shared ``_build_sft_config`` helper applies the v1.3
+#                  BACKEND-5 paged-optim autodetection + BACKEND-7 Ada
+#                  bf16/fp16 selection. Both call sites (Trainer.train and
+#                  MultiRunTrainer._execute_run) now share this helper so
+#                  cannot drift apart.
+#   BACKEND-A-004: shared ``_apply_train_on_responses_only`` helper
+#                  applies Unsloth's response-masking. Both call sites
+#                  now share the single application path.
+#   RUNTIME_GPU_OOM Option A: Trainer.train() oom_recovery=False on an OOM
+#                  raises GPUMemoryError(code='RUNTIME_GPU_OOM').
+#
+# The multi-run-specific BACKEND-B-002 (failed-run skips checkpoint save)
+# is tested separately in test_multi_run.py (the run loop fixture needed).
+
+
+class TestBuildSftConfigHelper:
+    """Pure-function tests of the shared ``_build_sft_config`` helper (Wave 6a
+    BACKEND-A-003)."""
+
+    def test_helper_threads_paged_optim_for_consumer_card(self):
+        """v1.3 BACKEND-5: < 24GB VRAM => paged_adamw_8bit auto-selected.
+
+        Pre-Wave-6a, multi_run.py:1347 hardcoded
+        ``optim=settings.training.optim`` and the detector never ran for
+        the multi-run path. The shared helper makes drift impossible.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        # Mock a 16GB consumer card (RTX 5080-class).
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.get_device_properties") as mock_props, \
+             patch("torch.cuda.get_device_capability", return_value=(12, 0)), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            mock_props.return_value.total_memory = 16 * 1024 ** 3
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["optim"] == "paged_adamw_8bit", (
+                f"BACKEND-A-003: 16GB consumer card should auto-upgrade "
+                f"optim to paged_adamw_8bit; got {kwargs['optim']!r}"
+            )
+
+    def test_helper_threads_bf16_on_ada(self):
+        """v1.3 BACKEND-7: Ampere+ (capability >= 8.0) => bf16=True, fp16=False.
+
+        Pre-Wave-6a, multi-run hardcoded ``bf16=settings.training.bf16``
+        ignoring the detector. The shared helper closes the drift.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        # Mock Ada (capability 8.9) — RTX 4090-class.
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.get_device_properties") as mock_props, \
+             patch("torch.cuda.get_device_capability", return_value=(8, 9)), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            mock_props.return_value.total_memory = 24 * 1024 ** 3
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["bf16"] is True, (
+                f"BACKEND-A-003: Ada (capability 8.9) should auto-select "
+                f"bf16; got bf16={kwargs['bf16']!r}"
+            )
+            assert kwargs["fp16"] is False, (
+                f"BACKEND-A-003: Ada should set fp16=False; got "
+                f"fp16={kwargs['fp16']!r}"
+            )
+
+    def test_helper_omits_optional_fields_when_none(self):
+        """save_steps + weight_decay are optional; omitted when None.
+
+        Multi-run's pre-Wave-6a inline build omitted these; the helper
+        preserves that observable behavior so the cross-site refactor is
+        equivalent on those fields.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+                # save_steps / weight_decay deliberately omitted
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert "save_steps" not in kwargs, (
+                "save_steps=None must be omitted so SFTConfig default "
+                "governs; the multi-run path depends on the omission."
+            )
+            assert "weight_decay" not in kwargs
+
+    def test_helper_includes_optional_fields_when_given(self):
+        """When the caller passes save_steps / weight_decay, they thread through."""
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+                save_steps=50,
+                weight_decay=0.01,
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["save_steps"] == 50
+            assert kwargs["weight_decay"] == 0.01
+
+
+class TestApplyTrainOnResponsesOnlyHelper:
+    """Pure-function tests of the shared
+    ``_apply_train_on_responses_only`` helper (Wave 6a BACKEND-A-004).
+    Multi-run users training on conversational data now get the same
+    response-masking the single-run path applied.
+    """
+
+    def test_helper_no_op_when_disabled(self):
+        """enabled=False => trainer returned unchanged, markers=None."""
+        from backpropagate.trainer import _apply_train_on_responses_only
+
+        sft_trainer = MagicMock(name="sft_trainer")
+        tokenizer = MagicMock()
+        wrapped, markers = _apply_train_on_responses_only(
+            sft_trainer,
+            tokenizer,
+            enabled=False,
+            use_unsloth=True,
+        )
+        assert wrapped is sft_trainer
+        assert markers is None
+
+    def test_helper_no_op_when_no_unsloth(self):
+        """use_unsloth=False => trainer returned unchanged, markers=None."""
+        from backpropagate.trainer import _apply_train_on_responses_only
+
+        sft_trainer = MagicMock(name="sft_trainer")
+        tokenizer = MagicMock()
+        wrapped, markers = _apply_train_on_responses_only(
+            sft_trainer,
+            tokenizer,
+            enabled=True,
+            use_unsloth=False,
+        )
+        assert wrapped is sft_trainer
+        assert markers is None
+
+    def test_helper_no_op_on_windows(self):
+        """os.name == 'nt' => trainer returned unchanged, markers=None.
+
+        Pre-Wave-6a, the Windows skip lived only in Trainer.train(); the
+        multi-run call site never invoked masking at all. The shared
+        helper centralizes the skip so both call sites observe the same
+        Windows behavior.
+        """
+        from backpropagate.trainer import _apply_train_on_responses_only
+
+        sft_trainer = MagicMock(name="sft_trainer")
+        tokenizer = MagicMock()
+        with patch("backpropagate.trainer.os.name", "nt"):
+            wrapped, markers = _apply_train_on_responses_only(
+                sft_trainer,
+                tokenizer,
+                enabled=True,
+                use_unsloth=True,
+            )
+        assert wrapped is sft_trainer
+        assert markers is None
+
+    def test_helper_applies_masking_when_all_conditions_met(self):
+        """Linux + Unsloth installed + enabled => masking applied + markers
+        recorded. Pre-Wave-6a, multi-run users never saw this branch fire.
+        """
+        from backpropagate.trainer import _apply_train_on_responses_only
+
+        sft_trainer = MagicMock(name="sft_trainer")
+        wrapped_trainer = MagicMock(name="wrapped_trainer")
+        tokenizer = MagicMock(name="tokenizer")
+
+        # Patch the Unsloth import to a controllable mock.
+        fake_unsloth_module = MagicMock()
+        fake_unsloth_module.train_on_responses_only = MagicMock(
+            return_value=wrapped_trainer
+        )
+        with patch("backpropagate.trainer.os.name", "posix"), \
+             patch.dict(
+                 "sys.modules",
+                 {"unsloth.chat_templates": fake_unsloth_module},
+             ):
+            wrapped, markers = _apply_train_on_responses_only(
+                sft_trainer,
+                tokenizer,
+                enabled=True,
+                use_unsloth=True,
+                response_markers_override=("USER>", "ASST>"),
+            )
+        assert wrapped is wrapped_trainer
+        assert markers == ("USER>", "ASST>")
+        fake_unsloth_module.train_on_responses_only.assert_called_once()
+
+
+class TestRuntimeGpuOomOptionA:
+    """Wave 6a RUNTIME_GPU_OOM Option A wrap on the Trainer.train() side:
+    oom_recovery=False on an OOM raises
+    GPUMemoryError(code='RUNTIME_GPU_OOM') instead of the generic
+    TrainingError(code='RUNTIME_TRAINING_FAILED') the outer except handler
+    used to produce. README + handbook + cli.py exit-code mapper + llms.txt
+    all promise this code; Option A makes the promise true.
+    """
+
+    def _setup_trainer(self, temp_dir, *, initial_batch=4, initial_accum=1):
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(
+                output_dir=str(temp_dir),
+                batch_size=initial_batch,
+                gradient_accumulation=initial_accum,
+                oom_recovery=False,  # Option A's relevant branch
+                use_unsloth=False,
+            )
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+        return trainer
+
+    def test_oom_recovery_false_raises_gpu_memory_error_with_correct_code(
+        self, temp_dir
+    ):
+        """oom_recovery=False + OOM => GPUMemoryError(code='RUNTIME_GPU_OOM').
+
+        Distinct from RUNTIME_OOM_RECOVERY_EXHAUSTED (which only fires on
+        the recovery-loop-ran-out-of-options path with oom_recovery=True).
+        """
+        from backpropagate.exceptions import GPUMemoryError
+
+        trainer = self._setup_trainer(temp_dir)
+        script = _OOMScript(oom_count=1)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"), \
+             pytest.raises(GPUMemoryError) as exc_info:
+            trainer.train("dummy_dataset", steps=10)
+
+        assert getattr(exc_info.value, "code", None) == "RUNTIME_GPU_OOM", (
+            "Wave 6a Option A: oom_recovery=False on an OOM must raise "
+            "GPUMemoryError carrying RUNTIME_GPU_OOM (the documented code). "
+            f"Got code={getattr(exc_info.value, 'code', None)!r}"
+        )
+        # __cause__ chain preserves the original RuntimeError for tracebacks.
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "out of memory" in str(exc_info.value.__cause__).lower()
+
+    def test_non_oom_exception_propagates_unchanged(self, temp_dir):
+        """Wave 6a Option A wrap MUST NOT touch non-OOM exceptions.
+
+        A generic RuntimeError that does NOT match the OOM matcher
+        propagates unchanged into the outer except RuntimeError handler
+        which wraps it as TrainingError(code='RUNTIME_TRAINING_FAILED').
+        Pre-Wave-6a behavior preserved for non-OOM paths.
+        """
+        from backpropagate.exceptions import GPUMemoryError, TrainingError
+
+        trainer = self._setup_trainer(temp_dir)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        # A non-OOM RuntimeError — message does NOT contain any OOM marker.
+        def raise_non_oom(*args, **kwargs):
+            instance = MagicMock()
+            instance.train.side_effect = RuntimeError("some other CUDA error, not OOM")
+            instance.state.log_history = []
+            return instance
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=raise_non_oom), \
+             patch("trl.SFTConfig"), \
+             pytest.raises(TrainingError) as exc_info:
+            trainer.train("dummy_dataset", steps=10)
+
+        # NOT wrapped as GPUMemoryError — non-OOM stays a TrainingError.
+        assert not isinstance(exc_info.value, GPUMemoryError), (
+            "Non-OOM RuntimeError must NOT be wrapped as GPUMemoryError "
+            "by Wave 6a Option A; only OOM-shaped errors are wrapped."
         )

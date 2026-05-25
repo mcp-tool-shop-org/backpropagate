@@ -156,6 +156,64 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  # CIDOCS-F-023 (v1.4 Wave 6a) — uv sync --frozen pilot.
+  #
+  # The main `test` matrix above installs deps via `pip install -e ".[dev,full]"`,
+  # ignoring uv.lock. This pilot job exercises `uv sync --frozen --extra dev
+  # --extra full` on Linux 3.11 (the most-tested cell) so a future migration
+  # of the full matrix has a green baseline to point at.
+  #
+  # The pilot is intentionally SOFT-GATED (continue-on-error: true) for the
+  # first rotation of v1.4.x patch releases — uv sync's --extra semantics
+  # differ from pip's bracket-extras, and a cross-platform `[tool.uv]`
+  # resolution marker may surface on macOS / Windows cells that this pilot
+  # doesn't exercise yet. Flip the gate to strict once we've confirmed
+  # the pilot is green across 3+ runs AND we're ready to migrate the full
+  # matrix off pip in a coordinated cutover.
+  #
+  # Per the baseline-before-enforce doctrine: a green soft pilot for one
+  # cycle, then a one-line gate flip, then the matrix migration. Never
+  # the gate flip + matrix migration in the same commit.
+  uv-sync-pilot:
+    name: uv sync pilot (Linux 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: uv sync --frozen --extra dev --extra full
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv --version
+          # --frozen: refuse to update the lockfile mid-CI (the lock is the
+          # source of truth for what got tested in this run; modifying it
+          # would invalidate the green signal).
+          # --extra dev --extra full: the same extras the pip install path
+          # ships, so the pilot test surface matches the main matrix.
+          uv sync --frozen --extra dev --extra full
+
+      - name: Run pytest (non-gpu / non-slow / non-integration)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Run inside the uv-managed venv. `uv run` activates the right
+          # interpreter without a manual `source .venv/bin/activate` step.
+          uv run pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
+
   # --- Security scanning (merged from security.yml) ---
 
   bandit:
@@ -193,11 +251,23 @@ jobs:
           sarif_file: bandit-results.sarif
           category: bandit
 
-      - name: Run Bandit (gating — MEDIUM severity / MEDIUM confidence and above)
+      - name: Run Bandit (gating — LOW severity / LOW confidence and above)
         # Emits BOTH the gating txt (failure surface) AND a JSON artifact for
         # post-mortem grep. --exit-zero on the JSON write keeps the file alive
         # even when the gating run goes red; the gating run itself is the
         # process-level non-zero that lights up the security-summary job.
+        #
+        # Severity contract (v1.4 Wave 6a doc-lie fix per CIDOCS-F /
+        # V1_4_BRIEF item 4): `-l -i` is Bandit shorthand for "fail on
+        # LOW severity AND LOW confidence and above" — i.e. the broadest
+        # floor short of `--exit-zero`. The step name + this comment
+        # used to say "MEDIUM/MEDIUM" which mismatched the flags and
+        # tripped Wave 5's within-swarm doc-lie sweep. Tightening the
+        # floor to MEDIUM/MEDIUM (`-ll -ii`) is a v1.5 candidate — the
+        # current v1.4 baseline is clean against LOW/LOW so the bar
+        # is real; bumping to MEDIUM/MEDIUM mid-swarm is a semantic
+        # shift that earns its own bake-in cycle. See WAVE_6A_TODO.md
+        # "V1_4_BRIEF item 4" for the deferral note.
         run: |
           set +e
           bandit -r backpropagate/ \
@@ -475,6 +545,54 @@ jobs:
       - name: Check package
         run: twine check dist/*
 
+      # CIDOCS-F-007 (v1.4 Wave 6a) — PyPI metadata end-to-end smoke.
+      # Twine's `twine check` validates the long-description rendering
+      # but does NOT verify that load-bearing PKG-INFO fields are present
+      # (License-Expression, Author, etc.). Wave 2 pinned hatchling@1.30.0
+      # after hatchling 1.31's License-Expression regression silently
+      # stripped the field; this step is the forcing function that
+      # would catch the next variant — a metadata-build regression in any
+      # backend gets flagged here before the wheel uploads to PyPI.
+      - name: PKG-INFO smoke (License-Expression + Author present)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDIST=$(ls dist/backpropagate-*.tar.gz | head -1)
+          if [ -z "${SDIST}" ]; then
+            echo "::error::No sdist found in dist/ — build step likely produced wheel-only."
+            exit 1
+          fi
+          # tar -t lists the archive contents; the PKG-INFO path is
+          # `<sdist-stem>/PKG-INFO`. Extract just that file to stdout.
+          PKGINFO=$(tar -xOf "${SDIST}" --wildcards '*/PKG-INFO' 2>/dev/null || true)
+          if [ -z "${PKGINFO}" ]; then
+            echo "::error::PKG-INFO not found inside ${SDIST}."
+            exit 1
+          fi
+          MISSING=()
+          # License-Expression is the PEP 639 modern shape (hatchling
+          # 1.27+, setuptools 78+). Match either it or the legacy
+          # ``License: ...`` so non-PEP-639 backends don't false-trip.
+          if ! echo "${PKGINFO}" | grep -qE '^(License-Expression|License):'; then
+            MISSING+=("License-Expression or License")
+          fi
+          if ! echo "${PKGINFO}" | grep -qE '^Author(-Email)?:'; then
+            MISSING+=("Author or Author-Email")
+          fi
+          if ! echo "${PKGINFO}" | grep -qE '^Name:\s*backpropagate\b'; then
+            MISSING+=("Name (== backpropagate)")
+          fi
+          if ! echo "${PKGINFO}" | grep -qE '^Version:'; then
+            MISSING+=("Version")
+          fi
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::PKG-INFO is missing load-bearing fields: ${MISSING[*]}"
+            echo "Full PKG-INFO follows ---"
+            echo "${PKGINFO}"
+            exit 1
+          fi
+          echo "PKG-INFO smoke: load-bearing fields present"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -483,18 +601,18 @@ jobs:
 
   # CIDOCS-F-003 — wire verify.sh into CI as an observability artifact.
   # Stage C added `verify.sh --format=json`; v1.3 CI consumes it here.
-  # The job stays SOFT-GATED (continue-on-error: true) for the first
-  # rotation of v1.3.x patch releases — operators need a chance to see
-  # the JSON output land in artifacts before a flaky stage starts gating
-  # PRs. Per the baseline-before-enforce doctrine, we flip the gate to
-  # strict in a follow-up patch once we've confirmed the JSON shape is
-  # stable across 3+ green runs.
+  # CIDOCS-F-006 (v1.4 Wave 6a) — gate flipped from soft (continue-on-error)
+  # to strict. The JSON shape has been stable across 5+ green runs (Wave 2 /
+  # Wave 3.5 / Stage C / Wave 5.5 / Wave 6a.0), so a verify-smoke failure
+  # now blocks the run. The soft-gate fallback at `tail -1 | python -c
+  # 'json.loads(...)'` is replaced by a strict `jq` parse — the JSON
+  # producer is deterministic enough to treat a parse error as a real
+  # failure surface, not noise.
   verify-smoke:
-    name: verify.sh smoke (advisory)
+    name: verify.sh smoke
     runs-on: ubuntu-latest
     needs: [test]
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -536,33 +654,33 @@ jobs:
             verify-*.log
           if-no-files-found: warn
 
-      - name: Gate on first_failed_stage
+      - name: Gate on first_failed_stage (strict)
         shell: bash
         run: |
           set -euo pipefail
-          # The final verify record in JSON mode carries .first_failed_stage
-          # as either null (pass) or a string naming the first failing
-          # stage. Pull the LAST line of verify.json (the aggregate record)
-          # and assert null.
-          # Soft-gate during v1.3.x bed-in: any parse failure becomes a
-          # warning, not a red X. Wave 6c will flip to strict once the
-          # JSON shape is confirmed stable across 3+ green runs.
+          # CIDOCS-F-006 (v1.4 Wave 6a) — strict gate. The final verify
+          # record in JSON mode carries .first_failed_stage as either
+          # null (pass) or a string naming the first failing stage. Pull
+          # the LAST line of verify.json (the aggregate record) and
+          # require it to be null. Any of:
+          #   - verify.json missing / empty
+          #   - last line fails jq parse
+          #   - first_failed_stage is a non-empty string
+          # fails the job. The JSON producer at verify.sh has been
+          # stable across 5+ green runs; treating a parse error as
+          # noise would mean a doc-lie banner ("strict") on a soft gate.
           if ! [ -s verify.json ]; then
-            echo "::warning::verify.json is empty — verify.sh produced no output. Soft-gated; exit 0 during v1.3.x bed-in."
-            exit 0
+            echo "::error::verify.json is empty or missing — verify.sh produced no output. Strict gate fails."
+            exit 1
           fi
-          # Pull the LAST line (aggregate record) and read
-          # first_failed_stage. Use jq instead of python so the JSON-parse
-          # error path returns "PARSE_ERROR" via shell fallback (cleaner
-          # YAML than a multi-line python heredoc).
-          PARSED=$(tail -1 verify.json | jq -r '.first_failed_stage // ""' 2>/dev/null || echo "PARSE_ERROR")
-          if [ "${PARSED}" = "PARSE_ERROR" ]; then
-            echo "::warning::verify.json last line did not parse as JSON. Soft-gated; exit 0 during v1.3.x bed-in. Check the verify-json artifact for raw output + verify.stderr.log for the cause."
-            exit 0
-          fi
+          # jq -e: non-zero exit on null result. Then we check the
+          # non-null result for being a non-empty string (= failure name).
+          # Capture the parsed value separately so a jq-internal error is
+          # distinguishable from "field is null."
+          PARSED=$(tail -1 verify.json | jq -r '.first_failed_stage // ""')
           if [ -n "${PARSED}" ]; then
-            echo "::warning::verify.sh first_failed_stage=${PARSED}. Soft-gated; exit 0 during v1.3.x bed-in. Download the verify-json artifact for the per-stage .log files."
-            exit 0
+            echo "::error::verify.sh failed at stage: ${PARSED}. Download the verify-json artifact for the per-stage .log files."
+            exit 1
           fi
           echo "verify.sh: all stages passed (first_failed_stage=null)"
 

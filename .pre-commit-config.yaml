@@ -117,6 +117,25 @@ repos:
         stages: [pre-push]  # Only on push (slower)
 
   # ==========================================================================
+  # DOC-DRIFT GATE (CIDOCS-F-010, v1.4 Wave 6a)
+  # ==========================================================================
+  # check_doc_drift.py is the within-swarm-doc-lie-drift-detection forcing
+  # function. Runs on pre-push (not pre-commit) because the 5-class
+  # extension walks the AST of cli.py + config.py + every workflow YAML —
+  # ~100ms total, which is comfortable on push but not on every commit.
+  # Stdlib-only, so no `additional_dependencies` block. Falls through to
+  # CI as a redundant safety net.
+  - repo: local
+    hooks:
+      - id: check-doc-drift
+        name: check-doc-drift (within-swarm doc-lie detector)
+        entry: python scripts/check_doc_drift.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true
+
+  # ==========================================================================
   # COMMIT MESSAGE VALIDATION
   # ==========================================================================
 

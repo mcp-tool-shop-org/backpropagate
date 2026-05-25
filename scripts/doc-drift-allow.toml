@@ -171,3 +171,52 @@ DatasetState = [
 RunsState = [
     "output_dir_override",
 ]
+
+# ---------------------------------------------------------------------------
+# Class 1 (argparse defaults vs handbook) — argparse ``default=None`` flags
+# whose handbook cell carries the runtime-resolved value from config.py.
+#
+# Pattern: argparse defaults to None so cli.py can detect "operator did not
+# pass this flag" and fall through to a config-sourced default. The handbook
+# documents the user-observable runtime default rather than the argparse
+# literal — which is the correct operator-facing contract. The drift gate
+# can't distinguish "intentional argparse-None fallthrough" from "stale
+# handbook string" without executing the runtime, so each instance earns
+# an allow-list entry with the config-side source.
+# ---------------------------------------------------------------------------
+[argparse_default_drift_allowlist]
+"--host" = "argparse default=None falls through to config.ui.host (default 127.0.0.1); handbook documents the runtime-resolved value"
+
+# ---------------------------------------------------------------------------
+# Class 4 (error-codes.md Fix-column refs) — references that intentionally
+# point at external surfaces (Python API, external env vars, future flags).
+# ---------------------------------------------------------------------------
+error_codes_doc_ref_grandfathered = [
+    # No grandfathered entries today — error-codes.md keeps recovery
+    # advice tied to existing knobs. Add an entry with a justification
+    # comment if a future code references something outside the drift
+    # gate's scope.
+]
+
+# ---------------------------------------------------------------------------
+# Class 2 (llms.txt env vars vs runtime) — llms.txt promises that are
+# intentionally read by a non-Python surface (e.g. a shell wrapper).
+# Empty today.
+# ---------------------------------------------------------------------------
+llms_txt_env_var_grandfathered = []
+
+# ---------------------------------------------------------------------------
+# Class 3 (env-vars.md defaults vs config.py) — env-vars.md cells whose
+# default representation intentionally differs from the config.py literal
+# (e.g. a translated unit, or a rendered enum vs a raw int constant).
+# Empty today.
+# ---------------------------------------------------------------------------
+[env_var_default_drift_allowlist]
+# Format: env_var_name = "justification". Empty today.
+
+# ---------------------------------------------------------------------------
+# Class 5 (workflow severity claims vs flag semantics) — substring-match
+# entries for known-OK severity claims (e.g. a comment that intentionally
+# documents a previous claim inside a "we fixed this" block).
+# ---------------------------------------------------------------------------
+workflow_severity_drift_allowlist = []

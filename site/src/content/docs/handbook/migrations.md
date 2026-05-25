@@ -7,6 +7,122 @@ sidebar:
 
 Operator-facing migration narratives. Each section covers one upgrade hop with breaking changes, behavioural fixes, and the recommended migration steps. For older transitions (v1.0 → v1.1, the Gradio → Reflex pivot) see the [v1.1.0 CHANGELOG section](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#110---2026-05-21).
 
+## v1.3 → v1.4
+
+A symbol-rename release. Two legacy names — `safe_gradio_handler` (a v1.0-era Gradio relic preserved through the v1.1.0 → Reflex migration) and `TRAINING_PRESETS` (which collided in name space with the v1.3 `LORA_PRESETS`) — were renamed to framework-agnostic and namespace-distinct canonical forms. **The legacy names continue to resolve** via module-level `__getattr__` shims; they emit a `DeprecationWarning` so downstream consumers get a migration nudge. Three-version deprecation cycle.
+
+### TL;DR
+
+- **`backpropagate.ui_security`** — the v1.0 Gradio-prefixed UI-error helpers (`safe_gradio_handler`, `raise_gradio_error`, `raise_gradio_warning`, `raise_gradio_info`, `RequestContext.from_gradio_request`) were renamed to `safe_ui_handler` / `raise_ui_error` / `raise_ui_warning` / `raise_ui_info` / `RequestContext.from_request`. The legacy names continue to import and emit `DeprecationWarning`.
+- **`backpropagate.config`** — `TRAINING_PRESETS` was renamed to `MULTI_RUN_PRESETS` to disambiguate from the v1.3-era `LORA_PRESETS` (LoRA-shape preset; CLI `--lora-preset`). Same shape: legacy name resolves with `DeprecationWarning`. **`LORA_PRESETS` was not touched** — it's the source of the user-facing `--lora-preset` flag values.
+- **Three-version deprecation cycle, both renames**:
+  - **v1.4** — `DeprecationWarning` (silent by default; visible under `python -W default` or pytest `-W default`).
+  - **v1.5** — escalates to `UserWarning` (visible to every Python process).
+  - **v1.6** — legacy names removed; access raises `AttributeError`.
+
+### Symbol rename 1 — `ui_security` Gradio→UI
+
+The `backpropagate/ui_security.py` module's UI-error helpers were authored against Gradio in v1.0 and kept their `gradio_` prefix through the v1.1.0 Reflex migration as a back-compat surface. v1.4 drops the prefix on the canonical names; the legacy names stay alive as aliases.
+
+| Legacy (v1.0 Gradio era) | Canonical (v1.4+) |
+|---|---|
+| `safe_gradio_handler` | `safe_ui_handler` |
+| `raise_gradio_error` | `raise_ui_error` |
+| `raise_gradio_warning` | `raise_ui_warning` |
+| `raise_gradio_info` | `raise_ui_info` |
+| `RequestContext.from_gradio_request` | `RequestContext.from_request` |
+| `DEFAULT_GRADIO_CSP` (v1.4 deprecated since Wave 2) | `DEFAULT_REFLEX_CSP` |
+| `get_gradio_csp` (v1.4 deprecated since Wave 2) | `get_reflex_csp` |
+
+**Migration:**
+
+```python
+# Old (v1.3) — emits DeprecationWarning since v1.4
+from backpropagate.ui_security import (
+    safe_gradio_handler,
+    raise_gradio_error,
+    RequestContext,
+)
+
+@safe_gradio_handler("train")
+def start_training(...): ...
+
+raise_gradio_error("dataset missing")
+ctx = RequestContext.from_gradio_request(request, operation="train")
+
+# New (v1.4+)
+from backpropagate.ui_security import (
+    safe_ui_handler,
+    raise_ui_error,
+    RequestContext,
+)
+
+@safe_ui_handler("train")
+def start_training(...): ...
+
+raise_ui_error("dataset missing")
+ctx = RequestContext.from_request(request, operation="train")
+```
+
+**`from backpropagate import safe_gradio_handler` is unchanged** — the package-level surface keeps `safe_gradio_handler` as a silent back-compat alias for `safe_ui_handler`. The `DeprecationWarning` fires only when importing the legacy name directly from `backpropagate.ui_security`. If you want to migrate cleanly, import the canonical name; if you don't care, the silent package-level alias keeps existing code working.
+
+**`DEFAULT_GRADIO_CSP` and `get_gradio_csp`** were already deprecated in v1.4 Wave 2 (FRONTEND-A-003) with an in-place `DeprecationWarning` shape — they pointed at `DEFAULT_REFLEX_CSP` / `get_reflex_csp` (introduced for the Reflex-tuned CSP middleware). Wave 6a's rename did NOT introduce a third `DEFAULT_UI_CSP` name — `DEFAULT_REFLEX_CSP` remains the canonical replacement because the production middleware shape is Reflex-specific (script-src `'unsafe-inline'` for the `__NEXT_DATA__` hydration block, drops Google Fonts since Reflex's stylesheet inlines Inter / JetBrains Mono, drops the Hugging Face origin since the UI never directly calls `huggingface.co` from the browser).
+
+### Symbol rename 2 — `TRAINING_PRESETS` → `MULTI_RUN_PRESETS`
+
+A Wave 5 audit (`WAVE_5_FEATURE_AUDIT_NOTES.md`) surfaced a namespace collision: the v1.0-era `TRAINING_PRESETS` table (multi-run loop hyperparameters — `num_runs`, `samples_per_run`, `replay_fraction`) and the v1.3-era `LORA_PRESETS` table (LoRA-architecture shape — `r`, `target_modules`, `lr_multiplier`) BOTH used the keys `"fast"` + `"quality"` with semantically different values. An operator reading "I want the `quality` preset" had no way to tell from the prose which namespace they were addressing — the [reference page → Training presets](/backpropagate/handbook/reference/#training-presets) carries a load-bearing disambiguator paragraph for this reason.
+
+v1.4 disambiguates the names: `TRAINING_PRESETS` → `MULTI_RUN_PRESETS`. `LORA_PRESETS` was **not touched** — it's the source of the user-facing `--lora-preset` flag values. The legacy `TRAINING_PRESETS` name continues to resolve from `backpropagate.config` via a module-level `__getattr__` shim and emits a `DeprecationWarning` pointing at the new name.
+
+**Migration:**
+
+```python
+# Old (v1.3) — emits DeprecationWarning since v1.4
+from backpropagate.config import TRAINING_PRESETS
+preset = TRAINING_PRESETS["balanced"]
+
+# New (v1.4+)
+from backpropagate.config import MULTI_RUN_PRESETS
+preset = MULTI_RUN_PRESETS["balanced"]
+
+# Either works at the package level (silent, no warning)
+from backpropagate import MULTI_RUN_PRESETS  # canonical
+from backpropagate import TRAINING_PRESETS   # back-compat alias
+```
+
+**`get_preset(name)`** is unchanged — it continues to work on whichever preset table is canonical, so `get_preset("balanced")` returns the same `TrainingPreset` value in v1.3 and v1.4+.
+
+### What did NOT change (v1.3 → v1.4)
+
+- **The `TrainingPreset` dataclass shape.** Field names, defaults, and the `effective_batch_size` property are byte-identical to v1.3.
+- **`LORA_PRESETS`** — the user-facing `--lora-preset {fast,quality}` flag values are untouched. v1.3's `LoRAPreset` dataclass + `get_lora_preset` helper continue unchanged.
+- **`safe_gradio_handler` from the top-level `backpropagate` package** still imports without warning. The rename surface is `backpropagate.ui_security`, not `backpropagate.__init__`.
+- **CSP middleware behavior.** `DEFAULT_REFLEX_CSP` + `get_reflex_csp` were already canonical from Wave 2; v1.4 Wave 6a did not change the production middleware's CSP shape.
+
+### Deprecation cycle (locked advisor 2026-05-25 Q4)
+
+| Version | Behavior |
+|---|---|
+| v1.4 | `DeprecationWarning` on legacy-name access (silent by default; visible under `-W default`). |
+| v1.5 | Escalates to `UserWarning` (visible to every Python process — harder to ignore). |
+| v1.6 | Legacy names removed entirely; access raises `AttributeError`. |
+
+If you need to silence the v1.4 warning in CI before migrating, the canonical pattern is:
+
+```python
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*is deprecated in v1.4.*",
+    category=DeprecationWarning,
+    module=r"backpropagate\.(ui_security|config)",
+)
+```
+
+But the friendlier path is migrating now while you have a soft fail — v1.5's `UserWarning` is harder to silence cleanly, and v1.6's hard `AttributeError` will fail tests outright.
+
+---
+
 ## v1.2.x → v1.3
 
 A polish + truth-in-advertising release. The big shift is that two CLI flags (`--host` and `--share`) that were silently no-ops since v1.1.0 are now actually wired to the runtime — so operators who *thought* they were binding to a network interface or publishing a public URL but never actually were will see different behaviour.

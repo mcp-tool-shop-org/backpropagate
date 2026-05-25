@@ -53,6 +53,8 @@ The full suite (`pytest tests/`) runs ~2000 tests in 30–60 seconds; the `not g
 
 The drift gate is load-bearing — it cross-checks env var names, CLI flag names, error codes, and a few specific value drifts across `backpropagate/**/*.py`, the handbook (`site/src/content/docs/handbook/*.md`), and `llms.txt`. If it fires, the message names which surface is out of sync. Per the v1.3 [[grep-all-instances-when-fixing-pattern]] doctrine, when you fix one drift instance, grep the rest of the repo for siblings — Wave 3.5 found 4 sibling drift sites across 5 handbook files via this approach.
 
+The drift gate also runs as a `pre-push` pre-commit hook (CIDOCS-F-010, v1.4 Wave 6a) — `pre-commit install` wires it up so `git push` fires the check locally before CI does. v1.4 Wave 6a extended the gate to a 5-class scanner (argparse defaults vs handbook copy; llms.txt env-var names vs runtime reads; env-vars.md defaults vs `config.py` source-of-truth; error-codes.md "Fix" column cross-references; CI workflow severity claims vs flag semantics) so the next within-swarm doc-lie gets caught at commit time rather than in Wave N+1 audit.
+
 ## Code Style
 
 We use the following tools to maintain code quality:

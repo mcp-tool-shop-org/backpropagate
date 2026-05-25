@@ -132,7 +132,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_DATA__CHAT_FORMAT` | `chatml` | Chat template (`chatml` / `llama` / `alpaca` / `sharegpt`). |
 | `BACKPROPAGATE_DATA__PRE_TOKENIZE` | `true` | Pre-tokenize before training (Windows-safe). |
 | `BACKPROPAGATE_DATA__SHUFFLE` | `true` | Shuffle the dataset. |
-| `BACKPROPAGATE_DATA__PACKING` | `false` | Combine short sequences. |
+| `BACKPROPAGATE_DATA__PACKING` | `true` | Combine short sequences via TRL sample packing. v1.3 default flipped from `false` to `true` per BACKEND-4 — 1.7-3× wall-clock throughput on SFT runs. Set to `false` to opt out (boundary-token leakage with exotic chat templates is the documented edge case). |
 
 ## Windows
 

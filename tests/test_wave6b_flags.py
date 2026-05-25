@@ -781,12 +781,18 @@ class TestCmdReplay:
         init_kwargs = mock_cls.call_args.kwargs
         # The override propagated all the way through; coerced to bool by
         # cmd_replay's _coerce helper. Pre-BRIDGE-B-001 this was None / missing.
-        assert init_kwargs.get("use_dora") is True, (
+        # v1.4 Wave 6a (BRIDGE-A-002 follow-up): the Wave 6b kwargs moved from
+        # direct MultiRunTrainer kwargs to MultiRunConfig fields, so the
+        # override now lives at init_kwargs["config"].use_dora rather than
+        # init_kwargs["use_dora"]. The threading is intact; the storage
+        # location moved one level down.
+        mr_config = init_kwargs.get("config")
+        assert mr_config is not None and getattr(mr_config, "use_dora", None) is True, (
             f"--override use_dora=true must reach the MultiRunTrainer "
-            f"constructor on a multi_run replay; got "
-            f"use_dora={init_kwargs.get('use_dora')!r} (recorded was False). "
-            f"BRIDGE-B-001 regression: the VAR_KEYWORD detection on the "
-            f"multi_run branch was lost or broken."
+            f"constructor via MultiRunConfig on a multi_run replay; got "
+            f"config.use_dora={getattr(mr_config, 'use_dora', None)!r} "
+            f"(recorded was False). BRIDGE-B-001 regression: the VAR_KEYWORD "
+            f"detection on the multi_run branch was lost or broken."
         )
 
 

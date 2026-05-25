@@ -25,6 +25,7 @@ from functools import lru_cache
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Any
 
 
 def _safe_pkg_version() -> str:
@@ -71,6 +72,15 @@ __all__ = [
     "MultiRunSettings",
     # Training presets (Phase 1.2)
     "TrainingPreset",
+    # v1.4 rename (Wave 6a, Wave 5 Decision 3): the multi-run-loop preset
+    # dict is canonically ``MULTI_RUN_PRESETS`` to disambiguate from the
+    # v1.3-era ``LORA_PRESETS`` (LoRA-architecture shape; CLI
+    # ``--lora-preset``). Both formerly shared the keys ``"fast"`` +
+    # ``"quality"`` with semantically different values. The legacy
+    # ``TRAINING_PRESETS`` name continues to resolve via module-level
+    # ``__getattr__`` + ``DeprecationWarning`` (v1.4) → ``UserWarning``
+    # (v1.5) → ``AttributeError`` (v1.6).
+    "MULTI_RUN_PRESETS",
     "TRAINING_PRESETS",
     "MODEL_PRESETS",
     "ModelPreset",
@@ -917,11 +927,12 @@ class TrainingPreset:
 # =============================================================================
 # LORA PRESETS (v1.3 BACKEND-1)
 # =============================================================================
-# Decoupled from TRAINING_PRESETS (which govern the training loop —
-# steps/runs/batch) so an operator can opt into "fast" LoRA shape (rank
-# 16 + q+v) without also pinning batch size or step count. The "fast"
-# preset reproduces the pre-v1.3 LoRAConfig defaults so anyone who
-# liked the speed-tilted behavior can opt in via ``--lora-preset=fast``.
+# Decoupled from MULTI_RUN_PRESETS (which govern the training loop —
+# steps/runs/batch; legacy name was TRAINING_PRESETS, see v1.4 rename)
+# so an operator can opt into "fast" LoRA shape (rank 16 + q+v) without
+# also pinning batch size or step count. The "fast" preset reproduces
+# the pre-v1.3 LoRAConfig defaults so anyone who liked the speed-tilted
+# behavior can opt in via ``--lora-preset=fast``.
 
 
 @dc_dataclass
@@ -1040,7 +1051,8 @@ class ModelPreset:
 
 # Research-backed catalog. New v1.3 presets land here (Phi-4-mini-3.8B,
 # Qwen-3.5-4B, SmolLM3-3B) alongside the existing v1.2 presets that the
-# TRAINING_PRESETS table referred to in prose.
+# MULTI_RUN_PRESETS table (legacy name: TRAINING_PRESETS) referred to in
+# prose.
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "qwen2.5-7b": ModelPreset(
         name="qwen2.5-7b",
@@ -1197,8 +1209,19 @@ def lookup_model_preset_by_id(model_id: str) -> ModelPreset | None:
     return None
 
 
-# Research-backed presets based on SLAO paper, Unsloth docs, and Databricks guide
-TRAINING_PRESETS = {
+# Research-backed presets based on SLAO paper, Unsloth docs, and Databricks
+# guide. Canonical name as of v1.4 is ``MULTI_RUN_PRESETS`` — these govern
+# the multi-run training LOOP (steps_per_run / num_runs / samples_per_run /
+# replay_fraction). The architecture-shape preset ``LORA_PRESETS`` (rank,
+# target_modules, lr_multiplier — surfaced via the CLI flag ``--lora-preset``)
+# lives just above and is INDEPENDENT: pick one of each.
+#
+# The two namespaces formerly shared the keys ``"fast"`` and ``"quality"``
+# with semantically different values, which surfaced as a Wave 5 audit
+# finding (operator-trap class). The legacy ``TRAINING_PRESETS`` name
+# continues to resolve via the module-level ``__getattr__`` shim at the
+# bottom of this file + emits a ``DeprecationWarning``.
+MULTI_RUN_PRESETS = {
     "fast-3b": TrainingPreset(
         name="fast-3b",
         description="Ultra-fast with Qwen2.5-3B (~6GB VRAM) for rapid iteration",
@@ -1258,7 +1281,13 @@ TRAINING_PRESETS = {
 
 def get_preset(name: str) -> TrainingPreset:
     """
-    Get a training preset by name.
+    Get a multi-run training preset by name.
+
+    The preset table was renamed from ``TRAINING_PRESETS`` to
+    ``MULTI_RUN_PRESETS`` in v1.4 to disambiguate from the v1.3-era
+    ``LORA_PRESETS`` (LoRA-shape preset). The legacy
+    ``backpropagate.config.TRAINING_PRESETS`` name continues to resolve
+    via module-level ``__getattr__`` + ``DeprecationWarning`` until v1.6.
 
     Args:
         name: Preset name ("fast", "balanced", or "quality")
@@ -1276,10 +1305,10 @@ def get_preset(name: str) -> TrainingPreset:
         ...     learning_rate=preset.learning_rate,
         ... )
     """
-    if name not in TRAINING_PRESETS:
-        available = ", ".join(TRAINING_PRESETS.keys())
+    if name not in MULTI_RUN_PRESETS:
+        available = ", ".join(MULTI_RUN_PRESETS.keys())
         raise ValueError(f"Unknown preset '{name}'. Available: {available}")
-    return TRAINING_PRESETS[name]
+    return MULTI_RUN_PRESETS[name]
 
 
 def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
@@ -1352,3 +1381,53 @@ def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:
         ratio = 0.05
 
     return max(1, int(num_steps * ratio))
+
+
+# =============================================================================
+# LEGACY ALIAS SHIM (v1.4 rename — Wave 6a foundation, Wave 5 Decision 3)
+# =============================================================================
+#
+# ``TRAINING_PRESETS`` was renamed to ``MULTI_RUN_PRESETS`` to disambiguate
+# from ``LORA_PRESETS`` (LoRA-shape preset, surfaced via the CLI flag
+# ``--lora-preset``). Both formerly shared the keys ``"fast"`` + ``"quality"``
+# with semantically different values — a Wave 5 audit finding flagged the
+# collision as an operator-trap class.
+#
+# Deprecation cycle (locked advisor 2026-05-25 Q4):
+#   v1.4 → DeprecationWarning (silent by default; visible under -W default)
+#   v1.5 → UserWarning (visible to every Python process)
+#   v1.6 → AttributeError (legacy name removed entirely)
+
+_LEGACY_CONFIG_ALIASES: dict[str, str] = {
+    "TRAINING_PRESETS": "MULTI_RUN_PRESETS",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Module-level legacy-alias resolver (PEP 562).
+
+    Resolves the legacy ``TRAINING_PRESETS`` name to its v1.4 canonical
+    ``MULTI_RUN_PRESETS`` form while emitting a ``DeprecationWarning`` at
+    the import / attribute-access site. ``stacklevel=2`` points the
+    warning at the caller, not this function.
+
+    Anything not in ``_LEGACY_CONFIG_ALIASES`` raises ``AttributeError``
+    per the PEP 562 contract so ``hasattr`` / ``getattr`` with a default
+    still work naturally.
+    """
+    if name in _LEGACY_CONFIG_ALIASES:
+        new_name = _LEGACY_CONFIG_ALIASES[name]
+        import warnings as _warnings
+
+        _warnings.warn(
+            f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
+            f"v1.5 escalates to UserWarning; v1.6 removes the legacy name. "
+            f"Note: this is the multi-run-loop preset table, NOT the "
+            f"LoRA-shape preset 'LORA_PRESETS' (surfaced via --lora-preset).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new_name]
+    raise AttributeError(
+        f"module 'backpropagate.config' has no attribute {name!r}"
+    )

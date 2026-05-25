@@ -75,7 +75,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import tomllib
+# tomllib is Python 3.11+ stdlib; fall back to tomli on 3.10 (tomli is a
+# transitive dep via multiple packages in uv.lock with marker
+# python_full_version < '3.11', so it's guaranteed available on 3.10).
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ImportError:  # Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef,import-not-found]
 
 REPO_ROOT = Path(__file__).parent.parent
 SOURCE_ROOT = REPO_ROOT / "backpropagate"

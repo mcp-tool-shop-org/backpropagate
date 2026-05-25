@@ -738,7 +738,12 @@ def _build_sft_config(
         "bf16": resolved_bf16,
         "fp16": resolved_fp16,
         "seed": seed,
-        "overwrite_output_dir": True,
+        # Note: `overwrite_output_dir` was removed in current trl (was a
+        # transformers.TrainingArguments inherited kwarg pre-trl 0.20+).
+        # SFTConfig in current trl raises TypeError if passed; the v1.3
+        # nightly-train-smoke caught this against the real trl install.
+        # The default behavior is preserved (output_dir overwrites on
+        # collision); we just drop the explicit kwarg.
         "dataloader_num_workers": 0 if os.name == "nt" else 4,
         "report_to": report_to,
         "run_name": run_name,

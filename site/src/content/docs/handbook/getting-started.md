@@ -111,7 +111,7 @@ A successful first training run prints something like:
 ```
 run_started run_id=8f3a2c1d-9e4b-4c5a-...
 Trainer initialized: Qwen/Qwen2.5-7B-Instruct
-  LoRA: r=16, alpha=32
+  LoRA: r=256, alpha=512
   Batch: 2, LR: 0.0002
   Degradation knobs: oom_recovery=True, unsloth_fallback=True
 Training: [####################] 100% loss=0.42  steps=10

@@ -182,6 +182,21 @@ Include:
 - Propose an API design
 - Consider backward compatibility
 
+## Repo labels
+
+The CI failure-observability path (`.github/workflows/nightly-train-smoke.yml`, `.github/workflows/post-publish-smoke.yml`, `.github/workflows/mutmut.yml`) opens GitHub Issues with labels when a smoke fails or a mutmut baseline rolls. GitHub requires those labels to exist on the repo before `gh issue create --label X` will apply them — otherwise the command silently no-ops and the issue is never created.
+
+To keep the path self-healing on a fresh repo, freshly-renamed label, or after a label is accidentally deleted, each issue-creation workflow runs `gh label create <name> --force` idempotently just before the `gh issue create` step. The labels currently auto-bootstrapped are:
+
+| Label | Used by | Color |
+|-------|---------|-------|
+| `ci` | All CI failure-observability workflows | `#0E8A16` (green) |
+| `nightly-smoke` | `nightly-train-smoke.yml` | `#FBCA04` (yellow) |
+| `post-publish-smoke` | `post-publish-smoke.yml` | `#FBCA04` (yellow) |
+| `mutmut-baseline` | `mutmut.yml` baseline-refresh PRs | `#FBCA04` (yellow) |
+
+If you want to retire one of these, drop the matching `gh label create` line from the bootstrap step in the workflow rather than relying on the label not existing on the repo.
+
 ## Questions?
 
 - For "how do I do X" / "is this the right pattern" / "did anyone hit this before" — use [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). The Q&A category is the canonical channel; accepted answers help the next person searching. Ideas + Show and Tell categories cover roadmap and community-built recipes.

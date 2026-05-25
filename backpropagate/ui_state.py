@@ -1505,6 +1505,18 @@ class RunDetailState(rx.State):
     loading: bool = False
     error: str = ""
     not_found: bool = False
+    # FRONTEND-B-001 (v1.4 Wave 3.5): a successful ``delete_run`` shell-out
+    # leaves the page showing data for a run that no longer exists on disk.
+    # Pre-fix the handler set ``not_found = True`` to suppress the stale
+    # body — but that latched the operator into the "Run not found" chrome
+    # (designed for unknown-id navigations), which misframed a successful
+    # operation as failure and stranded the success message in
+    # ``action_result``. ``was_deleted`` is a separate, deletion-specific
+    # surface so the template can render a "Run deleted." confirmation
+    # with a "Back to runs list" affordance instead of the not-found
+    # chrome. The template branches on ``was_deleted`` BEFORE
+    # ``not_found`` so a successful delete always wins.
+    was_deleted: bool = False
 
     # Header fields
     status: str = "-"
@@ -1594,6 +1606,11 @@ class RunDetailState(rx.State):
         self.loading = True
         self.error = ""
         self.not_found = False
+        # FRONTEND-B-001 (v1.4 Wave 3.5): clear the post-delete chrome
+        # when (re)loading any run — navigating from a just-deleted run's
+        # URL to a different run id must not carry the "Run deleted."
+        # surface forward.
+        self.was_deleted = False
         try:
             try:
                 from .ui_security import get_ui_output_dir
@@ -1829,7 +1846,15 @@ class RunDetailState(rx.State):
             if result.returncode == 0:
                 self.action_result = f"Run {self.current_run_id} deleted."
                 self.action_error = ""
-                self.not_found = True
+                # FRONTEND-B-001 (v1.4 Wave 3.5): a successful delete must
+                # render the "Run deleted." chrome with a Back-to-runs
+                # affordance, NOT the "Run not found" chrome. Setting
+                # ``not_found = True`` here pre-fix latched the page into
+                # the unknown-id surface and stranded ``action_result``
+                # behind a template that never displays it. The template
+                # in ``run_detail.py`` branches on ``was_deleted`` BEFORE
+                # ``not_found`` so the deletion confirmation wins.
+                self.was_deleted = True
             else:
                 self.action_error = (result.stderr or result.stdout)[:1000]
                 self.action_result = ""

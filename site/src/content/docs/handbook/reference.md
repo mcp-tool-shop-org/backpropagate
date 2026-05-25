@@ -87,7 +87,7 @@ See [Environment variables](/backpropagate/handbook/env-vars/) for the complete 
 
 ## Training presets
 
-Built-in presets for common scenarios:
+Built-in presets for common scenarios (these are `TRAINING_PRESETS` — multi-run loop hyperparameters; they predate the v1.3 `LORA_PRESETS` namespace which governs LoRA shape only and is referenced via `--lora-preset`):
 
 | Preset | LoRA r | Eff. Batch | LR | Runs | Use case |
 |--------|--------|-----------|-----|------|----------|
@@ -95,6 +95,8 @@ Built-in presets for common scenarios:
 | `fast` | 8 | 8 | 5e-4 | 3 | Quick testing with 7B models |
 | `balanced` | 16 | 16 | 2e-4 | 5 | Recommended default |
 | `quality` | 32 | 32 | 1e-4 | 10 | Maximum training effectiveness |
+
+> Note: `TRAINING_PRESETS["quality"]` (rank 32, above) is distinct from `LORA_PRESETS["quality"]` (rank 256 + all-linear + 10× LR, the v1.3 LoRA-shape default). The names collide for historical reasons; the v1.3 `--lora-preset=quality` / `--lora-preset=fast` flag controls LoRA shape only. See [CLI reference](/backpropagate/handbook/cli-reference/) for the LoRA preset table.
 
 ```python
 from backpropagate.config import get_preset

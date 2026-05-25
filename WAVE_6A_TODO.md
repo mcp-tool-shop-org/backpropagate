@@ -4,6 +4,9 @@
 - **BACKEND-A-003** — `multi_run.py:1314` `_execute_run` bypasses `Trainer.train()`'s v1.3 BACKEND-5/7 paged-optim + Ada bf16/fp16 autodetection. Wave 6a: refactor `multi_run._execute_run` to delegate to `Trainer.train()` OR extract shared SFTConfig builder, picking up both autodetection paths. Couples with `V1_4_BRIEF` item 8 `mode="full"`.
 - **BACKEND-A-004** — `multi_run.py:1314` same `_execute_run` never applies `train_on_responses_only` Unsloth masking despite docstring claim; multi-run users training on conversational data get full-conversation loss leakage. Fix via same refactor as A-003.
 
+## From Wave 3 backend (multi-run refactor coupling — added 2026-05-25)
+- **BACKEND-B-002** — `multi_run.py:1624` failed runs (`run_failed=True`) still flow through the checkpoint save + manifest registration path. Branch is gated on `self.config.save_every_run`, not on `not run_failed`. Resume may latch onto post-failure model state. Wave 6a: same refactor that delegates `_execute_run` to `Trainer.train()` (BACKEND-A-003) should gate save+register on `not run_failed`. Advisor lock 2026-05-25: coupled with the canonical multi-run refactor rather than a Wave 3.5 band-aid guard.
+
 ## From Wave 2 backend (RUNTIME_GPU_OOM contract drift)
 - **BACKEND-A-001 follow-up** — `exceptions.py` `RUNTIME_GPU_OOM` code in `ERROR_CODES` catalog + `GPUMemoryError` class are defined and exported but never raised by any Python raise site (confirmed via grep). The docstrings in `Trainer.__init__` and `MultiRunTrainer.__init__` were corrected in Wave 2 to match runtime (the OOM with `oom_recovery=False` surfaces as `TrainingError(code='RUNTIME_TRAINING_FAILED')` in single-run / records `run_failed=True` in multi-run). However:
   - `README.md` line 320 + 7 translations claim users will see `RUNTIME_GPU_OOM`

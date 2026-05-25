@@ -616,8 +616,26 @@ def cmd_train(args: argparse.Namespace) -> int:
         # five new flags AVAILABLE but inert until the backend lands —
         # matching the cross-domain handoff contract.
         import inspect as _inspect
+        # BRIDGE-B-001 (v1.4 Wave 3.5) doctrine ratchet —
+        # [[grep-all-instances-when-fixing-pattern]]: mirror the
+        # cmd_replay single_run VAR_KEYWORD detection (cli.py:3834-3843, landed
+        # Wave 2) so a MagicMock-patched Trainer advertising ``(*args, **kwargs)``
+        # doesn't get its Wave 6b override kwargs silently filtered out. Pre-fix
+        # the legacy ``in _trainer_sig_params`` membership test silently dropped
+        # every Wave 6b key against a non-spec MagicMock — the catch-all kwargs
+        # accept anything, so filtering is wrong in that case.
+        _has_var_keyword = False
         try:
-            _trainer_sig_params = set(_inspect.signature(Trainer.__init__).parameters)
+            _trainer_sig = _inspect.signature(Trainer.__init__)
+            _has_var_keyword = any(
+                p.kind == _inspect.Parameter.VAR_KEYWORD for p in _trainer_sig.parameters.values()
+            )
+            if _has_var_keyword:
+                # MagicMock-patched Trainer advertises (*args, **kwargs) — its
+                # catch-all kwargs accept anything; do NOT filter. Sentinel: None.
+                _trainer_sig_params = None
+            else:
+                _trainer_sig_params = set(_trainer_sig.parameters)
         except (TypeError, ValueError):
             # Test doubles that mock Trainer with a non-callable / opaque
             # MagicMock can't be introspected; degrade to "no Wave 6b
@@ -633,7 +651,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
-            if k in _trainer_sig_params
+            if _trainer_sig_params is None or k in _trainer_sig_params
         }
 
         # Create trainer
@@ -833,8 +851,27 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             _multi_cfg_fields = {f.name for f in _dc.fields(MultiRunConfig)}
         except (TypeError, ValueError):
             _multi_cfg_fields = set()
+        # BRIDGE-B-001 (v1.4 Wave 3.5) doctrine ratchet —
+        # [[grep-all-instances-when-fixing-pattern]]: mirror the
+        # cmd_replay single_run VAR_KEYWORD detection (cli.py:3834-3843, landed
+        # Wave 2) so a MagicMock-patched MultiRunTrainer advertising
+        # ``(*args, **kwargs)`` doesn't get its Wave 6b override kwargs silently
+        # filtered out. Same dataclass.fields() degradation logic preserved for
+        # the cfg side — ``dataclasses.fields`` raises TypeError on a
+        # MagicMock-patched MultiRunConfig (caught above), so empty-set is the
+        # right behavior there. Only the inspect-side needs the catch-all
+        # treatment.
         try:
-            _multi_trainer_params = set(_inspect.signature(MultiRunTrainer.__init__).parameters)
+            _multi_sig = _inspect.signature(MultiRunTrainer.__init__)
+            _multi_has_var_keyword = any(
+                p.kind == _inspect.Parameter.VAR_KEYWORD for p in _multi_sig.parameters.values()
+            )
+            if _multi_has_var_keyword:
+                # MagicMock-patched MultiRunTrainer advertises (*args, **kwargs) —
+                # its catch-all kwargs accept anything; do NOT filter.
+                _multi_trainer_params = None  # sentinel: skip filter
+            else:
+                _multi_trainer_params = set(_multi_sig.parameters)
         except (TypeError, ValueError):
             _multi_trainer_params = set()
         wave6b_candidate_kwargs: dict[str, Any] = {
@@ -850,7 +887,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         }
         wave6b_trainer_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
-            if k not in _multi_cfg_fields and k in _multi_trainer_params
+            if k not in _multi_cfg_fields and (_multi_trainer_params is None or k in _multi_trainer_params)
         }
 
         config = MultiRunConfig(
@@ -3766,8 +3803,33 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 _mr_cfg_fields = {f.name for f in _dc.fields(MultiRunConfig)}
             except (TypeError, ValueError):
                 _mr_cfg_fields = set()
+            # BRIDGE-B-001 (v1.4 Wave 3.5): mirror the single_run-branch VAR_KEYWORD
+            # detection (cli.py:3834-3843, landed Wave 2 coordinator-fix) on the
+            # multi_run replay path so a MagicMock-patched MultiRunTrainer that
+            # advertises ``(*args, **kwargs)`` doesn't get its Wave 6b override
+            # kwargs silently filtered out. Stage B finding flagged that this
+            # branch was the sibling-pattern instance — see Wave 3 advisor
+            # review for the locked [[grep-all-instances-when-fixing-pattern]]
+            # doctrine that made the audit catch the gap.
+            #
+            # ``_mr_cfg_fields`` from ``dataclasses.fields(MultiRunConfig)`` does
+            # NOT need the same fix because ``dataclasses.fields`` raises
+            # TypeError on a non-dataclass MagicMock (caught by the existing
+            # except above) — there's no inspect-level catch-all to be confused
+            # by, so empty-set degradation is the right behavior there.
             try:
-                _mr_trainer_params = set(_inspect.signature(MultiRunTrainer.__init__).parameters)
+                _mr_sig = _inspect.signature(MultiRunTrainer.__init__)
+                _mr_has_var_keyword = any(
+                    p.kind == _inspect.Parameter.VAR_KEYWORD for p in _mr_sig.parameters.values()
+                )
+                if _mr_has_var_keyword:
+                    # MagicMock-patched MultiRunTrainer advertises (*args, **kwargs) —
+                    # its catch-all kwargs accept anything; do NOT filter. Same
+                    # pattern as the single_run branch fix at line 3834 (Wave 2
+                    # coordinator post-amend).
+                    _mr_trainer_params = None  # sentinel: skip filter
+                else:
+                    _mr_trainer_params = set(_mr_sig.parameters)
             except (TypeError, ValueError):
                 _mr_trainer_params = set()
             mr_wave6b_candidate_kwargs: dict[str, Any] = {
@@ -3779,7 +3841,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
             }
             mr_wave6b_trainer_kwargs = {
                 k: v for k, v in mr_wave6b_candidate_kwargs.items()
-                if k not in _mr_cfg_fields and k in _mr_trainer_params
+                if k not in _mr_cfg_fields and (_mr_trainer_params is None or k in _mr_trainer_params)
             }
             mr_config_kwargs.update(mr_wave6b_cfg_kwargs)
             mr_config = MultiRunConfig(**mr_config_kwargs)

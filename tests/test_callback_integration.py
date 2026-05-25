@@ -27,14 +27,18 @@ class TestE2ETrainingCallbacks:
         """Test complete callback lifecycle during training."""
         callback, calls = mock_training_callback
 
-        # Simulate the callback invocations that would occur during training
-        if callback.on_step:
-            callback.on_step(1, 2.5)
-            callback.on_step(2, 2.3)
-            callback.on_step(3, 2.1)
+        # TESTS-B-002 (v1.4 Wave 3.5 amend): direct invocation — the
+        # `mock_training_callback` fixture constructs a TrainingCallback with
+        # on_step and on_complete already wired (see conftest.py). The prior
+        # `if callback.on_step:` / `if callback.on_complete:` guards were dead
+        # code that would silently pass with zero assertions if a regression
+        # made the fixture return a truthy no-op. Sibling-pattern fix of
+        # Wave 2 TESTS-A-004.
+        callback.on_step(1, 2.5)
+        callback.on_step(2, 2.3)
+        callback.on_step(3, 2.1)
 
-        if callback.on_complete:
-            callback.on_complete(MagicMock())
+        callback.on_complete(MagicMock())
 
         # Verify callbacks were invoked
         assert len(calls["step"]) == 3
@@ -47,9 +51,13 @@ class TestE2ETrainingCallbacks:
         callback, calls = mock_training_callback
 
         # Simulate error during training
+        # TESTS-B-002 (v1.4 Wave 3.5 amend): direct invocation — on_error is
+        # wired by the `mock_training_callback` fixture (see conftest.py).
+        # The prior `if callback.on_error:` guard was dead code that would
+        # silently pass with zero assertions if a regression made the fixture
+        # return a truthy no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
         error = RuntimeError("Training failed!")
-        if callback.on_error:
-            callback.on_error(error)
+        callback.on_error(error)
 
         assert len(calls["error"]) == 1
         assert calls["error"][0] is error
@@ -116,19 +124,24 @@ class TestE2EMultiRunCallbacks:
         )
 
         # Simulate the run sequence
+        # TESTS-B-002 (v1.4 Wave 3.5 amend): direct invocation — on_run_start,
+        # on_step, and on_run_complete are all wired by the
+        # `mock_multirun_callbacks` fixture (see conftest.py) and splatted into
+        # the MultiRunTrainer constructor via `**callbacks` above. The prior
+        # `if trainer.on_run_start:` / `if trainer.on_step:` /
+        # `if trainer.on_run_complete:` guards were dead code that would
+        # silently pass with zero assertions if a regression made any default
+        # a truthy no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
         for run_idx in range(3):
-            if trainer.on_run_start:
-                trainer.on_run_start(run_idx)
+            trainer.on_run_start(run_idx)
 
             for step in range(5):
-                if trainer.on_step:
-                    trainer.on_step(run_idx, step, 2.5 - step * 0.1)
+                trainer.on_step(run_idx, step, 2.5 - step * 0.1)
 
-            if trainer.on_run_complete:
-                result = MagicMock()
-                result.run_index = run_idx
-                result.final_loss = 2.0
-                trainer.on_run_complete(result)
+            result = MagicMock()
+            result.run_index = run_idx
+            result.final_loss = 2.0
+            trainer.on_run_complete(result)
 
         # Verify sequence
         assert calls["run_start"] == [0, 1, 2]

@@ -36,7 +36,9 @@ on:
         default: 'backpropagate/slao.py,backpropagate/checkpoints.py'
 
 permissions:
-  contents: read
+  contents: write          # CIDOCS-B-002 — push a baseline-refresh branch
+  pull-requests: write     # CIDOCS-B-002 — open the baseline-refresh PR
+  issues: write            # `gh pr create --label` requires label-write scope (labels are issue-scoped)
 
 jobs:
   mutmut:
@@ -100,6 +102,55 @@ jobs:
             exit 1
           fi
           echo "Within tolerance. Soft gate green."
+
+      - name: Ensure required labels exist
+        # CIDOCS-B-001 / CIDOCS-B-002 — labels MUST exist before `gh pr
+        # create --label` will apply them; otherwise the PR opens with the
+        # labels silently dropped. Bootstrap idempotently.
+        if: github.event_name == 'workflow_dispatch' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh label create "ci" --description "Continuous integration related issues" --color "0E8A16" --force 2>/dev/null || true
+          gh label create "mutmut-baseline" --description "Automated mutmut baseline refresh PRs" --color "FBCA04" --force 2>/dev/null || true
+
+      - name: Update baseline (if changed)
+        # CIDOCS-B-002 — the baseline file is currently written on the
+        # runner but never committed back; every fresh workflow_dispatch
+        # sees "no baseline" and silently records a new one without ever
+        # gating against a prior run. Fix: when the runner has a baseline
+        # file and it differs from main, open a small PR proposing the
+        # update. Human review keeps the gate honest (auto-merge would
+        # silently ratchet the bar to whatever the most recent run saw).
+        if: github.event_name == 'workflow_dispatch' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE_FILE: .github/mutmut-baseline.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$BASELINE_FILE" ]; then
+            echo "No baseline file written by the soft-gate step — nothing to refresh."
+            exit 0
+          fi
+          git fetch origin main --depth=1
+          if git diff --quiet "origin/main" -- "$BASELINE_FILE" 2>/dev/null; then
+            echo "Baseline unchanged vs origin/main — no PR needed."
+            exit 0
+          fi
+          BRANCH="ci/mutmut-baseline-$(date -u +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          git add "$BASELINE_FILE"
+          git -c user.name="mcp-tool-shop" \
+              -c user.email="64996768+mcp-tool-shop@users.noreply.github.com" \
+              commit -m "ci(mutmut): update baseline ($(date -u +%Y-%m-%d))"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "ci(mutmut): baseline update" \
+            --body "Automated baseline refresh from $GITHUB_WORKFLOW run #$GITHUB_RUN_NUMBER. Surviving mutation count delta should be reviewed before merge — the soft gate compares against the file on main, so merging this PR moves the bar." \
+            --label "ci" --label "mutmut-baseline" \
+            --base main --head "$BRANCH"
 
       - name: Upload mutmut artifacts
         if: always()

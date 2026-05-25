@@ -54,6 +54,19 @@ jobs:
         shell: bash
         run: python scripts/nightly_train_smoke.py
 
+      - name: Ensure required labels exist
+        # CIDOCS-B-001 — gh issue create silently no-ops if the labels
+        # don't exist on the repo. Bootstrap them idempotently before any
+        # issue-creation path so the failure-observability surface is
+        # actually reachable on a fresh repo / freshly-renamed label.
+        if: failure() && steps.smoke.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh label create "ci" --description "Continuous integration related issues" --color "0E8A16" --force 2>/dev/null || true
+          gh label create "nightly-smoke" --description "Issues from nightly train smoke test" --color "FBCA04" --force 2>/dev/null || true
+
       - name: Open issue on smoke failure
         if: failure() && steps.smoke.conclusion == 'failure'
         env:

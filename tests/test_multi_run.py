@@ -563,10 +563,13 @@ class TestMultiRunTrainerCallbacks:
             on_run_start=on_run_start,
         )
 
-        # Simulate callback being called
-        if trainer.on_run_start:
-            trainer.on_run_start(1)
-            trainer.on_run_start(2)
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_run_start
+        # was set explicitly above in the MultiRunTrainer constructor; the
+        # prior `if trainer.on_run_start:` guard was dead code that would
+        # silently pass with zero assertions if a regression made the default
+        # a truthy no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
+        trainer.on_run_start(1)
+        trainer.on_run_start(2)
 
         assert run_starts == [1, 2]
 
@@ -582,10 +585,13 @@ class TestMultiRunTrainerCallbacks:
             on_run_complete=on_run_complete,
         )
 
-        # Simulate callback being called
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_run_complete
+        # was set explicitly above in the MultiRunTrainer constructor; the
+        # prior `if trainer.on_run_complete:` guard was dead code that would
+        # silently pass with zero assertions if a regression made the default
+        # a truthy no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
         mock_result = RunResult(run_index=1, steps=100, samples=1000, final_loss=1.5)
-        if trainer.on_run_complete:
-            trainer.on_run_complete(mock_result)
+        trainer.on_run_complete(mock_result)
 
         assert len(completed_runs) == 1
         assert completed_runs[0].run_index == 1
@@ -602,10 +608,13 @@ class TestMultiRunTrainerCallbacks:
             on_gpu_status=on_gpu_status,
         )
 
-        # Simulate callback being called
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_gpu_status
+        # was set explicitly above in the MultiRunTrainer constructor; the
+        # prior `if trainer.on_gpu_status:` guard was dead code that would
+        # silently pass with zero assertions if a regression made the default
+        # a truthy no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
         mock_status = GPUStatus(available=True, temperature_c=70.0)
-        if trainer.on_gpu_status:
-            trainer.on_gpu_status(mock_status)
+        trainer.on_gpu_status(mock_status)
 
         assert len(status_updates) == 1
 
@@ -798,8 +807,13 @@ class TestMultiRunTrainerCallbackInvocation:
         )
 
         trainer._runs.append(mock_result)
-        if trainer.on_run_complete:
-            trainer.on_run_complete(mock_result)
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_run_complete
+        # was set explicitly via the `on_run_complete=on_complete` kwarg on the
+        # MultiRunTrainer constructor above; the prior
+        # `if trainer.on_run_complete:` guard was dead code that would silently
+        # pass with zero assertions if a regression made the default a truthy
+        # no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
+        trainer.on_run_complete(mock_result)
 
         assert len(completed_results) == 1
         assert completed_results[0].run_index == 1
@@ -818,9 +832,14 @@ class TestMultiRunTrainerCallbackInvocation:
         )
 
         # Simulate start callbacks
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_run_start
+        # was set explicitly via the `on_run_start=on_start` kwarg on the
+        # MultiRunTrainer constructor above; the prior
+        # `if trainer.on_run_start:` guard was dead code that would silently
+        # pass with zero assertions if a regression made the default a truthy
+        # no-op. Sibling-pattern fix of Wave 2 TESTS-A-004.
         for i in range(1, 4):
-            if trainer.on_run_start:
-                trainer.on_run_start(i)
+            trainer.on_run_start(i)
 
         assert started_runs == [1, 2, 3]
 
@@ -837,10 +856,15 @@ class TestMultiRunTrainerCallbackInvocation:
         )
 
         # Simulate step callback
-        if trainer.on_step:
-            trainer.on_step(1, 10, 1.25)
-            trainer.on_step(1, 20, 0.95)
-            trainer.on_step(2, 10, 0.82)
+        # TESTS-B-001 (v1.4 Wave 3.5 amend): direct invocation — on_step was
+        # set explicitly via the `on_step=on_step` kwarg on the MultiRunTrainer
+        # constructor above; the prior `if trainer.on_step:` guard was dead
+        # code that would silently pass with zero assertions if a regression
+        # made the default a truthy no-op. Sibling-pattern fix of Wave 2
+        # TESTS-A-004.
+        trainer.on_step(1, 10, 1.25)
+        trainer.on_step(1, 20, 0.95)
+        trainer.on_step(2, 10, 0.82)
 
         assert len(step_calls) == 3
         assert step_calls[0] == (1, 10, 1.25)

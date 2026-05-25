@@ -576,7 +576,12 @@ jobs:
           if ! echo "${PKGINFO}" | grep -qE '^(License-Expression|License):'; then
             MISSING+=("License-Expression or License")
           fi
-          if ! echo "${PKGINFO}" | grep -qE '^Author(-Email)?:'; then
+          # Hatchling emits `Author-email:` (lowercase 'e'); setuptools emits
+          # `Author:` separately. Match case-insensitively on the optional
+          # `-email` suffix to accept both shapes — the actual PKG-INFO from
+          # current hatchling has lowercase `Author-email:` which a
+          # case-sensitive `-Email` regex would silently miss.
+          if ! echo "${PKGINFO}" | grep -qiE '^Author(-Email)?:'; then
             MISSING+=("Author or Author-Email")
           fi
           if ! echo "${PKGINFO}" | grep -qE '^Name:\s*backpropagate\b'; then

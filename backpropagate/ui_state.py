@@ -718,6 +718,16 @@ class ExportState(rx.State):
     hub_status: str = ""  # "" / "pushing" / "done" / "error"
     hub_message: str = ""  # operator-facing status / error message
 
+    # FRONTEND-F-004 (v1.4 Wave 6b features): surface the two CLI flags that
+    # Wave 2 BRIDGE-A-004 added but the UI form was missing — ``--include-base``
+    # (push merged model with base weights, not just the LoRA adapter) and
+    # ``--token-file`` (read the HF token from a mode-0600 file instead of
+    # the inline ``--token`` argument). The token-file path is mutually
+    # exclusive with ``hub_token``; ``push_to_hub`` enforces the precedence.
+    hub_include_base: bool = False
+    hub_token_file_path: str = ""
+    hub_token_file_path_error: str = ""
+
     # ---- Validated path / name setters (FRONTEND-A-002) --------------------
 
     @rx.event
@@ -831,6 +841,39 @@ class ExportState(rx.State):
         self.hub_branch_error = ""
 
     @rx.event
+    def set_hub_include_base(self, value: bool) -> None:
+        """Toggle ``include_base`` — whether to push merged base weights too.
+
+        FRONTEND-F-004: mirrors the ``--include-base`` CLI flag. Default
+        (``False``) pushes the LoRA adapter only when the source directory
+        contains adapter files; ``True`` uploads every file in the
+        directory (including the base model if it's there).
+        """
+        self.hub_include_base = bool(value)
+
+    @rx.event
+    def set_hub_token_file_path(self, value: str) -> None:
+        """Validate the HF token-file path and stage it for the push.
+
+        FRONTEND-F-004: mirrors the ``--token-file`` CLI flag. The file is
+        not read here — only validated for shape (length / no traversal /
+        no nulls). ``push_to_hub`` reads the file at push time via the
+        existing ``_read_hub_token_file`` helper so the file-mode check
+        + POSIX-warning + empty-file error stay in one place.
+
+        Mutual exclusion with ``hub_token`` is enforced at push time
+        (the inline token wins the field-clear when both are set; the
+        push handler raises a structured error if both reach it).
+        """
+        if not value or not value.strip():
+            self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+            self.hub_token_file_path_error = ""  # nosec B105 — error-message sentinel, not a password
+            return
+        cleaned, err = _validate_ui_path(value)
+        self.hub_token_file_path = cleaned
+        self.hub_token_file_path_error = err
+
+    @rx.event
     def set_hub_token(self, value: str) -> None:
         """Set the HF API token.
 
@@ -880,13 +923,35 @@ class ExportState(rx.State):
             self.hub_status = "error"
             self.hub_message = "Set a valid HuggingFace repo id (<owner>/<repo>)."
             return
-        if not self.hub_token or self.hub_token_error:
+        # FRONTEND-F-004: mutual-exclusion + at-least-one check on the two
+        # token surfaces. Mirrors the CLI's `--token` vs `--token-file`
+        # contract in cmd_push (cli.py ~3411).
+        inline_token_set = bool(self.hub_token) and not self.hub_token_error
+        token_file_set = (
+            bool(self.hub_token_file_path) and not self.hub_token_file_path_error
+        )
+        if inline_token_set and token_file_set:
             self.hub_status = "error"
-            self.hub_message = "Set a valid HuggingFace API token."
+            self.hub_message = (
+                "Token and Token-file are mutually exclusive — clear one "
+                "before pushing. The token-file path is the safer floor "
+                "(mode 0600, not visible to spawned children)."
+            )
+            return
+        if not inline_token_set and not token_file_set:
+            self.hub_status = "error"
+            self.hub_message = (
+                "Set a valid HuggingFace API token (inline) or a token-file "
+                "path before pushing."
+            )
             return
         if self.hub_branch_error:
             self.hub_status = "error"
             self.hub_message = "Fix the branch field error before pushing."
+            return
+        if self.hub_token_file_path_error:
+            self.hub_status = "error"
+            self.hub_message = "Fix the Token-file path error before pushing."
             return
 
         self.hub_status = "pushing"
@@ -897,12 +962,27 @@ class ExportState(rx.State):
         try:
             from .export import push_to_hub as _push
 
+            # FRONTEND-F-004: resolve the token at push time. The
+            # token-file path is read via the shared CLI helper so the
+            # mode-0600 warning + empty-file error live in one spot.
+            resolved_token: str
+            if token_file_set:
+                from .cli import _read_hub_token_file
+
+                resolved_token = _read_hub_token_file(
+                    self.hub_token_file_path,
+                    flag_name="--token-file (UI)",
+                )
+            else:
+                resolved_token = self.hub_token
+
             _push(
                 local_path=self.source_model_path,
                 repo_id=self.hub_repo_id,
-                token=self.hub_token,
+                token=resolved_token,
                 private=bool(self.hub_private),
                 revision=(self.hub_branch or "main"),
+                include_base=bool(self.hub_include_base),
             )
             self.hub_status = "done"
             self.hub_message = (
@@ -911,6 +991,11 @@ class ExportState(rx.State):
             )
             # Clear token after successful push.
             self.hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            # FRONTEND-F-004: the token-file PATH itself is not a credential
+            # — it's a reference to a file the operator manages outside
+            # the UI session. Leaving it in state is intentional so a
+            # second push (e.g. after a transient HF outage) doesn't
+            # require re-typing the path.
         except Exception as exc:  # noqa: BLE001 — operator-facing string
             # Sanitize the error so HF token / operator paths don't leak.
             try:
@@ -969,6 +1054,12 @@ class DatasetState(rx.State):
 
     record_count: int = 0
     dedup_hits: int = 0
+    # FRONTEND-F-005 (v1.4 Wave 6b features): plumb the Stats-grid value
+    # that dataset.py was hardcoding as '—'. The figure comes from
+    # ``backpropagate.datasets.get_dataset_stats`` during the upload
+    # handler — same computation the CLI emits, just thread it to the UI
+    # state so the grid doesn't drift from the backend truth.
+    avg_tokens: int = 0
 
     # Per-session upload cap. Reflex state is per-WebSocket-connection so this
     # is effectively per-tab; an unauthenticated abuser can still open many
@@ -1160,6 +1251,64 @@ class DatasetState(rx.State):
             target.write_bytes(data)
             self.uploaded_path = str(target)
             self.upload_count += 1
+
+            # FRONTEND-F-005 (v1.4 Wave 6b features): compute dataset stats
+            # via the canonical backend API + thread them into state so the
+            # Stats grid (record_count / avg_tokens / dedup_hits) and the
+            # Format badge bind to live values rather than hardcoded '—'
+            # placeholders. The computation matches what
+            # `backprop validate-dataset` emits, so UI + CLI stay in
+            # lockstep. Failure here is non-fatal — the file is already
+            # persisted; we just leave the Stats grid empty and surface a
+            # one-line note inside the same upload_error channel.
+            try:
+                import json as _json
+
+                from .datasets import (
+                    DatasetFormat,
+                    _detect_format_from_file,
+                    get_dataset_stats,
+                )
+
+                samples: list[dict | str] = []
+                suffix = target.suffix.lower()
+                if suffix == ".jsonl":
+                    with target.open(encoding="utf-8") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    samples.append(_json.loads(line))
+                                except _json.JSONDecodeError:
+                                    # Skip malformed lines in stats —
+                                    # the strict validate-dataset
+                                    # surface catches these.
+                                    continue
+                elif suffix == ".json":
+                    with target.open(encoding="utf-8") as fh:
+                        parsed = _json.load(fh)
+                        if isinstance(parsed, list):
+                            samples = parsed
+                        else:
+                            samples = [parsed]
+                # Other extensions: leave samples empty → stats render 0s.
+
+                detected = _detect_format_from_file(target)
+                stats = get_dataset_stats(samples, format_type=detected)
+                self.record_count = int(stats.total_samples)
+                # avg_tokens_per_sample is float; round to int for the
+                # 4-size big-number cell. Sub-token resolution isn't
+                # operator-useful at this glance-level.
+                self.avg_tokens = int(round(stats.avg_tokens_per_sample))
+                if detected != DatasetFormat.UNKNOWN:
+                    # Map enum to a short human badge — the Format group
+                    # already binds ``detected_format`` and is None-safe.
+                    self.detected_format = str(detected.value).capitalize()
+            except Exception:  # noqa: BLE001  # nosec B110 — stats are advisory, never block upload
+                # Leave the grid empty rather than raising. The upload
+                # itself succeeded; a stats failure shouldn't surface as
+                # an upload error.
+                pass
 
         self.upload_error = ""
 

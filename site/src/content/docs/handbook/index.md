@@ -11,11 +11,13 @@ Welcome to the Backpropagate handbook. This is the complete operator guide — e
 
 - **[Getting Started](/backpropagate/handbook/getting-started/)** — Install and train your first model in under 5 minutes
 - **[Training](/backpropagate/handbook/training/)** — Basic training, multi-run SLAO, callbacks, dataset formats, and model presets
+- **[Full fine-tuning (`mode="full"`)](/backpropagate/handbook/full-fine-tuning/)** — v1.4 — when to use full FT, the 3B parameter ceiling, and the LoRA-vs-full quality math
 - **[Export](/backpropagate/handbook/export/)** — GGUF export, Ollama registration, quantization options, and custom Modelfiles
 - **[Recipes](/backpropagate/handbook/recipes/)** — Common operator workflows — paste-and-run snippets keyed by what you actually want to do
 - **[Reference](/backpropagate/handbook/reference/)** — Architecture, CLI overview, GPU safety, checkpoints, Windows support, error handling, and bug-reporting
 - **[Security](/backpropagate/handbook/security/)** — Threat model, GHSA-f65r-h4g3-3h9h auth middleware closure, deployment patterns, and vulnerability reporting
 - **[Error codes](/backpropagate/handbook/error-codes/)** — Catalog of every structured `BackpropagateError.code` with meaning and recommended fix
+- **[VRAM estimator](/backpropagate/handbook/estimate-vram/)** — v1.4 — `Trainer.estimate_vram()` + `backprop estimate-vram` for pre-flight VRAM sizing
 - **[Troubleshooting](/backpropagate/handbook/troubleshooting/)** — Symptoms-first reverse index for first-run failures
 - **[Troubleshooting (CUDA)](/backpropagate/handbook/troubleshooting-cuda/)** — Deep-dive on OOM, CUBLAS, NCCL, mixed-precision pitfalls, driver mismatch
 - **[Environment variables](/backpropagate/handbook/env-vars/)** — Every `BACKPROPAGATE_*` knob, grouped by family

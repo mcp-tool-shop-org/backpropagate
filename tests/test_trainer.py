@@ -1158,6 +1158,218 @@ class TestTrainerSaveMerged:
             trainer._model.save_pretrained.assert_called_once()
             trainer._tokenizer.save_pretrained.assert_called_once()
 
+    # =========================================================================
+    # TESTS-F-001 (v1.4 Wave 6b): pin the Stage C BACKEND-B-001 "save_merged
+    # silently downgraded to LoRA-only" warning. Pre-fix, an operator who
+    # explicitly asked for merged weights while training without Unsloth got
+    # a LoRA adapter on disk with NO diagnostic — the mismatch surfaced at
+    # inference time. The fix added a structured WARN at trainer.py:2796
+    # naming WHY (transformers Trainer can't do an in-place merge) and TWO
+    # concrete migration paths (re-train with Unsloth, OR `backprop export
+    # ... --format merged` post-save).
+    #
+    # This test pins the warning fires when the gate condition is met
+    # (save_merged=True AND use_unsloth=False). Without it, a future
+    # refactor could delete the warning and the silent-downgrade footgun
+    # would return invisibly.
+    # =========================================================================
+
+    def test_save_merged_with_no_unsloth_emits_warning(self, temp_dir, caplog):
+        """Stage C BACKEND-B-001: save_merged=True + use_unsloth=False must
+        emit a structured WARN naming the silent merged->LoRA downgrade.
+
+        The gate condition is (save_merged=True AND use_unsloth=False); the
+        warning text must reference both knobs so the operator can locate
+        the migration paths trainer.py:2796 names. Pre-fix this was a
+        silent downgrade — the operator saw a successful save and didn't
+        know merged weights had been quietly skipped.
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir), use_unsloth=False)
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+            # Bypass the untrained-save tripwire (covered separately by
+            # TESTS-F-002) so this test isolates the BACKEND-B-001 surface.
+            trainer._has_trained = True
+            # use_unsloth flag must be False for the gate condition.
+            trainer.use_unsloth = False
+
+            with caplog.at_level("WARNING", logger="backpropagate.trainer"):
+                trainer.save(save_merged=True)
+
+            matched = [
+                r for r in caplog.records
+                if "save_merged" in r.getMessage()
+                and "use_unsloth" in r.getMessage()
+            ]
+            assert matched, (
+                "Stage C BACKEND-B-001 regression: save(save_merged=True) "
+                "with use_unsloth=False must emit a WARNING that names both "
+                "knobs (save_merged + use_unsloth) so the operator can locate "
+                "the migration paths. Captured WARNING records: "
+                f"{[r.getMessage() for r in caplog.records if r.levelname == 'WARNING']!r}"
+            )
+            # The warning lives at WARNING severity (not INFO/DEBUG).
+            assert all(r.levelname == "WARNING" for r in matched), (
+                f"BACKEND-B-001 warning must be at WARNING level; got "
+                f"levels: {[r.levelname for r in matched]!r}"
+            )
+
+    def test_save_merged_with_unsloth_does_not_emit_b001_warning(self, temp_dir, caplog):
+        """The gate condition is AND-coupled — Unsloth + save_merged is the
+        SUPPORTED path and must NOT emit the BACKEND-B-001 downgrade warning.
+
+        Pins the negative branch so a future refactor that broadens the
+        gate (e.g. ``if save_merged:`` without the use_unsloth check) gets
+        caught — that would emit the warning even when Unsloth IS handling
+        the merge correctly, which is operator-hostile noise.
+        """
+        from backpropagate.trainer import Trainer
+
+        mock_fast_lm = MagicMock()
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+            trainer._has_trained = True
+            trainer.use_unsloth = True
+
+            with caplog.at_level("WARNING", logger="backpropagate.trainer"):
+                trainer.save(save_merged=True)
+
+            downgrade_warnings = [
+                r for r in caplog.records
+                if r.levelname == "WARNING"
+                and "save_merged" in r.getMessage()
+                and "use_unsloth=False" in r.getMessage()
+            ]
+            assert not downgrade_warnings, (
+                "BACKEND-B-001 warning emitted on the SUPPORTED path "
+                "(save_merged=True + use_unsloth=True). The gate should be "
+                "AND-coupled (save_merged AND not use_unsloth). Spurious "
+                f"warnings: {[r.getMessage() for r in downgrade_warnings]!r}"
+            )
+
+    # =========================================================================
+    # TESTS-F-002 (v1.4 Wave 6b): pin the Wave 3.5 BACKEND-B-004 "untrained-
+    # save" tripwire warning. Pre-fix, an operator who called
+    # ``Trainer(...).load_model(); trainer.save("./out")`` got a freshly-
+    # initialized PEFT adapter on disk — rank-r Gaussian-noise weights from
+    # PEFT init defaults — saved as if it were a trained checkpoint. The
+    # silence made the untrained save indistinguishable from a successfully-
+    # trained save. The fix at trainer.py:2746 added a structured WARNING
+    # gated on ``not self._has_trained`` that names what's happening and
+    # points at .train() as the typical next step.
+    #
+    # We pin: (a) the _has_trained flag initializes to False on a fresh
+    # Trainer; (b) calling save() with _has_trained=False emits the
+    # warning; (c) calling save() with _has_trained=True does NOT emit it
+    # (no operator-hostile noise on the success path).
+    # =========================================================================
+
+    def test_has_trained_flag_initializes_false(self):
+        """A fresh Trainer starts with _has_trained=False so the first
+        post-load save() correctly fires the untrained-save tripwire.
+
+        Pre-Wave-3.5 the flag didn't exist; pinning the init value here
+        catches a regression where someone defaults it to True (silencing
+        the warning unconditionally).
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer()
+
+        assert hasattr(trainer, "_has_trained"), (
+            "Wave 3.5 BACKEND-B-004 regression: Trainer is missing the "
+            "_has_trained attribute. The untrained-save tripwire warning "
+            "at trainer.py:2746 has nothing to gate on."
+        )
+        assert trainer._has_trained is False, (
+            f"Wave 3.5 BACKEND-B-004: Trainer._has_trained must initialize "
+            f"to False; got {trainer._has_trained!r}. A True default would "
+            f"silence the untrained-save tripwire unconditionally."
+        )
+
+    def test_save_without_train_emits_warning(self, temp_dir, caplog):
+        """Wave 3.5 BACKEND-B-004: save() with _has_trained=False emits a
+        structured WARN naming the untrained-save situation.
+
+        The pre-fix bug: an operator's ``load_model(); save()`` chain
+        produced a PEFT-init-noise adapter on disk silently. The warning
+        text must reference ``untrained`` so an operator grepping logs for
+        the symptom finds the diagnosis.
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+            trainer.use_unsloth = True
+            # _has_trained left at the constructor default (False).
+            assert trainer._has_trained is False, (
+                "Test setup precondition: _has_trained must be False "
+                "to exercise the BACKEND-B-004 tripwire."
+            )
+
+            with caplog.at_level("WARNING", logger="backpropagate.trainer"):
+                trainer.save()
+
+            matched = [
+                r for r in caplog.records
+                if r.levelname == "WARNING"
+                and "untrained" in r.getMessage().lower()
+            ]
+            assert matched, (
+                "Wave 3.5 BACKEND-B-004 regression: save() with "
+                "_has_trained=False must emit a WARNING containing "
+                "'untrained' so an operator grepping for the symptom "
+                "finds the diagnosis. Captured WARNING records: "
+                f"{[r.getMessage() for r in caplog.records if r.levelname == 'WARNING']!r}"
+            )
+
+    def test_save_after_train_does_not_emit_untrained_warning(self, temp_dir, caplog):
+        """Once _has_trained is True the tripwire MUST NOT fire — that
+        would be operator-hostile noise on the post-train save path.
+
+        Pins the gate negative-branch so a future refactor that drops the
+        ``if not self._has_trained:`` guard gets caught.
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+            trainer.use_unsloth = True
+            # Simulate a successful train() having completed.
+            trainer._has_trained = True
+
+            with caplog.at_level("WARNING", logger="backpropagate.trainer"):
+                trainer.save()
+
+            untrained_warnings = [
+                r for r in caplog.records
+                if r.levelname == "WARNING"
+                and "untrained" in r.getMessage().lower()
+            ]
+            assert not untrained_warnings, (
+                "Wave 3.5 BACKEND-B-004 regression: untrained-save "
+                "warning fired AFTER a successful train() "
+                "(_has_trained=True). The gate must remain "
+                "``if not self._has_trained:`` so post-train saves stay "
+                f"silent. Spurious warnings: {[r.getMessage() for r in untrained_warnings]!r}"
+            )
+
 
 # =============================================================================
 # LORA TESTS (Phase 3)

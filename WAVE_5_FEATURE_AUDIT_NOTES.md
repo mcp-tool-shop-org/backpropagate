@@ -35,6 +35,16 @@ Wave 5 (feature audit) should evaluate each and decide accept/defer/reject.
 - **Wave 5 verdict needed:** accept (build it in v1.4) / defer (v1.5+) /
   reject (keep the export-flag form as canonical).
 
+## From CIDOCS agent — v1.4 Wave 6b (closure of CIDOCS-A-001 + structural followups)
+
+### CIDOCS-A-001 closure — `backprop ollama register|list|rm` triad landed in v1.4
+
+The Wave 2 follow-up question "should `backprop ollama register` exist as a real CLI subcommand?" is answered ACCEPT — the triad (`register` / `list` / `rm`) landed in Wave 6b features under BRIDGE-F-001 as a NESTED subparser (matches the upstream `ollama` CLI grammar 1:1 — operator muscle memory). The architectural deviation (nested vs flat — backpropagate's convention) is documented operator-facing in `handbook/cli-reference.md` AND maintainer-facing in the same section. The existing one-shot `backprop export --ollama --ollama-name <name>` path is untouched as the canonical "I just trained, register in one command" surface; the new triad is for the "I already exported earlier, just register" case.
+
+### `_GradioShim` deletion — cascade survey
+
+The WAVE_6A_TODO.md "STILL DEFERRED" item 1 (the `_GradioShim` class in `ui_security.py` as load-bearing today because the rest of the file references `gr.Request` type hints + `gr.Error(...)` call sites) was surveyed in Wave 6b for tractability. The outcome (land in v1.4 vs defer to v1.5) is decided at the FRONTEND agent's landing — the CI/Docs agent's CHANGELOG entry for the deletion is written under the conditional "IF Frontend completes the cascade in Wave 6b" branch. If Frontend deferred (the more likely outcome given the ~20 type-hint + helper-refactor cascade size), the WAVE_6A_TODO.md "STILL DEFERRED" entry stays, the CHANGELOG carries no entry for the deletion, and the v1.5 candidate scope picks it up alongside the broader `DEFAULT_GRADIO_CSP` + `get_gradio_csp` removal locked for v1.6.
+
 ## From CIDOCS agent — v1.4 Wave 3.5
 
 ### TRAINING_PRESETS vs LORA_PRESETS namespace collision (operator-trap class)

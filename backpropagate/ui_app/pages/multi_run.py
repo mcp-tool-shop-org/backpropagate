@@ -245,10 +245,32 @@ def _runs_table() -> rx.Component:
                                     ),
                                 ),
                                 rx.table.cell(
+                                    # FRONTEND-F-005 (v1.4 Wave 6b features):
+                                    # bind the inline-trajectory cell to
+                                    # the per-run ``trajectory`` field so
+                                    # the cell renders the backend-emitted
+                                    # ASCII sparkline / loss-curve preview
+                                    # the moment the MultiRunState
+                                    # populator lands. **Producer contract**
+                                    # (load-bearing, see WAVE_6A_TODO
+                                    # FRONTEND-F-005 follow-up): every dict
+                                    # in ``MultiRunState.runs`` MUST carry
+                                    # a ``trajectory`` key — empty string
+                                    # when there's no data yet, or a short
+                                    # ASCII sparkline like ``"▁▂▃▅▆▇"``
+                                    # once the inner Trainer's loss log
+                                    # is plumbed through. Pre-fix the cell
+                                    # was a hardcoded ``"—"`` literal
+                                    # with no path to the live value;
+                                    # this binding closes that drift.
                                     rx.text(
-                                        "—",
+                                        run["trajectory"],
                                         size="1",
-                                        style={"color": "var(--bp-muted)"},
+                                        style={
+                                            "color": "var(--bp-muted)",
+                                            "font_family": "var(--bp-mono)",
+                                            "letter_spacing": "0.02em",
+                                        },
                                     ),
                                 ),
                             ),

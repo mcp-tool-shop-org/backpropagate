@@ -273,12 +273,27 @@ def _stats_group() -> rx.Component:
             ),
             rx.flex(
                 _label("Avg tokens"),
+                # FRONTEND-F-005 (v1.4 Wave 6b features): bind to the state
+                # field populated by handle_upload via get_dataset_stats.
+                # Pre-fix this was hardcoded '—' even though the figure was
+                # already computed (and emitted by ``backprop
+                # validate-dataset``); the UI just never plumbed it.
                 rx.text(
-                    "—",
+                    rx.cond(
+                        DatasetState.avg_tokens > 0,
+                        DatasetState.avg_tokens.to_string(),
+                        "—",
+                    ),
                     size="4",
                     weight="medium",
                     class_name="bp-num",
-                    style={"color": "var(--bp-muted)"},
+                    style={
+                        "color": rx.cond(
+                            DatasetState.avg_tokens > 0,
+                            "var(--bp-text)",
+                            "var(--bp-muted)",
+                        ),
+                    },
                 ),
                 direction="column",
                 gap="1",

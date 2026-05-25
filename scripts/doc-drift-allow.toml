@@ -186,6 +186,11 @@ RunsState = [
 # ---------------------------------------------------------------------------
 [argparse_default_drift_allowlist]
 "--host" = "argparse default=None falls through to config.ui.host (default 127.0.0.1); handbook documents the runtime-resolved value"
+"--log-level" = "argparse default=None; runtime reads BACKPROPAGATE_LOG_LEVEL (default INFO). Handbook documents the runtime-resolved value so operators see the effective default instead of 'unset'. v1.4 Wave 6b BRIDGE-F-002."
+"--log-format" = "argparse default=None; runtime reads BACKPROPAGATE_LOG_JSON (default console). Handbook documents the runtime-resolved value. v1.4 Wave 6b BRIDGE-F-002."
+"--hub-commit-message" = "argparse default=None; HF Hub push_to_hub() defaults to 'Upload model' when commit_message is None. Handbook documents the upstream default so operators don't have to chase the transformers reference. v1.4 Wave 6b BRIDGE-F-007."
+"--lora-r" = "argparse default=None falls through to settings.lora.r (default 256, per BRIDGE-A-003 v1.4). Handbook documents the runtime-resolved value so the cli-reference matches what trainings actually use. v1.4 Wave 6b cross-domain."
+"--name" = "backprop ollama register --name: argparse default=None; runtime derives the Ollama tag from the path basename (lora dir name or .gguf stem). Handbook documents the derivation rule so operators know what name will be registered when --name is omitted. v1.4 Wave 6b BRIDGE-F-014."
 
 # ---------------------------------------------------------------------------
 # Class 4 (error-codes.md Fix-column refs) — references that intentionally

@@ -98,6 +98,26 @@ except ImportError:  # pragma: no cover — exercised when [ui] uses reflex only
         ``Error`` subclass that mirrors Gradio's user-facing exception so
         ``raise gr.Error(...)`` keeps working in unit tests / mocks. The
         ``Warning`` / ``Info`` shims are no-ops.
+
+        **Transitional during the v1.4 → v1.6 ui_security rename
+        deprecation cycle.** Wave 6b features attempted deletion of this
+        class; the cascade survey found 44 ``gr.*`` reference sites in
+        this module (18 ``gr.Request`` type hints + 24 ``gr.Error``
+        raises/handlers + 1 ``gr.Warning`` + 1 ``gr.Info``), 13 of
+        which sit inside the legacy ``safe_ui_handler`` decorator's
+        ``except gr.Error:`` block that the v1.4 → v1.6 deprecation
+        cycle keeps alive for real-Gradio consumers. Replacing the
+        shim cleanly requires either (a) wrapping every ``gr.*`` call
+        site behind ``if GRADIO_AVAILABLE:`` (not a mechanical rename —
+        each call site has different fallback semantics), or (b)
+        splitting this module into ``ui_security_core.py`` (framework-
+        agnostic helpers the Reflex UI uses) and
+        ``ui_security_legacy.py`` (Gradio-era classes preserved for
+        backward-compat). Both paths are v1.5 candidates; see
+        WAVE_6A_TODO.md → "FRONTEND symbol-rename gating → STILL
+        DEFERRED (later wave / v1.5 candidate)". The shim's continued
+        presence is NOT dead code — it's load-bearing whenever Gradio
+        isn't installed (the [ui] extra ships Reflex only).
         """
 
         class Request:  # type: ignore[no-redef]

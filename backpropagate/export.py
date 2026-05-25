@@ -1693,3 +1693,102 @@ def list_ollama_models() -> list[str]:
         return models
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
+
+
+def remove_ollama_model(model_name: str) -> bool:
+    """v1.4 BRIDGE Wave 6b (Item 1 / Decision 4 ollama-triad): delete a model
+    from the local Ollama daemon by name.
+
+    Mirrors the ``register_with_ollama`` / ``list_ollama_models`` contract
+    so the ``backprop ollama rm <name>`` subcommand wires through to a
+    single subprocess invocation. The function validates the model name
+    (re-using ``_validate_model_name`` — same allowlist as the register
+    side) BEFORE handing argv to the ollama CLI so a leading ``-`` /
+    embedded NUL / newline cannot reach the parser. Ollama itself uses
+    ``ollama rm <name>`` (no extra flags); we forward stderr on failure so
+    "model 'foo' not found" / "the daemon refused the connection" surfaces
+    in the structured ``OllamaRegistrationError`` instead of being eaten.
+
+    Args:
+        model_name: The Ollama model name to remove (e.g. ``"my-finetune"``
+            or ``"alice/qwen-finetune:latest"``). Validated against the same
+            allowlist as ``register_with_ollama``.
+
+    Returns:
+        ``True`` on successful removal. (Currently the only False-return
+        path is the ``ollama`` CLI being absent — every other failure mode
+        raises ``OllamaRegistrationError`` with a structured message.)
+
+    Raises:
+        ExportError: With ``code='INPUT_VALIDATION_FAILED'`` when
+            ``model_name`` fails the allowlist (leading dash, NUL /
+            newline / CR, path separator, etc.) — same as the register
+            path.
+        OllamaRegistrationError: When the ``ollama rm`` invocation fails
+            (model not found, daemon unreachable, timeout). The error
+            ``suggestion`` field points operators at ``ollama serve`` /
+            ``backprop ollama list`` so the next step is one command away.
+    """
+    # BRIDGE Wave 6b: re-use the register-side allowlist so a model name
+    # that was safe to create is the same shape that is safe to remove.
+    _validate_model_name(model_name)
+
+    if not shutil.which("ollama"):
+        # Match list_ollama_models's soft-fail-on-missing-CLI contract —
+        # the remove subcommand turns this into a structured error in
+        # cmd_ollama_rm so operators get a clear "install Ollama" hint
+        # without raising an exception here.
+        return False
+
+    try:
+        # Bounded timeout: rm is metadata-only (no model bytes copied) so 30s
+        # is generous. Matches list_ollama_models's timeout shape.
+        subprocess.run(
+            ["ollama", "rm", model_name],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        logger.info(f"Successfully removed model '{model_name}' from Ollama")
+        return True
+    except subprocess.TimeoutExpired as exc:
+        raise OllamaRegistrationError(
+            model_name,
+            "ollama rm timed out after 30s",
+            suggestion=(
+                "The Ollama daemon may be unresponsive. Check `ollama list` "
+                "and retry. If `ollama list` itself hangs, restart the "
+                "daemon (`pkill ollama && ollama serve`)."
+            ),
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        error_msg = (exc.stderr or "").strip()[:500] or "Unknown error"
+        # Heuristic — the canonical "model not found" message from the ollama
+        # CLI is "Error: model '<name>' not found". Surface a targeted
+        # suggestion so the operator's next step is to `backprop ollama list`
+        # rather than re-reading the generic "ollama is unreachable" copy.
+        lower = error_msg.lower()
+        if "not found" in lower:
+            suggestion = (
+                f"Model '{model_name}' was not found in the local Ollama "
+                "registry. Run `backprop ollama list` to see the available "
+                "names. Tag-sensitive: `name` and `name:latest` are distinct."
+            )
+        elif "connection refused" in lower or "no such" in lower:
+            suggestion = (
+                "Ollama daemon does not appear to be running. Start it "
+                "with `ollama serve` (typically in a separate terminal) "
+                "and retry."
+            )
+        else:
+            suggestion = (
+                "Ensure the Ollama daemon is running (`ollama serve`) and "
+                "the model name exists (`backprop ollama list`). Re-run "
+                "with --verbose for the full ollama-CLI stderr."
+            )
+        raise OllamaRegistrationError(
+            model_name,
+            f"ollama rm failed: {error_msg}",
+            suggestion=suggestion,
+        ) from exc

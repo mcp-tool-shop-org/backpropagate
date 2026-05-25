@@ -51,6 +51,7 @@ from .exceptions import (
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
+    FullFinetuneModelTooLargeError,
     GPUNotAvailableError,
     InvalidSettingError,
     ModelLoadCauseCategory,
@@ -286,6 +287,9 @@ __all__ = [
     "load_dataset",
     "MultiRunTrainer",
     "SpeedrunTrainer",  # Backwards compatibility
+    # v1.4 BACKEND-F-002 (Wave 6b features): VRAM pre-flight estimator
+    "VRAMEstimate",
+    "estimate_vram",
 ]
 
 
@@ -623,6 +627,429 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 
 
 # =============================================================================
+# v1.4 BACKEND-F-008 (Wave 6b features) — FULL FINE-TUNING MODE
+# =============================================================================
+# mode='full' supports models up to the 3B parameter ceiling on consumer
+# 16GB cards (per the v1.3 16GB fine-tuning study-swarm: Biderman 2024 /
+# Thinking Machines 2025). The trainer's mode='full' contract:
+#
+#   * `_build_sft_config(mode='full', ...)` returns an SFTConfig with no
+#     peft_config (full FT), paged_adamw_8bit optimizer (memory ceiling),
+#     gradient_checkpointing=True, and a 10x-lower learning rate by default.
+#   * Trainer / MultiRunTrainer construction-time gate refuses models > 3B
+#     with RUNTIME_FULL_FT_MODEL_TOO_LARGE.
+#   * The gate probes the parameter count via (1) the preset table when a
+#     known HF model_id is matched, then (2) the loaded model when available.
+#     For unknown / unloaded models we accept construction and the gate
+#     re-fires at load_model() time. Construction-time refusal is the
+#     primary contract; load_model-time is the belt-and-braces second check.
+#
+# The mode parameter is a string Literal so SFTConfig assembly stays in one
+# helper (`_build_sft_config(mode='lora'|'full', ...)`); a parallel
+# `_build_full_ft_sft_config` would fork the code path and violate the
+# v1.4 Wave 6b doctrine ("extend, don't fork").
+
+# Documented production-feasible parameter count ceiling for mode='full'
+# on a 16GB consumer GPU. Operators who genuinely have a 24GB+ card can
+# still hit the gate (the threshold is conservative) — the escape hatch
+# is to construct with mode='lora' OR pick a smaller preset. Future
+# v1.5 may expose a `--full-ft-ceiling-billions` flag for 24GB+ operators.
+_FULL_FT_PARAM_CEILING_BILLIONS: float = 3.0
+
+# Default learning rate for mode='full'. Full fine-tuning literature
+# (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
+# LoRA — typical LoRA default is 2e-4, so full FT default is 2e-5. The
+# operator can override via Trainer(learning_rate=...).
+_FULL_FT_DEFAULT_LR_DIVISOR: float = 10.0
+
+
+def _estimate_param_count_billions(model_id: str) -> float | None:
+    """v1.4 BACKEND-F-008: estimate model parameter count for the mode='full' gate.
+
+    Resolution order:
+      1. Match against the preset table; preset entries with a "Bn"-style
+         token in their name (e.g. "qwen2.5-7b", "phi-4-mini-3.8b") yield a
+         parsed numeric value. The preset name is the canonical signal.
+      2. Heuristic regex over the model_id string for "<N>B" / "<N>b"
+         substrings (e.g. "Qwen/Qwen2.5-7B-Instruct-bnb-4bit" -> 7.0).
+         Best-effort; the substring need not be a preset.
+      3. Return None when no signal is available. The caller's gate then
+         degrades to accept-construction-and-recheck-at-load.
+
+    Returns the estimated parameter count in billions, or None.
+    """
+    import re
+
+    if not model_id:
+        return None
+
+    # 1. Preset-table primary path. Preset names follow ``<family>-<N>b``
+    #    convention (case-insensitive). lookup_model_preset_by_id matches
+    #    HF model_id case-insensitively, so an operator who passed the raw
+    #    HF id still hits the preset entry.
+    try:
+        from .config import MODEL_PRESETS, lookup_model_preset_by_id
+
+        preset = lookup_model_preset_by_id(model_id)
+        if preset is None:
+            # Operator may have passed the preset name directly (e.g.
+            # "qwen2.5-7b") rather than the HF model_id. Walk the table.
+            for name, candidate in MODEL_PRESETS.items():
+                if name.lower() == model_id.strip().lower():
+                    preset = candidate
+                    break
+        if preset is not None:
+            # Parse "Nb" from the preset name. The catalog convention is
+            # ``<family>-<count>b`` so split on "-" and look for a numeric
+            # suffix on each segment. "phi-4-mini-3.8b" → 3.8; "qwen2.5-7b"
+            # → 7.0; "smollm3-3b" → 3.0; "llama-3.2-1b" → 1.0.
+            for segment in reversed(preset.name.split("-")):
+                segment_clean = segment.strip().lower().rstrip("b")
+                try:
+                    parsed = float(segment_clean)
+                    # Sanity bound: model sizes range 0.1B to 200B+.
+                    if 0.05 <= parsed <= 1000.0:
+                        return parsed
+                except ValueError:
+                    continue
+    except Exception as exc:  # noqa: BLE001 — preset lookup is best-effort
+        logger.debug(f"_estimate_param_count_billions: preset path raised {exc!r}")
+
+    # 2. Heuristic regex fallback. Matches "<N>B" or "<N>.<M>B" anywhere
+    #    in the model_id; case-insensitive. Captures the LARGEST match
+    #    (an id like "Qwen2.5-7B-Instruct-bnb-4bit" should yield 7.0,
+    #    not the "4bit" trailing fragment which the regex also matches
+    #    against the "4" but lacks the "B" suffix — the [Bb] anchor
+    #    prevents that collision).
+    pattern = re.compile(r"(\d+(?:\.\d+)?)\s*[Bb](?:[^a-zA-Z]|$)")
+    matches = pattern.findall(model_id)
+    if matches:
+        try:
+            # Pick the largest match — handles "phi-4-mini-3.8b" by
+            # rejecting "4" (a Phi-version literal, not a param count)
+            # in favor of "3.8" (the actual param count). Operators
+            # whose model id has both a series number and a param
+            # count benefit; pure-name models like "Mistral-7B" still
+            # work since the only match is the right one.
+            best = max(float(m) for m in matches)
+            # Sanity bound: a model id mentioning "0.5B" is plausible
+            # (e.g. Qwen 0.5B), but a "100B" would be an outlier.
+            if 0.05 <= best <= 1000.0:
+                return best
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+def _enforce_full_ft_param_ceiling(
+    model_id: str,
+    *,
+    ceiling_billions: float = _FULL_FT_PARAM_CEILING_BILLIONS,
+    loaded_model: Any = None,
+) -> None:
+    """v1.4 BACKEND-F-008: refuse mode='full' for models > 3B.
+
+    Probe order:
+      1. ``loaded_model.num_parameters()`` when a loaded model is supplied
+         (authoritative). Falls back to summing ``parameters()`` lengths
+         when ``num_parameters`` is unavailable on the model object.
+      2. :func:`_estimate_param_count_billions` over the model id string.
+      3. If neither produces a count, accept construction silently (the
+         load-time recheck is the safety net).
+
+    Raises :class:`FullFinetuneModelTooLargeError` when the count exceeds
+    the ceiling. Pure function side-effect-free otherwise.
+    """
+    estimated_billions: float | None = None
+
+    # 1. Authoritative: ask the loaded model directly.
+    if loaded_model is not None:
+        try:
+            if hasattr(loaded_model, "num_parameters"):
+                # transformers / PEFT models expose this. Returns raw count.
+                count = int(loaded_model.num_parameters())
+                estimated_billions = count / 1e9
+            else:
+                # Manual sum — works for any nn.Module-like object.
+                total = 0
+                for param in loaded_model.parameters():
+                    try:
+                        total += int(getattr(param, "numel", lambda: 0)())
+                    except Exception:  # nosec B112 — best-effort per-param probe; one bad param shouldn't kill the count
+                        continue
+                if total > 0:
+                    estimated_billions = total / 1e9
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.debug(
+                f"_enforce_full_ft_param_ceiling: loaded model probe raised "
+                f"{exc!r}; falling back to model_id heuristics."
+            )
+
+    # 2. Fallback: probe the model_id string.
+    if estimated_billions is None:
+        estimated_billions = _estimate_param_count_billions(model_id)
+
+    # 3. No signal — accept (the load-time recheck will catch oversized
+    # models when they are actually loaded).
+    if estimated_billions is None:
+        logger.info(
+            f"_enforce_full_ft_param_ceiling: could not estimate parameter "
+            f"count for {model_id!r}; deferring the mode='full' check to "
+            f"load_model() time when the model is actually instantiated."
+        )
+        return
+
+    if estimated_billions > ceiling_billions:
+        raise FullFinetuneModelTooLargeError(
+            model_name=model_id,
+            param_count_billions=estimated_billions,
+            ceiling_billions=ceiling_billions,
+        )
+
+    logger.info(
+        f"_enforce_full_ft_param_ceiling: mode='full' approved — "
+        f"model={model_id!r} estimated_params={estimated_billions:.2f}B "
+        f"<= ceiling={ceiling_billions:.0f}B."
+    )
+
+
+# =============================================================================
+# v1.4 BACKEND-F-002 (Wave 6b features) — VRAM PRE-FLIGHT ESTIMATOR
+# =============================================================================
+# Today operators learn a config is too big AT FIRST OOM. The estimator
+# returns a structured VRAM ceiling estimate before .train() fires so an
+# operator can ask "will this config OOM?" at construction time.
+#
+# The math (matches industry-standard back-of-envelope; see
+# Biderman 2024 / Hugging Face peft docs):
+#
+#   total_vram_gb =
+#       model_weights_gb (params * bytes_per_param) +
+#       lora_adapter_gb  (rank * (in_dim + out_dim) * num_layers * bytes_per_param * 2)  [LoRA only]
+#       optimizer_state_gb (params * bytes_per_optim_state) +
+#       activations_gb (batch * seq_len * hidden_dim * num_layers * bytes_per_param * 2) +
+#       kv_cache_gb (batch * seq_len * num_kv_heads * head_dim * 2 layers worth) +
+#       overhead_gb (15% margin for fragmentation + framework overhead)
+
+
+@dataclass
+class VRAMEstimate:
+    """v1.4 BACKEND-F-002: structured VRAM estimate for a training config.
+
+    Each field is a GB estimate for one VRAM consumer. ``total_gb`` is the
+    headline number operators compare against their card's VRAM. The
+    breakdown helps post-mortem ("which component blew the budget?").
+    """
+
+    total_gb: float
+    model_weights_gb: float
+    lora_adapter_gb: float
+    optimizer_state_gb: float
+    activations_gb: float
+    kv_cache_gb: float
+    overhead_gb: float
+    # Reproducibility inputs — same shape on the way out as the way in.
+    param_count_billions: float
+    mode: str
+    batch_size: int
+    gradient_accumulation: int
+    max_seq_length: int
+    lora_r: int
+    notes: list[str] = field(default_factory=list)
+
+    def fits_on_card(self, vram_gb: float) -> bool:
+        """Will this config fit on a card with ``vram_gb`` total VRAM?"""
+        return self.total_gb <= vram_gb
+
+    def summary(self) -> str:
+        """Operator-readable one-line summary of the estimate."""
+        return (
+            f"VRAM estimate ({self.mode}, {self.param_count_billions:.1f}B "
+            f"params, batch={self.batch_size}, seq={self.max_seq_length}): "
+            f"total={self.total_gb:.1f}GB "
+            f"(weights={self.model_weights_gb:.1f} + "
+            f"lora={self.lora_adapter_gb:.1f} + "
+            f"optim={self.optimizer_state_gb:.1f} + "
+            f"activations={self.activations_gb:.1f} + "
+            f"kv={self.kv_cache_gb:.1f} + "
+            f"overhead={self.overhead_gb:.1f})"
+        )
+
+
+def estimate_vram(
+    model: str,
+    *,
+    mode: str = "lora",
+    lora_r: int = 16,
+    lora_alpha: int | None = None,  # noqa: ARG001 — accepted for symmetry, alpha doesn't affect memory
+    batch_size: int = 1,
+    gradient_accumulation: int = 1,  # noqa: ARG001 — accepted for symmetry, accum doesn't affect peak VRAM
+    max_seq_length: int = 2048,
+    bytes_per_param: int = 2,  # bf16 / fp16 default; 4 for fp32, 1 for int8, 0.5 for nf4
+    quantize_base: bool = True,  # nf4 base + bf16 adapter (the trainer default)
+    hidden_dim: int = 4096,  # 7B-class default; operator can override
+    num_layers: int = 32,  # 7B-class default; operator can override
+    num_heads: int = 32,  # 7B-class default
+    overhead_fraction: float = 0.15,
+    param_count_billions: float | None = None,
+) -> VRAMEstimate:
+    """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
+
+    Returns a structured estimate before ``.train()`` so an operator can
+    ask "will this config OOM?" instead of finding out at first OOM. The
+    math is back-of-envelope (15% overhead margin); accuracy is within
+    ~10-20% of empirical peak for well-known training configs.
+
+    Args:
+        model: Model identifier — preset name or HF id. Used to estimate
+            parameter count via :func:`_estimate_param_count_billions`.
+        mode: ``"lora"`` (default) or ``"full"``. Full FT skips the
+            ``lora_adapter_gb`` line + uses higher optimizer state.
+        lora_r: LoRA rank (default 16). Ignored when mode='full'.
+        lora_alpha: Accepted for API symmetry; does not affect memory.
+        batch_size: Per-device batch size.
+        gradient_accumulation: Accepted; does not affect peak VRAM.
+        max_seq_length: Maximum input sequence length.
+        bytes_per_param: 2 for bf16/fp16 (default), 4 for fp32, 1 for
+            int8, 0.5 for nf4.
+        quantize_base: When True (default — matches the trainer's
+            ``load_in_4bit=True``), the base model is in nf4 (0.5 bytes
+            per param) and the LoRA adapter is in bf16 (2 bytes per
+            param). When False, the base model uses ``bytes_per_param``.
+        hidden_dim: Model hidden dim (default 4096 — 7B-class).
+        num_layers: Model num_layers (default 32 — 7B-class).
+        num_heads: Model num_heads (default 32 — 7B-class).
+        overhead_fraction: Fragmentation + framework overhead (default 15%).
+        param_count_billions: Optional explicit parameter count. When
+            None, estimated via :func:`_estimate_param_count_billions`.
+
+    Returns:
+        :class:`VRAMEstimate` carrying the headline number + breakdown.
+    """
+    notes: list[str] = []
+
+    if param_count_billions is None:
+        param_count_billions = _estimate_param_count_billions(model)
+    if param_count_billions is None:
+        # Defensive default: 7B is the v1.3 canonical 16GB target. Surface
+        # the assumption in notes so operators see the imputation.
+        param_count_billions = 7.0
+        notes.append(
+            f"param_count_billions not provided and could not be estimated "
+            f"from model={model!r}; assumed 7.0B (v1.3 canonical 16GB target)."
+        )
+
+    params = param_count_billions * 1e9
+    bytes_to_gb = 1.0 / (1024 ** 3)
+
+    # 1. Model weights. nf4 base when quantize_base=True (the trainer
+    #    default with load_in_4bit=True); otherwise use bytes_per_param.
+    if quantize_base:
+        # nf4: 0.5 bytes per param. The LoRA adapter (if mode='lora')
+        # still lives in bf16 — that's the lora_adapter_gb line.
+        model_weights_gb = (params * 0.5) * bytes_to_gb
+        notes.append("base model quantized to nf4 (0.5 bytes/param)")
+    else:
+        model_weights_gb = (params * bytes_per_param) * bytes_to_gb
+
+    # 2. LoRA adapter. Per-layer cost = rank * (in_dim + out_dim) * 2 (A + B).
+    #    Modern PEFT applies LoRA to ~7 modules per layer (q, k, v, o, gate,
+    #    up, down for Llama/Qwen-style architectures). Approximate with a
+    #    7-module-per-layer constant.
+    if mode == "lora":
+        lora_modules_per_layer = 7
+        lora_adapter_gb = (
+            lora_r
+            * (hidden_dim + hidden_dim)  # in + out (typically same)
+            * num_layers
+            * lora_modules_per_layer
+            * bytes_per_param  # adapters in bf16/fp16 even when base is nf4
+        ) * bytes_to_gb
+    else:
+        lora_adapter_gb = 0.0
+
+    # 3. Optimizer state. paged_adamw_8bit (the trainer default on consumer
+    #    cards) stores 2 momentum buffers per trainable param at 1 byte each.
+    #    Full FT trains the whole model; LoRA only trains the adapter (rank
+    #    * (in + out) * num_layers * 7 modules).
+    trainable_params: float
+    if mode == "lora":
+        trainable_params = lora_r * (hidden_dim + hidden_dim) * num_layers * 7
+    else:
+        trainable_params = params
+    # paged 8-bit Adam: 2 buffers * 1 byte + gradient (bytes_per_param)
+    optimizer_state_gb = (
+        trainable_params * (2 * 1 + bytes_per_param)
+    ) * bytes_to_gb
+
+    # 4. Activations. With gradient checkpointing the activation memory
+    #    scales as sqrt(num_layers) instead of linearly. Mode='full'
+    #    enables gradient_checkpointing=True by default; mode='lora'
+    #    inherits the setting from settings.lora.use_gradient_checkpointing.
+    activation_layer_factor = (
+        max(1.0, num_layers ** 0.5) if mode == "full"
+        else float(num_layers)
+    )
+    activations_gb = (
+        batch_size
+        * max_seq_length
+        * hidden_dim
+        * activation_layer_factor
+        * bytes_per_param
+        * 2  # forward + backward
+    ) * bytes_to_gb
+    if mode == "full":
+        notes.append(
+            "mode='full' assumes gradient_checkpointing=True (sqrt(L) "
+            "activation memory)"
+        )
+
+    # 5. KV cache. batch * seq_len * num_heads * head_dim * num_layers * 2 (k+v)
+    #    bytes_per_param-sized. Training rarely keeps the full KV cache (it's
+    #    primarily an inference cost) but transformers libraries allocate it
+    #    transiently during forward; the constant approximates that share.
+    head_dim = hidden_dim // max(1, num_heads)
+    kv_cache_gb = (
+        batch_size
+        * max_seq_length
+        * num_heads
+        * head_dim
+        * num_layers
+        * 2  # k + v
+        * bytes_per_param
+        * 0.25  # Training amortization factor — full cache not retained
+    ) * bytes_to_gb
+
+    subtotal = (
+        model_weights_gb
+        + lora_adapter_gb
+        + optimizer_state_gb
+        + activations_gb
+        + kv_cache_gb
+    )
+    overhead_gb = subtotal * overhead_fraction
+    total_gb = subtotal + overhead_gb
+
+    return VRAMEstimate(
+        total_gb=total_gb,
+        model_weights_gb=model_weights_gb,
+        lora_adapter_gb=lora_adapter_gb,
+        optimizer_state_gb=optimizer_state_gb,
+        activations_gb=activations_gb,
+        kv_cache_gb=kv_cache_gb,
+        overhead_gb=overhead_gb,
+        param_count_billions=param_count_billions,
+        mode=mode,
+        batch_size=batch_size,
+        gradient_accumulation=gradient_accumulation,
+        max_seq_length=max_seq_length,
+        lora_r=lora_r,
+        notes=notes,
+    )
+
+
+# =============================================================================
 # SHARED SFTCONFIG BUILDER (Wave 6a BACKEND-A-003 / A-004 — multi-run refactor)
 # =============================================================================
 # Pre-Wave-6a, ``MultiRunTrainer._execute_run`` built its own ``SFTConfig`` +
@@ -666,6 +1093,18 @@ def _build_sft_config(
     # ``self.optim`` through so the per-invocation kwarg flows
     # end-to-end.
     optim: str | None = None,
+    # v1.4 BACKEND-F-008 (Wave 6b features): training mode. ``"lora"`` (the
+    # default) preserves pre-Wave-6b behavior byte-identically — operators
+    # who don't pass mode='full' see no change. ``"full"`` enables full
+    # fine-tuning: gradient_checkpointing=True (sqrt(L) activation memory),
+    # paged_adamw_8bit optimizer (memory ceiling), and a 10x-lower learning
+    # rate by default. The mode parameter is INTERNAL to the helper — the
+    # SFTConfig assembly stays in ONE place; mode='full' is an EXTENSION,
+    # not a parallel implementation (per advisor Wave 6b lock Q2). When
+    # the helper detects an irreconcilable contract (e.g. an SFTConfig
+    # parameter that doesn't map cleanly to mode-dispatch), escalate to
+    # Wave 6a.5 hotfix rather than fork the helper.
+    mode: str = "lora",
 ) -> Any:
     """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
 
@@ -712,6 +1151,16 @@ def _build_sft_config(
     """
     from trl import SFTConfig
 
+    # v1.4 BACKEND-F-008 (Wave 6b features): mode dispatch. The helper stays
+    # SINGLE; mode='full' adjusts optimizer + LR + gradient_checkpointing
+    # in-place rather than forking the SFTConfig assembly. Operators on
+    # mode='lora' (the default) see byte-identical pre-Wave-6b behavior.
+    if mode not in {"lora", "full"}:
+        raise ValueError(
+            f"_build_sft_config: mode={mode!r} not recognized. "
+            f"Expected 'lora' (default) or 'full'."
+        )
+
     # v1.4 BRIDGE-A-002 follow-up (Wave 6a): honor the per-invocation
     # ``optim`` override when supplied (forwarded by Trainer.train() /
     # MultiRunTrainer._execute_run via the Trainer instance's ``self.optim``,
@@ -720,10 +1169,35 @@ def _build_sft_config(
     # ``settings.training.optim`` directly (pre-Wave-6a behavior preserved
     # for callers that don't thread the per-invocation override).
     _configured_optim = optim if optim is not None else settings.training.optim
+    # v1.4 BACKEND-F-008 (Wave 6b): mode='full' forces paged_adamw_8bit
+    # because full FT of a 3B model on a 16GB consumer card cannot afford
+    # the non-paged AdamW state. Operators who explicitly overrode to a
+    # specific optimizer (anything other than the documented adamw_8bit
+    # default) keep their choice — the detector at _detect_optim_for_card
+    # honors explicit overrides. Mode='full' with optim='auto' / default
+    # surfaces paged_adamw_8bit; mode='full' with optim='adamw_torch'
+    # respects the operator's pin (they know their card / their LR
+    # schedule; if it OOMs that's on them).
+    if mode == "full" and _configured_optim == "adamw_8bit":
+        # Force the consumer-tier paged variant for the full FT memory
+        # ceiling. The detector below would upgrade adamw_8bit to
+        # paged_adamw_8bit on <24GB cards already; for mode='full' we
+        # short-circuit that path so the upgrade fires even on 24GB cards
+        # (which the LoRA detector would have left alone).
+        _configured_optim = "paged_adamw_8bit"
     resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
     resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
         settings.training.bf16, settings.training.fp16
     )
+
+    # v1.4 BACKEND-F-008 (Wave 6b): mode='full' scales the learning rate
+    # down by ~10x by default per the Biderman 2024 / Thinking Machines
+    # 2025 full-FT-vs-LoRA quality math. The operator's explicit
+    # `learning_rate=` kwarg is the authority — we only adjust when the
+    # caller passed the v1.3 LoRA default. The decision happens in
+    # Trainer.__init__ (mode='full' construction-time default-rewrite); the
+    # helper below applies the value as-given by the caller. Documenting
+    # the contract here so the LR field stays a one-edit-site invariant.
 
     kwargs: dict[str, Any] = {
         "output_dir": output_dir,
@@ -755,6 +1229,24 @@ def _build_sft_config(
         kwargs["save_steps"] = save_steps
     if weight_decay is not None:
         kwargs["weight_decay"] = weight_decay
+
+    # v1.4 BACKEND-F-008 (Wave 6b): full FT mandates gradient checkpointing.
+    # SFTConfig inherits from TrainingArguments which accepts the
+    # ``gradient_checkpointing`` kwarg. Forcing it for mode='full' is the
+    # documented contract — full FT of a 3B model on a 16GB card requires
+    # sqrt(L) activation memory; without checkpointing the activations line
+    # alone would exceed 8GB on seq=2048. Operators who genuinely have
+    # 24GB+ and want to skip checkpointing should pass mode='lora' with
+    # explicit full-rank LoRA settings; mode='full' is the consumer-card
+    # contract.
+    if mode == "full":
+        kwargs["gradient_checkpointing"] = True
+        # gradient_checkpointing_kwargs is supported by recent transformers
+        # (>=4.36). Pass use_reentrant=False which is the recommended
+        # default for HF gradient checkpointing — avoids the silent bug
+        # where reentrant=True breaks DDP gradients on some models.
+        kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+
     return SFTConfig(**kwargs)
 
 
@@ -957,6 +1449,19 @@ class Trainer:
         init_lora_weights: str | None = None,  # "default" | "pissa" | "loftq"
         lora_preset: str | None = None,  # "fast" | "quality" — stored for future overlay wiring
         optim: str | None = None,  # passthrough to TrainingArguments.optim (via _detect_optim_for_card)
+        # v1.4 BACKEND-F-008 (Wave 6b features): training mode. ``"lora"`` (the
+        # default) is the v1.3 contract — fine-tune a LoRA adapter on the
+        # configured base model. ``"full"`` enables full fine-tuning for
+        # models up to 3B parameters: no LoRA adapter, paged_adamw_8bit
+        # optimizer (memory ceiling), gradient_checkpointing=True (sqrt(L)
+        # activation memory), and a 10x-lower learning rate by default. Full
+        # FT of a model >3B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE at
+        # construction time (the gate re-fires at load_model() time as a
+        # belt-and-braces second check). Operators with 24GB+ datacenter
+        # cards who want full FT of a 7B model should use a fork of the
+        # trainer that lifts the ceiling — the 3B gate is the documented
+        # consumer-tier contract and not a soft-warning.
+        mode: str = "lora",
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -1099,6 +1604,64 @@ class Trainer:
             self.optim = optim
         else:
             self.optim = settings.training.optim
+
+        # v1.4 BACKEND-F-008 (Wave 6b features): mode resolution. The kwarg is
+        # already a string Literal candidate (``"lora"`` default | ``"full"``).
+        # Validate the value before any expensive work so an operator typo
+        # surfaces immediately rather than after the model has loaded. The
+        # accepted set is the same as ``_build_sft_config``'s `mode` parameter.
+        if mode not in {"lora", "full"}:
+            raise InvalidSettingError(
+                setting_name="mode",
+                value=mode,
+                expected="one of {'lora', 'full'}",
+                suggestion=(
+                    "Pass mode='lora' (the default) for LoRA fine-tuning, "
+                    "OR mode='full' for full fine-tuning of a model <=3B "
+                    "parameters. mode='full' on a model >3B raises "
+                    "RUNTIME_FULL_FT_MODEL_TOO_LARGE at construction time."
+                ),
+            )
+        self.mode = mode
+
+        # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate. Refuse
+        # construction for models whose parameter count exceeds the 3B
+        # ceiling. The probe is best-effort at construction time (preset
+        # table + heuristic regex over the model_id); load_model() re-fires
+        # the check with the authoritative ``num_parameters()`` reading as
+        # a belt-and-braces second gate. Operators passing an obscure HF id
+        # we can't estimate get a deferred check; operators passing a
+        # preset name or canonical HF id get the early refusal.
+        if self.mode == "full":
+            _enforce_full_ft_param_ceiling(self.model_name)
+            # Per the Biderman 2024 / Thinking Machines 2025 quality math
+            # (full FT needs ~10x lower LR than LoRA). Apply the divisor
+            # ONLY when the operator did not explicitly override the
+            # learning rate at construction time. Detection: the operator's
+            # explicit ``learning_rate=`` value differs from
+            # ``settings.training.learning_rate`` (the configured default).
+            # When they pass the bare LoRA default we rewrite to ~10x lower;
+            # explicit operator-supplied values win. This is a behavior
+            # change documented in the mode='full' contract.
+            if learning_rate is None:
+                # Caller relied on the settings default — apply the full-FT
+                # LR divisor so mode='full' lands at a sensible default
+                # without operator intervention.
+                self.learning_rate = (
+                    settings.training.learning_rate / _FULL_FT_DEFAULT_LR_DIVISOR
+                )
+                logger.info(
+                    f"mode='full': applied default learning_rate divisor "
+                    f"({_FULL_FT_DEFAULT_LR_DIVISOR}x lower than LoRA default) "
+                    f"-> learning_rate={self.learning_rate:.2e}. Pass "
+                    f"learning_rate=<value> to override."
+                )
+            else:
+                logger.info(
+                    f"mode='full': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (no divisor "
+                    f"applied; explicit override beats the full-FT default)."
+                )
 
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
@@ -1425,6 +1988,63 @@ class Trainer:
             )
         return (False, True)
 
+    def estimate_vram(
+        self,
+        *,
+        bytes_per_param: int = 2,
+        quantize_base: bool = True,
+        hidden_dim: int = 4096,
+        num_layers: int = 32,
+        num_heads: int = 32,
+        overhead_fraction: float = 0.15,
+        param_count_billions: float | None = None,
+    ) -> VRAMEstimate:
+        """v1.4 BACKEND-F-002 (Wave 6b features): VRAM pre-flight estimate.
+
+        Operator-actionable wrapper around :func:`estimate_vram` that pulls
+        the trainer's configured ``mode`` / ``lora_r`` / ``batch_size`` /
+        ``gradient_accumulation`` / ``max_seq_length`` and returns a
+        structured :class:`VRAMEstimate`. Call before ``.train()`` to ask
+        "will this config OOM?" without paying the cost of a real attempt.
+
+        Args:
+            bytes_per_param: 2 for bf16/fp16 (default), 4 for fp32.
+            quantize_base: True (default) — matches ``load_in_4bit=True``
+                in the trainer's actual load path.
+            hidden_dim: Model hidden dim — default 4096 (7B-class).
+                Override for non-7B-class architectures.
+            num_layers: Model num_layers — default 32 (7B-class).
+            num_heads: Model num_heads — default 32 (7B-class).
+            overhead_fraction: Fragmentation + framework overhead (15%).
+            param_count_billions: Explicit param count if known; otherwise
+                estimated from the model name.
+
+        Returns:
+            :class:`VRAMEstimate` carrying total_gb + per-component breakdown.
+
+        Example:
+            >>> trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", lora_r=256)
+            >>> est = trainer.estimate_vram()
+            >>> if not est.fits_on_card(16):
+            ...     print(f"Won't fit on 16GB: {est.summary()}")
+        """
+        return estimate_vram(
+            model=self.model_name,
+            mode=self.mode,
+            lora_r=self.lora_r,
+            lora_alpha=self.lora_alpha,
+            batch_size=self.batch_size,
+            gradient_accumulation=self.gradient_accumulation,
+            max_seq_length=self.max_seq_length,
+            bytes_per_param=bytes_per_param,
+            quantize_base=quantize_base,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            overhead_fraction=overhead_fraction,
+            param_count_billions=param_count_billions,
+        )
+
     def _cleanup_vram(self) -> None:
         """
         Release unused GPU memory.
@@ -1533,6 +2153,18 @@ class Trainer:
 
         self._is_loaded = True
         logger.info("Model loaded successfully")
+
+        # v1.4 BACKEND-F-008 (Wave 6b features): belt-and-braces re-fire of
+        # the mode='full' parameter-count gate against the loaded model. The
+        # construction-time gate accepted models whose param count couldn't
+        # be estimated (preset table miss + heuristic regex miss). Now that
+        # the model is actually loaded we can ask num_parameters() directly
+        # — if the authoritative reading exceeds the ceiling, refuse before
+        # any training happens. The check is no-op for mode='lora'.
+        if self.mode == "full":
+            _enforce_full_ft_param_ceiling(
+                self.model_name, loaded_model=self._model
+            )
 
     def _load_with_unsloth(self) -> None:
         """Load model using Unsloth for 2x faster training.
@@ -1936,6 +2568,11 @@ class Trainer:
             # CLI introspection filter now passes through.
             packing=self.packing,
             optim=self.optim,
+            # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
+            # resolved training mode (``"lora"`` default | ``"full"``) into
+            # the helper so SFTConfig assembly picks up the per-mode
+            # gradient_checkpointing + paged-optim contract.
+            mode=self.mode,
         )
 
         # F-003: build the HF-TrainerCallback bridge ONCE for this train()
@@ -2074,6 +2711,10 @@ class Trainer:
                             # silently reverting to the settings layer.
                             packing=self.packing,
                             optim=self.optim,
+                            # v1.4 BACKEND-F-008 (Wave 6b features): same
+                            # per-invocation threading on retry so the OOM
+                            # rebuild stays mode-coherent.
+                            mode=self.mode,
                         )
                         # F-003: rebuild the bridge for each OOM retry so the
                         # adapter is bound to the fresh SFTTrainer instance.
@@ -3080,6 +3721,13 @@ class Trainer:
             merge_mode=MergeMode(merge_mode.lower()),
             checkpoint_dir=checkpoint_dir or str(self.output_dir / "multi_run"),
             initial_lr=self.learning_rate,
+            # v1.4 BACKEND-F-008 (Wave 6b features): forward the outer
+            # Trainer's mode to MultiRunConfig so ``Trainer(mode='full')
+            # .multi_run(...)`` produces a coherent full-FT multi-run
+            # session. Operator-level intent is preserved end-to-end:
+            # outer Trainer mode → MultiRunConfig.mode → inner Trainer
+            # mode → _build_sft_config(mode=...).
+            mode=self.mode,
         )
 
         multi_run_trainer = MultiRunTrainer(

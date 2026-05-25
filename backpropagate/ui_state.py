@@ -1549,10 +1549,20 @@ class RunDetailState(rx.State):
     # can render them as table rows without on-template f-strings.
     hyperparameters: list[dict] = []
 
-    # Metrics — read from training_metrics.jsonl when present.
-    # v1.3 drill-down chart consumes loss_history only; lr + grad_norm
-    # series are tracked for v1.4 multi-line metrics view + landed at
-    # that time per [[no-banner-documenting-no-op]] / [[within-swarm-doc-lie-drift-detection]].
+    # Metrics — read from training_metrics.jsonl when present. v1.4 ships
+    # with loss_history only. The multi-line metrics view (V1_4_BRIEF item
+    # 10: lr + grad_norm + val_loss as additional series) was DEFERRED to
+    # v1.5 per advisor lock 2026-05-25 (Wave 5 feature audit, decision 5)
+    # because the upstream data pipeline is dead: trainer.py's log-history
+    # extraction reads only ``log.get('loss')`` from HF Trainer.state.log_
+    # history, dropping the ``grad_norm`` / ``learning_rate`` keys HF
+    # populates per step; checkpoints.py's manifest schema has no parallel
+    # ``grad_norm_history`` / ``lr_history`` / ``val_loss_history`` fields.
+    # v1.5 will land the full cohesive slice in one wave — trainer
+    # extraction + schema bump + RunDetailState fields + BpLossChart
+    # multi-line + dual-axis y-scale + per-series toggle — rather than
+    # ship the data plumbing as a banner-documenting-no-op intermediate
+    # in v1.4 (see [[no-banner-documenting-no-op]]).
     loss_history: list[float] = []
 
     # Checkpoint list — {name, size_mb, timestamp} per entry.

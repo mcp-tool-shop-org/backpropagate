@@ -28,7 +28,7 @@ trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ```bash
-backprop ollama register ./output/lora --name my-model
+backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 ollama run my-model
 ```
 
@@ -76,21 +76,24 @@ Aqui está a faixa prática em uma placa de 16 GB (RTX 4080 / 5080 / 4070 Ti Sup
 | Modelo | Método | Status |
 |---|---|---|
 | Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | Confortável. Comprimento total da sequência, espaço extra. |
+| Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B (limite máximo de 3 bilhões de parâmetros) | `mode="full"` (ajuste fino completo) | v1.4 — Utilize a opção `--mode=full` no comando `backprop train` ou `Trainer(..., mode="full")`. O checkpointing do gradiente e o Adam de 8 bits com paginação mantêm a memória de ativação em sqrt(L). |
 | Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | Padrão. ~7-8 GB. Configurações padrão do Backpropagate. |
 | Llama-3 13B | QLoRA + empacotamento de amostras | Apertado, mas funciona. Use sequências mais curtas. |
-| Mixtral 8x7B (47 bilhões de parâmetros no total) | AQLM 2-bit + LoRA | Experimental na v1.4. O maior modelo que você pode usar em uma placa de 16 GB. |
+| Mixtral 8x7B (47 bilhões de parâmetros no total) | AQLM 2-bit + LoRA | Planejado para v1.5 — Consulte o documento V1_5_BRIEF quando for publicado. |
 
-Para modelos de 3 bilhões de parâmetros ou menores, o ajuste fino completo (não apenas LoRA) é viável em 16 GB e está planejado como uma opção `mode="full"` para a v1.4. Para modelos de 7 bilhões de parâmetros ou mais, o ajuste fino completo requer uma GPU de 24 GB ou mais — considere alugar uma GPU A100 na nuvem, ou use LoRA, que pesquisas recentes mostram que corresponde à qualidade do ajuste fino completo na maioria das tarefas de pós-treinamento (veja a seção "o que Backpropagate não é" para citações).
+A quantização AQLM de 2 bits (`quant_method="aqlm"`, opção experimental para Mixtral-8x7B em 16GB) foi planejada para v1.4 e agora está prevista para v1.5. A biblioteca `aqlm` está madura; a prioridade para a versão 1.4 foi oferecer suporte completo para ajuste fino de modelos com até 3 bilhões de parâmetros (`mode="full"`), em vez de adicionar um novo backend de quantização. Consulte o documento V1_5_BRIEF quando for publicado para o plano de implementação da versão 1.5.
+
+Para modelos com 3 bilhões de parâmetros ou menores, o ajuste fino completo (e não apenas LoRA) é viável em 16GB e está disponível na versão 1.4 como `mode="full"`. Utilize `Trainer(..., mode="full")` ou `backprop train --mode=full --model phi-4-mini-3.8b` para habilitá-lo. Um mecanismo impede o uso desse modo para modelos maiores que 3 bilhões de parâmetros, oferecendo LoRA e as configurações predefinidas para modelos menores que 3 bilhões como alternativas. Consulte a página completa do manual de ajuste fino ([https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/](https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/)) para a configuração e a comparação de qualidade entre Biderman 2024 e Thinking Machines 2025. Para modelos com 7 bilhões de parâmetros ou mais, o ajuste fino completo requer uma GPU com 24GB ou mais — considere alugar uma GPU A100 na nuvem ou utilize LoRA, que, segundo pesquisas recentes, oferece qualidade comparável ao ajuste fino completo na maioria das tarefas de pós-treinamento (consulte a seção "o que Backpropagate não é" para referências).
 
 ## O que Backpropagate NÃO é
 
-Uma descrição honesta ajuda a todos. Backpropagate não faz essas coisas, e tentar fazer com que faça seria uma experiência pior do que usar a ferramenta certa:
+Se o seu caso de uso se enquadra nas opções abaixo, você terá melhores resultados com outra biblioteca — Backpropagate não é a escolha certa, e tentar fazê-lo funcionar custará mais do que simplesmente usar a ferramenta adequada. Ler esta seção antes de começar economiza o tempo gasto na instalação e na tentativa de fazer funcionar:
 
-- **Ajuste fino completo de parâmetros para modelos com mais de 7 bilhões de parâmetros** — O Backpropagate usa LoRA/QLoRA, que treina um adaptador pequeno em vez de atualizar todos os pesos. Para modelos com 7 bilhões de parâmetros ou mais, o ajuste fino completo requer 24 GB ou mais de memória da GPU e não cabe em uma placa de consumo de 16 GB. Para modelos com 3 bilhões de parâmetros ou menos, o ajuste fino completo é viável em 16 GB; uma opção `mode="full"` está planejada para a versão 1.4. Em resumo: pesquisas recentes ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) mostram que o LoRA, com a configuração correta, atinge a mesma qualidade do ajuste fino completo na maioria das tarefas de pós-treinamento (seguir instruções, adaptação de domínio, personalidade/estilo), utilizando 67% menos recursos computacionais. Portanto, para a maioria das tarefas que os usuários desejam realizar, você não perde nada ao usar o LoRA. Se você realmente precisa do ajuste fino completo de um modelo com mais de 7 bilhões de parâmetros, use o `transformers.Trainer` da HuggingFace diretamente em uma placa com 24 GB ou mais.
-- **DPO / PPO / GRPO / ajuste de preferências** — O Backpropagate realiza apenas o ajuste fino supervisionado em uma única etapa. Para o aprendizado por preferências, use o TRL diretamente ou o LLaMA-Factory.
-- **Treinamento em vários nós** — Apenas uma GPU em uma única máquina. O uso de várias GPUs em uma única máquina funciona (via `accelerate launch`), mas não é oficialmente suportado.
-- **Treinamento no macOS** — O Apple Silicon não possui CUDA, portanto, o treinamento deve ser executado em uma máquina Linux ou Windows com uma GPU NVIDIA. Você ainda pode executar o modelo treinado em um Mac usando o Ollama.
-- **Qualquer modelo fora das famílias de modelos testados** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Outros modelos geralmente funcionam, mas não são testados nos testes de integração contínua (CI).
+- **Ajuste fino de todos os parâmetros de modelos com 7 bilhões de parâmetros ou mais** — Backpropagate utiliza LoRA / QLoRA, que treina um adaptador pequeno em vez de atualizar todos os pesos. Para modelos com 7 bilhões de parâmetros ou mais, o ajuste fino completo requer 24GB ou mais de memória da GPU e não cabe em uma placa de consumidor com 16GB. Para modelos com 3 bilhões de parâmetros ou menos, o ajuste fino completo é viável em 16GB e está disponível na versão 1.4 como `mode="full"` (utilize `Trainer(..., mode="full")` ou `--mode=full` na linha de comando; um mecanismo impede o uso desse modo para modelos maiores que 3 bilhões de parâmetros, oferecendo LoRA e as configurações predefinidas para modelos menores que 3 bilhões como alternativas). Em resumo: pesquisas recentes ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) mostram que o LoRA, com a configuração correta, oferece qualidade comparável ao ajuste fino completo na maioria das tarefas de pós-treinamento (seguir instruções, adaptação de domínio, personalidade/estilo) com 67% do poder computacional — portanto, para o trabalho que a maioria dos usuários realmente deseja realizar, você não perde nada ao usar LoRA. `mode="full"` existe para os casos em que você mediu uma diferença de qualidade e decidiu gastar mais poder computacional. Se você realmente precisa de um ajuste fino completo de um modelo com 7 bilhões de parâmetros ou mais, utilize diretamente o `transformers.Trainer` da HuggingFace em uma placa com 24GB ou mais.
+- **DPO / PPO / GRPO / ajuste de preferências** — Backpropagate realiza apenas o ajuste fino supervisionado em uma única etapa. Para o aprendizado por preferências, utilize diretamente o TRL ou o LLaMA-Factory.
+- **Treinamento em vários nós** — apenas uma GPU em uma única máquina. O uso de várias GPUs em uma única máquina funciona (via `accelerate launch`), mas não é oficialmente suportado.
+- **Treinamento no macOS** — o Apple Silicon não possui CUDA, portanto, o treinamento deve ser executado em uma máquina Linux ou Windows com uma GPU NVIDIA. Você ainda pode executar o modelo treinado em um Mac via Ollama.
+- **Qualquer modelo fora das famílias de modelos testados** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Outros modelos podem funcionar, mas não são testados nos testes automatizados.
 
 Se você precisar de alguma dessas funcionalidades, utilize uma das bibliotecas listadas acima. Elas são mais adequadas para isso.
 
@@ -331,12 +334,12 @@ Quando algo falha, o Backpropagate imprime uma linha no início, como `run_start
 
 Um bom relatório de bug inclui:
 
-1. **O `run_id`** — o UUID impresso no início.
-2. **O código de erro** — a linha `[CODE_NAME]: message` no stderr. Consulte [códigos de erro](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) para a lista completa.
-3. **O comando de linha de comando, com informações sensíveis removidas.** O stderr é automaticamente anonimizado (tokens Bearer, `sk-*`, `hf_*`, chaves AWS, pares `password=` / `token=` são removidos) — é seguro colar. Para obter o rastreamento completo e não anonimizado, execute novamente com `--verbose`, mas revise antes de publicar.
-4. **Versões do Python / PyTorch, modelo da GPU, sistema operacional.** `backprop info` imprime tudo isso de uma vez.
+1. **O `run_id`** — o UUID (identificador único universal) exibido na inicialização. Um único UUID permite que um administrador correlacione cada linha de log, cada ponto de verificação e cada entrada do Weights & Biases para aquela execução específica.
+2. **O código de erro** — a linha `[NOME_DO_CÓDIGO]: mensagem` no stderr. Consulte [códigos de erro](https://mcp-tool-shop-org.github.io/backpropagate/handbook/error-codes/) para o catálogo de códigos estáveis.
+3. **O rastreamento de erro (traceback) com informações removidas.** O stderr é automaticamente editado (com informações sensíveis removidas) no modo não detalhado (tokens Bearer, `sk-*`, `hf_*`, chaves da AWS, pares `password=` / `token=` / `api_key=` são removidos) — é seguro colar. Para o rastreamento de erro completo e sem informações removidas, execute novamente com `BACKPROPAGATE_DEBUG=1` (ou `--verbose`); revise antes de publicar.
+4. **A saída de `backprop info`.** Um único comando imprime informações sobre Python / PyTorch / CUDA / modelo da GPU / VRAM / sistema operacional / complementos instalados — tudo o que o administrador precisa para identificar a causa de uma regressão específica da plataforma.
 
-Perguntas, ideias ou discussões sobre se algo é esperado devem ser feitas em [Discussões do GitHub](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Problemas de segurança devem ser relatados de forma privada através do formulário [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) — consulte [SECURITY.md](SECURITY.md) para a política.
+O [modelo de relatório de erro](https://github.com/mcp-tool-shop-org/backpropagate/issues/new?template=bug_report.yml) solicita explicitamente cada um desses itens, o que agiliza o processo de triagem. Perguntas, ideias ou discussões sobre "é isso esperado?" devem ser feitas nos [GitHub Discussions](https://github.com/mcp-tool-shop-org/backpropagate/discussions). Problemas de segurança devem ser relatados de forma privada através do formulário [GitHub Security Advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) — consulte o arquivo [SECURITY.md](SECURITY.md) para obter a política e os prazos de resposta.
 
 ## Privacidade
 

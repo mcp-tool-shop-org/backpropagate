@@ -3026,6 +3026,46 @@ class TestBuildSftConfigHelper:
                 f"fp16={kwargs['fp16']!r}"
             )
 
+    def test_helper_forces_fp32_on_cpu_only_runner(self):
+        """CPU runner (no CUDA) => bf16=False, fp16=False.
+
+        Regression for the nightly_train_smoke failure on 2026-05-25/26
+        (workflow runs 26385294328 + 26434147558). The config default is
+        ``bf16=True, fp16=False``; pre-fix, ``_detect_optimal_dtype``
+        threaded ``configured_bf16`` through unchanged when CUDA was
+        unavailable. transformers' ``TrainingArguments._validate_args``
+        rejects bf16 on CPU with ``"Your setup doesn't support bf16/gpu.
+        You need to assign use_cpu if you want to train the model on
+        CPU."``, so every CPU train (including the nightly smoke) blew
+        up at SFTConfig construction. The detector now forces fp32 when
+        CUDA isn't available.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["bf16"] is False, (
+                f"CPU runner must force bf16=False to satisfy transformers' "
+                f"_validate_args; got bf16={kwargs['bf16']!r}"
+            )
+            assert kwargs["fp16"] is False, (
+                f"CPU runner must force fp16=False (same _validate_args "
+                f"check); got fp16={kwargs['fp16']!r}"
+            )
+
     def test_helper_omits_optional_fields_when_none(self):
         """save_steps + weight_decay are optional; omitted when None.
 

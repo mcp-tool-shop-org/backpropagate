@@ -1939,12 +1939,22 @@ class Trainer:
            to pass ``--fp16`` AND ``--no-bf16`` (or set both env vars)
            — the resolver respects that by leaving the explicit choice
            alone (bf16=False, fp16=True ⇒ skip).
-        2. If torch is missing or CUDA is unavailable, leave the
-           defaults in place.
-        3. If the card supports bf16 (compute capability >= 8.0, i.e.
+        2. If CUDA is unavailable (CPU-only runner / no GPU
+           visible), force ``(False, False)`` — transformers'
+           ``TrainingArguments._validate_args`` hard-rejects
+           ``bf16=True`` or ``fp16=True`` on CPU with
+           ``"Your setup doesn't support bf16/gpu. You need to
+           assign use_cpu if you want to train the model on CPU."``
+           The config defaults (``bf16=True, fp16=False``) would
+           otherwise blow up every CPU train at SFTConfig
+           construction time. fp32 is the only valid CPU choice.
+        3. If torch is missing or the CUDA capability query raises,
+           leave the operator's config in place (we can't tell
+           what they have).
+        4. If the card supports bf16 (compute capability >= 8.0, i.e.
            Ampere / Ada / Hopper / Blackwell): prefer (bf16=True,
            fp16=False).
-        4. Otherwise prefer (bf16=False, fp16=True) — pre-Ampere
+        5. Otherwise prefer (bf16=False, fp16=True) — pre-Ampere
            cards.
 
         Returns ``(bf16, fp16)`` for SFTConfig.
@@ -1956,7 +1966,14 @@ class Trainer:
         try:
             import torch
             if not torch.cuda.is_available():
-                return (configured_bf16, configured_fp16)
+                if configured_bf16 or configured_fp16:
+                    logger.info(
+                        "_detect_optimal_dtype: CUDA unavailable — "
+                        "forcing fp32 (bf16/fp16 are not supported on "
+                        "CPU; transformers rejects them at SFTConfig "
+                        "construction)."
+                    )
+                return (False, False)
             major, minor = torch.cuda.get_device_capability(0)
             capability = float(f"{major}.{minor}")
         except Exception as exc:  # noqa: BLE001

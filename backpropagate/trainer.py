@@ -1872,11 +1872,18 @@ class Trainer:
            operators who pinned a specific optimizer for an LR
            schedule / fairness constraint / token budget that depends
            on it.
-        2. If torch is missing or CUDA is unavailable, leave the
-           default in place — no runtime data to act on.
-        3. If the card has < 24GB VRAM, upgrade ``adamw_8bit`` →
+        2. If CUDA is unavailable (CPU-only runner / no GPU
+           visible), downgrade ``adamw_8bit`` → ``adamw_torch``.
+           bitsandbytes 8-bit optimizers are CUDA-only — calling
+           ``.step()`` on CPU tensors raises ``RuntimeError: All
+           input tensors need to be on the same GPU`` from
+           ``bnb.functional.is_on_gpu``. ``adamw_torch`` is the
+           transformers-standard CPU-compatible AdamW.
+        3. If torch is missing or the CUDA capability query raises,
+           leave the operator's config in place.
+        4. If the card has < 24GB VRAM, upgrade ``adamw_8bit`` →
            ``paged_adamw_8bit`` (consumer-card tier).
-        4. Otherwise leave the default in place (datacenter-class card
+        5. Otherwise leave the default in place (datacenter-class card
            with VRAM to spare).
 
         Returns the resolved optimizer string. Pure function; the
@@ -1890,7 +1897,12 @@ class Trainer:
         try:
             import torch
             if not torch.cuda.is_available():
-                return configured_optim
+                logger.info(
+                    "_detect_optim_for_card: CUDA unavailable — "
+                    "downgrading optim adamw_8bit -> adamw_torch "
+                    "(bitsandbytes 8-bit optimizers are CUDA-only)."
+                )
+                return "adamw_torch"
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
         except Exception as exc:  # noqa: BLE001
             # Defensive: never let a CUDA query failure crash the

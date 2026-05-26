@@ -3026,6 +3026,41 @@ class TestBuildSftConfigHelper:
                 f"fp16={kwargs['fp16']!r}"
             )
 
+    def test_helper_downgrades_to_adamw_torch_on_cpu_only_runner(self):
+        """CPU runner (no CUDA) => optim downgrades adamw_8bit -> adamw_torch.
+
+        Same shape as the bf16 regression. bitsandbytes 8-bit optimizers
+        are CUDA-only; calling ``.step()`` on CPU tensors raises
+        ``RuntimeError: All input tensors need to be on the same GPU``
+        from ``bnb.functional.is_on_gpu``. The config default `optim`
+        is ``adamw_8bit``, so every CPU train (including
+        nightly_train_smoke) would hit the bnb error after the SFTConfig
+        bf16 guard was satisfied. The detector now picks ``adamw_torch``
+        — the transformers-standard CPU-compatible AdamW.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-4,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["optim"] == "adamw_torch", (
+                f"CPU runner must downgrade adamw_8bit -> adamw_torch "
+                f"(bnb 8-bit optimizers are CUDA-only); got "
+                f"optim={kwargs['optim']!r}"
+            )
+
     def test_helper_forces_fp32_on_cpu_only_runner(self):
         """CPU runner (no CUDA) => bf16=False, fp16=False.
 

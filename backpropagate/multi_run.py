@@ -735,6 +735,35 @@ class MultiRunTrainer:
         )
         logger.info(f"Merge mode: {self.config.merge_mode.value}, oom_recovery={self.oom_recovery}")
 
+        # CONTINUAL-A-006 (v1.4): surface the DoRA + SLAO magnitude contract at
+        # construction so it's discoverable for anyone debugging "why does my
+        # merged magnitude reflect only the latest run?". When DoRA is active
+        # AND we merge via SLAO, the DoRA magnitude vector
+        # (``...lora_magnitude_vector...``) is HARD-REPLACED on every merge —
+        # treated as fresh, mirroring the asymmetric A-matrix policy — NOT
+        # EMA-merged like the LoRA B matrix. This is correct: the magnitude is
+        # tightly coupled to the hard-replaced A-direction, and blending it
+        # would leave it describing a stale direction (see SLAOMerger.merge()).
+        # Logged at INFO (not WARN) on purpose — nothing is wrong with this
+        # config; it's a documented contract, not a risk, and a WARN on a
+        # correct + recommended combo would only breed warning-fatigue. The
+        # effective DoRA value resolves the same way the inner Trainer resolves
+        # it: explicit ``config.use_dora`` wins, else fall back to
+        # ``settings.lora.use_dora`` (the env-var-driven layer).
+        _effective_use_dora = (
+            self.config.use_dora
+            if self.config.use_dora is not None
+            else settings.lora.use_dora
+        )
+        if self.config.merge_mode == MergeMode.SLAO and _effective_use_dora:
+            logger.info(
+                "DoRA + SLAO: DoRA magnitude vectors (lora_magnitude_vector) "
+                "are hard-replaced (treated as fresh) on every merge — not "
+                "EMA-merged like LoRA B matrices — so they stay coherent with "
+                "the hard-replaced A-direction. Merged magnitudes therefore "
+                "reflect the latest run only, by design (CONTINUAL-A-006)."
+            )
+
     def _maybe_resume(self, checkpoint_dir: Path) -> str | None:
         """F-002: resolve the resume hint into a concrete run_id (or None).
 

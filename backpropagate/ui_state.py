@@ -2037,7 +2037,10 @@ class RunDetailState(rx.State):
             # Populate header fields.
             self.status = str(entry.get("status") or "-")
             self.model = str(entry.get("model_name") or "-")
-            self.dataset = str(entry.get("dataset_info") or "-")
+            # Re-audit MEDIUM: dataset_info is often an absolute path (trainer
+            # records the raw --data arg); redact home-dir/username before it
+            # reaches this public, client-serialized var (sibling of UI-A-002).
+            self.dataset = _redact_action(str(entry.get("dataset_info") or "-"))
             self.started_at = str(entry.get("started_at") or entry.get("timestamp") or "-")
             self.completed_at = str(entry.get("completed_at") or "-")
             duration = entry.get("duration_seconds")

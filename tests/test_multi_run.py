@@ -3940,3 +3940,108 @@ class TestDoRASlaoMultiRunIntegration:
                     f"{k} stayed on {v.device} after a CUDA merge — "
                     "CONTINUAL-A-005 device alignment regressed"
                 )
+
+
+# Distinctive substring of the construction-time INFO line (CONTINUAL-A-006).
+_DORA_SLAO_LOG_MARKER = "DoRA magnitude vectors (lora_magnitude_vector)"
+
+
+@pytest.mark.serial
+class TestDoRASlaoConstructionLog:
+    """CONTINUAL-A-006: MultiRunTrainer emits an INFO at construction
+    documenting that DoRA magnitude vectors are hard-replaced (treated as
+    fresh) under SLAO — not EMA-merged like LoRA B. INFO (not WARN) because the
+    combo is correct + recommended: the line is a discoverability aid, not a
+    risk signal. It fires only when DoRA is *effectively* active (explicit
+    ``config.use_dora``, or inherited from ``settings.lora.use_dora``) AND
+    ``merge_mode=SLAO``.
+
+    These construct MultiRunTrainer only (no model load), so they're fast and
+    need no GPU. Log capture mirrors the repo's established pattern
+    (caplog.at_level(..., logger="backpropagate.<module>") — see
+    tests/test_checkpoints.py / tests/test_datasets.py).
+    """
+
+    @staticmethod
+    def _fires(caplog) -> bool:
+        return any(_DORA_SLAO_LOG_MARKER in r.getMessage() for r in caplog.records)
+
+    def test_logs_when_use_dora_true_and_slao(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=True),
+            )
+        assert self._fires(caplog), (
+            "DoRA + SLAO construction INFO did not fire. Records: "
+            + repr([r.getMessage() for r in caplog.records])
+        )
+        # Deliberate level choice: INFO, never WARNING (correct config, not a risk).
+        rec = next(
+            r for r in caplog.records if _DORA_SLAO_LOG_MARKER in r.getMessage()
+        )
+        assert rec.levelno == logging.INFO, (
+            f"DoRA+SLAO contract line should be INFO (a discoverability aid), "
+            f"got {rec.levelname} — a WARN on a correct/recommended combo would "
+            "breed warning-fatigue."
+        )
+
+    def test_silent_when_use_dora_false(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=False),
+            )
+        assert not self._fires(caplog)
+
+    def test_silent_when_merge_mode_simple(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SIMPLE, use_dora=True),
+            )
+        assert not self._fires(caplog), (
+            "magnitude-replace contract is SLAO-specific; SIMPLE mode never "
+            "merges, so the line must not fire"
+        )
+
+    def test_logs_when_use_dora_inherited_from_settings(self, caplog, monkeypatch):
+        """``use_dora=None`` inherits ``settings.lora.use_dora``; when that's
+        True under SLAO, DoRA is genuinely active and the contract still
+        applies — so the INFO must fire on the inherited path too."""
+        import logging
+
+        import backpropagate.multi_run as _mr
+
+        # Patch the EXACT settings.lora object multi_run.py reads (its own
+        # ``from .config import settings`` binding), NOT a freshly-imported
+        # alias — robust to a prior test reassigning the config singleton, so
+        # the inherited-path assertion holds in full-suite collection order.
+        monkeypatch.setattr(_mr.settings.lora, "use_dora", True)
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=None),
+            )
+        assert self._fires(caplog)
+
+    def test_silent_when_use_dora_none_and_settings_false(self, caplog, monkeypatch):
+        """Default path: ``use_dora=None`` + ``settings.lora.use_dora`` False
+        (the shipped default) → DoRA inactive → no line."""
+        import logging
+
+        import backpropagate.multi_run as _mr
+
+        monkeypatch.setattr(_mr.settings.lora, "use_dora", False)
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=None),
+            )
+        assert not self._fires(caplog)

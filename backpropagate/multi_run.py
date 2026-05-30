@@ -442,7 +442,7 @@ class MultiRunConfig:
     # v1.4 BACKEND-F-008 (Wave 6b features): training mode forwarded to the
     # inner Trainer instance. ``"lora"`` (default) preserves pre-Wave-6b
     # multi-run behavior byte-identically; ``"full"`` enables full
-    # fine-tuning for models <=3B parameters. mode='full' on a model >3B
+    # fine-tuning for models <=4B parameters. mode='full' on a model >4B
     # raises RUNTIME_FULL_FT_MODEL_TOO_LARGE at MultiRunTrainer
     # construction time via the inner Trainer's construction-time gate
     # (and again at the inner Trainer's load_model() time as belt-and-
@@ -1325,7 +1325,7 @@ class MultiRunTrainer:
                 optim=self.config.optim,
                 # v1.4 BACKEND-F-008 (Wave 6b features): forward the multi-run
                 # mode setting to the inner Trainer. mode='full' on a model
-                # >3B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE here (Trainer
+                # >4B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE here (Trainer
                 # construction); mode='lora' (default) preserves byte-
                 # identical pre-Wave-6b multi-run behavior.
                 mode=self.config.mode,

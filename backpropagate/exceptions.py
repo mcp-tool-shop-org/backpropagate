@@ -463,25 +463,25 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     },
     # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate.
     # Raised at Trainer / MultiRunTrainer construction time when the operator
-    # selects mode='full' for a model whose parameter count exceeds the 3B
-    # consumer-GPU ceiling (16GB VRAM tier per the v1.3 16GB fine-tuning
-    # study-swarm; Biderman 2024 / Thinking Machines 2025). The 3B ceiling is
-    # the documented production-feasible boundary — full FT of a 7B requires
-    # a 24GB+ datacenter card AND paged optimizer state AND aggressive
-    # gradient checkpointing, which the trainer does not configure for
-    # consumer hardware.
+    # selects mode='full' for a model whose parameter count exceeds the 4B
+    # full-fine-tuning ceiling. The ceiling bounds the parameter COUNT so the
+    # marketed "3B" presets (true count 3.08-3.24B) and the 3.8-4B class clear
+    # it; full FT of a 7B+ requires aggressive memory engineering the trainer
+    # does not configure for consumer hardware (Biderman 2024 / Thinking
+    # Machines 2025). VRAM split: a genuine ~3B fits 16GB; 3.8-4B needs 24GB+.
     "RUNTIME_FULL_FT_MODEL_TOO_LARGE": {
         "description": (
-            "mode='full' was selected but the target model exceeds the 3B "
-            "parameter ceiling for full fine-tuning on consumer hardware "
-            "(16GB VRAM tier per the v1.3 16GB fine-tuning study-swarm)."
+            "mode='full' was selected but the target model exceeds the 4B "
+            "parameter ceiling for full fine-tuning. (A genuine ~3B fits a "
+            "16GB card; the 3.8-4B class needs 24GB+.)"
         ),
         "default_hint": (
             "Re-run with mode='lora' (the default) to fine-tune a LoRA "
-            "adapter on the same model, OR switch to a smaller model whose "
-            "parameter count fits the 3B ceiling — phi-4-mini-3.8b / "
-            "qwen3.5-4b / smollm3-3b all carry preset entries and support "
-            "mode='full'. See handbook/full-finetuning.md for the "
+            "adapter on the same model, OR switch to a model whose parameter "
+            "count fits the 4B ceiling — smollm3-3b / qwen2.5-3b / "
+            "llama-3.2-3b / llama-3.2-1b fit 16GB; phi-4-mini-3.8b / "
+            "qwen3.5-4b also support mode='full' but need a 24GB+ card. "
+            "See handbook/full-fine-tuning.md for the "
             "Biderman 2024 + Thinking Machines 2025 quality math."
         ),
         "retryable": "no",
@@ -1009,20 +1009,24 @@ class ModelLoadError(TrainingError):
 
 class FullFinetuneModelTooLargeError(TrainingError):
     """v1.4 BACKEND-F-008 (Wave 6b): raised when mode='full' is requested for a model
-    whose parameter count exceeds the 3B ceiling for consumer-GPU full fine-tuning.
+    whose parameter count exceeds the 4B full-fine-tuning ceiling.
 
-    The 3B ceiling tracks the v1.3 16GB fine-tuning study-swarm: full FT of a 3B
-    model on a 16GB consumer card (RTX 5080 / 4080) is the documented
-    production-feasible boundary even with 8-bit paged optimizer + gradient
-    checkpointing. Models >3B require a 24GB+ datacenter card AND more
-    aggressive memory engineering than this trainer configures by default.
+    The ceiling bounds the parameter COUNT (it does not promise a 16GB fit for
+    every admitted model). It is 4B so the marketed "3B" presets — whose true
+    num_parameters() are 3.08-3.24B — actually clear the gate, alongside the
+    3.8-4B class. VRAM reality (v1.3 16GB study-swarm): full FT of a genuine
+    ~3B in bf16 + 8-bit paged optimizer + gradient checkpointing fits a 16GB
+    consumer card (RTX 5080 / 4080); the 3.8-4B class (phi-4-mini-3.8b,
+    qwen3.5-4b) is admitted but needs a 24GB+ card. Models >4B require
+    mode='lora' or transformers.Trainer directly.
 
     The operator's two recoveries are:
       1. Re-run with mode='lora' (the default) — LoRA fits 7B+ on a 16GB card
          and is the recommended path for most fine-tuning workflows.
-      2. Switch to a model that fits the ceiling. phi-4-mini-3.8b (MIT),
-         qwen3.5-4b (Apache 2.0), smollm3-3b (Apache 2.0) all carry preset
-         entries and the catalog calls each one out as commercial-safe.
+      2. Switch to a model that fits the ceiling. smollm3-3b (Apache 2.0),
+         qwen2.5-3b, llama-3.2-3b, and llama-3.2-1b are <=~3.2B and fit 16GB;
+         phi-4-mini-3.8b and qwen3.5-4b also support mode='full' but want a
+         24GB+ card. All carry preset entries.
 
     Carries ``code='RUNTIME_FULL_FT_MODEL_TOO_LARGE'`` so the cli.py exit-code
     mapper + handbook/error-codes.md surface it consistently.
@@ -1032,7 +1036,7 @@ class FullFinetuneModelTooLargeError(TrainingError):
         self,
         model_name: str,
         param_count_billions: float | None = None,
-        ceiling_billions: float = 3.0,
+        ceiling_billions: float = 4.0,
         suggestion: str | None = None,
     ):
         self.model_name = model_name
@@ -1046,19 +1050,18 @@ class FullFinetuneModelTooLargeError(TrainingError):
                 f"has approximately {param_count_billions:.1f}B parameters"
             )
         else:
-            # Preset table lookup said "this is a >3B model" without an exact
-            # count (e.g. fallback heuristic). The operator still needs the
-            # actionable hint even when the precise number is unknown.
+            # Preset table lookup said "this is an oversized model" without an
+            # exact count (e.g. fallback heuristic). The operator still needs
+            # the actionable hint even when the precise number is unknown.
             size_phrase = "exceeds the documented parameter ceiling"
 
         message = (
             f"model {model_name!r} {size_phrase}; mode='full' supports "
-            f"models up to {ceiling_billions:.0f}B (the 16GB consumer GPU "
-            f"ceiling per the v1.3 16GB fine-tuning study-swarm). "
+            f"models up to {ceiling_billions:.0f}B parameters. "
             f"Re-run with mode='lora' (the default) to fine-tune a LoRA "
             f"adapter, OR switch to a smaller model "
-            f"(phi-4-mini-3.8b / qwen3.5-4b / smollm3-3b presets all "
-            f"support mode='full')."
+            f"(smollm3-3b / qwen2.5-3b / llama-3.2-3b / llama-3.2-1b fit 16GB; "
+            f"phi-4-mini-3.8b / qwen3.5-4b need 24GB+)."
         )
 
         details: dict[str, Any] = {

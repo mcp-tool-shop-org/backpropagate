@@ -48,14 +48,32 @@ class TestTrainerModeFullGate:
         assert trainer.mode == "lora"
 
     def test_mode_full_accepts_small_preset(self):
-        """Trainer(mode='full', model='smollm3-3b') passes the 3B gate."""
+        """Trainer(mode='full', model='smollm3-3b') passes the 4B gate."""
         from backpropagate.trainer import Trainer
 
         with patch("torch.cuda.is_available", return_value=False):
-            # smollm3-3b is 3B and within the ceiling.
+            # smollm3-3b's true count is ~3.08B — under the 4B ceiling.
             trainer = Trainer(model="smollm3-3b", mode="full")
 
         assert trainer.mode == "full"
+
+    def test_mode_full_accepts_38b_and_4b_presets(self):
+        """v1.4.x: the 4B ceiling admits phi-4-mini-3.8b and qwen3.5-4b.
+
+        Pre-fix the ceiling was 3.0B, which rejected every marketed "3B"
+        preset at LOAD time (their true counts are 3.08-3.24B > 3.0).  Raised
+        to 4.0B so the 3B presets work end-to-end AND the 3.8-4B class is
+        admitted (those need a 24GB+ card for VRAM, but the param-count gate
+        allows them).
+        """
+        from backpropagate.trainer import Trainer
+
+        for preset in ("phi-4-mini-3.8b", "qwen3.5-4b"):
+            with patch("torch.cuda.is_available", return_value=False):
+                trainer = Trainer(model=preset, mode="full")
+            assert trainer.mode == "full", (
+                f"mode='full' should accept {preset} under the 4B ceiling"
+            )
 
     def test_mode_full_rejects_oversized_model(self):
         """Trainer(mode='full', model='Qwen/Qwen2.5-7B-Instruct') raises."""
@@ -71,8 +89,8 @@ class TestTrainerModeFullGate:
         # The model id MUST appear in the message so an operator pasting the
         # traceback into Slack sees what they passed.
         assert "Qwen/Qwen2.5-7B-Instruct" in str(err)
-        # The 3B ceiling is the documented contract — drift surfaces here.
-        assert err.ceiling_billions == 3.0
+        # The 4B ceiling is the documented contract — drift surfaces here.
+        assert err.ceiling_billions == 4.0
         # The recovery hint names the lora alternative + at least one
         # mode='full'-compatible preset.
         assert "mode='lora'" in str(err)
@@ -259,6 +277,147 @@ class TestTrainerModeFullGate:
                 logging_steps=1,
                 mode="aqlm",
             )
+
+
+# =============================================================================
+# mode='full' loads a GENUINE full model (regression for the v1.4.0 QLoRA bug)
+# =============================================================================
+
+
+class TestModeFullLoadsGenuineFullModel:
+    """v1.4.x BACKEND fix — ``mode='full'`` must do real full fine-tuning.
+
+    The v1.4.0 loaders applied 4-bit quantization + a LoRA adapter
+    UNCONDITIONALLY (``_load_with_transformers`` / ``_load_with_unsloth`` had
+    no ``self.mode`` branch), so ``mode='full'`` silently ran QLoRA — the
+    exact opposite of its advertised contract. ``_build_sft_config(mode='full')``
+    correctly dropped the adapter + used paged-8bit AdamW, but it was handed a
+    model that was ALREADY 4-bit + ``get_peft_model``'d, so TRL trained the
+    LoRA adapter, not the full weights.
+
+    These tests pin the fix: after the loader runs with ``mode='full'``, the
+    model the trainer carries into ``SFTTrainer`` must be a plain
+    full-precision model — NOT 4-bit, NO LoRA adapter, every parameter
+    trainable. They are mocked (no multi-GB download) but exercise the real
+    loader code path and FAIL on the pre-fix loaders (which always called
+    ``get_peft_model``).
+    """
+
+    def test_transformers_full_mode_cpu_skips_4bit_and_adapter(self):
+        """transformers path, CPU: full-precision fp32 load, no 4-bit, no adapter."""
+        import torch
+
+        from backpropagate.trainer import Trainer
+
+        raw_model = MagicMock(name="full_precision_model")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.pad_token = None
+        mock_tokenizer.eos_token = "<eos>"
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(model="smollm3-3b", mode="full", use_unsloth=False)
+
+        with patch("torch.cuda.is_available", return_value=False), patch(
+            "transformers.AutoModelForCausalLM.from_pretrained", return_value=raw_model
+        ) as mock_from_pretrained, patch(
+            "transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer
+        ), patch(
+            "transformers.BitsAndBytesConfig"
+        ) as mock_bnb, patch(
+            "peft.prepare_model_for_kbit_training"
+        ) as mock_prepare, patch(
+            "peft.get_peft_model"
+        ) as mock_get_peft:
+            trainer._load_with_transformers()
+
+        # NOT 4-bit: BitsAndBytesConfig never built, no quantization_config passed.
+        mock_bnb.assert_not_called()
+        _, kwargs = mock_from_pretrained.call_args
+        assert "quantization_config" not in kwargs, (
+            "mode='full' must NOT 4-bit-quantize the base model; from_pretrained "
+            f"got quantization_config={kwargs.get('quantization_config')!r} — this "
+            "is the v1.4.0 QLoRA-masquerading-as-full bug."
+        )
+        # Full-precision dtype requested; CPU => fp32, no device_map.
+        assert kwargs.get("dtype") == torch.float32
+        assert "device_map" not in kwargs
+        # NOT a PeftModel: no adapter, no k-bit prep.
+        mock_get_peft.assert_not_called()
+        mock_prepare.assert_not_called()
+        # The trainer carries the raw full model forward, unwrapped.
+        assert trainer._model is raw_model
+
+    def test_transformers_full_mode_gpu_loads_bf16_no_quant(self):
+        """transformers path, GPU (Blackwell): bf16 + device_map='auto', still no 4-bit/adapter."""
+        import torch
+
+        from backpropagate.trainer import Trainer
+
+        raw_model = MagicMock(name="full_precision_model")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.pad_token = None
+        mock_tokenizer.eos_token = "<eos>"
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(model="smollm3-3b", mode="full", use_unsloth=False)
+
+        with patch("torch.cuda.is_available", return_value=True), patch(
+            "torch.cuda.get_device_capability", return_value=(12, 0)
+        ), patch(
+            "transformers.AutoModelForCausalLM.from_pretrained", return_value=raw_model
+        ) as mock_from_pretrained, patch(
+            "transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer
+        ), patch(
+            "transformers.BitsAndBytesConfig"
+        ) as mock_bnb, patch(
+            "peft.get_peft_model"
+        ) as mock_get_peft:
+            trainer._load_with_transformers()
+
+        _, kwargs = mock_from_pretrained.call_args
+        assert kwargs.get("device_map") == "auto"
+        assert kwargs.get("dtype") == torch.bfloat16, (
+            "mode='full' on a bf16-capable GPU should load bf16 weights "
+            f"(keeps the 16GB envelope); got dtype={kwargs.get('dtype')!r}"
+        )
+        assert "quantization_config" not in kwargs
+        mock_bnb.assert_not_called()
+        mock_get_peft.assert_not_called()
+        assert trainer._model is raw_model
+
+    def test_unsloth_full_mode_uses_full_finetuning_no_adapter(self):
+        """unsloth path: full_finetuning=True + load_in_4bit=False, get_peft_model NOT called."""
+        from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer
+
+        mock_fast_lm = MagicMock()
+        raw_model = MagicMock(name="unsloth_full_model")
+        mock_tokenizer = MagicMock()
+        mock_fast_lm.from_pretrained.return_value = (raw_model, mock_tokenizer)
+
+        with patch("torch.cuda.is_available", return_value=False), patch.dict(
+            feature_flags.FEATURES, {"unsloth": True}
+        ), patch.dict(
+            "sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}
+        ):
+            trainer = Trainer(model="smollm3-3b", mode="full", use_unsloth=True)
+            with patch("unsloth.FastLanguageModel", mock_fast_lm):
+                trainer._load_with_unsloth()
+
+        # from_pretrained told to do full FT, NOT 4-bit (``_label`` is consumed
+        # by _retry_hf_call, so it won't appear in the forwarded kwargs).
+        _, kwargs = mock_fast_lm.from_pretrained.call_args
+        assert kwargs.get("full_finetuning") is True, (
+            f"mode='full' (unsloth) must pass full_finetuning=True; got {kwargs!r}"
+        )
+        assert kwargs.get("load_in_4bit") is False, (
+            "mode='full' (unsloth) must disable 4-bit; got "
+            f"load_in_4bit={kwargs.get('load_in_4bit')!r}"
+        )
+        # NO LoRA adapter applied — this is the regression assertion.
+        mock_fast_lm.get_peft_model.assert_not_called()
+        # The raw full model is what the trainer carries forward.
+        assert trainer._model is raw_model
 
 
 # =============================================================================

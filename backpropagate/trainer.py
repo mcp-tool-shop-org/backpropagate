@@ -651,11 +651,18 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 # v1.4 Wave 6b doctrine ("extend, don't fork").
 
 # Documented production-feasible parameter count ceiling for mode='full'
-# on a 16GB consumer GPU. Operators who genuinely have a 24GB+ card can
-# still hit the gate (the threshold is conservative) — the escape hatch
-# is to construct with mode='lora' OR pick a smaller preset. Future
-# v1.5 may expose a `--full-ft-ceiling-billions` flag for 24GB+ operators.
-_FULL_FT_PARAM_CEILING_BILLIONS: float = 3.0
+# on a consumer GPU. The ceiling is 4B so the marketed "3B" presets — whose
+# true num_parameters() are 3.08-3.24B (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B)
+# — actually clear the gate, plus the 3.8-4B class (phi-4-mini-3.8b,
+# qwen3.5-4b). NOTE the VRAM split: full FT of a genuine ~3B in bf16 + paged
+# 8-bit AdamW + gradient checkpointing fits ~16GB; the 3.8-4B class needs a
+# 24GB+ card (weights+grads alone approach 16GB before optimizer/activations).
+# The gate only bounds the parameter COUNT — it does not promise 16GB fit for
+# every admitted model. Operators >4B use mode='lora'. A pre-4B value of 3.0
+# wrongly rejected every "3B" preset at load time (count > 3.0); raised to 4.0
+# in the v1.4.x mode='full' fix. Future v1.5 may expose a
+# `--full-ft-ceiling-billions` flag to lift it further on 24GB+ cards.
+_FULL_FT_PARAM_CEILING_BILLIONS: float = 4.0
 
 # Default learning rate for mode='full'. Full fine-tuning literature
 # (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
@@ -3095,21 +3102,47 @@ class Trainer:
         B-017: ``FastLanguageModel.from_pretrained`` is wrapped with the HF
         Hub transient-retry decorator so a 5xx / 429 / connection timeout
         from the Hub doesn't fail the load on the first blip.
+
+        Mode-aware (v1.4.x ``mode='full'`` correctness fix):
+
+        * ``mode='lora'`` (default) — ``load_in_4bit=True`` + a LoRA adapter
+          via ``FastLanguageModel.get_peft_model``. Unchanged.
+        * ``mode='full'`` — ``full_finetuning=True`` + ``load_in_4bit=False``
+          and **no** ``get_peft_model`` call: Unsloth returns a plain
+          trainable model whose every parameter updates. This is the Unsloth
+          half of the fix for the v1.4.0 bug where ``mode='full'`` silently
+          trained a LoRA adapter on a 4-bit base. Unsloth releases that
+          predate ``full_finetuning`` raise ``TypeError`` here; ``load_model``
+          catches it (``ModelLoadError`` is not a ``RuntimeError``) and
+          degrades to the mode-aware transformers full-precision path — still
+          genuine full FT, just without Unsloth's kernels.
         """
         from unsloth import FastLanguageModel
+
+        full_ft = self.mode == "full"
+
+        from_pretrained_kwargs: dict[str, Any] = {
+            "model_name": self.model_name,
+            "max_seq_length": self.max_seq_length,
+            "dtype": None,  # Auto-detect (bf16 on Ampere+, fp16 otherwise)
+            "trust_remote_code": settings.model.trust_remote_code,
+            "_label": f"unsloth_from_pretrained:{self.model_name}",
+        }
+        if full_ft:
+            # Full fine-tuning: no 4-bit base, every weight trainable.
+            from_pretrained_kwargs["load_in_4bit"] = False
+            from_pretrained_kwargs["full_finetuning"] = True
+        else:
+            # v1.5 T2.1 (FP8): reads the resolved ``self._load_in_4bit`` (the
+            # gate ladder flips it False when FP8 is effective). FP8 routes to
+            # the transformers backend, so on the unsloth path this is True in
+            # practice — but staying consistent with the resolved value.
+            from_pretrained_kwargs["load_in_4bit"] = self._load_in_4bit
 
         try:
             self._model, self._tokenizer = _retry_hf_call(
                 FastLanguageModel.from_pretrained,
-                model_name=self.model_name,
-                max_seq_length=self.max_seq_length,
-                dtype=None,  # Auto-detect
-                # v1.5 T2.1 (FP8): was hardcoded True. Now reads the resolved
-                # ``self._load_in_4bit`` — the gate ladder flips it False when
-                # FP8 is effective (FP8 keeps the base in float8, not nf4).
-                load_in_4bit=self._load_in_4bit,
-                trust_remote_code=settings.model.trust_remote_code,
-                _label=f"unsloth_from_pretrained:{self.model_name}",
+                **from_pretrained_kwargs,
             )
         except Exception as e:
             # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
@@ -3122,6 +3155,16 @@ class Trainer:
                 f"Unsloth model loading failed: {e}",
                 cause_category=_classify_model_load_cause(e),
             ) from e
+
+        # mode='full': Unsloth already returned a fully-trainable model. Do
+        # NOT apply a LoRA adapter — that would re-introduce the v1.4.0
+        # QLoRA-masquerading-as-full bug.
+        if full_ft:
+            logger.info(
+                "mode='full' (unsloth): full_finetuning=True, 4-bit disabled, "
+                "no LoRA adapter; SFTTrainer will update ALL parameters."
+            )
+            return
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
         # init_lora_weights through to the Unsloth call site. Built as a
@@ -3175,45 +3218,98 @@ class Trainer:
             ) from e
 
     def _load_with_transformers(self) -> None:
-        """Load model using standard transformers + PEFT.
+        """Load model using standard transformers (+ PEFT for mode='lora').
 
         B-017: model + tokenizer ``from_pretrained`` calls are wrapped in
         the HF Hub transient-retry decorator.
+
+        Mode-aware (v1.4.x ``mode='full'`` correctness fix):
+
+        * ``mode='lora'`` (default) — 4-bit QLoRA base (bitsandbytes nf4,
+          CUDA-only) + a LoRA adapter via ``get_peft_model``. Byte-identical
+          to the pre-fix load path.
+        * ``mode='full'`` — full-precision base (bf16 on Ampere+, fp16 on
+          pre-Ampere, fp32 on CPU); **no** ``BitsAndBytesConfig`` and **no**
+          ``prepare_model_for_kbit_training`` / ``get_peft_model``. Every
+          parameter stays trainable and the plain model is handed straight to
+          ``SFTTrainer`` (which therefore receives no ``peft_config``). This
+          is the fix for the v1.4.0 bug where ``mode='full'`` silently trained
+          a LoRA adapter on a 4-bit base — i.e. QLoRA, the opposite of its
+          documented contract.
+
+        bitsandbytes 4-bit is CUDA-only, so ``mode='full'`` is additionally
+        the only transformers load path that works on a CPU-only runner (CI
+        smoke): it omits ``device_map='auto'`` and loads fp32 weights on CPU.
         """
         import torch
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        # v1.5 T2.1 (FP8): the base-load shape now depends on self._load_in_4bit
-        # (was unconditionally nf4 4-bit). When FP8 is effective the gate ladder
-        # flipped _load_in_4bit False, so we load an UNQUANTIZED bf16 base —
-        # torchao's convert_to_float8_training operates on plain nn.Linear
-        # layers, not bitsandbytes Linear4bit (which it can't convert). When
-        # FP8 is inactive this is byte-identical to the pre-v1.5 nf4 path.
-        from_pretrained_kwargs: dict[str, Any] = {
-            "device_map": "auto",
-            "trust_remote_code": settings.model.trust_remote_code,
-            "_label": f"transformers_from_pretrained:{self.model_name}",
-        }
-        if self._load_in_4bit:
-            # Quantization config (the historical default path).
+        full_ft = self.mode == "full"
+
+        if full_ft:
+            # FULL FINE-TUNING (mode='full'): full-precision weights, no
+            # quantization, no adapter. Keep the load dtype in lockstep with the
+            # SFTConfig bf16/fp16 resolution (``_detect_optimal_dtype``) so the
+            # loaded weights and the TrainingArguments mixed-precision flags
+            # never disagree: bf16 on Ampere+, fp16 on pre-Ampere, fp32 on CPU.
+            resolved_bf16, resolved_fp16 = self._detect_optimal_dtype(
+                settings.training.bf16, settings.training.fp16
+            )
+            if resolved_bf16:
+                load_dtype = torch.bfloat16
+            elif resolved_fp16:
+                load_dtype = torch.float16
+            else:
+                # CUDA unavailable -> fp32 (the only valid CPU dtype; matches
+                # the SFTConfig CPU contract that forces bf16=fp16=False).
+                load_dtype = torch.float32
+            model_load_kwargs: dict[str, Any] = {
+                # transformers 5.x canonical kwarg (``torch_dtype`` is a
+                # deprecated BC alias there); ``dtype`` is honored everywhere CI
+                # installs.
+                "dtype": load_dtype,
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
+            # device_map='auto' only when CUDA is present (a CPU runner would
+            # need accelerate and gain nothing).
+            if torch.cuda.is_available():
+                model_load_kwargs["device_map"] = "auto"
+        elif self._load_in_4bit:
+            # LoRA / QLoRA (default): 4-bit nf4 base + adapter. bitsandbytes
+            # 4-bit requires CUDA. Byte-identical to the pre-fix path.
+            from transformers import BitsAndBytesConfig
+
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=torch.bfloat16,
                 bnb_4bit_use_double_quant=True,
             )
-            from_pretrained_kwargs["quantization_config"] = bnb_config
+            model_load_kwargs = {
+                "quantization_config": bnb_config,
+                "device_map": "auto",
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
         else:
-            # FP8 path: unquantized bf16 base so torchao can convert the
-            # plain nn.Linear projections to Float8Linear post-LoRA-attach.
-            from_pretrained_kwargs["torch_dtype"] = torch.bfloat16
+            # FP8 path (mode='lora' + FP8 effective): unquantized bf16 base so
+            # torchao's convert_to_float8_training can convert the plain
+            # nn.Linear projections to Float8Linear AFTER the LoRA attach (in
+            # load_model via _apply_fp8_to_base) — it cannot convert a
+            # bitsandbytes Linear4bit. No 4-bit on this path.
+            model_load_kwargs = {
+                "dtype": torch.bfloat16,
+                "device_map": "auto",
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
 
         # Load model
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
-            **from_pretrained_kwargs,
+            **model_load_kwargs,
         )
 
         # Load tokenizer
@@ -3226,11 +3322,28 @@ class Trainer:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Prepare for training. prepare_model_for_kbit_training is a k-bit
-        # (4/8-bit) helper; on the FP8 unquantized path there is no k-bit base
-        # to prepare, but the call is still useful for gradient-checkpointing +
-        # input-grad enablement and is safe on a non-quantized model, so it
-        # runs in both paths (byte-identical to pre-v1.5 for the 4-bit path).
+        # mode='full': stop here. The full-precision model trains ALL of its
+        # parameters as-is. Calling prepare_model_for_kbit_training or
+        # get_peft_model below would re-introduce the v1.4.0 QLoRA-masquerading-
+        # as-full bug; the plain model goes straight to SFTTrainer(peft_config=
+        # None).
+        if full_ft:
+            logger.info(
+                "mode='full': loaded full-precision transformers model "
+                f"(dtype={load_dtype}, quantization=none, adapter=none); "
+                "SFTTrainer will update ALL parameters."
+            )
+            return
+
+        # ----- LoRA / QLoRA path (mode='lora', the default; incl. the FP8
+        # unquantized-base variant) -----
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+        # prepare_model_for_kbit_training is a k-bit (4/8-bit) helper; on the
+        # FP8 unquantized path there's no k-bit base to prep, but it's safe on a
+        # non-quantized model and still enables gradient checkpointing + input
+        # grads, so it runs for both LoRA variants (byte-identical to pre-v1.5
+        # for the 4-bit path).
         self._model = prepare_model_for_kbit_training(self._model)
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and

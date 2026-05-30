@@ -6548,9 +6548,9 @@ Tips:
         help=(
             "Training mode. 'lora' (default) = LoRA adapter training "
             "(rank, alpha, dropout govern). 'full' = full fine-tuning "
-            "(no adapter; trains all params). Full FT is consumer-feasible "
-            "up to ~3B params on 16GB cards; the backend refuses full FT "
-            "on larger models. (16GB study-swarm Wave 6b)"
+            "(no adapter; trains all params). Full FT is allowed up to 4B "
+            "params; a genuine ~3B fits a 16GB card, the 3.8-4B class needs "
+            "24GB+. The backend refuses full FT on >4B models. (Wave 6b)"
         ),
     )
     # v1.5 T1.2 (ORPO): --method selector + --orpo-beta. Threaded into the

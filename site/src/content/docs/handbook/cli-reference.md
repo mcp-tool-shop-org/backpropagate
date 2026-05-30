@@ -86,7 +86,7 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--no-packing` | (packing ON by default) | Same as `backprop train`. |
 | `--init-lora-weights` | `default` | Same as `backprop train`. |
 | `--optim` | auto | Same as `backprop train`. |
-| `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 3B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
+| `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 4B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
 | `--merge-strategy` | `qiao_mahdavi` | **v1.5** — per-tensor LoRA merge rule. `qiao_mahdavi` (default) = the v1.4 SLAO merge (behavior-preserving). `linear` = plain weighted average. `ties` = trim + elect-sign + disjoint-merge (uses `--ties-trim`). `dare` = Bernoulli-drop + rescale (uses `--dare-drop-rate`). All stay mergeable with zero inference cost. Applies only with `--merge-mode slao`. |
 | `--ties-trim` | `0.2` | **v1.5** — TIES trim quantile in `[0, 1]` (fraction of lowest-magnitude delta params zeroed before the sign election; `0.2` = bottom 20%). Only used with `--merge-strategy ties`. |
 | `--dare-drop-rate` | `0.5` | **v1.5** — DARE Bernoulli drop probability in `[0, 1)` (fraction of delta params randomly dropped; survivors rescaled by `1/(1-p)`). Only used with `--merge-strategy dare`. |

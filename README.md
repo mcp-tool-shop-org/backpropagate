@@ -76,10 +76,12 @@ Here's the practical envelope on a 16GB card (RTX 4080 / 5080 / 4070 Ti Super):
 | Model | Method | Status |
 |---|---|---|
 | Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | Comfortable. Full sequence length, room to spare. |
-| Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B (≤3B parameter ceiling) | `mode="full"` (full fine-tuning) | v1.4 — pass `--mode=full` on `backprop train` or `Trainer(..., mode="full")`. Gradient checkpointing + paged 8-bit Adam keep the activation memory at sqrt(L). |
+| SmolLM3-3B / Qwen2.5-3B / Llama-3.2-3B / Llama-3.2-1B | `mode="full"` (full fine-tuning) | v1.4 — pass `--mode=full` on `backprop train` or `Trainer(..., mode="full")`. Loads full-precision (bf16) weights — no 4-bit, no adapter; gradient checkpointing + paged 8-bit Adam keep the footprint inside 16GB. |
 | Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | Standard. ~7-8 GB. Backpropagate's default presets. |
 | Llama-3 13B | QLoRA + sample packing | Tight but works. Use shorter sequences. |
 | Mixtral 8x7B (47B total parameters) | AQLM 2-bit + LoRA | Planned for v1.5 — see V1_5_BRIEF when posted. |
+
+`mode="full"` admits models up to **4B parameters**. The four presets in the full-FT row above are genuine ~3B (true parameter count 3.08–3.24B) and fit a 16GB card. The 3.8–4B class (Phi-4-mini-3.8B, Qwen-3.5-4B) is also accepted by the ceiling but needs a **24GB+** card for full FT — weights + gradients alone approach 16GB before the optimizer and activations — so on a 16GB card use `mode="lora"` for those (they're in the LoRA row). Models >4B exit with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`.
 
 AQLM 2-bit quantization (`quant_method="aqlm"` experimental opt-in for Mixtral-8x7B on 16GB) was scoped for v1.4 and is now planned for v1.5. The `aqlm` library is mature; the v1.4 wave-budget prioritized full fine-tuning support for ≤3B models (`mode="full"`) over adding a new quantization backend. See V1_5_BRIEF when posted for the v1.5 implementation plan.
 

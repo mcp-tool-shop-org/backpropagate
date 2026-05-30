@@ -325,7 +325,7 @@ A short index of the most common first-run failures. The full reverse index is a
 | `register_with_ollama` connection refused | `DEP_OLLAMA_REGISTRATION_FAILED` | Start the daemon: `ollama serve`. Install from <https://ollama.com>. Retryable. |
 | Disk full during checkpoint save | `STATE_CHECKPOINT_INVALID` | Atomic writes leave a `.partial` directory on crash — safe to delete. The previous good checkpoint is intact. |
 | Training paused on GPU overheat | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | Automatic — Backpropagate pauses on the temperature threshold and resumes as the GPU cools. Improve airflow if it keeps happening. |
-| `backprop ui --share` rejected | `INPUT_AUTH_REQUIRED` | Pass `--auth user:password`, or use SSH port-forwarding instead (see [Web UI](#web-ui)). |
+| `backprop ui --share` rejected | `RUNTIME_UI_AUTH_NOT_ENFORCED` | Pass `--auth user:password`, or use SSH port-forwarding instead (see [Web UI](#web-ui)). |
 | GGUF export failed on first try | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; on Windows you also need Visual C++ Build Tools + CMake. |
 
 ## Reporting bugs

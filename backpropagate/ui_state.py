@@ -100,6 +100,51 @@ def _validate_ui_path(value: str) -> tuple[str, str]:
         return "", f"Invalid path: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Run-id validation helper — UI-A-003 fix (Wave A1 HIGH)
+# ---------------------------------------------------------------------------
+#
+# Run IDs originate from two user-controlled surfaces: the dynamic route
+# param ``rid`` (``/runs/[rid]``) and the ``diff_other_run_id`` text input.
+# Both flow into ``subprocess`` argv for the diff-runs / replay shell-outs.
+# An option-shaped value (e.g. ``--to=/etc/passwd`` or ``-o``) is parsed by
+# the downstream argparse-based CLI as a FLAG, not a positional run id —
+# letting a remote operator (under the documented ``--share + --auth`` flow)
+# smuggle arbitrary flags into the spawned process.
+#
+# Real run IDs are UUID-hex / wandb-style slugs: ``[A-Za-z0-9_-]``. We pin a
+# strict allowlist (1-64 chars, no leading ``-``) at the trust boundary so a
+# malformed value is rejected with a clean error before it can reach argv.
+# The leading char is constrained to ``[A-Za-z0-9_]`` (NOT ``-``) so the
+# value can never be parsed as a CLI flag even before the ``--`` separator.
+# (The ``--`` end-of-options separator inserted in each shell-out is the
+# defense-in-depth second layer; this regex is the first.)
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_run_id(value: str) -> tuple[str, str]:
+    """Validate a user-supplied run id against the strict allowlist.
+
+    Returns a ``(cleaned_value, error_message)`` tuple mirroring
+    ``_validate_ui_path``: on success the error is empty; on failure the
+    value is empty and the error carries a short operator-facing message.
+    Empty input is a pass-through (no error, no value).
+
+    The allowlist (``^[A-Za-z0-9_-]{1,64}$``) rejects any leading ``-`` (so
+    the value can never be parsed as a CLI flag), path separators, dots
+    (no ``..`` traversal), whitespace, and shell metacharacters.
+    """
+    if not value or not value.strip():
+        return "", ""
+    candidate = value.strip()
+    if not _RUN_ID_RE.match(candidate):
+        return "", (
+            "Invalid run id — expected 1-64 chars of letters, digits, "
+            "'_' or '-' (no leading '-', no path separators)."
+        )
+    return candidate, ""
+
+
 def _coerce_int(value: object) -> int | None:
     """Best-effort ``int`` cast; returns ``None`` if value can't be parsed.
 
@@ -713,7 +758,19 @@ class ExportState(rx.State):
     hub_private: bool = True
     hub_branch: str = "main"
     hub_branch_error: str = ""
-    hub_token: str = ""  # treated as secret — never logged, validated by length
+    # UI-A-001 (Wave A1 CRITICAL): the raw HF token is held in a BACKEND-only
+    # var (``_``-prefix → Reflex never serializes it into the client WS state
+    # bundle). Pre-fix ``hub_token`` was a public (base_vars) var bound
+    # two-way to a type=password input, so the live write-scoped credential
+    # round-tripped to the browser on every keystroke; the password mask was
+    # visual only. The input is now write-only: the setter populates the
+    # backend var but the field does NOT bind ``value=`` back (drop the
+    # controlled-input round-trip). ``hub_token_set`` is a public BOOL mirror
+    # so the form can show a "token set" affordance without echoing the
+    # secret. ``hub_token_error`` stays public — it's an operator-facing
+    # validation string, never the credential.
+    _hub_token: str = ""  # nosec B105 — backend-only secret store, not a credential literal
+    hub_token_set: bool = False
     hub_token_error: str = ""
     hub_status: str = ""  # "" / "pushing" / "done" / "error"
     hub_message: str = ""  # operator-facing status / error message
@@ -875,16 +932,21 @@ class ExportState(rx.State):
 
     @rx.event
     def set_hub_token(self, value: str) -> None:
-        """Set the HF API token.
+        """Set the HF API token (UI-A-001: write-only into a backend var).
 
-        Tokens are write-once on the form (the input is type=password). The
-        value lives only in this state — never logged, never serialized to
-        run history, never echoed in error messages. ``hub_token`` clears
-        after a successful push to limit exposure.
+        The input is write-only — the form does NOT bind ``value=`` back to
+        this field, so the raw secret never round-trips to the client. The
+        value lives ONLY in the backend var ``self._hub_token`` (never in
+        base_vars / the WS bundle), is never logged, never serialized to run
+        history, never echoed in error messages. ``_hub_token`` clears after
+        a successful push to limit exposure. ``hub_token_set`` is a public
+        bool mirror so the form can render a "token set" affordance without
+        exposing the credential.
         """
         cleaned = (value or "").strip()
         if not cleaned:
-            self.hub_token = ""  # nosec B105 — form-field clear, not a credential literal
+            self._hub_token = ""  # nosec B105 — backend-var clear, not a credential literal
+            self.hub_token_set = False
             self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
             return
         # HF tokens are ``hf_<40 base62 chars>``; we don't pin the exact
@@ -893,8 +955,10 @@ class ExportState(rx.State):
         # 30-100 char range so we catch "I pasted my username by accident".
         if len(cleaned) < 20 or len(cleaned) > 200:
             self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"  # nosec B105 — operator-facing validation message, not a credential
+            self.hub_token_set = False
             return
-        self.hub_token = cleaned
+        self._hub_token = cleaned  # nosec B105 — backend-only secret store
+        self.hub_token_set = True
         self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
 
     @rx.event
@@ -926,7 +990,7 @@ class ExportState(rx.State):
         # FRONTEND-F-004: mutual-exclusion + at-least-one check on the two
         # token surfaces. Mirrors the CLI's `--token` vs `--token-file`
         # contract in cmd_push (cli.py ~3411).
-        inline_token_set = bool(self.hub_token) and not self.hub_token_error
+        inline_token_set = bool(self._hub_token) and not self.hub_token_error
         token_file_set = (
             bool(self.hub_token_file_path) and not self.hub_token_file_path_error
         )
@@ -974,7 +1038,7 @@ class ExportState(rx.State):
                     flag_name="--token-file (UI)",
                 )
             else:
-                resolved_token = self.hub_token
+                resolved_token = self._hub_token
 
             _push(
                 local_path=self.source_model_path,
@@ -989,8 +1053,9 @@ class ExportState(rx.State):
                 f"Pushed to https://huggingface.co/{self.hub_repo_id} "
                 f"on branch {self.hub_branch or 'main'}."
             )
-            # Clear token after successful push.
-            self.hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            # Clear token after successful push (UI-A-001: backend var).
+            self._hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            self.hub_token_set = False
             # FRONTEND-F-004: the token-file PATH itself is not a credential
             # — it's a reference to a file the operator manages outside
             # the UI session. Leaving it in state is intentional so a
@@ -1746,10 +1811,23 @@ class RunDetailState(rx.State):
 
     @rx.event
     def set_diff_other_run_id(self, value: str) -> None:
-        """Update the comparison-run-id text input (FRONTEND-A-001)."""
+        """Update the comparison-run-id text input (FRONTEND-A-001).
+
+        UI-A-003 (Wave A1 HIGH): validate at the trust boundary. The value
+        flows into ``subprocess`` argv (``diff_against``); an option-shaped
+        run id (``--to=…``) would be parsed as a CLI flag downstream. Reject
+        anything outside the strict ``[A-Za-z0-9_-]{1,64}`` allowlist and
+        surface a clean error instead of storing it.
+        """
         # Strip whitespace so a copy-pasted run id with trailing whitespace
         # doesn't trip RunHistoryManager's exact-id lookup downstream.
-        self.diff_other_run_id = (value or "").strip()
+        cleaned, err = _validate_run_id(value)
+        self.diff_other_run_id = cleaned
+        if err:
+            self.action_error = err
+        elif self.action_error.startswith("Invalid run id"):
+            # Clear a stale run-id validation error once the field is valid.
+            self.action_error = ""
 
     @rx.event
     def diff_with_input(self) -> None:
@@ -1793,8 +1871,6 @@ class RunDetailState(rx.State):
             route_run_id = str(self.router.page.params.get("rid", "") or "")
         except Exception:  # noqa: BLE001 — defensive
             pass  # nosec B110 — defensive route-param read; missing param falls back to ""
-        if route_run_id:
-            self.current_run_id = route_run_id
 
         self.loading = True
         self.error = ""
@@ -1802,8 +1878,24 @@ class RunDetailState(rx.State):
         # FRONTEND-B-001 (v1.4 Wave 3.5): clear the post-delete chrome
         # when (re)loading any run — navigating from a just-deleted run's
         # URL to a different run id must not carry the "Run deleted."
-        # surface forward.
+        # surface forward. This reset happens BEFORE the UI-A-003 route-param
+        # validation early-return so a malformed URL still clears the chrome.
         self.was_deleted = False
+
+        # UI-A-003 (Wave A1 HIGH): validate the route param at the trust
+        # boundary before it reaches ``current_run_id`` (and thence the
+        # diff/replay subprocess argv). An option-shaped ``rid`` (``--to=…``)
+        # would be parsed as a CLI flag downstream. Reject it with a clean
+        # error rather than assigning the malicious value.
+        if route_run_id:
+            cleaned_rid, rid_err = _validate_run_id(route_run_id)
+            if rid_err:
+                self.error = rid_err
+                self.not_found = True
+                self.loading = False
+                return
+            self.current_run_id = cleaned_rid
+
         try:
             try:
                 from .ui_security import get_ui_output_dir
@@ -1960,10 +2052,22 @@ class RunDetailState(rx.State):
         # as in flight so the action panel renders an inline spinner. Cleared
         # in the finally so a thrown exception still leaves the UI in a
         # consistent state.
+        # UI-A-003 (Wave A1 HIGH): validate both run IDs at the boundary even
+        # though set_diff_other_run_id / load_run already guard their inputs —
+        # belt-and-suspenders so a future caller that sets current_run_id /
+        # other_run_id by another path can't smuggle an option-shaped id into
+        # argv. Reject rather than shelling out.
+        _, err_cur = _validate_run_id(self.current_run_id)
+        _, err_other = _validate_run_id(other_run_id)
+        if err_cur or err_other:
+            self.action_error = err_cur or err_other
+            return
         self.action_in_flight = "diff-runs"
         try:
+            # ``--`` ends option parsing so the run IDs are always treated as
+            # positionals by the downstream argparse CLI, never as flags.
             result = subprocess.run(
-                [cmd, "diff-runs", self.current_run_id, other_run_id],
+                [cmd, "diff-runs", "--", self.current_run_id, other_run_id],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -1982,74 +2086,136 @@ class RunDetailState(rx.State):
 
     @rx.event
     def replay(self) -> None:
-        """Shell out to ``backprop replay <self.current_run_id>``.
+        """Validate that the current run is replayable IN-PROCESS.
 
-        Bridge owns the subcommand. Replay re-runs with the same hyperparams
-        as the original; the operator confirms before the heavy work starts.
+        Pre-fix this shelled out to ``backprop replay --dry-run -- <id>`` —
+        but the ``replay`` subcommand has NO ``--dry-run`` flag (it accepts
+        only ``run_id`` / ``--output`` / ``--override`` / ``--json``), so
+        argparse rejected the token (``unrecognized arguments: --dry-run``)
+        and the Replay button always failed. This is the same phantom-CLI-
+        surface bug class as UI-A-004 (delete_run / export_run) — the sibling
+        fix the UI-A-003 separator test flagged as out-of-scope at the time —
+        and the remedy matches UI-A-004: do the check IN-PROCESS via
+        ``RunHistoryManager``. No subprocess, no PATH dependency (the
+        ``backprop`` binary need not be on the Reflex server's PATH), no
+        phantom flag.
+
+        The button is a *preflight*, not the heavy replay: it confirms the
+        run exists and carries the one hard precondition ``cmd_replay``
+        enforces before launching training — a recorded ``dataset_info``
+        (cli.py ``cmd_replay`` returns EXIT_USER_ERROR when it is ``None``) —
+        then directs the operator to run ``backprop replay <id>`` from the
+        shell to start the actual (heavy) job.
         """
-        import shutil
-        import subprocess
-
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        # UI-A-003: validate even though the id no longer reaches argv — a
+        # malformed id should surface a clean error rather than a confusing
+        # "not found" deeper in the lookup.
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "replay"
         try:
-            result = subprocess.run(
-                [cmd, "replay", self.current_run_id, "--dry-run"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
-                self.action_result = (
-                    "Dry-run OK. To actually replay: "
-                    f"`backprop replay {self.current_run_id}` from the shell.\n\n"
-                    + result.stdout[:3000]
-                )
-                self.action_error = ""
-            else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                self.action_error = f"No run history at {history_dir}."
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"replay --dry-run failed: {exc}"
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            entry = manager.get_run(self.current_run_id)
+            if entry is None:
+                self.action_error = (
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
+                self.action_result = ""
+                return
+            # Mirror cmd_replay's one hard precondition (cli.py cmd_replay):
+            # a run with no recorded dataset_info cannot be replayed
+            # automatically, so a dry-run reporting "OK" here would promise a
+            # replay the real command rejects. Surface the same verdict.
+            if entry.get("dataset_info") is None:
+                self.action_error = (
+                    f"Run '{self.current_run_id}' has no dataset_info "
+                    "recorded — cannot replay automatically. Re-run manually "
+                    "with `backprop train --data <dataset>` matching the "
+                    "original configuration."
+                )
+                self.action_result = ""
+                return
+            model = entry.get("model_name") or "(default model)"
+            session_kind = entry.get("session_kind") or "single_run"
+            self.action_result = (
+                f"Dry-run OK — run {self.current_run_id} is replayable "
+                f"(session={session_kind}, model={model}, "
+                f"dataset={entry.get('dataset_info')}). To actually replay: "
+                f"`backprop replay {self.current_run_id}` from the shell."
+            )
+            self.action_error = ""
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            self.action_error = f"replay check failed: {type(exc).__name__}: {exc}"
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 
+    def _resolve_history_dir(self):
+        """Resolve the sandboxed run-history directory.
+
+        Mirrors ``load_run``'s resolution: prefer the UI sandbox
+        (``get_ui_output_dir()``), fall back to the legacy default. Kept as
+        one helper so the in-process action handlers (UI-A-004) and
+        ``load_run`` stay in lockstep.
+        """
+        from pathlib import Path as _Path
+
+        try:
+            from .ui_security import get_ui_output_dir
+
+            return get_ui_output_dir()
+        except Exception:  # noqa: BLE001 — defensive; fall back to legacy default
+            return _Path.home() / ".backpropagate" / "ui-outputs"
+
     @rx.event
     def delete_run(self) -> None:
-        """Shell out to ``backprop delete-run <self.current_run_id>``.
+        """Delete the current run's history entry IN-PROCESS (UI-A-004).
+
+        Pre-fix this shelled out to ``backprop delete-run <id> --yes`` — a
+        subcommand that DOES NOT EXIST (argparse rejected it → the Delete
+        button always failed). We use ``RunHistoryManager.delete_run``
+        directly, exactly as ``load_run`` reads via ``get_run``. No
+        subprocess, no PATH dependency, no phantom CLI surface.
 
         Operator confirmation is the responsibility of the UI button (a
         confirm-dialog wrap); this handler unconditionally executes.
         """
-        import shutil
-        import subprocess
-
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        # UI-A-003: the id flows nowhere dangerous now (in-process), but
+        # validate anyway so a malformed id surfaces a clean error rather
+        # than a confusing "not found".
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "delete-run"
         try:
-            result = subprocess.run(
-                [cmd, "delete-run", self.current_run_id, "--yes"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                self.action_error = f"No run history at {history_dir}."
+                self.action_result = ""
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            deleted = manager.delete_run(self.current_run_id)
+            if deleted:
                 self.action_result = f"Run {self.current_run_id} deleted."
                 self.action_error = ""
                 # FRONTEND-B-001 (v1.4 Wave 3.5): a successful delete must
@@ -2062,44 +2228,76 @@ class RunDetailState(rx.State):
                 # ``not_found`` so the deletion confirmation wins.
                 self.was_deleted = True
             else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_error = (
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"delete-run failed: {exc}"
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            self.action_error = f"delete failed: {type(exc).__name__}: {exc}"
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 
     @rx.event
     def export_run(self) -> None:
-        """Shell out to ``backprop export-runs --run-id <id> --format jsonl``."""
-        import shutil
-        import subprocess
+        """Export the current run as a single-record JSONL IN-PROCESS (UI-A-004).
+
+        Pre-fix this shelled out to ``backprop export-runs --run-id <id>`` —
+        but ``export-runs`` has NO ``--run-id`` flag (only ``--output/-o``,
+        ``--format``, ``--to``, ``--status``), so argparse rejected it and
+        the Export button always failed. We read the single run via
+        ``RunHistoryManager.get_run`` and write one JSONL record to a
+        SANDBOXED path under ``get_ui_output_dir()`` — no phantom flag, no
+        filesystem-wide write surface.
+        """
+        import json
+        from datetime import datetime, timezone
 
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "export-runs"
         try:
-            result = subprocess.run(
-                [cmd, "export-runs", "--run-id", self.current_run_id, "--format", "jsonl"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-            if result.returncode == 0:
-                self.action_result = result.stdout[:3000]
-                self.action_error = ""
-            else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                self.action_error = f"No run history at {history_dir}."
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"export-runs failed: {exc}"
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            entry = manager.get_run(self.current_run_id)
+            if entry is None:
+                self.action_error = (
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
+                self.action_result = ""
+                return
+
+            # Write inside a sandboxed ``exports/`` subdir of the UI output
+            # dir. The filename is derived from the (already-validated, so
+            # filesystem-safe ``[A-Za-z0-9_-]``) run id plus a UTC stamp so
+            # repeat exports don't clobber. No user-controlled path segment
+            # escapes the sandbox.
+            exports_dir = history_dir / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            out_path = exports_dir / f"run-{self.current_run_id}-{stamp}.jsonl"
+            with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps(entry, default=str))
+                fh.write("\n")
+            self.action_result = (
+                f"Exported run {self.current_run_id} to {out_path}."
+            )
+            self.action_error = ""
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            self.action_error = f"export failed: {type(exc).__name__}: {exc}"
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 

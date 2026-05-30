@@ -205,7 +205,13 @@ def time_aware_scale(
                     f"{run_index}. Return a finite float in [min_scale, 1.0]."
                 ),
             )
-        return max(scale, min_scale)
+        # CONTINUAL-A-001: clamp BOTH ends. The docstring promises a value
+        # in [min_scale, 1.0]; a callable returning >1.0 would otherwise
+        # flow into merge_B_matrices as an EMA weight >1.0 and extrapolate
+        # PAST the new adapter (B_merged + s*(B_new - B_merged) with s>1
+        # lands beyond B_new), destroying the anti-catastrophic-forgetting
+        # invariant. Lower clamp prevents vanishing updates.
+        return max(min(scale, 1.0), min_scale)
 
     valid_scaling_types = ("sqrt", "linear", "log", "constant")
     if scaling_type not in valid_scaling_types:
@@ -228,7 +234,11 @@ def time_aware_scale(
         # No decay (simple averaging)
         scale = 1.0
 
-    return max(scale, min_scale)
+    # CONTINUAL-A-001: clamp BOTH ends so the docstring's "[min_scale, 1.0]"
+    # contract holds on every path. The "log" schedule at run_index=1 is
+    # 1/log(2) ≈ 1.443 — without the upper clamp it would leak a >1.0 EMA
+    # weight into merge_B_matrices and over-extrapolate past the new adapter.
+    return max(min(scale, 1.0), min_scale)
 
 
 def orthogonal_init_A(A_prev: torch.Tensor) -> torch.Tensor:
@@ -684,6 +694,16 @@ class SLAOMerger:
                 similarity,
                 scale_range=self.config.adaptive_scale_range,
             )
+            # CONTINUAL-A-002: adaptive_scale multiplies base_scale by up to
+            # adaptive_scale_range[1] (default 1.5), so e.g. run-2 base
+            # 0.707 * 1.5 = 1.06 — a B-matrix EMA weight >1.0 that
+            # extrapolates PAST the new adapter and destroys the
+            # anti-catastrophic-forgetting invariant. Clamp before the value
+            # reaches merge_B_matrices (and before it's recorded as the
+            # operator-visible scale_factor). base_scale is already in
+            # [min_scale, 1.0] (time_aware_scale clamps it), so the
+            # non-adaptive path needs no extra clamp.
+            scale = max(min(scale, 1.0), self.config.min_scale)
             logger.debug(f"Adaptive scaling: similarity={similarity:.4f}, scale={scale:.4f}")
         else:
             scale = base_scale
@@ -789,6 +809,15 @@ class SLAOMerger:
                     late_scale=self.config.layer_scale_late,
                 )
                 effective_scale = scale * layer_scale
+                # CONTINUAL-A-002: clamp the COMBINED weight too. ``scale``
+                # is already clamped above, but ``layer_scale`` is operator-
+                # configurable (layer_scale_early/middle/late) and a value
+                # >1.0 would re-introduce an EMA weight >1.0 that
+                # extrapolates past the new adapter. Clamp at the last hop
+                # before merge_B_matrices.
+                effective_scale = max(
+                    min(effective_scale, 1.0), self.config.min_scale
+                )
             else:
                 effective_scale = scale
 

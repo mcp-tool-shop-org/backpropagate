@@ -279,14 +279,31 @@ def _hub_group() -> rx.Component:
                 ),
                 rx.flex(
                     _label("HuggingFace API token (write-once)"),
+                    # UI-A-001 (Wave A1 CRITICAL): write-only input. We do
+                    # NOT bind ``value=`` back to a state var — the raw token
+                    # lives only in the backend-only ExportState._hub_token
+                    # and never round-trips to the client. ``on_change``
+                    # pushes each keystroke into the backend setter; the
+                    # field renders empty on every server-driven re-render
+                    # (uncontrolled), which is the intended write-once UX for
+                    # a secret. ``hub_token_set`` (public bool) drives the
+                    # "token captured" affordance below without echoing it.
                     rx.input(
                         placeholder="hf_…",
-                        value=ExportState.hub_token,
                         on_change=ExportState.set_hub_token,
                         size="2",
                         type="password",
                         style={"width": "100%"},
                         aria_label="HuggingFace API token (write scope) — cleared on successful push",
+                    ),
+                    rx.cond(
+                        ExportState.hub_token_set,
+                        rx.text(
+                            "Token captured (held server-side only).",
+                            size="1",
+                            style={"color": "var(--bp-teal)", "font_size": "11px"},
+                        ),
+                        rx.fragment(),
                     ),
                     rx.cond(
                         ExportState.hub_token_error != "",  # nosec B105 — empty-string comparison for UI cond, not a credential

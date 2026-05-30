@@ -2280,6 +2280,223 @@ class TestMultiRunResume:
         assert "--checkpoint-dir" in msg
 
 
+class TestResumeLivenessGuard:
+    """Regression tests for CONTINUAL-A-003.
+
+    Auto-resume must distinguish a CRASHED in-progress multi-run (safe to
+    adopt) from a LIVE one (adopting it makes two processes share one run_id
+    and corrupt the shared SLAO accumulator). Pre-fix, ``_maybe_resume``
+    adopted the most-recent ``status='running'`` entry within the 24h window
+    with no liveness check at all — so a live holder was happily stolen.
+
+    The fix stamps ``host`` + ``pid`` + ``heartbeat_at`` on the running entry
+    and refuses to auto-adopt an entry that is provably live (same-host live
+    PID OR fresh heartbeat). A genuinely-stale crashed run still resumes.
+    """
+
+    def _started_entry(self, tmp_path, run_id, **extra):
+        """Record a running multi-run entry, then patch in liveness fields."""
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id=run_id,
+            model_name="m",
+            session_kind="multi_run",
+        )
+        if extra:
+            history.update_run(run_id, **extra)
+        return history
+
+    def test_live_entry_via_fresh_heartbeat_not_adopted(self, tmp_path):
+        """An entry with a fresh heartbeat is a LIVE holder → auto-resume
+        must NOT adopt it (must start fresh / return None). FAILS pre-fix:
+        the pre-fix path returned the run_id regardless of liveness."""
+        import socket
+        from datetime import datetime
+
+        # Bogus host so the PID signal is skipped; rely on the fresh heartbeat.
+        self._started_entry(
+            tmp_path,
+            "liverun",
+            host="some-other-box-" + socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None, (
+            "auto-resume adopted a LIVE (fresh-heartbeat) holder — would "
+            "corrupt the shared SLAO accumulator"
+        )
+
+    def test_live_entry_via_same_host_live_pid_not_adopted(self, tmp_path):
+        """An entry stamped on THIS host with an alive PID (the test process
+        itself) is a live holder → not adopted. FAILS pre-fix."""
+        import os
+        import socket
+
+        # Use this process's own pid (definitely alive) + a STALE heartbeat,
+        # so adoption can only be blocked by the PID-liveness signal.
+        self._started_entry(
+            tmp_path,
+            "livepid",
+            host=socket.gethostname(),
+            pid=os.getpid(),
+            heartbeat_at="2000-01-01T00:00:00",  # ancient → heartbeat says dead
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None, (
+            "auto-resume adopted a holder whose PID is alive on this host"
+        )
+
+    def test_stale_crashed_entry_is_resumable(self, tmp_path):
+        """A crashed entry (ancient heartbeat + dead PID on a foreign host)
+        must STILL be auto-resumed — the liveness guard only blocks LIVE
+        holders, not genuinely-stale orphans."""
+        import socket
+
+        self._started_entry(
+            tmp_path,
+            "deadrun",
+            host="long-gone-box-" + socket.gethostname(),
+            pid=999999,  # implausible/dead pid (and foreign host anyway)
+            heartbeat_at="2000-01-01T00:00:00",  # ancient → cold heartbeat
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "deadrun", (
+            "a genuinely-stale crashed run must remain resumable"
+        )
+
+    def test_legacy_entry_without_liveness_fields_is_resumable(self, tmp_path):
+        """Pre-A-003 entries carry no host/pid/heartbeat. They must remain
+        resumable (the 24h in_progress_runs window is their guard) so the fix
+        is a no-op for existing crashed-run recovery."""
+        self._started_entry(tmp_path, "legacyrun")  # no liveness fields
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "legacyrun"
+
+    def test_live_holder_skipped_but_stale_sibling_adopted(self, tmp_path):
+        """With BOTH a live holder and an older crashed run present, auto-
+        resume skips the live one and adopts the crashed one. This is the
+        core two-session scenario: a second launcher must not steal the live
+        run_id but should still recover a real orphan."""
+        import socket
+        from datetime import datetime, timedelta
+
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        # Older crashed run.
+        history.record_run_started(
+            run_id="crashed", model_name="m", session_kind="multi_run"
+        )
+        # A RECENT crash: started_at within the 24h in_progress window (so it
+        # survives the staleness filter and is offered as a resume candidate),
+        # but on a host we cannot PID-probe and with a stale heartbeat — so the
+        # liveness guard recognizes it as crashed (not live) and adopts it.
+        _crash_ts = (datetime.now() - timedelta(hours=2)).isoformat()
+        history.update_run(
+            "crashed",
+            started_at=_crash_ts,
+            host="gone-" + socket.gethostname(),
+            pid=999999,
+            heartbeat_at=_crash_ts,
+        )
+        # Newer LIVE holder (fresh heartbeat).
+        history.record_run_started(
+            run_id="alive", model_name="m", session_kind="multi_run"
+        )
+        history.update_run(
+            "alive",
+            started_at=datetime.now().isoformat(),
+            host="other-" + socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        resolved = trainer._maybe_resume(_Path(str(tmp_path)))
+        assert resolved == "crashed", (
+            f"expected to skip live holder and adopt crashed orphan, "
+            f"got {resolved!r}"
+        )
+
+    def test_explicit_resume_from_bypasses_liveness_guard(self, tmp_path):
+        """An EXPLICIT resume_from=<run_id> is an operator override and must
+        still resolve even if the entry looks live — the guard only governs
+        the auto-detect (default) path."""
+        import socket
+        from datetime import datetime
+
+        self._started_entry(
+            tmp_path,
+            "forcedrun",
+            host=socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(
+            model="m", config=config, resume_from="forcedrun"
+        )
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "forcedrun"
+
+    def test_stamp_liveness_writes_host_pid_heartbeat(self, tmp_path):
+        """_stamp_liveness must persist host + pid + heartbeat_at onto the
+        running entry so a concurrent launcher can read them."""
+        import os
+        import socket
+
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="stampme", model_name="m", session_kind="multi_run"
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        trainer._run_history = history
+        trainer._run_id = "stampme"
+        trainer._stamp_liveness()
+
+        entry = history.get_run("stampme")
+        assert entry is not None
+        assert entry.get("host") == socket.gethostname()
+        assert entry.get("pid") == os.getpid()
+        assert entry.get("heartbeat_at"), "heartbeat_at must be set"
+
+    def test_stamp_liveness_makes_entry_self_live(self, tmp_path):
+        """End-to-end: after a session stamps its own liveness, a SECOND
+        trainer's auto-resume refuses to adopt that run_id (the corruption
+        scenario the fix prevents). FAILS pre-fix."""
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="session-a", model_name="m", session_kind="multi_run"
+        )
+        # Session A stamps its liveness (this process is the "live" holder).
+        trainer_a = MultiRunTrainer(
+            model="m", config=MultiRunConfig(checkpoint_dir=str(tmp_path))
+        )
+        trainer_a._run_history = history
+        trainer_a._run_id = "session-a"
+        trainer_a._stamp_liveness()
+
+        # Session B (fresh trainer) tries to auto-detect — must NOT adopt A.
+        trainer_b = MultiRunTrainer(
+            model="m", config=MultiRunConfig(checkpoint_dir=str(tmp_path))
+        )
+        assert trainer_b._maybe_resume(_Path(str(tmp_path))) is None, (
+            "second launcher adopted the first session's LIVE run_id"
+        )
+
+
 class TestRestoreSessionState:
 
     def test_restore_skips_when_no_checkpoint(self, tmp_path):

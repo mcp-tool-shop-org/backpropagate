@@ -126,6 +126,25 @@ _LOGGING_SETUP_FAIL_REASON = ""
 
 
 # =============================================================================
+# SHARED ROOT-FLAG DEFAULTS (CLI-A-001, v1.4 Wave A1)
+# =============================================================================
+# The four root-level logging flags (--verbose / --log-level / --log-format /
+# --log-file) live on a parent parser and are inherited by every subparser via
+# parents=[_common] so they parse both before AND after the subcommand verb.
+# They use default=argparse.SUPPRESS to avoid the subparse clobbering a value
+# set before the subcommand (see the long note in create_parser). SUPPRESS
+# means an unseen flag leaves its dest absent, so main() backfills these real
+# defaults after parse_args — keeping the dozens of `if args.verbose:` reads in
+# the subcommand handlers working regardless of where the flag was placed.
+_COMMON_FLAG_DEFAULTS: dict[str, object] = {
+    "verbose": False,
+    "log_level": None,
+    "log_format": None,
+    "log_file": None,
+}
+
+
+# =============================================================================
 # SUBCOMMAND STABILITY TIERS (BRIDGE-B-017 Stage C)
 # =============================================================================
 # Centralized registry of subcommand stability so the CLI can print a
@@ -5339,10 +5358,82 @@ def create_parser() -> argparse.ArgumentParser:
     # read source. The new layout is workflow-grouped (not alphabetical)
     # because operators looking for "how do I export to Ollama" want to
     # see the ollama-triad and `export --ollama` flag form side-by-side.
+    # CLI-A-001 (v1.4 Wave A1): the root-level logging flags below
+    # (--verbose/-v, --log-level, --log-format, --log-file) used to be
+    # registered ONLY on the top-level parser, so `backprop train --verbose`
+    # (flag placed AFTER the subcommand) died with
+    # `error: unrecognized arguments: --verbose` (exit 2) — even though
+    # nearly every error handler advises "Run with --verbose for full
+    # traceback" and the --log-level help promises "for THIS invocation".
+    # Fix: collect them on a parent parser and pass `parents=[_common]` to
+    # the top-level parser AND every subparser, so both placements work
+    # (`backprop --verbose train` and `backprop train --verbose`).
+    #
+    # default=argparse.SUPPRESS is load-bearing: when a flag with a normal
+    # default sits on both the top-level parser and a subparser, the
+    # subparse re-applies the subparser's default and CLOBBERS the
+    # top-level value back to it (so `backprop --verbose train` would reset
+    # verbose to False). SUPPRESS makes an unseen flag leave its dest
+    # untouched, so whichever side actually saw the flag wins. main() then
+    # backfills the four dests to their real defaults (see the
+    # _COMMON_FLAG_DEFAULTS backfill there) so handlers can keep doing the
+    # bare `if args.verbose:` read without an AttributeError.
+    _common = argparse.ArgumentParser(add_help=False)
+    _common.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show verbose output including stack traces",
+    )
+    # BRIDGE-F-002 (v1.4 Wave 6b): root-level logging-config flags. Pre-fix the
+    # three structured-logging knobs (level / format / file) were env-var only
+    # via BACKPROPAGATE_LOG_LEVEL / BACKPROPAGATE_LOG_JSON / BACKPROPAGATE_LOG_FILE.
+    # Operators could not tweak per-invocation logging from the CLI surface;
+    # they had to export the env var first or wrap with `env` -- both surprising.
+    #
+    # Precedence (standard): CLI flag > env var > default. The wiring lives
+    # in ``main()`` — when a flag is set the corresponding env var is
+    # overwritten on os.environ for THIS process only. Env-var consumers
+    # (configure_logging _get_log_level / _should_use_json / _get_log_file)
+    # see the new value transparently.
+    _common.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=argparse.SUPPRESS,
+        help=(
+            "Override the structured-logging level for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_LEVEL=<level> but scoped to the "
+            "current process. CLI flag wins over env var when both are set. "
+            "Default: DEBUG when --verbose is passed, else INFO."
+        ),
+    )
+    _common.add_argument(
+        "--log-format",
+        choices=["console", "json"],
+        default=argparse.SUPPRESS,
+        help=(
+            "Override the structured-logging format for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_JSON=true/false but scoped to the "
+            "current process. Default: console when stderr is a TTY, json "
+            "otherwise (auto-detect)."
+        ),
+    )
+    _common.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=argparse.SUPPRESS,
+        help=(
+            "Append structured logs to PATH (in addition to stderr). "
+            "Equivalent to BACKPROPAGATE_LOG_FILE=<path> but scoped to the "
+            "current process."
+        ),
+    )
+
     parser = argparse.ArgumentParser(
         prog="backprop",
         description="Backpropagate - Headless LLM Fine-Tuning",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[_common],
         epilog="""
 Subcommands (grouped by workflow):
 
@@ -5408,55 +5499,11 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         version=f"%(prog)s {__version__}",
     )
 
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Show verbose output including stack traces",
-    )
-
-    # BRIDGE-F-002 (v1.4 Wave 6b): root-level logging-config flags. Pre-fix the
-    # three structured-logging knobs (level / format / file) were env-var only
-    # via BACKPROPAGATE_LOG_LEVEL / BACKPROPAGATE_LOG_JSON / BACKPROPAGATE_LOG_FILE.
-    # Operators could not tweak per-invocation logging from the CLI surface;
-    # they had to export the env var first or wrap with `env` -- both surprising.
-    #
-    # Precedence (standard): CLI flag > env var > default. The wiring lives
-    # in ``main()`` — when a flag is set the corresponding env var is
-    # overwritten on os.environ for THIS process only. Env-var consumers
-    # (configure_logging _get_log_level / _should_use_json / _get_log_file)
-    # see the new value transparently.
-    parser.add_argument(
-        "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default=None,
-        help=(
-            "Override the structured-logging level for THIS invocation. "
-            "Equivalent to BACKPROPAGATE_LOG_LEVEL=<level> but scoped to the "
-            "current process. CLI flag wins over env var when both are set. "
-            "Default: DEBUG when --verbose is passed, else INFO."
-        ),
-    )
-    parser.add_argument(
-        "--log-format",
-        choices=["console", "json"],
-        default=None,
-        help=(
-            "Override the structured-logging format for THIS invocation. "
-            "Equivalent to BACKPROPAGATE_LOG_JSON=true/false but scoped to the "
-            "current process. Default: console when stderr is a TTY, json "
-            "otherwise (auto-detect)."
-        ),
-    )
-    parser.add_argument(
-        "--log-file",
-        metavar="PATH",
-        default=None,
-        help=(
-            "Append structured logs to PATH (in addition to stderr). "
-            "Equivalent to BACKPROPAGATE_LOG_FILE=<path> but scoped to the "
-            "current process."
-        ),
-    )
+    # NOTE (CLI-A-001): --verbose / --log-level / --log-format / --log-file are
+    # now defined on the ``_common`` parent parser above and inherited here via
+    # ``parents=[_common]``; every subparser created below ALSO passes
+    # ``parents=[_common]`` so the flags are accepted both before and after the
+    # subcommand verb. Do not re-add them directly to ``parser``.
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -5470,6 +5517,7 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     # have to read the per-flag --help for the recommended starting point.
     train_parser = subparsers.add_parser(
         "train",
+        parents=[_common],
         help="Train a model",
         description="Fine-tune an LLM on your dataset",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -5672,6 +5720,7 @@ Tips:
     # multi-run command
     multi_parser = subparsers.add_parser(
         "multi-run",
+        parents=[_common],
         help="Multi-run training with SLAO merging",
         description="Train with multiple short runs and LoRA merging",
     )
@@ -5812,6 +5861,7 @@ Tips:
     # through `--help` permutations.
     export_parser = subparsers.add_parser(
         "export",
+        parents=[_common],
         help="Export a trained model",
         description="Export model to LoRA, merged, or GGUF format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -5947,6 +5997,7 @@ Quantization tradeoffs (fastest -> smallest):
     # info command
     info_parser = subparsers.add_parser(
         "info",
+        parents=[_common],
         help="Show system information",
         description=(
             "Display backpropagate version, Python, PyTorch + CUDA, GPU, "
@@ -6004,6 +6055,7 @@ Quantization tradeoffs (fastest -> smallest):
     # config command
     config_parser = subparsers.add_parser(
         "config",
+        parents=[_common],
         help="View or modify configuration",
         description="View or modify Backpropagate configuration",
     )
@@ -6027,6 +6079,7 @@ Quantization tradeoffs (fastest -> smallest):
     # resume command (F-002)
     resume_parser = subparsers.add_parser(
         "resume",
+        parents=[_common],
         help="Resume a crashed or interrupted training run",
         description=(
             "Re-run the train / multi-run command associated with a "
@@ -6057,6 +6110,7 @@ Quantization tradeoffs (fastest -> smallest):
     # push command (F-001)
     push_parser = subparsers.add_parser(
         "push",
+        parents=[_common],
         help="Push a local export to the Hugging Face Hub",
         description=(
             "Upload a directory produced by `backprop export` (or "
@@ -6158,6 +6212,7 @@ Quantization tradeoffs (fastest -> smallest):
     # list-runs command (F-003)
     list_runs_parser = subparsers.add_parser(
         "list-runs",
+        parents=[_common],
         help="List recorded training runs",
         description=(
             "List runs from the on-disk run_history.json (populated by every "
@@ -6194,6 +6249,7 @@ Quantization tradeoffs (fastest -> smallest):
     # on field additions / removals.
     runs_parser = subparsers.add_parser(
         "runs",
+        parents=[_common],
         help="Emit run history as a versioned JSON payload (UI data API)",
         description=(
             "Emit the run history under a schema_version contract suitable "
@@ -6235,6 +6291,7 @@ Quantization tradeoffs (fastest -> smallest):
     # show-run command (F-003)
     show_run_parser = subparsers.add_parser(
         "show-run",
+        parents=[_common],
         help="Show detail for a single training run",
         description=(
             "Print the full record for a single training run, including "
@@ -6264,6 +6321,7 @@ Quantization tradeoffs (fastest -> smallest):
     # diff-runs command (BRIDGE Wave 6b)
     diff_runs_parser = subparsers.add_parser(
         "diff-runs",
+        parents=[_common],
         help="Diff config + hyperparameters + final loss between two runs",
         description=(
             "Side-by-side comparison of two completed runs from the on-disk "
@@ -6306,6 +6364,7 @@ Quantization tradeoffs (fastest -> smallest):
     # replay command (BRIDGE Wave 6b)
     replay_parser = subparsers.add_parser(
         "replay",
+        parents=[_common],
         help="Re-run an existing run with the same config (fresh run_id)",
         description=(
             "Re-execute a recorded training run with the same model + "
@@ -6360,6 +6419,7 @@ Quantization tradeoffs (fastest -> smallest):
     # export-runs command (BRIDGE Wave 6b)
     export_runs_parser = subparsers.add_parser(
         "export-runs",
+        parents=[_common],
         help="Bulk export of run history (JSONL, one record per line)",
         description=(
             "Dump every run history entry as JSONL — one record per line, "
@@ -6413,6 +6473,7 @@ Quantization tradeoffs (fastest -> smallest):
     # auth-required gate (which v1.2 introduced) refuses that.
     ui_parser = subparsers.add_parser(
         "ui",
+        parents=[_common],
         help="Launch the Reflex web interface",
         description="Launch the Reflex (Radix UI) web interface for training, "
                     "export, and monitoring. Requires `pip install backpropagate[ui]`.",
@@ -6500,6 +6561,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # validate command (BRIDGE-F-007 — wrap existing validate_dataset)
     validate_parser = subparsers.add_parser(
         "validate",
+        parents=[_common],
         help="Validate a dataset's format + content",
         description=(
             "Wrap backpropagate.datasets.validate_dataset to report row "
@@ -6547,6 +6609,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # estimate-vram command (BRIDGE-F-008 — wrap Trainer._detect_batch_size logic)
     estimate_vram_parser = subparsers.add_parser(
         "estimate-vram",
+        parents=[_common],
         help="Estimate VRAM requirements at different batch sizes",
         description=(
             "Print a small table of recommended batch sizes given the "
@@ -6627,6 +6690,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # etc. in a future cleanup).
     ollama_parser = subparsers.add_parser(
         "ollama",
+        parents=[_common],
         help="Manage Ollama models (register / list / rm)",
         description=(
             "Manage local Ollama daemon models. Mirrors upstream Ollama "
@@ -6661,6 +6725,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama register <path> [--name N] [--modelfile P]
     ollama_register_parser = ollama_subparsers.add_parser(
         "register",
+        parents=[_common],
         help="Register an existing GGUF with the local Ollama daemon",
         description=(
             "Register an already-exported GGUF file (produced by "
@@ -6700,6 +6765,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama list
     ollama_list_parser = ollama_subparsers.add_parser(
         "list",
+        parents=[_common],
         help="List models registered with Ollama",
         description=(
             "List every model the local Ollama daemon has registered. "
@@ -6711,6 +6777,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama rm <name>
     ollama_rm_parser = ollama_subparsers.add_parser(
         "rm",
+        parents=[_common],
         help="Remove a model from Ollama",
         description=(
             "Remove a registered model from the local Ollama daemon. "
@@ -6808,6 +6875,19 @@ def main(argv: list[str] | None = None) -> int:
         # validator does I/O) should still exit 130 per the Ship Gate contract.
         print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
         return EXIT_INTERRUPTED
+
+    # CLI-A-001 (v1.4 Wave A1): backfill the four shared logging flags.
+    # They are declared with default=argparse.SUPPRESS on the ``_common``
+    # parent parser (see create_parser) so a flag placed AFTER the subcommand
+    # verb does not get clobbered back to a subparser default during the
+    # subparse. The flip side of SUPPRESS is that an *unseen* flag leaves its
+    # dest entirely absent from the namespace — which would break the dozens
+    # of subcommand handlers that read a bare ``args.verbose`` (AttributeError).
+    # Normalise here, once, so every downstream handler sees the four dests
+    # with their real defaults regardless of flag placement.
+    for _dest, _default in _COMMON_FLAG_DEFAULTS.items():
+        if not hasattr(args, _dest):
+            setattr(args, _dest, _default)
 
     # BRIDGE-B-002: configure structured logging before ANY subcommand runs.
     # ``--verbose`` bumps the level to DEBUG so structlog emits the full

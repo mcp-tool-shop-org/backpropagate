@@ -1400,6 +1400,154 @@ class TestConcurrentSaveOperations:
         assert len(errors) == 0, f"Errors occurred: {errors}"
 
 
+class TestCrossProcessLostUpdate:
+    """TRAINER-A-002: the cross-process lock must prevent the lost-update
+    race the manifest documents (checkpoints.py lines 191-202), not just
+    write-tearing.
+
+    Two ``CheckpointManager`` instances on the SAME directory model two
+    OS processes: each loads its own in-memory ``self._checkpoints`` snapshot
+    at construction. Pre-fix, every mutator wrapped only ``_save_manifest()``
+    in the lock and mutated the stale in-memory list outside it — so the
+    second writer's save clobbered the first writer's appended entry. The
+    fix re-reads the manifest INSIDE the lock and applies the mutation
+    against the fresh state (mirrors ``RunHistoryManager._locked_mutate``).
+    """
+
+    def test_two_managers_register_distinct_checkpoints_both_survive(
+        self, temp_checkpoint_dir
+    ):
+        """Two managers each register a distinct checkpoint => both survive.
+
+        This is the canonical lost-update interleaving: manager_b is
+        constructed while the manifest is still empty (its in-memory list
+        does NOT contain manager_a's entry). Pre-fix, manager_b.register
+        saved its stale single-entry list over manager_a's manifest and
+        manager_a's checkpoint vanished from disk. With the re-read-inside-
+        lock fix, manager_b picks up manager_a's entry before saving.
+        """
+        policy = CheckpointPolicy(auto_prune=False)
+
+        # Both managers load the (empty) manifest at construction — neither
+        # sees the other's not-yet-registered checkpoint.
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "proc_a_cp")
+        cp_b = create_dummy_checkpoint(temp_checkpoint_dir, "proc_b_cp")
+
+        manager_a.register(0, str(cp_a), validation_loss=0.5)
+        # manager_b's in-memory snapshot still lacks cp_a at this point.
+        manager_b.register(1, str(cp_b), validation_loss=0.4)
+
+        # Read the on-disk manifest through a fresh manager (a third
+        # "process") so we assert against persisted state, not either
+        # writer's in-memory list.
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        persisted_paths = {cp.path for cp in reader.list_checkpoints()}
+
+        assert str(cp_a) in persisted_paths, (
+            "TRAINER-A-002: manager_a's registration was lost — manager_b "
+            "clobbered the manifest with its stale in-memory snapshot. The "
+            "mutator must re-read the manifest inside the lock."
+        )
+        assert str(cp_b) in persisted_paths, (
+            "TRAINER-A-002: manager_b's own registration is missing from disk."
+        )
+        assert len(reader.list_checkpoints()) == 2, (
+            f"TRAINER-A-002: expected both registrations to survive; "
+            f"on-disk manifest has {len(reader.list_checkpoints())} entries: "
+            f"{persisted_paths}"
+        )
+
+    def test_concurrent_two_manager_registrations_no_lost_update(
+        self, temp_checkpoint_dir
+    ):
+        """Threaded variant: N managers register concurrently, none lost.
+
+        Each thread builds its OWN manager (own in-memory snapshot) and
+        registers one distinct checkpoint. The cross-process file lock plus
+        re-read-inside-lock must serialize the load+mutate+save cycle so
+        every registration lands on disk. Pre-fix this drops entries
+        nondeterministically; post-fix all N survive.
+        """
+        import threading
+
+        policy = CheckpointPolicy(auto_prune=False)
+        n = 6
+        errors: list[Exception] = []
+        barrier = threading.Barrier(n)
+
+        def register_from_own_manager(idx: int) -> None:
+            try:
+                mgr = CheckpointManager(str(temp_checkpoint_dir), policy)
+                cp = create_dummy_checkpoint(temp_checkpoint_dir, f"proc_cp_{idx}")
+                # Line up all threads so their stale snapshots overlap — this
+                # maximizes the lost-update window the lock must close.
+                barrier.wait(timeout=10.0)
+                mgr.register(idx, str(cp), validation_loss=0.5 - idx * 0.01)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=register_from_own_manager, args=(i,))
+            for i in range(n)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15.0)
+            assert not t.is_alive(), "Thread did not finish within timeout"
+
+        assert not errors, f"Errors occurred: {errors}"
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        persisted_paths = {cp.path for cp in reader.list_checkpoints()}
+        expected = {
+            str(temp_checkpoint_dir / f"proc_cp_{i}") for i in range(n)
+        }
+        missing = expected - persisted_paths
+        assert not missing, (
+            f"TRAINER-A-002: {len(missing)} registration(s) lost to the "
+            f"lost-update race: {missing}"
+        )
+
+    def test_protect_checkpoint_preserves_concurrent_registration(
+        self, temp_checkpoint_dir
+    ):
+        """Sibling mutator: protect_checkpoint must not clobber a sibling's
+        registration either.
+
+        manager_a registers cp_a. manager_b (constructed before cp_a
+        existed) registers cp_b, then protects its own cp_b. Pre-fix the
+        protect save would persist manager_b's stale list (lacking cp_a).
+        Post-fix protect_checkpoint re-reads inside the lock so cp_a
+        survives and cp_b ends up protected.
+        """
+        policy = CheckpointPolicy(auto_prune=False)
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "prot_a_cp")
+        cp_b = create_dummy_checkpoint(temp_checkpoint_dir, "prot_b_cp")
+
+        manager_a.register(0, str(cp_a), validation_loss=0.5)
+        manager_b.register(1, str(cp_b), validation_loss=0.4)
+        manager_b.protect_checkpoint(1)
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        by_run = {cp.run_index: cp for cp in reader.list_checkpoints()}
+
+        assert 0 in by_run, (
+            "TRAINER-A-002: protect_checkpoint on manager_b clobbered "
+            "manager_a's registration (run_index=0 missing from disk)."
+        )
+        assert 1 in by_run, "manager_b's own checkpoint (run_index=1) missing."
+        assert by_run[1].protected is True, (
+            "protect_checkpoint did not persist the protected flag for run 1."
+        )
+
+
 class TestDiskFullHandling:
     """Tests for graceful error handling when disk is full."""
 

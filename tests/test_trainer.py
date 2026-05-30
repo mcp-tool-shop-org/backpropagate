@@ -3061,6 +3061,82 @@ class TestBuildSftConfigHelper:
                 f"optim={kwargs['optim']!r}"
             )
 
+    def test_helper_full_mode_downgrades_paged_optim_on_cpu_only_runner(self):
+        """TRAINER-A-001: mode='full' on a CPU runner downgrades to adamw_torch.
+
+        mode='full' force-rewrites the configured optim to
+        ``paged_adamw_8bit`` (the consumer-tier memory ceiling) BEFORE the
+        card detector runs. Pre-fix, ``_detect_optim_for_card`` short-
+        circuited on any value != ``adamw_8bit`` and returned
+        ``paged_adamw_8bit`` unchanged — so a full-FT run on a CPU-only
+        runner kept the CUDA-only paged optimizer and crashed at
+        ``.step()`` with the bitsandbytes ``is_on_gpu`` RuntimeError (the
+        exact failure commit 3cb3943 was meant to prevent; CI's nightly
+        smoke is LoRA-only so it can't catch the mode='full' path). The
+        CPU downgrade must fire for ANY bnb 8-bit optimizer, including the
+        paged variant that mode='full' forces.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-5,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+                mode="full",
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["optim"] == "adamw_torch", (
+                f"TRAINER-A-001: mode='full' on a CPU runner must downgrade "
+                f"the force-selected paged_adamw_8bit -> adamw_torch "
+                f"(bnb 8-bit optimizers are CUDA-only); got "
+                f"optim={kwargs['optim']!r}"
+            )
+
+    def test_helper_downgrades_explicit_paged_optim_on_cpu_only_runner(self):
+        """TRAINER-A-007: explicit paged_adamw_8bit on CPU => adamw_torch.
+
+        Sibling of TRAINER-A-001. An operator who explicitly pins a bnb
+        8-bit optimizer (``paged_adamw_8bit`` / ``paged_adamw_32bit`` /
+        ``adamw_8bit``) on a CPU-only runner would, pre-fix, sail past the
+        ``_detect_optim_for_card`` override short-circuit and crash at
+        ``.step()`` with the bitsandbytes ``is_on_gpu`` RuntimeError. The
+        CPU-availability downgrade must override the explicit pin for the
+        whole bnb 8-bit family — CPU simply cannot run them.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        for pinned in ("paged_adamw_8bit", "paged_adamw_32bit", "adamw_8bit"):
+            with patch("torch.cuda.is_available", return_value=False), \
+                 patch("trl.SFTConfig") as mock_sft_config:
+                _build_sft_config(
+                    output_dir="/tmp/out",
+                    per_device_train_batch_size=2,
+                    gradient_accumulation_steps=4,
+                    max_steps=100,
+                    learning_rate=2e-4,
+                    warmup_steps=10,
+                    max_seq_length=2048,
+                    seed=42,
+                    lr_scheduler_type="cosine",
+                    logging_steps=10,
+                    optim=pinned,
+                )
+                _, kwargs = mock_sft_config.call_args
+                assert kwargs["optim"] == "adamw_torch", (
+                    f"TRAINER-A-007: explicit optim={pinned!r} on a CPU "
+                    f"runner must downgrade to adamw_torch (bnb 8-bit "
+                    f"optimizers are CUDA-only); got optim={kwargs['optim']!r}"
+                )
+
     def test_helper_forces_fp32_on_cpu_only_runner(self):
         """CPU runner (no CUDA) => bf16=False, fp16=False.
 

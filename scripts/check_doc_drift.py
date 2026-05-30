@@ -43,6 +43,14 @@ Five-class extension (added v1.4 Wave 6a)
    handbook reference to ``BACKPROPAGATE_*``, ``--flag``, or another
    error code inside the error-codes.md Fix column must point at a thing
    that still exists (env var read, registered flag, catalog entry).
+8b. CLASS 4b (README error-code refs, added v1.4 Wave A1) — every
+   backtick-wrapped ``PREFIX_...`` token in README.md drawn from a live
+   ERROR_CODES prefix family must be an actual key in
+   ``backpropagate/exceptions.py:ERROR_CODES``. Catches the case where the
+   README troubleshooting table names a stale / renamed / wrong code
+   (TESTSCI-A-001: the --share/--auth row named INPUT_AUTH_REQUIRED instead
+   of the runtime's RUNTIME_UI_AUTH_NOT_ENFORCED). Class 4 scanned only the
+   handbook, leaving README drift invisible to the gate built to catch it.
 9. CLASS 5 (CI workflow step NAMES / comments vs flag semantics) —
    every ``MEDIUM/MEDIUM`` / ``HIGH`` / ``LOW/LOW`` etc. severity-claim
    in a workflow step name or comment must match the actual flag
@@ -89,10 +97,12 @@ UI_APP_ROOT = SOURCE_ROOT / "ui_app"
 CLI_PATH = SOURCE_ROOT / "cli.py"
 CONFIG_PATH = SOURCE_ROOT / "config.py"
 UI_STATE_PATH = SOURCE_ROOT / "ui_state.py"
+EXCEPTIONS_PATH = SOURCE_ROOT / "exceptions.py"
 HANDBOOK_ROOT = REPO_ROOT / "site" / "src" / "content" / "docs" / "handbook"
 ENV_VARS_DOC = HANDBOOK_ROOT / "env-vars.md"
 CLI_REF_DOC = HANDBOOK_ROOT / "cli-reference.md"
 ERROR_CODES_DOC = HANDBOOK_ROOT / "error-codes.md"
+README_PATH = REPO_ROOT / "README.md"
 LLMS_TXT_PATH = REPO_ROOT / "llms.txt"
 WORKFLOWS_ROOT = REPO_ROOT / ".github" / "workflows"
 ERROR_CODES_TEST = REPO_ROOT / "tests" / "test_error_codes_catalog.py"
@@ -899,6 +909,47 @@ def check_env_var_default_drift() -> list[str]:
 _DOC_REF_ENV_VAR_PATTERN = re.compile(r"\bBACKPROPAGATE_[A-Z0-9_]+\b")
 
 
+def _find_error_codes() -> set[str]:
+    """Return the live ``ERROR_CODES`` keys by AST-parsing exceptions.py.
+
+    The catalog at ``backpropagate/exceptions.py:ERROR_CODES`` is the single
+    source of truth for stable machine-readable codes. We read it via AST
+    (rather than ``import backpropagate.exceptions``) to keep this script
+    stdlib-only — the package import path can pull in torch / pydantic on a
+    full install, and the drift gate is the first CI step on a stock
+    setup-python action. Walks the module body for the
+    ``ERROR_CODES: ... = {...}`` assignment and collects every string-literal
+    dict key.
+    """
+    if not EXCEPTIONS_PATH.exists():
+        return set()
+    tree = ast.parse(EXCEPTIONS_PATH.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        # Match both ``ERROR_CODES = {...}`` (Assign) and the annotated
+        # ``ERROR_CODES: dict[...] = {...}`` (AnnAssign) shapes.
+        target_is_error_codes = False
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            target_is_error_codes = any(
+                isinstance(t, ast.Name) and t.id == "ERROR_CODES"
+                for t in node.targets
+            )
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            target_is_error_codes = (
+                isinstance(node.target, ast.Name)
+                and node.target.id == "ERROR_CODES"
+            )
+            value = node.value
+        if not target_is_error_codes or not isinstance(value, ast.Dict):
+            continue
+        for key in value.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                found.add(key.value)
+    return found
+
+
 def check_error_codes_doc_refs() -> list[str]:
     """Class 4: error-codes.md Fix column references must point at real things.
 
@@ -958,6 +1009,95 @@ def check_error_codes_doc_refs() -> list[str]:
             f"error-codes.md references {flag}, but no add_argument site AND "
             "no cli-reference.md row exists for it"
         )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Class 4b (v1.4 Wave A1) — README error-code references vs ERROR_CODES catalog
+# ---------------------------------------------------------------------------
+#
+# Sibling of Class 4: the same "named code must be a live key" invariant, but
+# applied to README.md instead of error-codes.md. README's troubleshooting
+# table is a load-bearing operator surface that names stable codes the user
+# greps their logs for — a wrong code there is the exact doc-lie this gate
+# exists to catch (TESTSCI-A-001: the --share/--auth row named the HF-push
+# code INPUT_AUTH_REQUIRED instead of the code the runtime actually raises,
+# RUNTIME_UI_AUTH_NOT_ENFORCED). Before this check the gate scanned only the
+# handbook, so README error-code drift was invisible to the gate built to
+# catch it.
+
+
+def _readme_error_code_token_pattern(error_codes: set[str]) -> re.Pattern[str] | None:
+    """Build a backtick-anchored matcher for ERROR_CODES-shaped README tokens.
+
+    Conservative by construction: the matcher only fires on a fully
+    backtick-wrapped, all-caps ``PREFIX_...`` token whose ``PREFIX_`` is one
+    of the prefix families that actually appear in the live ``ERROR_CODES``
+    catalog (``INPUT_``, ``CONFIG_``, ``DEP_``, ``RUNTIME_``, ``STATE_``,
+    ``PARTIAL_``, ``HUB_``, ``PEFT_``, ``UI_``, ``SLAO_`` today). Anchoring
+    on real families is what keeps prose / config snippets like ``mode="full"``
+    or env vars like ``BACKPROPAGATE_DEBUG`` (a different family, covered by
+    the env-var checks) from surfacing as false positives — a token has to
+    look exactly like an error code from a known family to be considered.
+
+    Returns ``None`` when the catalog yields no usable prefixes (defensive;
+    in practice the catalog is always populated).
+    """
+    prefixes = sorted(
+        {code.split("_", 1)[0] for code in error_codes if "_" in code}
+    )
+    if not prefixes:
+        return None
+    prefix_alt = "|".join(re.escape(p) for p in prefixes)
+    # `(PREFIX_REST)` — one of the live families, an underscore, then one or
+    # more uppercase / digit / underscore chars, the whole thing wrapped in
+    # single backticks so prose mentions outside code spans never match.
+    return re.compile(rf"`((?:{prefix_alt})_[A-Z0-9_]+)`")
+
+
+def check_readme_error_code_refs() -> list[str]:
+    """Class 4b: every error-code token named in README.md must be a live key.
+
+    Scans README.md for backtick-wrapped ``PREFIX_...`` tokens drawn from the
+    live ERROR_CODES prefix families and asserts each is an actual key in
+    ``backpropagate/exceptions.py:ERROR_CODES``. Catches the case where the
+    troubleshooting table (or any README prose) names a stale, renamed, or
+    simply wrong code — the operator greps their logs for that string and
+    finds nothing, or finds the wrong remediation.
+
+    Honors the ``readme_error_code_ref_grandfathered`` allow-list key for
+    tokens that intentionally aren't catalog keys (rare — e.g. a deliberately
+    illustrative ``RUNTIME_GPU_OOO`` typo demo, should it ever be needed).
+    """
+    if not README_PATH.exists():
+        return []
+    error_codes = _find_error_codes()
+    # If we couldn't read the catalog at all, stay silent rather than flag
+    # every README code as "unknown" — a missing/unparseable exceptions.py is
+    # a different, louder failure caught elsewhere.
+    if not error_codes:
+        return []
+    pattern = _readme_error_code_token_pattern(error_codes)
+    if pattern is None:
+        return []
+    allow = _load_allow_list()
+    grandfathered = set(allow.get("readme_error_code_ref_grandfathered", []))
+    text = README_PATH.read_text(encoding="utf-8")
+    findings: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(text):
+        token = match.group(1)
+        if token in seen:
+            continue
+        seen.add(token)
+        if token in grandfathered:
+            continue
+        if token not in error_codes:
+            findings.append(
+                f"README.md references error code `{token}`, but it is not a "
+                "key in backpropagate/exceptions.py:ERROR_CODES (renamed, "
+                "stale, or the wrong code for the documented symptom)"
+            )
     return findings
 
 
@@ -1121,6 +1261,8 @@ def main() -> int:
         check_llms_txt_env_vars,
         check_env_var_default_drift,
         check_error_codes_doc_refs,
+        # Class 4b extension (v1.4 Wave A1) — README error-code refs.
+        check_readme_error_code_refs,
         check_workflow_severity_drift,
     )
     for check in checks:

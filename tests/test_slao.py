@@ -160,10 +160,11 @@ class TestTimeAwareScale:
 
     def test_scale_log_type(self):
         """Log scaling should be 1/log(i+1)."""
-        # Run 1: 1/log(2) ≈ 1.443
+        # Run 1: raw 1/log(2) ≈ 1.443 is CLAMPED to 1.0 (CONTINUAL-A-001 — an
+        # EMA weight > 1.0 over-extrapolates past the new adapter and breaks
+        # the anti-catastrophic-forgetting invariant the merger exists to hold).
         scale_1 = time_aware_scale(1, scaling_type="log")
-        expected_1 = 1.0 / math.log(2)
-        assert abs(scale_1 - expected_1) < 1e-6, f"Log scale at run 1 must be {expected_1}"
+        assert abs(scale_1 - 1.0) < 1e-6, "Log scale at run 1 must be clamped to 1.0"
 
         # Run 2: 1/log(3) ≈ 0.910
         scale_2 = time_aware_scale(2, scaling_type="log")
@@ -919,3 +920,192 @@ class TestPhase4Integration:
         assert result.scale_factor > 0, "Scale factor should be positive"
         assert result.a_matrices_merged > 0, "Should merge A matrices"
         assert result.b_matrices_merged > 0, "Should merge B matrices"
+
+
+class TestScaleUpperClamp:
+    """Regression tests for CONTINUAL-A-001 + CONTINUAL-A-002.
+
+    The B-matrix EMA weight passed into ``merge_B_matrices`` must ALWAYS be
+    within ``[min_scale, 1.0]``. A weight >1.0 over-extrapolates *past* the
+    new adapter (B_merged + s*(B_new - B_merged) with s>1 lands beyond
+    B_new), destroying the anti-catastrophic-forgetting invariant: instead
+    of moving the accumulator toward the freshly-trained adapter, it shoots
+    past it, amplifying the new task's delta and discarding more of the
+    prior knowledge than even a full replacement would.
+
+    Two leaks fed an out-of-range weight into the merge:
+      * A-001 — ``time_aware_scale``'s callable / string branches returned
+        ``max(scale, min_scale)`` with no upper clamp, so a custom schedule
+        returning >1.0 flowed straight through.
+      * A-002 — ``adaptive_scale`` multiplies the base scale by up to
+        ``adaptive_scale_range[1]`` (default 1.5), so e.g. run-2 base
+        0.707 * 1.5 = 1.06; ``merge()`` used this UNCLAMPED both as the
+        B-merge weight and as ``effective_scale = scale * layer_scale``.
+    """
+
+    # --- A-001: time_aware_scale upper clamp -------------------------------
+
+    def test_callable_schedule_clamped_above_1(self):
+        """A custom callable returning >1.0 must clamp to 1.0 (docstring
+        contract: 'clamped to [min_scale, 1.0]')."""
+        # Schedule returns a constant 5.0 regardless of run index.
+        scale = time_aware_scale(3, scaling_type=lambda i: 5.0)
+        assert scale == 1.0, (
+            f"callable schedule returning 5.0 must clamp to 1.0, got {scale}"
+        )
+
+    def test_callable_schedule_clamped_below_min(self):
+        """A custom callable returning <min_scale must clamp up to min_scale
+        (the existing lower-clamp must survive the upper-clamp fix)."""
+        scale = time_aware_scale(3, scaling_type=lambda i: 0.0, min_scale=0.2)
+        assert scale == 0.2, (
+            f"callable schedule returning 0.0 must clamp to min_scale 0.2, got {scale}"
+        )
+
+    def test_callable_schedule_passthrough_in_range(self):
+        """An in-range callable value is returned unchanged."""
+        scale = time_aware_scale(3, scaling_type=lambda i: 0.6)
+        assert abs(scale - 0.6) < 1e-9, f"in-range value must pass through, got {scale}"
+
+    def test_all_string_schedules_within_unit_interval(self):
+        """No built-in string schedule may exceed 1.0 for any run index
+        (log at run 1 = 1/log(2) ≈ 1.443 would violate this without the
+        upper clamp — the canonical A-001 string-branch leak)."""
+        for stype in ("sqrt", "linear", "log", "constant"):
+            for i in range(1, 50):
+                scale = time_aware_scale(i, scaling_type=stype)
+                assert 0.1 <= scale <= 1.0, (
+                    f"{stype} scale at run {i} = {scale} escaped [min_scale, 1.0]"
+                )
+
+    def test_log_schedule_run_1_clamped(self):
+        """Pin the specific log-at-run-1 case: raw 1/log(2) ≈ 1.443 must
+        clamp to exactly 1.0."""
+        scale = time_aware_scale(1, scaling_type="log")
+        assert scale == 1.0, (
+            f"log scale at run 1 (raw ~1.443) must clamp to 1.0, got {scale}"
+        )
+
+    # --- A-002: adaptive_scale reaches the B-merge clamped -----------------
+
+    def _capture_merge_scales(self, merger, new_lora, run_index):
+        """Run a merge while intercepting every ``scale`` value handed to
+        ``merge_B_matrices``. Returns the list of captured scales."""
+        captured: list[float] = []
+        import backpropagate.slao as slao_mod
+
+        real_merge_B = slao_mod.merge_B_matrices
+
+        def _spy(B_merged, B_new, scale):
+            captured.append(float(scale))
+            return real_merge_B(B_merged, B_new, scale)
+
+        from unittest.mock import patch
+
+        with patch.object(slao_mod, "merge_B_matrices", _spy):
+            merger.merge(new_lora, run_index=run_index)
+        return captured
+
+    def test_adaptive_scale_reaching_b_merge_is_clamped(self):
+        """With adaptive scaling and a near-identical adapter (similarity≈1),
+        the base scale gets multiplied by ~1.5 → would-be >1.0. Every value
+        reaching merge_B_matrices must be clamped into [min_scale, 1.0]."""
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        # Near-identical → cosine similarity ≈ 1 → multiplier ≈ 1.5.
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+
+        captured = self._capture_merge_scales(merger, new_lora, run_index=2)
+
+        assert captured, "merge_B_matrices was never called"
+        for s in captured:
+            assert 0.1 <= s <= 1.0, (
+                f"scale {s} handed to merge_B_matrices escaped [min_scale, 1.0]"
+            )
+
+    def test_adaptive_with_layer_scaling_clamped(self):
+        """effective_scale = scale * layer_scale must also be clamped — the
+        ~791 site. Layer scaling can only shrink (factors <=0.7) but the
+        clamp on the combined value is the invariant under test; with
+        adaptive pushing >1.0 first, the product before clamping could still
+        land >1.0 for early layers if the implementation clamped in the
+        wrong order. Assert the value that reaches the merge stays in range."""
+        config = SLAOConfig(
+            use_adaptive_scaling=True,
+            use_layer_scaling=True,
+            layer_scale_late=1.0,  # late layers keep the full (clamped) scale
+            min_scale=0.1,
+        )
+        merger = SLAOMerger(config)
+        base = {}
+        for i in range(4):
+            base[f"model.layers.{i}.lora_A.weight"] = torch.ones(8, 16)
+            base[f"model.layers.{i}.lora_B.weight"] = torch.ones(32, 8)
+        merger.initialize(base)
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+
+        captured = self._capture_merge_scales(merger, new_lora, run_index=2)
+
+        assert captured, "merge_B_matrices was never called"
+        for s in captured:
+            assert 0.1 <= s <= 1.0, (
+                f"effective_scale {s} reaching merge_B_matrices escaped "
+                f"[min_scale, 1.0]"
+            )
+
+    def test_merge_does_not_extrapolate_past_b_new(self):
+        """The load-bearing invariant: a would-be >1.0 scale must NOT push
+        the merged B past B_new.
+
+        Setup forces a >1.0 raw scale: B_merged=ones, B_new=ones*2 are
+        parallel non-zero vectors → cosine similarity 1.0 → adaptive
+        multiplier 1.5 → raw scale 0.707*1.5 = 1.06. The EMA update is
+        merged = B_merged + s*(B_new - B_merged) = 1 + s*(2-1) = 1 + s.
+          * Pre-fix (s=1.06): merged ≈ 2.06  → PAST B_new=2 (over-extrapolated).
+          * Post-fix (s clamped to 1.0): merged = 2.0 → lands AT B_new, never past.
+        """
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        # B_new parallel to B_merged but larger → similarity 1.0, B_new=2.
+        new_lora = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8) * 2.0,
+        }
+
+        result = merger.merge(new_lora, run_index=2)
+        merged_b = merger.get_merged_lora()["model.layers.0.lora_B.weight"]
+
+        # B_new is all-2.0. With the clamp, s <= 1.0 so merged_b <= 2.0
+        # everywhere. Pre-fix s≈1.06 would land merged_b ≈ 2.06 > 2.0
+        # (extrapolation past the new adapter).
+        assert torch.all(merged_b <= 2.0 + 1e-6), (
+            f"merged B extrapolated past B_new=2.0 (max={merged_b.max().item()}); "
+            f"scale_factor={result.scale_factor}"
+        )
+
+    def test_reported_scale_factor_clamped(self):
+        """MergeResult.scale_factor (the value also used as the B-merge
+        weight when layer scaling is off) must itself be clamped — it's the
+        operator-visible record of what the merge actually applied."""
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+        result = merger.merge(new_lora, run_index=2)
+        assert 0.1 <= result.scale_factor <= 1.0, (
+            f"reported scale_factor {result.scale_factor} escaped [min_scale, 1.0]"
+        )

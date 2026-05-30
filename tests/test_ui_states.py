@@ -969,8 +969,30 @@ class TestRunDetailStateDeleteRun:
         result.stderr = stderr
         return result
 
-    def test_delete_run_success_sets_was_deleted_true(self, monkeypatch):
-        """A successful ``delete_run`` shell-out sets ``was_deleted=True``
+    def _patch_in_process_delete(self, monkeypatch, tmp_path, *, ok: bool):
+        """Patch RunHistoryManager + sandbox dir for the in-process delete.
+
+        UI-A-004 (Wave A1): delete_run no longer shells out — it calls
+        ``RunHistoryManager.delete_run`` in-process (as ``load_run`` does).
+        These tests patch that surface instead of ``subprocess.run``.
+        """
+        from backpropagate import checkpoints as _ck
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                return ok
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+
+    def test_delete_run_success_sets_was_deleted_true(self, monkeypatch, tmp_path):
+        """A successful in-process ``delete_run`` sets ``was_deleted=True``
         AND ``action_result`` (the deletion-confirmation chrome) AND
         clears ``action_error``.
 
@@ -982,14 +1004,7 @@ class TestRunDetailStateDeleteRun:
         state = RunDetailState()
         state.current_run_id = "abc12345"
 
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(returncode=0, stdout="ok"),
-        )
+        self._patch_in_process_delete(monkeypatch, tmp_path, ok=True)
 
         state.delete_run()
 
@@ -1017,25 +1032,17 @@ class TestRunDetailStateDeleteRun:
             "message. The fix MUST keep not_found=False."
         )
 
-    def test_delete_run_failure_does_not_set_was_deleted(self, monkeypatch):
-        """A failing shell-out leaves ``was_deleted=False`` so the
-        not-found / error chrome can render correctly.
+    def test_delete_run_failure_does_not_set_was_deleted(self, monkeypatch, tmp_path):
+        """An in-process delete that returns False (entry not found) leaves
+        ``was_deleted=False`` so the not-found / error chrome can render
+        correctly.
         """
         from backpropagate.ui_state import RunDetailState
 
         state = RunDetailState()
         state.current_run_id = "abc12345"
 
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(
-                returncode=1, stderr="run not found"
-            ),
-        )
+        self._patch_in_process_delete(monkeypatch, tmp_path, ok=False)
 
         state.delete_run()
 
@@ -1099,8 +1106,27 @@ class TestRunDetailStateActionInFlight:
         result.stderr = stderr
         return result
 
-    def test_action_in_flight_cleared_after_successful_delete(self, monkeypatch):
-        """After a successful delete shell-out the field is cleared
+    def _patch_in_process_delete(self, monkeypatch, tmp_path, *, ok: bool):
+        """Patch the in-process delete surface (UI-A-004) — see
+        TestRunDetailStateDeleteRun._patch_in_process_delete.
+        """
+        from backpropagate import checkpoints as _ck
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                return ok
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+
+    def test_action_in_flight_cleared_after_successful_delete(self, monkeypatch, tmp_path):
+        """After a successful in-process delete the field is cleared
         (via try/finally) so the spinner stops rendering.
         """
         from backpropagate.ui_state import RunDetailState
@@ -1108,87 +1134,70 @@ class TestRunDetailStateActionInFlight:
         state = RunDetailState()
         state.current_run_id = "rid-delete"
 
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(returncode=0),
-        )
+        self._patch_in_process_delete(monkeypatch, tmp_path, ok=True)
 
         state.delete_run()
 
         assert state.action_in_flight == "", (
             "Stage C FRONTEND-B-014-EXTENDED regression: "
             "action_in_flight not cleared after a successful "
-            "delete_run shell-out. The try/finally at "
-            "ui_state.py:1920 MUST clear the field on every exit "
-            "path so the spinner stops rendering."
+            "in-process delete_run. The try/finally MUST clear the "
+            "field on every exit path so the spinner stops rendering."
         )
 
-    def test_action_in_flight_cleared_after_failed_delete(self, monkeypatch):
-        """After a failing shell-out the field is STILL cleared via
-        try/finally. Pre-fix the failure path could leave the spinner
-        stuck.
+    def test_action_in_flight_cleared_after_failed_delete(self, monkeypatch, tmp_path):
+        """After an in-process delete that returns False the field is STILL
+        cleared via try/finally. Pre-fix the failure path could leave the
+        spinner stuck.
         """
         from backpropagate.ui_state import RunDetailState
 
         state = RunDetailState()
         state.current_run_id = "rid-delete-fail"
 
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(
-                returncode=1, stderr="boom"
-            ),
-        )
+        self._patch_in_process_delete(monkeypatch, tmp_path, ok=False)
 
         state.delete_run()
 
         assert state.action_in_flight == "", (
             "FRONTEND-B-014-EXTENDED regression: action_in_flight "
-            "not cleared after a FAILED delete_run shell-out. The "
+            "not cleared after a FAILED in-process delete_run. The "
             "try/finally clear must fire on every exit path, "
-            "including the rc != 0 branch."
+            "including the not-found branch."
         )
 
-    def test_action_in_flight_cleared_when_subprocess_raises(self, monkeypatch):
-        """If ``subprocess.run`` raises (TimeoutExpired / OSError), the
-        finally MUST still clear ``action_in_flight``.
+    def test_action_in_flight_cleared_when_delete_raises(self, monkeypatch, tmp_path):
+        """If the in-process delete raises (e.g. OSError from the history
+        store), the finally MUST still clear ``action_in_flight``.
 
-        The handler at ui_state.py:1918 catches TimeoutExpired + OSError
-        in the except block; the finally at :1920 runs regardless. Pre-
-        FRONTEND-B-014-EXTENDED there was no finally — an exception
-        left action_in_flight latched forever, freezing the spinner.
+        UI-A-004 (Wave A1): delete_run is in-process now; the try/finally
+        contract still holds — an exception must not latch the spinner.
         """
-        import subprocess
-
+        from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunDetailState
 
         state = RunDetailState()
         state.current_run_id = "rid-raise"
 
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                raise OSError("disk gone")
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
         monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
         )
 
-        def _raise(*args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd=["backprop"], timeout=30)
-
-        monkeypatch.setattr("subprocess.run", _raise)
-
-        state.delete_run()  # handler swallows TimeoutExpired
+        state.delete_run()  # handler must swallow the error
 
         assert state.action_in_flight == "", (
             "FRONTEND-B-014-EXTENDED regression: action_in_flight "
-            "not cleared when subprocess.run raised TimeoutExpired. "
-            "The try/finally MUST fire on the exception path so the "
+            "not cleared when the in-process delete raised. The "
+            "try/finally MUST fire on the exception path so the "
             "spinner doesn't latch forever."
         )
         assert state.action_error != "", (
@@ -1227,58 +1236,723 @@ class TestRunDetailStateActionInFlight:
             "(diff/replay/delete/export)."
         )
 
-    def test_action_in_flight_cleared_after_replay(self, monkeypatch):
-        """The same try/finally contract holds for replay (sibling
-        handler at ui_state.py:1874).
+    def test_action_in_flight_cleared_after_replay(self, monkeypatch, tmp_path):
+        """The same try/finally contract holds for the in-process replay
+        preflight.
+
+        replay was rewired off the phantom ``replay --dry-run`` shell-out to
+        an in-process RunHistoryManager check (see
+        TestRunDetailReplayInProcess); the try/finally clear contract still
+        applies on every exit path so the spinner stops rendering.
         """
+        from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunDetailState
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return {"run_id": run_id, "dataset_info": "data.jsonl"}
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+        # Guard: the rewired handler must NOT shell out any more.
+        def _no_subprocess(*args, **kwargs):
+            raise AssertionError(
+                "replay must NOT shell out; the in-process preflight uses "
+                "RunHistoryManager."
+            )
+
+        monkeypatch.setattr("subprocess.run", _no_subprocess)
 
         state = RunDetailState()
         state.current_run_id = "rid-replay"
-
-        monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(
-                returncode=0, stdout="replay dry-run ok"
-            ),
-        )
 
         state.replay()
 
         assert state.action_in_flight == "", (
             "FRONTEND-B-014-EXTENDED regression on replay: "
-            "action_in_flight not cleared after the replay --dry-run "
-            "shell-out."
+            "action_in_flight not cleared after the in-process replay "
+            "preflight. The try/finally MUST clear the field on every "
+            "exit path so the spinner stops rendering."
         )
 
-    def test_action_in_flight_cleared_after_export_run(self, monkeypatch):
-        """The same try/finally contract holds for export_run (sibling
-        handler at ui_state.py:1955).
+    def test_action_in_flight_cleared_after_export_run(self, monkeypatch, tmp_path):
+        """The same try/finally contract holds for export_run.
+
+        UI-A-004 (Wave A1): export_run is in-process now (single-run JSONL
+        to a sandboxed path); the try/finally contract still holds.
         """
+        from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunDetailState
 
         state = RunDetailState()
         state.current_run_id = "rid-export"
 
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return {"run_id": "rid-export", "status": "completed"}
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
         monkeypatch.setattr(
-            "shutil.which",
-            lambda name: "/usr/local/bin/backprop" if name in ("backprop", "backpropagate") else None,
-        )
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *args, **kwargs: self._make_subprocess_mock(
-                returncode=0, stdout='{"run_id":"rid-export"}'
-            ),
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
         )
 
         state.export_run()
 
         assert state.action_in_flight == "", (
             "FRONTEND-B-014-EXTENDED regression on export_run: "
-            "action_in_flight not cleared after the export-runs "
-            "shell-out."
+            "action_in_flight not cleared after the in-process export."
         )
+
+
+# =============================================================================
+# UI-A-001 (Wave A1 CRITICAL): the HF token must NOT be a client-serialized
+# (public) Reflex var. Pre-fix ``ExportState.hub_token`` was in ``base_vars``
+# and bound two-way to a type=password input — the live write-scoped token
+# round-tripped to the browser on every keystroke. The fix moves the raw
+# secret to a backend-only (``_``-prefixed) var that Reflex never serializes
+# to the client.
+# =============================================================================
+
+
+class TestExportStateHubTokenNotClientSerialized:
+    """The raw HF token must live ONLY in a backend var, never in base_vars."""
+
+    def test_hub_token_not_in_base_vars(self):
+        """UI-A-001 CRITICAL regression: ``hub_token`` (the raw write-scoped
+        credential) must NOT be a client-serialized Reflex var.
+
+        Reflex serializes every name in ``base_vars`` into the WebSocket
+        state bundle that ships to the browser. A secret in ``base_vars``
+        round-trips to the client; the type=password mask is visual only.
+        """
+        from backpropagate.ui_state import ExportState
+
+        assert "hub_token" not in ExportState.base_vars, (
+            "UI-A-001 CRITICAL: ExportState.hub_token is a client-"
+            "serialized (public) Reflex var. The raw HF token must be "
+            "held in a backend-only ('_'-prefixed) var so it is never "
+            "serialized into the WS state bundle sent to the browser."
+        )
+
+    def test_hub_token_held_in_backend_var(self):
+        """The secret is held in a backend-only var (``_hub_token``)."""
+        from backpropagate.ui_state import ExportState
+
+        assert "_hub_token" in ExportState.backend_vars, (
+            "UI-A-001: the raw token must be held in the backend-only "
+            "var ExportState._hub_token (in backend_vars, not base_vars)."
+        )
+        assert "_hub_token" not in ExportState.base_vars, (
+            "UI-A-001: the backend token var must NOT also appear in "
+            "base_vars."
+        )
+
+    def test_no_public_state_var_holds_a_secret(self):
+        """Sibling probe: NO public (client-serialized) Reflex var across
+        the UI state classes may hold a raw credential.
+
+        Guards against re-introducing UI-A-001 on a sibling surface (a new
+        token / password / secret field declared as a plain public var).
+        Field *paths* (e.g. hub_token_file_path) and *error* sentinels are
+        allow-listed because they are references / UI strings, not the
+        secret material itself.
+        """
+        import reflex as rx
+
+        from backpropagate import ui_state as _m
+
+        secret_substrings = ("token", "password", "secret", "passwd", "apikey", "api_key")
+        # Public vars whose name matches a secret keyword but which provably
+        # hold NO credential material:
+        #  - hub_token_file_path        -> a filesystem path reference, not the token
+        #  - *_set (e.g. hub_token_set) -> boolean mirror carrying only "is a
+        #    token captured", never the secret itself (the UI-A-001 design)
+        #  - *tokens* (plural: min/max/avg_tokens) -> dataset token COUNTS (ints)
+        allow = {"hub_token_file_path"}
+
+        offenders: list[str] = []
+        for name in dir(_m):
+            obj = getattr(_m, name)
+            if not isinstance(obj, type) or not issubclass(obj, rx.State):
+                continue
+            for var_name in obj.base_vars:
+                low = var_name.lower()
+                if (
+                    var_name in allow
+                    or low.endswith(("_error", "_path", "_set"))
+                    or "tokens" in low  # plural -> dataset count, not a credential
+                ):
+                    continue
+                if any(s in low for s in secret_substrings):
+                    offenders.append(f"{obj.__name__}.{var_name}")
+
+        assert not offenders, (
+            "UI-A-001 sibling regression: public (client-serialized) "
+            f"Reflex var(s) appear to hold a secret: {offenders}. Move "
+            "the raw credential to a backend-only ('_'-prefixed) var."
+        )
+
+    def test_set_hub_token_writes_backend_var(self, monkeypatch):
+        """The write-only setter populates the backend var, not a public one.
+
+        Post-fix, ``set_hub_token`` writes ``_hub_token`` (backend). The
+        public mirror that the form binds ``value=`` to (if any) must NOT
+        contain the raw secret.
+        """
+        from backpropagate.ui_state import ExportState
+
+        state = ExportState()
+        state.set_hub_token("hf_" + "a" * 40)
+
+        assert state._hub_token == "hf_" + "a" * 40, (
+            "UI-A-001: set_hub_token must store the raw token in the "
+            "backend-only _hub_token var."
+        )
+
+    def test_push_to_hub_reads_and_clears_backend_token(self, monkeypatch):
+        """``push_to_hub`` reads the backend token and clears it on success."""
+        from backpropagate.ui_state import ExportState
+
+        captured: dict[str, object] = {}
+
+        def _fake_push(**kwargs):
+            captured.update(kwargs)
+
+        # ``push_to_hub`` does ``from .export import push_to_hub as _push``;
+        # patch the source symbol the UI imports.
+        import backpropagate.export as _export_mod
+
+        monkeypatch.setattr(_export_mod, "push_to_hub", _fake_push, raising=False)
+
+        state = ExportState()
+        state.set_source_model_path("model-out")  # sandboxed-validated path
+        state.source_model_path = "model-out"  # ensure populated regardless of validator
+        state.set_hub_repo_id("owner/repo")
+        state.set_hub_token("hf_" + "b" * 40)
+
+        state.push_to_hub()
+
+        assert captured.get("token") == "hf_" + "b" * 40, (
+            "UI-A-001: push_to_hub must resolve the token from the "
+            f"backend var and pass it to export.push_to_hub; got {captured!r}."
+        )
+        assert state._hub_token == "", (
+            "UI-A-001: push_to_hub must clear the backend token after a "
+            "successful push so it doesn't sit in state for the WS session."
+        )
+
+
+# =============================================================================
+# UI-A-003 (Wave A1 HIGH): user-controlled run IDs reach subprocess argv with
+# no format validation. An option-shaped run_id (``--to=…`` / ``-x``) is
+# parsed as a FLAG by the downstream CLI. The fix validates run IDs at the
+# trust boundary (strict allowlist regex rejecting any leading ``-``) and
+# inserts a ``--`` end-of-options separator before positional run IDs.
+# =============================================================================
+
+
+class TestRunDetailRunIdValidation:
+    """Run-id format validation at the trust boundary (UI-A-003)."""
+
+    def test_set_diff_other_run_id_rejects_option_shaped(self):
+        """A leading-dash run id (``--to=evil``) is rejected, not stored."""
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.set_diff_other_run_id("--to=/etc/passwd")
+
+        assert state.diff_other_run_id == "", (
+            "UI-A-003 HIGH: an option-shaped comparison run id must be "
+            "rejected at set_diff_other_run_id; storing it lets the "
+            "downstream CLI parse it as a flag. Got "
+            f"{state.diff_other_run_id!r}."
+        )
+        assert state.action_error != "", (
+            "UI-A-003: rejecting a malformed run id must surface a clean "
+            "operator-facing error."
+        )
+
+    def test_set_diff_other_run_id_rejects_bare_leading_dash(self):
+        """Even a short ``-x`` (otherwise all-allowlist-chars) is rejected
+        because a leading dash makes argparse treat it as a flag.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.set_diff_other_run_id("-x")
+
+        assert state.diff_other_run_id == "", (
+            "UI-A-003: a leading '-' must be rejected even when the rest "
+            "of the value is in the allowlist char set ('-x' is a CLI "
+            "flag to argparse)."
+        )
+
+    def test_set_diff_other_run_id_accepts_valid(self):
+        """A well-formed run id passes through unchanged."""
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.set_diff_other_run_id("abc123_DEF-456")
+
+        assert state.diff_other_run_id == "abc123_DEF-456"
+        assert state.action_error == ""
+
+    def test_set_diff_other_run_id_rejects_overlong(self):
+        """A run id over 64 chars is rejected (DoS / argv-bloat guard)."""
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.set_diff_other_run_id("a" * 65)
+
+        assert state.diff_other_run_id == "", (
+            "UI-A-003: run ids longer than 64 chars must be rejected."
+        )
+
+    def test_load_run_rejects_option_shaped_route_param(self, monkeypatch, tmp_path):
+        """A malicious ``rid`` route param (``--to=…``) is rejected before
+        it can reach current_run_id / any shell-out.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+
+        class _FakeParams:
+            @staticmethod
+            def get(key, default=None):
+                return "--to=/etc/passwd" if key == "rid" else default
+
+        class _FakePage:
+            params = _FakeParams()
+
+        class _FakeRouter:
+            page = _FakePage()
+
+        monkeypatch.setattr(type(state), "router", _FakeRouter(), raising=False)
+
+        state.load_run()
+
+        assert state.current_run_id != "--to=/etc/passwd", (
+            "UI-A-003: an option-shaped rid route param must NOT be "
+            "assigned to current_run_id (it would flow into subprocess "
+            f"argv). Got {state.current_run_id!r}."
+        )
+        assert state.error != "", (
+            "UI-A-003: a rejected route param must surface a clean error."
+        )
+
+    def test_diff_against_inserts_end_of_options_separator(self, monkeypatch):
+        """Defense-in-depth: the diff-runs shell-out inserts ``--`` before
+        the positional run IDs so even a (hypothetically) dash-leading id
+        is treated as a positional, not a flag.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        captured_argv: dict[str, list] = {}
+
+        def _fake_run(argv, *args, **kwargs):
+            captured_argv["argv"] = argv
+            from unittest.mock import MagicMock
+
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "ok"
+            r.stderr = ""
+            return r
+
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda name: "/usr/local/bin/backprop"
+            if name in ("backprop", "backpropagate")
+            else None,
+        )
+        monkeypatch.setattr("subprocess.run", _fake_run)
+
+        state = RunDetailState()
+        state.current_run_id = "run-a"
+        state.diff_against("run-b")
+
+        argv = captured_argv["argv"]
+        assert "--" in argv, (
+            "UI-A-003: diff_against must insert a '--' end-of-options "
+            f"separator before the positional run IDs. argv={argv!r}."
+        )
+        sep = argv.index("--")
+        assert argv[sep + 1 :] == ["run-a", "run-b"], (
+            "UI-A-003: both run IDs must follow the '--' separator as "
+            f"positionals. argv={argv!r}."
+        )
+
+
+# =============================================================================
+# UI-A-004 (Wave A1 MED, coupled to A-003): delete_run / export_run shelled
+# out to a NON-EXISTENT subcommand / flag (``delete-run``; ``export-runs
+# --run-id``) → argparse error → broken buttons. The fix rewires both to the
+# EXISTING surface: delete uses RunHistoryManager in-process; export writes a
+# single-run JSONL to a SANDBOXED path. These smoke tests assert the real
+# argparse accepts the shapes we DO shell out to (diff-runs / replay) and
+# that the rewired handlers no longer depend on the phantom surface.
+# =============================================================================
+
+
+class TestRunDetailShellOutsParseAgainstRealArgparse:
+    """The CLI argv shapes the UI emits must parse against create_parser()."""
+
+    def test_diff_runs_argv_parses(self, cli_parser):
+        """``diff-runs -- <a> <b>`` (the UI-A-003 shape) parses cleanly."""
+        args = cli_parser.parse_args(["diff-runs", "--", "run-a", "run-b"])
+        assert args.command == "diff-runs"
+        assert args.run_id_a == "run-a"
+        assert args.run_id_b == "run-b"
+
+    def test_replay_positional_after_separator_parses(self, cli_parser):
+        """The ``--``-then-positional shape (UI-A-003 separator) parses.
+
+        The ``replay`` handler no longer shells out at all — it was rewired
+        to an in-process preflight (see TestRunDetailReplayInProcess) once
+        the phantom ``--dry-run`` token the old shell-out passed was confirmed
+        to be rejected by argparse (test_replay_has_no_dry_run_flag pins that
+        root cause). This stays as a CLI-surface pin: ``replay -- <id>``
+        treats the id as a positional, never a flag.
+        """
+        args = cli_parser.parse_args(["replay", "--", "run-a"])
+        assert args.command == "replay"
+        assert args.run_id == "run-a"
+
+    def test_replay_has_no_dry_run_flag(self, cli_parser):
+        """Pin the root cause: ``replay --dry-run`` is NOT a real flag.
+
+        This is why the pre-fix UI shell-out (``replay --dry-run -- <id>``)
+        failed at argparse (``unrecognized arguments: --dry-run``). The fix
+        rewires replay to an in-process preflight; this test documents the
+        phantom flag so a future edit doesn't re-introduce the shell-out.
+        Sibling to test_export_runs_has_no_run_id_flag /
+        test_no_delete_run_subcommand.
+
+        NOTE: this asserts the CURRENT cli.py surface (replay has no
+        ``--dry-run``). A real ``--dry-run`` flag on the replay subcommand is
+        a separately-tracked deferred feature owned by the CLI domain; if it
+        lands, this pin flips to assert the flag parses instead.
+        """
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["replay", "--dry-run", "--", "abc"])
+
+    def test_export_runs_has_no_run_id_flag(self, cli_parser):
+        """Pin the root cause: ``export-runs --run-id`` is NOT a real flag.
+
+        This is why the pre-fix UI shell-out (``export-runs --run-id <id>``)
+        failed at argparse. The fix rewires export_run to in-process /
+        valid-flag export; this test documents the phantom flag so a future
+        edit doesn't re-introduce it.
+        """
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["export-runs", "--run-id", "abc"])
+
+    def test_no_delete_run_subcommand(self, cli_parser):
+        """Pin the root cause: there is NO ``delete-run`` subcommand.
+
+        The pre-fix UI shelled out to ``backprop delete-run <id> --yes``,
+        which argparse rejected. delete_run is now in-process; this test
+        documents the phantom subcommand.
+        """
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["delete-run", "abc", "--yes"])
+
+
+class TestRunDetailDeleteRunInProcess:
+    """delete_run uses RunHistoryManager directly (UI-A-004) — no subprocess."""
+
+    def test_delete_run_calls_run_history_manager(self, monkeypatch, tmp_path):
+        """A successful in-process delete sets was_deleted + action_result."""
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        calls: dict[str, str] = {}
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                calls["run_id"] = run_id
+                return True
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+        # Guard: if the handler still shells out, fail loudly.
+        def _no_subprocess(*args, **kwargs):
+            raise AssertionError(
+                "UI-A-004: delete_run must NOT shell out; use "
+                "RunHistoryManager in-process."
+            )
+
+        monkeypatch.setattr("subprocess.run", _no_subprocess)
+
+        state = RunDetailState()
+        state.current_run_id = "deadbeef"
+        state.delete_run()
+
+        assert calls.get("run_id") == "deadbeef", (
+            "UI-A-004: delete_run must call RunHistoryManager.delete_run "
+            f"in-process with the current run id; got {calls!r}."
+        )
+        assert state.was_deleted is True
+        assert "deleted" in state.action_result.lower()
+        assert state.action_error == ""
+
+    def test_delete_run_missing_entry_surfaces_error(self, monkeypatch, tmp_path):
+        """delete_run returning False (entry not found) surfaces an error
+        and does NOT set was_deleted.
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                return False
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "ghost"
+        state.delete_run()
+
+        assert state.was_deleted is False
+        assert state.action_error != ""
+
+
+class TestRunDetailExportRunInProcess:
+    """export_run writes a sandboxed single-run JSONL (UI-A-004)."""
+
+    def test_export_run_writes_sandboxed_jsonl(self, monkeypatch, tmp_path):
+        """export_run must produce a JSONL file under the sandbox dir and
+        NOT shell out to the phantom ``export-runs --run-id`` flag.
+        """
+        import json
+
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        run_entry = {"run_id": "rid-export", "status": "completed", "final_loss": 0.5}
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return run_entry if run_id == "rid-export" else None
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+
+        def _no_subprocess(*args, **kwargs):
+            raise AssertionError(
+                "UI-A-004: export_run must NOT shell out to the phantom "
+                "`export-runs --run-id` flag."
+            )
+
+        monkeypatch.setattr("subprocess.run", _no_subprocess)
+
+        state = RunDetailState()
+        state.current_run_id = "rid-export"
+        state.export_run()
+
+        assert state.action_error == "", (
+            f"export_run should succeed in-process; got error "
+            f"{state.action_error!r}."
+        )
+        # A JSONL file was written somewhere under the sandbox dir.
+        written = list(tmp_path.rglob("*.jsonl"))
+        assert written, (
+            "UI-A-004: export_run must write a JSONL file under the "
+            f"sandbox dir {tmp_path}; found none."
+        )
+        # The written file resolves INSIDE the sandbox (no traversal).
+        for p in written:
+            assert tmp_path.resolve() in p.resolve().parents or p.resolve().parent == tmp_path.resolve(), (
+                f"UI-A-004: export path {p} escaped the sandbox {tmp_path}."
+            )
+        # And it contains the run record.
+        record = json.loads(written[0].read_text(encoding="utf-8").splitlines()[0])
+        assert record["run_id"] == "rid-export"
+
+
+class TestRunDetailReplayInProcess:
+    """replay() is an in-process preflight via RunHistoryManager — no
+    subprocess, no phantom ``--dry-run`` flag.
+
+    Sibling to the UI-A-004 delete_run / export_run rewiring: the Replay
+    button validates that the run *can* be replayed (it exists and carries
+    the one hard precondition cmd_replay enforces — a recorded
+    ``dataset_info``) and then directs the operator to the real shell
+    command, all without shelling out to a flag that does not exist.
+    """
+
+    @staticmethod
+    def _patch(monkeypatch, tmp_path, entry):
+        """Patch ``RunHistoryManager.get_run`` to return ``entry`` (matched
+        by run_id; ``None`` otherwise), sandbox the history dir at
+        ``tmp_path``, and hard-fail ANY shell-out so every test in this class
+        implicitly proves the handler stays in-process.
+        """
+        from backpropagate import checkpoints as _ck
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                if entry is not None and run_id == entry.get("run_id"):
+                    return entry
+                return None
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir",
+            lambda: tmp_path,
+        )
+
+        def _no_subprocess(*args, **kwargs):
+            raise AssertionError(
+                "replay must NOT shell out: the in-process preflight uses "
+                "RunHistoryManager (the phantom `replay --dry-run` flag the "
+                "old shell-out passed does not exist in cli.py)."
+            )
+
+        monkeypatch.setattr("subprocess.run", _no_subprocess)
+
+    def test_replay_ok_when_run_is_replayable(self, monkeypatch, tmp_path):
+        """A run with a recorded dataset_info preflights OK and hands the
+        operator the real shell command for the heavy replay (it must NOT
+        claim the replay already ran).
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        entry = {
+            "run_id": "rid-replay",
+            "dataset_info": "data.jsonl",
+            "model_name": "Qwen/Qwen2.5-7B-Instruct",
+            "session_kind": "single_run",
+        }
+        self._patch(monkeypatch, tmp_path, entry)
+
+        state = RunDetailState()
+        state.current_run_id = "rid-replay"
+        state.replay()
+
+        assert state.action_error == "", (
+            f"replay preflight should succeed for a replayable run; got "
+            f"error {state.action_error!r}."
+        )
+        assert "replayable" in state.action_result.lower()
+        assert "backprop replay rid-replay" in state.action_result, (
+            "The preflight result must hand the operator the real shell "
+            f"command, not claim the replay ran; got {state.action_result!r}."
+        )
+
+    def test_replay_rejects_run_without_dataset_info(self, monkeypatch, tmp_path):
+        """Mirror cmd_replay: a run with no dataset_info is NOT replayable —
+        the preflight must surface the same verdict, not a false "OK".
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        entry = {"run_id": "rid-nodata", "dataset_info": None, "model_name": "m"}
+        self._patch(monkeypatch, tmp_path, entry)
+
+        state = RunDetailState()
+        state.current_run_id = "rid-nodata"
+        state.replay()
+
+        assert state.action_result == ""
+        assert "dataset_info" in state.action_error, (
+            "A run with no dataset_info must surface the same 'cannot "
+            "replay automatically' verdict cmd_replay returns "
+            f"EXIT_USER_ERROR for; got {state.action_error!r}."
+        )
+
+    def test_replay_missing_entry_surfaces_error(self, monkeypatch, tmp_path):
+        """get_run returning None (unknown run id) surfaces a not-found
+        error and no result.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        self._patch(
+            monkeypatch, tmp_path,
+            entry={"run_id": "other", "dataset_info": "d"},
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "ghost"
+        state.replay()
+
+        assert state.action_result == ""
+        assert "not found" in state.action_error.lower()
+
+    def test_replay_does_not_shell_out(self, monkeypatch, tmp_path):
+        """The named regression guard for the original bug: replay must NEVER
+        invoke ``subprocess.run`` (pre-fix it shelled out to the phantom
+        ``replay --dry-run`` flag and always failed at argparse). ``_patch``
+        installs a ``subprocess.run`` that raises if called; a clean run
+        proves the handler stays fully in-process.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        entry = {"run_id": "rid-noshell", "dataset_info": "data.jsonl"}
+        self._patch(monkeypatch, tmp_path, entry)
+
+        state = RunDetailState()
+        state.current_run_id = "rid-noshell"
+        state.replay()  # raises AssertionError inside the handler if it shells out
+
+        assert state.action_error == ""
+        assert state.action_in_flight == ""
+
+    def test_replay_no_run_loaded(self, monkeypatch, tmp_path):
+        """No current_run_id → clean error, no manager call, no shell-out."""
+        from backpropagate.ui_state import RunDetailState
+
+        self._patch(monkeypatch, tmp_path, entry={"run_id": "x", "dataset_info": "d"})
+
+        state = RunDetailState()
+        state.current_run_id = ""
+        state.replay()
+
+        assert state.action_error == "No run loaded."
+
+    def test_replay_rejects_malformed_run_id(self, monkeypatch, tmp_path):
+        """An option-shaped / malformed run id is rejected at the boundary
+        (UI-A-003 _validate_run_id) before any lookup — preserved through the
+        in-process rewire.
+        """
+        from backpropagate.ui_state import RunDetailState
+
+        self._patch(monkeypatch, tmp_path, entry={"run_id": "x", "dataset_info": "d"})
+
+        state = RunDetailState()
+        state.current_run_id = "--malicious"
+        state.replay()
+
+        assert state.action_result == ""
+        assert "invalid run id" in state.action_error.lower()

@@ -37,11 +37,13 @@ Usage:
 import gc
 import logging
 import os
+import socket
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -100,6 +102,79 @@ __all__ = [
     "SpeedrunConfig",
     "SpeedrunResult",
 ]
+
+
+# =============================================================================
+# CONTINUAL-A-003: auto-resume liveness guard
+# =============================================================================
+#
+# Pre-fix, ``_maybe_resume`` auto-adopted the most-recent ``status='running'``
+# multi-run entry within the 24h staleness window (in_progress_runs) with NO
+# way to tell a CRASHED in-progress session from a LIVE one. Two operators (or
+# two processes) pointing at the same ``checkpoint_dir`` would both latch onto
+# the same run_id and corrupt the shared SLAO accumulator — both sessions write
+# the same ``run_NNN/slao`` checkpoint dirs and the SLAO merge_history diverges
+# silently.
+#
+# The fix records ``host`` + ``pid`` + a refreshed ``heartbeat_at`` on the
+# running entry (at session start and after every saved run) and teaches
+# ``_maybe_resume`` to SKIP an entry that is provably live:
+#   * same host AND the recorded PID is alive on this machine (deterministic
+#     for the common single-box double-launch), OR
+#   * heartbeat is fresh within ``_LIVENESS_HEARTBEAT_FRESH_SECONDS`` (the
+#     cross-host / PID-reuse fallback).
+# The 24h ``in_progress_runs`` window remains the fallback for genuinely-stale
+# crashed runs whose heartbeat has long gone cold.
+
+# A live multi-run refreshes its heartbeat at session start and after every
+# saved run. A run can legitimately take a long time, so the freshness window
+# must comfortably exceed a single run's wall-clock while staying far below the
+# 24h crashed-orphan floor. 30 minutes is a generous middle ground: a holder
+# whose heartbeat is younger than this is treated as live (skip auto-resume);
+# older than this falls through to the normal stale-window logic so a genuinely
+# crashed run mid-long-step is still recoverable.
+_LIVENESS_HEARTBEAT_FRESH_SECONDS: float = 30 * 60  # 30 minutes
+
+
+def _current_host() -> str:
+    """Best-effort stable host identifier for the liveness guard."""
+    try:
+        return socket.gethostname()
+    except Exception:  # pragma: no cover — gethostname is effectively infallible
+        return "unknown-host"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with ``pid`` is currently alive on THIS host.
+
+    Cross-platform: POSIX uses ``os.kill(pid, 0)`` (signal 0 probes existence
+    without delivering a signal); Windows lacks reliable signal-0 semantics so
+    we fall back to ``os.kill`` and treat its specific errnos the same way
+    Python's signal layer does. On any ambiguity we return True (fail-safe:
+    "assume live" means we DON'T steal a possibly-live run_id — the worse
+    failure mode here is corrupting a live session, so we bias toward caution).
+    """
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        # POSIX: no such process — definitively dead.
+        return False
+    except PermissionError:
+        # Process exists but is owned by another user — definitively alive.
+        return True
+    except OSError as exc:
+        # Windows raises OSError with errno EINVAL for a dead PID and
+        # ESRCH-equivalents vary; be conservative and treat "invalid" as dead,
+        # everything else as alive.
+        import errno
+
+        if getattr(exc, "winerror", None) == 87:  # ERROR_INVALID_PARAMETER
+            return False
+        # ESRCH = no such process; any other errno → assume alive (cautious).
+        return exc.errno != errno.ESRCH
+    return True
 
 
 def _build_abort_callback(trainer: "MultiRunTrainer") -> Any:
@@ -728,18 +803,113 @@ class MultiRunTrainer:
         in_progress = [r for r in in_progress if r.get("session_kind") == "multi_run"]
         if not in_progress:
             return None
-        # Pick the most recent.
-        in_progress.sort(
+
+        # CONTINUAL-A-003: liveness guard. An entry left ``status='running'``
+        # could be EITHER a crashed session (safe to adopt) OR a live holder
+        # (adopting it would make two sessions share one run_id and corrupt
+        # the SLAO accumulator). Filter out provably-live holders before
+        # picking a resume candidate. A genuinely-stale crashed run (heartbeat
+        # cold, PID dead) survives the filter and is still resumable.
+        resumable: list[dict[str, Any]] = []
+        for entry in in_progress:
+            if self._entry_is_live(entry):
+                logger.info(
+                    "Skipping auto-resume of run_id=%r: it appears to be a "
+                    "LIVE multi-run holder (host=%r pid=%r heartbeat=%r). "
+                    "Starting a fresh session instead so two processes don't "
+                    "share one run_id and corrupt the SLAO accumulator. Pass "
+                    "resume_from=%r explicitly to force-adopt it if you know "
+                    "the holder is dead.",
+                    entry.get("run_id"),
+                    entry.get("host"),
+                    entry.get("pid"),
+                    entry.get("heartbeat_at"),
+                    entry.get("run_id"),
+                )
+                continue
+            resumable.append(entry)
+
+        if not resumable:
+            # Every in-progress entry is a live holder — start fresh.
+            return None
+
+        # Pick the most recent resumable (crashed) entry.
+        resumable.sort(
             key=lambda r: str(r.get("started_at") or r.get("timestamp") or ""),
             reverse=True,
         )
-        candidate = in_progress[0]
+        candidate = resumable[0]
         run_id = str(candidate.get("run_id"))
         logger.info(
             f"Auto-detected in-progress multi-run {run_id} — resuming. "
             "Pass resume_from='off' to start fresh."
         )
         return run_id
+
+    @staticmethod
+    def _entry_is_live(entry: dict[str, Any]) -> bool:
+        """CONTINUAL-A-003: decide whether a ``status='running'`` history
+        entry belongs to a process that is still alive (so auto-resume must
+        NOT adopt it).
+
+        Two independent signals, OR'd together — either one proving liveness
+        is enough to refuse adoption (bias toward NOT stealing a live run_id):
+
+        1. **Same-host PID liveness** — if the entry was stamped on THIS host
+           and the recorded PID is alive, it's a live holder. Deterministic
+           for the common single-box double-launch.
+        2. **Fresh heartbeat** — if ``heartbeat_at`` is younger than
+           :data:`_LIVENESS_HEARTBEAT_FRESH_SECONDS`, treat it as live. Covers
+           the cross-host case (where we can't check the remote PID) and the
+           PID-reuse edge (a different live process happens to reuse the PID).
+
+        Returns False for legacy entries that carry neither ``pid`` nor
+        ``heartbeat_at`` (pre-A-003 records) so existing crashed-run resume
+        behavior is preserved — the 24h ``in_progress_runs`` window remains
+        the guard for those.
+        """
+        # Signal 1: same-host PID liveness.
+        host = entry.get("host")
+        pid = entry.get("pid")
+        if host is not None and host == _current_host() and isinstance(pid, int):
+            if _pid_alive(pid):
+                return True
+            # PID dead on this host → not live via this signal; fall through
+            # to the heartbeat check (cheap, and guards against PID-reuse).
+
+        # Signal 2: fresh heartbeat (host-agnostic).
+        hb = entry.get("heartbeat_at")
+        if hb:
+            try:
+                parsed = datetime.fromisoformat(str(hb))
+            except (ValueError, TypeError):
+                return False
+            age = (datetime.now() - parsed).total_seconds()
+            if 0 <= age <= _LIVENESS_HEARTBEAT_FRESH_SECONDS:
+                return True
+
+        return False
+
+    def _stamp_liveness(self) -> None:
+        """CONTINUAL-A-003: record host + pid + a refreshed heartbeat on this
+        session's running history entry.
+
+        Called at session start (right after the entry is marked ``running``)
+        and again after every saved run so a long multi-hour session keeps a
+        warm heartbeat. Best-effort: history persistence is never allowed to
+        gate training, so any failure is logged at DEBUG and swallowed.
+        """
+        if self._run_history is None or self._run_id is None:
+            return
+        try:
+            self._run_history.update_run(
+                self._run_id,
+                host=_current_host(),
+                pid=os.getpid(),
+                heartbeat_at=datetime.now().isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001 — liveness stamp is best-effort
+            logger.debug(f"_stamp_liveness failed (non-fatal): {exc}")
 
     def _restore_session_state(
         self,
@@ -934,6 +1104,13 @@ class MultiRunTrainer:
                 f"RunHistoryManager.record_run_started failed: {hist_err}"
             )
         self._run_history = run_history
+
+        # CONTINUAL-A-003: stamp host + pid + heartbeat on the running entry
+        # so a CONCURRENT MultiRunTrainer pointed at the same checkpoint_dir
+        # can tell this live session apart from a crashed orphan and refuse
+        # to auto-adopt our run_id (which would corrupt the shared SLAO
+        # accumulator). Refreshed after every saved run in _execute_run.
+        self._stamp_liveness()
 
         # Phase 5.3: Initialize checkpoint manager
         checkpoint_policy = CheckpointPolicy(
@@ -1999,6 +2176,12 @@ class MultiRunTrainer:
                     save_err,
                 )
                 checkpoint_path = None
+
+        # CONTINUAL-A-003: refresh the liveness heartbeat once per run so a
+        # long multi-hour session keeps a warm timestamp and a concurrent
+        # launcher continues to see this run_id as a LIVE holder (not a
+        # crashed orphan to auto-adopt).
+        self._stamp_liveness()
 
         duration = time.time() - run_start
 

@@ -467,11 +467,8 @@ class CheckpointManager:
         Returns:
             CheckpointInfo for the registered checkpoint
         """
-        # Mark all existing checkpoints as not final
-        for cp in self._checkpoints:
-            cp.is_final = False
-
-        # Create new checkpoint info
+        # Create new checkpoint info. The size probe touches the filesystem
+        # but not the manifest, so it is safe to compute outside the lock.
         size = self._get_checkpoint_size(checkpoint_path)
         info = CheckpointInfo(
             run_index=run_index,
@@ -485,10 +482,25 @@ class CheckpointManager:
             run_id=run_id,
         )
 
-        self._checkpoints.append(info)
-        # v1.4 BACKEND-F-004 (Wave 6b features): cross-process lock around
-        # the manifest save. Mirrors RunHistoryManager BACKEND-F-012.
-        with self._locked_manifest_write("register"):
+        # v1.4 BACKEND-F-004 (Wave 6b features) + TRAINER-A-002: cross-process
+        # lock around the FULL load+mutate+save cycle. Mirrors
+        # RunHistoryManager._locked_mutate (BACKEND-F-012). Re-reading the
+        # manifest INSIDE the lock is load-bearing: a sibling process may
+        # have appended entries since this manager loaded its snapshot at
+        # construction, and saving our stale in-memory list would silently
+        # drop the sibling's registrations (the lost-update race the
+        # manifest docstring at lines 191-202 calls out). The append +
+        # mark-not-final mutation is applied against the fresh state.
+        with self._locked_manifest_write("register") as locked:
+            if locked:
+                # Refresh self._checkpoints from disk so a concurrent
+                # writer's entries are preserved through our save.
+                self._load_manifest()
+            # Mark all existing checkpoints (merged with the fresh disk
+            # state when locked) as not final, then append the new one.
+            for cp in self._checkpoints:
+                cp.is_final = False
+            self._checkpoints.append(info)
             try:
                 if not self._save_manifest():
                     logger.warning(
@@ -576,23 +588,18 @@ class CheckpointManager:
 
         return prunable
 
-    def prune(self, dry_run: bool = False) -> list[CheckpointInfo]:
-        """
-        Prune checkpoints according to policy.
+    def _compute_prune_plan(self) -> list[CheckpointInfo]:
+        """Score the current ``self._checkpoints`` and return the prune list.
 
-        Args:
-            dry_run: If True, don't actually delete, just return what would be pruned
-
-        Returns:
-            List of checkpoints that were (or would be) pruned
+        Pure read over the in-memory list — callers run it INSIDE the
+        manifest lock (after a re-read) so the plan reflects current
+        on-disk state, not a stale snapshot.
         """
-        # Score all checkpoints
         scored = [(self._score_checkpoint(cp), cp) for cp in self._checkpoints]
         scored.sort(key=lambda x: x[0], reverse=True)  # Highest scores first
 
-        # Determine which to keep
-        to_keep = []
-        to_prune = []
+        to_keep: list[CheckpointInfo] = []
+        to_prune: list[CheckpointInfo] = []
 
         for score, cp in scored:
             # Always keep protected
@@ -611,39 +618,60 @@ class CheckpointManager:
             else:
                 to_prune.append(cp)
 
-        if not to_prune:
-            logger.debug("No checkpoints to prune")
-            return []
+        return to_prune
 
-        if dry_run:
-            logger.info(f"Dry run: would prune {len(to_prune)} checkpoints")
-            return to_prune
+    def prune(self, dry_run: bool = False) -> list[CheckpointInfo]:
+        """
+        Prune checkpoints according to policy.
 
-        # Actually delete
-        pruned = []
-        freed_bytes = 0
+        Args:
+            dry_run: If True, don't actually delete, just return what would be pruned
 
-        for cp in to_prune:
-            try:
-                checkpoint_path = Path(cp.path)
-                if checkpoint_path.exists():
-                    if checkpoint_path.is_dir():
-                        shutil.rmtree(checkpoint_path)
-                    else:
-                        checkpoint_path.unlink()
-                    freed_bytes += cp.size_bytes
-                    logger.info(f"Pruned checkpoint: run={cp.run_index}, freed={cp.size_bytes / (1024**2):.1f} MB")
+        Returns:
+            List of checkpoints that were (or would be) pruned
+        """
+        # TRAINER-A-002: the score → delete → save cycle runs INSIDE the
+        # cross-process lock, after a fresh manifest re-read. Pre-fix, the
+        # plan was computed against the stale construction-time snapshot and
+        # only ``_save_manifest`` was locked, so a concurrent register from a
+        # sibling process was silently dropped (lost-update race). Re-reading
+        # under the lock means the prune decision — and the resulting save —
+        # account for the sibling's entries.
+        with self._locked_manifest_write("prune") as locked:
+            if locked:
+                self._load_manifest()
 
-                pruned.append(cp)
-                self._checkpoints.remove(cp)
+            to_prune = self._compute_prune_plan()
 
-            except Exception as e:
-                logger.error(f"Failed to prune checkpoint {cp.path}: {e}")
+            if not to_prune:
+                logger.debug("No checkpoints to prune")
+                return []
 
-        # v1.4 BACKEND-F-004 (Wave 6b features): cross-process lock around
-        # the manifest save after pruning. Concurrent prunes from a sibling
-        # process can otherwise interleave manifest writes.
-        with self._locked_manifest_write("prune"):
+            if dry_run:
+                logger.info(f"Dry run: would prune {len(to_prune)} checkpoints")
+                return to_prune
+
+            # Actually delete
+            pruned = []
+            freed_bytes = 0
+
+            for cp in to_prune:
+                try:
+                    checkpoint_path = Path(cp.path)
+                    if checkpoint_path.exists():
+                        if checkpoint_path.is_dir():
+                            shutil.rmtree(checkpoint_path)
+                        else:
+                            checkpoint_path.unlink()
+                        freed_bytes += cp.size_bytes
+                        logger.info(f"Pruned checkpoint: run={cp.run_index}, freed={cp.size_bytes / (1024**2):.1f} MB")
+
+                    pruned.append(cp)
+                    self._checkpoints.remove(cp)
+
+                except Exception as e:
+                    logger.error(f"Failed to prune checkpoint {cp.path}: {e}")
+
             try:
                 if not self._save_manifest():
                     logger.warning(
@@ -709,19 +737,22 @@ class CheckpointManager:
         Returns:
             True if checkpoint was found and protected
         """
-        for cp in self._checkpoints:
-            if cp.run_index == run_index:
-                cp.protected = True
-                # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
-                # protect-then-save mutation.
-                with self._locked_manifest_write("protect_checkpoint"):
+        # TRAINER-A-002: re-read inside the lock so flipping the protected
+        # flag (and saving) doesn't clobber a sibling process's appended
+        # entries. The match is resolved against the fresh on-disk state.
+        with self._locked_manifest_write("protect_checkpoint") as locked:
+            if locked:
+                self._load_manifest()
+            for cp in self._checkpoints:
+                if cp.run_index == run_index:
+                    cp.protected = True
                     try:
                         if not self._save_manifest():
                             logger.warning("Manifest save failed after protecting checkpoint")
                     except Exception as e:
                         logger.warning(f"Manifest save error after protecting checkpoint: {e}")
-                logger.info(f"Protected checkpoint: run={run_index}")
-                return True
+                    logger.info(f"Protected checkpoint: run={run_index}")
+                    return True
         return False
 
     def unprotect_checkpoint(self, run_index: int) -> bool:
@@ -734,19 +765,22 @@ class CheckpointManager:
         Returns:
             True if checkpoint was found and unprotected
         """
-        for cp in self._checkpoints:
-            if cp.run_index == run_index:
-                cp.protected = False
-                # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
-                # unprotect-then-save mutation.
-                with self._locked_manifest_write("unprotect_checkpoint"):
+        # TRAINER-A-002: re-read inside the lock so flipping the protected
+        # flag (and saving) doesn't clobber a sibling process's appended
+        # entries. The match is resolved against the fresh on-disk state.
+        with self._locked_manifest_write("unprotect_checkpoint") as locked:
+            if locked:
+                self._load_manifest()
+            for cp in self._checkpoints:
+                if cp.run_index == run_index:
+                    cp.protected = False
                     try:
                         if not self._save_manifest():
                             logger.warning("Manifest save failed after unprotecting checkpoint")
                     except Exception as e:
                         logger.warning(f"Manifest save error after unprotecting checkpoint: {e}")
-                logger.info(f"Unprotected checkpoint: run={run_index}")
-                return True
+                    logger.info(f"Unprotected checkpoint: run={run_index}")
+                    return True
         return False
 
     def cleanup_orphaned(self) -> int:
@@ -756,20 +790,21 @@ class CheckpointManager:
         Returns:
             Number of orphaned entries removed
         """
-        orphaned = []
-        for cp in self._checkpoints:
-            if not Path(cp.path).exists():
-                orphaned.append(cp)
+        # TRAINER-A-002: re-read inside the lock so the orphan scan runs
+        # against current on-disk state and the cleanup save doesn't clobber
+        # a concurrent register's appended entries. Compute the orphan set
+        # AFTER the re-read so a sibling's freshly-registered (still-on-disk)
+        # checkpoint is never misclassified as orphaned.
+        with self._locked_manifest_write("cleanup_orphaned") as locked:
+            if locked:
+                self._load_manifest()
 
-        for cp in orphaned:
-            self._checkpoints.remove(cp)
-            logger.info(f"Removed orphaned manifest entry: {cp.path}")
+            orphaned = [cp for cp in self._checkpoints if not Path(cp.path).exists()]
+            for cp in orphaned:
+                self._checkpoints.remove(cp)
+                logger.info(f"Removed orphaned manifest entry: {cp.path}")
 
-        if orphaned:
-            # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
-            # orphan-cleanup manifest save so a concurrent register doesn't
-            # race the cleanup write.
-            with self._locked_manifest_write("cleanup_orphaned"):
+            if orphaned:
                 try:
                     if not self._save_manifest():
                         logger.warning("Manifest save failed after cleaning orphaned entries")
@@ -805,89 +840,95 @@ class CheckpointManager:
         # The previously-skipped tests/test_checkpoints.py::test_force_prune_to_size
         # passes against this implementation.
         max_bytes = max_size_gb * (1024**3)
-        pruned = []
+        pruned: list[CheckpointInfo] = []
         max_iterations = 100
 
-        for _iteration in range(max_iterations):
-            total_size = sum(cp.size_bytes for cp in self._checkpoints)
-            if total_size <= max_bytes:
-                break
+        # TRAINER-A-002: the whole prune loop + save runs INSIDE the
+        # cross-process lock, after a fresh manifest re-read. Pre-fix the
+        # loop ran against the stale construction-time snapshot and only the
+        # trailing ``_save_manifest`` was locked, so a sibling process's
+        # registration was silently dropped (lost-update race). Re-reading
+        # under the lock means the size accounting + prune decisions + save
+        # all reflect the sibling's entries.
+        with self._locked_manifest_write("force_prune_to_size") as locked:
+            if locked:
+                self._load_manifest()
 
-            # Get lowest scored non-protected checkpoint
-            prunable = self._get_prunable_checkpoints()
-            if not prunable:
-                # Stage C humanization: name what's blocking the prune so
-                # the operator can decide whether to relax the policy or
-                # raise the size cap. The protected set is the union of
-                # keep_final + keep_run_boundaries + keep_best_n +
-                # explicitly-protected entries; pre-fix the operator had
-                # to read the source to know what "protected" meant.
-                logger.warning(
-                    "Cannot prune further: all %d remaining checkpoints "
-                    "are protected by CheckpointPolicy (keep_final=%s, "
-                    "keep_run_boundaries=%s, keep_best_n=%d, plus any "
-                    "explicitly-protected entries). Total size %.1f GB "
-                    "exceeds max_size_gb=%.1f. Options: (1) raise "
-                    "max_size_gb, (2) lower keep_best_n / disable "
-                    "keep_run_boundaries in CheckpointPolicy, or (3) "
-                    "manually unprotect specific checkpoints via "
-                    "CheckpointManager.unprotect(<path>).",
-                    len(self._checkpoints),
-                    self.policy.keep_final,
-                    self.policy.keep_run_boundaries,
-                    self.policy.keep_best_n,
-                    sum(cp.size_bytes for cp in self._checkpoints) / (1024**3),
-                    max_size_gb,
+            for _iteration in range(max_iterations):
+                total_size = sum(cp.size_bytes for cp in self._checkpoints)
+                if total_size <= max_bytes:
+                    break
+
+                # Get lowest scored non-protected checkpoint
+                prunable = self._get_prunable_checkpoints()
+                if not prunable:
+                    # Stage C humanization: name what's blocking the prune so
+                    # the operator can decide whether to relax the policy or
+                    # raise the size cap. The protected set is the union of
+                    # keep_final + keep_run_boundaries + keep_best_n +
+                    # explicitly-protected entries; pre-fix the operator had
+                    # to read the source to know what "protected" meant.
+                    logger.warning(
+                        "Cannot prune further: all %d remaining checkpoints "
+                        "are protected by CheckpointPolicy (keep_final=%s, "
+                        "keep_run_boundaries=%s, keep_best_n=%d, plus any "
+                        "explicitly-protected entries). Total size %.1f GB "
+                        "exceeds max_size_gb=%.1f. Options: (1) raise "
+                        "max_size_gb, (2) lower keep_best_n / disable "
+                        "keep_run_boundaries in CheckpointPolicy, or (3) "
+                        "manually unprotect specific checkpoints via "
+                        "CheckpointManager.unprotect(<path>).",
+                        len(self._checkpoints),
+                        self.policy.keep_final,
+                        self.policy.keep_run_boundaries,
+                        self.policy.keep_best_n,
+                        sum(cp.size_bytes for cp in self._checkpoints) / (1024**3),
+                        max_size_gb,
+                    )
+                    break
+
+                # Sort by score and prune lowest
+                scored = [(self._score_checkpoint(cp), cp) for cp in prunable]
+                scored.sort(key=lambda x: x[0])
+                _, victim = scored[0]
+
+                # Delete it
+                try:
+                    checkpoint_path = Path(victim.path)
+                    if checkpoint_path.exists():
+                        if checkpoint_path.is_dir():
+                            shutil.rmtree(checkpoint_path)
+                        else:
+                            checkpoint_path.unlink()
+
+                    pruned.append(victim)
+                    self._checkpoints.remove(victim)
+                    logger.info(f"Force-pruned: run={victim.run_index}, freed={victim.size_bytes / (1024**2):.1f} MB")
+
+                except Exception as e:
+                    logger.error(f"Failed to force-prune {victim.path}: {e}")
+                    break
+            else:
+                # Stage C amend BACKEND-B-022: include actionable context so an
+                # operator who hits the safety guard has the info they need to
+                # decide between "raise the limit" and "file a bug." Pre-fix
+                # the log line stopped at "aborting" with no diagnostics.
+                current_total_bytes = sum(cp.size_bytes for cp in self._checkpoints)
+                current_total_gb = current_total_bytes / (1024**3)
+                logger.error(
+                    f"force_prune_to_size hit {max_iterations} iteration limit "
+                    f"— aborting to prevent infinite loop. State at abort: "
+                    f"checkpoints_remaining={len(self._checkpoints)}, "
+                    f"total_size_gb={current_total_gb:.2f}, "
+                    f"target_size_gb={max_size_gb:.2f}, "
+                    f"pruned_this_pass={len(pruned)}. "
+                    f"If this is a legitimate large-session, raise "
+                    f"force_prune_to_size's max_iterations ceiling (current "
+                    f"hard-coded at {max_iterations}); if not, file a bug at "
+                    f"https://github.com/mcp-tool-shop-org/backpropagate/issues "
+                    f"with the manifest.json + this log line."
                 )
-                break
 
-            # Sort by score and prune lowest
-            scored = [(self._score_checkpoint(cp), cp) for cp in prunable]
-            scored.sort(key=lambda x: x[0])
-            _, victim = scored[0]
-
-            # Delete it
-            try:
-                checkpoint_path = Path(victim.path)
-                if checkpoint_path.exists():
-                    if checkpoint_path.is_dir():
-                        shutil.rmtree(checkpoint_path)
-                    else:
-                        checkpoint_path.unlink()
-
-                pruned.append(victim)
-                self._checkpoints.remove(victim)
-                logger.info(f"Force-pruned: run={victim.run_index}, freed={victim.size_bytes / (1024**2):.1f} MB")
-
-            except Exception as e:
-                logger.error(f"Failed to force-prune {victim.path}: {e}")
-                break
-        else:
-            # Stage C amend BACKEND-B-022: include actionable context so an
-            # operator who hits the safety guard has the info they need to
-            # decide between "raise the limit" and "file a bug." Pre-fix
-            # the log line stopped at "aborting" with no diagnostics.
-            current_total_bytes = sum(cp.size_bytes for cp in self._checkpoints)
-            current_total_gb = current_total_bytes / (1024**3)
-            logger.error(
-                f"force_prune_to_size hit {max_iterations} iteration limit "
-                f"— aborting to prevent infinite loop. State at abort: "
-                f"checkpoints_remaining={len(self._checkpoints)}, "
-                f"total_size_gb={current_total_gb:.2f}, "
-                f"target_size_gb={max_size_gb:.2f}, "
-                f"pruned_this_pass={len(pruned)}. "
-                f"If this is a legitimate large-session, raise "
-                f"force_prune_to_size's max_iterations ceiling (current "
-                f"hard-coded at {max_iterations}); if not, file a bug at "
-                f"https://github.com/mcp-tool-shop-org/backpropagate/issues "
-                f"with the manifest.json + this log line."
-            )
-
-        # v1.4 BACKEND-F-004 (Wave 6b features): lock around the
-        # force-prune-to-size manifest save. Same shape as the prune()
-        # path so concurrent prune/force_prune from sibling processes
-        # serialize through the lock.
-        with self._locked_manifest_write("force_prune_to_size"):
             try:
                 if not self._save_manifest():
                     logger.warning("Manifest save failed after force prune")

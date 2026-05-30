@@ -200,6 +200,94 @@ class TestParser:
         args = cli_parser.parse_args(["--verbose", "info"])
         assert args.verbose is True
 
+    # CLI-A-001 (Wave A1): the root-level logging flags (--verbose/-v,
+    # --log-level, --log-format, --log-file) must work BOTH before AND after
+    # the subcommand. Pre-fix they lived only on the top-level parser, so
+    # ``backprop train --verbose`` (flag after the subcommand) died with
+    # ``error: unrecognized arguments: --verbose`` (exit 2) — even though
+    # nearly every error handler advises "Run with --verbose for full
+    # traceback". The parent-parser fix registers them on every subparser.
+    def test_verbose_after_subcommand(self, cli_parser):
+        """`backprop train --data x --verbose` (flag AFTER subcommand)."""
+        args = cli_parser.parse_args(["train", "--data", "x", "--verbose"])
+        assert args.verbose is True
+        assert args.data == "x"
+
+    def test_verbose_before_subcommand_still_works(self, cli_parser):
+        """`backprop --verbose train --data x` (flag BEFORE subcommand) must
+        not regress — the parent-parser fix must not clobber the top-level
+        value back to the subparser default during the subparse."""
+        args = cli_parser.parse_args(["--verbose", "train", "--data", "x"])
+        assert args.verbose is True
+        assert args.data == "x"
+
+    def test_verbose_short_flag_after_subcommand(self, cli_parser):
+        """The ``-v`` short form must also work after the subcommand."""
+        args = cli_parser.parse_args(["train", "--data", "x", "-v"])
+        assert args.verbose is True
+
+    def test_verbose_default_suppressed_in_parser_backfilled_by_handler(self):
+        """SUPPRESS contract: the four shared logging flags use
+        default=argparse.SUPPRESS so a value set BEFORE the subcommand is not
+        clobbered by the subparse. The flip side is that an omitted flag is
+        ABSENT from the bare parser namespace; the backfill table provides the
+        real defaults that main() applies before any handler runs."""
+        from backpropagate.cli import _COMMON_FLAG_DEFAULTS, create_parser
+
+        args = create_parser().parse_args(["info"])
+        # Pre-backfill: absent (this is what lets before-subcommand placement win).
+        assert not hasattr(args, "verbose")
+        # The backfill table main() applies is the documented default surface.
+        assert _COMMON_FLAG_DEFAULTS["verbose"] is False
+        assert _COMMON_FLAG_DEFAULTS["log_level"] is None
+
+    def test_log_level_after_subcommand(self, cli_parser):
+        """`backprop export ./m --log-level DEBUG` (spot-check a second
+        subcommand with a positional + the --log-level flag after it)."""
+        args = cli_parser.parse_args(["export", "./m", "--log-level", "DEBUG"])
+        assert args.log_level == "DEBUG"
+        assert args.model_path == "./m"
+
+    def test_log_level_before_subcommand_not_clobbered(self, cli_parser):
+        """`backprop --log-level DEBUG train` must survive the subparse."""
+        args = cli_parser.parse_args(["--log-level", "DEBUG", "train", "--data", "x"])
+        assert args.log_level == "DEBUG"
+
+    def test_log_format_and_file_after_subcommand(self, cli_parser):
+        """--log-format / --log-file must also be accepted after the subcommand."""
+        args = cli_parser.parse_args(
+            ["train", "--data", "x", "--log-format", "json", "--log-file", "run.log"]
+        )
+        assert args.log_format == "json"
+        assert args.log_file == "run.log"
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["train", "--data", "x", "--verbose"],
+            ["multi-run", "--data", "x", "--verbose"],
+            ["export", "./m", "--verbose"],
+            ["info", "--verbose"],
+            ["config", "--verbose"],
+            ["list-runs", "--verbose"],
+            ["runs", "--verbose"],
+            ["show-run", "abc123", "--verbose"],
+            ["diff-runs", "a", "b", "--verbose"],
+            ["replay", "abc123", "--verbose"],
+            ["export-runs", "--verbose"],
+            ["resume", "abc123", "--verbose"],
+            ["push", "./m", "--repo", "a/b", "--verbose"],
+            ["validate", "x.jsonl", "--verbose"],
+            ["estimate-vram", "--verbose"],
+            ["ui", "--verbose"],
+        ],
+    )
+    def test_verbose_accepted_after_every_subcommand(self, cli_parser, argv):
+        """Family-of-call-sites probe: every subcommand must accept --verbose
+        AFTER the subcommand verb, not just the top-level parser."""
+        args = cli_parser.parse_args(argv)
+        assert args.verbose is True
+
 
 class TestMain:
     """Tests for main CLI entry point."""
@@ -217,6 +305,18 @@ class TestMain:
 
         result = main(["info"])
         assert result == 0
+
+    def test_verbose_after_subcommand_reaches_handler(self):
+        """CLI-A-001 end-to-end: `backprop info --verbose` (flag AFTER the
+        subcommand) must run the handler cleanly (rc 0), not die in argparse
+        with `unrecognized arguments: --verbose` (the pre-fix exit 2). Also
+        proves main()'s SUPPRESS backfill leaves args.verbose readable so the
+        handler's `if args.verbose:` reads don't AttributeError."""
+        from backpropagate.cli import main
+
+        assert main(["info", "--verbose"]) == 0
+        # Sanity: omitting the flag (backfill path) still runs the handler.
+        assert main(["info"]) == 0
 
     def test_config_command_runs(self):
         """Test config command runs successfully."""

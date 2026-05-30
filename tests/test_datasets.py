@@ -2407,3 +2407,164 @@ class TestStreamingLoaderAdditional:
         filtered = list(loader.filter(min_tokens=1000))
 
         assert len(filtered) == 0
+
+
+# =============================================================================
+# WAVE A1 REGRESSION TESTS (DATA-A-001 / DATA-A-002 / DATA-A-003)
+# =============================================================================
+
+class TestOpenAIFunctionCallContent:
+    """DATA-A-003: function_call must not clobber assistant content."""
+
+    def test_function_call_preserves_content(self):
+        """A message with both content and function_call retains the content."""
+        sample = {
+            "messages": [
+                {"role": "user", "content": "What's the weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": "Let me look that up for you.",
+                    "function_call": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Paris"}',
+                    },
+                },
+            ]
+        }
+        result = FormatConverter.openai_to_chatml(sample)
+
+        # Real answer must survive (pre-fix it was overwritten).
+        assert "Let me look that up for you." in result
+        # Function call still rendered, structured (name + args), not raw dict.
+        assert "get_weather" in result
+        assert '{"city": "Paris"}' in result
+        # No leaked Python dict repr like "{'name': ...}".
+        assert "{'name'" not in result
+
+    def test_function_call_only_still_rendered(self):
+        """A function_call with no content still produces a readable call."""
+        sample = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "function_call": {"name": "do_thing", "arguments": "{}"},
+                },
+            ]
+        }
+        result = FormatConverter.openai_to_chatml(sample)
+
+        assert "do_thing" in result
+        assert "Function call" in result
+
+
+class TestMixedFormatConversion:
+    """DATA-A-001: per-sample format detection prevents silent blank turns."""
+
+    def test_mixed_alpaca_sharegpt_converts_both(self):
+        """A mixed Alpaca-first + ShareGPT list converts both rows correctly."""
+        samples = [
+            # Alpaca row first -> drives single-shot detection pre-fix.
+            {"instruction": "Add 2 and 3", "output": "5"},
+            # ShareGPT row that pre-fix would convert with Alpaca rules -> blanks.
+            {
+                "conversations": [
+                    {"from": "human", "value": "Capital of France?"},
+                    {"from": "gpt", "value": "Paris"},
+                ]
+            },
+        ]
+
+        result = convert_to_chatml(samples)  # no source_format -> per-sample
+
+        assert len(result) == 2
+        # Alpaca row content present.
+        assert "Add 2 and 3" in result[0]["text"]
+        assert "5" in result[0]["text"]
+        # ShareGPT row content present (pre-fix: empty user + assistant turns).
+        sharegpt_text = result[1]["text"]
+        assert "Capital of France?" in sharegpt_text
+        assert "Paris" in sharegpt_text
+        # And the ShareGPT row must NOT have produced empty user/assistant bodies.
+        assert "<|im_start|>user\n<|im_end|>" not in sharegpt_text
+        assert "<|im_start|>assistant\n<|im_end|>" not in sharegpt_text
+
+    def test_explicit_format_still_applies_to_all(self):
+        """An explicit source_format is still honored for every row."""
+        samples = [
+            {"instruction": "Q1", "output": "A1"},
+            {"instruction": "Q2", "output": "A2"},
+        ]
+        result = convert_to_chatml(samples, source_format=DatasetFormat.ALPACA)
+
+        assert len(result) == 2
+        assert "Q1" in result[0]["text"]
+        assert "A2" in result[1]["text"]
+
+    def test_empty_body_emits_warning(self, caplog):
+        """A converted sample with an empty assistant body logs a WARN."""
+        import logging
+
+        samples = [
+            {
+                "conversations": [
+                    {"from": "human", "value": "Hi"},
+                    {"from": "gpt", "value": ""},  # empty assistant body
+                ]
+            }
+        ]
+        with caplog.at_level(logging.WARNING, logger="backpropagate.datasets"):
+            convert_to_chatml(samples)
+
+        assert any(
+            "empty assistant turn" in rec.getMessage() for rec in caplog.records
+        )
+
+
+class TestCurriculumClamping:
+    """DATA-A-002: curriculum funcs must not crash on bad num_chunks."""
+
+    def test_analyze_curriculum_more_chunks_than_samples(self):
+        """num_chunks > len(samples) returns sane stats, not a ValueError."""
+        from backpropagate.datasets import analyze_curriculum
+
+        samples = [{"text": "short one"}, {"text": "a much longer sample here"}]
+        stats = analyze_curriculum(samples, num_chunks=5)
+
+        # Effective chunk count clamped to sample count; no empty min()/max().
+        assert stats.total_samples == 2
+        assert stats.num_chunks == 2
+        assert sum(stats.chunk_sizes) == 2
+        assert len(stats.difficulty_ranges) == stats.num_chunks
+        for d_min, d_max in stats.difficulty_ranges:
+            assert d_min <= d_max
+
+    def test_analyze_curriculum_zero_chunks(self):
+        """num_chunks=0 clamps to 1 instead of ZeroDivisionError."""
+        from backpropagate.datasets import analyze_curriculum
+
+        samples = [{"text": "a"}, {"text": "b"}, {"text": "c"}]
+        stats = analyze_curriculum(samples, num_chunks=0)
+
+        assert stats.num_chunks == 1
+        assert stats.chunk_sizes == [3]
+
+    def test_analyze_curriculum_empty_samples(self):
+        """Empty input returns empty stats, not a crash."""
+        from backpropagate.datasets import analyze_curriculum
+
+        stats = analyze_curriculum([], num_chunks=5)
+
+        assert stats.total_samples == 0
+        assert stats.num_chunks == 0
+        assert stats.chunk_sizes == []
+        assert stats.difficulty_ranges == []
+
+    def test_get_curriculum_chunks_zero_chunks(self):
+        """num_chunks=0 clamps to a single chunk instead of ZeroDivisionError."""
+        from backpropagate.datasets import get_curriculum_chunks
+
+        samples = [{"text": f"sample {i}"} for i in range(4)]
+        chunks = get_curriculum_chunks(samples, num_chunks=0)
+
+        assert len(chunks) == 1
+        assert len(chunks[0]) == 4

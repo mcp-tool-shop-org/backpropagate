@@ -1854,6 +1854,26 @@ class Trainer:
     # alone.
 
     @staticmethod
+    def _is_bnb_8bit_optim(optim: str) -> bool:
+        """True when ``optim`` is a bitsandbytes 8-bit (CUDA-only) optimizer.
+
+        bitsandbytes registers its quantized optimizers under names that
+        either end in ``_8bit`` (``adamw_8bit``, ``adam_8bit``,
+        ``lion_8bit``, ``lamb_8bit``, ...) or carry the ``paged_`` prefix
+        (``paged_adamw_8bit``, ``paged_adamw_32bit``, ``paged_lion_32bit``,
+        ...). Every one of them allocates CUDA tensors in its optimizer
+        state and raises from ``bnb.functional.is_on_gpu`` if asked to
+        ``.step()`` on CPU. This predicate is the single source of truth
+        for "this optimizer cannot run without CUDA" so the CPU downgrade
+        in :meth:`_detect_optim_for_card` covers the whole family rather
+        than just the ``adamw_8bit`` default (TRAINER-A-001 / TRAINER-A-007).
+        """
+        if not optim:
+            return False
+        name = optim.lower()
+        return name.endswith("_8bit") or name.startswith("paged_")
+
+    @staticmethod
     def _detect_optim_for_card(configured_optim: str) -> str:
         """v1.3 BACKEND-5: resolve the optimizer for the current GPU.
 
@@ -1866,19 +1886,26 @@ class Trainer:
 
         Detection rules (in order):
 
-        1. If the operator passed anything other than the documented
-           default ``adamw_8bit``, honor their choice unchanged. The
-           explicit-override surface is the canonical knob for
-           operators who pinned a specific optimizer for an LR
+        1. If CUDA is unavailable (CPU-only runner / no GPU visible),
+           downgrade ANY bitsandbytes 8-bit optimizer
+           (``adamw_8bit`` / ``paged_adamw_8bit`` /
+           ``paged_adamw_32bit`` / any ``*_8bit`` / ``paged_*`` bnb
+           variant) → ``adamw_torch``. bitsandbytes 8-bit optimizers
+           are CUDA-only — calling ``.step()`` on CPU tensors raises
+           ``RuntimeError: All input tensors need to be on the same
+           GPU`` from ``bnb.functional.is_on_gpu``. ``adamw_torch`` is
+           the transformers-standard CPU-compatible AdamW. This rule
+           runs BEFORE the explicit-override short-circuit (TRAINER-A-001 /
+           TRAINER-A-007): a CPU runner physically cannot run a bnb
+           optimizer, so even an explicit operator pin (or the
+           ``mode='full'`` force to ``paged_adamw_8bit``) must be
+           downgraded — otherwise the run crashes at ``.step()``.
+        2. If the operator passed anything other than the documented
+           default ``adamw_8bit`` (and we have CUDA), honor their choice
+           unchanged. The explicit-override surface is the canonical
+           knob for operators who pinned a specific optimizer for an LR
            schedule / fairness constraint / token budget that depends
            on it.
-        2. If CUDA is unavailable (CPU-only runner / no GPU
-           visible), downgrade ``adamw_8bit`` → ``adamw_torch``.
-           bitsandbytes 8-bit optimizers are CUDA-only — calling
-           ``.step()`` on CPU tensors raises ``RuntimeError: All
-           input tensors need to be on the same GPU`` from
-           ``bnb.functional.is_on_gpu``. ``adamw_torch`` is the
-           transformers-standard CPU-compatible AdamW.
         3. If torch is missing or the CUDA capability query raises,
            leave the operator's config in place.
         4. If the card has < 24GB VRAM, upgrade ``adamw_8bit`` →
@@ -1889,9 +1916,41 @@ class Trainer:
         Returns the resolved optimizer string. Pure function; the
         caller threads it into SFTConfig.optim.
         """
-        # Rule 1: explicit operator override wins. The documented v1.3
-        # default in config.py is "adamw_8bit"; anything else is the
-        # operator's explicit pick.
+        # Rule 1: a CPU-only runner cannot run ANY bitsandbytes 8-bit
+        # optimizer — the downgrade must therefore run BEFORE the
+        # explicit-override short-circuit below. This catches the
+        # ``mode='full'`` force to ``paged_adamw_8bit`` (TRAINER-A-001)
+        # and any explicit operator pin of a bnb 8-bit variant
+        # (TRAINER-A-007), both of which previously slipped past the
+        # ``!= "adamw_8bit"`` short-circuit and crashed at ``.step()``
+        # with the bnb ``is_on_gpu`` RuntimeError. We only reach the
+        # torch import / CUDA query for bnb 8-bit optimizers; non-bnb
+        # optimizers (adamw_torch, sgd, adafactor, ...) skip straight to
+        # the explicit-override return and never pay the import cost.
+        if Trainer._is_bnb_8bit_optim(configured_optim):
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    logger.info(
+                        "_detect_optim_for_card: CUDA unavailable — "
+                        "downgrading optim %r -> adamw_torch "
+                        "(bitsandbytes 8-bit optimizers are CUDA-only).",
+                        configured_optim,
+                    )
+                    return "adamw_torch"
+            except Exception as exc:  # noqa: BLE001
+                # Defensive: if torch is missing / the CUDA probe raises,
+                # fall through to the legacy resolution path below rather
+                # than crashing the optimizer resolver.
+                logger.debug(
+                    f"_detect_optim_for_card: CUDA availability probe failed "
+                    f"({exc!r}); proceeding with legacy resolution for "
+                    f"optim={configured_optim!r}."
+                )
+
+        # Rule 2: explicit operator override wins (CUDA present). The
+        # documented v1.3 default in config.py is "adamw_8bit"; anything
+        # else is the operator's explicit pick.
         if configured_optim != "adamw_8bit":
             return configured_optim
         try:

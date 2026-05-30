@@ -427,6 +427,23 @@ def _detect_format_from_file(file_path: Path, sample_size: int = 5) -> DatasetFo
 # FORMAT CONVERTERS
 # =============================================================================
 
+def _render_function_call(function_call: Any) -> str:
+    """Render an OpenAI ``function_call`` as readable text for ChatML.
+
+    Prefers a structured ``name(arguments)`` rendering over a raw ``str(dict)``
+    so the converted training text reads like a tool invocation rather than a
+    Python dict repr (DATA-A-003).
+    """
+    if isinstance(function_call, dict):
+        name = function_call.get("name", "")
+        arguments = function_call.get("arguments", "")
+        if name:
+            if arguments:
+                return f"[Function call: {name}({arguments})]"
+            return f"[Function call: {name}]"
+    return f"[Function call: {function_call}]"
+
+
 class FormatConverter:
     """Convert between dataset formats."""
 
@@ -493,11 +510,16 @@ class FormatConverter:
 
         for msg in messages:
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = msg.get("content", "") or ""
 
-            # Handle function calls (OpenAI format)
-            if "function_call" in msg:
-                content = f"[Function call: {msg['function_call']}]"
+            # Handle function calls (OpenAI format). Preserve any natural-language
+            # content the assistant produced alongside the call rather than
+            # overwriting it (DATA-A-003): an assistant turn may carry both a
+            # reply and a function_call, and dropping the reply silently trains
+            # the model on a raw dict repr instead of the real answer.
+            if msg.get("function_call"):
+                call_repr = _render_function_call(msg["function_call"])
+                content = f"{content}\n{call_repr}" if content else call_repr
 
             parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
 
@@ -539,6 +561,29 @@ class FormatConverter:
         raise ValueError(f"Cannot convert format: {format_type}")
 
 
+# Matches a ChatML turn header and its body up to the next <|im_end|>.
+_CHATML_TURN_RE = re.compile(
+    r"<\|im_start\|>(\w+)\n(.*?)<\|im_end\|>", re.DOTALL
+)
+
+
+def _warn_on_empty_turns(chatml: str, row_index: int) -> None:
+    """Emit a WARN when a converted sample yields an empty user or assistant body.
+
+    Silent blank turns mean the model trains on empty prompts/answers — usually
+    the symptom of a per-row format mismatch (DATA-A-001). Surfacing it keeps the
+    content loss visible instead of training on blanks.
+    """
+    for role, body in _CHATML_TURN_RE.findall(chatml):
+        if role in ("user", "assistant") and not body.strip():
+            logger.warning(
+                "Converted sample %d produced an empty %s turn "
+                "(possible format mismatch — verify the source row's format)",
+                row_index,
+                role,
+            )
+
+
 def convert_to_chatml(
     samples: list[dict | str],
     source_format: DatasetFormat | None = None,
@@ -547,8 +592,12 @@ def convert_to_chatml(
     Convert a list of samples to ChatML format.
 
     Args:
-        samples: List of samples in any supported format
-        source_format: Optional format hint (auto-detected if not provided)
+        samples: List of samples in any supported format. When ``source_format``
+            is omitted, each sample's format is detected individually so a mixed
+            file (e.g. an Alpaca-first file with a stray ShareGPT row) does not
+            silently convert later rows to empty turns (DATA-A-001).
+        source_format: Optional format hint. If provided, it is applied to every
+            sample (auto-detected per-sample when not provided).
 
     Returns:
         List of dicts with "text" key containing ChatML
@@ -556,13 +605,17 @@ def convert_to_chatml(
     if not samples:
         return []
 
-    if source_format is None:
-        source_format = detect_format(samples[0])
+    # Per-sample detection when no explicit format is given: a single file may
+    # carry rows in different formats, and detecting once from samples[0] would
+    # convert every non-matching row to blank turns (silent content loss).
+    per_sample_detect = source_format is None or source_format == DatasetFormat.UNKNOWN
 
     results = []
-    for sample in samples:
+    for i, sample in enumerate(samples):
+        fmt = detect_format(sample) if per_sample_detect else source_format
         try:
-            chatml = FormatConverter.to_chatml(sample, source_format)
+            chatml = FormatConverter.to_chatml(sample, fmt)
+            _warn_on_empty_turns(chatml, i)
             results.append({"text": chatml})
         except Exception as e:
             logger.warning(f"Failed to convert sample: {e}")
@@ -1839,6 +1892,10 @@ class DatasetLoader:
         self.source = source
         self._samples: list[dict[Any, Any] | str] = []
         self._format: DatasetFormat = format_type or DatasetFormat.UNKNOWN
+        # Track whether the caller pinned a format. When they did NOT, conversion
+        # detects per-sample so a mixed file's later rows aren't converted with
+        # the first row's format (DATA-A-001 sibling).
+        self._format_explicit = format_type is not None
         self._validation: ValidationResult | None = None
         self._loaded = False
 
@@ -2059,7 +2116,8 @@ class DatasetLoader:
 
     def to_chatml(self) -> list[dict[str, str]]:
         """Convert all samples to ChatML format."""
-        return convert_to_chatml(self._samples, self._format)
+        fmt = self._format if self._format_explicit else None
+        return convert_to_chatml(self._samples, fmt)
 
     def to_hf_dataset(self, split: str | None = None) -> Any:
         """
@@ -2097,13 +2155,23 @@ class DatasetLoader:
         samples = self._samples[:n]
 
         if as_chatml:
-            return [FormatConverter.to_chatml(s, self._format) for s in samples]
+            # Detect per-sample when the caller didn't pin a format so a mixed
+            # file previews each row in its own format (DATA-A-001 sibling).
+            return [
+                FormatConverter.to_chatml(
+                    s, self._format if self._format_explicit else detect_format(s)
+                )
+                for s in samples
+            ]
         else:
             return [json.dumps(s, indent=2) if isinstance(s, dict) else s for s in samples]
 
     def stats(self) -> DatasetStats:
         """Get dataset statistics."""
-        return get_dataset_stats(self._samples, self._format)
+        # Pass None when the format was auto-detected so get_dataset_stats detects
+        # per-sample for a mixed file (DATA-A-001 sibling).
+        fmt = self._format if self._format_explicit else None
+        return get_dataset_stats(self._samples, fmt)
 
     def shuffle(self, seed: int | None = None) -> "DatasetLoader":
         """Return a new loader with shuffled samples."""
@@ -2387,6 +2455,10 @@ class StreamingDatasetLoader:
         self.buffer_size = buffer_size
         self.split = split
         self._format = format_type or DatasetFormat.UNKNOWN
+        # When the caller did not pin a format, convert/filter detect per-sample
+        # so a mixed stream's rows aren't all coerced to the first row's format
+        # (DATA-A-001 sibling).
+        self._format_explicit = format_type is not None
         self._iterator = None
         self._is_hf_dataset = False
 
@@ -2555,7 +2627,8 @@ class StreamingDatasetLoader:
             List of ChatML formatted samples
         """
         samples = self.take(n) if n is not None else list(self)
-        return convert_to_chatml(samples, self._format)
+        fmt = self._format if self._format_explicit else None
+        return convert_to_chatml(samples, fmt)
 
     def filter(
         self,
@@ -2581,8 +2654,11 @@ class StreamingDatasetLoader:
             Filtered samples
         """
         for sample in self:
-            # Convert to ChatML for consistent filtering
-            chatml = FormatConverter.to_chatml(sample, self._format)
+            # Convert to ChatML for consistent filtering. Detect per-sample when
+            # the caller didn't pin a format so a mixed stream isn't coerced to
+            # the first row's format (DATA-A-001 sibling).
+            fmt = self._format if self._format_explicit else detect_format(sample)
+            chatml = FormatConverter.to_chatml(sample, fmt)
             text = chatml if isinstance(chatml, str) else chatml
 
             # Check empty
@@ -2670,11 +2746,15 @@ def get_dataset_stats(
             unique_system_prompts=0,
         )
 
-    if format_type is None:
+    # When no format is given, detect once for the reported `format_detected`
+    # summary but let convert_to_chatml detect per-sample so a mixed file's later
+    # rows are not converted with the wrong format (DATA-A-001 sibling).
+    auto_detected = format_type is None
+    if auto_detected:
         format_type = detect_format(samples)
 
     # Convert to ChatML for consistent analysis
-    chatml_samples = convert_to_chatml(samples, format_type)
+    chatml_samples = convert_to_chatml(samples, None if auto_detected else format_type)
 
     # Approximate token counts (4 chars ≈ 1 token)
     token_counts = []
@@ -2816,6 +2896,12 @@ def get_curriculum_chunks(
             print(f"Chunk {i+1}: {len(chunk)} samples")
             trainer.train(chunk, steps=100)
     """
+    # Guard against a non-positive chunk count: num_chunks=0 (or negative) would
+    # raise a raw ZeroDivisionError below (DATA-A-002). Clamp to at least one
+    # chunk; the more-chunks-than-samples case is already handled by integer
+    # division producing trailing empty chunks.
+    num_chunks = max(1, num_chunks)
+
     # Order by difficulty
     ordered = order_by_difficulty(samples, key=key, ascending=True)
 
@@ -2874,6 +2960,23 @@ def analyze_curriculum(
     Returns:
         CurriculumStats with distribution info
     """
+    # Empty input: report empty stats rather than crashing on the division /
+    # min()/max()-on-empty paths below (DATA-A-002).
+    if not samples:
+        return CurriculumStats(
+            total_samples=0,
+            num_chunks=0,
+            chunk_sizes=[],
+            difficulty_ranges=[],
+        )
+
+    # Clamp to a sane chunk count: num_chunks=0 would raise ZeroDivisionError and
+    # num_chunks > len(samples) would leave empty chunks whose min()/max() blow up
+    # (DATA-A-002). Bounding to [1, len(samples)] guarantees every chunk is
+    # non-empty. The effective count is what we report in the returned stats so
+    # chunk_sizes / difficulty_ranges stay consistent (see CurriculumStats.summary).
+    effective_chunks = max(1, min(num_chunks, len(samples)))
+
     # Get scores
     scores = [compute_difficulty_score(s, key) for s in samples]
 
@@ -2881,13 +2984,13 @@ def analyze_curriculum(
     sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i])
 
     # Compute chunk stats
-    chunk_size = len(samples) // num_chunks
+    chunk_size = len(samples) // effective_chunks
     chunk_sizes = []
     difficulty_ranges = []
 
-    for i in range(num_chunks):
+    for i in range(effective_chunks):
         start = i * chunk_size
-        if i == num_chunks - 1:
+        if i == effective_chunks - 1:
             end = len(sorted_indices)
         else:
             end = start + chunk_size
@@ -2896,11 +2999,16 @@ def analyze_curriculum(
         chunk_scores = [scores[j] for j in chunk_indices]
 
         chunk_sizes.append(len(chunk_indices))
-        difficulty_ranges.append((min(chunk_scores), max(chunk_scores)))
+        # Defensive: an empty chunk yields a neutral (0.0, 0.0) range instead of
+        # crashing on min()/max() of an empty sequence.
+        if chunk_scores:
+            difficulty_ranges.append((min(chunk_scores), max(chunk_scores)))
+        else:
+            difficulty_ranges.append((0.0, 0.0))
 
     return CurriculumStats(
         total_samples=len(samples),
-        num_chunks=num_chunks,
+        num_chunks=effective_chunks,
         chunk_sizes=chunk_sizes,
         difficulty_ranges=difficulty_ranges,
     )

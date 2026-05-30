@@ -1402,3 +1402,77 @@ class TestGetUiOutputDir:
             f"Expected BackpropagateError(code='UI_OUTPUT_DIR_FORBIDDEN') "
             f"for forbidden base {forbidden!r}, got code={exc_info.value.code!r}"
         )
+
+
+# =============================================================================
+# UI-A-007 (Wave A2): the forbidden-base guard previously evaluated the
+# *resolved* candidate only — so a symlink placed UNDER $HOME whose target is
+# a non-credential location outside home could slip past the "inside home →
+# allow" fast path by masking its true target behind ``.resolve()``. The guard
+# now rejects any path whose user-controlled tail (strictly below the home
+# root) contains a symlink component.
+# =============================================================================
+
+
+class TestForbiddenOutputBaseSymlinkBelowHome:
+    """A symlink in the tail below $HOME must be treated as forbidden."""
+
+    def test_symlink_below_home_is_forbidden(self, tmp_path, monkeypatch):
+        """A ``$HOME/link -> /elsewhere`` output base is refused even when the
+        link target is not itself a credential / system dir.
+        """
+        from backpropagate.ui_security import _is_forbidden_output_base
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        # The link target lives OUTSIDE home and is a perfectly benign dir —
+        # the OLD guard would resolve through the link and allow it.
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        link = fake_home / "sneaky-out"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this host")
+
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        # The symlink leaf itself …
+        assert _is_forbidden_output_base(link) is True, (
+            "UI-A-007: a symlink directly under $HOME must be forbidden "
+            "(it can mask a target outside the credential set)."
+        )
+        # … and a path *under* the symlink.
+        assert _is_forbidden_output_base(link / "sub") is True, (
+            "UI-A-007: a path traversing a symlink below $HOME must be "
+            "forbidden."
+        )
+
+    def test_plain_dir_below_home_still_allowed(self, tmp_path, monkeypatch):
+        """A real (non-symlinked) directory under home is still allowed — the
+        symlink guard must not over-block the default sandbox.
+        """
+        from backpropagate.ui_security import _is_forbidden_output_base
+
+        fake_home = tmp_path / "home"
+        (fake_home / ".backpropagate" / "ui-outputs").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        assert _is_forbidden_output_base(
+            fake_home / ".backpropagate" / "ui-outputs"
+        ) is False, (
+            "UI-A-007 regression: the symlink guard over-blocked a plain "
+            "directory under home (the default UI sandbox)."
+        )
+
+    def test_credential_dir_below_home_still_forbidden(self, tmp_path, monkeypatch):
+        """The pre-existing credential-dir denylist still fires (the symlink
+        guard is additive, not a replacement).
+        """
+        from backpropagate.ui_security import _is_forbidden_output_base
+
+        fake_home = tmp_path / "home"
+        (fake_home / ".ssh").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        assert _is_forbidden_output_base(fake_home / ".ssh") is True

@@ -245,6 +245,59 @@ def _port_int(value: str) -> int:
     return n
 
 
+# CLI-A-007 (v1.4 Wave A2): argparse type for the `backprop ui --host` bind
+# address. Pre-fix `--host` accepted ANY string with no `type=` validator, so
+# a fat-fingered `--host -0.0.0.0` (parsed as an option), a value with
+# embedded whitespace, or other malformed hostnames slipped past argparse and
+# only failed deep in the Reflex/react-router subprocess with an opaque error.
+# This mirrors `_port_int`'s fail-at-the-boundary discipline: reject leading
+# `-` (option-shaped, also the argparse footgun), whitespace, and anything
+# that isn't a plausible IPv4 / IPv6 / RFC-1123 hostname before the value
+# ever reaches the bind logic. NOTE: this is robustness/UX hardening, not a
+# security control — the load-bearing DNS-rebinding defense remains the
+# non-loopback-requires-`--auth` gate in cmd_ui.
+_HOSTNAME_LABEL = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
+
+
+def _host_str(value: str) -> str:
+    """argparse type for --host bind addresses (IPv4 / IPv6 / hostname)."""
+    if not isinstance(value, str) or not value:
+        raise argparse.ArgumentTypeError("--host requires a non-empty value")
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise argparse.ArgumentTypeError(
+            f"--host must not contain whitespace, got {value!r}"
+        )
+    if value.startswith("-"):
+        raise argparse.ArgumentTypeError(
+            f"--host must not start with '-' (looks like a flag), got {value!r}"
+        )
+
+    import ipaddress
+
+    # Accept any valid IP literal outright (covers 0.0.0.0, ::, LAN IPs, etc.).
+    # IPv6 may be bracketed in URL contexts; tolerate the bare form here.
+    candidate = value
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        ipaddress.ip_address(candidate)
+        return value
+    except ValueError:
+        pass
+
+    # Otherwise require a plausible RFC-1123 hostname (dot-separated labels,
+    # each 1..63 chars, alnum + hyphen, no leading/trailing hyphen). A
+    # trailing dot (FQDN root) is tolerated.
+    hostname = value[:-1] if value.endswith(".") else value
+    if len(hostname) > 253 or not hostname:
+        raise argparse.ArgumentTypeError(f"invalid hostname: {value!r}")
+    if all(_HOSTNAME_LABEL.match(label) for label in hostname.split(".")):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid --host value {value!r}: expected an IP address or hostname"
+    )
+
+
 def _positive_float(value: str) -> float:
     """argparse type for floats that must be > 0 (e.g. learning rate)."""
     try:
@@ -344,22 +397,20 @@ def _auth_credential(value: str) -> str:
     return value
 
 
-# Patterns used to redact common secret-bearing tokens from non-verbose
-# error output. The previous catch-all (`(password|...)\s*[=:]\s*\S+`) had
-# two defects: (1) it matched plain prose like "the token: abc is wrong"
-# (false-positive — any sentence with a configuration-flavored word followed
-# by punctuation got mangled), and (2) the replacement template `\1=<REDACTED>`
-# hardcoded `=` regardless of whether the input used `:` or `=` (silently
-# rewriting the operator's input shape).
+# CLI-A-002: secret redaction now lives in ``backpropagate.logging_config``
+# as the single source of truth, so the CLI error paths AND the structured-log
+# / file pipeline scrub credentials through ONE definition (they can no longer
+# drift). The private module-local names are kept as aliases because
+# ``_print_error_redacted`` and the test suite reference them; the canonical
+# public names are ``logging_config.redact_secrets`` / ``SECRET_PATTERNS``.
 #
-# Current shape:
-# - High-signal prefixes (Bearer, sk-, hf_, AKIA) trigger redaction on their
-#   own — these have low false-positive rates by construction.
-# - The keyword-prefixed pattern now requires an `=` or `:` AND at least 8
-#   non-space characters of value (with at least one digit or special char)
-#   — high-entropy enough to filter out prose. The separator is captured
-#   in group 2 and re-emitted in the replacement so `token: foo` stays
-#   `token: <REDACTED>` (NOT `token=<REDACTED>`).
+# Pattern shape (defined in logging_config, summarized here):
+# - High-signal prefixes (Bearer, sk-, hf_, AKIA, ghp_/glpat-, JWT,
+#   url-embedded creds) trigger on their own — low false-positive by design.
+# - The keyword-prefixed pattern requires key=value / key:value with a
+#   high-entropy value (>=8 non-space chars incl. >=1 digit-or-special) so
+#   prose like "the token: abc is wrong" is left intact; the separator is
+#   preserved so `token: foo` → `token: <REDACTED>` (not `token=<REDACTED>`).
 #
 # Negative-test expectations (NOT to be redacted):
 #   "the token: abc is wrong"        → unchanged (value too short, prose-like)
@@ -367,76 +418,12 @@ def _auth_credential(value: str) -> str:
 #   "Authorization: Bearer xyz"      → "Authorization: Bearer <REDACTED>"
 #   "api_key=EXAMPLE-NOT-A-REAL-KEY"   → "api_key=<REDACTED>"
 #   "password=hunter2!@#secret_key"  → "password=<REDACTED>"
-_SECRET_PATTERNS = [
-    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
-    (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
-    (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
-    # BRIDGE-B-012 (Stage C): additional patterns the error-redaction layer
-    # should catch before pasting into a bug report.
-    #
-    # URL-embedded credentials (https://user:token@host/...): HfHubHTTPError
-    # occasionally surfaces request URLs in its message. Match the canonical
-    # `scheme://user:secret@host` form (NOT the user@host form, which is just
-    # an SSH-style address with no secret). The capture preserves the scheme
-    # and the host so the operator still sees what service was contacted.
-    (
-        re.compile(r"(https?://)[^/\s:@]+:[^/\s:@]+@([^/\s]+)"),
-        r"\1<REDACTED>@\2",
-    ),
-    # JWT tokens (3 base64url segments separated by `.`): RFC 7519 shape.
-    # The `eyJ` prefix is the base64 header of `{"`, present in essentially
-    # every real JWT, which keeps false-positive risk low against prose.
-    (
-        re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"),
-        "<JWT_REDACTED>",
-    ),
-    # GitHub Personal Access Tokens (ghp_*, ghs_*, gho_*, ghu_*, ghr_*):
-    # canonical prefix per GitHub's secret-scanning docs; the suffix length
-    # is 36+ base62 chars. Matches modern PATs (post-2021); the legacy
-    # 40-hex format isn't redacted here because it has high false-positive
-    # rate against generic 40-hex strings.
-    (
-        re.compile(r"\b(ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
-        r"\1_<REDACTED>",
-    ),
-    # GitLab PATs (glpat-...): canonical 20+ base62 / hyphen suffix per
-    # GitLab's tokens docs.
-    (
-        re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
-        "glpat-<REDACTED>",
-    ),
-    # Keyword-prefixed credentials: require key=value OR key:value shape with
-    # a high-entropy value (>=8 non-space chars including >=1 digit-or-special).
-    # The separator (group 2) is preserved in the replacement.
-    (
-        re.compile(
-            r"(password|passwd|pwd|secret|token|api[_-]?key)"
-            r"(\s*[=:]\s*)"
-            r'(?=[^\s]*[\d!@#$%^&*()+\-./?_=])'  # lookahead: at least one digit/special
-            r"[^\s]{8,}",
-            re.IGNORECASE,
-        ),
-        r"\1\2<REDACTED>",
-    ),
-]
-
-
-def _redact_secrets(text: str) -> str:
-    """
-    Best-effort redaction of common secret patterns in error output.
-
-    Designed to leave human-readable prose intact (e.g. "the token: abc is
-    wrong" is NOT redacted because "abc" is too short / has no digit) while
-    catching realistic credential leaks (e.g. "api_key=EXAMPLE-NOT-A-REAL-KEY"
-    is redacted to "api_key=<REDACTED>"). The separator character (``:`` vs
-    ``=``) is preserved in the output to avoid silently rewriting the
-    operator's input shape.
-    """
-    for pattern, replacement in _SECRET_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text
-
+from .logging_config import (  # noqa: E402
+    SECRET_PATTERNS as _SECRET_PATTERNS,  # noqa: F401 — re-export for tests/back-compat
+)
+from .logging_config import (
+    redact_secrets as _redact_secrets,
+)
 
 # =============================================================================
 # TERMINAL COLORS (ANSI)
@@ -6507,10 +6494,13 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     )
     ui_parser.add_argument(
         "--host",
+        type=_host_str,
         default=None,
         help=(
             "Interface to bind (default: 127.0.0.1). Non-loopback values "
-            "(e.g. 0.0.0.0, a LAN IP) require --auth — DNS-rebinding defense."
+            "(e.g. 0.0.0.0, a LAN IP) require --auth — DNS-rebinding defense. "
+            "Must be a valid IP address or hostname (no whitespace, no "
+            "leading '-')."
         ),
     )
     ui_parser.add_argument(
@@ -7056,8 +7046,14 @@ def main(argv: list[str] | None = None) -> int:
     except BackpropagateError as e:
         # BRIDGE-F-006: map the structured exception's code to a sysexits
         # bucket before falling through to the legacy EXIT_RUNTIME_ERROR.
+        # CLI-A-003: this last-resort handler fires for exceptions raised
+        # BEFORE a subcommand's own try/except (per-handler redaction is
+        # bypassed on that path), so redact the message here too — a
+        # downstream library exception may quote a credential-bearing URL /
+        # header. BACKPROPAGATE_DEBUG still prints the full (un-redacted)
+        # traceback for the operator who opted in.
         code = getattr(e, "code", None) or "RUNTIME"
-        print(f"{code}: {e}", file=sys.stderr)
+        print(f"{code}: {_redact_secrets(str(e))}", file=sys.stderr)
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
 
@@ -7078,7 +7074,14 @@ def main(argv: list[str] | None = None) -> int:
         # crashes. The default Python behavior is exit code 1 + traceback.
         # BRIDGE-F-006 sysexits overlay: name the failure mode before
         # falling back to EXIT_RUNTIME_ERROR.
-        print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        # CLI-A-003: redact the message — same rationale as the
+        # BackpropagateError handler above. The exception type name is safe
+        # (it never carries a secret); only str(e) can. BACKPROPAGATE_DEBUG
+        # still emits the full traceback for opted-in operators.
+        print(
+            f"Unexpected error: {type(e).__name__}: {_redact_secrets(str(e))}",
+            file=sys.stderr,
+        )
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
         else:

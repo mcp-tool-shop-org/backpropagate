@@ -330,6 +330,45 @@ class TestModelfile:
         content = modelfile.read_text()
         assert '\\"hello\\"' in content
 
+    @pytest.mark.parametrize(
+        "ctrl",
+        ["\x0c", "\x0b", "\x07", "\x01", "\x1f", "\x08", "\x1b"],
+        ids=["form-feed", "vtab", "bell", "soh", "unit-sep", "backspace", "esc"],
+    )
+    def test_create_modelfile_rejects_c0_controls_in_system_prompt(self, sample_gguf_path, ctrl):
+        """DATA-A-009: every C0 control (except TAB) in system_prompt is rejected.
+
+        Pre-fix only NUL / newline / CR were caught; form-feed, vertical-tab
+        and the other C0 controls slipped into the SYSTEM directive where some
+        parsers treat them as line breaks / separators.
+        """
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import create_modelfile
+
+        with pytest.raises(ExportError) as exc_info:
+            create_modelfile(sample_gguf_path, system_prompt=f"hello{ctrl}world")
+        assert exc_info.value.code == "INPUT_VALIDATION_FAILED"
+
+    def test_create_modelfile_still_rejects_nul_newline_cr(self, sample_gguf_path):
+        """DATA-A-009 regression guard: the original NUL/LF/CR checks survive."""
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import create_modelfile
+
+        for ctrl in ("\x00", "\n", "\r"):
+            with pytest.raises(ExportError):
+                create_modelfile(sample_gguf_path, system_prompt=f"a{ctrl}b")
+
+    def test_create_modelfile_allows_tab_in_system_prompt(self, sample_gguf_path):
+        """DATA-A-009: TAB is legitimate whitespace and must NOT be rejected."""
+        from backpropagate.export import create_modelfile
+
+        modelfile = create_modelfile(
+            sample_gguf_path,
+            system_prompt="role:\tassistant",
+        )
+        assert modelfile.exists()
+        assert "\t" in modelfile.read_text()
+
 
 class TestOllamaIntegration:
     """Tests for Ollama integration functions."""
@@ -825,6 +864,92 @@ class TestFindGgufFile:
         # Should find and use one of the GGUF files
         assert result.path.exists()
         assert result.path.suffix == ".gguf"
+
+
+class TestExportGgufModelNameSanitization:
+    """DATA-A-004: export_gguf must not let model_name escape output_dir.
+
+    The manual-conversion path interpolates model_name into the output GGUF
+    filename. A model_name carrying path separators / ``..`` segments would
+    otherwise write the GGUF outside output_dir (path traversal). The Ollama
+    register/remove sinks already validate model names; this programmatic
+    entry point did not.
+    """
+
+    def _run_manual_export(self, monkeypatch, temp_dir, model, tokenizer, model_name):
+        """Drive the llama.cpp (manual) export path with a stub convert script.
+
+        Returns the ExportResult. The stub ``_run_subprocess_interruptible``
+        writes a real byte to whatever ``--outfile`` path export_gguf chose,
+        so the produced file's location is observable.
+        """
+        from backpropagate import export as export_mod
+
+        # Point the convert-script discovery at a real file via the env hatch.
+        fake_convert = temp_dir / "convert_hf_to_gguf.py"
+        fake_convert.write_text("# stub convert script")
+        monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", str(fake_convert))
+
+        def fake_subprocess(cmd, **kwargs):
+            # cmd == [python, script, merged, "--outfile", <gguf_path>, "--outtype", quant]
+            outfile = Path(cmd[cmd.index("--outfile") + 1])
+            outfile.parent.mkdir(parents=True, exist_ok=True)
+            outfile.write_bytes(b"GGUF")
+            import subprocess as _sp
+            return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_subprocess):
+            return export_mod.export_gguf(
+                model=model,
+                tokenizer=tokenizer,
+                output_dir=temp_dir / "out",
+                quantization="q4_k_m",
+                model_name=model_name,
+            )
+
+    def test_traversal_model_name_stays_within_output_dir(
+        self, monkeypatch, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """A ``../`` model_name must produce a leaf file inside output_dir."""
+        out_dir = (temp_dir / "out").resolve()
+        result = self._run_manual_export(
+            monkeypatch, temp_dir, mock_peft_model, mock_tokenizer,
+            model_name="../../../evil",
+        )
+
+        # The produced GGUF is confined to output_dir.
+        assert result.path.resolve().parent == out_dir
+        assert result.path.exists()
+        # The traversal target outside output_dir was NEVER created.
+        assert not (temp_dir / "evil-q4_k_m.gguf").exists()
+        assert not (temp_dir.parent / "evil-q4_k_m.gguf").exists()
+
+    def test_separator_model_name_reduced_to_leaf(
+        self, monkeypatch, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """``sub/dir/x`` collapses to leaf ``x`` and stays in output_dir."""
+        out_dir = (temp_dir / "out").resolve()
+        result = self._run_manual_export(
+            monkeypatch, temp_dir, mock_peft_model, mock_tokenizer,
+            model_name="sub/dir/x",
+        )
+        assert result.path.resolve().parent == out_dir
+        assert result.path.name == "x-q4_k_m.gguf"
+        assert not (out_dir / "sub").exists()
+
+    def test_clean_model_name_is_preserved(
+        self, monkeypatch, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """A normal model_name is used verbatim (no false-positive mangling)."""
+        out_dir = (temp_dir / "out").resolve()
+        result = self._run_manual_export(
+            monkeypatch, temp_dir, mock_peft_model, mock_tokenizer,
+            model_name="my-finetune",
+        )
+        assert result.path.name == "my-finetune-q4_k_m.gguf"
+        assert result.path.resolve().parent == out_dir
 
 
 class TestExportResultSummary:

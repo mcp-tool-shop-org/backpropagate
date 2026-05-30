@@ -423,6 +423,51 @@ class TestSafeTorchLoad:
 
         assert "weight" in result
 
+    def test_safe_torch_load_warns_on_weights_only_false(self, tmp_path):
+        """CLI-A-006: weights_only=False must emit a SecurityWarning.
+
+        The wrapper's whole value is the weights_only=True safety floor.
+        Flipping it off turns the load into unrestricted pickle
+        deserialization (RCE surface), so the "safe_" name must not be
+        silently subvertible — we warn loudly while still honoring the
+        request (a trusted legacy checkpoint may genuinely need it).
+        """
+        from backpropagate.security import SecurityWarning, safe_torch_load
+
+        pt_file = tmp_path / "model.pt"
+        pt_file.write_bytes(b"mock pickle")
+
+        mock_state = {"weight": "tensor"}
+
+        with patch("backpropagate.security.check_torch_security"), patch(
+            "torch.load", return_value=mock_state
+        ) as mock_torch_load, pytest.warns(SecurityWarning, match="weights_only"):
+            result = safe_torch_load(pt_file, weights_only=False)
+
+        # Request is still honored (warning, not refusal).
+        assert result == mock_state
+        call_kwargs = mock_torch_load.call_args.kwargs
+        assert call_kwargs.get("weights_only") is False, (
+            f"weights_only=False must still be forwarded (got {call_kwargs})"
+        )
+
+    def test_safe_torch_load_no_warning_on_default(self, tmp_path):
+        """CLI-A-006: the safe default (weights_only=True) emits NO warning."""
+        import warnings
+
+        from backpropagate.security import SecurityWarning, safe_torch_load
+
+        pt_file = tmp_path / "model.pt"
+        pt_file.write_bytes(b"mock pickle")
+
+        with patch("backpropagate.security.check_torch_security"), patch(
+            "torch.load", return_value={"weight": "t"}
+        ):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", SecurityWarning)
+                # Must not raise (no SecurityWarning on the safe path).
+                safe_torch_load(pt_file)
+
 
 class TestAuditLog:
     """Tests for audit_log function."""

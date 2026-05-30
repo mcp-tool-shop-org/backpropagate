@@ -523,6 +523,35 @@ class CheckpointManager:
 
         return info
 
+    def _best_n_by_val_loss(self) -> list[int]:
+        """Return the ``id()``s of the top-``keep_best_n`` checkpoints by
+        validation loss, ranked low-loss-first, ordered.
+
+        TRAINER-A-005: ranking is by CHECKPOINT IDENTITY, not by loss-VALUE
+        membership. Pre-fix both retention sites did
+        ``sorted_losses.index(cp.validation_loss)`` to get a rank — but
+        ``list.index`` returns the FIRST occurrence's position for EVERY tied
+        checkpoint, so N checkpoints sharing the best loss all resolved to
+        rank 0 and all survived a ``keep_best_n=1`` policy (silent over-keep,
+        unbounded under heavy ties). Ranking distinct ``CheckpointInfo``
+        objects with a deterministic, identity-stable sort key
+        ``(validation_loss, run_index, timestamp)`` makes "top N" mean exactly
+        N entries even when their losses tie.
+
+        The returned list is ordered best-first; a caller's rank is the index
+        of its ``id()`` in the list. Returns ``[]`` when no checkpoint carries
+        a validation loss.
+        """
+        scored = [c for c in self._checkpoints if c.validation_loss is not None]
+        # Deterministic total order: primary loss (lower better), then
+        # run_index, then timestamp — all identity-stable so ties resolve the
+        # same way on every call within a process.
+        scored.sort(
+            key=lambda c: (c.validation_loss, c.run_index, c.timestamp)
+        )
+        keep_n = max(0, self.policy.keep_best_n)
+        return [id(c) for c in scored[:keep_n]]
+
     def _score_checkpoint(self, cp: CheckpointInfo) -> float:
         """
         Score a checkpoint for retention (higher = more likely to keep).
@@ -545,23 +574,26 @@ class CheckpointManager:
             score += 500.0
 
         # Validation loss scoring (lower loss = higher score)
+        # TRAINER-A-005: rank by identity (see _best_n_by_val_loss) so tied
+        # losses don't all collapse to rank 0 and over-score.
         if cp.validation_loss is not None:
-            # Rank by validation loss - best gets highest bonus
-            all_losses = [c.validation_loss for c in self._checkpoints if c.validation_loss is not None]
-            if all_losses:
-                sorted_losses = sorted(all_losses)
-                try:
-                    rank = sorted_losses.index(cp.validation_loss)
-                    # Top N get bonus points
-                    if rank < self.policy.keep_best_n:
-                        score += 100.0 * (self.policy.keep_best_n - rank)
-                except ValueError:
-                    pass
+            best_ids = self._best_n_by_val_loss()
+            try:
+                rank = best_ids.index(id(cp))
+            except ValueError:
+                rank = -1  # not in the top-N keep set
+            if 0 <= rank < self.policy.keep_best_n:
+                score += 100.0 * (self.policy.keep_best_n - rank)
 
         return score
 
     def _get_prunable_checkpoints(self) -> list[CheckpointInfo]:
         """Get list of checkpoints that can be pruned."""
+        # TRAINER-A-005: compute the top-N keep set ONCE by identity so tied
+        # validation losses keep exactly keep_best_n checkpoints (pre-fix the
+        # per-cp ``all_losses.index(cp.validation_loss)`` returned rank 0 for
+        # every checkpoint tied at the best loss, so all of them were spared).
+        best_ids = set(self._best_n_by_val_loss())
         prunable = []
         for cp in self._checkpoints:
             if cp.protected:
@@ -571,18 +603,9 @@ class CheckpointManager:
             if cp.is_run_boundary and self.policy.keep_run_boundaries:
                 continue
 
-            # Check if in top N by validation loss
-            if cp.validation_loss is not None:
-                all_losses = sorted([
-                    c.validation_loss for c in self._checkpoints
-                    if c.validation_loss is not None
-                ])
-                try:
-                    rank = all_losses.index(cp.validation_loss)
-                    if rank < self.policy.keep_best_n:
-                        continue  # In top N, don't prune
-                except ValueError:
-                    pass
+            # Check if in top N by validation loss (identity membership).
+            if cp.validation_loss is not None and id(cp) in best_ids:
+                continue  # In top N, don't prune
 
             prunable.append(cp)
 
@@ -670,7 +693,36 @@ class CheckpointManager:
                     self._checkpoints.remove(cp)
 
                 except Exception as e:
-                    logger.error(f"Failed to prune checkpoint {cp.path}: {e}")
+                    # TRAINER-A-008: a partial rmtree (e.g. one weight file
+                    # locked, the rest deleted) used to log here and LEAVE the
+                    # manifest entry in place — so the manifest kept advertising
+                    # a checkpoint whose directory is now half-deleted, and a
+                    # later resume/load hit a cryptic "state_dict missing keys".
+                    # Finish the teardown best-effort and DROP the entry so the
+                    # corrupt dir is never offered as a resume/keep candidate.
+                    logger.error(
+                        f"Failed to prune checkpoint {cp.path}: {e}. The "
+                        f"directory may be partially deleted; completing the "
+                        f"delete best-effort and dropping the manifest entry so "
+                        f"resume never selects a corrupt checkpoint."
+                    )
+                    try:
+                        cp_path = Path(cp.path)
+                        if cp_path.exists():
+                            if cp_path.is_dir():
+                                shutil.rmtree(cp_path, ignore_errors=True)
+                            else:
+                                cp_path.unlink(missing_ok=True)
+                    except Exception as cleanup_err:  # nosec B110 — best-effort
+                        logger.warning(
+                            f"Best-effort cleanup of partially-pruned checkpoint "
+                            f"{cp.path} also failed: {cleanup_err}. Dropping the "
+                            f"manifest entry regardless."
+                        )
+                    if cp in self._checkpoints:
+                        self._checkpoints.remove(cp)
+                    if cp not in pruned:
+                        pruned.append(cp)
 
             try:
                 if not self._save_manifest():
@@ -906,7 +958,35 @@ class CheckpointManager:
                     logger.info(f"Force-pruned: run={victim.run_index}, freed={victim.size_bytes / (1024**2):.1f} MB")
 
                 except Exception as e:
-                    logger.error(f"Failed to force-prune {victim.path}: {e}")
+                    # TRAINER-A-008 (sibling of prune): a partial rmtree leaves
+                    # a half-deleted directory still advertised in the manifest.
+                    # Finish the teardown best-effort and DROP the entry so a
+                    # later resume never selects the corrupt checkpoint. We
+                    # still break (continuing would re-select the same victim
+                    # and spin) — but break with the entry REMOVED, not stranded.
+                    logger.error(
+                        f"Failed to force-prune {victim.path}: {e}. Completing "
+                        f"the delete best-effort and dropping the manifest entry "
+                        f"so resume never selects a corrupt checkpoint."
+                    )
+                    try:
+                        victim_path = Path(victim.path)
+                        if victim_path.exists():
+                            if victim_path.is_dir():
+                                shutil.rmtree(victim_path, ignore_errors=True)
+                            else:
+                                victim_path.unlink(missing_ok=True)
+                    except Exception as cleanup_err:  # nosec B110 — best-effort
+                        logger.warning(
+                            f"Best-effort cleanup of partially-force-pruned "
+                            f"checkpoint {victim.path} also failed: "
+                            f"{cleanup_err}. Dropping the manifest entry "
+                            f"regardless."
+                        )
+                    if victim in self._checkpoints:
+                        self._checkpoints.remove(victim)
+                    if victim not in pruned:
+                        pruned.append(victim)
                     break
             else:
                 # Stage C amend BACKEND-B-022: include actionable context so an

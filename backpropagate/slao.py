@@ -799,6 +799,21 @@ class SLAOMerger:
 
             merged_value = self._merged_state[key]
 
+            # CONTINUAL-A-005: normalize the accumulator tensor onto the new
+            # value's device before any arithmetic. On a RESUMED session the
+            # accumulator is rehydrated by ``load()`` via ``torch.load`` onto
+            # whatever device it was serialized from (CPU for a CPU-saved
+            # checkpoint), while ``new_value`` comes from the LIVE model that
+            # may sit on CUDA. ``merge_B_matrices`` (B_merged + s*(B_new -
+            # B_merged)) would then raise a device-mismatch RuntimeError on
+            # the FIRST resumed merge. A no-op when devices already match
+            # (the steady-state fresh-session path), so the happy path is
+            # byte-identical; we also write the normalized tensor back so the
+            # hard-replace A-branch and subsequent runs stay device-coherent.
+            if isinstance(merged_value, torch.Tensor) and merged_value.device != new_value.device:
+                merged_value = merged_value.to(new_value.device)
+                self._merged_state[key] = merged_value
+
             # Phase 4.2: Get layer-specific scale if enabled
             if self.config.use_layer_scaling and total_layers:
                 layer_scale = get_layer_scale(
@@ -826,6 +841,20 @@ class SLAOMerger:
                 self._merged_state[key] = merge_A_matrices(new_value)
                 a_count += 1
                 kind = "lora_A"
+            elif "lora_magnitude_vector" in key:
+                # CONTINUAL-A-006: DoRA magnitude vector. DoRA decomposes the
+                # weight as W = m · (W0 + BA)/||W0 + BA||, where the magnitude
+                # ``m`` (PEFT key ``...lora_magnitude_vector...``) is retrained
+                # every run and is tightly coupled to the *current* direction.
+                # The direction's A matrix is HARD-REPLACED above (asymmetric
+                # SLAO policy), so EMA-blending ``m`` independently — the
+                # generic "other" branch's old behavior — would leave the
+                # magnitude describing a stale direction and produce an
+                # internally inconsistent adapter. Treat ``m`` as fresh
+                # (replace), mirroring the A-matrix asymmetry, so the
+                # magnitude/direction pair stays coherent across merges.
+                self._merged_state[key] = merge_A_matrices(new_value)
+                kind = "lora_magnitude"
             elif ".lora_B." in key:
                 # B matrix: time-aware merge with layer-specific scale
                 self._merged_state[key] = merge_B_matrices(
@@ -1304,13 +1333,33 @@ def merge_lora_weights(
         return merged
 
     elif method == "average":
-        # Simple averaging (no time-aware scaling)
+        # Simple averaging (no time-aware scaling).
+        #
+        # CONTINUAL-A-008: average keys present in BOTH dicts, but don't
+        # silently drop keys that appear in only one side. Pre-fix the loop
+        # iterated ``base_lora`` alone, so a key present only in ``new_lora``
+        # (e.g. a layer that the upstream run added via a target_modules
+        # change, or a DoRA magnitude vector the base lacked) vanished from
+        # the merged result — an asymmetric, silent data loss. We now keep
+        # every key from either side: averaged where both carry a tensor,
+        # passed through (cloned) where only one side does. This mirrors the
+        # SLAO path, which clones new-only keys into the accumulator.
         result = {}
-        for key in base_lora:
-            if isinstance(base_lora[key], torch.Tensor) and key in new_lora:
-                result[key] = (base_lora[key] + new_lora[key]) / 2
+        for key, base_value in base_lora.items():
+            new_value = new_lora.get(key)
+            if isinstance(base_value, torch.Tensor) and isinstance(new_value, torch.Tensor):
+                result[key] = (base_value + new_value) / 2
             else:
-                result[key] = base_lora[key]
+                # Base-only key, or a non-tensor on either side: keep base.
+                result[key] = base_value
+        # Fold in keys present ONLY in new_lora so they aren't dropped.
+        for key, new_value in new_lora.items():
+            if key not in result:
+                result[key] = (
+                    new_value.clone()
+                    if isinstance(new_value, torch.Tensor)
+                    else new_value
+                )
         return result
 
     elif method == "replace":

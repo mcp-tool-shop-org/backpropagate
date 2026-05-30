@@ -713,6 +713,110 @@ class TestManualPrune:
         remaining = len(manager.list_checkpoints())
         assert remaining <= 2
 
+    def test_keep_best_n_does_not_overkeep_on_tied_val_losses(
+        self, temp_checkpoint_dir
+    ):
+        """TRAINER-A-005: keep_best_n=1 must keep EXACTLY ONE checkpoint even
+        when several tie at the best validation loss.
+
+        Pre-fix the retention rank used ``sorted_losses.index(loss)``, which
+        returns the FIRST occurrence's position for every tied checkpoint — so
+        all checkpoints sharing the best loss resolved to rank 0 and all
+        survived a keep_best_n=1 policy (silent over-keep). The fix ranks by
+        checkpoint identity, so ties keep exactly N.
+        """
+        policy = CheckpointPolicy(
+            keep_best_n=1,
+            keep_final=False,
+            keep_run_boundaries=False,
+            max_total=0,  # unlimited — isolate the keep_best_n criterion
+            auto_prune=False,
+        )
+        manager = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # Two checkpoints TIE at the best loss (0.10); two are worse.
+        losses = [0.10, 0.10, 0.20, 0.30]
+        for i, loss in enumerate(losses):
+            cp = create_dummy_checkpoint(temp_checkpoint_dir, f"tie_cp{i}")
+            manager.register(i, str(cp), validation_loss=loss)
+
+        # Pre-fix: prunable EXCLUDES both 0.10 checkpoints (both rank 0).
+        prunable = manager._get_prunable_checkpoints()
+        kept_best = [
+            cp for cp in manager.list_checkpoints()
+            if cp.validation_loss == 0.10 and cp not in prunable
+        ]
+        assert len(kept_best) == 1, (
+            f"TRAINER-A-005: keep_best_n=1 must spare exactly ONE of the tied "
+            f"best-loss checkpoints from pruning; {len(kept_best)} were spared "
+            f"(tie over-keep)."
+        )
+
+        # And the public prune() must actually delete down to one best.
+        manager.prune()
+        survivors_at_best = [
+            cp for cp in manager.list_checkpoints() if cp.validation_loss == 0.10
+        ]
+        assert len(survivors_at_best) == 1, (
+            f"TRAINER-A-005: after prune() exactly one tied-best checkpoint "
+            f"should survive; {len(survivors_at_best)} survived."
+        )
+
+    def test_partial_prune_failure_drops_manifest_entry(
+        self, temp_checkpoint_dir, monkeypatch
+    ):
+        """TRAINER-A-008: if rmtree fails (partial delete) during prune, the
+        manifest entry is DROPPED, not left advertising a corrupt directory.
+
+        Pre-fix the except-branch logged and left the entry in
+        self._checkpoints, so the manifest kept pointing at a half-deleted
+        checkpoint that a later resume/load would choke on.
+        """
+        import shutil as _shutil
+
+        policy = CheckpointPolicy(
+            keep_best_n=1,
+            keep_final=False,
+            keep_run_boundaries=False,
+            max_total=0,
+            auto_prune=False,
+        )
+        manager = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # Best (kept) + a worse one that prune will try to delete.
+        good = create_dummy_checkpoint(temp_checkpoint_dir, "keep_cp")
+        doomed = create_dummy_checkpoint(temp_checkpoint_dir, "doomed_cp")
+        manager.register(0, str(good), validation_loss=0.1)
+        manager.register(1, str(doomed), validation_loss=0.9)
+
+        # Make the FIRST rmtree (the prune delete) raise to simulate a partial
+        # deletion; the best-effort cleanup uses ignore_errors=True and won't
+        # re-raise.
+        calls = {"n": 0}
+        real_rmtree = _shutil.rmtree
+
+        def flaky_rmtree(path, *args, **kwargs):
+            if kwargs.get("ignore_errors"):
+                return real_rmtree(path, *args, **kwargs)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("[Errno 16] Device or resource busy")
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(_shutil, "rmtree", flaky_rmtree)
+
+        manager.prune()
+
+        # The doomed checkpoint must no longer be advertised in the manifest,
+        # even though its rmtree raised.
+        remaining_paths = {cp.path for cp in manager.list_checkpoints()}
+        assert str(doomed) not in remaining_paths, (
+            "TRAINER-A-008: a partial rmtree failure must DROP the manifest "
+            "entry so resume never selects a half-deleted checkpoint; the "
+            "doomed checkpoint is still advertised."
+        )
+        assert str(good) in remaining_paths, "the best checkpoint must survive"
+
 
 # =============================================================================
 # PROTECTED CHECKPOINTS TESTS
@@ -1545,6 +1649,190 @@ class TestCrossProcessLostUpdate:
         assert 1 in by_run, "manager_b's own checkpoint (run_index=1) missing."
         assert by_run[1].protected is True, (
             "protect_checkpoint did not persist the protected flag for run 1."
+        )
+
+    # ------------------------------------------------------------------
+    # V3-a verifier gap: the Wave A1 lock fix migrated 6 mutators, but only
+    # register + protect_checkpoint had a cross-process lost-update SURVIVAL
+    # test. The four below cover prune / unprotect_checkpoint /
+    # cleanup_orphaned / force_prune_to_size. Each uses the stale-ordering that
+    # actually exercises the MUTATOR's in-lock re-read (not register's):
+    #
+    #   1. manager_b.register(cp_b)         -> manager_b in-memory = [cp_b]
+    #   2. manager_a.register(cp_a)         -> disk = [cp_b, cp_a]; manager_b STALE
+    #   3. manager_b.<mutator>()            -> pre-fix saves stale [cp_b], dropping
+    #                                          cp_a; post-fix re-reads so cp_a SURVIVES
+    #
+    # The assertion is SURVIVAL of the sibling's entry, not merely
+    # no-exception, mirroring test_protect_checkpoint_preserves_concurrent_registration.
+    # ------------------------------------------------------------------
+
+    def test_prune_preserves_concurrent_registration(self, temp_checkpoint_dir):
+        """prune() must re-read under the lock so a sibling's registration
+        survives an actual prune.
+
+        Teeth: manager_b owns three checkpoints with a worst-loss entry that IS
+        a legitimate prune target, so prune() takes its save path (it would
+        early-return without saving if nothing were prunable). manager_a's
+        concurrent cp_a (best loss) must survive that save. Pre-fix prune saved
+        manager_b's STALE list (lacking cp_a), dropping it.
+        """
+        # keep_best_n=2 + no final/boundary protection + unlimited total: the
+        # two best-by-loss survive, the rest are pruned.
+        policy = CheckpointPolicy(
+            keep_best_n=2,
+            keep_final=False,
+            keep_run_boundaries=False,
+            max_total=0,
+            auto_prune=False,
+        )
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # manager_b owns three (stale ordering: register before manager_a).
+        cp_b1 = create_dummy_checkpoint(temp_checkpoint_dir, "prune_b1")
+        cp_b2 = create_dummy_checkpoint(temp_checkpoint_dir, "prune_b2")
+        cp_b3 = create_dummy_checkpoint(temp_checkpoint_dir, "prune_b3")
+        manager_b.register(1, str(cp_b1), validation_loss=0.20)
+        manager_b.register(2, str(cp_b2), validation_loss=0.30)
+        manager_b.register(3, str(cp_b3), validation_loss=0.90)  # worst -> prunable
+
+        # manager_a registers cp_a with the BEST loss (always kept) AFTER
+        # manager_b's snapshot, so manager_b's in-memory list is now stale.
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "prune_a")
+        manager_a.register(0, str(cp_a), validation_loss=0.10)
+
+        # manager_b prunes against its STALE in-memory list — this both deletes
+        # a real victim (so the save path runs) AND must preserve cp_a.
+        pruned = manager_b.prune()
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        by_run = {cp.run_index: cp for cp in reader.list_checkpoints()}
+        assert 0 in by_run, (
+            "V3-a: prune() on manager_b clobbered manager_a's concurrent "
+            "registration (run_index=0 missing from disk) — the mutator did "
+            "not re-read under the lock."
+        )
+        # Sanity: the prune actually did work (non-vacuous) — the worst-loss
+        # entry was removed.
+        assert pruned, "expected prune to remove at least one checkpoint"
+        assert 3 not in by_run, (
+            "the worst-loss checkpoint (run_index=3) should have been pruned."
+        )
+
+    def test_unprotect_checkpoint_preserves_concurrent_registration(
+        self, temp_checkpoint_dir
+    ):
+        """unprotect_checkpoint() must re-read under the lock so a sibling's
+        registration survives the flag flip."""
+        policy = CheckpointPolicy(auto_prune=False)
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        cp_b = create_dummy_checkpoint(temp_checkpoint_dir, "unprot_b_cp")
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "unprot_a_cp")
+
+        # manager_b registers a PROTECTED checkpoint first (stale ordering).
+        manager_b.register(1, str(cp_b), validation_loss=0.4, protected=True)
+        manager_a.register(0, str(cp_a), validation_loss=0.5)
+
+        # manager_b unprotects its own cp against its STALE in-memory list.
+        result = manager_b.unprotect_checkpoint(1)
+        assert result is True
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        by_run = {cp.run_index: cp for cp in reader.list_checkpoints()}
+        assert 0 in by_run, (
+            "V3-a: unprotect_checkpoint on manager_b clobbered manager_a's "
+            "concurrent registration (run_index=0 missing from disk)."
+        )
+        assert 1 in by_run, "manager_b's own checkpoint (run_index=1) missing."
+        assert by_run[1].protected is False, (
+            "unprotect_checkpoint did not persist the cleared flag for run 1."
+        )
+
+    def test_cleanup_orphaned_preserves_concurrent_registration(
+        self, temp_checkpoint_dir
+    ):
+        """cleanup_orphaned() must re-read under the lock so a sibling's
+        registration (still present on disk) is not dropped.
+
+        Teeth: manager_b owns a REAL orphan (its directory is deleted) so
+        cleanup_orphaned takes its save path (it skips the save when nothing is
+        orphaned). manager_a's concurrent cp_a (dir present) must survive that
+        save. Pre-fix cleanup saved manager_b's STALE list (lacking cp_a),
+        dropping it even though its directory was intact.
+        """
+        import shutil as _shutil
+
+        policy = CheckpointPolicy(auto_prune=False)
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # manager_b owns a live checkpoint AND one that will become orphaned.
+        cp_b = create_dummy_checkpoint(temp_checkpoint_dir, "orph_b_cp")
+        cp_b_orphan = create_dummy_checkpoint(temp_checkpoint_dir, "orph_b_dead")
+        manager_b.register(1, str(cp_b), validation_loss=0.4)
+        manager_b.register(2, str(cp_b_orphan), validation_loss=0.5)
+
+        # manager_a registers cp_a AFTER manager_b's snapshot (stale ordering).
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "orph_a_cp")
+        manager_a.register(0, str(cp_a), validation_loss=0.6)
+
+        # Delete the orphan's directory so cleanup_orphaned has real work to do
+        # (and therefore actually saves the manifest).
+        _shutil.rmtree(cp_b_orphan)
+
+        removed = manager_b.cleanup_orphaned()
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        by_run = {cp.run_index: cp for cp in reader.list_checkpoints()}
+        assert 0 in by_run, (
+            "V3-a: cleanup_orphaned on manager_b clobbered manager_a's "
+            "concurrent registration (run_index=0 missing from disk) even "
+            "though the directory was still present."
+        )
+        assert 1 in by_run, "manager_b's live checkpoint (run_index=1) missing."
+        # Non-vacuous: the genuinely-orphaned entry was removed.
+        assert removed == 1, (
+            f"cleanup_orphaned should have removed exactly the 1 orphan; "
+            f"removed={removed}."
+        )
+        assert 2 not in by_run, "the orphaned entry (run_index=2) should be gone."
+
+    def test_force_prune_to_size_preserves_concurrent_registration(
+        self, temp_checkpoint_dir
+    ):
+        """force_prune_to_size() must re-read under the lock so a sibling's
+        registration survives. A large size cap => nothing is force-pruned,
+        isolating the lost-update concern."""
+        policy = CheckpointPolicy(
+            auto_prune=False, keep_best_n=10, keep_final=True, max_total=100
+        )
+        manager_a = CheckpointManager(str(temp_checkpoint_dir), policy)
+        manager_b = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        cp_b = create_dummy_checkpoint(temp_checkpoint_dir, "force_b_cp")
+        cp_a = create_dummy_checkpoint(temp_checkpoint_dir, "force_a_cp")
+
+        # Stale ordering.
+        manager_b.register(1, str(cp_b), validation_loss=0.4)
+        manager_a.register(0, str(cp_a), validation_loss=0.5)
+
+        # 100 GB cap — the two tiny dummy checkpoints are far under it, so the
+        # loop deletes nothing on the first size check.
+        pruned = manager_b.force_prune_to_size(100.0)
+
+        reader = CheckpointManager(str(temp_checkpoint_dir), policy)
+        by_run = {cp.run_index: cp for cp in reader.list_checkpoints()}
+        assert 0 in by_run, (
+            "V3-a: force_prune_to_size on manager_b clobbered manager_a's "
+            "concurrent registration (run_index=0 missing from disk)."
+        )
+        assert 1 in by_run, "manager_b's own checkpoint (run_index=1) missing."
+        assert not pruned, (
+            f"unexpected force-prune of {[c.run_index for c in pruned]} under a "
+            f"100 GB cap."
         )
 
 

@@ -754,6 +754,29 @@ def basic_auth_transformer(asgi_app: Callable) -> Callable:
                 })
                 return
 
+            # UI-A-008 (Wave A2): require a PRESENT Origin on the WS upgrade in
+            # every authed mode. ``_origin_matches_allowlist`` deliberately
+            # fails OPEN on a missing Origin (some legitimate same-origin HTTP
+            # requests omit it, and the Host + cookie gates still apply there).
+            # But a real browser ALWAYS sets Origin on a cross-origin WebSocket
+            # handshake — so on the ``/_event`` upgrade, in an authed
+            # deployment (especially under --share where the UI is reachable
+            # off-loopback), a *missing* Origin has no legitimate browser
+            # source and is the shape a hand-rolled CSWSH client uses to dodge
+            # the allowlist. Reject it. NO_AUTH_LOCAL_ONLY (loopback dev) keeps
+            # the fail-open behavior so native/test WS clients still connect.
+            if mode != AuthMode.NO_AUTH_LOCAL_ONLY and not origin_header:
+                logger.warning(
+                    "auth: WS rejected — missing Origin on authed upgrade",
+                    extra={"path": scope.get("path", ""), "mode": mode.value},
+                )
+                await send({
+                    "type": "websocket.close",
+                    "code": _WS_CLOSE_CODE_ORIGIN_FAILED,
+                    "reason": "origin_required",
+                })
+                return
+
             # NO_AUTH_LOCAL_ONLY mode skips cookie validation — the Host check
             # above is the only gate. This preserves dev-mode behavior.
             if mode == AuthMode.NO_AUTH_LOCAL_ONLY:

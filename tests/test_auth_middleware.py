@@ -457,6 +457,94 @@ async def test_origin_allowlist_rejects_cswsh(basic_mode_middleware):
     )
 
 
+# =============================================================================
+# UI-A-008 (Wave A2): the Origin allowlist deliberately fails OPEN on a
+# MISSING Origin header (some legitimate same-origin HTTP requests omit it,
+# and Host + cookie gates still apply there). But a real browser ALWAYS sets
+# Origin on a cross-origin WebSocket handshake — so on the ``/_event`` upgrade,
+# in an authed deployment, a *missing* Origin has no legitimate browser source
+# and is the shape a hand-rolled CSWSH client uses to dodge the allowlist.
+# Require a present Origin on the WS upgrade in every authed mode; preserve the
+# fail-open behavior for NO_AUTH_LOCAL_ONLY (loopback dev / native WS clients).
+# =============================================================================
+
+
+@requires_middleware
+@pytest.mark.asyncio
+async def test_ws_missing_origin_rejected_in_authed_mode(basic_mode_middleware):
+    """UI-A-008 — WS upgrade with NO Origin header closes 4403 PRE-accept in
+    an authed (EXPLICIT_CREDS) mode.
+    """
+    # origin omitted -> no Origin header in the scope.
+    scope = make_ws_scope(path="/_event", host="127.0.0.1:7860")
+    recorder = WSMessageRecorder()
+    receive = await make_connect_receive()
+    await basic_mode_middleware(scope, receive, recorder)
+
+    assert recorder.accepted_before_closed is False, (
+        "UI-A-008: missing-Origin rejection on the WS upgrade must happen "
+        "PRE-accept (same DoS-defense invariant as the cookie / Origin "
+        "gates)."
+    )
+    assert recorder.close_code == 4403, (
+        f"UI-A-008: a WS upgrade with NO Origin in an authed mode must be "
+        f"closed with the origin-failure code 4403; got {recorder.close_code}."
+    )
+
+
+@requires_middleware
+@pytest.mark.asyncio
+async def test_ws_missing_origin_rejected_in_share_mode(shared_mode_middleware):
+    """UI-A-008 — the missing-Origin rejection also fires in PRODUCTION
+    (--share + --auth), the mode most exposed off-loopback.
+    """
+    scope = make_ws_scope(
+        path="/_event", host="random123.trycloudflare.com:443"
+    )
+    recorder = WSMessageRecorder()
+    receive = await make_connect_receive()
+    await shared_mode_middleware(scope, receive, recorder)
+
+    assert recorder.accepted_before_closed is False
+    assert recorder.close_code == 4403, (
+        f"UI-A-008: missing Origin under --share must close 4403; got "
+        f"{recorder.close_code}."
+    )
+
+
+@requires_middleware
+@pytest.mark.asyncio
+async def test_ws_missing_origin_allowed_in_no_auth_local_mode(monkeypatch):
+    """UI-A-008 — NO_AUTH_LOCAL_ONLY (loopback dev) preserves the fail-open
+    behavior so native / test WS clients that omit Origin still connect.
+
+    The Host allowlist remains the load-bearing gate in this mode; the
+    missing-Origin requirement is scoped to authed modes only.
+    """
+    monkeypatch.setattr("backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True)
+    # No auth creds, no launch token, no share host -> NO_AUTH_LOCAL_ONLY.
+    monkeypatch.delenv("BACKPROPAGATE_UI_AUTH", raising=False)
+    monkeypatch.delenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", raising=False)
+    monkeypatch.delenv("BACKPROPAGATE_UI_SHARE_HOST", raising=False)
+    monkeypatch.delenv("BACKPROPAGATE_UI_HOST_BIND", raising=False)
+
+    from backpropagate.ui_app.auth import basic_auth_transformer
+
+    middleware = basic_auth_transformer(stub_asgi_http_app)
+    scope = make_ws_scope(path="/_event", host="127.0.0.1:7860")  # no Origin
+    recorder = WSMessageRecorder()
+    receive = await make_connect_receive()
+    await middleware(scope, receive, recorder)
+
+    # NO_AUTH_LOCAL_ONLY must NOT reject a missing Origin with 4403 — the
+    # connection passes through to the stub (which may accept/close normally).
+    assert recorder.close_code != 4403, (
+        "UI-A-008 regression: NO_AUTH_LOCAL_ONLY rejected a missing-Origin "
+        "WS upgrade with 4403. The missing-Origin requirement is scoped to "
+        "authed modes only; loopback dev keeps the fail-open behavior."
+    )
+
+
 # Brief test 10: --share mode admits the tunnel host
 @requires_middleware
 @pytest.mark.asyncio

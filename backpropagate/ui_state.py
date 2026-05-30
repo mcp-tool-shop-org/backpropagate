@@ -145,6 +145,41 @@ def _validate_run_id(value: str) -> tuple[str, str]:
     return candidate, ""
 
 
+# ---------------------------------------------------------------------------
+# Action-string redaction — V2-a fix (Wave A2 verifier gap)
+# ---------------------------------------------------------------------------
+#
+# RunDetailState's in-process action handlers (delete_run / export_run /
+# replay, rewired in Wave A1 from broken subprocess shell-outs) build
+# operator-facing strings that embed RAW absolute paths — the sandbox
+# ``history_dir`` / ``out_path`` (both under ``~/.backpropagate/ui-outputs``,
+# which contains the OS home dir + username) and the bare ``{exc}`` repr of an
+# OSError (``[Errno 2] ... '/home/<user>/...'``). Those strings are assigned to
+# ``action_error`` / ``action_result``, which are PUBLIC (client-serialized)
+# Reflex vars — under the documented ``--share + --auth`` flow they ship to the
+# remote browser, leaking the operator's home dir + username (the exact FB-011
+# class ``sanitize_error_for_user`` exists to prevent). Route every
+# path-bearing action string through this helper before assignment so the home
+# prefix is replaced with ``<redacted-path>``.
+def _redact_action(text: str) -> str:
+    """Redact absolute filesystem paths from an operator-facing action string.
+
+    Thin wrapper over ``ui_security._redact_paths`` (the same redactor
+    ``sanitize_error_for_user`` uses) so the in-process action handlers can
+    scrub ``history_dir`` / ``out_path`` / raw ``OSError`` reprs out of the
+    client-serialized ``action_error`` / ``action_result`` vars. Falls back to
+    returning the text unchanged if the import fails (the redactor module is
+    framework-agnostic and always importable, but be defensive — a redaction
+    failure must never crash the handler).
+    """
+    try:
+        from .ui_security import _redact_paths
+
+        return _redact_paths(text)
+    except Exception:  # noqa: BLE001 — redaction is best-effort, never fatal
+        return text
+
+
 def _coerce_int(value: object) -> int | None:
     """Best-effort ``int`` cast; returns ``None`` if value can't be parsed.
 
@@ -1076,9 +1111,14 @@ class ExportState(rx.State):
             except Exception:  # noqa: BLE001
                 # Last-resort fallback — preserve the operator-facing
                 # message but trim to 200 chars so we don't spill a giant
-                # traceback into the WS bundle.
+                # traceback into the WS bundle. V2-a (sibling): redact absolute
+                # paths from the raw exception repr — ``hub_message`` is a
+                # public (client-serialized) var, so an HF exception embedding
+                # the operator's home dir would otherwise ship to the browser.
                 self.hub_status = "error"
-                self.hub_message = f"Push failed: {type(exc).__name__}: {str(exc)[:200]}"
+                self.hub_message = _redact_action(
+                    f"Push failed: {type(exc).__name__}: {str(exc)[:200]}"
+                )
 
     @rx.event
     def clear_hub_status(self) -> None:
@@ -1090,20 +1130,37 @@ class ExportState(rx.State):
 class DatasetState(rx.State):
     """Dataset surface state: upload, format detect, preview, dedup config."""
 
-    uploaded_path: str = ""
+    # UI-A-002 (Wave A2): the full upload path embeds the operator's home dir
+    # + username and was previously a PUBLIC (client-serialized) Reflex var —
+    # so the home prefix shipped in the WS bundle on every state delta even
+    # though FRONTEND-B-013 only RENDERED the basename. The full path is now
+    # held in a backend-only ('_'-prefixed) var that Reflex never serializes;
+    # the client sees only the basename via the ``uploaded_basename`` computed
+    # var. The full path stays available server-side for the Trainer hookup.
+    _uploaded_path: str = ""
     upload_error: str = ""
     upload_count: int = 0  # per-session cap
     detected_format: str = ""
     preview_records: list[dict] = []
 
-    # FRONTEND-B-013: backend-computed basename so the UI never has to
-    # split the full path on the client. The full path (with home prefix)
-    # is kept for the Trainer hookup; only the basename is rendered.
+    # FRONTEND-B-013 / UI-A-002: backend-computed basename so the UI never has
+    # to split the full path on the client AND the full path (with home
+    # prefix) never enters the serialized state bundle. Only the basename is
+    # rendered.
     @rx.var
     def uploaded_basename(self) -> str:
-        if not self.uploaded_path:
+        if not self._uploaded_path:
             return ""
-        return Path(self.uploaded_path).name
+        return Path(self._uploaded_path).name
+
+    @rx.var
+    def has_upload(self) -> bool:
+        """Client-safe truthiness for the 'Uploaded: …' chrome.
+
+        The template can't test the backend-only ``_uploaded_path`` (it isn't
+        serialized), so expose a boolean computed var for the ``rx.cond``.
+        """
+        return bool(self._uploaded_path)
 
     # Format hint — operator can override the auto-detect when it guesses wrong.
     format_hint: DatasetFormatHint = "auto"
@@ -1314,7 +1371,9 @@ class DatasetState(rx.State):
 
             target = upload_dir / safe_name
             target.write_bytes(data)
-            self.uploaded_path = str(target)
+            # UI-A-002: store the full path in the backend-only var; the
+            # client receives only the basename via ``uploaded_basename``.
+            self._uploaded_path = str(target)
             self.upload_count += 1
 
             # FRONTEND-F-005 (v1.4 Wave 6b features): compute dataset stats
@@ -1414,7 +1473,7 @@ class DatasetState(rx.State):
     @rx.event
     def detect_format_stub(self) -> None:
         """Stub handler — placeholder for the upload->detect flow."""
-        if self.uploaded_path:
+        if self._uploaded_path:
             self.detected_format = "alpaca"
 
 
@@ -1467,7 +1526,37 @@ class RunsState(rx.State):
             # Resolve the history directory. Use the override if set, otherwise
             # fall back to the UI's own output dir (the default training sink).
             if self.output_dir_override.strip():
+                # UI-A-005 (Wave A2): ``output_dir_override`` is a PUBLIC
+                # (client-serialized) Reflex var. ``set_output_dir_override``
+                # validates via ``_validate_ui_path`` — but a malicious WS
+                # client can write the public var directly, bypassing the
+                # setter. Re-validate the forbidden-base guard HERE, at the
+                # read sink, so a value pointing at a system / credential dir
+                # (``/etc``, ``~/.ssh``, ``C:\\Windows`` …) is refused even if
+                # it never passed through the setter. This mirrors the env-var
+                # guard ``get_ui_output_dir()`` applies to its override.
                 history_dir = _Path(self.output_dir_override).expanduser()
+                try:
+                    from .ui_security import _is_forbidden_output_base
+
+                    if _is_forbidden_output_base(history_dir):
+                        self.runs = []
+                        self.error = _redact_action(
+                            "Refusing to read run history from a system or "
+                            f"credential directory: {history_dir.resolve()}. "
+                            "Point the override at a non-system directory."
+                        )
+                        return
+                except Exception:  # noqa: BLE001 — guard import/resolve must
+                    # fail closed: if we can't validate, refuse the override
+                    # and fall back to the sandbox default rather than reading
+                    # an unvalidated operator-supplied path.
+                    try:
+                        from .ui_security import get_ui_output_dir
+
+                        history_dir = get_ui_output_dir()
+                    except Exception:
+                        history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
             else:
                 try:
                     from .ui_security import get_ui_output_dir
@@ -1479,7 +1568,9 @@ class RunsState(rx.State):
 
             if not history_dir.exists():
                 self.runs = []
-                self.error = (
+                # UI-A-002 (sibling): ``error`` is a public RunsState var;
+                # history_dir embeds the home dir + username. Redact.
+                self.error = _redact_action(
                     f"No run history at {history_dir}. Train a model from the "
                     "UI or CLI; runs will appear here automatically."
                 )
@@ -1488,7 +1579,7 @@ class RunsState(rx.State):
             try:
                 from .checkpoints import RunHistoryManager
             except ImportError as exc:
-                self.error = f"checkpoints module unavailable: {exc}"
+                self.error = _redact_action(f"checkpoints module unavailable: {exc}")
                 self.runs = []
                 return
 
@@ -1757,7 +1848,12 @@ class RunDetailState(rx.State):
     completed_at: str = "-"
     duration: str = "-"
     final_loss: str = "-"
-    checkpoint_path: str = "-"
+    # UI-A-002 (Wave A2): the checkpoint path embeds the operator's home dir +
+    # username. Held in a backend-only var; the client sees only the redacted
+    # form via the ``checkpoint_path_display`` computed var (home prefix
+    # replaced with ``<redacted-path>`` so the operator still sees the
+    # run-relative tail but not their username).
+    _checkpoint_path: str = "-"
 
     # Hyperparameter table — list of {key, value} dicts so Reflex's foreach
     # can render them as table rows without on-template f-strings.
@@ -1783,8 +1879,22 @@ class RunDetailState(rx.State):
     checkpoints: list[dict] = []
 
     # Log tail — last 200 lines of training.log when present (trimmed for
-    # WS bundle size).
+    # WS bundle size). UI-A-002: each line is run through ``_redact_paths``
+    # before assignment in ``load_run`` so absolute paths a training log may
+    # contain (the checkpoint dir, the HF cache, tempdirs) don't ship the
+    # operator's home dir + username to the client.
     log_lines: list[str] = []
+
+    # UI-A-002 (Wave A2): client-facing, redacted form of the checkpoint
+    # path. The full path lives in the backend-only ``_checkpoint_path``;
+    # this computed var replaces the home prefix with ``<redacted-path>`` so
+    # the operator still sees the run-relative tail without leaking their
+    # username into the WS bundle / screenshots.
+    @rx.var
+    def checkpoint_path_display(self) -> str:
+        if not self._checkpoint_path or self._checkpoint_path == "-":
+            return "-"
+        return _redact_action(self._checkpoint_path)
 
     # Action panel — last shell-out result (for the operator-facing toast).
     action_result: str = ""
@@ -1904,20 +2014,24 @@ class RunDetailState(rx.State):
                 history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
 
             if not history_dir.exists():
-                self.error = f"No run history at {history_dir}."
+                # V2-a (sibling): ``error`` is a public RunDetailState var;
+                # history_dir embeds the home dir + username. Redact.
+                self.error = _redact_action(f"No run history at {history_dir}.")
                 return
 
             try:
                 from .checkpoints import RunHistoryManager
             except ImportError as exc:
-                self.error = f"checkpoints module unavailable: {exc}"
+                self.error = _redact_action(f"checkpoints module unavailable: {exc}")
                 return
 
             manager = RunHistoryManager(str(history_dir))
             entry = manager.get_run(self.current_run_id) if self.current_run_id else None
             if entry is None:
                 self.not_found = True
-                self.error = f"Run '{self.current_run_id}' not found in {history_dir}."
+                self.error = _redact_action(
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
                 return
 
             # Populate header fields.
@@ -1942,7 +2056,9 @@ class RunDetailState(rx.State):
                     self.final_loss = f"{float(final_loss):.4f}"
                 except (TypeError, ValueError):
                     self.final_loss = "-"
-            self.checkpoint_path = str(entry.get("checkpoint_path") or "-")
+            # UI-A-002: full path into the backend-only var; the client reads
+            # the redacted ``checkpoint_path_display`` computed var.
+            self._checkpoint_path = str(entry.get("checkpoint_path") or "-")
 
             # Hyperparameter table — flatten the entry dict into {key, value}
             # rows, skipping the fields surfaced as headers above so the
@@ -2014,7 +2130,14 @@ class RunDetailState(rx.State):
                     try:
                         with open(log_path, encoding="utf-8", errors="replace") as f:
                             tail = f.readlines()[-200:]
-                            self.log_lines = [line.rstrip("\n") for line in tail]
+                            # UI-A-002: a training log routinely embeds absolute
+                            # paths (checkpoint dir, HF cache, tempdirs) that
+                            # carry the operator's home dir + username. Redact
+                            # each line before it enters the client-serialized
+                            # ``log_lines`` var.
+                            self.log_lines = [
+                                _redact_action(line.rstrip("\n")) for line in tail
+                            ]
                     except OSError:
                         pass
         finally:
@@ -2080,7 +2203,10 @@ class RunDetailState(rx.State):
                 self.action_error = (result.stderr or result.stdout)[:1000]
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"diff-runs failed: {exc}"
+            # V2-a (sibling): the OSError / TimeoutExpired repr can embed the
+            # resolved ``backprop`` binary path (an absolute path under the
+            # operator's environment); redact before surfacing to the client.
+            self.action_error = _redact_action(f"diff-runs failed: {exc}")
         finally:
             self.action_in_flight = ""
 
@@ -2122,7 +2248,9 @@ class RunDetailState(rx.State):
         try:
             history_dir = self._resolve_history_dir()
             if not history_dir.exists():
-                self.action_error = f"No run history at {history_dir}."
+                # V2-a: history_dir embeds the home dir + username; redact
+                # before assigning to the client-serialized action_error.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
                 self.action_result = ""
                 return
             from .checkpoints import RunHistoryManager
@@ -2130,7 +2258,7 @@ class RunDetailState(rx.State):
             manager = RunHistoryManager(str(history_dir))
             entry = manager.get_run(self.current_run_id)
             if entry is None:
-                self.action_error = (
+                self.action_error = _redact_action(
                     f"Run '{self.current_run_id}' not found in {history_dir}."
                 )
                 self.action_result = ""
@@ -2158,7 +2286,11 @@ class RunDetailState(rx.State):
             )
             self.action_error = ""
         except Exception as exc:  # noqa: BLE001 — operator-facing string
-            self.action_error = f"replay check failed: {type(exc).__name__}: {exc}"
+            # V2-a: a raw OSError repr embeds absolute paths (the home dir +
+            # username); redact before surfacing to the client-serialized var.
+            self.action_error = _redact_action(
+                f"replay check failed: {type(exc).__name__}: {exc}"
+            )
             self.action_result = ""
         finally:
             self.action_in_flight = ""
@@ -2208,7 +2340,9 @@ class RunDetailState(rx.State):
         try:
             history_dir = self._resolve_history_dir()
             if not history_dir.exists():
-                self.action_error = f"No run history at {history_dir}."
+                # V2-a: redact the home-dir-bearing history_dir before it
+                # reaches the client-serialized action_error.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
                 self.action_result = ""
                 return
             from .checkpoints import RunHistoryManager
@@ -2228,12 +2362,15 @@ class RunDetailState(rx.State):
                 # ``not_found`` so the deletion confirmation wins.
                 self.was_deleted = True
             else:
-                self.action_error = (
+                self.action_error = _redact_action(
                     f"Run '{self.current_run_id}' not found in {history_dir}."
                 )
                 self.action_result = ""
         except Exception as exc:  # noqa: BLE001 — operator-facing string
-            self.action_error = f"delete failed: {type(exc).__name__}: {exc}"
+            # V2-a: redact absolute paths from the raw exception repr.
+            self.action_error = _redact_action(
+                f"delete failed: {type(exc).__name__}: {exc}"
+            )
             self.action_result = ""
         finally:
             self.action_in_flight = ""
@@ -2265,7 +2402,8 @@ class RunDetailState(rx.State):
         try:
             history_dir = self._resolve_history_dir()
             if not history_dir.exists():
-                self.action_error = f"No run history at {history_dir}."
+                # V2-a: redact the home-dir-bearing history_dir.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
                 self.action_result = ""
                 return
             from .checkpoints import RunHistoryManager
@@ -2273,7 +2411,7 @@ class RunDetailState(rx.State):
             manager = RunHistoryManager(str(history_dir))
             entry = manager.get_run(self.current_run_id)
             if entry is None:
-                self.action_error = (
+                self.action_error = _redact_action(
                     f"Run '{self.current_run_id}' not found in {history_dir}."
                 )
                 self.action_result = ""
@@ -2291,12 +2429,19 @@ class RunDetailState(rx.State):
             with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(json.dumps(entry, default=str))
                 fh.write("\n")
-            self.action_result = (
+            # V2-a: out_path is the sandbox absolute path (home dir +
+            # username); redact before surfacing the success string to the
+            # client. The basename is preserved so the operator can still
+            # locate the file inside their UI output dir.
+            self.action_result = _redact_action(
                 f"Exported run {self.current_run_id} to {out_path}."
             )
             self.action_error = ""
         except Exception as exc:  # noqa: BLE001 — operator-facing string
-            self.action_error = f"export failed: {type(exc).__name__}: {exc}"
+            # V2-a: redact absolute paths from the raw exception repr.
+            self.action_error = _redact_action(
+                f"export failed: {type(exc).__name__}: {exc}"
+            )
             self.action_result = ""
         finally:
             self.action_in_flight = ""
@@ -2328,10 +2473,20 @@ class ModelsState(rx.State):
 
     models: list[dict] = []
     total_size_mb: str = "0"
-    cache_dir: str = ""
+    # UI-A-002 (Wave A2): the HF cache dir is ``~/.cache/huggingface/hub`` —
+    # it embeds the operator's home dir + username. Held in a backend-only
+    # var; the client reads the redacted ``cache_dir_display`` computed var.
+    _cache_dir: str = ""
     loading: bool = False
     error: str = ""
     last_loaded_at: str = ""
+
+    @rx.var
+    def cache_dir_display(self) -> str:
+        """Client-facing, redacted form of the HF cache directory (UI-A-002)."""
+        if not self._cache_dir:
+            return ""
+        return _redact_action(self._cache_dir)
 
     @rx.event
     def load_models(self) -> None:
@@ -2351,11 +2506,14 @@ class ModelsState(rx.State):
         self.error = ""
         try:
             cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
-            self.cache_dir = str(cache_dir)
+            # UI-A-002: full path into the backend-only var; the client reads
+            # the redacted ``cache_dir_display`` computed var.
+            self._cache_dir = str(cache_dir)
             if not cache_dir.exists():
                 self.models = []
                 self.total_size_mb = "0"
-                self.error = (
+                # UI-A-002: ``error`` is a public var; redact the cache path.
+                self.error = _redact_action(
                     f"No HF cache at {cache_dir}. Models download on first "
                     "use via `transformers.AutoModel.from_pretrained(...)`."
                 )
@@ -2396,7 +2554,8 @@ class ModelsState(rx.State):
                         ),
                     })
             except OSError as exc:
-                self.error = f"Cannot walk HF cache: {exc}"
+                # UI-A-002: the OSError repr embeds the cache path.
+                self.error = _redact_action(f"Cannot walk HF cache: {exc}")
                 self.models = []
                 self.total_size_mb = "0"
                 return
@@ -2419,6 +2578,21 @@ class ModelsState(rx.State):
         FRONTEND-F-007 safety: the path is validated to live under
         ``~/.cache/huggingface/hub/`` so a malicious operator-controlled
         ``dir_name`` can't escape the cache via ``..`` traversal.
+
+        UI-A-006 (Wave A2) hardening:
+          - Use ``Path.is_relative_to`` for the confinement check instead of
+            ``str.startswith``. A string-prefix test treats a SIBLING dir
+            whose name shares the cache prefix (e.g. ``…/hub-evil``) as
+            "inside" the cache; the path-component check does not.
+          - Refuse the delete if ``target`` (the UNRESOLVED path) is a
+            symlink. Pre-fix the handler resolved the symlink and then
+            ``rmtree``'d the resolved target — a ``models--*`` symlink in the
+            cache pointing at, say, ``~/important`` would pass the
+            resolved-prefix check (target resolves outside, but the OLD
+            ``startswith`` compared against the resolved cache root) OR, worse,
+            delete the link's target outside the cache. Refusing symlinks
+            outright removes the foot-gun; real HF cache entries are plain
+            directories.
         """
         import shutil
         from pathlib import Path as _Path
@@ -2429,17 +2603,32 @@ class ModelsState(rx.State):
             return
         target = cache_dir / dir_name
         try:
+            # UI-A-006: refuse symlinks BEFORE resolving so a malicious
+            # ``models--*`` symlink can't redirect the rmtree outside the
+            # cache. Check the unresolved path.
+            if target.is_symlink():
+                self.error = _redact_action(
+                    f"Refusing to delete a symlinked cache entry: {target}"
+                )
+                return
             target_resolved = target.resolve()
             cache_resolved = cache_dir.resolve()
-            if not str(target_resolved).startswith(str(cache_resolved)):
-                self.error = f"Refusing to delete outside HF cache: {target_resolved}"
+            # UI-A-006: path-component confinement (is_relative_to), not a
+            # string-prefix test. ``is_relative_to`` returns False for a
+            # sibling dir that merely shares the prefix string.
+            if not target_resolved.is_relative_to(cache_resolved):
+                self.error = _redact_action(
+                    f"Refusing to delete outside HF cache: {target_resolved}"
+                )
                 return
             if not target_resolved.exists():
-                self.error = f"Model directory not found: {target}"
+                self.error = _redact_action(f"Model directory not found: {target}")
                 return
+            # Operate on the confined, resolved path. ``rmtree`` does not
+            # follow a top-level symlink (and we refused one above anyway).
             shutil.rmtree(target_resolved)
         except OSError as exc:
-            self.error = f"Failed to delete {dir_name}: {exc}"
+            self.error = _redact_action(f"Failed to delete {dir_name}: {exc}")
             return
         # Reload to reflect the deletion.
         self.load_models()

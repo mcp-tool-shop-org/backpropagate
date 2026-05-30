@@ -869,8 +869,59 @@ class TestDeduplicateExact:
         assert num_removed == 1
 
 
+class TestGetNgrams:
+    """DATA-A-006: _get_ngrams must not degenerate on short / empty text."""
+
+    def test_empty_text_yields_no_grams(self):
+        """Empty text returns [] (was ['']), so empties don't collapse."""
+        from backpropagate.datasets import _get_ngrams
+
+        assert _get_ngrams("", n=3) == []
+
+    def test_distinct_short_texts_yield_distinct_grams(self):
+        """Sub-n-length strings stay distinguishable (no false dedup)."""
+        from backpropagate.datasets import _get_ngrams
+
+        assert _get_ngrams("hi", n=3) == ["hi"]
+        assert _get_ngrams("yo", n=3) == ["yo"]
+        assert _get_ngrams("hi", n=3) != _get_ngrams("yo", n=3)
+
+    def test_full_length_text_unchanged(self):
+        """Normal (>= n) text still produces the sliding-window grams."""
+        from backpropagate.datasets import _get_ngrams
+
+        assert _get_ngrams("abcd", n=3) == ["abc", "bcd"]
+        # Lowercasing contract preserved.
+        assert _get_ngrams("ABCD", n=3) == ["abc", "bcd"]
+
+
 class TestDeduplicateMinhash:
     """Tests for MinHash deduplication."""
+
+    def test_dedupe_minhash_keeps_distinct_empty_rows(self):
+        """DATA-A-006: blank-content rows must not collapse into one.
+
+        Pre-fix every empty row hashed to ['' ] -> identical MinHash -> all
+        but one were dropped as "duplicates" (a force multiplier with the
+        DATA-A-001 blank-conversion rows).
+        """
+        try:
+            from datasketch import MinHash  # noqa: F401
+        except ImportError:
+            pytest.skip("datasketch not installed")
+
+        from backpropagate.datasets import deduplicate_minhash
+
+        samples = [
+            {"text": ""},
+            {"text": ""},
+            {"text": "   "},  # whitespace-only is "empty" too
+            {"text": "real distinct content here for hashing"},
+        ]
+        unique, num_removed = deduplicate_minhash(samples, threshold=0.7)
+        # All three empties survive + the one real row -> nothing removed.
+        assert len(unique) == 4
+        assert num_removed == 0
 
     def test_dedupe_minhash_import_error(self):
         """Should raise ImportError if datasketch not installed."""
@@ -1563,6 +1614,36 @@ class TestDatasetLoaderEdgeCases:
         items = list(loader)
         assert len(items) == 3
 
+    def test_loader_propagates_structured_parse_error(self, tmp_path):
+        """DATA-A-011: _load must not re-wrap structured errors in a bare ValueError.
+
+        A fully-malformed JSONL file makes _load_jsonl raise DatasetParseError
+        (with a stable code + remediation hint). The prior broad
+        ``except Exception -> raise ValueError`` discarded that structure;
+        BackpropagateError subclasses must now propagate unchanged.
+        """
+        from backpropagate.exceptions import DatasetParseError
+
+        file_path = tmp_path / "all_bad_load.jsonl"
+        file_path.write_text("xxx\nyyy\nzzz\n")
+
+        with pytest.raises(DatasetParseError) as exc_info:
+            DatasetLoader(str(file_path), validate=False)
+        assert exc_info.value.code == "INPUT_DATASET_PARSE_FAILED"
+        # The remediation hint survives (it would be lost under a bare ValueError).
+        assert exc_info.value.suggestion
+
+    def test_loader_missing_file_still_raises_not_found(self, tmp_path):
+        """DATA-A-011 sibling: a missing path still raises the structured NotFound.
+
+        DatasetNotFoundError is raised before the try block, so it was never
+        affected — pin it so the propagation change doesn't regress it.
+        """
+        from backpropagate.exceptions import DatasetNotFoundError
+
+        with pytest.raises(DatasetNotFoundError):
+            DatasetLoader(str(tmp_path / "does_not_exist.jsonl"))
+
 
 # =============================================================================
 # DATASET LOADING TESTS (Phase 5 additions)
@@ -2130,6 +2211,51 @@ class TestValidationAdditional:
 
         assert result.total_rows == 1
 
+    def test_validate_mixed_format_detects_per_sample(self):
+        """V1-c / DATA-A-001: with no pinned format, validate each row's own format.
+
+        A mixed file (Alpaca rows + a stray ShareGPT row) must NOT be
+        validated against the first row's format — that produced false
+        errors for the minority-format rows. Passing format_type=None now
+        detects per-sample.
+        """
+        mixed = [
+            {"instruction": "Q1", "output": "A1"},  # Alpaca
+            {"instruction": "Q2", "output": "A2"},  # Alpaca
+            {"conversations": [
+                {"from": "human", "value": "Hi"},
+                {"from": "gpt", "value": "Hello"},
+            ]},  # ShareGPT (stray)
+        ]
+
+        # Forcing the first-row format flags the ShareGPT row as broken.
+        forced = validate_dataset(mixed, DatasetFormat.ALPACA)
+        assert forced.error_count > 0
+
+        # Per-sample detection validates every row against its real format.
+        per_sample = validate_dataset(mixed, None)
+        assert per_sample.valid_rows == 3
+        assert per_sample.error_count == 0
+
+    def test_dataset_loader_unpinned_format_validates_mixed_file(self):
+        """V1-c: DatasetLoader without an explicit format uses per-sample validation.
+
+        _validate() was the 5th self._format consumer missed by Wave A1; it
+        now passes None when the format wasn't pinned, so a mixed in-memory
+        dataset validates clean instead of failing against the first row's
+        format.
+        """
+        mixed = [
+            {"instruction": "Q1", "output": "A1"},  # Alpaca
+            {"conversations": [
+                {"from": "human", "value": "Hi"},
+                {"from": "gpt", "value": "Hello"},
+            ]},  # ShareGPT
+        ]
+        loader = DatasetLoader(mixed)  # no format pinned
+        assert loader.is_valid
+        assert loader.validation_result.valid_rows == 2
+
     def test_validation_result_error_rate_edge_cases(self):
         """Test error rate with edge cases."""
         # Zero total rows
@@ -2249,6 +2375,50 @@ class TestFilterByQualityAdditional:
 
         assert len(filtered) == 0
         assert stats.retention_rate == 0.0
+
+    def test_filter_to_empty_emits_warning(self, caplog):
+        """DATA-A-005: filtering a non-empty corpus to ZERO logs a loud WARN.
+
+        The default min_tokens=50 + the 4-chars/token heuristic silently wipes
+        out short / CJK datasets; the operator must be told (with the likely
+        cause + the knob) instead of discovering an empty training set later.
+        """
+        import logging
+
+        from backpropagate.datasets import filter_by_quality
+
+        # All rows are well under min_tokens=50 at 4 chars/token.
+        samples = [{"text": f"short-{i}"} for i in range(5)]
+
+        with caplog.at_level(logging.WARNING, logger="backpropagate.datasets"):
+            filtered, stats = filter_by_quality(
+                samples, min_turns=0, require_assistant=False
+            )
+
+        assert len(filtered) == 0
+        assert any(
+            "removed ALL" in rec.getMessage() and "min_tokens" in rec.getMessage()
+            for rec in caplog.records
+        )
+
+    def test_filter_no_warning_on_healthy_retention(self, caplog):
+        """DATA-A-005: a normal run (most rows kept) must NOT emit the warning."""
+        import logging
+
+        from backpropagate.datasets import filter_by_quality
+
+        samples = [
+            {"text": "<|im_start|>user\nHello there<|im_end|>\n"
+                     "<|im_start|>assistant\n" + "answer " * 40 + "<|im_end|>"}
+            for _ in range(5)
+        ]
+
+        with caplog.at_level(logging.WARNING, logger="backpropagate.datasets"):
+            filtered, stats = filter_by_quality(samples)
+
+        assert len(filtered) == 5
+        assert not any("removed ALL" in rec.getMessage() for rec in caplog.records)
+        assert not any("retained only" in rec.getMessage() for rec in caplog.records)
 
     def test_filter_none_removed(self):
         """Should handle case where no samples are filtered."""
@@ -2408,6 +2578,52 @@ class TestStreamingLoaderAdditional:
 
         assert len(filtered) == 0
 
+    def test_streaming_all_bad_lines_raises(self, tmp_path):
+        """DATA-A-010: an entirely-malformed JSONL stream must RAISE, not be empty.
+
+        Pre-fix every decode error was silently `continue`d, so a fully
+        corrupt file (e.g. a JSON array saved as .jsonl) streamed zero
+        samples and the operator got a silently-empty run.
+        """
+        from backpropagate.datasets import StreamingDatasetLoader
+        from backpropagate.exceptions import DatasetParseError
+
+        file_path = tmp_path / "all_bad.jsonl"
+        file_path.write_text("not json\n{also bad\nplain text\n")
+
+        loader = StreamingDatasetLoader(str(file_path))
+        with pytest.raises(DatasetParseError) as exc_info:
+            list(loader)
+        assert exc_info.value.code == "INPUT_DATASET_PARSE_FAILED"
+
+    def test_streaming_partial_bad_yields_good_and_warns(self, tmp_path, caplog):
+        """DATA-A-010: a partly-bad stream yields the good rows + a WARN summary."""
+        import logging
+
+        from backpropagate.datasets import StreamingDatasetLoader
+
+        file_path = tmp_path / "partial.jsonl"
+        file_path.write_text('{"text":"a"}\nGARBAGE\n{"text":"b"}\n')
+
+        loader = StreamingDatasetLoader(str(file_path))
+        with caplog.at_level(logging.WARNING, logger="backpropagate.datasets"):
+            samples = list(loader)
+
+        assert len(samples) == 2
+        assert any(
+            "JSONL stream summary" in rec.getMessage() for rec in caplog.records
+        )
+
+    def test_streaming_empty_file_does_not_raise(self, tmp_path):
+        """DATA-A-010: a genuinely empty file is NOT an error (zero-from-zero)."""
+        from backpropagate.datasets import StreamingDatasetLoader
+
+        file_path = tmp_path / "empty2.jsonl"
+        file_path.write_text("")
+
+        # No non-empty lines -> no raise, just an empty stream.
+        assert list(StreamingDatasetLoader(str(file_path))) == []
+
 
 # =============================================================================
 # WAVE A1 REGRESSION TESTS (DATA-A-001 / DATA-A-002 / DATA-A-003)
@@ -2518,6 +2734,30 @@ class TestMixedFormatConversion:
         assert any(
             "empty assistant turn" in rec.getMessage() for rec in caplog.records
         )
+
+    def test_convert_failure_logs_row_index_and_dropped_count(self, caplog):
+        """V2-b: a row that fails to convert is logged WITH its index + a final count.
+
+        DATA-A-001's fix left the convert-FAILS branch silent (no index, no
+        count). A malformed / UNKNOWN-format row must now name its index and
+        contribute to a dropped-count summary so wholesale loss is visible.
+        """
+        import logging
+
+        samples = [
+            {"text": "<|im_start|>user\nhi<|im_end|>"},  # row 0: converts fine
+            12345,  # row 1: int -> UNKNOWN format -> to_chatml raises -> dropped
+        ]
+        with caplog.at_level(logging.WARNING, logger="backpropagate.datasets"):
+            result = convert_to_chatml(samples)
+
+        # Only the convertible row survives.
+        assert len(result) == 1
+        messages = [rec.getMessage() for rec in caplog.records]
+        # Per-row WARN names the offending index (row 1).
+        assert any("Failed to convert sample 1" in m for m in messages)
+        # Final dropped-count summary fired.
+        assert any("dropped 1/2" in m for m in messages)
 
 
 class TestCurriculumClamping:

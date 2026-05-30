@@ -641,3 +641,167 @@ class TestFallbackLogging:
         handler = root.handlers[0]
         # Should be a standard Formatter, not StructuredFormatter
         assert isinstance(handler.formatter, logging.Formatter)
+
+
+# =============================================================================
+# CLI-A-002: SECRET REDACTION (shared source of truth + log pipeline)
+# =============================================================================
+#
+# Pre-CLI-A-002 the redaction patterns lived only in cli.py and the
+# structured-log / file pipeline emitted events VERBATIM — a token bound
+# into log context (or interpolated into a message) reached the JSON/file
+# stream un-redacted. These tests pin:
+#   1. ``redact_secrets`` is the shared definition (cli.py re-exports it);
+#   2. the structlog processor scrubs both the event message AND bound
+#      string fields (the load-bearing "token in log context" case);
+#   3. the stdlib fallback Filter scrubs the rendered message; and
+#   4. an end-to-end configure_logging() run redacts what it writes.
+
+
+class TestRedactSecrets:
+    """Unit tests for the shared ``redact_secrets`` (CLI-A-002)."""
+
+    def test_redacts_keyworded_credential_with_separator(self):
+        from backpropagate.logging_config import redact_secrets
+
+        out = redact_secrets("api_key=EXAMPLE-NOT-A-REAL-KEY")
+        assert "EXAMPLE-NOT-A-REAL-KEY" not in out
+        assert "<REDACTED>" in out
+
+    def test_preserves_separator_shape(self):
+        from backpropagate.logging_config import redact_secrets
+
+        # ``:`` separator must survive as ``:`` (not be rewritten to ``=``).
+        out = redact_secrets("token: hunter2!@#secret_value")
+        assert out == "token: <REDACTED>"
+
+    def test_redacts_hf_and_bearer_tokens(self):
+        from backpropagate.logging_config import redact_secrets
+
+        out = redact_secrets("Authorization: Bearer hf_abcdefgh12345678")
+        assert "hf_abcdefgh12345678" not in out
+        assert "<REDACTED>" in out
+
+    def test_leaves_prose_intact(self):
+        from backpropagate.logging_config import redact_secrets
+
+        # No separator / value too short → not a credential, leave prose alone.
+        assert redact_secrets("the token: abc is wrong") == "the token: abc is wrong"
+        assert redact_secrets("try a different password") == "try a different password"
+
+    def test_empty_input_returns_empty(self):
+        from backpropagate.logging_config import redact_secrets
+
+        assert redact_secrets("") == ""
+
+    def test_cli_reexports_same_function(self):
+        """cli.py's ``_redact_secrets`` IS the shared definition (one source)."""
+        from backpropagate import cli
+        from backpropagate.logging_config import redact_secrets
+
+        assert cli._redact_secrets is redact_secrets
+
+
+class TestLogPipelineRedaction:
+    """The structured-log / file pipeline scrubs credentials (CLI-A-002)."""
+
+    def test_processor_redacts_event_message(self):
+        from backpropagate.logging_config import _redact_event_processor
+
+        event = {"event": "push failed for token=hunter2!@#secret_value"}
+        out = _redact_event_processor(None, "info", event)
+        assert "hunter2" not in out["event"]
+        assert "<REDACTED>" in out["event"]
+
+    def test_processor_redacts_bound_context_field(self):
+        """A token bound into log context (a string field) is redacted."""
+        from backpropagate.logging_config import _redact_event_processor
+
+        # Simulates structlog.contextvars.bind_contextvars(hf_token=...)
+        # being merged into the event dict before this processor runs.
+        event = {"event": "run_started", "hf_token": "hf_abcdefgh12345678"}
+        out = _redact_event_processor(None, "info", event)
+        assert out["hf_token"] == "hf_<REDACTED>"
+        assert out["event"] == "run_started"  # non-secret field untouched
+
+    def test_processor_leaves_non_string_values(self):
+        from backpropagate.logging_config import _redact_event_processor
+
+        event = {"event": "step", "loss": 1.23, "step": 100}
+        out = _redact_event_processor(None, "info", event)
+        assert out["loss"] == 1.23
+        assert out["step"] == 100
+
+    def test_stdlib_filter_redacts_rendered_message(self):
+        from backpropagate.logging_config import _SecretRedactingFilter
+
+        rec = logging.LogRecord(
+            name="t", level=logging.INFO, pathname=__file__, lineno=1,
+            msg="leaking api_key=EXAMPLE-NOT-A-REAL-KEY now", args=(), exc_info=None,
+        )
+        assert _SecretRedactingFilter().filter(rec) is True
+        assert "EXAMPLE-NOT-A-REAL-KEY" not in rec.getMessage()
+        assert "<REDACTED>" in rec.getMessage()
+
+    def test_stdlib_filter_redacts_after_arg_interpolation(self):
+        """Secrets carried in %-args are redacted (args neutralized post-render)."""
+        from backpropagate.logging_config import _SecretRedactingFilter
+
+        rec = logging.LogRecord(
+            name="t", level=logging.INFO, pathname=__file__, lineno=1,
+            msg="token=%s", args=("hunter2!@#secret_value",), exc_info=None,
+        )
+        _SecretRedactingFilter().filter(rec)
+        assert "hunter2" not in rec.getMessage()
+        assert "<REDACTED>" in rec.getMessage()
+
+
+@pytest.mark.serial
+class TestEndToEndLogRedaction:
+    """End-to-end: configure_logging() output is redacted (CLI-A-002).
+
+    @serial: calls configure_logging(force=True), mutating process-global
+    structlog config + the _configured flag (same contract as the other
+    serial classes in this file).
+    """
+
+    def setup_method(self):
+        import backpropagate.logging_config as lc
+        lc._configured = False
+        logging.getLogger().handlers.clear()
+
+    def teardown_method(self):
+        import backpropagate.logging_config as lc
+        lc._configured = False
+        logging.getLogger().handlers.clear()
+
+    def test_token_bound_into_context_is_redacted_in_output(self, capsys):
+        """The load-bearing case: a token bound into structlog context never
+        reaches the rendered (stdout) stream un-redacted."""
+        from backpropagate.logging_config import (
+            STRUCTLOG_AVAILABLE,
+            bind_run_context,
+            clear_request_context,
+            configure_logging,
+            get_logger,
+        )
+
+        if not STRUCTLOG_AVAILABLE:
+            pytest.skip("structlog not installed; processor path not exercised")
+
+        configure_logging(level="INFO", json_logs=True, force=True)
+        try:
+            bind_run_context(run_id="r1", hf_token="hf_abcdefgh12345678")
+            get_logger("test.redaction").info(
+                "run_started", note="api_key=EXAMPLE-NOT-A-REAL-KEY"
+            )
+        finally:
+            clear_request_context()
+
+        out = capsys.readouterr().out
+        assert "hf_abcdefgh12345678" not in out, (
+            "CLI-A-002: a token bound into log context leaked to the "
+            f"rendered stream. Output: {out!r}"
+        )
+        assert "EXAMPLE-NOT-A-REAL-KEY" not in out
+        assert "<REDACTED>" in out

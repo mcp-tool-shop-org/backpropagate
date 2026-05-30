@@ -102,11 +102,13 @@ def _upload_group() -> rx.Component:
             ),
             rx.fragment(),
         ),
-        # FRONTEND-B-013: render only the basename so the operator's home
-        # directory doesn't appear in the UI / screenshots. Full path stays on
-        # the backend for the Trainer hookup.
+        # FRONTEND-B-013 / UI-A-002: render only the basename so the
+        # operator's home directory doesn't appear in the UI / screenshots —
+        # AND the full path is now a backend-only var that never enters the
+        # serialized state bundle. ``has_upload`` is the client-safe boolean
+        # for the cond (the backend-only ``_uploaded_path`` isn't serialized).
         rx.cond(
-            DatasetState.uploaded_path != "",
+            DatasetState.has_upload,
             rx.text(
                 "Uploaded: " + DatasetState.uploaded_basename,
                 size="1",

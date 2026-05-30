@@ -9,10 +9,34 @@ name: Doc Drift Check
 # workflow requires the same doctrine review.
 
 on:
+  # Paths mirror every input check_doc_drift.py actually reads, so the gate
+  # fires exactly when a doc-drift surface could change and stays idle on
+  # unrelated commits (repo GH-Actions rule: every CI workflow paths-gated).
+  # README.md + llms.txt + tests/test_error_codes_catalog.py are load-bearing
+  # here even though ci.yml omits them — the script's Class 4b (README error
+  # codes) and Class 4 (error-codes catalog) checks read them directly, so a
+  # README-only or catalog-only drift commit must still trip this gate.
   pull_request:
     branches: [main]
+    paths:
+      - 'backpropagate/**'
+      - 'site/**'
+      - 'README.md'
+      - 'llms.txt'
+      - 'scripts/**'
+      - 'tests/test_error_codes_catalog.py'
+      - '.github/workflows/**'
   push:
     branches: [main]
+    paths:
+      - 'backpropagate/**'
+      - 'site/**'
+      - 'README.md'
+      - 'llms.txt'
+      - 'scripts/**'
+      - 'tests/test_error_codes_catalog.py'
+      - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read

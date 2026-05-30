@@ -99,7 +99,10 @@ def _metadata_header() -> rx.Component:
             rx.flex(_label("Final loss"), _value(RunDetailState.final_loss), direction="column"),
             rx.flex(
                 _label("Checkpoint path"),
-                _value(RunDetailState.checkpoint_path),
+                # UI-A-002: render the redacted form (home prefix stripped) so
+                # the operator's username never appears in the UI / screenshots
+                # and the full path never ships in the WS state bundle.
+                _value(RunDetailState.checkpoint_path_display),
                 direction="column",
                 style={"grid_column": "1 / span 2"},
             ),

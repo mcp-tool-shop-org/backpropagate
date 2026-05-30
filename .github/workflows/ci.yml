@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  # site/** is intentionally NOT in these paths: the Python test matrix
+  # (incl. the macOS ~10x / Windows ~2x smoke cells) has no job that reads
+  # site/, so a docs-only commit firing the full matrix is pure CI-minute
+  # waste. pages-deploy.yml owns site/** for build+deploy, and doc-drift.yml
+  # owns the handbook drift check — both are paths-gated on site/** already.
   push:
     branches: [main]
     paths:
@@ -9,7 +14,6 @@ on:
       - 'pyproject.toml'
       - 'Dockerfile'
       - 'requirements*.txt'
-      - 'site/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -19,7 +23,6 @@ on:
       - 'pyproject.toml'
       - 'Dockerfile'
       - 'requirements*.txt'
-      - 'site/**'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -155,6 +158,57 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  # TESTSCI-A-009 (v1.4 Stage A) — exercise the pytest-xdist parallel path.
+  #
+  # The main `test` matrix above keeps BACKPROPAGATE_PYTEST_PARALLEL at the
+  # repo-var default ('0' unless an operator flips `vars.BACKPROPAGATE_
+  # PYTEST_PARALLEL`), so default CI runs serial. That left the xdist
+  # serial-scheduling machinery DORMANT: conftest.py's
+  # `pytest_collection_modifyitems` hook (which pins every @pytest.mark.serial
+  # test into a single xdist_group so global-state mutators don't race across
+  # workers) only does anything under `-n`, so a regression — e.g. a newly
+  # added global-state test that forgot the @serial marker, or a hook that
+  # stopped grouping — would ship green on a serial-only matrix.
+  #
+  # This dedicated cell forces the knob ON for ONE Linux/3.12 run so the
+  # parallel + serial-grouping path is covered on every CI invocation,
+  # independent of the matrix's repo-var default. It's a single Linux job
+  # (no win/mac fan-out, no matrix bloat) and runs the same fast selection
+  # as the matrix cells. If a serial-marker regression lands, this job goes
+  # red while the serial matrix stays green — pinpointing the parallel-only
+  # failure surface.
+  parallel-xdist:
+    name: pytest-xdist parallel path (Linux 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full]"
+
+      - name: Run tests under -n auto --dist worksteal
+        shell: bash
+        env:
+          # Forced ON for this job specifically (the matrix honors the repo
+          # var; this cell hard-codes the parallel contract so the xdist
+          # serial-grouping hook is always exercised).
+          BACKPROPAGATE_PYTEST_PARALLEL: "1"
+        run: |
+          set -euo pipefail
+          echo "::notice::pytest-xdist forced ON (BACKPROPAGATE_PYTEST_PARALLEL=1) — exercising serial-group scheduling"
+          pytest tests/ -v --tb=short -n auto --dist worksteal -m "not gpu and not slow and not integration"
 
   # CIDOCS-F-023 (v1.4 Wave 6a) — uv sync --frozen pilot.
   #

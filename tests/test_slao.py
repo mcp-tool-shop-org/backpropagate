@@ -1109,3 +1109,170 @@ class TestScaleUpperClamp:
         assert 0.1 <= result.scale_factor <= 1.0, (
             f"reported scale_factor {result.scale_factor} escaped [min_scale, 1.0]"
         )
+
+
+class TestMergeDeviceNormalization:
+    """CONTINUAL-A-005: the accumulator tensor must be aligned to the new
+    value's device before any merge arithmetic.
+
+    On a RESUMED session ``load()`` rehydrates the accumulator via
+    ``torch.load`` onto whatever device it was serialized from (CPU for a
+    CPU-saved checkpoint), while the incoming ``new_lora_state`` comes from
+    the live model (possibly CUDA). Without normalization the first resumed
+    ``merge_B_matrices`` (B_merged + s*(B_new - B_merged)) raises a
+    device-mismatch RuntimeError. These tests pin the alignment + the
+    no-op-on-match guarantee; on a CPU-only box they exercise the same code
+    path (the ``.device != .device`` branch is simply not taken).
+    """
+
+    @pytest.fixture
+    def sample_lora_state(self):
+        return {
+            "model.layers.0.lora_A.weight": torch.randn(8, 16),
+            "model.layers.0.lora_B.weight": torch.randn(32, 8),
+        }
+
+    def test_save_load_merge_roundtrip_no_device_error(self, sample_lora_state):
+        """The resume shape: initialize → save → load into a fresh merger →
+        merge a live adapter. Must not raise, and merged tensors must land on
+        the incoming adapter's device."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "slao"
+            merger.save(str(save_path))
+
+            resumed = SLAOMerger()
+            resumed.load(str(save_path))
+
+            new_lora = {k: torch.randn_like(v) for k, v in sample_lora_state.items()}
+            # Must not raise a device-mismatch RuntimeError.
+            resumed.merge(new_lora, run_index=2)
+
+            merged = resumed.get_merged_lora()
+            for key, new_value in new_lora.items():
+                assert merged[key].device == new_value.device, (
+                    f"{key}: merged tensor on {merged[key].device}, "
+                    f"new value on {new_value.device} — accumulator was not "
+                    f"aligned to the new value's device"
+                )
+
+    def test_merge_aligns_accumulator_to_new_value_device(self, sample_lora_state):
+        """Directly exercise the alignment: after a merge, every accumulator
+        tensor shares the device of the corresponding new tensor."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        new_lora = {k: torch.randn_like(v) for k, v in sample_lora_state.items()}
+        merger.merge(new_lora, run_index=2)
+        merged = merger.get_merged_lora()
+        for key, new_value in new_lora.items():
+            assert merged[key].device == new_value.device
+
+
+class TestDoRAMagnitudeMerge:
+    """CONTINUAL-A-006: DoRA magnitude vectors are hard-REPLACED (treated as
+    fresh), not EMA-blended.
+
+    DoRA decomposes W = m · (W0 + BA)/||W0 + BA||. The magnitude ``m`` (PEFT
+    key ``...lora_magnitude_vector...``) is retrained every run and is coupled
+    to the *current* direction. SLAO hard-replaces the direction's A matrix,
+    so EMA-blending ``m`` independently (the old generic 'other' branch) would
+    leave the magnitude describing a stale direction → an internally
+    inconsistent adapter. Treating ``m`` as fresh keeps the pair coherent.
+    """
+
+    def _state(self, a_val, b_val, m_val):
+        return {
+            "model.layers.0.lora_A.weight": torch.full((8, 16), float(a_val)),
+            "model.layers.0.lora_B.weight": torch.full((32, 8), float(b_val)),
+            "model.layers.0.lora_magnitude_vector.weight": torch.full(
+                (32,), float(m_val)
+            ),
+        }
+
+    def test_magnitude_vector_is_replaced_not_blended(self):
+        """A run-2 magnitude vector must equal the NEW value exactly (replace),
+        not a midpoint between old and new (which an EMA blend would give)."""
+        merger = SLAOMerger()
+        base = self._state(a_val=1.0, b_val=1.0, m_val=1.0)
+        merger.initialize(base)
+
+        new_lora = self._state(a_val=5.0, b_val=5.0, m_val=9.0)
+        merger.merge(new_lora, run_index=2)
+
+        merged = merger.get_merged_lora()
+        mag = merged["model.layers.0.lora_magnitude_vector.weight"]
+        # Replaced: equals the new magnitude (9.0). An EMA blend with the
+        # run-2 sqrt scale (~0.707) would yield 1 + 0.707*(9-1) ≈ 6.66.
+        assert torch.allclose(mag, torch.full((32,), 9.0)), (
+            f"magnitude vector was blended, not replaced: got {mag.flatten()[0].item()} "
+            f"(expected 9.0; an EMA blend would land ~6.66)"
+        )
+
+    def test_magnitude_vector_matches_replaced_A_direction(self):
+        """Consistency: after merge, the magnitude AND the A matrix both equal
+        their fresh (run-2) values — the coupled pair stays in lockstep."""
+        merger = SLAOMerger()
+        merger.initialize(self._state(1.0, 1.0, 1.0))
+        new_lora = self._state(a_val=5.0, b_val=5.0, m_val=9.0)
+        merger.merge(new_lora, run_index=2)
+        merged = merger.get_merged_lora()
+        # A is hard-replaced (existing SLAO contract) ...
+        assert torch.allclose(
+            merged["model.layers.0.lora_A.weight"], torch.full((8, 16), 5.0)
+        )
+        # ... and so is the magnitude (the A-006 fix).
+        assert torch.allclose(
+            merged["model.layers.0.lora_magnitude_vector.weight"],
+            torch.full((32,), 9.0),
+        )
+
+
+class TestMergeLoraWeightsAverageKeyUnion:
+    """CONTINUAL-A-008: ``merge_lora_weights(method='average')`` must not drop
+    keys present in only one of the two state dicts."""
+
+    def test_new_only_key_is_preserved(self):
+        """A key present only in ``new_lora`` survives into the result."""
+        base = {"layer.lora_A.weight": torch.randn(8, 16)}
+        new = {
+            "layer.lora_A.weight": torch.randn(8, 16),
+            "layer.lora_B.weight": torch.randn(32, 8),  # new-only key
+        }
+        result = merge_lora_weights(base, new, method="average")
+        assert "layer.lora_B.weight" in result, (
+            "average method dropped a key present only in new_lora"
+        )
+        # The new-only key passes through as a clone of the new tensor.
+        assert torch.allclose(result["layer.lora_B.weight"], new["layer.lora_B.weight"])
+
+    def test_base_only_key_is_preserved(self):
+        """A key present only in ``base_lora`` survives (pre-fix behavior kept)."""
+        base = {
+            "layer.lora_A.weight": torch.randn(8, 16),
+            "layer.lora_B.weight": torch.randn(32, 8),  # base-only key
+        }
+        new = {"layer.lora_A.weight": torch.randn(8, 16)}
+        result = merge_lora_weights(base, new, method="average")
+        assert "layer.lora_B.weight" in result
+        assert torch.allclose(result["layer.lora_B.weight"], base["layer.lora_B.weight"])
+
+    def test_common_keys_still_averaged(self):
+        """Keys in both dicts are still the elementwise mean (no regression)."""
+        base = {"layer.lora_A.weight": torch.ones(8, 16)}
+        new = {"layer.lora_A.weight": torch.ones(8, 16) * 3.0}
+        result = merge_lora_weights(base, new, method="average")
+        assert torch.allclose(result["layer.lora_A.weight"], torch.full((8, 16), 2.0))
+
+    def test_new_only_clone_is_independent(self):
+        """The preserved new-only key must be a clone (mutating the source
+        must not bleed into the merged result)."""
+        base = {"layer.lora_A.weight": torch.randn(8, 16)}
+        new_b = torch.ones(32, 8)
+        new = {"layer.lora_A.weight": torch.randn(8, 16), "layer.lora_B.weight": new_b}
+        result = merge_lora_weights(base, new, method="average")
+        new_b[0, 0] = 999.0
+        assert result["layer.lora_B.weight"][0, 0] != 999.0, (
+            "new-only key was stored by reference, not cloned"
+        )

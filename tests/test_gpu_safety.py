@@ -211,6 +211,43 @@ class TestEvaluateCondition:
         assert condition == GPUCondition.CRITICAL
         assert "Temperature" in reason
 
+    def test_hardware_shutdown_threshold_escalates_to_emergency(
+        self, default_config
+    ):
+        """TRAINER-A-009: a temp within margin of the card's OWN hardware
+        shutdown threshold is EMERGENCY even when below the configured
+        temp_emergency (default 95C).
+
+        Models a card whose hardware shutdown is 90C: at 89C we are below the
+        static 95C emergency AND below the 95C critical, so pre-fix this would
+        have reported merely WARNING (>=82C) — but the card is 1C from its own
+        protection cutoff. The queried-but-ignored temperature_max_c must now
+        drive the decision.
+        """
+        status = GPUStatus(temperature_c=89.0, temperature_max_c=90.0)
+        condition, reason = _evaluate_condition(status, default_config)
+
+        assert condition == GPUCondition.EMERGENCY, (
+            f"TRAINER-A-009: temp 89C within margin of HW shutdown 90C must be "
+            f"EMERGENCY (was {condition}); the card's real shutdown threshold "
+            f"must drive the decision, not just the static temp_emergency."
+        )
+        assert "hardware shutdown" in reason
+
+    def test_hardware_shutdown_threshold_unknown_preserves_static_behavior(
+        self, default_config
+    ):
+        """TRAINER-A-009: when temperature_max_c is None (no NVML threshold
+        available / mocked path), the pure static-threshold behavior is
+        preserved — 89C is WARNING under the default config, not EMERGENCY."""
+        status = GPUStatus(temperature_c=89.0, temperature_max_c=None)
+        condition, _reason = _evaluate_condition(status, default_config)
+
+        assert condition == GPUCondition.WARNING, (
+            f"With no hardware threshold, 89C should fall through to the static "
+            f"WARNING band (>=82C, <95C critical); got {condition}."
+        )
+
 
 class TestGetGPUStatus:
     """Tests for the get_gpu_status function."""

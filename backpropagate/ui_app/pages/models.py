@@ -51,7 +51,10 @@ def _filter_bar() -> rx.Component:
                 },
             ),
             rx.text(
-                ModelsState.cache_dir,
+                # UI-A-002: render the redacted cache dir (home prefix
+                # stripped) so the operator's username never appears in the UI
+                # / screenshots and the full path never ships in the WS bundle.
+                ModelsState.cache_dir_display,
                 size="2",
                 class_name="bp-num",
                 style={

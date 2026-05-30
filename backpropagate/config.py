@@ -99,7 +99,7 @@ __all__ = [
 ]
 
 try:
-    from pydantic import Field
+    from pydantic import Field, model_validator
     from pydantic_settings import BaseSettings, SettingsConfigDict
     PYDANTIC_SETTINGS_AVAILABLE = True
 except ImportError:
@@ -337,6 +337,37 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         output_dir: str = "./output"
         # Overwrite output directory
         overwrite_output_dir: bool = True
+
+        @model_validator(mode="after")
+        def _reject_bf16_and_fp16(self) -> "Settings.TrainingConfig":
+            """Reject bf16=True AND fp16=True at construction time.
+
+            DATA-A-007: transformers' ``TrainingArguments`` raises
+            ``ValueError("At most one of fp16 and bf16 can be True ...")``
+            deep inside the trainer setup — long after the run has spun up
+            the model + dataset. Catching the contradiction here keeps the
+            "pydantic validates the config early" promise: the operator gets
+            a structured ``CONFIG_INVALID_SETTING`` with an actionable hint
+            at construction instead of an opaque framework crash mid-run.
+            A non-``ValueError`` exception raised from a pydantic ``after``
+            validator propagates as-is (it is NOT re-wrapped in
+            ``ValidationError``), so the structured code/hint survive.
+            """
+            if self.bf16 and self.fp16:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "bf16/fp16",
+                    {"bf16": self.bf16, "fp16": self.fp16},
+                    "at most one of bf16 / fp16 enabled",
+                    suggestion=(
+                        "Set exactly one of bf16 / fp16 (or neither for "
+                        "fp32). Use bf16 on Ampere+ / Blackwell GPUs and "
+                        "fp16 on older cards; they are mutually exclusive "
+                        "mixed-precision modes."
+                    ),
+                )
+            return self
 
     class DataConfig(BaseSettings):
         """Dataset configuration."""
@@ -681,6 +712,25 @@ else:
         seed: int = 42
         output_dir: str = "./output"
         overwrite_output_dir: bool = True
+
+        def __post_init__(self) -> None:
+            # DATA-A-007 (parity with the pydantic branch above): reject the
+            # bf16+fp16 contradiction here too so a pydantic-settings-less
+            # install validates identically and doesn't silently defer the
+            # crash to transformers mid-run.
+            if self.bf16 and self.fp16:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "bf16/fp16",
+                    {"bf16": self.bf16, "fp16": self.fp16},
+                    "at most one of bf16 / fp16 enabled",
+                    suggestion=(
+                        "Set exactly one of bf16 / fp16 (or neither for "
+                        "fp32). They are mutually exclusive mixed-precision "
+                        "modes."
+                    ),
+                )
 
     @dataclass
     class DataConfig:  # type: ignore[no-redef]
@@ -1340,15 +1390,32 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
     # A custom base_lr scales these proportionally (e.g. base_lr=4e-4 gives small=1e-3).
     scale = base_lr / 2e-4
 
+    # DATA-A-008: the medium branch must apply ``scale`` like the other two
+    # branches. ``2e-4 * scale`` is numerically identical to the prior bare
+    # ``base_lr`` (since ``scale == base_lr / 2e-4``), but writing it
+    # explicitly keeps all three anchors (5e-4 / 2e-4 / 1e-4) visibly on the
+    # same ``* scale`` footing — a future edit to one anchor can no longer
+    # silently desync the medium tier from small/large.
+    small_lr = 5e-4 * scale
+    medium_lr = 2e-4 * scale
+    large_lr = 1e-4 * scale
+    # The recommended ladder is strictly monotone (smaller corpora tolerate a
+    # higher LR). This holds for any positive base_lr; assert it so a sign /
+    # anchor regression is caught at the source instead of mid-training.
+    assert small_lr > medium_lr > large_lr, (
+        "get_recommended_lr ladder must satisfy small > medium > large "
+        f"(got {small_lr} / {medium_lr} / {large_lr})"
+    )
+
     if dataset_size < 1000:
         # Small dataset: higher LR, more aggressive learning
-        return 5e-4 * scale
+        return small_lr
     elif dataset_size < 10000:
         # Medium dataset: standard LoRA LR
-        return base_lr
+        return medium_lr
     else:
         # Large dataset: lower LR for stability
-        return 1e-4 * scale
+        return large_lr
 
 
 def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:

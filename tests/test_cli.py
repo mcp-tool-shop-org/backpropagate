@@ -289,6 +289,52 @@ class TestParser:
         assert args.verbose is True
 
 
+class TestHostStr:
+    """CLI-A-007: `backprop ui --host` argparse type validator (`_host_str`).
+
+    Pre-fix `--host` had no `type=`, so malformed values (option-shaped,
+    whitespace, junk hostnames) slipped past argparse and only failed deep
+    in the Reflex subprocess. Robustness/UX hardening — NOT a security
+    control (the DNS-rebinding gate stays in cmd_ui).
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        ["127.0.0.1", "0.0.0.0", "192.168.1.50", "::1", "localhost",
+         "my-host.local", "example.com", "[::1]"],
+    )
+    def test_valid_hosts_accepted(self, value):
+        from backpropagate.cli import _host_str
+
+        assert _host_str(value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        ["-0.0.0.0", "--evil", "0.0.0.0 ", " 127.0.0.1", "a b",
+         "host\twith\ttab", "", "bad_host!", "-.foo", "foo-.bar",
+         "a" * 300],
+    )
+    def test_invalid_hosts_rejected(self, value):
+        import argparse
+
+        from backpropagate.cli import _host_str
+
+        with pytest.raises(argparse.ArgumentTypeError):
+            _host_str(value)
+
+    def test_parser_accepts_valid_host(self, cli_parser):
+        """End-to-end: a valid --host parses (with --auth for the LAN bind)."""
+        args = cli_parser.parse_args(
+            ["ui", "--host", "0.0.0.0", "--auth", "alice:s3cret"]
+        )
+        assert args.host == "0.0.0.0"
+
+    def test_parser_rejects_option_shaped_host(self, cli_parser):
+        """`--host -0.0.0.0` (option-shaped) is rejected at argparse, exit 2."""
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["ui", "--host", "-0.0.0.0"])
+
+
 class TestMain:
     """Tests for main CLI entry point."""
 
@@ -332,6 +378,55 @@ class TestMain:
 
         result = main(["train"])
         assert result == 1
+
+    def test_main_catchall_redacts_unexpected_exception(self, capsys, monkeypatch):
+        """CLI-A-003: the last-resort `except Exception` in main() redacts
+        secrets in the printed message. A handler that lets an exception
+        escape (bypassing its own redaction) must NOT leak a credential to
+        stderr."""
+        import backpropagate.cli as cli
+
+        def _boom(_args):
+            raise RuntimeError("download failed for api_key=EXAMPLE-NOT-A-REAL-KEY")
+
+        # set_defaults(func=cmd_info) binds at parser-build time, so patch
+        # the module attr BEFORE main() builds the parser.
+        monkeypatch.setattr(cli, "cmd_info", _boom)
+        monkeypatch.delenv("BACKPROPAGATE_DEBUG", raising=False)
+
+        rc = cli.main(["info"])
+        err = capsys.readouterr().err
+
+        assert rc != 0
+        assert "Unexpected error" in err
+        assert "EXAMPLE-NOT-A-REAL-KEY" not in err, (
+            f"CLI-A-003: catch-all leaked a credential. stderr: {err!r}"
+        )
+        assert "<REDACTED>" in err
+
+    def test_main_catchall_redacts_backpropagate_error(self, capsys, monkeypatch):
+        """CLI-A-003: the last-resort `except BackpropagateError` in main()
+        redacts secrets too (the pre-try-raise path that bypasses the
+        per-handler redaction)."""
+        import backpropagate.cli as cli
+        from backpropagate.exceptions import BackpropagateError
+
+        def _boom(_args):
+            raise BackpropagateError(
+                "hub push failed: token=hunter2!@#secret_value"
+            )
+
+        monkeypatch.setattr(cli, "cmd_info", _boom)
+        monkeypatch.delenv("BACKPROPAGATE_DEBUG", raising=False)
+
+        cli.main(["info"])
+        err = capsys.readouterr().err
+
+        assert "hunter2" not in err, (
+            f"CLI-A-003: BackpropagateError handler leaked a credential. "
+            f"stderr: {err!r}"
+        )
+        assert "<REDACTED>" in err
 
 
 class TestCmdInfo:

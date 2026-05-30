@@ -1177,6 +1177,29 @@ def export_gguf(
 
     model_name = model_name or "model"
 
+    # DATA-A-004: ``model_name`` is interpolated into the output GGUF filename
+    # (``output_path / f"{model_name}-{quant}.gguf"`` in the manual-conversion
+    # path below). The Ollama register/remove sinks already run model names
+    # through ``_validate_model_name``; this programmatic-API entry point did
+    # NOT, so a caller-supplied ``model_name`` like ``"../../etc/evil"`` or
+    # ``"sub/dir/x"`` would escape ``output_path`` (path traversal) or write
+    # into an unintended subtree. Reduce to the basename component — the same
+    # ``Path(...).name`` defense ``_validate_model_name`` uses (export.py:120)
+    # — so only a leaf filename can ever be produced. A value that is ALL
+    # path machinery (``"."`` / ``".."`` / ``"foo/"`` -> empty leaf) falls
+    # back to the safe default rather than yielding a degenerate filename.
+    safe_model_name = Path(model_name).name
+    if safe_model_name in ("", ".", ".."):
+        safe_model_name = "model"
+    if safe_model_name != model_name:
+        logger.warning(
+            "export_gguf: model_name %r contained path components; using "
+            "sanitized leaf %r for the output filename.",
+            model_name,
+            safe_model_name,
+        )
+    model_name = safe_model_name
+
     # Try Unsloth first (fastest)
     # B-006: write into a sibling .partial directory so a mid-conversion
     # disk-full / crash doesn't leave a half-written .gguf file at the
@@ -1491,12 +1514,13 @@ def create_modelfile(
         Path to the created Modelfile
 
     Raises:
-        ExportError: when ``gguf_path`` or ``system_prompt`` contains an
-            embedded NUL / newline / CR. The Modelfile format treats these
-            as statement separators, so silently accepting them would either
-            corrupt the FROM/SYSTEM directive (CR / LF inside a quoted
-            string) or open a SYSTEM-injection surface (extra PARAMETER /
-            SYSTEM lines past the parser). Code is
+        ExportError: when ``gguf_path`` or ``system_prompt`` contains any C0
+            control character (U+0000–U+001F) other than TAB — NUL, newline,
+            CR, form-feed, vertical-tab, etc. The Modelfile format treats
+            these as statement separators / line breaks, so silently
+            accepting them would either corrupt the FROM/SYSTEM directive
+            (CR / LF inside a quoted string) or open a SYSTEM-injection
+            surface (extra PARAMETER / SYSTEM lines past the parser). Code is
             ``INPUT_VALIDATION_FAILED``, matching ``_validate_model_name``.
     """
     gguf_path = Path(gguf_path).resolve()
@@ -1510,18 +1534,31 @@ def create_modelfile(
     # and the surviving fragments would parse as separate Ollama directives.
     # The error names the offending field so an operator can triage which
     # input was bad.
+    # Named C0 controls get a specific label in the error; the rest are
+    # reported generically by codepoint. DATA-A-009: the prior check only
+    # rejected NUL / newline / CR, but the WHOLE C0 control block (U+0000–
+    # U+001F) is unsafe in Modelfile body text — form-feed (\x0c) and
+    # vertical-tab (\x0b) are treated as line breaks by some parsers, and
+    # the other controls corrupt the SYSTEM / FROM directive. Only TAB
+    # (\x09) is legitimately allowed (it can appear inside a quoted SYSTEM
+    # prompt as ordinary whitespace).
+    _C0_NAMES = {"\x00": "NUL", "\n": "newline", "\r": "CR", "\x0c": "form-feed", "\x0b": "vertical-tab"}
+
     def _reject_modelfile_unsafe(value: str, *, field: str) -> None:
-        for ch, ch_name in (("\x00", "NUL"), ("\n", "newline"), ("\r", "CR")):
-            if ch in value:
+        for ch in value:
+            # Reject every C0 control (U+0000–U+001F) except TAB (U+0009).
+            if ord(ch) < 0x20 and ch != "\t":
+                ch_name = _C0_NAMES.get(ch, f"control char U+{ord(ch):04X}")
                 raise ExportError(
                     f"{field} contains a {ch_name} character; the Ollama "
-                    "Modelfile format treats it as a statement separator "
-                    "and the file would split into multiple directives.",
+                    "Modelfile format treats control characters as statement "
+                    "separators / line breaks and the file would split into "
+                    "multiple directives.",
                     suggestion=(
                         f"Strip the embedded {ch_name} from {field}. "
                         "If the value comes from a path with an unusual "
                         "filename, rename the file before exporting. If "
-                        "from --system-prompt, remove the line break."
+                        "from --system-prompt, remove the control character."
                     ),
                     code="INPUT_VALIDATION_FAILED",
                 )

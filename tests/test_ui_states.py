@@ -624,7 +624,11 @@ class TestDatasetStateDefaults:
         from backpropagate.ui_state import DatasetState
 
         state = DatasetState()
-        assert state.uploaded_path == ""
+        # UI-A-002 (Wave A2): the full upload path is now a backend-only var
+        # (``_uploaded_path``); the public surface is the basename + a boolean.
+        assert state._uploaded_path == ""
+        assert state.uploaded_basename == ""
+        assert state.has_upload is False
         assert state.upload_error == ""
         assert state.upload_count == 0
         assert state.detected_format == ""
@@ -744,7 +748,7 @@ class TestDatasetStateEventHandlers:
         from backpropagate.ui_state import DatasetState
 
         state = DatasetState()
-        assert state.uploaded_path == ""
+        assert state._uploaded_path == ""
         state.detect_format_stub()
         assert state.detected_format == ""  # unchanged
 
@@ -760,7 +764,7 @@ class TestDatasetStateEventHandlers:
         from backpropagate.ui_state import DatasetState
 
         state = DatasetState()
-        state.uploaded_path = "/tmp/some-uploaded-file.jsonl"
+        state._uploaded_path = "/tmp/some-uploaded-file.jsonl"
         state.detect_format_stub()
         assert state.detected_format == "alpaca"
 
@@ -1312,6 +1316,455 @@ class TestRunDetailStateActionInFlight:
             "FRONTEND-B-014-EXTENDED regression on export_run: "
             "action_in_flight not cleared after the in-process export."
         )
+
+
+# =============================================================================
+# V2-a (Wave A2 verifier gap): the in-process action handlers
+# (delete_run / export_run / replay), rewired in Wave A1 from broken
+# subprocess shell-outs, write RAW absolute paths (the sandbox ``history_dir``
+# / ``out_path``, both under ``~/.backpropagate/ui-outputs`` which embeds the
+# OS home dir + username) AND the bare ``{exc}`` repr of an OSError into the
+# PUBLIC (client-serialized) ``action_error`` / ``action_result`` vars. Under
+# the documented ``--share + --auth`` flow those ship to the remote browser.
+# Every path-bearing action string must be routed through ``_redact_paths``
+# (via ``_redact_action``) before assignment.
+# =============================================================================
+
+
+class TestRunDetailActionStringsRedactPaths:
+    """Path-bearing action_error / action_result strings must be redacted."""
+
+    @staticmethod
+    def _home_history_dir():
+        """A synthetic history dir UNDER the user's home so the home prefix
+        is present in any error string the handler builds. ``_redact_paths``
+        targets ``/home/<user>/…`` / ``C:\\Users\\<user>\\…`` so a path under
+        the real home is the deterministic, cross-platform probe.
+        """
+        from pathlib import Path as _Path
+
+        return _Path.home() / ".backpropagate" / "ui-outputs"
+
+    def _assert_no_home_leak(self, text: str, label: str) -> None:
+        """Assert the operator's home dir / username does not appear raw."""
+        from pathlib import Path as _Path
+
+        home = str(_Path.home())
+        assert home not in text, (
+            f"V2-a: {label} leaks the operator home dir ({home!r}) into a "
+            f"client-serialized var. Route the string through _redact_action "
+            f"so the home prefix becomes <redacted-path>. Got: {text!r}"
+        )
+        # The username component specifically must not survive.
+        try:
+            user = _Path.home().name
+        except Exception:  # noqa: BLE001
+            user = ""
+        if user:
+            assert user not in text or "<redacted-path>" in text, (
+                f"V2-a: {label} appears to leak the username ({user!r}); "
+                f"expected a <redacted-path> token. Got: {text!r}"
+            )
+
+    def test_delete_run_not_found_error_redacts_history_dir(self, monkeypatch):
+        """delete_run's not-found branch embeds ``history_dir`` (home+user) —
+        it must be redacted before reaching ``action_error``.
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        hist = self._home_history_dir()
+        hist.mkdir(parents=True, exist_ok=True)
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                return False  # not found -> error string embeds history_dir
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir", lambda: hist
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "missingrun"
+        state.delete_run()
+
+        assert state.action_error, "expected a not-found error message"
+        self._assert_no_home_leak(state.action_error, "delete_run not-found")
+        assert "<redacted-path>" in state.action_error, (
+            "V2-a: the redacted history_dir should surface as <redacted-path>."
+        )
+
+    def test_delete_run_exception_redacts_oserror_path(self, monkeypatch):
+        """A raw OSError repr (``[Errno 2] … '/home/<user>/…'``) must be
+        redacted on the exception branch of delete_run.
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        hist = self._home_history_dir()
+        hist.mkdir(parents=True, exist_ok=True)
+        leaky = str(hist / "secret-run" / "manifest.json")
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def delete_run(self, run_id):
+                raise OSError(f"[Errno 13] Permission denied: '{leaky}'")
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir", lambda: hist
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "abc12345"
+        state.delete_run()
+
+        assert state.action_error, "expected an exception error message"
+        self._assert_no_home_leak(state.action_error, "delete_run exception")
+
+    def test_export_run_success_redacts_out_path(self, monkeypatch):
+        """export_run's success string embeds the sandbox ``out_path``
+        (home+user) — it must be redacted in ``action_result``.
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        hist = self._home_history_dir()
+        hist.mkdir(parents=True, exist_ok=True)
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return {"run_id": run_id, "status": "completed"}
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir", lambda: hist
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "exportme"
+        state.export_run()
+
+        assert state.action_result, "expected a success message"
+        self._assert_no_home_leak(state.action_result, "export_run success")
+        assert "<redacted-path>" in state.action_result, (
+            "V2-a: the sandbox out_path must surface as <redacted-path> in "
+            "the client-serialized action_result."
+        )
+
+    def test_replay_not_found_error_redacts_history_dir(self, monkeypatch):
+        """replay's not-found branch embeds ``history_dir`` — redact it."""
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        hist = self._home_history_dir()
+        hist.mkdir(parents=True, exist_ok=True)
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return None  # not found -> error embeds history_dir
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir", lambda: hist
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "ghostrun"
+        state.replay()
+
+        assert state.action_error, "expected a not-found error message"
+        self._assert_no_home_leak(state.action_error, "replay not-found")
+
+
+# =============================================================================
+# UI-A-002 (Wave A2): absolute paths carrying the operator's home dir +
+# username must NOT live in PUBLIC (client-serialized) Reflex vars. The full
+# paths move to backend-only ('_'-prefixed) vars; the client sees only
+# basenames / redacted forms via computed vars. ``log_lines`` is redacted
+# per-line before assignment.
+# =============================================================================
+
+
+class TestUiPathFieldsNotClientSerialized:
+    """Full-path fields must be backend-only; only redacted/basename forms
+    are client-serialized.
+    """
+
+    def test_dataset_uploaded_path_is_backend_only(self):
+        from backpropagate.ui_state import DatasetState
+
+        assert "uploaded_path" not in DatasetState.base_vars, (
+            "UI-A-002: DatasetState.uploaded_path (full path w/ home+user) "
+            "must NOT be a client-serialized var."
+        )
+        assert "_uploaded_path" in DatasetState.backend_vars, (
+            "UI-A-002: the full upload path must live in the backend-only "
+            "var DatasetState._uploaded_path."
+        )
+        # The basename + boolean ARE the public surface.
+        assert "uploaded_basename" in DatasetState.computed_vars
+        assert "has_upload" in DatasetState.computed_vars
+
+    def test_run_detail_checkpoint_path_is_backend_only(self):
+        from backpropagate.ui_state import RunDetailState
+
+        assert "checkpoint_path" not in RunDetailState.base_vars, (
+            "UI-A-002: RunDetailState.checkpoint_path (full path) must NOT "
+            "be a client-serialized var."
+        )
+        assert "_checkpoint_path" in RunDetailState.backend_vars, (
+            "UI-A-002: the full checkpoint path must live in the backend-"
+            "only var RunDetailState._checkpoint_path."
+        )
+        assert "checkpoint_path_display" in RunDetailState.computed_vars, (
+            "UI-A-002: the redacted client-facing form must be a computed "
+            "var (checkpoint_path_display)."
+        )
+
+    def test_models_cache_dir_is_backend_only(self):
+        from backpropagate.ui_state import ModelsState
+
+        assert "cache_dir" not in ModelsState.base_vars, (
+            "UI-A-002: ModelsState.cache_dir (full ~/.cache path) must NOT "
+            "be a client-serialized var."
+        )
+        assert "_cache_dir" in ModelsState.backend_vars, (
+            "UI-A-002: the full cache dir must live in the backend-only var "
+            "ModelsState._cache_dir."
+        )
+        assert "cache_dir_display" in ModelsState.computed_vars
+
+    def test_checkpoint_path_display_redacts_home(self):
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state._checkpoint_path = str(_Path.home() / "runs" / "run-x" / "ckpt")
+        disp = state.checkpoint_path_display
+        assert str(_Path.home()) not in disp, (
+            f"UI-A-002: checkpoint_path_display leaks the home dir: {disp!r}"
+        )
+        assert "<redacted-path>" in disp
+
+    def test_cache_dir_display_redacts_home(self):
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        state = ModelsState()
+        state._cache_dir = str(_Path.home() / ".cache" / "huggingface" / "hub")
+        disp = state.cache_dir_display
+        assert str(_Path.home()) not in disp, (
+            f"UI-A-002: cache_dir_display leaks the home dir: {disp!r}"
+        )
+        assert "<redacted-path>" in disp
+
+    def test_load_run_redacts_log_lines(self, monkeypatch, tmp_path):
+        """A training.log line containing an absolute home path must be
+        redacted before it enters the client-serialized ``log_lines`` var.
+        """
+        from pathlib import Path as _Path
+
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunDetailState
+
+        # Build a fake checkpoint dir with a training.log that embeds a home
+        # path. Use the real tmp_path for the checkpoint dir, but write a log
+        # line that contains the operator's actual home dir so the redaction
+        # pattern fires deterministically.
+        ckpt = tmp_path / "ckpt"
+        ckpt.mkdir()
+        leaky_line = f"loaded adapter from {_Path.home() / 'models' / 'a.safetensors'}"
+        (ckpt / "training.log").write_text(leaky_line + "\n", encoding="utf-8")
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def get_run(self, run_id):
+                return {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "checkpoint_path": str(ckpt),
+                }
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+        monkeypatch.setattr(
+            "backpropagate.ui_security.get_ui_output_dir", lambda: tmp_path
+        )
+
+        state = RunDetailState()
+        state.current_run_id = "withlogs"
+        state.load_run()
+
+        assert state.log_lines, "expected the training.log tail to populate"
+        joined = "\n".join(state.log_lines)
+        assert str(_Path.home()) not in joined, (
+            f"UI-A-002: log_lines leaks the operator home dir: {joined!r}"
+        )
+
+
+# =============================================================================
+# UI-A-005 (Wave A2): RunsState.load_runs reads run-history from
+# ``output_dir_override`` — a PUBLIC var a malicious WS client can set
+# directly, bypassing the validating setter. The forbidden-base guard must be
+# re-applied at the READ sink, not only in the setter.
+# =============================================================================
+
+
+class TestRunsStateOutputDirOverrideReadGuard:
+    """A forbidden output_dir_override must be refused at the read sink even
+    when set directly (bypassing the setter).
+    """
+
+    def test_load_runs_refuses_forbidden_override_set_directly(self, monkeypatch):
+        """Simulate a WS client writing the public var directly to a
+        credential dir, then calling load_runs. The read sink must refuse.
+        """
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import RunsState
+
+        state = RunsState()
+        # Bypass set_output_dir_override entirely — assign the public var.
+        state.output_dir_override = str(_Path.home() / ".ssh")
+
+        # Guard: RunHistoryManager must NEVER be constructed for a forbidden
+        # base (that would mean we read from it).
+        from backpropagate import checkpoints as _ck
+
+        def _boom(_dir):
+            raise AssertionError(
+                "UI-A-005: load_runs constructed RunHistoryManager on a "
+                "forbidden base — the read-sink guard did not fire."
+            )
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _boom)
+
+        state.load_runs()
+
+        assert state.runs == []
+        assert state.error, "expected a refusal error"
+        assert "system or credential" in state.error.lower() or "refus" in state.error.lower(), (
+            f"UI-A-005: expected a forbidden-base refusal; got {state.error!r}"
+        )
+
+    def test_load_runs_allows_benign_override(self, monkeypatch, tmp_path):
+        """A benign (non-forbidden) override still works — the guard must not
+        over-block legitimate operator dirs.
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunsState
+
+        class _FakeManager:
+            def __init__(self, _dir):
+                pass
+
+            def list_runs(self, status=None, limit=50):
+                return []
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
+
+        state = RunsState()
+        state.output_dir_override = str(tmp_path)
+        state.load_runs()
+
+        # No refusal error — empty list is fine (no runs on disk).
+        assert state.runs == []
+        assert "credential" not in state.error.lower()
+
+
+# =============================================================================
+# UI-A-006 (Wave A2): delete_model must use is_relative_to confinement (not
+# str.startswith) and refuse a symlinked cache entry before rmtree.
+# =============================================================================
+
+
+class TestModelsStateDeleteModelHardening:
+    """delete_model confinement + symlink refusal."""
+
+    def test_delete_model_refuses_symlink_entry(self, monkeypatch, tmp_path):
+        """A ``models--*`` symlink in the cache must be refused (not followed
+        into an rmtree of the link target).
+        """
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        # Point the HF cache at a temp dir we control.
+        fake_cache = tmp_path / ".cache" / "huggingface" / "hub"
+        fake_cache.mkdir(parents=True)
+        outside = tmp_path / "precious"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("do not delete", encoding="utf-8")
+
+        link = fake_cache / "models--evil--link"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not permitted on this host")
+
+        # Redirect Path.home() so cache_dir resolves under tmp_path.
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+
+        state = ModelsState()
+        state.delete_model("models--evil--link")
+
+        assert state.error, "expected a refusal error for the symlink entry"
+        assert "symlink" in state.error.lower(), (
+            f"UI-A-006: expected a symlink refusal; got {state.error!r}"
+        )
+        # The link target must be untouched.
+        assert (outside / "keep.txt").exists(), (
+            "UI-A-006: delete_model followed a symlink and deleted the "
+            "link target outside the cache."
+        )
+        # And the link itself must still exist (we refused, not deleted).
+        assert link.is_symlink()
+
+    def test_delete_model_sibling_prefix_dir_not_confused(self, monkeypatch, tmp_path):
+        """A sibling dir whose path shares the cache prefix string must not be
+        treated as inside the cache (is_relative_to vs startswith).
+
+        This is exercised indirectly: a normal in-cache delete still works,
+        proving the is_relative_to swap didn't break the happy path.
+        """
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        fake_cache = tmp_path / ".cache" / "huggingface" / "hub"
+        fake_cache.mkdir(parents=True)
+        victim = fake_cache / "models--org--model"
+        victim.mkdir()
+        (victim / "blob").write_text("x", encoding="utf-8")
+
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        # Avoid the post-delete reload doing real work.
+        monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
+
+        state = ModelsState()
+        state.delete_model("models--org--model")
+
+        assert not victim.exists(), (
+            "UI-A-006: a legitimate in-cache delete must still succeed after "
+            "the is_relative_to swap."
+        )
+        assert state.error == "", f"unexpected error: {state.error!r}"
 
 
 # =============================================================================

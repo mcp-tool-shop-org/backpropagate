@@ -369,8 +369,11 @@ class MultiRunConfig:
 
     # Phase 4.3: Early stopping per run
     early_stopping: bool = False
-    early_stopping_patience: int = 2  # Stop if val loss increases for N consecutive runs
-    early_stopping_threshold: float = 0.0  # Min improvement required (0.0 = any increase is bad)
+    # CONTINUAL-A-009: patience is counted against the BEST val_loss seen so
+    # far, not the previous run. Stop after this many consecutive runs with
+    # no improvement over the running best (see _check_early_stopping).
+    early_stopping_patience: int = 2  # Stop after N runs with no improvement over best
+    early_stopping_threshold: float = 0.0  # Min improvement over best required (0.0 = must strictly beat best)
 
     # Phase 5.3: Checkpoint management
     checkpoint_keep_best_n: int = 3  # Keep N best checkpoints by validation loss
@@ -2128,13 +2131,24 @@ class MultiRunTrainer:
                 )
                 logger.info(f"Checkpoint saved: {checkpoint_path}")
 
-                # Also save SLAO merger state (B-001: thread run_id through)
-                if self._slao_merger:
-                    self._slao_merger.save(
-                        str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"),
-                        run_id=self._run_id,
-                    )
-
+                # CONTINUAL-A-007: register the manifest entry BEFORE saving
+                # the SLAO accumulator dir. Resume-candidate lookup
+                # (find_latest_for_run_id) keys off the manifest; the on-disk
+                # ``slao/`` dir is only consulted on resume IF the manifest
+                # already points at this run. Pre-fix the order was
+                # save-LoRA → save-SLAO → register, so a register() failure
+                # left an orphan ``slao/`` dir on disk with NO manifest entry:
+                # a later resume would then latch onto an EARLIER run_index
+                # (whose manifest entry survived), silently re-doing this
+                # run's work / diverging from the orphaned accumulator.
+                # Registering first means a subsequent slao.save() failure
+                # leaves a coherent state — the manifest points at run N, the
+                # LoRA weights for run N are present, and the resume SLAO
+                # restore degrades gracefully (re-initializes the merger,
+                # see _restore_session_state). And a register() failure now
+                # happens BEFORE any slao dir for this run exists, so the
+                # orphan-dir-without-manifest-entry state cannot arise.
+                #
                 # Phase 5.3: Register with checkpoint manager for smart pruning
                 # (B-001: pass run_id so manifest can carry the correlation token)
                 if self._checkpoint_manager:
@@ -2148,6 +2162,15 @@ class MultiRunTrainer:
                         run_id=self._run_id,
                     )
                     # Note: auto_prune happens inside register() if enabled
+
+                # Also save SLAO merger state (B-001: thread run_id through).
+                # Done AFTER manifest registration (see CONTINUAL-A-007 above)
+                # so a failure here never produces a manifest-less orphan dir.
+                if self._slao_merger:
+                    self._slao_merger.save(
+                        str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"),
+                        run_id=self._run_id,
+                    )
             except Exception as save_err:
                 # Stage C BACKEND-B-012 humanization: the prior log was a
                 # bare ERROR line. Operators watching `on_run_complete` saw
@@ -2308,15 +2331,36 @@ class MultiRunTrainer:
             # lock as the in-class CheckpointManager mutators (register /
             # prune / protect). Concurrent multi-run sessions otherwise
             # race on this write.
+            #
+            # CONTINUAL-A-010: do the find + patch INSIDE the lock against a
+            # FRESH read of the manifest, mirroring the Wave A1
+            # CheckpointManager.register() pattern (re-read under lock before
+            # mutate+save). Pre-fix, this iterated the stale in-memory
+            # ``list_checkpoints()`` snapshot and mutated ``cp`` OUTSIDE the
+            # lock, taking the lock only for the bare ``_save_manifest()`` —
+            # a benign TOCTOU that could (a) clobber a sibling process's
+            # entries appended since this manager loaded its snapshot, and
+            # (b) patch a CheckpointInfo object that the reloaded list no
+            # longer contains. Reloading under the lock and patching the
+            # freshly-loaded entry closes both gaps. A degraded fallback
+            # (filelock unavailable / timeout → ``locked=False``) still
+            # patches the in-memory snapshot so single-process behavior is
+            # preserved.
             if self._checkpoint_manager:
-                for cp in self._checkpoint_manager.list_checkpoints():
-                    if cp.run_index == run_idx and cp.validation_loss is None:
-                        cp.validation_loss = val_loss
-                        with self._checkpoint_manager._locked_manifest_write(
-                            "validation_loss_update"
-                        ):
-                            self._checkpoint_manager._save_manifest()
-                        break
+                mgr = self._checkpoint_manager
+                with mgr._locked_manifest_write("validation_loss_update") as locked:
+                    if locked:
+                        # Refresh from disk so a concurrent writer's entries
+                        # are preserved through our save.
+                        mgr._load_manifest()
+                    patched = False
+                    for cp in mgr._checkpoints:
+                        if cp.run_index == run_idx and cp.validation_loss is None:
+                            cp.validation_loss = val_loss
+                            patched = True
+                            break
+                    if patched:
+                        mgr._save_manifest()
 
         return run_result, val_loss
 
@@ -2354,6 +2398,70 @@ class MultiRunTrainer:
         """
         _, val_start = self._get_validation_holdout(total_samples)
         return val_start
+
+    def _fresh_window_counts(self, run_idx: int) -> tuple[int, int]:
+        """CONTINUAL-A-004: how many NEW vs REPLAY samples run ``run_idx`` draws.
+
+        Returns ``(new_samples_count, replay_count)``. Run 1 (and any run when
+        ``replay_fraction <= 0``) is all-fresh: ``(samples_per_run, 0)``.
+        Otherwise ``replay_count = int(samples_per_run * min(replay_fraction,
+        0.5))`` (the 50% cap matches the historical chunker) and
+        ``new_samples_count = samples_per_run - replay_count``.
+
+        Centralised so the chunker (fresh-window striding) and the replay
+        sampler (reconstructing a prior run's fresh window) agree on the
+        per-run fresh width — the precondition for gap-free, lockstep
+        striding.
+        """
+        chunk_size = self.config.samples_per_run
+        replay_fraction = min(self.config.replay_fraction, 0.5)  # Cap at 50%
+        if run_idx <= 1 or replay_fraction <= 0:
+            return chunk_size, 0
+        replay_count = int(chunk_size * replay_fraction)
+        return chunk_size - replay_count, replay_count
+
+    def _fresh_window_start_unwrapped(self, run_idx: int) -> int:
+        """CONTINUAL-A-004: cumulative (pre-wrap) start offset of run ``run_idx``'s
+        fresh window — the sum of the fresh widths consumed by all prior runs.
+
+        Run 1 consumes ``samples_per_run`` (no replay); each subsequent run
+        consumes ``new_samples_count`` (constant for a fixed
+        ``replay_fraction``). Expressed in closed form so it's O(1):
+
+            start(1)   = 0
+            start(k>=2) = samples_per_run + (k - 2) * new_width
+
+        where ``new_width`` is the runs-2+ fresh width. With replay disabled
+        ``new_width == samples_per_run`` and this collapses to
+        ``(run_idx - 1) * samples_per_run`` — identical to the pre-fix stride.
+        """
+        if run_idx <= 1:
+            return 0
+        samples_per_run = self.config.samples_per_run
+        new_width, _ = self._fresh_window_counts(2)  # runs >= 2 share a width
+        return samples_per_run + (run_idx - 2) * new_width
+
+    def _fresh_window_indices(self, run_idx: int, train_pool_size: int) -> list[int]:
+        """CONTINUAL-A-004: the train-pool indices forming run ``run_idx``'s
+        fresh window, wrapping INSIDE ``[0, train_pool_size)`` only (never into
+        the validation holdout).
+
+        Used by both ``_get_data_chunk`` (the run's own fresh samples) and
+        ``_get_replay_samples`` (reconstructing a prior run's fresh window to
+        resample from), so the two never disagree about which indices a run
+        saw as fresh data.
+        """
+        new_width, _ = self._fresh_window_counts(run_idx)
+        if new_width <= 0 or train_pool_size <= 0:
+            return []
+        start_idx = self._fresh_window_start_unwrapped(run_idx) % train_pool_size
+        end_idx = start_idx + new_width
+        if end_idx > train_pool_size:
+            return (
+                list(range(start_idx, train_pool_size))
+                + list(range(0, end_idx - train_pool_size))
+            )
+        return list(range(start_idx, end_idx))
 
     def _get_data_chunk(self, full_dataset: Any, run_idx: int) -> Any:
         """
@@ -2442,26 +2550,26 @@ class MultiRunTrainer:
             )
 
         # Calculate how many new vs replay samples
-        replay_fraction = min(self.config.replay_fraction, 0.5)  # Cap at 50%
-        if run_idx == 1 or replay_fraction <= 0:
-            # First run or no replay - just get new samples
-            new_samples_count = chunk_size
-            replay_count = 0
-        else:
-            replay_count = int(chunk_size * replay_fraction)
-            new_samples_count = chunk_size - replay_count
+        _new_samples_count, replay_count = self._fresh_window_counts(run_idx)
 
         # Get new samples for this run. We index into the TRAINING POOL only
         # (`[0, train_pool_size)`) and wrap inside it, so wrap-around can never
         # reach into the validation holdout `[train_pool_size, total_samples)`.
-        start_idx = ((run_idx - 1) * self.config.samples_per_run) % train_pool_size
-        end_idx = start_idx + new_samples_count
-
-        # Handle wrap-around for new samples (inside the train pool only).
-        if end_idx > train_pool_size:
-            new_indices = list(range(start_idx, train_pool_size)) + list(range(0, end_idx - train_pool_size))
-        else:
-            new_indices = list(range(start_idx, end_idx))
+        #
+        # CONTINUAL-A-004: the fresh-window start is a CUMULATIVE cursor over
+        # the widths actually consumed by prior runs (see
+        # _fresh_window_indices), NOT ``(run_idx-1) * samples_per_run``.
+        # Pre-fix, the stride was the full ``samples_per_run`` while a
+        # replay-enabled run only consumed ``new_samples_count`` (=
+        # samples_per_run - replay_count), so each run left a gap of
+        # ``replay_count`` samples between the end of its fresh window and the
+        # start of the next run's window — those samples were never trained as
+        # fresh data (and replay only resamples PRIOR windows, so the gap
+        # samples were never seen at all). Striding by the cumulative consumed
+        # width makes the fresh windows contiguous and gap-free. With
+        # replay_fraction=0 the cumulative width equals samples_per_run and
+        # this reduces to the original behavior byte-for-byte.
+        new_indices = self._fresh_window_indices(run_idx, train_pool_size)
 
         new_chunk = full_dataset.select(new_indices)
 
@@ -2505,37 +2613,47 @@ class MultiRunTrainer:
 
         total_samples = len(full_dataset)
         train_pool_size = self._get_train_pool_size(total_samples)
-        samples_per_run = self.config.samples_per_run
 
-        # Calculate indices from previous runs. All ranges are clamped to the
-        # training pool so we never pull validation samples into replay.
+        # Calculate indices from previous runs. All windows are reconstructed
+        # via the SAME helper the chunker uses (_fresh_window_indices), so
+        # replay resamples exactly the indices each prior run actually saw as
+        # fresh data — and never a gap index or a validation-holdout index.
+        #
+        # CONTINUAL-A-004: pre-fix these branches recomputed prior windows as
+        # ``((prev_run-1) * samples_per_run) % train_pool_size`` with width
+        # ``samples_per_run``. That assumed the full-stride layout the chunker
+        # no longer uses, so with replay enabled the reconstructed windows
+        # drifted out of sync with the real (cumulative, narrower) fresh
+        # windows. Sharing the helper keeps them in lockstep.
         if self.config.replay_strategy == "recent":
-            # Get samples from the most recent previous run
-            prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-            prev_end = min(prev_start + samples_per_run, train_pool_size)
-            available_indices = list(range(prev_start, prev_end))
+            # Get samples from the most recent previous run.
+            available_indices = self._fresh_window_indices(
+                run_idx - 1, train_pool_size
+            )
 
         elif self.config.replay_strategy == "random":
-            # Random samples from all previous runs
+            # Random samples from all previous runs.
             all_prev_indices: list[int] = []
             for prev_run in range(1, run_idx):
-                prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-                prev_end = min(prev_start + samples_per_run, train_pool_size)
-                all_prev_indices.extend(range(prev_start, prev_end))
+                all_prev_indices.extend(
+                    self._fresh_window_indices(prev_run, train_pool_size)
+                )
             available_indices = list(set(all_prev_indices))  # Remove duplicates
 
         elif self.config.replay_strategy == "all_previous":
             # Uniform sample from all data seen so far (within the train pool).
-            total_seen = min((run_idx - 1) * samples_per_run, train_pool_size)
-            available_indices = list(range(total_seen))
+            # "Seen so far" is the union of every prior run's fresh window;
+            # de-duplicated because wrap-around can revisit indices.
+            seen: set[int] = set()
+            for prev_run in range(1, run_idx):
+                seen.update(self._fresh_window_indices(prev_run, train_pool_size))
+            available_indices = sorted(seen)
 
         else:
-            # Default to recent
-            prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-            prev_end = min(prev_start + samples_per_run, train_pool_size)
-            available_indices = list(range(prev_start, prev_end))
+            # Default to recent.
+            available_indices = self._fresh_window_indices(
+                run_idx - 1, train_pool_size
+            )
 
         # Sample from available indices
         if len(available_indices) == 0:
@@ -3119,8 +3237,21 @@ class MultiRunTrainer:
         """
         Check if early stopping should be triggered.
 
-        Phase 4.3: Stop training if validation loss increases for
-        `early_stopping_patience` consecutive runs.
+        Phase 4.3: Stop training when the validation loss fails to improve
+        on the **best value seen so far** for ``early_stopping_patience``
+        consecutive runs.
+
+        CONTINUAL-A-009: the comparison baseline is the best-ever val_loss
+        (``self._best_val_loss``), NOT the immediately-preceding run's loss.
+        A run that beats the running best by more than
+        ``early_stopping_threshold`` resets the patience counter and becomes
+        the new best; any run that does not improve on the best increments
+        the counter. (An earlier revision of this docstring said "increases
+        for N consecutive runs vs the previous run," which did not match the
+        implementation — a saw-tooth curve oscillating above a low best
+        would correctly keep incrementing here, whereas a strict
+        vs-previous rule would reset on every down-tick. The best-ever
+        semantics are the intended, tested behavior.)
 
         Args:
             val_loss: Current validation loss

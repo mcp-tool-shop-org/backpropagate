@@ -49,6 +49,12 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# TRAINER-A-009: degrees Celsius below the card's hardware shutdown threshold
+# (NVML NVML_TEMPERATURE_THRESHOLD_SHUTDOWN) at which we escalate to EMERGENCY,
+# independent of the statically-configured temp_emergency. A card already this
+# close to its own protection cutoff is in danger regardless of our default.
+_HW_SHUTDOWN_MARGIN_C = 3.0
+
 # =============================================================================
 # PYNVML INIT-ONCE PATTERN (BR-009)
 # =============================================================================
@@ -377,6 +383,30 @@ def _evaluate_condition(status: GPUStatus, config: GPUSafetyConfig) -> tuple:
 
     # Check temperature (most critical)
     if status.temperature_c is not None:
+        # TRAINER-A-009: the card's OWN hardware shutdown threshold
+        # (status.temperature_max_c, from
+        # nvmlDeviceGetTemperatureThreshold(SHUTDOWN)) was queried in
+        # get_gpu_status but never consulted — a dead safety signal. A
+        # statically-configured temp_emergency (default 95C) can sit ABOVE a
+        # specific card's real shutdown point (some mobile / older GPUs shut
+        # down at 90-92C), so a card already in its hardware-protection zone
+        # would only register CRITICAL under the static thresholds. Factor the
+        # real threshold in as an additional EMERGENCY floor: if we are within
+        # HW_SHUTDOWN_MARGIN_C of (or past) the card's shutdown temp, that is
+        # an emergency regardless of the configured value. Skipped when the
+        # threshold is unknown (None), so software-only / mocked paths keep the
+        # pure static-threshold behavior.
+        if (
+            status.temperature_max_c is not None
+            and status.temperature_max_c > 0
+            and status.temperature_c >= status.temperature_max_c - _HW_SHUTDOWN_MARGIN_C
+        ):
+            return (
+                GPUCondition.EMERGENCY,
+                f"Temperature EMERGENCY: {status.temperature_c}C is within "
+                f"{_HW_SHUTDOWN_MARGIN_C}C of the card's hardware shutdown "
+                f"threshold ({status.temperature_max_c}C)",
+            )
         if status.temperature_c >= config.temp_emergency:
             return GPUCondition.EMERGENCY, f"Temperature EMERGENCY: {status.temperature_c}C >= {config.temp_emergency}C"
         if status.temperature_c >= config.temp_critical:

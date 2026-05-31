@@ -1014,6 +1014,87 @@ class TestTrainerTrain:
                 trainer.train("dummy_dataset", steps=5)
                 assert len(trainer.runs) == 2
 
+    def test_train_coerces_non_finite_final_loss(self, temp_dir):
+        """CORE-B-009: a non-finite training_loss must be coerced to 0.0.
+
+        A diverged run (fp16 overflow, exploding LR) can surface NaN/inf as
+        ``training_loss``. Persisting that poisons JSON serialization
+        (json.dump emits non-spec ``NaN``) and best-checkpoint comparisons
+        (NaN compares false against everything). The recorded final_loss
+        must be a finite float.
+        """
+        import math
+
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+            mock_dataset = MagicMock()
+            mock_dataset.__len__ = MagicMock(return_value=10)
+
+            with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+                 patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+                 patch("trl.SFTTrainer") as mock_sft_trainer, \
+                 patch("trl.SFTConfig"):
+                mock_instance = MagicMock()
+                mock_instance.train.return_value = MagicMock(
+                    training_loss=float("nan")
+                )
+                mock_instance.state.log_history = [{"loss": 0.5}]
+                mock_sft_trainer.return_value = mock_instance
+
+                run = trainer.train("dummy_dataset", steps=10)
+
+                assert math.isfinite(run.final_loss), (
+                    f"final_loss must be finite, got {run.final_loss!r}"
+                )
+                assert run.final_loss == 0.0
+
+    def test_train_drops_non_finite_loss_history_entries(self, temp_dir):
+        """CORE-B-009: NaN/inf entries in log_history must be dropped, not
+        threaded through into the persisted loss_history."""
+        import math
+
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+            mock_dataset = MagicMock()
+            mock_dataset.__len__ = MagicMock(return_value=10)
+
+            with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+                 patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+                 patch("trl.SFTTrainer") as mock_sft_trainer, \
+                 patch("trl.SFTConfig"):
+                mock_instance = MagicMock()
+                mock_instance.train.return_value = MagicMock(training_loss=0.3)
+                # Mix of finite, NaN, and inf entries.
+                mock_instance.state.log_history = [
+                    {"loss": 1.0},
+                    {"loss": float("nan")},
+                    {"loss": 0.5},
+                    {"loss": float("inf")},
+                    {"loss": 0.3},
+                ]
+                mock_sft_trainer.return_value = mock_instance
+
+                run = trainer.train("dummy_dataset", steps=10)
+
+                assert all(math.isfinite(x) for x in run.loss_history), (
+                    f"loss_history must contain only finite floats, got "
+                    f"{run.loss_history!r}"
+                )
+                # Only the three finite entries survive, in order.
+                assert run.loss_history == [1.0, 0.5, 0.3]
+
 
 class TestLoadModelFunction:
     """Tests for load_model() convenience function."""

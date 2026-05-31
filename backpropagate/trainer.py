@@ -3065,15 +3065,57 @@ class Trainer:
             # Validate training result
             if not hasattr(result, 'training_loss'):
                 logger.warning("Training result missing 'training_loss' attribute - using 0.0")
-            final_loss = getattr(result, 'training_loss', 0.0)
 
-            # Extract loss history from logs
+            # Stage C amend CORE-B-009: coerce loss values to finite floats
+            # before persisting. HF's ``training_loss`` is normally a float,
+            # but a degenerate run can surface None (no logged steps) or a
+            # non-finite value (NaN/inf on divergence / fp16 overflow).
+            # Persisting NaN/inf into ``final_loss`` / ``loss_history``
+            # poisons downstream JSON (json.dump emits non-spec ``NaN``),
+            # best-checkpoint comparisons (NaN compares false against
+            # everything), and the run-history record. Coerce to a finite
+            # float, defaulting non-finite/non-numeric to 0.0 with a warn.
+            import math
+
+            def _finite_loss(value: Any, *, context: str) -> float:
+                try:
+                    f = float(value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Non-numeric %s (%r); recording 0.0 instead.",
+                        context,
+                        value,
+                    )
+                    return 0.0
+                if not math.isfinite(f):
+                    logger.warning(
+                        "Non-finite %s (%r); recording 0.0 instead "
+                        "(training may have diverged — check learning rate / "
+                        "fp16 overflow).",
+                        context,
+                        f,
+                    )
+                    return 0.0
+                return f
+
+            final_loss = _finite_loss(
+                getattr(result, 'training_loss', 0.0),
+                context="final training_loss",
+            )
+
+            # Extract loss history from logs. Drop non-finite / non-numeric
+            # entries rather than threading NaN through the persisted history.
             loss_history = []
             if hasattr(self._trainer, 'state') and self._trainer.state.log_history:
-                loss_history = [
-                    log.get('loss', 0) for log in self._trainer.state.log_history
-                    if 'loss' in log
-                ]
+                for log in self._trainer.state.log_history:
+                    if 'loss' not in log:
+                        continue
+                    try:
+                        f = float(log.get('loss', 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(f):
+                        loss_history.append(f)
 
             run = TrainingRun(
                 run_id=run_id,

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backpropagate.exceptions import BackpropagateError
 from backpropagate.gpu_safety import GPUCondition, GPUStatus
 from backpropagate.multi_run import (
     MergeMode,
@@ -1114,6 +1115,96 @@ class TestMultiRunTrainerCheckpointLoading:
         # Verify state_dict was retrieved for manual update
         mock_model.state_dict.assert_called_once()
 
+    def test_load_lora_state_dict_fallback_zero_matches_raises(self):
+        """CORE-B-001: manual fallback raises when ZERO keys match.
+
+        On PEFT-version skew / key-namespace divergence, none of the
+        accumulator's keys line up with the live model. Pre-fix the
+        ``if name in model_state`` guard silently skipped every key — the
+        SLAO accumulator was discarded while logs reported success. The
+        write side must now fail loud like the read-side invariant check.
+        """
+        import torch
+
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict  # Force the manual fallback
+
+        # Live model uses a DIFFERENT key namespace than the accumulator.
+        mock_model.state_dict.return_value = {
+            "base_model.foo.weight": torch.tensor([0.0]),
+            "base_model.bar.weight": torch.tensor([0.0]),
+        }
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        # Accumulator keys that match NOTHING in the model above.
+        orphan_state = {
+            "lora_A.weight": torch.tensor([1.0]),
+            "lora_B.weight": torch.tensor([2.0]),
+        }
+
+        with pytest.raises(BackpropagateError) as exc_info:
+            trainer._load_lora_state_dict(orphan_state)
+
+        assert exc_info.value.code == "PEFT_API_INCOMPATIBLE"
+        assert exc_info.value.details["matched_keys"] == 0
+        assert exc_info.value.details["accumulator_keys"] == 2
+
+    def test_load_lora_state_dict_fallback_partial_match_ok(self):
+        """CORE-B-001: a partial match (>=1 key) is NOT treated as failure.
+
+        Guard against over-eager raising: as long as at least one key
+        applied, the merge is considered to have landed (matches the
+        prior best-effort copy semantics — we only fail on total mismatch).
+        """
+        import torch
+
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict
+
+        mock_model.state_dict.return_value = {
+            "lora_A.weight": torch.tensor([0.0]),
+            "base_model.other.weight": torch.tensor([0.0]),
+        }
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        # One key matches (lora_A.weight), one does not (lora_B.weight).
+        partial_state = {
+            "lora_A.weight": torch.tensor([1.0]),
+            "lora_B.weight": torch.tensor([2.0]),
+        }
+
+        # Must not raise.
+        trainer._load_lora_state_dict(partial_state)
+
+    def test_load_lora_state_dict_empty_state_does_not_raise(self):
+        """CORE-B-001: an empty accumulator is a no-op, not a failure.
+
+        ``matched == 0`` only raises when there WAS something to load
+        (``state_dict`` truthy). An empty dict legitimately applies
+        nothing and must not be misclassified as a key mismatch.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict
+        mock_model.state_dict.return_value = {}
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        trainer._load_lora_state_dict({})  # must not raise
+
     def test_prepare_for_next_run_slao_mode(self):
         """_prepare_for_next_run should load SLAO weights in SLAO mode."""
         trainer = MultiRunTrainer(
@@ -2200,6 +2291,76 @@ class TestCheckpointManagerIntegrationConfig:
         assert trainer._checkpoint_manager is None
 
 
+class TestRunHistoryCompletionRepair:
+    """CORE-B-003: a successful session must end up status='completed'
+    even when ``record_run_completed`` raises.
+
+    ``record_run_completed`` is the call that rolls the history entry from
+    'running' to 'completed'. If it throws (disk full, lock contention,
+    corrupt history), the prior behavior left the entry stranded as
+    'running' forever — `backprop list-runs` reported a finished session as
+    in-flight, and the liveness guard could even refuse to reuse the slot.
+    The fix forces an independent minimal ``update_run(status='completed')``
+    so the terminal state is recorded regardless.
+    """
+
+    def _drive_one_successful_run(self, trainer, tmp_path):
+        """Drive ``run()`` to its success tail with the heavy interior
+        mocked out — no real GPU, dataset, model load, or SFTTrainer."""
+        run_result = RunResult(
+            run_index=1,
+            steps=10,
+            samples=50,
+            final_loss=0.5,
+            checkpoint_path=str(tmp_path / "run_001"),
+        )
+
+        with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+             patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+             patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+             patch.object(trainer, "_execute_run", return_value=run_result):
+            return trainer.run("dummy_dataset")
+
+    def test_completion_recorded_when_record_run_completed_raises(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=False,
+            pause_on_overheat=False,
+            # SIMPLE skips the SLAO _verify_peft_api startup probe so the
+            # mocked load_model (no real PEFT model) doesn't trip it.
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        # Real history manager so we can inspect the persisted entry, but
+        # force record_run_completed to blow up on the success path.
+        with patch.object(
+            RunHistoryManager,
+            "record_run_completed",
+            side_effect=RuntimeError("simulated disk-full on completion write"),
+        ):
+            result = self._drive_one_successful_run(trainer, tmp_path)
+
+        assert result is not None
+        assert result.aborted is False
+
+        # The independent status flip must have landed: the entry is
+        # 'completed', not stranded as 'running'.
+        history = RunHistoryManager(str(tmp_path))
+        entry = history.get_run(trainer._run_id)
+        assert entry is not None, "run entry must be persisted"
+        assert entry.get("status") == "completed", (
+            "CORE-B-003: even though record_run_completed raised, the "
+            "session succeeded, so the entry must be flipped to "
+            f"'completed' (got {entry.get('status')!r})"
+        )
+
+
 class TestEarlyStoppingConfig:
     """Tests for early stopping configuration."""
 
@@ -2903,6 +3064,110 @@ class TestPauseOnOverheatWiring:
             "pause_on_overheat=False MUST keep the event clear even on "
             "CRITICAL; the operator chose hard-fail-on-overheat semantics."
         )
+
+
+class TestGpuPauseDeadMonitorShortCircuit:
+    """CORE-B-002: the GPU-cooldown pause loop must fail fast when the
+    monitor thread is dead.
+
+    The pause event is ONLY cleared by ``_on_gpu_status``, which runs on
+    the GPU monitor thread. If that thread has died (an unhandled error,
+    a crashed nvidia-smi), the event can never clear — the loop would
+    otherwise block until ``max_pause_seconds`` (default 30 min), or
+    forever if the ceiling is disabled. The fix detects the dead monitor
+    and raises a structured error immediately.
+    """
+
+    def test_pause_loop_raises_when_monitor_thread_dead(self, tmp_path):
+        from backpropagate.gpu_safety import GPUMonitor
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=True,
+            pause_on_overheat=True,
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        # Install a GPU monitor that was NEVER started (so ._thread is None
+        # -> treated as dead) and ARM the pause event, mimicking the state
+        # right after a CRITICAL reading whose monitor then died before it
+        # could clear the event.
+        def _install_dead_monitor():
+            dead = GPUMonitor()
+            assert dead._thread is None  # never started == dead
+            trainer._gpu_monitor = dead
+            trainer._gpu_pause_event.set()
+
+        with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+             patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+             patch.object(trainer, "_start_gpu_monitor", side_effect=_install_dead_monitor), \
+             patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+             patch.object(trainer, "_execute_run") as mock_exec:
+            with pytest.raises(BackpropagateError) as exc_info:
+                trainer.run("dummy_dataset")
+
+        # The run must never have started training — we failed fast in the
+        # pause loop, before _execute_run.
+        mock_exec.assert_not_called()
+        assert exc_info.value.code == "RUNTIME_GPU_TEMPERATURE_CRITICAL"
+        assert exc_info.value.details["monitor_thread_alive"] is False
+
+    def test_pause_loop_proceeds_when_monitor_clears_event(self, tmp_path):
+        """Guard: a LIVE monitor that clears the event lets the loop proceed.
+
+        Ensures the dead-monitor short-circuit doesn't false-positive on a
+        healthy monitor — the loop must exit normally once the event clears.
+        """
+        from backpropagate.gpu_safety import GPUMonitor
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=True,
+            pause_on_overheat=True,
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        run_result = RunResult(
+            run_index=1, steps=10, samples=50, final_loss=0.5,
+            checkpoint_path=str(tmp_path / "run_001"),
+        )
+
+        def _install_live_monitor():
+            live = GPUMonitor()
+            # Start a real (but harmless) monitor thread so is_alive() is True.
+            with patch("backpropagate.gpu_safety.get_gpu_status") as mock_status:
+                mock_status.return_value = GPUStatus(
+                    available=True, device_name="Test GPU", temperature_c=60.0,
+                    vram_total_gb=16.0, vram_used_gb=8.0, vram_percent=50.0,
+                    condition=GPUCondition.SAFE, condition_reason="ok",
+                )
+                live.start()
+            trainer._gpu_monitor = live
+            # Arm then immediately clear: the loop sees the event set on the
+            # first check, then cleared, with a live thread throughout.
+            trainer._gpu_pause_event.set()
+            trainer._gpu_pause_event.clear()
+
+        try:
+            with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+                 patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+                 patch.object(trainer, "_start_gpu_monitor", side_effect=_install_live_monitor), \
+                 patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+                 patch.object(trainer, "_execute_run", return_value=run_result):
+                result = trainer.run("dummy_dataset")
+            assert result is not None
+            assert result.aborted is False
+        finally:
+            if trainer._gpu_monitor is not None:
+                trainer._gpu_monitor.stop()
 
 
 # =============================================================================

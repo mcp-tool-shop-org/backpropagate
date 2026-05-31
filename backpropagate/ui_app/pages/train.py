@@ -398,8 +398,11 @@ def _next_steps_panel() -> rx.Component:
                     variant="ghost",
                     color_scheme="teal",
                     size="2",
+                    # CLIUI-B-001: routes through the same honesty-floor handler
+                    # — surfaces the "use `backprop train`" notice rather than
+                    # faking a new run.
                     on_click=TrainState.start_training,
-                    aria_label="Reset and start another training run with the same config",
+                    aria_label="Start another training run — use the backprop train shell command",
                 ),
                 direction="row",
                 gap="2",
@@ -419,6 +422,47 @@ def _next_steps_panel() -> rx.Component:
             # completes.
             role="region",
             aria_label="Run complete — next steps",
+        ),
+        rx.fragment(),
+    )
+
+
+def _cli_notice() -> rx.Component:
+    """Inline "use the CLI" notice — CLIUI-B-001 (Stage C UI honesty floor).
+
+    Surfaces ``TrainState.cli_notice`` (set when the operator clicks the
+    "coming soon" Start button) as a neutral, NON-error callout pointing at
+    the ``backprop train`` shell command. Wrapped in role=status / aria_live
+    so screen readers announce it on click — mirrors the export-page hub-status
+    accessibility wiring. Renders nothing until the notice is set.
+    """
+    return rx.cond(
+        TrainState.cli_notice != "",
+        rx.box(
+            rx.flex(
+                rx.text(
+                    TrainState.cli_notice,
+                    size="1",
+                    style={
+                        "color": "var(--bp-text-2)",
+                        "font_size": "12px",
+                        "flex_grow": "1",
+                    },
+                ),
+                direction="row",
+                align="center",
+                gap="2",
+                padding="3",
+                style={
+                    "background": "var(--bp-surface-2)",
+                    "border": "1px solid var(--bp-border)",
+                    "border_radius": "var(--bp-r-2)",
+                },
+            ),
+            role="status",
+            aria_live="polite",
+            aria_atomic="true",
+            margin_top="2",
         ),
         rx.fragment(),
     )
@@ -510,42 +554,37 @@ def train_page() -> rx.Component:
                     _dataset_group(),
                     _advanced_group(),
                     _next_steps_panel(),
+                    # CLIUI-B-001 (Stage C UI honesty floor): UI-driven training
+                    # is not wired yet (the real background-task hookup is the
+                    # feature pass). The Start button is visibly marked
+                    # "coming soon" and clicking it surfaces an inline notice
+                    # pointing at the `backprop train` shell command rather than
+                    # faking a loading spinner / a run that never starts. The
+                    # config form + dataset preview above stay fully functional.
                     rx.flex(
                         rx.button(
-                            rx.cond(
-                                TrainState.run_state == "loading",
-                                rx.spinner(size="2"),
-                                rx.fragment(),
-                            ),
-                            rx.cond(
-                                TrainState.run_state == "loading",
-                                rx.text("Starting…"),
-                                rx.text("Start training"),
+                            rx.text("Start training"),
+                            rx.badge(
+                                "coming soon",
+                                color_scheme="gray",
+                                variant="soft",
+                                size="1",
                             ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
-                            # FRONTEND-B-003: disable while a run is in flight so
-                            # double-clicks don't queue duplicate trainer jobs.
-                            disabled=(TrainState.run_state == "loading")
-                            | (TrainState.run_state == "active"),
                             on_click=TrainState.start_training,
-                        ),
-                        rx.button(
-                            "Stop",
-                            variant="soft",
-                            color_scheme="gray",
-                            size="3",
-                            # Stop is meaningless when nothing is running.
-                            disabled=(TrainState.run_state == "idle")
-                            | (TrainState.run_state == "done")
-                            | (TrainState.run_state == "error"),
-                            on_click=TrainState.stop_training,
+                            aria_label=(
+                                "Start training — web-UI training ships in a "
+                                "future release; use the backprop train shell "
+                                "command for now"
+                            ),
                         ),
                         gap="3",
                         margin_top="2",
                         align="center",
                     ),
+                    _cli_notice(),
                     direction="column",
                     gap="4",
                     padding="6",

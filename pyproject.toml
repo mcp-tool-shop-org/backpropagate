@@ -44,9 +44,22 @@ classifiers = [
 ]
 
 # Core dependencies - minimal for basic functionality
+#
+# Upper caps on torch + transformers (CIDOCS-B-103): pin BELOW the next major
+# so an unscheduled resolve onto it can't silently break installs — the cap
+# moves deliberately alongside the matching compat work, never on the resolver's
+# own initiative.
+#   - transformers `<6`: the 4.x→5.x bump (deprecates `torch_dtype=` → `dtype=`,
+#     reshapes the Trainer API used in trainer.py / datasets.py) is tracked as a
+#     v1.5 dep-sweep item; `<6` admits the in-flight 5.x line while holding the
+#     6.0 major until that next migration is scoped + smoke-tested. (The 5.0.0rc
+#     Trainer-ACE fix is deferred on this same compat work — CHANGELOG "Security".)
+#   - torch `<3`: same major-version risk class for the SFT/PEFT stack; holds the
+#     tested 2.x line (CI matrix + the RTX-5080 dev rig run 2.10.x) until a 3.x
+#     smoke cell exists.
 dependencies = [
-    "torch>=2.0.0",
-    "transformers>=4.36.0",
+    "torch>=2.0.0,<3",
+    "transformers>=4.36.0,<6",
     "datasets>=2.14.0",
     "trl>=0.7.0",
     "peft>=0.7.0",
@@ -114,7 +127,11 @@ dev = [
     # Security scanning tools
     "bandit>=1.7.0",           # Security linter
     "pip-audit>=2.7.0",        # Dependency vulnerability scanner
-    "safety>=2.3.0",           # Dependency security checker
+    # `safety` removed (CIDOCS-B-105): it was invoked by no workflow, script, or
+    # pre-commit hook — pure dead weight. pip-audit (above) already covers
+    # dependency-vuln scanning across CI + scripts/preflight.sh; `safety`'s
+    # added value (license checks) is not part of any gate. Re-add deliberately
+    # if a license-scan gate is ever wired.
     "packaging>=21.0",         # Version parsing for security checks
     "httpx>=0.27.0",           # ASGI test client (auth middleware tests)
 ]

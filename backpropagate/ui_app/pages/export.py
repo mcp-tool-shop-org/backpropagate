@@ -470,6 +470,45 @@ def _hub_group() -> rx.Component:
     )
 
 
+def _cli_notice() -> rx.Component:
+    """Inline "use the CLI" notice — CLIUI-B-001 (Stage C UI honesty floor).
+
+    Surfaces ``ExportState.cli_notice`` (set on the "coming soon" Export
+    click) as a neutral, NON-error callout pointing at `backprop export`.
+    Renders nothing until the notice is set.
+    """
+    return rx.cond(
+        ExportState.cli_notice != "",
+        rx.box(
+            rx.flex(
+                rx.text(
+                    ExportState.cli_notice,
+                    size="1",
+                    style={
+                        "color": "var(--bp-text-2)",
+                        "font_size": "12px",
+                        "flex_grow": "1",
+                    },
+                ),
+                direction="row",
+                align="center",
+                gap="2",
+                padding="3",
+                style={
+                    "background": "var(--bp-surface-2)",
+                    "border": "1px solid var(--bp-border)",
+                    "border_radius": "var(--bp-r-2)",
+                },
+            ),
+            role="status",
+            aria_live="polite",
+            aria_atomic="true",
+            margin_top="2",
+        ),
+        rx.fragment(),
+    )
+
+
 def _output_group() -> rx.Component:
     """Output path + (FRONTEND-9 Wave 6b) empty-state guidance.
 
@@ -545,30 +584,36 @@ def export_page() -> rx.Component:
                     _ollama_group(),
                     _hub_group(),
                     _output_group(),
+                    # CLIUI-B-001 (Stage C UI honesty floor): the LOCAL
+                    # export-to-disk path is not wired from the UI yet, so the
+                    # Export button is marked "coming soon" and clicking it
+                    # surfaces an inline notice pointing at `backprop export`.
+                    # The HuggingFace Hub push above (_hub_group) is a SEPARATE,
+                    # fully-wired handler and is unaffected.
                     rx.flex(
                         rx.button(
-                            rx.cond(
-                                ExportState.export_state == "loading",
-                                rx.spinner(size="2"),
-                                rx.fragment(),
-                            ),
-                            rx.cond(
-                                ExportState.export_state == "loading",
-                                rx.text("Exporting…"),
-                                rx.text("Export"),
+                            rx.text("Export"),
+                            rx.badge(
+                                "coming soon",
+                                color_scheme="gray",
+                                variant="soft",
+                                size="1",
                             ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
-                            # FRONTEND-B-003: disable while an export is in flight.
-                            disabled=(ExportState.export_state == "loading")
-                            | (ExportState.export_state == "active"),
                             on_click=ExportState.start_export,
+                            aria_label=(
+                                "Export — web-UI export ships in a future "
+                                "release; use the backprop export shell command "
+                                "for now"
+                            ),
                         ),
                         gap="3",
                         margin_top="2",
                         align="center",
                     ),
+                    _cli_notice(),
                     direction="column",
                     gap="4",
                     padding="6",

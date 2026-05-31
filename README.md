@@ -154,7 +154,7 @@ pipx install "backpropagate[ui]"
 backprop ui --port 7862
 ```
 
-A local web interface opens at `http://localhost:7862` where you can point at a dataset, pick a model, train, and export. The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+A local web interface opens at `http://localhost:7862` for browsing datasets, validating formats, and assembling a training config visually. Training itself runs via `backprop train` (UI-driven training is on the roadmap — the Start button currently surfaces that note). The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Multi-run training
 
@@ -224,7 +224,9 @@ The Reflex web interface is opt-in — install with `pipx install "backpropagate
 backprop ui --port 7862
 ```
 
-The UI runs locally on `http://localhost:7862`. To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
+The UI runs locally on `http://localhost:7862`. Today it covers the **browse / validate / configure** half of the workflow — point it at a dataset, check the auto-detected format and stats, pick a model, and assemble a run config. **Launching the run is done from the CLI** (`backprop train` / `backprop multi-run`); the in-UI Start button surfaces a note pointing there. UI-driven training is a planned follow-up — until then the UI is the on-ramp and the CLI is the trigger.
+
+To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
 
 ```bash
 backprop ui --share --auth alice:hunter2

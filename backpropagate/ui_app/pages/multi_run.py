@@ -286,6 +286,45 @@ def _runs_table() -> rx.Component:
     )
 
 
+def _cli_notice() -> rx.Component:
+    """Inline "use the CLI" notice — CLIUI-B-001 (Stage C UI honesty floor).
+
+    Surfaces ``MultiRunState.cli_notice`` (set on the "coming soon" Start
+    click) as a neutral, NON-error callout pointing at `backprop multi-run`.
+    Renders nothing until the notice is set.
+    """
+    return rx.cond(
+        MultiRunState.cli_notice != "",
+        rx.box(
+            rx.flex(
+                rx.text(
+                    MultiRunState.cli_notice,
+                    size="1",
+                    style={
+                        "color": "var(--bp-text-2)",
+                        "font_size": "12px",
+                        "flex_grow": "1",
+                    },
+                ),
+                direction="row",
+                align="center",
+                gap="2",
+                padding="3",
+                style={
+                    "background": "var(--bp-surface-2)",
+                    "border": "1px solid var(--bp-border)",
+                    "border_radius": "var(--bp-r-2)",
+                },
+            ),
+            role="status",
+            aria_live="polite",
+            aria_atomic="true",
+            margin_top="2",
+        ),
+        rx.fragment(),
+    )
+
+
 def _cross_run_group() -> rx.Component:
     return Group(
         rx.text(
@@ -321,30 +360,34 @@ def multi_run_page() -> rx.Component:
                     _sweep_shape_group(),
                     _runs_table(),
                     _cross_run_group(),
+                    # CLIUI-B-001 (Stage C UI honesty floor): UI-driven sweeps
+                    # are not wired yet. The Start button is marked "coming
+                    # soon" and clicking it surfaces an inline notice pointing
+                    # at `backprop multi-run` rather than faking a spinner.
                     rx.flex(
                         rx.button(
-                            rx.cond(
-                                MultiRunState.run_state == "loading",
-                                rx.spinner(size="2"),
-                                rx.fragment(),
-                            ),
-                            rx.cond(
-                                MultiRunState.run_state == "loading",
-                                rx.text("Starting…"),
-                                rx.text("Start multi-run"),
+                            rx.text("Start multi-run"),
+                            rx.badge(
+                                "coming soon",
+                                color_scheme="gray",
+                                variant="soft",
+                                size="1",
                             ),
                             variant="solid",
                             color_scheme="teal",
                             size="3",
-                            # FRONTEND-B-003: disable while a sweep is in flight.
-                            disabled=(MultiRunState.run_state == "loading")
-                            | (MultiRunState.run_state == "active"),
                             on_click=MultiRunState.start_multi_run,
+                            aria_label=(
+                                "Start multi-run — web-UI sweeps ship in a "
+                                "future release; use the backprop multi-run "
+                                "shell command for now"
+                            ),
                         ),
                         gap="3",
                         margin_top="2",
                         align="center",
                     ),
+                    _cli_notice(),
                     direction="column",
                     gap="4",
                     padding="6",

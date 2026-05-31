@@ -24,18 +24,21 @@
 #   5. Build                     — python -m build
 #   6. Twine + PKG-INFO smoke    — twine check + PKG-INFO grep
 #   7. Bandit gating run         — bandit -l -i (LOW/LOW floor)
+#  7b. pip-audit (advisory)      — dependency-vuln report (never blocks)
 #   8. CITATION.cff version sync — pyproject.toml ↔ CITATION.cff
 #   9. Workflow severity-claim   — drift gate Class 5 (re-asserted)
 #
 # Stages 1-6 mirror verify.sh + the ci.yml build job. Stages 7-9 add
 # the gates that live outside verify.sh — Bandit (in ci.yml security
 # scan) + the version-sync check that release.yml performs at tag time.
+# Stage 7b mirrors ci.yml's pip-audit ADVISORY step (informational; the
+# CRITICAL floor + triaged-accept ACK stay CI-side).
 #
 # Usage
 # -----
 #   scripts/preflight.sh           # run every gate
-#   scripts/preflight.sh --quick   # skip the slow gates (mypy + bandit)
-#                                  # for the fast inner-loop pre-commit
+#   scripts/preflight.sh --quick   # skip the slow gates (mypy + bandit +
+#                                  # pip-audit) for the fast inner-loop pre-commit
 #   scripts/preflight.sh --help
 #
 # Exit codes
@@ -169,6 +172,35 @@ else
   # Match the ci.yml ``-l -i`` flag set so local + CI semantics agree.
   # The doc-lie fixed in V1_4_BRIEF item 4 — those flags ARE LOW/LOW.
   run_gate "Bandit (LOW/LOW gating)" bandit -r backpropagate/ -c pyproject.toml -l -i -f txt
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 7b: pip-audit dependency-vuln scan (ADVISORY — skippable in --quick)
+# ---------------------------------------------------------------------------
+# CIDOCS-B-106 — local preflight ran no dep-vuln scan, so a maintainer running
+# the "would CI pass?" command never saw the dependency advisories CI's
+# pip-audit job surfaces. This mirrors ci.yml's pip-audit ADVISORY step: it
+# reports every known vuln (fixed + unfixed) for human review but never blocks
+# (the real CI floor is CRITICAL-only + the triaged-accept ACK; gating locally
+# on the documented transitive baseline would just be noise). Informational by
+# design — OVERALL_RC is untouched.
+if [ "${QUICK}" = "1" ]; then
+  echo ""
+  echo "=== pip-audit (advisory) ==="
+  echo "  - skipped (--quick)"
+else
+  echo ""
+  echo "=== pip-audit (advisory — dependency vulnerabilities) ==="
+  if command -v pip-audit >/dev/null 2>&1; then
+    # `|| true`: advisory only — a found vuln must not fail preflight (matches
+    # the ci.yml advisory step). The CRITICAL floor + the CIDOCS-B-101
+    # triaged-accept ACK live in CI; this surfaces the same list locally.
+    pip-audit --desc on || true
+    echo "  - advisory only (does not affect preflight exit code); see ci.yml"
+    echo "    pip-audit job for the CRITICAL gate + the triaged-accept set."
+  else
+    echo "  - pip-audit not installed; run 'pip install -e \".[dev]\"' to enable" >&2
+  fi
 fi
 
 # ---------------------------------------------------------------------------

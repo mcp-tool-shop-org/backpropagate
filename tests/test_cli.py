@@ -2518,3 +2518,61 @@ class TestCmdResume:
         # Trainer.train called with resume_from=sres.
         train_kwargs = fake_trainer.train.call_args.kwargs
         assert train_kwargs.get("resume_from") == "sres"
+
+
+class TestDeprecationMarkerLifecycle:
+    """CLIUI-B-007: the deprecation-removal version must stay ahead of shipped.
+
+    ``backpropagate.__init__._REMOVED_IN_VERSION`` is the version named in the
+    DeprecationWarning + ImportError raised when a caller touches a removed
+    Gradio-era attribute (``launch`` / ``create_backpropagate_theme`` / …). It
+    promises "this still works as ImportError until <version>, then becomes a
+    hard AttributeError." That promise silently goes stale if the marker names
+    a version that has already shipped — which is EXACTLY what happened at
+    v1.4.0 (the marker still said ``v1.4`` per the CLI-A-005 note before it was
+    bumped to ``v1.5``). This tripwire fails the moment ``_REMOVED_IN_VERSION``
+    is <= ``__version__`` so the bump can't be forgotten across a release.
+    """
+
+    def test_removed_in_version_is_strictly_ahead_of_current(self):
+        from packaging.version import Version
+
+        import backpropagate
+        from backpropagate import __version__
+
+        removed_in = backpropagate._REMOVED_IN_VERSION
+        # Markers are written with a leading "v" (e.g. "v1.5"); __version__ is
+        # bare PEP 440 (e.g. "1.4.0"). Normalise before comparing.
+        removed_v = Version(removed_in.lstrip("vV"))
+        current_v = Version(__version__)
+
+        assert removed_v > current_v, (
+            f"_REMOVED_IN_VERSION={removed_in!r} is not strictly ahead of the "
+            f"shipped __version__={__version__!r}. The deprecation shim "
+            f"promises callers it stays ImportError until {removed_in}, then "
+            f"becomes a hard AttributeError — but that version has already "
+            f"shipped (or IS the current release), so the promise is stale. "
+            f"Bump _REMOVED_IN_VERSION in backpropagate/__init__.py to the "
+            f"next planned removal release, and flip __getattr__ to raise "
+            f"AttributeError at the cut."
+        )
+
+    def test_removed_in_version_is_parseable_and_prefixed(self):
+        """The marker stays in the documented ``vMAJOR.MINOR`` shape.
+
+        Guards the comparison above: a malformed marker (e.g. a bare int or a
+        typo) would make the Version() parse throw or silently mis-order. Pin
+        the leading-``v`` convention the __init__ comments document.
+        """
+        from packaging.version import Version
+
+        import backpropagate
+
+        removed_in = backpropagate._REMOVED_IN_VERSION
+        assert isinstance(removed_in, str)
+        assert removed_in[:1] in ("v", "V"), (
+            f"_REMOVED_IN_VERSION={removed_in!r} should keep the documented "
+            f"leading 'v' (e.g. 'v1.5') for consistency with the warning text."
+        )
+        # Must parse cleanly as a PEP 440 version once the prefix is stripped.
+        Version(removed_in.lstrip("vV"))

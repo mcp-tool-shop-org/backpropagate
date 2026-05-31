@@ -386,6 +386,56 @@ jobs:
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
 
+      # CIDOCS-B-101 — triaged HIGH/MED advisories: decision-on-record, not a
+      # silent gap.
+      #
+      # The CRITICAL-only gate below is intentionally narrow (false-positive
+      # flood from the v1.1.x rollback). That left three real-but-unfixable
+      # advisories *silently* invisible — reported by the advisory step but
+      # called out nowhere as a conscious accept:
+      #
+      #   - GHSA-7wx4-6vff-v64p (diffusers, trust_remote_code bypass) — HIGH
+      #   - GHSA-98h9-4798-4q5v (diffusers, trust_remote_code bypass) — HIGH
+      #   - GHSA-69w3-r845-3855 (transformers.Trainer, arbitrary code exec) — MED
+      #
+      # Accepted because:
+      #   - diffusers (0.37.1 in uv.lock) is transitive via unsloth and is NOT
+      #     imported by any backpropagate/**/*.py — no reachable codepath into
+      #     the vulnerable remote-code-load functions. The fix (0.38.0) requires
+      #     safetensors>=0.8.0rc0 (a pre-release); per baseline-before-enforce
+      #     we don't enable pre-releases for a security bump. Closes when
+      #     safetensors 0.8.0 GA lands OR unsloth loosens its floor (see
+      #     CHANGELOG "Security" / SECURITY.md).
+      #   - transformers.Trainer ACE is held on the 5.0 major-version-compat
+      #     work the v1.5 dispatch scopes; the rc-only fix is excluded by the
+      #     same pre-release policy.
+      # review-by: 2026-08-31 (re-triage at the v1.5 dep-sweep — drop any ID
+      # whose upstream fix went GA). Adding an ID here REQUIRES a one-line
+      # rationale in the diff.
+      #
+      # Mechanism: pip-audit has no --ignore-unfixed, so a bare hard gate would
+      # re-flood on the documented transitive baseline (.trivyignore). Instead
+      # this step ACKs the three IDs (--ignore-vuln matches GHSA aliases) and
+      # emits a ::warning:: annotation listing whatever non-accepted advisories
+      # remain — so a NEW advisory shows up as a named CI annotation (reviewable)
+      # rather than being lost in the advisory markdown, while the documented
+      # transitive baseline doesn't turn the run red. CRITICAL still hard-fails
+      # in the next step. continue-on-error keeps this informational.
+      - name: pip-audit (triaged-accept ACK + surface any new advisory)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855"
+          # --ignore-vuln matches the primary id OR any alias, so the GHSA form
+          # suppresses the PYSEC/CVE-keyed diffusers + transformers entries.
+          pip-audit \
+            --vulnerability-service osv \
+            --ignore-vuln GHSA-7wx4-6vff-v64p \
+            --ignore-vuln GHSA-98h9-4798-4q5v \
+            --ignore-vuln GHSA-69w3-r845-3855 \
+          && echo "pip-audit (post-accept): no advisories outside the accepted set." \
+          || echo "::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)"
+
       # Gating step (v1.1.2): CRITICAL-only floor. Unfixed transitive
       # CVEs (huggingface-hub → requests → urllib3 etc.) at HIGH and
       # below still surface in the advisory step above for triage but

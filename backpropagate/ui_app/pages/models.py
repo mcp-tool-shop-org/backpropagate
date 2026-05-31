@@ -126,6 +126,12 @@ def _model_row(row) -> rx.Component:
     nuke a 14 GB Llama checkout. The dialog's confirm action calls
     ``ModelsState.delete_model(row["dir_name"])`` — the state validates the
     path lives under the cache root before deleting.
+
+    CLIUI-B-005 (Stage C): the confirm button is disabled while THIS row's
+    delete is in flight (``ModelsState.deleting_dir == row["dir_name"]``) so a
+    double-click can't re-enter ``delete_model`` and surface a spurious
+    "not found" once the first rmtree completes. The state handler carries the
+    same guard, so correctness doesn't depend on the UI debounce alone.
     """
     return rx.grid(
         rx.text(
@@ -180,6 +186,9 @@ def _model_row(row) -> rx.Component:
                             variant="solid",
                             color_scheme="red",
                             size="2",
+                            # CLIUI-B-005: disable while THIS row's delete is in
+                            # flight so a double-click can't re-enter the handler.
+                            disabled=ModelsState.deleting_dir == row["dir_name"],
                             on_click=lambda: ModelsState.delete_model(row["dir_name"]),
                         ),
                     ),

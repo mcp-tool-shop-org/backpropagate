@@ -1158,3 +1158,61 @@ class TestPresetExports:
         assert get_preset is not None
         assert get_recommended_lr is not None
         assert get_recommended_warmup is not None
+
+
+# =============================================================================
+# STAGE C PROACTIVE AMEND — DATA-B-009 (deprecated env-var scan)
+# =============================================================================
+
+
+class TestStageCDeprecatedEnvVarScan:
+    """DATA-B-009: a renamed BACKPROPAGATE_* env var that ``extra="ignore"``
+    would silently drop now produces a WARN naming the replacement."""
+
+    def test_deprecated_env_var_detected(self, monkeypatch):
+        from backpropagate import config
+
+        # Use a known-deprecated name from the map.
+        old = next(iter(config._DEPRECATED_ENV_VARS))
+        monkeypatch.setenv(old, "5")
+        found = config._warn_deprecated_env_vars()
+        assert old in found
+
+    def test_deprecated_env_var_warns_with_replacement(self, monkeypatch, capsys):
+        from backpropagate import config
+
+        old, new = next(iter(config._DEPRECATED_ENV_VARS.items()))
+        monkeypatch.setenv(old, "5")
+        config._warn_deprecated_env_vars()
+        # The project routes warnings through structlog, which renders to
+        # stdout/stderr; assert the deprecated + replacement names surface.
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert old in combined
+        if new:
+            assert new in combined
+
+    def test_clean_env_returns_empty(self, monkeypatch):
+        from backpropagate import config
+
+        for name in config._DEPRECATED_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+        assert config._warn_deprecated_env_vars() == []
+
+    def test_get_settings_runs_scan(self, monkeypatch):
+        from backpropagate import config
+
+        old = next(iter(config._DEPRECATED_ENV_VARS))
+        monkeypatch.setenv(old, "5")
+        config.get_settings.cache_clear()
+        called = {}
+        real = config._warn_deprecated_env_vars
+
+        def spy():
+            called["hit"] = True
+            return real()
+
+        monkeypatch.setattr(config, "_warn_deprecated_env_vars", spy)
+        config.get_settings()
+        assert called.get("hit") is True
+        config.get_settings.cache_clear()

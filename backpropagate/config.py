@@ -47,6 +47,69 @@ def _safe_pkg_version() -> str:
     except PackageNotFoundError:
         return "0.0.0+unknown"
 
+
+# =============================================================================
+# DATA-B-009 — DEPRECATED ENV-VAR SCAN
+# =============================================================================
+# Settings uses ``extra="ignore"`` so an unknown ``BACKPROPAGATE_*`` env var
+# is silently dropped. That is the right default for forward-compat, but it
+# means a RENAMED knob (the operator set the old name they remember) is
+# applied to NOTHING with zero feedback — the run quietly uses the default.
+# We keep a small map of names that were renamed across releases and emit a
+# one-time WARN naming the replacement when the old name is still set in the
+# environment. New renames append here; the map is intentionally tiny.
+#
+# Keys are FULL env-var names (the BACKPROPAGATE_ prefix included). Values are
+# the current name to use instead (or ``None`` when the knob was removed
+# outright with no replacement).
+_DEPRECATED_ENV_VARS: dict[str, str | None] = {
+    # BRIDGE-B-004 (v1.4): the env-var model was renamed
+    # MultiRunConfig -> MultiRunSettings. Its env prefix was historically
+    # written both ways in the wild; the canonical prefix is now
+    # BACKPROPAGATE_MULTIRUN__ (no underscore between MULTI and RUN).
+    "BACKPROPAGATE_MULTI_RUN__NUM_RUNS": "BACKPROPAGATE_MULTIRUN__NUM_RUNS",
+    "BACKPROPAGATE_MULTI_RUN__STEPS_PER_RUN": "BACKPROPAGATE_MULTIRUN__STEPS_PER_RUN",
+    "BACKPROPAGATE_MULTI_RUN__SAMPLES_PER_RUN": "BACKPROPAGATE_MULTIRUN__SAMPLES_PER_RUN",
+}
+
+
+def _warn_deprecated_env_vars() -> list[str]:
+    """Scan ``os.environ`` for known-deprecated BACKPROPAGATE_* names.
+
+    Emits one WARN per deprecated name found that names the replacement (or
+    says the knob was removed). Returns the list of deprecated names that
+    were present, so callers / tests can assert on the scan result without
+    parsing logs. Pure read of the environment — never mutates it.
+    """
+    found: list[str] = []
+    for old_name, new_name in _DEPRECATED_ENV_VARS.items():
+        if old_name in os.environ:
+            found.append(old_name)
+            try:
+                from .logging_config import get_logger as _get_logger
+
+                _logger = _get_logger(__name__)
+            except Exception:  # noqa: BLE001 — logging must never block config
+                import logging as _logging
+
+                _logger = _logging.getLogger(__name__)
+            if new_name:
+                _logger.warning(
+                    "Deprecated environment variable %s is set but no longer "
+                    "read; rename it to %s. The current value is being "
+                    "ignored and the default applies.",
+                    old_name,
+                    new_name,
+                )
+            else:
+                _logger.warning(
+                    "Environment variable %s is set but has been removed and "
+                    "is no longer read; remove it from your environment.",
+                    old_name,
+                )
+    return found
+
+
 __all__ = [
     "Settings",
     "settings",
@@ -847,6 +910,10 @@ def get_settings() -> Settings:
     Uses @lru_cache to avoid re-reading environment/.env on every call.
     Call get_settings.cache_clear() to reload settings.
     """
+    # DATA-B-009: warn once (per cache lifetime) about deprecated env-var
+    # names still set in the environment that ``extra="ignore"`` would
+    # otherwise drop silently.
+    _warn_deprecated_env_vars()
     return Settings()
 
 

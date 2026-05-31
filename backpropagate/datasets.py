@@ -40,6 +40,7 @@ from typing import Any, cast
 
 from .exceptions import (
     BackpropagateError,
+    DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
     InvalidSettingError,
@@ -134,6 +135,31 @@ def _retry_hf_call(
             f"err={type(exc).__name__}: {exc}"
         )
         raise
+
+
+def _dtype_kwarg(dtype: Any) -> dict[str, Any]:
+    """DATA-B-003: build the load-dtype kwarg for ``from_pretrained`` using
+    the name the installed transformers version expects.
+
+    transformers renamed ``torch_dtype`` → ``dtype`` and deprecated the old
+    name (it logs ``"torch_dtype is deprecated! Use dtype instead!"`` on
+    every model load on >= 4.56, and is slated for removal in 5.0+). We pick
+    the modern ``dtype`` key on >= 5.0 and fall back to ``torch_dtype`` on
+    older releases that predate the rename, so the same call site is quiet on
+    both. Detection failures degrade to the legacy key (always accepted —
+    just deprecated — on every version that still ships it).
+    """
+    try:
+        import transformers
+        from packaging import version
+
+        ver = version.parse(transformers.__version__.split("+")[0])
+        if ver >= version.parse("5.0.0"):
+            return {"dtype": dtype}
+    except Exception:  # noqa: BLE001 — never let version detection break load
+        pass  # nosec B110 — fall through to the legacy kwarg key below
+    return {"torch_dtype": dtype}
+
 
 __all__ = [
     # Core classes
@@ -780,8 +806,17 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Missing 'output' field",
         ))
 
-    # Check for empty values
-    if sample.get("instruction", "").strip() == "":
+    # Check for empty values.
+    # DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
+    # pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
+    # the present-but-None value (the "" default only fires for ABSENT keys),
+    # so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
+    # has no attribute 'strip'`` and crashed validation of an otherwise-loadable
+    # dataset. Treat any non-string (None, NaN, numeric) as empty content.
+    def _is_blank(value: Any) -> bool:
+        return not isinstance(value, str) or value.strip() == ""
+
+    if _is_blank(sample.get("instruction")):
         errors.append(ValidationError(
             row_index=row_index,
             field="instruction",
@@ -789,7 +824,7 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Empty instruction",
         ))
 
-    if sample.get("output", "").strip() == "":
+    if _is_blank(sample.get("output")):
         errors.append(ValidationError(
             row_index=row_index,
             field="output",
@@ -1511,11 +1546,14 @@ class PerplexityFilter:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # DATA-B-003: transformers renamed torch_dtype -> dtype (deprecated on
+        # 4.56+, removed on 5.x). Pick the kwarg the installed version wants.
+        _dtype = torch.float16 if self._device == "cuda" else torch.float32
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
-            torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
             _label=f"perplexity_model:{self.model_name}",
+            **_dtype_kwarg(_dtype),
         )
         self._model.to(self._device)
         self._model.eval()
@@ -2175,9 +2213,33 @@ class DatasetLoader:
         return samples
 
     def _load_json(self, path: Path) -> list[dict[Any, Any] | str]:
-        """Load JSON file."""
+        """Load JSON file.
+
+        DATA-B-001: the ``.jsonl`` path (``_load_jsonl``) gives a malformed
+        file the full structured ``DatasetParseError`` treatment; the
+        single-document ``.json`` path used a bare ``json.load`` whose
+        ``JSONDecodeError`` surfaced as an opaque traceback with no recovery
+        hint. Mirror the jsonl contract: catch the decode error, attach the
+        offending byte position via ``line_number``, and point the operator
+        at the common causes (trailing comma, BOM, wrong extension).
+        """
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise DatasetParseError(
+                    f"Failed to parse {path.name} as JSON: {e.msg}",
+                    path=str(path),
+                    line_number=e.lineno,
+                    suggestion=(
+                        "A .json file must be a single valid JSON document "
+                        "(object or array). Common causes: a trailing comma, "
+                        "an unescaped quote, a UTF-8 BOM, or a "
+                        "newline-delimited file saved with a .json extension "
+                        "(rename it .jsonl — DatasetLoader auto-detects the "
+                        "extension). See handbook/troubleshooting.md."
+                    ),
+                ) from e
             if isinstance(data, list):
                 return cast(list[dict[Any, Any] | str], data)
             return [data]
@@ -2191,23 +2253,88 @@ class DatasetLoader:
                 return [s.strip() for s in content.split("\n\n") if s.strip()]
             return [content]
 
+    def _records_from_df(self, df: Any, source_name: str) -> list[dict[Any, Any] | str]:
+        """DATA-B-002: convert a pandas DataFrame to records with NaN coerced
+        to ``None``.
+
+        Pandas represents an empty CSV/parquet cell as the float ``nan``.
+        ``df.to_dict("records")`` then leaves those ``nan`` floats in place,
+        so a downstream ``str(value)`` turns an empty cell into the literal
+        three-character training token ``'nan'``, and a numeric filter (e.g.
+        a min-length check that calls ``len``) raises ``TypeError`` on the
+        float. Replacing NaN with ``None`` before ``to_dict`` yields a clean
+        ``None`` the converters already skip. We also surface a single WARN
+        naming the affected columns + counts so a silently-sparse source is
+        visible (e.g. a header typo that produced an all-empty column).
+        """
+        try:
+            null_counts = df.isna().sum()
+            offenders = {
+                str(col): int(n) for col, n in null_counts.items() if n > 0
+            }
+        except Exception:  # noqa: BLE001 — diagnostics only; never block load
+            offenders = {}
+        if offenders:
+            logger.warning(
+                "%s: %d column(s) contain empty/NaN cells (%s); these become "
+                "None (skipped by the converters), not the literal string "
+                "'nan'. Verify your column headers if this is unexpected.",
+                source_name,
+                len(offenders),
+                ", ".join(f"{c}={n}" for c, n in sorted(offenders.items())),
+            )
+        # Coerce NaN -> None. The naive ``df.where(df.notna(), None)`` does
+        # NOT work on modern pandas (>= 2.x): with the StringDtype/object
+        # columns a read_csv produces, ``where`` re-introduces the float NaN
+        # and the cell survives as ``nan``. Casting to ``object`` first makes
+        # the substitution stick across both string and numeric columns.
+        clean = df.astype(object).where(df.notna(), None)
+        return cast(list[dict[Any, Any] | str], clean.to_dict("records"))
+
     def _load_parquet(self, path: Path) -> list[dict[Any, Any] | str]:
-        """Load Parquet file."""
+        """Load Parquet file.
+
+        DATA-B-006: parquet needs BOTH pandas and a parquet engine
+        (pyarrow). A missing engine doesn't fail at ``import pandas`` — it
+        fails inside ``read_parquet`` with an ``ImportError`` whose message
+        only the well-read recognize. Probe pyarrow explicitly and raise the
+        structured :class:`DatasetError` (with the missing-dep code) so the
+        operator gets a single actionable hint either way.
+        """
         try:
             import pandas as pd
-            df = pd.read_parquet(path)
-            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
-        except ImportError:
-            raise ImportError("pandas and pyarrow required for parquet: pip install pandas pyarrow")
+        except ImportError as e:
+            raise DatasetError(
+                "pandas and pyarrow are required to load parquet files.",
+                suggestion="Install them: pip install pandas pyarrow",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError as e:
+            raise DatasetError(
+                "A parquet engine (pyarrow) is required to load parquet files.",
+                suggestion="Install it: pip install pyarrow",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        df = pd.read_parquet(path)
+        return self._records_from_df(df, path.name)
 
     def _load_csv(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load CSV file."""
         try:
             import pandas as pd
-            df = pd.read_csv(path)
-            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
-        except ImportError:
-            raise ImportError("pandas required for CSV: pip install pandas")
+        except ImportError as e:
+            raise DatasetError(
+                "pandas is required to load CSV files.",
+                suggestion="Install it: pip install pandas",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        df = pd.read_csv(path)
+        return self._records_from_df(df, path.name)
 
     def _validate(self) -> None:
         """Run validation.
@@ -2633,17 +2760,18 @@ class StreamingDatasetLoader:
             _label=f"streaming_load_dataset:{self.source}",
         )
 
-        # Detect format from first sample
-        first_sample = None
+        # DATA-B-010: iterate the streaming dataset exactly ONCE. The prior
+        # two-loop shape (a first loop that `break`s after one sample, then a
+        # second `for sample in dataset`) re-entered ``__iter__`` on an
+        # IterableDataset — which restarts the stream — so row 0 was yielded
+        # twice ([0, 0, 1, 2, ...]). A single loop with a first-iteration
+        # flag detects the format off the first sample without replaying it.
+        first = True
         for sample in dataset:
-            first_sample = sample
-            if self._format == DatasetFormat.UNKNOWN:
-                self._format = detect_format(sample)
-            yield sample
-            break
-
-        # Yield rest of samples
-        for sample in dataset:
+            if first:
+                if self._format == DatasetFormat.UNKNOWN:
+                    self._format = detect_format(sample)
+                first = False
             yield sample
 
     def _stream_local_file(self) -> Iterator[dict[Any, Any] | str]:
@@ -2731,9 +2859,28 @@ class StreamingDatasetLoader:
             )
 
     def _stream_json(self, path: Path) -> Iterator[dict[Any, Any] | str]:
-        """Stream JSON array file."""
+        """Stream JSON array file.
+
+        DATA-B-001: mirror the structured ``DatasetParseError`` that
+        ``_stream_jsonl`` raises on a fully-malformed file. ``json.load`` on
+        a corrupt ``.json`` previously raised a bare ``JSONDecodeError`` mid
+        ``__iter__`` with no recovery hint.
+        """
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise DatasetParseError(
+                    f"Failed to parse {path} as JSON: {e.msg}",
+                    path=str(path),
+                    line_number=e.lineno,
+                    suggestion=(
+                        "A .json file must be a single valid JSON document "
+                        "(object or array). A newline-delimited file saved "
+                        "with a .json extension is the most common cause — "
+                        "rename it .jsonl so it streams line-by-line."
+                    ),
+                ) from e
             if isinstance(data, list):
                 for sample in data:
                     if self._format == DatasetFormat.UNKNOWN:

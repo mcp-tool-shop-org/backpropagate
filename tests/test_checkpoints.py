@@ -1896,6 +1896,74 @@ class TestDiskFullHandling:
         # Original checkpoint data should still be queryable in memory
         assert len(manager.list_checkpoints()) >= 1
 
+    def test_prune_save_failure_triggers_orphan_recovery(
+        self, temp_checkpoint_dir, monkeypatch
+    ):
+        """CORE-B-004: when the post-prune manifest save fails, the
+        orphan-recovery path must reload+drop the deleted entries and
+        re-save so the on-disk manifest does not keep advertising
+        checkpoints whose directories were already removed.
+
+        Pre-fix, prune() deleted the directories, mutated in-memory state,
+        then logged a warning on save failure and returned — leaving the
+        on-disk manifest pointing at now-missing directories (orphan
+        entries a future process would offer as resume/keep candidates,
+        then choke on with a cryptic missing-state_dict error).
+
+        We make ``_save_manifest`` fail exactly ONCE (the post-prune save)
+        and succeed on the recovery re-save, then assert the on-disk
+        manifest no longer lists the pruned checkpoint.
+        """
+        policy = CheckpointPolicy(
+            keep_best_n=1,
+            keep_final=False,
+            keep_run_boundaries=False,
+            max_total=1,
+            auto_prune=False,
+        )
+        manager = CheckpointManager(str(temp_checkpoint_dir), policy)
+
+        # Register three checkpoints; two will be pruned (keep_best_n=1,
+        # max_total=1).
+        for i in range(3):
+            cp = create_dummy_checkpoint(temp_checkpoint_dir, f"cp{i}")
+            manager.register(i, str(cp), validation_loss=0.1 * (i + 1))
+
+        manifest_path = temp_checkpoint_dir / "manifest.json"
+        assert len(json.loads(manifest_path.read_text())["checkpoints"]) == 3
+
+        real_save = manager._save_manifest
+        call_state = {"n": 0}
+
+        def fail_first_then_real():
+            call_state["n"] += 1
+            if call_state["n"] == 1:
+                # The post-prune save fails (simulated transient write error).
+                return False
+            # The recovery re-save (and any later save) succeeds.
+            return real_save()
+
+        monkeypatch.setattr(manager, "_save_manifest", fail_first_then_real)
+
+        pruned = manager.prune()
+
+        # The save was attempted at least twice: the failing post-prune
+        # save + the recovery re-save.
+        assert call_state["n"] >= 2, (
+            "Orphan recovery must re-attempt the manifest save after the "
+            f"first failure (saw {call_state['n']} attempts)"
+        )
+        assert len(pruned) >= 1
+
+        # The on-disk manifest must NOT advertise any checkpoint whose
+        # directory no longer exists — recovery purged the orphans.
+        disk_checkpoints = json.loads(manifest_path.read_text())["checkpoints"]
+        for entry in disk_checkpoints:
+            assert Path(entry["path"]).exists(), (
+                f"On-disk manifest still lists a deleted checkpoint "
+                f"(orphan entry not recovered): {entry['path']}"
+            )
+
     def test_readonly_checkpoint_directory(self, temp_checkpoint_dir):
         """Handle read-only checkpoint directory gracefully."""
         # This test is platform-specific and may not work on Windows

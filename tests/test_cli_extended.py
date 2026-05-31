@@ -802,6 +802,22 @@ class TestCmdUI:
         result.returncode = returncode
         return result
 
+    @pytest.fixture(autouse=True)
+    def _free_ports(self):
+        """CLIUI-B-004: neutralise the port pre-flight for the launch-path
+        tests in this class.
+
+        ``cmd_ui`` now bind-probes ``--port`` and ``--port + 1`` before handing
+        off to the Reflex subprocess (so a busy port surfaces a structured
+        EADDRINUSE error instead of a 30-60s-deferred traceback). The existing
+        happy-path tests assert ``subprocess.run`` is reached; without this
+        fixture they'd flake on any box that happens to have 7860/7862 bound.
+        Force the probe to report "all free" by default; the dedicated
+        port-in-use test overrides it with its own patch.
+        """
+        with patch("backpropagate.cli._find_port_in_use", return_value=None):
+            yield
+
     def test_ui_import_error(self, capsys, monkeypatch):
         """Missing Reflex (no [ui] extra) shows helpful error."""
         import builtins
@@ -1271,6 +1287,142 @@ class TestCmdUI:
             assert result == 0
             mock_run.assert_called_once()
 
+    def test_cmd_ui_port_in_use_refuses_with_structured_error(self, capsys):
+        """CLIUI-B-004: an occupied port → structured EADDRINUSE, not a traceback.
+
+        Before the fix, a port already bound by a previous `backprop ui` (or any
+        other dev server) surfaced only as a bare Reflex traceback + non-zero
+        exit, 30-60s into the launch. The pre-flight now bind-probes --port and
+        --port+1 and raises a structured ``RUNTIME_UI_PORT_IN_USE`` BEFORE any
+        subprocess is spawned. This test forces the probe to report the
+        frontend port busy and pins the raised code + that the subprocess is
+        never launched.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._find_port_in_use", return_value=7860
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=False,
+                auth=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            assert excinfo.value.code == "RUNTIME_UI_PORT_IN_USE"
+            # The message must name the busy port and the --port remedy.
+            assert "7860" in excinfo.value.message
+            assert excinfo.value.suggestion and "--port" in excinfo.value.suggestion
+            # Refuse-to-start: the Reflex subprocess is never spawned.
+            mock_run.assert_not_called()
+
+    def test_cmd_ui_port_in_use_skips_cloudflared_spawn(self, capsys):
+        """CLIUI-B-004: a busy port fails BEFORE cloudflared is spawned.
+
+        The pre-flight sits ahead of the cloudflared spawn so a busy port never
+        leaks a public tunnel. With --share + --auth (which would otherwise
+        spawn cloudflared) and a busy port, _spawn_cloudflared_tunnel must NOT
+        be called.
+        """
+        from backpropagate.cli import cmd_ui
+        from backpropagate.exceptions import BackpropagateError
+
+        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+            "backpropagate.cli._spawn_cloudflared_tunnel"
+        ) as mock_spawn, patch(
+            "backpropagate.cli._find_port_in_use", return_value=7861
+        ):
+            mock_run.return_value = self._mock_subprocess_result(0)
+            args = argparse.Namespace(
+                port=7860,
+                host=None,
+                share=True,
+                auth="alice:secret123",
+                auth_file=None,
+                verbose=False,
+            )
+
+            with pytest.raises(BackpropagateError) as excinfo:
+                cmd_ui(args)
+
+            assert excinfo.value.code == "RUNTIME_UI_PORT_IN_USE"
+            mock_spawn.assert_not_called()
+            mock_run.assert_not_called()
+
+
+class TestFindPortInUse:
+    """CLIUI-B-004: unit tests for the _find_port_in_use bind-probe helper."""
+
+    def test_free_ports_return_none(self):
+        """All-free candidate ports → None (no false positive)."""
+        import socket
+
+        from backpropagate.cli import _find_port_in_use
+
+        # Grab an ephemeral port, learn its number, then release it so the
+        # probe sees it free.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+        assert _find_port_in_use("127.0.0.1", [free_port]) is None
+
+    def test_bound_port_is_detected(self):
+        """A genuinely-bound port is reported back."""
+        import socket
+
+        from backpropagate.cli import _find_port_in_use
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            bound_port = sock.getsockname()[1]
+            # Probe a free port first, then the bound one — confirms the loop
+            # returns the FIRST occupied candidate (here the second slot).
+            assert _find_port_in_use("127.0.0.1", [bound_port]) == bound_port
+        finally:
+            sock.close()
+
+    def test_returns_first_busy_of_pair(self):
+        """With [free, busy] the busy one is returned (frontend free, backend busy)."""
+        import socket
+
+        from backpropagate.cli import _find_port_in_use
+
+        # Reserve a free-then-released port number for the frontend slot.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+
+        busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen(1)
+            busy_port = busy.getsockname()[1]
+            assert _find_port_in_use("127.0.0.1", [free_port, busy_port]) == busy_port
+        finally:
+            busy.close()
+
+    def test_unbindable_host_is_skipped_not_false_positive(self):
+        """A host the kernel won't bind (EADDRNOTAVAIL) is skipped, not flagged.
+
+        Probing an IP that isn't assigned to this machine raises
+        EADDRNOTAVAIL, which is out of scope for a port pre-flight — the
+        helper must return None (let Reflex surface its own error) rather
+        than a false EADDRINUSE.
+        """
+        from backpropagate.cli import _find_port_in_use
+
+        # 192.0.2.0/24 is TEST-NET-1 (RFC 5737) — guaranteed not local.
+        assert _find_port_in_use("192.0.2.1", [54321]) is None
+
 
 # =============================================================================
 # TESTS-A-002 — Cloudflared subprocess shutdown (v1.4 Wave 2 amend)
@@ -1310,6 +1462,15 @@ class TestCloudflaredShutdown:
     is the load-bearing assertion. We also pin a 4th case for the
     .wait() timeout path that escalates to .kill().
     """
+
+    @pytest.fixture(autouse=True)
+    def _free_ports(self):
+        """CLIUI-B-004: neutralise the cmd_ui port pre-flight so these
+        cleanup-contract tests don't flake on a box with 7860/7861 bound.
+        These tests drive cmd_ui through to subprocess.run; the port probe
+        is not their subject."""
+        with patch("backpropagate.cli._find_port_in_use", return_value=None):
+            yield
 
     @staticmethod
     def _mock_cloudflared_proc(wait_raises=None, poll_return=None):
@@ -1534,6 +1695,178 @@ class TestCloudflaredShutdown:
 
 
 # =============================================================================
+# CLIUI-B-008 — cloudflared deadline-aware read (Stage C proactive)
+# =============================================================================
+#
+# The tunnel-URL scrape loop used a bare blocking ``proc.stdout.readline()``
+# and only re-checked the deadline at the TOP of the loop. A cloudflared that
+# was alive but silent (DNS wedged, captive portal swallowing the handshake)
+# parked the call inside readline() forever — the deadline was never reached
+# and ``backprop ui --share`` hung with no output until the operator Ctrl+C'd.
+# The fix moves blocking reads onto a daemon reader thread and pulls lines via
+# ``queue.get(timeout=remaining)`` so the deadline is authoritative regardless
+# of whether cloudflared ever speaks. These tests pin that contract.
+
+
+class TestCloudflaredDeadline:
+    """CLIUI-B-008: the URL-scrape loop honors the deadline even on silence."""
+
+    @staticmethod
+    def _silent_proc(alive: bool = True):
+        """Build a fake Popen whose stdout.readline() blocks until released.
+
+        Models an alive-but-silent cloudflared: ``poll()`` returns None
+        (running) and ``readline()`` parks on an Event that the test releases
+        in teardown, so the reader thread would block indefinitely without the
+        deadline-aware consumer. ``read()``/iteration return nothing.
+        """
+        import threading as _threading
+
+        release = _threading.Event()
+
+        class _BlockingStdout:
+            def readline(self_inner):
+                # Block until the test releases us (simulating no output).
+                # Return "" (EOF) once released so the daemon reader exits
+                # cleanly during teardown rather than leaking.
+                release.wait(timeout=5.0)
+                return ""
+
+            def read(self_inner):
+                return ""
+
+            def __iter__(self_inner):
+                return iter(())
+
+        proc = MagicMock()
+        proc.stdout = _BlockingStdout()
+        proc.poll = MagicMock(return_value=None if alive else 0)
+        proc.returncode = None if alive else 0
+        proc.terminate = MagicMock()
+        proc.kill = MagicMock()
+        proc._release = release  # exposed so the test can unblock the reader
+        return proc
+
+    def test_silent_cloudflared_respects_deadline(self, capsys, monkeypatch):
+        """An alive-but-silent cloudflared returns None at the deadline, not a hang.
+
+        Pre-fix this would block forever in readline(). We set a 1s timeout
+        via the env override and assert the call returns None within a few
+        seconds (generous bound to avoid CI flake) — proving the deadline is
+        enforced rather than gated behind a line that never arrives.
+        """
+        import time as _time
+
+        from backpropagate import cli as cli_module
+
+        # Tight deadline so the test is fast; the helper clamps <=0 to default
+        # but 1 is valid.
+        monkeypatch.setenv("BACKPROPAGATE_CLOUDFLARED_TIMEOUT", "1")
+
+        proc = self._silent_proc(alive=True)
+
+        # shutil.which must find a binary (else the spawn aborts before the
+        # read loop); Popen returns our fake silent process.
+        with patch("shutil.which", return_value="/usr/bin/cloudflared"), patch(
+            "backpropagate.cli.subprocess.Popen", return_value=proc
+        ):
+            start = _time.monotonic()
+            try:
+                result = cli_module._spawn_cloudflared_tunnel(7860)
+            finally:
+                proc._release.set()  # let the daemon reader exit
+            elapsed = _time.monotonic() - start
+
+        # The contract: None (no URL surfaced) — NOT a hang.
+        assert result is None
+        # Bounded: must return near the 1s deadline, well under the 5s readline
+        # cap. A pre-fix blocking readline would sit until proc._release (or
+        # forever in production). Allow generous headroom for slow CI.
+        assert elapsed < 4.5, f"deadline not enforced; took {elapsed:.1f}s"
+        # And it terminated the silent subprocess on the timeout path.
+        proc.terminate.assert_called()
+
+    def test_url_parsed_from_first_line_returns_proc(self, capsys, monkeypatch):
+        """When cloudflared emits the URL promptly, it's parsed and returned.
+
+        Positive-path companion: confirms the queue-backed reader still finds
+        the trycloudflare URL on a normal fast start (the common case) and
+        returns the (proc, url) tuple.
+        """
+        from backpropagate import cli as cli_module
+
+        url = "https://happy-fast-tunnel.trycloudflare.com"
+        lines = iter([f"INF connection registered url={url}\n", ""])  # then EOF
+
+        class _ChattyStdout:
+            def readline(self_inner):
+                return next(lines, "")
+
+            def read(self_inner):
+                return ""
+
+            def __iter__(self_inner):
+                return iter(())
+
+        proc = MagicMock()
+        proc.stdout = _ChattyStdout()
+        proc.poll = MagicMock(return_value=None)
+        proc.returncode = None
+        proc.terminate = MagicMock()
+        proc.kill = MagicMock()
+
+        with patch("shutil.which", return_value="/usr/bin/cloudflared"), patch(
+            "backpropagate.cli.subprocess.Popen", return_value=proc
+        ):
+            result = cli_module._spawn_cloudflared_tunnel(7860)
+
+        assert result is not None
+        returned_proc, returned_url = result
+        assert returned_proc is proc
+        assert returned_url == url
+        # Happy path does NOT terminate — the caller owns the live tunnel.
+        proc.terminate.assert_not_called()
+
+    def test_dead_cloudflared_pre_url_returns_none(self, capsys, monkeypatch):
+        """A cloudflared that exits before any URL → None + tail surfaced.
+
+        Reader hits EOF immediately (process already dead). The consumer's
+        None-sentinel branch fires, surfaces the tail, and returns None.
+        """
+        from backpropagate import cli as cli_module
+
+        # readline returns the error tail then EOF; poll() reports dead.
+        lines = iter(["ERR failed to connect to edge\n", ""])
+
+        class _DeadStdout:
+            def readline(self_inner):
+                return next(lines, "")
+
+            def read(self_inner):
+                return ""
+
+            def __iter__(self_inner):
+                return iter(())
+
+        proc = MagicMock()
+        proc.stdout = _DeadStdout()
+        proc.poll = MagicMock(return_value=1)  # already exited
+        proc.returncode = 1
+        proc.terminate = MagicMock()
+        proc.kill = MagicMock()
+
+        with patch("shutil.which", return_value="/usr/bin/cloudflared"), patch(
+            "backpropagate.cli.subprocess.Popen", return_value=proc
+        ):
+            result = cli_module._spawn_cloudflared_tunnel(7860)
+
+        assert result is None
+        captured = capsys.readouterr()
+        combined = captured.err + captured.out
+        assert "exited before publishing" in combined
+
+
+# =============================================================================
 # TESTS-B-006 — ENFORCEMENT_AVAILABLE flipped path (post-middleware contract)
 # =============================================================================
 #
@@ -1567,6 +1900,13 @@ class TestCmdUiEnforcementFlipped:
         result = MagicMock()
         result.returncode = returncode
         return result
+
+    @pytest.fixture(autouse=True)
+    def _free_ports(self):
+        """CLIUI-B-004: neutralise the cmd_ui port pre-flight so the
+        enforcement-flip proceed-path tests don't flake on 7860/7861."""
+        with patch("backpropagate.cli._find_port_in_use", return_value=None):
+            yield
 
     def test_auth_proceeds_when_enforcement_available(self, monkeypatch):
         """--auth alone proceeds to subprocess launch once the flag flips.

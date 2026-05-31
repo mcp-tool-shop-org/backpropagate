@@ -2808,3 +2808,210 @@ class TestCurriculumClamping:
 
         assert len(chunks) == 1
         assert len(chunks[0]) == 4
+
+
+# =============================================================================
+# STAGE C PROACTIVE AMEND — DATA-B-001/002/003/006/010
+# =============================================================================
+
+class TestStageCJsonParseErrors:
+    """DATA-B-001: malformed .json (load + stream) -> structured
+    DatasetParseError instead of an opaque JSONDecodeError traceback."""
+
+    def test_load_json_malformed_raises_parse_error(self):
+        from backpropagate.exceptions import DatasetParseError
+
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "bad.json"
+            bad.write_text('{"a": 1,}', encoding="utf-8")  # trailing comma
+            # DatasetLoader.__init__ loads eagerly, so the structured error
+            # surfaces at construction time.
+            with pytest.raises(DatasetParseError) as exc:
+                DatasetLoader(str(bad))
+            assert exc.value.code == "INPUT_DATASET_PARSE_FAILED"
+            assert exc.value.suggestion  # actionable hint present
+            assert "bad.json" in str(exc.value)
+
+    def test_load_json_valid_still_loads(self):
+        with tempfile.TemporaryDirectory() as d:
+            ok = Path(d) / "ok.json"
+            ok.write_text(
+                '[{"instruction": "hi", "output": "there"}]', encoding="utf-8"
+            )
+            loader = DatasetLoader(str(ok))
+            loader._load()
+            assert len(loader.samples) == 1
+
+    def test_stream_json_malformed_raises_parse_error(self):
+        from backpropagate.datasets import StreamingDatasetLoader
+        from backpropagate.exceptions import DatasetParseError
+
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "bad.json"
+            bad.write_text('{"a": 1', encoding="utf-8")  # truncated
+            loader = StreamingDatasetLoader(str(bad))
+            with pytest.raises(DatasetParseError) as exc:
+                list(loader)
+            assert exc.value.code == "INPUT_DATASET_PARSE_FAILED"
+
+
+class TestStageCNaNCoercion:
+    """DATA-B-002: empty CSV/parquet cells become None (not the literal
+    string 'nan' / a float NaN), and validation no longer crashes."""
+
+    def _records(self, loader: DatasetLoader) -> list:
+        loader._load()
+        return loader.samples
+
+    def test_csv_empty_cells_coerced_to_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            csvp = Path(d) / "t.csv"
+            csvp.write_text(
+                "instruction,output\nhi there,\n,bye now\n", encoding="utf-8"
+            )
+            recs = self._records(DatasetLoader(str(csvp)))
+            # No literal 'nan' string and no surviving float NaN.
+            assert not any(v == "nan" for r in recs for v in r.values())
+            assert not any(
+                isinstance(v, float) and v != v
+                for r in recs
+                for v in r.values()
+            )
+            # Empty cells are None.
+            assert recs[0]["output"] is None
+            assert recs[1]["instruction"] is None
+
+    def test_csv_with_empty_cell_does_not_crash_validation(self):
+        # Pre-fix this raised AttributeError: 'float'/'NoneType' object has no
+        # attribute 'strip' inside _validate_alpaca during __init__.
+        with tempfile.TemporaryDirectory() as d:
+            csvp = Path(d) / "t.csv"
+            csvp.write_text(
+                "instruction,output\nq,\n,a\ngood q,good a\n", encoding="utf-8"
+            )
+            loader = DatasetLoader(str(csvp))  # __init__ loads + validates
+            assert loader.is_valid is not None  # no crash
+
+    def test_parquet_empty_cells_coerced_to_none(self):
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as d:
+            pqp = Path(d) / "t.parquet"
+            pd.DataFrame(
+                {"instruction": ["a", None], "score": [1.0, None]}
+            ).to_parquet(pqp)
+            recs = self._records(DatasetLoader(str(pqp)))
+            assert not any(
+                isinstance(v, float) and v != v
+                for r in recs
+                for v in r.values()
+            )
+            assert recs[1]["instruction"] is None
+            assert recs[1]["score"] is None
+
+    def test_validate_alpaca_tolerates_none_field(self):
+        # Direct unit test of the hardened validator: a None field is
+        # reported as empty content, not a crash.
+        from backpropagate.datasets import validate_sample
+
+        errors = validate_sample(
+            {"instruction": None, "output": "x"}, 0, DatasetFormat.ALPACA
+        )
+        types = {e.error_type for e in errors}
+        assert "empty_content" in types
+
+
+class TestStageCDtypeKwarg:
+    """DATA-B-003: torch_dtype -> dtype version-aware kwarg selection."""
+
+    def test_dtype_kwarg_modern_transformers(self):
+        from backpropagate.datasets import _dtype_kwarg
+
+        with patch("transformers.__version__", "5.5.0"):
+            kw = _dtype_kwarg("float16")
+        assert kw == {"dtype": "float16"}
+
+    def test_dtype_kwarg_legacy_transformers(self):
+        from backpropagate.datasets import _dtype_kwarg
+
+        with patch("transformers.__version__", "4.40.0"):
+            kw = _dtype_kwarg("float16")
+        assert kw == {"torch_dtype": "float16"}
+
+    def test_dtype_kwarg_detection_failure_falls_back(self):
+        from backpropagate.datasets import _dtype_kwarg
+
+        with patch("transformers.__version__", "not-a-version"):
+            kw = _dtype_kwarg("float16")
+        # Unparseable version -> safe legacy key (accepted on every release
+        # that still ships it).
+        assert kw == {"torch_dtype": "float16"}
+
+
+class TestStageCParquetCsvDeps:
+    """DATA-B-006: missing parquet/csv deps -> structured DatasetError with a
+    catalog code and a pyarrow probe (not a bare ImportError)."""
+
+    def test_parquet_missing_pyarrow_structured_error(self):
+        from backpropagate.exceptions import DatasetError
+
+        loader = DatasetLoader.__new__(DatasetLoader)
+        real_import = __import__
+
+        def fake_import(name, *a, **k):
+            if name == "pyarrow":
+                raise ImportError("no pyarrow")
+            return real_import(name, *a, **k)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with pytest.raises(DatasetError) as exc:
+                loader._load_parquet(Path("x.parquet"))
+        assert exc.value.code == "DEP_DATASET_ENGINE_MISSING"
+        assert "pyarrow" in str(exc.value)
+
+    def test_csv_missing_pandas_structured_error(self):
+        from backpropagate.exceptions import DatasetError
+
+        loader = DatasetLoader.__new__(DatasetLoader)
+        real_import = __import__
+
+        def fake_import(name, *a, **k):
+            if name == "pandas":
+                raise ImportError("no pandas")
+            return real_import(name, *a, **k)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with pytest.raises(DatasetError) as exc:
+                loader._load_csv(Path("x.csv"))
+        assert exc.value.code == "DEP_DATASET_ENGINE_MISSING"
+
+
+class TestStageCStreamHfSingleIteration:
+    """DATA-B-010: _stream_hf_dataset iterates the source exactly once (no
+    duplicated first row from a second __iter__ pass)."""
+
+    def test_stream_hf_no_duplicate_first_row(self):
+        from backpropagate.datasets import StreamingDatasetLoader
+
+        class ReIterable:
+            """Mimics an HF IterableDataset: __iter__ restarts the stream."""
+
+            def __init__(self, data):
+                self.data = data
+
+            def __iter__(self):
+                return iter(self.data)
+
+        rows = [{"text": f"row {i}"} for i in range(4)]
+        loader = StreamingDatasetLoader.__new__(StreamingDatasetLoader)
+        loader.source = "fake/dataset"
+        loader.split = None
+        loader._format = DatasetFormat.UNKNOWN
+        loader._format_explicit = False
+
+        with patch("backpropagate.datasets._retry_hf_call", return_value=ReIterable(rows)):
+            with patch.dict("sys.modules", {"datasets": MagicMock()}):
+                out = list(loader._stream_hf_dataset())
+
+        # Exactly 4 rows, in order, with no duplicate of row 0.
+        assert out == rows

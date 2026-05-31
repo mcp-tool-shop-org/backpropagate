@@ -152,12 +152,22 @@ MultiRunState = [
     "replay_fraction_error",
     "current_run_index",
     "events",
+    # Stage C honesty floor (CLIUI-B-001): the page's live-run consumer (the
+    # training spinner reading run_state) was removed when the stub Start
+    # button became "coming soon". run_state is retained for the deferred
+    # UI-training hookup (CLIUI-B-002, V1_5_BRIEF feature pass), which re-adds
+    # the consumer and closes this loop.
+    "run_state",
 ]
 
 # ExportState — events list populated by the export pipeline; rendered via
-# Reflex foreach that the substring heuristic doesn't see.
+# Reflex foreach that the substring heuristic doesn't see. export_state: same
+# Stage C honesty-floor situation as MultiRunState.run_state above — the page
+# spinner consumer was removed when Export became "coming soon"; export_state
+# returns with the deferred UI-export hookup (CLIUI-B-002, feature pass).
 ExportState = [
     "events",
+    "export_state",
 ]
 
 # DatasetState — upload_count incremented by the upload event handler;

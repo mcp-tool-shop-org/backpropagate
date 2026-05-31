@@ -687,10 +687,35 @@ class GPUMonitor:
         return self._emergency_triggered
 
     def _monitor_loop(self) -> None:
-        """Main monitoring loop (runs in background thread)."""
+        """Main monitoring loop (runs in background thread).
+
+        Stage C amend CORE-B-008: a persistently-failing ``get_gpu_status``
+        (driver crash, nvidia-smi gone, sensor wedged) previously logged a
+        full ``GPU monitor error`` line on EVERY iteration — once per
+        ``check_interval`` for the whole session, flooding logs and burying
+        real signal. We now count consecutive failures: log the first at
+        error level, escalate ONCE at the threshold to make clear that
+        thermal safety is effectively disabled (no fresh readings ->
+        pause/emergency callbacks can never fire), then fall back to debug
+        for the steady-state spam. Any successful poll resets the counter and
+        logs a one-line recovery so the operator sees monitoring came back.
+        """
+        consecutive_failures = 0
+        # After this many back-to-back failures, escalate once: the monitor
+        # has produced no usable reading for ~threshold * check_interval and
+        # cannot enforce any thermal limit.
+        _FAILURE_ESCALATE_AT = 3
         while not self._stop_event.is_set():
             try:
                 status = get_gpu_status(self.device_index, self.config)
+
+                if consecutive_failures > 0:
+                    logger.warning(
+                        "GPU monitor recovered after %d consecutive failed "
+                        "poll(s); thermal safety re-armed.",
+                        consecutive_failures,
+                    )
+                    consecutive_failures = 0
 
                 # Store in history (deque with maxlen handles eviction)
                 self._status_history.append(status)
@@ -707,7 +732,28 @@ class GPUMonitor:
                     self._handle_condition(status)
 
             except Exception as e:
-                logger.error(f"GPU monitor error: {e}")
+                consecutive_failures += 1
+                if consecutive_failures == 1:
+                    logger.error(f"GPU monitor error: {e}")
+                elif consecutive_failures == _FAILURE_ESCALATE_AT:
+                    logger.error(
+                        "GPU monitor has failed %d consecutive polls "
+                        "(latest: %s). Thermal safety is effectively "
+                        "DISABLED — no fresh GPU readings means overheat "
+                        "auto-pause / emergency-abort cannot trigger. "
+                        "Verify the driver / nvidia-smi / pynvml install. "
+                        "Suppressing further per-poll error logs until a "
+                        "reading succeeds.",
+                        consecutive_failures,
+                        e,
+                    )
+                else:
+                    # Steady-state spam suppression: keep a debug breadcrumb
+                    # but stop flooding error logs every check_interval.
+                    logger.debug(
+                        f"GPU monitor still failing "
+                        f"(consecutive={consecutive_failures}): {e}"
+                    )
 
             # Wait for next check (interruptible)
             self._stop_event.wait(self.config.check_interval)

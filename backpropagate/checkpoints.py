@@ -363,7 +363,13 @@ class CheckpointManager:
         )
         try:
             data = {
-                "version": "1.0",
+                # Stage C amend CORE-B-006: source the version from the
+                # single constant instead of a duplicated literal so the
+                # write side can never drift from the read-side check in
+                # _load_manifest (which compares against
+                # CURRENT_MANIFEST_VERSION). Bumping the constant now
+                # propagates to both surfaces automatically.
+                "version": self.CURRENT_MANIFEST_VERSION,
                 "updated": datetime.now().isoformat(),
                 "policy": asdict(self.policy),
                 "checkpoints": [c.to_dict() for c in self._checkpoints],
@@ -724,14 +730,62 @@ class CheckpointManager:
                     if cp not in pruned:
                         pruned.append(cp)
 
+            # Stage C amend CORE-B-004: the directories are already deleted
+            # above. If the manifest save now fails, the on-disk manifest
+            # still advertises the just-deleted checkpoints — orphan entries
+            # that a future process (or a reload) will offer as resume/keep
+            # candidates, then fail with a cryptic "state_dict missing keys"
+            # when it tries to load a directory that isn't there. Recover by
+            # reloading the on-disk manifest, dropping entries whose dirs no
+            # longer exist (the orphans we just created), and re-saving once.
+            # We're already inside the prune lock, so we run the orphan
+            # cleanup inline rather than re-entering via cleanup_orphaned().
+            save_failed = False
             try:
                 if not self._save_manifest():
-                    logger.warning(
-                        "Manifest save failed after pruning — "
-                        "in-memory state may diverge from disk"
-                    )
+                    save_failed = True
             except Exception as e:
+                save_failed = True
                 logger.warning(f"Manifest save error after pruning: {e}")
+
+            if save_failed:
+                logger.warning(
+                    "Manifest save failed after pruning; attempting "
+                    "orphan-entry recovery so the on-disk manifest does not "
+                    "keep advertising the deleted checkpoints."
+                )
+                try:
+                    self._load_manifest()
+                    orphaned = [
+                        cp for cp in self._checkpoints
+                        if not Path(cp.path).exists()
+                    ]
+                    for cp in orphaned:
+                        self._checkpoints.remove(cp)
+                    if not self._save_manifest():
+                        logger.warning(
+                            "Orphan-recovery manifest save also failed — the "
+                            "on-disk manifest may list deleted checkpoints "
+                            "until the next successful save. Run "
+                            "CheckpointManager.cleanup_orphaned() (or any "
+                            "save-triggering op) once write access to "
+                            f"{self._manifest_path!s} is restored to purge "
+                            "them; a resume that selects an orphaned entry "
+                            "fails loud (missing directory) rather than "
+                            "corrupting state."
+                        )
+                    else:
+                        logger.info(
+                            f"Orphan recovery removed {len(orphaned)} stale "
+                            f"manifest entries after the prune save failure."
+                        )
+                except Exception as recover_err:
+                    logger.warning(
+                        f"Orphan-entry recovery after prune save failure "
+                        f"raised: {recover_err}. The on-disk manifest may "
+                        f"list deleted checkpoints until the next successful "
+                        f"save."
+                    )
 
         logger.info(
             f"Pruned {len(pruned)} checkpoints, "

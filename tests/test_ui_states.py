@@ -8,9 +8,9 @@ ZERO regression test coverage. Only ``RunsState`` was covered (by
 
 These four states drive the four primary operator-facing UI surfaces. A
 v1.3.x patch could silently regress any of them: a clamp boundary drift in
-``set_steps``, a path-validation bypass in ``set_dataset_path``, a stub
-event handler that stops firing the loading-state transition, or a setter
-silently swallowing invalid input. CI was silent on all four surfaces.
+``set_steps``, a path-validation bypass in ``set_dataset_path``, a Start
+handler that re-grows a fake loading spinner, or a setter silently
+swallowing invalid input. CI was silent on all four surfaces.
 
 This file establishes the contract for the four state classes:
 
@@ -20,11 +20,14 @@ This file establishes the contract for the four state classes:
    happy-path value (asserts the field updated) and one error-path value
    (asserts the error string is populated AND the field either stays at the
    prior value or is clamped to a documented bound).
-3. **Event-handler stubs** — ``start_training``, ``start_multi_run``,
-   ``start_export``, ``detect_format_stub`` transition the right run-state
-   field and log the documented stub event. These pin the contract that the
-   stubs MUST keep behaving like stubs until Phase 3 hookup lands; a
-   regression that wired a real subprocess call would fail loudly here.
+3. **Start handlers (CLIUI-B-001 UI honesty floor)** — ``start_training``,
+   ``start_multi_run``, ``start_export`` do NOT fake a loading spinner /
+   in-progress run (UI-driven training is not wired yet; the real
+   background-task hookup is CLIUI-B-002, deferred to the feature pass). They
+   stay ``idle`` and surface ``cli_notice`` pointing at the matching
+   ``backprop`` shell command. ``detect_format_stub`` remains a stub. These
+   pin the honesty contract; a regression that re-grew the fake loading
+   spinner — or, worse, wired a real subprocess call here — fails loudly.
 
 All tests are read-only (no actual training, no subprocess, no disk
 writes); they exercise the state class directly via ``rx.State`` instance
@@ -285,36 +288,62 @@ class TestTrainStateSetters:
 
 
 class TestTrainStateEventHandlers:
-    """Exercise the stub event handlers — pin their stub-shape until Phase 3."""
+    """Exercise the Start/Stop event handlers.
 
-    def test_start_training_transitions_to_loading_and_logs(self):
-        """``start_training`` flips run_state to 'loading' + appends one event.
+    CLIUI-B-001 (Stage C UI honesty floor): the Start handlers used to flip
+    ``run_state`` to ``loading`` and append a ``[stub] … clicked`` event,
+    which presented a permanent spinner and the *illusion* of a training run
+    that never actually started. The README advertises UI training, so a
+    fake loading state is a dishonest surface. The handler now stays at
+    ``idle`` (no spinner) and surfaces ``cli_notice`` — an operator-facing
+    "run ``backprop train`` from the shell for now" message. The real
+    background-task hookup (CLIUI-B-002) is deferred to the feature pass.
+    """
 
-        This is the FRONTEND-A-005 stub contract. Phase 3 will replace this
-        with a real subprocess dispatch; until then, the stub must keep
-        firing the state transition so the UI's loading-spinner pattern
-        works in the live preview.
+    def test_start_training_does_not_enter_loading_and_surfaces_cli_notice(self):
+        """``start_training`` stays idle (no fake spinner) + sets ``cli_notice``.
+
+        CLIUI-B-001 honesty floor: clicking Start must NOT latch a permanent
+        loading spinner that implies a live run. It surfaces a notice that
+        points the operator at ``backprop train``.
         """
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
         assert state.run_state == "idle"
+        assert state.cli_notice == ""
         state.start_training()
-        assert state.run_state == "loading"
+        # No fake loading spinner — the state never leaves idle.
+        assert state.run_state == "idle"
+        # The notice names the CLI command so the operator knows where to go.
+        assert state.cli_notice != ""
+        assert "backprop train" in state.cli_notice
+        # One info-level breadcrumb is appended (kept consistent across the
+        # three Start handlers — CLIUI-B-009).
         assert len(state.events) == 1
         assert state.events[0]["level"] == "info"
         assert "training" in state.events[0]["msg"].lower()
+
+    def test_start_training_appends_does_not_overwrite_prior_events(self):
+        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
+        from backpropagate.ui_state import TrainState
+
+        state = TrainState()
+        state.start_training()
+        state.start_training()
+        assert len(state.events) == 2
 
     def test_stop_training_returns_to_idle_from_active_states(self):
         """``stop_training`` returns to 'idle' from loading/active/paused."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
-        state.start_training()
-        assert state.run_state == "loading"
+        # Simulate a future live run reaching an active state (Start no longer
+        # sets loading — CLIUI-B-001). Stop must still wind it back to idle.
+        state.run_state = "active"
         state.stop_training()
         assert state.run_state == "idle"
-        # The stop event was appended after the start event.
+        # The stop event was appended.
         assert any("stopped" in e["msg"].lower() for e in state.events)
 
     def test_stop_training_from_idle_is_noop(self):
@@ -441,18 +470,37 @@ class TestMultiRunStateSetters:
 
 
 class TestMultiRunStateEventHandlers:
-    """Exercise the Multi-Run stub event handler."""
+    """Exercise the Multi-Run Start event handler (CLIUI-B-001 honesty floor)."""
 
-    def test_start_multi_run_transitions_to_loading_and_logs(self):
-        """``start_multi_run`` flips run_state + appends one stub event."""
+    def test_start_multi_run_does_not_enter_loading_and_surfaces_cli_notice(self):
+        """``start_multi_run`` stays idle (no fake spinner) + sets ``cli_notice``.
+
+        CLIUI-B-001: mirrors ``start_training`` — no permanent loading state,
+        an operator-facing notice pointing at ``backprop multi-run``.
+        """
         from backpropagate.ui_state import MultiRunState
 
         state = MultiRunState()
         assert state.run_state == "idle"
+        assert state.cli_notice == ""
         state.start_multi_run()
-        assert state.run_state == "loading"
+        assert state.run_state == "idle"
+        assert state.cli_notice != ""
+        assert "backprop multi-run" in state.cli_notice
+        # CLIUI-B-009: event handling is now consistent with start_training —
+        # append a single info breadcrumb (pre-fix it overwrote the log).
         assert len(state.events) == 1
+        assert state.events[0]["level"] == "info"
         assert "multi-run" in state.events[0]["msg"].lower()
+
+    def test_start_multi_run_appends_does_not_overwrite_prior_events(self):
+        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
+        from backpropagate.ui_state import MultiRunState
+
+        state = MultiRunState()
+        state.start_multi_run()
+        state.start_multi_run()
+        assert len(state.events) == 2
 
 
 # =============================================================================
@@ -597,18 +645,36 @@ class TestExportStateSetters:
 
 
 class TestExportStateEventHandlers:
-    """Exercise the Export stub event handler."""
+    """Exercise the Export Start event handler (CLIUI-B-001 honesty floor)."""
 
-    def test_start_export_transitions_to_loading_and_logs(self):
-        """``start_export`` flips export_state + appends one stub event."""
+    def test_start_export_does_not_enter_loading_and_surfaces_cli_notice(self):
+        """``start_export`` stays idle (no fake spinner) + sets ``cli_notice``.
+
+        CLIUI-B-001: mirrors ``start_training`` — no permanent loading state,
+        an operator-facing notice pointing at ``backprop export``.
+        """
         from backpropagate.ui_state import ExportState
 
         state = ExportState()
         assert state.export_state == "idle"
+        assert state.cli_notice == ""
         state.start_export()
-        assert state.export_state == "loading"
+        assert state.export_state == "idle"
+        assert state.cli_notice != ""
+        assert "backprop export" in state.cli_notice
+        # CLIUI-B-009: consistent append-one-event shape with start_training.
         assert len(state.events) == 1
+        assert state.events[0]["level"] == "info"
         assert "export" in state.events[0]["msg"].lower()
+
+    def test_start_export_appends_does_not_overwrite_prior_events(self):
+        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
+        from backpropagate.ui_state import ExportState
+
+        state = ExportState()
+        state.start_export()
+        state.start_export()
+        assert len(state.events) == 2
 
 
 # =============================================================================
@@ -1765,6 +1831,125 @@ class TestModelsStateDeleteModelHardening:
             "the is_relative_to swap."
         )
         assert state.error == "", f"unexpected error: {state.error!r}"
+
+
+# =============================================================================
+# CLIUI-B-005 (Stage C): delete_model double-click guard. Pre-fix the delete
+# button had no in-flight disable, so a double-click re-entered delete_model;
+# the second invocation found the directory already gone and surfaced a
+# spurious "Model directory not found" error. The handler now carries a
+# per-row in-flight flag (``deleting_dir``) that gates re-entry, mirroring
+# RunDetailState.action_in_flight; the cleared-on-every-exit-path invariant
+# is enforced via try/finally.
+# =============================================================================
+
+
+class TestModelsStateDeleteModelInFlight:
+    """delete_model re-entrancy guard (CLIUI-B-005)."""
+
+    def test_deleting_dir_defaults_empty(self):
+        """``deleting_dir`` defaults to '' (no delete in flight on first render)."""
+        from backpropagate.ui_state import ModelsState
+
+        state = ModelsState()
+        assert hasattr(state, "deleting_dir"), (
+            "CLIUI-B-005 regression: ModelsState is missing the deleting_dir "
+            "field. The per-row delete button has nothing to bind its "
+            "in-flight disable to."
+        )
+        assert state.deleting_dir == ""
+
+    def test_deleting_dir_cleared_after_successful_delete(self, monkeypatch, tmp_path):
+        """After a successful delete the in-flight flag is cleared (try/finally)."""
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        fake_cache = tmp_path / ".cache" / "huggingface" / "hub"
+        fake_cache.mkdir(parents=True)
+        victim = fake_cache / "models--org--model"
+        victim.mkdir()
+        (victim / "blob").write_text("x", encoding="utf-8")
+
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
+
+        state = ModelsState()
+        state.delete_model("models--org--model")
+
+        assert not victim.exists()
+        assert state.deleting_dir == "", (
+            "CLIUI-B-005: deleting_dir must be cleared on the success path so "
+            "the row's delete button re-enables."
+        )
+
+    def test_double_click_does_not_surface_spurious_not_found(self, monkeypatch, tmp_path):
+        """A second delete of the SAME dir while one is in flight must be a
+        no-op, not a 'not found' error.
+
+        Pre-fix the second invocation found the directory already gone and
+        latched ``error`` with a confusing "Model directory not found"
+        message. The re-entrancy guard makes the second call a silent no-op.
+        """
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        fake_cache = tmp_path / ".cache" / "huggingface" / "hub"
+        fake_cache.mkdir(parents=True)
+        victim = fake_cache / "models--org--model"
+        victim.mkdir()
+        (victim / "blob").write_text("x", encoding="utf-8")
+
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
+
+        state = ModelsState()
+        # Simulate the in-flight window of a first click that hasn't finished
+        # (the reload hasn't refreshed the row away yet).
+        state.deleting_dir = "models--org--model"
+        # The directory is already gone (first rmtree completed).
+        import shutil as _shutil
+
+        _shutil.rmtree(victim)
+
+        state.delete_model("models--org--model")
+
+        assert state.error == "", (
+            "CLIUI-B-005: a re-entrant delete of the same dir while one is "
+            f"in flight must be a no-op, not a spurious error; got "
+            f"{state.error!r}."
+        )
+
+    def test_deleting_dir_cleared_when_delete_raises(self, monkeypatch, tmp_path):
+        """If rmtree raises, the finally MUST still clear ``deleting_dir`` so
+        the button doesn't latch disabled forever.
+        """
+        import shutil as _shutil
+        from pathlib import Path as _Path
+
+        from backpropagate.ui_state import ModelsState
+
+        fake_cache = tmp_path / ".cache" / "huggingface" / "hub"
+        fake_cache.mkdir(parents=True)
+        victim = fake_cache / "models--org--model"
+        victim.mkdir()
+
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+
+        def _boom(*_a, **_k):
+            raise OSError("disk on fire")
+
+        monkeypatch.setattr(_shutil, "rmtree", _boom)
+
+        state = ModelsState()
+        state.delete_model("models--org--model")
+
+        assert state.deleting_dir == "", (
+            "CLIUI-B-005: deleting_dir must be cleared on the exception path "
+            "(try/finally) so the delete button re-enables after a failure."
+        )
+        assert state.error, "a delete failure must still surface an operator error"
 
 
 # =============================================================================

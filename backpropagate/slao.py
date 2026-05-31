@@ -512,6 +512,13 @@ class SLAOMerger:
         final_lora = merger.get_merged_lora()
     """
 
+    # Stage C amend CORE-B-006: single source of truth for the on-disk
+    # merge_history.json schema version, referenced by both save() (written
+    # into the file) and load() (compared against the disk value). Previously
+    # save() embedded a "1.0" literal and load() defined a local
+    # _CURRENT_SLAO_SCHEMA = "1.0" — two copies that could silently drift.
+    CURRENT_SLAO_VERSION = "1.0"
+
     def __init__(self, config: SLAOConfig | None = None):
         """
         Initialize the SLAO merger.
@@ -1072,7 +1079,8 @@ class SLAOMerger:
             # could only detect this by diff-ing logs across sessions.
             # The ``version`` field anchors the schema for v1.4 migration.
             history_data = {
-                "version": "1.0",
+                # CORE-B-006: source from the class constant (see load()).
+                "version": self.CURRENT_SLAO_VERSION,
                 "created_at": datetime.now().isoformat(),
                 "run_index": self._run_index,
                 "run_id": run_id,
@@ -1171,12 +1179,40 @@ class SLAOMerger:
         try:
             # Security check for PyTorch version
             check_torch_security()
-            self._merged_state = torch.load(weights_path, weights_only=True)
+            loaded_state = torch.load(weights_path, weights_only=True)
         except Exception as e:
             raise SLAOCheckpointError(
                 "load", str(weights_path),
                 f"Failed to load weights: {e}"
             ) from e
+
+        # Stage C amend CORE-B-007: structural validation. ``torch.load`` of a
+        # corrupt/truncated/wrong-kind file can return a non-dict (e.g. a bare
+        # tensor, a list, or an empty dict) without raising. The merger then
+        # carries garbage as its accumulator and every subsequent merge feeds
+        # the corruption forward — silently. Assert the contract the rest of
+        # SLAOMerger relies on (a dict mapping str -> torch.Tensor with at
+        # least one tensor) and fail loud here, at the load seam, where the
+        # operator can still recover from a prior checkpoint.
+        if not isinstance(loaded_state, dict):
+            raise SLAOCheckpointError(
+                "load", str(weights_path),
+                f"merged_lora.pt did not deserialize to a state dict "
+                f"(got {type(loaded_state).__name__}); the file is corrupt "
+                f"or was not written by SLAOMerger.save(). Re-run from an "
+                f"earlier boundary checkpoint."
+            )
+        tensor_count = sum(
+            1 for v in loaded_state.values() if isinstance(v, torch.Tensor)
+        )
+        if tensor_count == 0:
+            raise SLAOCheckpointError(
+                "load", str(weights_path),
+                f"merged_lora.pt deserialized to a {len(loaded_state)}-entry "
+                f"dict but contains zero tensors; the accumulator is empty or "
+                f"corrupt. Re-run from an earlier boundary checkpoint."
+            )
+        self._merged_state = loaded_state
 
         # Load history
         history_path = load_dir / "merge_history.json"
@@ -1192,12 +1228,13 @@ class SLAOMerger:
                 # a schema mismatch. v1.4 will add a real migrator; v1.3
                 # just fails-loud-but-keeps-going.
                 disk_version = str(history_data.get("version") or "0.0")
-                _CURRENT_SLAO_SCHEMA = "1.0"
-                if disk_version != _CURRENT_SLAO_SCHEMA:
+                # CORE-B-006: compare against the class constant that save()
+                # also writes, so the two surfaces never drift.
+                if disk_version != self.CURRENT_SLAO_VERSION:
                     logger.warning(
                         f"SLAO merge_history.json on disk has "
                         f"version={disk_version!r} but this build expects "
-                        f"{_CURRENT_SLAO_SCHEMA!r}. Missing fields will fall "
+                        f"{self.CURRENT_SLAO_VERSION!r}. Missing fields will fall "
                         f"back to runtime defaults — pass them explicitly on "
                         f"the resumed session to silence this warning and "
                         f"preserve prior merge math."

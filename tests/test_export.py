@@ -1669,3 +1669,203 @@ class TestExportGgufAtomicWrite:
         assert not scratch.exists(), (
             f"Unsloth scratch dir must be cleaned up on failure; still at {scratch}"
         )
+
+
+# =============================================================================
+# STAGE C PROACTIVE AMEND — DATA-B-004/005/007/008
+# =============================================================================
+
+
+class _FakeParam:
+    def __init__(self, n):
+        self._n = n
+
+    def numel(self):
+        return self._n
+
+
+class _FakeModel:
+    """Minimal stand-in exposing parameters() like a torch Module."""
+
+    def __init__(self, n_params):
+        self._params = [_FakeParam(n_params)]
+
+    def parameters(self):
+        return list(self._params)
+
+
+class TestStageCDiskSpaceGuard:
+    """DATA-B-004: pre-flight free-space check before a multi-GB export."""
+
+    def test_estimate_param_count(self):
+        from backpropagate.export import _estimate_param_count
+
+        assert _estimate_param_count(_FakeModel(7_000_000_000)) == 7_000_000_000
+
+    def test_estimate_param_count_non_model_returns_none(self):
+        from backpropagate.export import _estimate_param_count
+
+        class NoParams:
+            pass
+
+        assert _estimate_param_count(NoParams()) is None
+
+    def test_disk_guard_raises_when_short(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import _check_export_disk_space
+
+        # Absurd multiplier forces "insufficient space" regardless of the
+        # real free space on the test volume.
+        with pytest.raises(GGUFExportError) as exc:
+            _check_export_disk_space(
+                Path(temp_dir),
+                _FakeModel(7_000_000_000),
+                error_cls=GGUFExportError,
+                multiplier=1_000_000.0,
+                output_path=str(temp_dir),
+                quantization="q4_k_m",
+            )
+        assert exc.value.code == "RUNTIME_GGUF_EXPORT_FAILED"
+        assert "disk space" in str(exc.value).lower()
+        # Error carries the export-detail kwargs through.
+        assert exc.value.quantization == "q4_k_m"
+
+    def test_disk_guard_merge_error_class(self, temp_dir):
+        from backpropagate.exceptions import MergeExportError
+        from backpropagate.export import _check_export_disk_space
+
+        with pytest.raises(MergeExportError) as exc:
+            _check_export_disk_space(
+                Path(temp_dir),
+                _FakeModel(7_000_000_000),
+                error_cls=MergeExportError,
+                multiplier=1_000_000.0,
+            )
+        assert exc.value.code == "RUNTIME_MERGE_EXPORT_FAILED"
+
+    def test_disk_guard_noop_when_params_unknown(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import _check_export_disk_space
+
+        class NoParams:
+            pass
+
+        # Must NOT raise even with an absurd multiplier — unknown param count
+        # means the guard cannot make a sound estimate, so it stands down.
+        _check_export_disk_space(
+            Path(temp_dir),
+            NoParams(),
+            error_cls=GGUFExportError,
+            multiplier=1_000_000.0,
+        )
+
+    def test_disk_guard_passes_when_space_available(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import _check_export_disk_space
+
+        # 1KB model with default multiplier needs a few KB — always available.
+        _check_export_disk_space(
+            Path(temp_dir),
+            _FakeModel(1_000),
+            error_cls=GGUFExportError,
+        )
+
+
+class TestStageCListOllamaWarns:
+    """DATA-B-005: list_ollama_models WARNs (naming the cause) on a
+    missing CLI / daemon-down / timeout instead of silently returning []."""
+
+    def test_warns_when_cli_missing(self, caplog):
+        import logging
+
+        from backpropagate.export import list_ollama_models
+
+        with patch("shutil.which", return_value=None):
+            with caplog.at_level(logging.WARNING, logger="backpropagate.export"):
+                assert list_ollama_models() == []
+        assert any("not on PATH" in r.message for r in caplog.records)
+
+    def test_warns_on_daemon_error(self, caplog):
+        import logging
+
+        from backpropagate.export import list_ollama_models
+
+        err = subprocess.CalledProcessError(1, "ollama")
+        err.stderr = "connection refused"
+        with patch("shutil.which", return_value="/usr/bin/ollama"), \
+             patch("subprocess.run", side_effect=err):
+            with caplog.at_level(logging.WARNING, logger="backpropagate.export"):
+                assert list_ollama_models() == []
+        joined = " ".join(r.message for r in caplog.records)
+        assert "ollama serve" in joined
+
+    def test_warns_on_timeout(self, caplog):
+        import logging
+
+        from backpropagate.export import list_ollama_models
+
+        with patch("shutil.which", return_value="/usr/bin/ollama"), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired("ollama", 30)):
+            with caplog.at_level(logging.WARNING, logger="backpropagate.export"):
+                assert list_ollama_models() == []
+        assert any("timed out" in r.message for r in caplog.records)
+
+
+class TestStageCHfTokenCap:
+    """DATA-B-007: cached HF token read is size-capped + single-line."""
+
+    def test_oversized_token_file_is_capped(self, temp_dir, monkeypatch):
+        from backpropagate import export
+
+        home = Path(temp_dir)
+        cache = home / ".cache" / "huggingface"
+        cache.mkdir(parents=True)
+        # First line is a valid-looking token; then a huge junk tail.
+        (cache / "token").write_text("hf_realtoken\n" + ("X" * 1_000_000), encoding="utf-8")
+        monkeypatch.setattr(export.Path, "home", staticmethod(lambda: home))
+
+        token = export._resolve_hf_token(None)
+        assert token == "hf_realtoken"  # only the first line, capped read
+
+    def test_no_token_file_returns_none(self, temp_dir, monkeypatch):
+        from backpropagate import export
+
+        monkeypatch.setattr(export.Path, "home", staticmethod(lambda: Path(temp_dir)))
+        # No env token, no cache file.
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+        assert export._resolve_hf_token(None) is None
+
+
+class TestStageCExportProgressLogged:
+    """DATA-B-008: the long GGUF step logs (not just print) so headless runs
+    record that it started."""
+
+    def test_gguf_progress_is_logged(self, temp_dir, caplog):
+        import logging
+
+        from backpropagate import export
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+
+        # save_pretrained_gguf writes a .gguf into the partial dir.
+        def fake_save(partial_dir, tok, quantization_method):
+            p = Path(partial_dir) / "model.gguf"
+            p.write_bytes(b"GGUF" + b"\x00" * 64)
+
+        model.save_pretrained_gguf.side_effect = fake_save
+
+        with patch("backpropagate.export._has_unsloth", return_value=True), \
+             patch("backpropagate.export._is_peft_model", return_value=False), \
+             patch("backpropagate.export._estimate_param_count", return_value=None), \
+             caplog.at_level(logging.INFO, logger="backpropagate.export"):
+            export.export_gguf(
+                model,
+                tokenizer,
+                str(temp_dir),
+                quantization="q4_k_m",
+                emit_model_card=False,
+            )
+
+        assert any("Exporting to GGUF" in r.message for r in caplog.records)

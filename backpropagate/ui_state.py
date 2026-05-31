@@ -61,6 +61,22 @@ _TARGET_MODULES_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_,\s]*$")
 # W&B run name: same shape that wandb itself accepts.
 _WANDB_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
+# CLIUI-B-001 (Stage C UI honesty floor): the Train / Multi-run / Export Start
+# buttons do NOT drive training from the browser yet — the live background-task
+# hookup is CLIUI-B-002, deferred to the feature pass. Rather than fake a
+# loading spinner that implies a run is underway (the pre-fix stub behaviour,
+# which the README's "train from the UI" claim made actively misleading), the
+# Start handlers surface one of these notices pointing the operator at the
+# shell command that DOES work today. The ``{cmd}`` is the relevant subcommand
+# so each surface names its own CLI path.
+_CLI_NOTICE_TEMPLATE = (
+    "Starting a run from the web UI ships in a future release — "
+    "run `{cmd}` from the shell for now."
+)
+_CLI_NOTICE_TRAIN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop train")
+_CLI_NOTICE_MULTI_RUN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop multi-run")
+_CLI_NOTICE_EXPORT = _CLI_NOTICE_TEMPLATE.format(cmd="backprop export")
+
 
 # ---------------------------------------------------------------------------
 # Path validation helper — FRONTEND-A-002 fix
@@ -418,6 +434,13 @@ class TrainState(rx.State):
     vram_used_gb: float = 0.0
     vram_total_gb: float = 0.0
 
+    # CLIUI-B-001 (Stage C UI honesty floor): operator-facing notice surfaced
+    # when the Start button is clicked. UI-driven training is not wired yet
+    # (the real background-task hookup is CLIUI-B-002, deferred to the feature
+    # pass), so instead of faking a loading spinner the handler points the
+    # operator at the shell command that DOES work today. Empty until clicked.
+    cli_notice: str = ""
+
     # Event log — each entry is a dict with keys: t (timestamp str),
     # level (one of info/ok/warn/err/tx/hf), msg (str).
     events: list[dict] = []
@@ -596,20 +619,30 @@ class TrainState(rx.State):
 
     @rx.event
     def start_training(self) -> None:
-        """Stub handler for "Start training" button.
+        """Handle the "Start training" button — honesty floor (CLIUI-B-001).
 
-        Transitions to ``loading`` and APPENDS a placeholder event so the
-        skeleton's side rail visibly responds to the click without erasing
-        prior log lines (FRONTEND-B-LOW-EVENTS-APPEND, Stage C humanization
-        - the previous shape ``self.events = [...]`` overwrote any prior
-        events, which was confusing during repeated stop/start cycles).
-        Phase 3 will replace this with a real ``Trainer.train(...)`` call
-        dispatched to a background task.
+        UI-driven training is NOT wired yet: the real background-task hookup
+        (a single ``Trainer.train(...)`` dispatched via ``@rx.event(
+        background=True)``) is CLIUI-B-002, deferred to the feature pass.
+
+        Pre-fix this stub flipped ``run_state`` to ``loading`` and appended a
+        ``[stub] … clicked`` event — presenting a permanent spinner and the
+        illusion of a live run that never started. Because the README
+        advertises UI training, that fake loading state was an actively
+        misleading surface (the Stage B UI honesty-floor finding). The handler
+        now stays at ``idle`` (no spinner) and surfaces ``cli_notice`` — an
+        operator-facing message pointing at the ``backprop train`` shell
+        command that works today. The breadcrumb is appended (not assigned) so
+        repeated clicks don't erase prior log lines.
         """
-        self.run_state = "loading"
+        self.cli_notice = _CLI_NOTICE_TRAIN
         self.events = [
             *self.events,
-            {"t": "00:00:00", "level": "info", "msg": "[stub] training start clicked"},
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI training not wired yet — use `backprop train`.",
+            },
         ]
 
     @rx.event
@@ -665,6 +698,8 @@ class MultiRunState(rx.State):
     run_state: RunState = "idle"
     current_run_index: int = 0
     runs: list[dict] = []  # per-run summary (loss, step, status)
+    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
+    cli_notice: str = ""
     events: list[dict] = []
 
     # ---- Setters (shared logic with TrainState via _apply_* helpers) -------
@@ -763,10 +798,23 @@ class MultiRunState(rx.State):
 
     @rx.event
     def start_multi_run(self) -> None:
-        """Stub handler for "Start multi-run" button."""
-        self.run_state = "loading"
+        """Handle the "Start multi-run" button — honesty floor (CLIUI-B-001).
+
+        Mirrors ``TrainState.start_training``: no fake loading spinner (the
+        real SLAO-sweep hookup is deferred to the feature pass), an
+        operator-facing ``cli_notice`` pointing at ``backprop multi-run``.
+        CLIUI-B-009: the breadcrumb is now APPENDED (not assigned) so the shape
+        matches ``start_training`` — the pre-fix ``self.events = [...]`` form
+        overwrote any prior log lines.
+        """
+        self.cli_notice = _CLI_NOTICE_MULTI_RUN
         self.events = [
-            {"t": "00:00:00", "level": "info", "msg": "[stub] multi-run start clicked"}
+            *self.events,
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI multi-run not wired yet — use `backprop multi-run`.",
+            },
         ]
 
 
@@ -871,14 +919,31 @@ class ExportState(rx.State):
     # Live state.
     export_state: RunState = "idle"
     output_path: str = ""
+    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
+    cli_notice: str = ""
     events: list[dict] = []
 
     @rx.event
     def start_export(self) -> None:
-        """Stub handler for "Export" button."""
-        self.export_state = "loading"
+        """Handle the "Export" button — honesty floor (CLIUI-B-001).
+
+        Mirrors ``TrainState.start_training``: no fake loading spinner (the
+        real export hookup is deferred to the feature pass), an operator-facing
+        ``cli_notice`` pointing at ``backprop export``. CLIUI-B-009: the
+        breadcrumb is APPENDED (not assigned) to match ``start_training``.
+
+        NOTE: this is the LOCAL export-to-disk path. The HuggingFace Hub push
+        (``push_to_hub`` below) is a SEPARATE, fully-wired handler and is NOT
+        affected by this honesty floor.
+        """
+        self.cli_notice = _CLI_NOTICE_EXPORT
         self.events = [
-            {"t": "00:00:00", "level": "info", "msg": "[stub] export start clicked"}
+            *self.events,
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI export not wired yet — use `backprop export`.",
+            },
         ]
 
     # ---- HuggingFace Hub push setters + handler (FRONTEND-11) --------------
@@ -2483,6 +2548,13 @@ class ModelsState(rx.State):
     loading: bool = False
     error: str = ""
     last_loaded_at: str = ""
+    # CLIUI-B-005 (Stage C): per-row in-flight flag for the delete affordance.
+    # Holds the ``dir_name`` currently being deleted (empty when idle). Drives
+    # the row's ``disabled=`` binding AND gates re-entry inside delete_model so
+    # a double-click can't fire a second rmtree that finds the dir already gone
+    # and surfaces a spurious "not found" error. Mirrors
+    # RunDetailState.action_in_flight.
+    deleting_dir: str = ""
 
     @rx.var
     def cache_dir_display(self) -> str:
@@ -2582,6 +2654,17 @@ class ModelsState(rx.State):
         ``~/.cache/huggingface/hub/`` so a malicious operator-controlled
         ``dir_name`` can't escape the cache via ``..`` traversal.
 
+        CLIUI-B-005 (Stage C) re-entrancy guard: the delete affordance had no
+        in-flight disable, so a double-click re-entered this handler; the
+        second invocation found the directory already gone and surfaced a
+        spurious "Model directory not found" error. The handler now records the
+        in-flight ``dir_name`` in ``self.deleting_dir`` and SHORT-CIRCUITS a
+        re-entrant click for the same target (a no-op, not an error). The flag
+        is cleared via try/finally so a thrown ``OSError`` can't latch the
+        button disabled forever. The page also binds ``disabled`` to this flag,
+        but the handler-level guard makes the behaviour correct even if a
+        rapid double-fire slips past the UI debounce.
+
         UI-A-006 (Wave A2) hardening:
           - Use ``Path.is_relative_to`` for the confinement check instead of
             ``str.startswith``. A string-prefix test treats a SIBLING dir
@@ -2604,7 +2687,15 @@ class ModelsState(rx.State):
         if not dir_name or not dir_name.startswith("models--") or "/" in dir_name or "\\" in dir_name or ".." in dir_name:
             self.error = f"Invalid model directory name: {dir_name!r}"
             return
+        # CLIUI-B-005: short-circuit a re-entrant double-click for the same
+        # target. The first click is still in flight (its reload hasn't yet
+        # refreshed the row away), so a second fire would rmtree an
+        # already-deleted dir and surface a confusing "not found". Treat it as
+        # a silent no-op — the in-flight delete will finish and reload.
+        if self.deleting_dir == dir_name:
+            return
         target = cache_dir / dir_name
+        self.deleting_dir = dir_name
         try:
             # UI-A-006: refuse symlinks BEFORE resolving so a malicious
             # ``models--*`` symlink can't redirect the rmtree outside the
@@ -2633,6 +2724,11 @@ class ModelsState(rx.State):
         except OSError as exc:
             self.error = _redact_action(f"Failed to delete {dir_name}: {exc}")
             return
+        finally:
+            # CLIUI-B-005: clear the in-flight flag on EVERY exit path
+            # (success, validation refusal, or thrown OSError) so the row's
+            # delete button re-enables.
+            self.deleting_dir = ""
         # Reload to reflect the deletion.
         self.load_models()
 

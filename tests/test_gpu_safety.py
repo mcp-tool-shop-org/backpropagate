@@ -817,6 +817,95 @@ class TestGPUSafetyEdgeCases:
             finally:
                 monitor.stop()
 
+    def test_monitor_consecutive_failures_escalate_once(self, caplog):
+        """CORE-B-008: repeated get_gpu_status failures escalate ONCE then
+        stop flooding error logs.
+
+        Pre-fix the loop logged a full 'GPU monitor error' line on EVERY
+        iteration for the whole session. Now: first failure logs at error,
+        the threshold-th failure escalates once with a 'thermal safety
+        disabled' message, and subsequent failures drop to debug. We drive
+        the loop deterministically by setting the stop event from the mock
+        after a fixed number of failed polls (no thread, no timing race).
+        """
+        import logging
+
+        monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.0))
+
+        calls = {"n": 0}
+
+        def fail_then_stop(*args, **kwargs):
+            calls["n"] += 1
+            # Let the loop run 5 failing iterations, then stop it so the
+            # test is deterministic.
+            if calls["n"] >= 5:
+                monitor._stop_event.set()
+            raise RuntimeError(f"sensor failure #{calls['n']}")
+
+        with patch(
+            "backpropagate.gpu_safety.get_gpu_status",
+            side_effect=fail_then_stop,
+        ), caplog.at_level(logging.DEBUG, logger="backpropagate.gpu_safety"):
+            # Run the loop body synchronously in this thread.
+            monitor._monitor_loop()
+
+        # The escalation line must appear exactly once.
+        escalations = [
+            r for r in caplog.records
+            if "Thermal safety is effectively" in r.message
+            or "thermal safety is effectively" in r.message.lower()
+        ]
+        assert len(escalations) == 1, (
+            f"Expected exactly one 'thermal safety disabled' escalation, "
+            f"got {len(escalations)}"
+        )
+        # The escalation must be at ERROR level.
+        assert escalations[0].levelno == logging.ERROR
+
+        # Steady-state failures past the threshold must NOT keep logging at
+        # error — only the first failure + the one escalation are error-level
+        # "GPU monitor" lines; the rest fall to debug.
+        error_monitor_lines = [
+            r for r in caplog.records
+            if r.levelno == logging.ERROR and "GPU monitor" in r.message
+        ]
+        assert len(error_monitor_lines) == 2, (
+            f"Expected exactly 2 error-level monitor lines (first failure + "
+            f"escalation), got {len(error_monitor_lines)}: "
+            f"{[r.message for r in error_monitor_lines]}"
+        )
+
+    def test_monitor_recovers_after_failures_logs_once(self, caplog):
+        """CORE-B-008: a successful poll after failures resets the counter
+        and logs a single recovery line."""
+        import logging
+
+        monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.0))
+
+        calls = {"n": 0}
+        safe_status = GPUStatus(available=True, condition=GPUCondition.SAFE)
+
+        def fail_twice_then_recover_then_stop(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError(f"transient #{calls['n']}")
+            # Third call succeeds; stop the loop right after.
+            monitor._stop_event.set()
+            return safe_status
+
+        with patch(
+            "backpropagate.gpu_safety.get_gpu_status",
+            side_effect=fail_twice_then_recover_then_stop,
+        ), caplog.at_level(logging.DEBUG, logger="backpropagate.gpu_safety"):
+            monitor._monitor_loop()
+
+        recoveries = [
+            r for r in caplog.records if "recovered after" in r.message
+        ]
+        assert len(recoveries) == 1, (
+            f"Expected exactly one recovery line, got {len(recoveries)}"
+        )
+
     def test_concurrent_monitors(self):
         """Should support multiple concurrent monitors."""
         mock_status = GPUStatus(available=True, condition=GPUCondition.SAFE)

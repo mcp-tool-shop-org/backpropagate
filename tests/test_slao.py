@@ -19,6 +19,7 @@ import pytest
 # Import torch conditionally for environments without GPU
 torch = pytest.importorskip("torch")
 
+from backpropagate.exceptions import SLAOCheckpointError
 from backpropagate.slao import (
     MergeResult,
     SLAOConfig,
@@ -451,6 +452,68 @@ class TestSLAOMerger:
         assert merger.config.scaling_type == "linear"
         assert merger.config.min_scale == 0.2
         assert merger.config.use_orthogonal_init is False
+
+    def test_load_rejects_non_dict_state(self, tmp_path):
+        """CORE-B-007: load() must reject a merged_lora.pt that does not
+        deserialize to a dict.
+
+        ``torch.load`` of a corrupt / wrong-kind file can return a bare
+        tensor (or list) without raising. Pre-fix the merger silently
+        carried that garbage as its accumulator and fed it forward through
+        every subsequent merge. Now load() fails loud at the seam.
+        """
+        save_dir = tmp_path / "merger"
+        save_dir.mkdir()
+        # A bare tensor, not a state dict.
+        torch.save(torch.randn(4, 4), save_dir / "merged_lora.pt")
+
+        merger = SLAOMerger()
+        with pytest.raises(SLAOCheckpointError) as exc_info:
+            merger.load(str(save_dir))
+        assert "state dict" in str(exc_info.value).lower()
+
+    def test_load_rejects_zero_tensor_dict(self, tmp_path):
+        """CORE-B-007: load() must reject a dict that contains no tensors.
+
+        An empty/tensorless dict is structurally a "state dict" but carries
+        nothing to merge — treating it as a valid accumulator silently
+        zeroes out catastrophic-forgetting protection. Fail loud instead.
+        """
+        save_dir = tmp_path / "merger"
+        save_dir.mkdir()
+        # A dict with only non-tensor values.
+        torch.save({"meta": "not a tensor", "count": 3}, save_dir / "merged_lora.pt")
+
+        merger = SLAOMerger()
+        with pytest.raises(SLAOCheckpointError) as exc_info:
+            merger.load(str(save_dir))
+        assert "zero tensors" in str(exc_info.value).lower()
+
+    def test_load_accepts_valid_state_dict(self, sample_lora_state, tmp_path):
+        """CORE-B-007 guard: a normal save/load round-trip still succeeds —
+        the structural validation must not reject legitimate accumulators."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        save_dir = tmp_path / "merger"
+        merger.save(str(save_dir))
+
+        loaded = SLAOMerger()
+        loaded.load(str(save_dir))  # must not raise
+        assert loaded._merged_state is not None
+
+    def test_save_writes_version_from_constant(self, sample_lora_state, tmp_path):
+        """CORE-B-006: merge_history.json carries the version sourced from
+        the single ``CURRENT_SLAO_VERSION`` constant (not a duplicated
+        literal that could drift from the load-side check)."""
+        import json
+
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        save_dir = tmp_path / "merger"
+        merger.save(str(save_dir))
+
+        history = json.loads((save_dir / "merge_history.json").read_text())
+        assert history["version"] == SLAOMerger.CURRENT_SLAO_VERSION
 
 
 class TestMergeLoraWeights:

@@ -1628,6 +1628,13 @@ def _detect_installed_versions() -> dict[str, str]:
         "peft",
         "unsloth",
         "torch",
+        # CLIUI-B-006 (Stage C proactive): reflex is a first-class shipped
+        # surface (the Web UI, `backprop ui`). Operators triaging a UI launch
+        # failure need its version in the support payload the same way they
+        # need transformers/peft for a training failure. ``gradio`` is the
+        # legacy pre-v1.1 UI stack — kept in the probe so a stale gradio left
+        # over from a v1.0.x install shows up (it should read "not installed").
+        "reflex",
         "gradio",
         "pydantic",
         "wandb",
@@ -1640,6 +1647,19 @@ def _detect_installed_versions() -> dict[str, str]:
             out[name] = "not installed"
         except Exception:  # nosec B110 — defensive: don't let info crash
             out[name] = "unknown"
+
+    # CLIUI-B-006: cloudflared is the --share tunnel binary — not a Python
+    # package, so importlib.metadata can't see it. Probe the PATH the same way
+    # ``_spawn_cloudflared_tunnel`` does (shutil.which) so the support payload
+    # reflects whether `backprop ui --share` can actually establish a tunnel.
+    try:
+        import shutil
+
+        cf_path = shutil.which("cloudflared")
+        out["cloudflared"] = "installed" if cf_path else "not installed"
+    except Exception:  # nosec B110 — defensive: PATH probe must not crash info
+        out["cloudflared"] = "unknown"
+
     return out
 
 
@@ -2032,6 +2052,12 @@ def cmd_info(args: argparse.Namespace) -> int:
     _print_kv("trl", versions.get("trl", "not installed"))
     _print_kv("peft", versions.get("peft", "not installed"))
     _print_kv("unsloth", versions.get("unsloth", "not installed"))
+    # CLIUI-B-006 (Stage C proactive): reflex (the Web UI) + cloudflared (the
+    # --share tunnel binary) are first-class shipped surfaces; surface their
+    # versions/presence here so `backprop info` is a complete support payload
+    # for UI launch failures, not just training failures.
+    _print_kv("reflex", versions.get("reflex", "not installed"))
+    _print_kv("cloudflared", versions.get("cloudflared", "not installed"))
 
     # System info
     print(f"\n{Colors.BOLD}System{Colors.RESET}")
@@ -2412,6 +2438,7 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     cloudflared's own view (edge selection, retry attempts, packet-loss
     warnings) without spamming normal INFO-level operation.
     """
+    import queue
     import shutil
     import threading
 
@@ -2509,18 +2536,86 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     deadline = _time.monotonic() + timeout_seconds
     tunnel_url: str | None = None
 
-    # Read line-by-line until we find the URL or the deadline elapses.
+    # CLIUI-B-008 (Stage C proactive): deadline-aware read. The previous loop
+    # called a bare blocking ``proc.stdout.readline()`` and only re-checked the
+    # deadline at the TOP of the loop — so a cloudflared that was alive but
+    # silent (no output at all: DNS wedged, captive portal swallowing the
+    # handshake) parked us inside readline() forever, never reaching the
+    # deadline check. The inline comment claimed a select()-based bounded read,
+    # but no select() was wired (and Windows pipes aren't selectable anyway).
+    #
+    # Fix: a single daemon reader thread does the blocking reads and pushes
+    # each line onto a queue; the main loop pulls with ``queue.get(timeout=
+    # remaining)`` so the deadline is authoritative regardless of whether
+    # cloudflared ever speaks. This thread is also the post-URL drain (it logs
+    # every line at DEBUG and keeps the OS pipe buffer from filling), so the
+    # separate ``_drain_pipe`` thread that used to start after URL parse is
+    # gone — one reader owns stdout for the tunnel's whole lifetime, which also
+    # removes the double-consume race the old tail ``proc.stdout.read()`` had
+    # against that drain thread.
     assert proc.stdout is not None  # nosec B101 — Popen(stdout=PIPE) guarantees this
-    while _time.monotonic() < deadline:
-        if proc.poll() is not None:
-            # cloudflared died before publishing a URL — surface the tail
-            # of its output to help the operator triage (invalid network,
-            # captive portal, etc.).
+    line_queue: queue.Queue[str | None] = queue.Queue()
+    # Once the URL is parsed, the main loop stops consuming the queue. Flip
+    # this event so the reader stops enqueuing (just logs + discards) — without
+    # it the queue would grow unbounded over a long-lived chatty tunnel.
+    url_parsed = threading.Event()
+
+    def _reader(pipe: Any, out_q: "queue.Queue[str | None]") -> None:
+        # BRIDGE-B-010 (Stage C): route every cloudflared output line to the
+        # structured logger at DEBUG (edge selection / reconnect / packet-loss
+        # warnings under BACKPROPAGATE_LOG_LEVEL=DEBUG; filtered out at INFO),
+        # then — until the URL is parsed — hand it to the main loop via the
+        # queue. After URL parse this thread becomes the pure drain (logs +
+        # discards) so the OS pipe buffer never fills. Sentinel ``None`` on EOF.
+        try:
+            for line in iter(pipe.readline, ""):
+                try:
+                    _cf_logger.debug("cloudflared_event", line=line.rstrip())
+                except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
+                    pass
+                if not url_parsed.is_set():
+                    out_q.put(line)
+        except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
+            pass
+        finally:
+            out_q.put(None)  # EOF sentinel so the consumer never blocks past it
+
+    reader_thread = threading.Thread(
+        target=_reader, args=(proc.stdout, line_queue), daemon=True, name="cloudflared-reader"
+    )
+    reader_thread.start()
+
+    # Pull lines with a bounded wait so the deadline is enforced even when
+    # cloudflared emits nothing. We poll the dead-process state on every wakeup
+    # (queue timeout) so a process that exits silently is caught promptly.
+    while True:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            line = line_queue.get(timeout=min(remaining, 0.5))
+        except queue.Empty:
+            # No line within this slice — re-check deadline + liveness, loop.
+            if proc.poll() is not None:
+                line = None  # fall through to the dead-process branch below
+            else:
+                continue
+        if line is None:
+            # EOF sentinel or detected exit: cloudflared died (or closed its
+            # pipe) before publishing a URL — surface the tail of its output to
+            # help the operator triage (invalid network, captive portal, etc.).
+            # Drain whatever the reader already queued for the tail buffer.
             _print_error("cloudflared exited before publishing a tunnel URL.")
-            try:
-                tail = proc.stdout.read() or ""
-            except Exception:  # noqa: BLE001 — best-effort drain
-                tail = ""
+            tail_lines: list[str] = []
+            while True:
+                try:
+                    pending = line_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if pending is None:
+                    break
+                tail_lines.append(pending)
+            tail = "".join(tail_lines)
             try:
                 _cf_logger.info(
                     "cloudflared_exited_pre_url",
@@ -2534,27 +2629,10 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
                 # Truncate to a reasonable size so we don't pipe MB of log.
                 _print_info(f"cloudflared output (tail):\n{tail[-800:]}")
             return None
-        # Read one line with a short timeout via select — readline()
-        # blocks indefinitely otherwise. POSIX uses select.select on the
-        # raw fd; Windows pipes aren't selectable so we fall back to a
-        # blocking readline() which is bounded by the deadline at the
-        # next iteration.
-        line = proc.stdout.readline()
-        if not line:
-            # EOF or transient empty read — re-check deadline + alive.
-            continue
-        # BRIDGE-B-010 (Stage C): route every cloudflared output line to
-        # the structured logger at DEBUG. Operators triaging "my tunnel
-        # keeps dropping" see edge selection / packet-loss warnings under
-        # BACKPROPAGATE_LOG_LEVEL=DEBUG; default INFO operation is
-        # unaffected (DEBUG events are filtered out).
-        try:
-            _cf_logger.debug("cloudflared_event", line=line.rstrip())
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass
         match = _CLOUDFLARED_URL_RE.search(line)
         if match:
             tunnel_url = match.group(0)
+            url_parsed.set()  # reader switches to drain-and-discard mode
             break
 
     if not tunnel_url:
@@ -2590,30 +2668,75 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     except Exception:  # noqa: BLE001  # nosec B110
         pass
 
-    # Drain remaining cloudflared output in a daemon thread so the
-    # subprocess doesn't deadlock on a full pipe buffer.
-    #
-    # BRIDGE-B-010 (Stage C): the post-URL drain now also routes each line
-    # to the structured logger at DEBUG so `BACKPROPAGATE_LOG_LEVEL=DEBUG`
-    # surfaces cloudflared's full lifecycle (edge selection changes,
-    # reconnect attempts, packet-loss warnings). At INFO the events are
-    # filtered out so normal operation isn't spammed.
-    def _drain_pipe(pipe: Any) -> None:
-        try:
-            for line in pipe:
-                try:
-                    _cf_logger.debug("cloudflared_event", line=line.rstrip())
-                except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
-                    pass
-        except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
-            pass
-
-    drain_thread = threading.Thread(
-        target=_drain_pipe, args=(proc.stdout,), daemon=True, name="cloudflared-drain"
-    )
-    drain_thread.start()
-
+    # CLIUI-B-008 (Stage C proactive): the post-URL drain is no longer a
+    # separate thread. The ``cloudflared-reader`` daemon started above already
+    # owns stdout for the tunnel's whole lifetime — it keeps reading + logging
+    # every subsequent line at DEBUG (edge selection changes, reconnect
+    # attempts, packet-loss warnings under BACKPROPAGATE_LOG_LEVEL=DEBUG;
+    # filtered out at INFO) and drains the OS pipe buffer so the subprocess
+    # never deadlocks on a full pipe. The main loop simply stopped consuming
+    # from its queue once it parsed the URL; the reader runs on. Spinning up a
+    # second consumer here would double-read the pipe.
     return proc, tunnel_url
+
+
+def _find_port_in_use(host: str, ports: list[int]) -> int | None:
+    """Return the first port in ``ports`` that cannot be bound on ``host``.
+
+    CLIUI-B-004 (Stage C proactive): port-in-use is the single most common
+    ``backprop ui`` launch failure (a previous Reflex run that didn't exit,
+    another dev server, etc.), and without a pre-flight it surfaces only as a
+    bare Reflex traceback + a non-zero exit code 30-60s into the launch — long
+    after the "Launching..." banner printed. We attempt a throwaway bind (then
+    immediately close) on each candidate port BEFORE handing control to the
+    Reflex subprocess so the operator gets a structured EADDRINUSE error naming
+    the port + the ``--port`` remedy instead of a stack trace.
+
+    We deliberately do NOT set ``SO_REUSEADDR`` — the goal is to detect a port
+    that is genuinely occupied right now, which is exactly what Reflex's own
+    bind will hit. A bind failure for any reason other than "address in use"
+    (e.g. a permission error on a privileged port, or a host the kernel won't
+    let us bind) is treated as "not our problem to pre-flight" and skipped, so
+    we never block a launch that might actually have succeeded.
+
+    Args:
+        host: The interface the Reflex subprocess will bind (frontend +
+            backend share the host; only the port differs).
+        ports: Candidate ports to probe — typically ``[port, port + 1]``
+            (Reflex serves the frontend on ``--port`` and the backend on
+            ``--port + 1``).
+
+    Returns:
+        The first occupied port, or ``None`` if all candidates are free.
+    """
+    import errno
+    import socket
+
+    # Reflex binds the frontend host to 0.0.0.0 regardless of --backend-host
+    # (see the cmd() comment block), but the backend honors the requested
+    # host. Probe on the requested host; fall back to 127.0.0.1 if the host
+    # string isn't bindable here (e.g. a LAN IP not assigned to this box) so a
+    # mis-probe never turns into a false EADDRINUSE.
+    probe_host = host or "127.0.0.1"
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((probe_host, port))
+        except OSError as exc:
+            if exc.errno in (errno.EADDRINUSE, errno.EACCES):
+                # EADDRINUSE: the port is taken. EACCES on a privileged port
+                # (<1024) is also actionable — Reflex would fail the same way.
+                if exc.errno == errno.EADDRINUSE:
+                    return port
+                # EACCES is rarer (privileged port) — still flag it as "in use"
+                # from the operator's POV since Reflex can't bind it either.
+                return port
+            # EADDRNOTAVAIL (host not local), AF mismatch, etc. — out of scope
+            # for a port pre-flight; let Reflex try and surface its own error.
+            continue
+        finally:
+            sock.close()
+    return None
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
@@ -2902,6 +3025,33 @@ def cmd_ui(args: argparse.Namespace) -> int:
             "`python -m backpropagate.ui_app.app` manually."
         )
         return EXIT_RUNTIME_ERROR
+
+    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex serves the
+    # frontend on --port and the backend on --port+1; if EITHER is already
+    # bound, the subprocess dies 30-60s in with a bare traceback. Probe both
+    # here so the operator gets a structured EADDRINUSE error naming the port
+    # + the --port remedy BEFORE we spawn cloudflared or print "Launching...".
+    # Done after the auth/host gates so a misconfigured launch still fails on
+    # the auth axis first (the higher-severity contract), and before the
+    # cloudflared spawn so a busy port doesn't leak a public tunnel.
+    _preflight_host = getattr(args, "host", None) or "127.0.0.1"
+    _busy_port = _find_port_in_use(_preflight_host, [args.port, args.port + 1])
+    if _busy_port is not None:
+        _which = "frontend" if _busy_port == args.port else "backend (--port + 1)"
+        raise BackpropagateError(
+            f"Port {_busy_port} ({_which}) is already in use on "
+            f"{_preflight_host}; the Reflex UI needs both {args.port} and "
+            f"{args.port + 1} free.",
+            suggestion=(
+                f"Pick a free port with --port <N> (the backend uses N+1, so "
+                f"leave a gap), or stop whatever is holding {_busy_port} "
+                "(a previous `backprop ui` that didn't exit is the usual "
+                "culprit — check `lsof -i :%d` on POSIX or "
+                "`netstat -ano | findstr :%d` on Windows)."
+                % (_busy_port, _busy_port)
+            ),
+            code="RUNTIME_UI_PORT_IN_USE",
+        )
 
     # Set env vars that Reflex's state can pick up. ``BACKPROPAGATE_UI_AUTH``
     # is the agreed handoff for the Reflex side to enforce per-request auth

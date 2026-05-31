@@ -930,6 +930,21 @@ class MultiRunTrainer:
         and again after every saved run so a long multi-hour session keeps a
         warm heartbeat. Best-effort: history persistence is never allowed to
         gate training, so any failure is logged at DEBUG and swallowed.
+
+        Stage C amend CORE-B-010 (doc note): the heartbeat is only refreshed
+        at run boundaries, not on a timer. A single run whose wall-clock
+        exceeds :data:`_LIVENESS_HEARTBEAT_FRESH_SECONDS` (30 min) — a very
+        large dataset chunk, a slow disk, or this ``update_run`` itself
+        blocking on cross-process lock contention from a sibling session —
+        can let the heartbeat go cold mid-run. The freshness window is sized
+        (30 min) to comfortably exceed a normal run; if your per-run
+        wall-clock approaches it, raise the window rather than relying on
+        more frequent stamping. The only consequence of a falsely-cold
+        heartbeat is that a *concurrent* launch on the same ``checkpoint_dir``
+        might (after the 24h stale floor also elapses) treat this still-live
+        session as crashed — the same-host PID-liveness signal (Signal 1 in
+        :meth:`_entry_is_live`) remains the primary guard for the common
+        single-box case and is unaffected by heartbeat age.
         """
         if self._run_history is None or self._run_id is None:
             return
@@ -1348,6 +1363,59 @@ class MultiRunTrainer:
                     pause_started = time.time()
                     pause_ceiling = float(getattr(self.config, "max_pause_seconds", 0.0) or 0.0)
                     while self._gpu_pause_event.is_set() and not self._should_abort:
+                        # Stage C amend CORE-B-002: the pause event is ONLY
+                        # cleared by ``_on_gpu_status``, which runs on the
+                        # GPU monitor thread. If that thread has died (an
+                        # unhandled exception, a crashed nvidia-smi the
+                        # monitor's own try/except couldn't survive), the
+                        # event can NEVER clear and this loop would otherwise
+                        # block until ``max_pause_seconds`` (default 30 min)
+                        # — or forever if the ceiling is disabled. Fail fast
+                        # the instant we detect the dead monitor so the
+                        # operator isn't wedged waiting on a thread that will
+                        # never resume them.
+                        mon = self._gpu_monitor
+                        mon_thread = getattr(mon, "_thread", None) if mon else None
+                        if mon is not None and (
+                            mon_thread is None or not mon_thread.is_alive()
+                        ):
+                            elapsed = time.time() - pause_started
+                            logger.error(
+                                f"GPU pause is active but the monitor thread "
+                                f"is dead (run_id={self._run_id}, next "
+                                f"run_index={run_idx}, elapsed={elapsed:.0f}s); "
+                                f"the cooldown event can never clear because "
+                                f"the thread that clears it has stopped. "
+                                f"Aborting instead of blocking on a resume "
+                                f"signal that will never arrive."
+                            )
+                            raise BackpropagateError(
+                                "GPU cooldown wait cannot complete: the GPU "
+                                "monitor thread has died, so the pause event "
+                                "will never be cleared. The run loop will not "
+                                "proceed against a GPU whose temperature the "
+                                "monitor can no longer confirm is safe.",
+                                code="RUNTIME_GPU_TEMPERATURE_CRITICAL",
+                                details={
+                                    "run_id": self._run_id,
+                                    "next_run_index": run_idx,
+                                    "elapsed_seconds": elapsed,
+                                    "monitor_thread_alive": False,
+                                },
+                                suggestion=(
+                                    "The background GPU monitor stopped "
+                                    "(check earlier logs for a 'GPU monitor "
+                                    "error' line). Verify GPU cooling with "
+                                    "nvidia-smi, then re-run. If the monitor "
+                                    "is crashing on a malformed environment, "
+                                    "disable it with "
+                                    "MultiRunConfig.enable_gpu_monitoring="
+                                    "False (you lose thermal auto-pause) or "
+                                    "fix the underlying nvidia-smi / pynvml "
+                                    "install."
+                                ),
+                                retryable=False,
+                            )
                         if pause_ceiling > 0.0 and (time.time() - pause_started) > pause_ceiling:
                             elapsed = time.time() - pause_started
                             logger.error(
@@ -1482,6 +1550,35 @@ class MultiRunTrainer:
             logger.warning(
                 f"RunHistoryManager.record_run_completed failed: {hist_err}"
             )
+            # Stage C amend CORE-B-003: record_run_completed is what flips
+            # status 'running' -> 'completed'. If it raised, the entry is
+            # stranded as 'running' forever — `backprop list-runs` shows a
+            # finished session as still-in-flight, and the liveness guard
+            # may even treat a fresh heartbeat as a live holder and refuse
+            # to reuse the slot. Force an independent minimal status flip so
+            # the terminal state is recorded even when the full metrics
+            # write failed. This is best-effort too; a second failure is
+            # logged but never raised (the training itself succeeded).
+            try:
+                if (
+                    self._run_history is not None
+                    and self._run_id is not None
+                    and self._run_history.update_run(
+                        self._run_id, status="completed"
+                    ) is not None
+                ):
+                    logger.info(
+                        f"run_status_repaired run_id={self._run_id} "
+                        f"status=completed (record_run_completed had failed; "
+                        f"forced an independent status flip so the session "
+                        f"isn't stranded as 'running')"
+                    )
+            except Exception as flip_err:
+                logger.warning(
+                    f"Independent status flip to 'completed' also failed for "
+                    f"run_id={self._run_id}: {flip_err}. The history entry "
+                    f"may remain 'running' despite a successful session."
+                )
         return result
 
     def abort(self, reason: str = "User requested abort") -> None:
@@ -2390,6 +2487,22 @@ class MultiRunTrainer:
                             break
                     if patched:
                         mgr._save_manifest()
+                    else:
+                        # Stage C amend CORE-B-005: no manifest entry took
+                        # the validation loss. Benign when the run's
+                        # checkpoint was already pruned (best-N / size
+                        # policy) before validation finished, but it's a
+                        # silent drop of a computed metric — log at debug so
+                        # an operator chasing "why is best-checkpoint
+                        # selection ignoring run N's val loss" has a
+                        # breadcrumb.
+                        logger.debug(
+                            f"validation_loss={val_loss:.4f} for run_index="
+                            f"{run_idx} was not backfilled into any manifest "
+                            f"entry (checkpoint likely already pruned or "
+                            f"already carried a val loss); metric not "
+                            f"persisted to the manifest."
+                        )
 
         return run_result, val_loss
 
@@ -2833,7 +2946,19 @@ class MultiRunTrainer:
             )
 
     def _load_lora_state_dict(self, state_dict: dict[str, Any]) -> None:
-        """Load LoRA state dict into model."""
+        """Load LoRA state dict into model.
+
+        Stage C amend CORE-B-001: the manual ``named_parameters`` fallback
+        (used when PEFT lacks ``load_adapter_state_dict``) silently no-op'd
+        on a total key mismatch — ``if name in model_state`` simply skipped
+        every key when PEFT-version skew or a key-naming divergence meant
+        ZERO of the accumulator's keys lined up with the live model. The
+        merge appeared to succeed (no exception, success logs) while the
+        SLAO accumulator was discarded — catastrophic-forgetting protection
+        died invisibly. The read-side invariant (``_verify_peft_api``) fails
+        loud; the write-side now matches it: we count matched keys and raise
+        ``PEFT_API_INCOMPATIBLE`` when the load applied nothing.
+        """
 
         model = self._trainer._model
 
@@ -2842,11 +2967,40 @@ class MultiRunTrainer:
             model.load_adapter_state_dict(state_dict)
             return
 
-        # Fallback: manual loading
+        # Fallback: manual loading. Count matches so a total key-namespace
+        # mismatch fails loud instead of silently discarding the merge.
         model_state = model.state_dict()
+        matched = 0
         for name, param in state_dict.items():
             if name in model_state:
                 model_state[name].copy_(param)
+                matched += 1
+
+        if state_dict and matched == 0:
+            raise BackpropagateError(
+                "SLAO merge load applied zero parameters: none of the "
+                f"{len(state_dict)} accumulator keys matched the live "
+                "model's state_dict. The merged LoRA was silently "
+                "discarded — catastrophic-forgetting protection would be "
+                "lost for every subsequent run.",
+                code="PEFT_API_INCOMPATIBLE",
+                details={
+                    "accumulator_keys": len(state_dict),
+                    "matched_keys": 0,
+                    "model_state_keys": len(model_state),
+                },
+                suggestion=(
+                    "The installed PEFT version exposes neither "
+                    "load_adapter_state_dict nor a parameter namespace that "
+                    "matches the extracted accumulator (key-shape / naming "
+                    "skew). Backpropagate requires peft>=0.7.0 "
+                    "(see pyproject.toml). Reinstall: pip install "
+                    "'peft>=0.7.0'. If you pinned a specific PEFT version, "
+                    "verify it still exposes load_adapter_state_dict OR "
+                    "uses '.lora_A.' / '.lora_B.' parameter names."
+                ),
+                retryable=False,
+            )
 
     def _load_full_dataset(self, dataset: DatasetLoader | str | Any) -> Any:
         """

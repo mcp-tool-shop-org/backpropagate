@@ -145,7 +145,9 @@ def _model_row(row) -> rx.Component:
             },
         ),
         rx.text(
-            row["size_mb"] + " MB",
+            # f-string, not ``+``: ``row["size_mb"]`` is an untyped foreach-item
+            # Var; ``Var + str`` raises TypeError at compile.
+            f"{row['size_mb']} MB",
             size="2",
             class_name="bp-num",
             style={

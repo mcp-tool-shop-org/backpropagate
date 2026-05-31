@@ -62,6 +62,7 @@ from .exceptions import (
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
 from .logging_config import bind_run_context, unbind_run_context
+from .mlx_backend import detect_apple_silicon, resolve_backend
 
 logger = logging.getLogger(__name__)
 
@@ -650,17 +651,37 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 # v1.4 Wave 6b doctrine ("extend, don't fork").
 
 # Documented production-feasible parameter count ceiling for mode='full'
-# on a 16GB consumer GPU. Operators who genuinely have a 24GB+ card can
-# still hit the gate (the threshold is conservative) — the escape hatch
-# is to construct with mode='lora' OR pick a smaller preset. Future
-# v1.5 may expose a `--full-ft-ceiling-billions` flag for 24GB+ operators.
-_FULL_FT_PARAM_CEILING_BILLIONS: float = 3.0
+# on a consumer GPU. The ceiling is 4B so the marketed "3B" presets — whose
+# true num_parameters() are 3.08-3.24B (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B)
+# — actually clear the gate, plus the 3.8-4B class (phi-4-mini-3.8b,
+# qwen3.5-4b). NOTE the VRAM split: full FT of a genuine ~3B in bf16 + paged
+# 8-bit AdamW + gradient checkpointing fits ~16GB; the 3.8-4B class needs a
+# 24GB+ card (weights+grads alone approach 16GB before optimizer/activations).
+# The gate only bounds the parameter COUNT — it does not promise 16GB fit for
+# every admitted model. Operators >4B use mode='lora'. A pre-4B value of 3.0
+# wrongly rejected every "3B" preset at load time (count > 3.0); raised to 4.0
+# in the v1.4.x mode='full' fix. Future v1.5 may expose a
+# `--full-ft-ceiling-billions` flag to lift it further on 24GB+ cards.
+_FULL_FT_PARAM_CEILING_BILLIONS: float = 4.0
 
 # Default learning rate for mode='full'. Full fine-tuning literature
 # (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
 # LoRA — typical LoRA default is 2e-4, so full FT default is 2e-5. The
 # operator can override via Trainer(learning_rate=...).
 _FULL_FT_DEFAULT_LR_DIVISOR: float = 10.0
+
+# v1.5 T1.2 (ORPO): default learning rate for method='orpo'. ORPO's combined
+# SFT + odds-ratio preference loss is sensitive to LR — the reference-free
+# preference literature (Hong 2024 "ORPO: Monolithic Preference Optimization
+# without Reference Model", arXiv:2403.07691) and TRL's own ORPO example
+# scripts anchor on the 8e-6 / 5e-6 band, an order of magnitude below the
+# 2e-4 LoRA SFT default. We lower the default to 8e-6 so a bare
+# Trainer(method='orpo') lands in the documented-stable range without
+# operator intervention; explicit ``learning_rate=`` wins. Mirrors the
+# mode='full' divisor path but is a fixed anchor (ORPO's stable band does
+# not scale with the LoRA default). full+orpo is blocked, so the two
+# LR-default branches are mutually exclusive.
+_ORPO_DEFAULT_LR: float = 8e-6
 
 
 def _estimate_param_count_billions(model_id: str) -> float | None:
@@ -1250,6 +1271,125 @@ def _build_sft_config(
     return SFTConfig(**kwargs)
 
 
+# =============================================================================
+# SHARED ORPOCONFIG BUILDER (v1.5 T1.2 — ORPO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_sft_config` for the reference-free ORPO objective.
+# It REUSES the same two GPU-dependent detectors —
+# :meth:`Trainer._detect_optim_for_card` and
+# :meth:`Trainer._detect_optimal_dtype` — so card detection (consumer-card
+# paged-optim upgrade + Ada/Hopper/Blackwell bf16 selection + the Stage-A
+# CPU-runner downgrades) CANNOT diverge between the SFT and ORPO configs.
+# Because those detectors downgrade bnb-8bit → adamw_torch on CPU and force
+# fp32 on CPU, this config is CPU-constructible for free (the unit tests build
+# it under ``torch.cuda.is_available() == False``).
+#
+# Contract differences vs SFTConfig:
+#   * NO ``packing`` — ORPOConfig has no such field (it rejects unknown
+#     kwargs); preference rows are paired, not packed.
+#   * NO ``gradient_checkpointing`` forcing — ORPO is mode='lora'-only in v1.5
+#     (full+orpo is blocked at construction), so there is no full-FT
+#     activation-memory contract to enforce here; ORPOConfig's own default
+#     governs.
+#   * ``beta`` (the odds-ratio loss weight) and ``max_length`` (mapped from
+#     the operator's ``max_seq_length``) are ORPO-specific.
+#   * ``max_prompt_length`` / ``max_completion_length`` are optional ORPO
+#     truncation knobs — added only when not None so ORPOConfig's defaults
+#     govern otherwise.
+
+
+def _build_orpo_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    orpo_beta: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble an ``ORPOConfig`` with the v1.3 quality contracts applied.
+
+    Like :func:`_build_sft_config`, this resolves ``optim`` and ``bf16`` /
+    ``fp16`` via the SAME detectors so the ORPO config cannot drift from the
+    SFT config on card-specific decisions:
+
+    * ``optim`` — via :meth:`Trainer._detect_optim_for_card` (consumer-card
+      paged-optim upgrade; CPU → ``adamw_torch`` downgrade — the Stage-A
+      CPU-runner fix, inherited here so ORPO is CPU-constructible).
+    * ``bf16`` / ``fp16`` — via :meth:`Trainer._detect_optimal_dtype`
+      (Ampere+ → bf16; CPU → fp32 so ORPOConfig does not reject bf16=True
+      at construction).
+
+    Parameters mirror :func:`_build_sft_config` with three ORPO-specific
+    additions (``orpo_beta`` → ``beta``, plus the optional
+    ``max_prompt_length`` / ``max_completion_length`` truncation knobs).
+    ``max_seq_length`` maps to ORPOConfig's ``max_length``.
+
+    Returns:
+        A configured ``ORPOConfig`` instance.
+    """
+    from trl import ORPOConfig
+
+    # Reuse the exact detectors the SFT builder uses so the two configs
+    # converge on the same card-specific resolution (single source of truth).
+    # Note: ORPO is mode='lora'-only in v1.5, so there is no mode='full'
+    # adamw_8bit → paged short-circuit here — the consumer-card upgrade in
+    # _detect_optim_for_card still fires for the adamw_8bit default on
+    # <24GB cards, and the CPU downgrade fires when CUDA is absent.
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        # ORPO-specific: max_length is ORPOConfig's name for the combined
+        # prompt+completion sequence cap; beta is the odds-ratio loss weight.
+        "max_length": max_seq_length,
+        "beta": orpo_beta,
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # Deliberately DO NOT pass ``packing`` (ORPOConfig has no such field and
+    # rejects it) or force ``gradient_checkpointing`` (no full-FT contract for
+    # ORPO in v1.5; ORPOConfig's own default governs).
+    return ORPOConfig(**kwargs)
+
+
 def _apply_train_on_responses_only(
     sft_trainer: Any,
     tokenizer: Any,
@@ -1462,6 +1602,83 @@ class Trainer:
         # trainer that lifts the ceiling — the 3B gate is the documented
         # consumer-tier contract and not a soft-warning.
         mode: str = "lora",
+        # v1.5 T1.2 (ORPO Wave 2): training objective. ``"sft"`` (the default)
+        # is the supervised fine-tuning path — byte-identical pre-v1.5
+        # behavior for callers who do not pass this kwarg. ``"orpo"`` selects
+        # the reference-free ORPO objective (Hong 2024, arXiv:2403.07691):
+        # SFT + odds-ratio preference loss in one pass, NO separate reference
+        # model. ORPO requires a preference dataset (``{chosen, rejected}`` ±
+        # ``prompt``) and is supported with mode='lora' ONLY in v1.5 — a
+        # method='orpo' + mode='full' combination raises InvalidSettingError
+        # at construction. Defaults to None so the settings layer
+        # (``settings.training.method``) governs when the kwarg is omitted;
+        # config.py validates the value too, but a DIRECT Trainer(method=...)
+        # call is re-validated here (defense in depth). The CLI threads
+        # ``--method`` through this kwarg via the wave6b_candidate_kwargs
+        # introspection filter — naming the param here is what makes the CLI
+        # flag flow through.
+        method: str | None = None,
+        # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight (lambda in
+        # the paper; ``beta`` in ORPOConfig). Ignored unless method='orpo'.
+        # Defaults to None so ``settings.training.orpo_beta`` (default 0.1)
+        # governs when omitted.
+        orpo_beta: float | None = None,
+        # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao float8
+        # (Blackwell sm_90+). None ⇒ ``settings.training.fp8`` (default False)
+        # governs. When True AND the card supports it (CUDA + sm>=9 + torchao
+        # present), the BASE projection linears are converted to Float8Linear
+        # AFTER the LoRA adapter is attached (adapter rank-r sub-linears,
+        # lm_head, and embeddings excluded — converting the rank-r linears
+        # crashes on backward because r is not divisible by 16). On an
+        # unsupported card / missing torchao the trainer logs ONE WARN and
+        # trains in bf16 (graceful degrade, no raise). mode='full'+fp8 and
+        # method='orpo'+fp8 and explicit-4bit+fp8 are rejected by the gate
+        # ladder below. Named EXACTLY ``fp8`` so the CLI's wave6b introspection
+        # filter threads ``--fp8`` through (GLUE owns the flag).
+        fp8: bool | None = None,
+        # v1.5 T2.3 (rsLoRA, finding 19): rank-stabilized LoRA — alpha/sqrt(r)
+        # scaling instead of alpha/r. None ⇒ ``settings.lora.use_rslora``
+        # (default False). Threaded into PEFT's ``LoraConfig(use_rslora=...)``
+        # at the adapter-build call site (both the unsloth + transformers
+        # loaders). Zero inference cost; the merged adapter is unaffected.
+        # Named EXACTLY ``use_rslora`` so the CLI introspection filter threads
+        # ``--use-rslora`` through (GLUE owns the flag).
+        use_rslora: bool | None = None,
+        # v1.5 T2.1 (FP8 compute path): explicit 4-bit-quantization control.
+        # Pre-v1.5 the trainer always loaded the base in 4-bit (nf4) — there
+        # was no constructor knob, so 4-bit was *only ever the default*. This
+        # kwarg makes an EXPLICIT 4-bit request detectable so the FP8 gate
+        # ladder can refuse the stacked combination (FP8 and 4-bit are
+        # alternatives, not stackable). None ⇒ the historical default-on
+        # behavior (and FP8, when effective, silently flips it off with an INFO
+        # log). load_in_4bit=True is an EXPLICIT request and FP8 + it raises;
+        # load_in_4bit=False forces an unquantized base load.
+        load_in_4bit: bool | None = None,
+        # v1.5 T3.2 (reasoning-trace SFT / R1 distillation, finding 24): keep
+        # the ``<think>`` chain-of-thought in the SFT target, drop empty /
+        # over-long traces (datasets.filter_by_trace_length), and raise the
+        # DEFAULT max_seq_length to 8192 when the operator left it at the
+        # shipped 2048. ``<think>`` is treated as PLAIN TEXT — no special
+        # tokens, no embedding resize — so the merge→GGUF→Ollama export stays
+        # intact. SFT only (ignored under method='orpo'). None ⇒
+        # ``settings.data.reasoning_trace`` (default False ⇒ byte-identical
+        # v1.4 SFT). Named EXACTLY ``reasoning_trace`` so the CLI's wave6b
+        # introspection filter threads ``--reasoning-trace`` through (GLUE owns
+        # the flag).
+        reasoning_trace: bool | None = None,
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): the compute-rail selector.
+        # None ⇒ ``settings.training.backend`` (default "auto"). "auto" resolves
+        # to "mlx" on an Apple-Silicon Mac with the [mlx] extra, else "cuda"
+        # (so existing CUDA rigs are byte-identical). "cuda" forces the canonical
+        # CUDA rail; "mlx" forces the Apple-Silicon rail. A FORCED "mlx" on a
+        # non-Apple host raises InvalidSettingError (CONFIG_INVALID_SETTING) from
+        # the guard below — it is an unrunnable request on that hardware. When
+        # the effective backend is "mlx", train() short-circuits to
+        # _train_with_mlx (which drives mlx_lm.lora via a subprocess seam) and
+        # NEVER calls load_model(); orpo / fp8 / mode='full' are rejected for the
+        # MLX rail (out of scope for v1.5). Named EXACTLY ``backend`` so the CLI
+        # introspection filter threads ``--backend`` through (GLUE owns the flag).
+        backend: str | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -1624,6 +1841,140 @@ class Trainer:
             )
         self.mode = mode
 
+        # v1.5 T1.2 (ORPO Wave 2): training-objective resolution. Kwarg-
+        # authoritative (per-invocation ``method=`` wins), falling back to
+        # ``settings.training.method`` (the env-var path), default "sft".
+        # Validate the resolved value here even though config.py's pydantic
+        # ``_reject_invalid_method`` validator already guards the settings
+        # path — a DIRECT ``Trainer(method="dpo")`` call bypasses the settings
+        # layer entirely, so the constructor must re-validate (defense in
+        # depth). InvalidSettingError carries code CONFIG_INVALID_SETTING.
+        self.method = method if method is not None else settings.training.method
+        if self.method not in {"sft", "orpo"}:
+            raise InvalidSettingError(
+                setting_name="method",
+                value=self.method,
+                expected="one of {'sft', 'orpo'}",
+                suggestion=(
+                    "Pass method='sft' (the default) for supervised "
+                    "fine-tuning, OR method='orpo' for reference-free ORPO "
+                    "preference training (requires a {chosen, rejected} "
+                    "dataset and mode='lora')."
+                ),
+            )
+        # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight. Kwarg-
+        # authoritative, falling back to ``settings.training.orpo_beta``
+        # (default 0.1). Ignored unless method='orpo'.
+        self.orpo_beta = (
+            orpo_beta if orpo_beta is not None else settings.training.orpo_beta
+        )
+        # Re-audit #6 (trainer half): config.py validation only covers the
+        # SETTINGS path; a DIRECT ``Trainer(orpo_beta=-1.0)`` / ``=0.0`` sets
+        # ``self.orpo_beta`` here and would flow UNCLAMPED into
+        # ``ORPOConfig(beta=...)`` — beta=0 degenerates ORPO to plain SFT (the
+        # odds-ratio term vanishes) and a negative beta trains TOWARD the
+        # rejected response. Defend the direct kwarg with the same
+        # CONFIG_INVALID_SETTING the settings validator raises. Only fires for
+        # method='orpo' (beta is inert for SFT, so a stray value there is
+        # harmless and must not block a non-ORPO run).
+        if self.method == "orpo" and self.orpo_beta <= 0:
+            raise InvalidSettingError(
+                "orpo_beta",
+                self.orpo_beta,
+                "a positive number",
+                suggestion=(
+                    "ORPO's odds-ratio weight beta must be > 0 (TRL/Hong 2024 "
+                    "default 0.1). beta=0 collapses ORPO to plain SFT and a "
+                    "negative beta trains toward the REJECTED response. Pass a "
+                    "small positive value, e.g. orpo_beta=0.1."
+                ),
+            )
+
+        # v1.5 T2.1 (FP8) / T2.3 (rsLoRA): resolve the two new feature knobs,
+        # kwarg-authoritative with the settings layer as fallback (same
+        # ``is not None`` discipline as the load-bearing fields above so a
+        # legitimate ``False`` is not mistaken for "unset").
+        self.fp8 = fp8 if fp8 is not None else settings.training.fp8
+        self.use_rslora = (
+            use_rslora if use_rslora is not None else settings.lora.use_rslora
+        )
+        # v1.5 T3.2 (reasoning-trace SFT): resolve the recipe flag + its
+        # trace-length bounds (kwarg-authoritative, settings as fallback —
+        # same ``is not None`` discipline). When on, _load_dataset filters the
+        # materialized SFT dataset by ``<think>`` token length and the
+        # max_seq_length auto-bump below widens the default window for CoT.
+        self.reasoning_trace = (
+            reasoning_trace
+            if reasoning_trace is not None
+            else settings.data.reasoning_trace
+        )
+        # Re-audit #7: reasoning-trace SFT is an SFT-ONLY recipe. The trace
+        # filter in _load_dataset is gated on method=="sft", so on ORPO (or any
+        # non-sft objective) reasoning_trace does NOTHING useful — yet leaving
+        # it truthy would still fire the max_seq_length 2048->8192 bump (a real
+        # memory change) and stamp ``reasoning_trace: True`` into run-history
+        # (a lie). Neutralize it here: emit ONE WARN, force it False so the
+        # bump is skipped AND hyperparameters record it honestly as inert.
+        if self.reasoning_trace and self.method != "sft":
+            logger.warning(
+                "reasoning-trace SFT does not apply to method='%s'; ignoring "
+                "reasoning_trace (it is an SFT-only recipe — the <think> "
+                "trace-length filter runs only on the SFT data path). "
+                "max_seq_length is left unchanged and run-history records "
+                "reasoning_trace=False. Use method='sft' to train on reasoning "
+                "traces.",
+                self.method,
+            )
+            self.reasoning_trace = False
+        self.min_trace_tokens = settings.data.min_trace_tokens
+        self.max_trace_tokens = settings.data.max_trace_tokens
+        # v1.5 T3.2: max_seq_length auto-bump. Reasoning traces (R1/QwQ CoT)
+        # routinely exceed the shipped 2048 default; raise it to 8192 ONLY when
+        # the operator left max_seq_length at the shipped default (kwarg None
+        # AND settings still at 2048). An explicit max_seq_length — passed as a
+        # kwarg OR set via BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH — always wins.
+        # (Gated by self.reasoning_trace, which the non-sft guard above already
+        # forced False, so an ORPO run never bumps max_seq.)
+        if (
+            self.reasoning_trace
+            and max_seq_length is None
+            and settings.model.max_seq_length == 2048
+        ):
+            logger.info(
+                "reasoning_trace on: raised max_seq_length 2048->8192 for "
+                "longer CoT; pass max_seq_length to override"
+            )
+            self.max_seq_length = 8192
+        # v1.5 T2.1: remember whether the operator EXPLICITLY asked for 4-bit
+        # (vs relying on the historical default-on behavior). The gate ladder
+        # below refuses ``fp8 + explicit-4bit``; when 4-bit is only the default
+        # an active FP8 path flips it off with an INFO log instead of raising.
+        # ``self._load_in_4bit`` holds the resolved effective value the loaders
+        # thread into BitsAndBytesConfig / FastLanguageModel.
+        self._load_in_4bit_explicit = load_in_4bit is not None
+        self._load_in_4bit = load_in_4bit if load_in_4bit is not None else True
+        # v1.5 T2.1: FP8-effective state. Stays False unless load_model()
+        # successfully converts ≥1 base linear to Float8Linear; the gate ladder
+        # below may also force it False (unsupported card / missing lib) BEFORE
+        # any load. Persisted into run-history hyperparameters.
+        self._fp8_effective = False
+
+        # v1.5 T1.2 (ORPO Wave 2): ORPO + mode='full' guard. ORPO is supported
+        # with mode='lora' ONLY in v1.5 — the adapter is attached by
+        # load_model()'s get_peft_model before train(), and the ORPO+full
+        # combination (full-param weights + the odds-ratio objective +
+        # gradient-checkpointing memory ceiling) is out of scope for this
+        # release. Refuse the combination at construction so the operator
+        # sees an actionable error before any model load. (Fires after BOTH
+        # self.mode and self.method resolve.)
+        if self.method == "orpo" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "orpo", "mode": "full"},
+                expected="ORPO is supported with mode='lora' only in v1.5",
+                suggestion="Use mode='lora' (default) with method='orpo'.",
+            )
+
         # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate. Refuse
         # construction for models whose parameter count exceeds the 3B
         # ceiling. The probe is best-effort at construction time (preset
@@ -1663,6 +2014,262 @@ class Trainer:
                     f"applied; explicit override beats the full-FT default)."
                 )
 
+        # v1.5 T1.2 (ORPO Wave 2): ORPO LR default. Parallel to the mode='full'
+        # LR-lowering block above and keyed on the SAME ``learning_rate is
+        # None`` detection (operator relied on the settings default). ORPO's
+        # combined SFT + odds-ratio loss is stable around 8e-6 (Hong 2024 /
+        # TRL examples), ~25x below the 2e-4 LoRA SFT default, so a bare
+        # Trainer(method='orpo') would otherwise train at a divergent LR.
+        # Explicit ``learning_rate=`` wins. full+orpo is blocked above, so
+        # this branch and the mode='full' branch are mutually exclusive (an
+        # ``elif`` on self.mode != "full" would be equivalent — we gate on
+        # self.method directly for readability).
+        elif self.method == "orpo":
+            if learning_rate is None:
+                self.learning_rate = _ORPO_DEFAULT_LR
+                logger.info(
+                    f"method='orpo': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (ORPO's combined SFT + "
+                    f"odds-ratio loss is stable in the ~8e-6 band, well below "
+                    f"the LoRA SFT default). Pass learning_rate=<value> to "
+                    f"override."
+                )
+            else:
+                logger.info(
+                    f"method='orpo': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (no ORPO default "
+                    f"applied; explicit override wins)."
+                )
+
+        # v1.5 T2.1 (FP8 compute path): the gate ladder. Two distinct failure
+        # philosophies, in priority order:
+        #   * MISCONFIGURATION (a combination that can never work) → raise an
+        #     InvalidSettingError (CONFIG_INVALID_SETTING) at construction so
+        #     the operator fixes their call. These fire regardless of hardware.
+        #   * ENVIRONMENT DEGRADE (fp8 asked for, hardware/library can't honor
+        #     it) → log ONE WARN naming the reason + fix, set
+        #     ``_fp8_effective=False``, and proceed in bf16. NEVER raise — this
+        #     mirrors the unsloth→transformers fallback (a missing capability is
+        #     not an operator error).
+        # The ladder only runs when fp8 was requested; ``self._fp8_effective``
+        # is already False from the resolution block above for the common path.
+        if self.fp8:
+            # (1) MISCONFIG: FP8 + full fine-tuning. FP8 is validated only for
+            # the LoRA path in v1.5 (the adapter-excluding module filter assumes
+            # an attached PEFT adapter; full-FT has no adapter to exclude and the
+            # combined FP8 + full-param + checkpointing memory profile is
+            # untested). Mirrors the ORPO+full guard above.
+            if self.mode == "full":
+                raise InvalidSettingError(
+                    setting_name="fp8+mode",
+                    value={"fp8": True, "mode": "full"},
+                    expected="FP8 is supported with mode='lora' only in v1.5",
+                    suggestion=(
+                        "FP8 + full FT not supported in v1.5; use mode='lora'."
+                    ),
+                )
+            # (2) MISCONFIG: FP8 + ORPO. FP8 was dogfood-validated with
+            # method='sft' only in v1.5; the ORPO odds-ratio loss on FP8 base
+            # linears is unverified.
+            if self.method == "orpo":
+                raise InvalidSettingError(
+                    setting_name="fp8+method",
+                    value={"fp8": True, "method": "orpo"},
+                    expected="FP8 is supported with method='sft' only in v1.5",
+                    suggestion=(
+                        "FP8 validated with method='sft' only in v1.5."
+                    ),
+                )
+            # (3) FP8 vs 4-bit. They are alternatives: FP8 keeps the base in
+            # float8, 4-bit keeps it in nf4 — you cannot do both. If the
+            # operator EXPLICITLY requested 4-bit (load_in_4bit=True), refuse
+            # the stack. This is a MISCONFIG and fires regardless of hardware
+            # (an explicit fp8+4bit request can never be honored). The DEFAULT
+            # 4-bit flip is deliberately NOT done here — see (4)/(5) below: it
+            # is deferred until we know FP8 is actually EFFECTIVE, so an
+            # unsupported host that degrades to bf16 KEEPS the operator's
+            # default 4-bit (the historical OOM-safe path) instead of silently
+            # loading an unquantized ~2x-larger bf16 base.
+            if self._load_in_4bit_explicit and self._load_in_4bit:
+                raise InvalidSettingError(
+                    setting_name="fp8+load_in_4bit",
+                    value={"fp8": True, "load_in_4bit": True},
+                    expected="FP8 and 4-bit are alternatives, not stackable",
+                    suggestion=(
+                        "FP8 and 4-bit are alternatives, not stackable. Drop "
+                        "load_in_4bit=True (FP8 keeps the base in float8) or "
+                        "drop fp8=True."
+                    ),
+                )
+            # (4) ENVIRONMENT axis: is FP8 actually runnable here? CPU /
+            # pre-Hopper / torchao-absent → degrade to bf16 with ONE WARN, no
+            # raise. The capability + library probe is centralized in
+            # ``_fp8_supported`` so load_model() and the tests share one truth.
+            supported, reason = self._fp8_supported()
+            if not supported:
+                # DEGRADE. FP8 is NOT effective, so the default 4-bit is left
+                # exactly as the operator had it: ON (the OOM-safe default) or
+                # whatever they passed. Critically we do NOT strip the default
+                # 4-bit here — doing so would load an unquantized bf16 base
+                # (~2x the nf4 footprint) on a card that only fit via 4-bit.
+                # The WARN must NOT claim "FP8 keeps the base in float8" (FP8
+                # was disabled); it states the bf16 degrade and that 4-bit (if
+                # any) is unchanged.
+                still_4bit = self._load_in_4bit
+                logger.warning(
+                    "fp8=True requested but unavailable on this host: %s. "
+                    "Falling back to bf16 (training proceeds, just without the "
+                    "FP8 speed/memory win). This is an environment degrade, not "
+                    "an error. Your base quantization is UNCHANGED: "
+                    "load_in_4bit=%s (FP8 was NOT enabled, so it cannot have "
+                    "replaced 4-bit).",
+                    reason,
+                    still_4bit,
+                )
+                self._fp8_effective = False
+            else:
+                # Provisionally effective — load_model()'s _apply_fp8_to_base
+                # may still flip this False if the actual conversion raises
+                # (try/except → bf16 fallback). The ONE experimental WARN fires
+                # here so it is emitted exactly once per Trainer, at construction.
+                self._fp8_effective = True
+                logger.warning(
+                    "fp8=True: FP8 training is EXPERIMENTAL in v1.5 (torchao "
+                    "float8 path, validated on Blackwell sm_120). The base "
+                    "projection linears will be converted to Float8Linear after "
+                    "the LoRA adapter is attached; the adapter, lm_head, and "
+                    "embeddings stay in bf16. Report anomalies (loss spikes, "
+                    "export mismatches) so the path can graduate to stable."
+                )
+                # v1.5 T2.1 (FP8): FP8 vs default 4-bit. Now that FP8 is
+                # EFFECTIVE (supported host + library), the default 4-bit is
+                # superseded — FP8 keeps the base in float8, the two are
+                # alternatives. Flip it off with an INFO log (the explicit
+                # fp8+4bit case already raised above). This is deliberately
+                # INSIDE the effective branch: on a degrade the operator's
+                # default 4-bit is preserved so the base still loads quantized
+                # (no surprise unquantized-bf16 OOM — re-audit finding #5).
+                if self._load_in_4bit and not self._load_in_4bit_explicit:
+                    self._load_in_4bit = False
+                    logger.info(
+                        "fp8=True: disabling the default 4-bit base quantization "
+                        "(FP8 keeps the base in float8 — the two are "
+                        "alternatives). Pass load_in_4bit=True to force 4-bit, "
+                        "which conflicts with fp8 and will raise."
+                    )
+                # v1.5 T2.1 (FP8): packing is INCOMPATIBLE with FP8 and must be
+                # off. TRL's ``packing=True`` enables padding-free training,
+                # which flattens a batch into ONE variable-length sequence; the
+                # token count is then whatever the rows happen to sum to (e.g.
+                # 211). torchao's float8 matmul (``_scaled_mm``) hard-requires
+                # the contracted dimension divisible by 16 and raises
+                # "Expected trailing dimension of mat1 to be divisible by 16"
+                # on the FIRST backward otherwise (dogfood-verified on sm_120,
+                # SmolLM2-135M). With packing off, sequences pad to the fixed
+                # ``max_seq_length`` so the token dim is batch x max_seq_length —
+                # a multiple of 16 whenever max_seq_length is. Force it off here
+                # (the resolved ``self.packing`` is what _build_sft_config reads;
+                # the builder itself stays untouched) with an INFO breadcrumb so
+                # an operator who set packing=True sees why it was overridden.
+                if self.packing:
+                    logger.info(
+                        "fp8: disabling packing (was on). FP8's float8 matmul "
+                        "requires the token dimension divisible by 16; packing's "
+                        "padding-free variable-length sequences violate that and "
+                        "crash on backward. Sequences now pad to max_seq_length="
+                        f"{self.max_seq_length}."
+                    )
+                self.packing = False
+
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): backend resolution + gates.
+        # Placed AFTER the FP8 ladder (and after mode/method resolve) so the
+        # MLX unsupported-feature gates can see the resolved self.mode /
+        # self.method / self.fp8. Kwarg-authoritative with the settings layer as
+        # fallback (same ``is not None`` discipline as the fields above).
+        self.backend = backend if backend is not None else settings.training.backend
+        # Defense-in-depth value check (config.py validates the settings path; a
+        # DIRECT Trainer(backend="rocm") bypasses it). Mirrors the method gate.
+        if self.backend not in {"auto", "cuda", "mlx"}:
+            raise InvalidSettingError(
+                setting_name="backend",
+                value=self.backend,
+                expected="one of {'auto', 'cuda', 'mlx'}",
+                suggestion=(
+                    "Pass backend='auto' (the default — routes to MLX on an "
+                    "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                    "backend='cuda' to force the CUDA rail, or backend='mlx' to "
+                    "force the Apple-Silicon rail (macOS + arm64 only)."
+                ),
+            )
+        # Resolve "auto" → concrete rail. resolve_backend("auto") consults
+        # detect_apple_silicon(); "cuda"/"mlx" pass through unchanged.
+        self._effective_backend = resolve_backend(self.backend)
+
+        # Forced-mlx-on-non-Apple guard: a FORCED backend='mlx' on a host that
+        # is not Apple Silicon (macOS + arm64 + the [mlx] extra) is unrunnable —
+        # mlx-lm cannot exist here. Refuse it with a structured
+        # CONFIG_INVALID_SETTING so the operator gets an actionable error before
+        # any work. (backend='auto' never reaches here as "mlx" on a non-Apple
+        # host — resolve_backend routed it to "cuda".)
+        if self.backend == "mlx" and not detect_apple_silicon():
+            raise InvalidSettingError(
+                setting_name="backend",
+                value="mlx",
+                expected="Apple Silicon (macOS+arm64) with the [mlx] extra",
+                suggestion=(
+                    "Use backend='auto' (routes to CUDA here) or run on an "
+                    "M-series Mac with pip install 'backpropagate[mlx]'."
+                ),
+            )
+
+        # MLX unsupported-feature gates — only when the EFFECTIVE backend is the
+        # MLX rail. These features are out of scope for the MLX backend in v1.5
+        # (mlx_lm.lora is LoRA-SFT-only here). Co-located with the FP8 ladder so
+        # all the cross-field training-shape refusals live together.
+        if self._effective_backend == "mlx":
+            if self.method == "orpo":
+                raise InvalidSettingError(
+                    setting_name="backend+method",
+                    value={"backend": "mlx", "method": "orpo"},
+                    expected="ORPO is not supported on the MLX backend in v1.5",
+                    suggestion=(
+                        "ORPO (reference-free preference tuning) runs on the "
+                        "CUDA rail only in v1.5. Use method='sft' with "
+                        "backend='mlx', or method='orpo' with a CUDA GPU."
+                    ),
+                )
+            if self.fp8:
+                raise InvalidSettingError(
+                    setting_name="backend+fp8",
+                    value={"backend": "mlx", "fp8": True},
+                    expected="FP8 is a CUDA/Blackwell path; not supported on MLX",
+                    suggestion=(
+                        "FP8 (torchao float8) is a CUDA/Blackwell-only compute "
+                        "path. Drop fp8=True on the MLX backend — Apple Silicon "
+                        "uses its own unified-memory precision."
+                    ),
+                )
+            if self.mode == "full":
+                raise InvalidSettingError(
+                    setting_name="backend+mode",
+                    value={"backend": "mlx", "mode": "full"},
+                    expected="mode='full' is not supported on the MLX backend in v1.5",
+                    suggestion=(
+                        "Full fine-tuning on the MLX rail is out of scope for "
+                        "v1.5. Use mode='lora' (the default) with backend='mlx'."
+                    ),
+                )
+            # use_rslora / use_dora are PEFT-specific knobs with no mlx_lm.lora
+            # equivalent — WARN-and-ignore (do NOT raise) so an operator who set
+            # them on a CUDA-tuned config can still run on MLX.
+            if getattr(self, "use_rslora", False) or getattr(self, "use_dora", False):
+                logger.warning(
+                    "backend='mlx': use_rslora / use_dora are PEFT-specific and "
+                    "have no mlx_lm.lora equivalent — ignored for this MLX run. "
+                    "mlx_lm applies its own LoRA scaling (the alpha/r -> scale "
+                    "mapping) on the last num_layers blocks."
+                )
+
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
         # late-installed trackers (e.g. tracker installed after import).
@@ -1694,6 +2301,10 @@ class Trainer:
         logger.info(f"Trainer initialized: {self.model_name}")
         logger.info(f"  LoRA: r={self.lora_r}, alpha={self.lora_alpha}")
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
+        # v1.5 T1.2 (ORPO Wave 2): surface the objective so a post-mortem grep
+        # can confirm which path ran without reading the config.
+        if self.method == "orpo":
+            logger.info(f"  Method: orpo (beta={self.orpo_beta})")
         logger.info(
             f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
             f"unsloth_fallback={self.unsloth_fallback}"
@@ -1986,6 +2597,212 @@ class Trainer:
         )
         return configured_optim
 
+    def _fp8_supported(self) -> tuple[bool, str | None]:
+        """v1.5 T2.1: is the FP8 (torchao float8) compute path runnable here?
+
+        Three AND-ed requirements, each a distinct ENVIRONMENT axis (not an
+        operator misconfiguration — those are handled by the constructor gate
+        ladder). Returns ``(True, None)`` when all hold, else ``(False, reason)``
+        where ``reason`` names the exact missing piece + the fix, so the
+        constructor can emit ONE actionable degrade-to-bf16 WARN.
+
+        1. **CUDA present.** FP8 tensor-core ops have no CPU kernel; on a
+           CPU-only host FP8 is meaningless. (Also the most common test path —
+           ``torch.cuda.is_available()`` patched False.)
+        2. **torchao installed.** The float8 conversion lives in
+           ``torchao.float8``; without the library there is nothing to convert
+           with. Probed via ``feature_flags.check_feature("fp8")`` (find_spec —
+           no import cost) so a late ``pip install`` is honored after
+           ``refresh_features()``.
+        3. **Compute capability >= 9.0 (Hopper / Blackwell).** FP8 needs 4th-gen
+           (Hopper sm_90) or 5th-gen (Blackwell sm_120) tensor cores. Ada
+           (sm_89) and earlier lack the FP8 matmul path — torchao would fall
+           back to emulation or fail. The brief's verified contract targets the
+           RTX 5090 (sm_120).
+
+        torch import failures / capability-query errors are swallowed into a
+        ``(False, reason)`` so a half-broken CUDA stack degrades rather than
+        crashes (consistent with ``_detect_optimal_dtype``'s defensive query).
+        """
+        try:
+            import torch
+        except Exception as exc:  # noqa: BLE001 - torch genuinely optional at import edges
+            return False, (
+                f"PyTorch is not importable ({exc!r}); FP8 needs torch + CUDA. "
+                "Install the training extras: pip install 'backpropagate[fp8]'."
+            )
+        if not torch.cuda.is_available():
+            return False, (
+                "CUDA is not available (CPU-only host); FP8 tensor-core ops have "
+                "no CPU kernel. Run on a Hopper/Blackwell GPU, or drop fp8=True."
+            )
+        if not check_feature("fp8"):
+            return False, (
+                "torchao is not installed; the float8 conversion lives in "
+                "torchao.float8. Install it: pip install 'backpropagate[fp8]' "
+                "(or pip install torchao)."
+            )
+        try:
+            major, _minor = torch.cuda.get_device_capability(0)
+        except Exception as exc:  # noqa: BLE001 - defensive capability probe
+            return False, (
+                f"could not query CUDA compute capability ({exc!r}); cannot "
+                "confirm FP8 (Hopper sm_90+) support. Drop fp8=True to be safe."
+            )
+        if major < 9:
+            try:
+                name = torch.cuda.get_device_name(0)
+            except Exception:  # noqa: BLE001 - name is best-effort for the message
+                name = "this GPU"
+            return False, (
+                f"GPU compute capability is sm_{major}x ({name}); FP8 needs "
+                "sm_90+ (Hopper) or sm_120 (Blackwell). Ada (sm_89) and earlier "
+                "have no FP8 matmul path. Drop fp8=True; bf16 is the right mode "
+                "for this card."
+            )
+        return True, None
+
+    @staticmethod
+    def _fp8_module_filter(module: Any, fqn: str) -> bool:
+        """v1.5 T2.1: which modules torchao should convert to Float8Linear.
+
+        THE LOAD-BEARING GOTCHA (dogfood-verified on Blackwell sm_120): a naive
+        ``convert_to_float8_training(peft_model)`` crashes on the FIRST backward
+        pass. torchao's default filter converts EVERY ``nn.Linear``, including
+        the LoRA adapter's rank-``r`` sub-linears (``lora_A`` / ``lora_B``). FP8
+        scaled-matmul requires inner dimensions divisible by 16; a rank like
+        r=16 happens to pass but r=8 / r=24 / r=anything-not-%16 does not, and
+        even when r%16==0 the adapter math is numerically fragile in float8.
+        The fix is to convert ONLY the base projection linears and EXCLUDE:
+
+        * any module whose FQN contains ``"lora_"`` (the adapter A/B linears);
+        * the ``lm_head`` (output projection — float8 there hurts logit quality
+          and the vocab dim is often not %16-friendly);
+        * token / positional embeddings (``nn.Embedding`` — not a Linear, but
+          some architectures wrap an ``embed``-named Linear; exclude by name).
+
+        Returns True ⇒ convert this module. The predicate is intentionally a
+        pure, static function of ``(module, fqn)`` so it can be unit-tested on a
+        tiny mocked module tree without standing up torchao or a real model.
+        """
+        import torch.nn as nn
+
+        # Only Linear layers are convertible at all.
+        if not isinstance(module, nn.Linear):
+            return False
+        lowered = fqn.lower()
+        # Exclude the LoRA adapter sub-linears (the load-bearing exclusion), the
+        # LM head, and any embedding-named projection. Everything else — the
+        # base q/k/v/o/gate/up/down projection linears — is converted.
+        excluded_markers = ("lora_", "lm_head", "embed", "embedding")
+        return not any(marker in lowered for marker in excluded_markers)
+
+    def _apply_fp8_to_base(self) -> None:
+        """v1.5 T2.1: convert the base projection linears to torchao Float8Linear.
+
+        Called from :meth:`load_model` AFTER the LoRA adapter is attached (so
+        the adapter's rank-``r`` sub-linears are present in the module tree and
+        the :meth:`_fp8_module_filter` predicate can exclude them). No-op unless
+        ``self._fp8_effective`` is True (the constructor gate ladder already
+        confirmed CUDA + torchao + sm>=9 and emitted the experimental WARN).
+
+        Failure policy mirrors the unsloth→transformers fallback: ANY exception
+        during the CONVERSION (an architecture the filter mishandles, a
+        torch-version skew, a torchao runtime quirk) is caught, logged at WARN,
+        and the run continues in bf16 with ``self._fp8_effective`` flipped back
+        to False — a partial/aborted FP8 conversion must never take training
+        down.
+
+        The ONE structured hard-failure escape hatch is the IMPORT: if
+        ``_fp8_supported()`` reported torchao present (find_spec succeeded) but
+        ``import torchao.float8`` then fails, the install is in a contradictory,
+        unrecoverable state (half-installed torchao). That is NOT a graceful
+        environment degrade — the gate already promised FP8 — so it re-raises as
+        a structured ``TrainingError(code="RUNTIME_FP8_UNSUPPORTED")`` rather
+        than silently dropping to bf16. (The GLUE agent registers that catalog
+        row in exceptions.py this wave; referencing it by string before the row
+        lands is safe — BackpropagateError WARNs on an unknown code, it does not
+        crash.)
+
+        torchao prints a "Skipping import of cpp extensions / upgrade to torch
+        >= 2.11" banner on import — that is NOISE (it falls back to torch-native
+        ``_scaled_mm``, which works on sm_120), not a fatal error.
+        """
+        if not self._fp8_effective:
+            return
+        # Import is the hard-failure axis (see docstring): a broken torchao that
+        # passed the find_spec gate but can't actually import is a structured
+        # RUNTIME_FP8_UNSUPPORTED, not a silent bf16 degrade.
+        try:
+            from torchao.float8 import (
+                Float8LinearConfig,
+                convert_to_float8_training,
+            )
+        except Exception as exc:  # noqa: BLE001 - broken-install detection
+            self._fp8_effective = False
+            raise TrainingError(
+                "FP8 was reported available (torchao spec found) but "
+                "'torchao.float8' could not be imported — the torchao install "
+                f"is broken or incompatible ({type(exc).__name__}: {exc}).",
+                suggestion=(
+                    "Reinstall torchao matching your torch build: "
+                    "pip install --force-reinstall 'backpropagate[fp8]'. Or run "
+                    "without FP8 (drop fp8=True) to train in bf16."
+                ),
+                code="RUNTIME_FP8_UNSUPPORTED",
+                cause=exc,
+            ) from exc
+        # Conversion is the graceful-degrade axis: ANY failure → bf16 + WARN.
+        try:
+            # Default rowwise-ish recipe is fine for LoRA fine-tuning; an
+            # explicit config future-proofs against torchao default drift.
+            fp8_config = Float8LinearConfig()
+            convert_to_float8_training(
+                self._model,
+                config=fp8_config,
+                module_filter_fn=self._fp8_module_filter,
+            )
+            # Count what we converted so the smoke can assert ≥1 base
+            # Float8Linear AND zero lora_* Float8Linear, and so a post-mortem
+            # log shows the conversion actually bit.
+            try:
+                from torchao.float8.float8_linear import Float8Linear
+
+                converted = sum(
+                    1
+                    for _n, m in self._model.named_modules()
+                    if isinstance(m, Float8Linear)
+                )
+            except Exception:  # noqa: BLE001 - counting is best-effort telemetry
+                converted = -1
+            if converted == 0:
+                # Nothing matched the filter — the adapter is attached but no
+                # base linear was converted. Treat as a soft degrade: FP8 is
+                # not actually active, so be honest about it.
+                self._fp8_effective = False
+                logger.warning(
+                    "fp8: convert_to_float8_training matched 0 base linears "
+                    "(model architecture may not expose nn.Linear projections "
+                    "the filter recognizes); proceeding in bf16."
+                )
+                return
+            logger.info(
+                "fp8: converted %s base projection linear(s) to Float8Linear "
+                "(LoRA adapter, lm_head, embeddings excluded). FP8 compute "
+                "path active.",
+                converted if converted >= 0 else "an unknown number of",
+            )
+        except Exception as exc:  # noqa: BLE001 - broad by design: degrade, don't crash
+            self._fp8_effective = False
+            logger.warning(
+                "fp8: conversion to Float8Linear failed (%s: %s); falling back "
+                "to bf16. Training proceeds without the FP8 speed/memory win. "
+                "Set fp8=False to silence this, or report the stack so the "
+                "torchao float8 path can be hardened.",
+                type(exc).__name__,
+                exc,
+            )
+
     @staticmethod
     def _detect_optimal_dtype(configured_bf16: bool, configured_fp16: bool) -> tuple[bool, bool]:
         """v1.3 BACKEND-7: resolve (bf16, fp16) for the current GPU.
@@ -2175,6 +2992,22 @@ class Trainer:
 
         logger.info(f"Loading model: {self.model_name}")
 
+        # v1.5 T2.1 (FP8): FP8 prefers the transformers backend. Unsloth may
+        # inject its own quantized / fused linears that the nn.Linear module
+        # filter does not recognize (so they would either be missed or
+        # mis-converted), and the dogfood-verified contract is transformers +
+        # PEFT + torchao float8. When FP8 is effective and the operator left
+        # Unsloth on, force the transformers loader with an INFO log so the
+        # behavior is visible rather than silent. (No-op when fp8 is inactive.)
+        if self._fp8_effective and self.use_unsloth:
+            logger.info(
+                "fp8: forcing the transformers backend (use_unsloth disabled "
+                "for this run). Unsloth injects fused/quantized linears the FP8 "
+                "nn.Linear filter can miss; the verified FP8 path is "
+                "transformers + PEFT + torchao float8."
+            )
+            self.use_unsloth = False
+
         try:
             if self.use_unsloth:
                 try:
@@ -2254,24 +3087,62 @@ class Trainer:
                 self.model_name, loaded_model=self._model
             )
 
+        # v1.5 T2.1 (FP8): convert the base projection linears to Float8Linear
+        # AFTER the LoRA adapter is attached (the loaders call get_peft_model
+        # before returning), so the module filter can see — and exclude — the
+        # adapter's rank-r sub-linears. No-op unless self._fp8_effective is True
+        # (the gate ladder confirmed CUDA + torchao + sm>=9 at construction).
+        # Any conversion failure inside degrades to bf16 with a WARN; a broken
+        # torchao install raises RUNTIME_FP8_UNSUPPORTED.
+        self._apply_fp8_to_base()
+
     def _load_with_unsloth(self) -> None:
         """Load model using Unsloth for 2x faster training.
 
         B-017: ``FastLanguageModel.from_pretrained`` is wrapped with the HF
         Hub transient-retry decorator so a 5xx / 429 / connection timeout
         from the Hub doesn't fail the load on the first blip.
+
+        Mode-aware (v1.4.x ``mode='full'`` correctness fix):
+
+        * ``mode='lora'`` (default) — ``load_in_4bit=True`` + a LoRA adapter
+          via ``FastLanguageModel.get_peft_model``. Unchanged.
+        * ``mode='full'`` — ``full_finetuning=True`` + ``load_in_4bit=False``
+          and **no** ``get_peft_model`` call: Unsloth returns a plain
+          trainable model whose every parameter updates. This is the Unsloth
+          half of the fix for the v1.4.0 bug where ``mode='full'`` silently
+          trained a LoRA adapter on a 4-bit base. Unsloth releases that
+          predate ``full_finetuning`` raise ``TypeError`` here; ``load_model``
+          catches it (``ModelLoadError`` is not a ``RuntimeError``) and
+          degrades to the mode-aware transformers full-precision path — still
+          genuine full FT, just without Unsloth's kernels.
         """
         from unsloth import FastLanguageModel
+
+        full_ft = self.mode == "full"
+
+        from_pretrained_kwargs: dict[str, Any] = {
+            "model_name": self.model_name,
+            "max_seq_length": self.max_seq_length,
+            "dtype": None,  # Auto-detect (bf16 on Ampere+, fp16 otherwise)
+            "trust_remote_code": settings.model.trust_remote_code,
+            "_label": f"unsloth_from_pretrained:{self.model_name}",
+        }
+        if full_ft:
+            # Full fine-tuning: no 4-bit base, every weight trainable.
+            from_pretrained_kwargs["load_in_4bit"] = False
+            from_pretrained_kwargs["full_finetuning"] = True
+        else:
+            # v1.5 T2.1 (FP8): reads the resolved ``self._load_in_4bit`` (the
+            # gate ladder flips it False when FP8 is effective). FP8 routes to
+            # the transformers backend, so on the unsloth path this is True in
+            # practice — but staying consistent with the resolved value.
+            from_pretrained_kwargs["load_in_4bit"] = self._load_in_4bit
 
         try:
             self._model, self._tokenizer = _retry_hf_call(
                 FastLanguageModel.from_pretrained,
-                model_name=self.model_name,
-                max_seq_length=self.max_seq_length,
-                dtype=None,  # Auto-detect
-                load_in_4bit=True,
-                trust_remote_code=settings.model.trust_remote_code,
-                _label=f"unsloth_from_pretrained:{self.model_name}",
+                **from_pretrained_kwargs,
             )
         except Exception as e:
             # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
@@ -2284,6 +3155,16 @@ class Trainer:
                 f"Unsloth model loading failed: {e}",
                 cause_category=_classify_model_load_cause(e),
             ) from e
+
+        # mode='full': Unsloth already returned a fully-trainable model. Do
+        # NOT apply a LoRA adapter — that would re-introduce the v1.4.0
+        # QLoRA-masquerading-as-full bug.
+        if full_ft:
+            logger.info(
+                "mode='full' (unsloth): full_finetuning=True, 4-bit disabled, "
+                "no LoRA adapter; SFTTrainer will update ALL parameters."
+            )
+            return
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
         # init_lora_weights through to the Unsloth call site. Built as a
@@ -2308,6 +3189,11 @@ class Trainer:
         # default). Same shape for ``self.init_lora_weights``.
         if self.use_dora:
             lora_kwargs["use_dora"] = True
+        # v1.5 T2.3 (rsLoRA): forward use_rslora only when True so we don't
+        # tickle the kwarg on an older Unsloth/PEFT that may not accept it
+        # (same defensive shape as use_dora). alpha/sqrt(r) scaling.
+        if self.use_rslora:
+            lora_kwargs["use_rslora"] = True
         # v1.3 BACKEND-6: forward init_lora_weights only when the
         # operator picked something other than the PEFT default. PEFT
         # accepts the string {"pissa", "loftq"} OR the bool True
@@ -2332,31 +3218,98 @@ class Trainer:
             ) from e
 
     def _load_with_transformers(self) -> None:
-        """Load model using standard transformers + PEFT.
+        """Load model using standard transformers (+ PEFT for mode='lora').
 
         B-017: model + tokenizer ``from_pretrained`` calls are wrapped in
         the HF Hub transient-retry decorator.
+
+        Mode-aware (v1.4.x ``mode='full'`` correctness fix):
+
+        * ``mode='lora'`` (default) — 4-bit QLoRA base (bitsandbytes nf4,
+          CUDA-only) + a LoRA adapter via ``get_peft_model``. Byte-identical
+          to the pre-fix load path.
+        * ``mode='full'`` — full-precision base (bf16 on Ampere+, fp16 on
+          pre-Ampere, fp32 on CPU); **no** ``BitsAndBytesConfig`` and **no**
+          ``prepare_model_for_kbit_training`` / ``get_peft_model``. Every
+          parameter stays trainable and the plain model is handed straight to
+          ``SFTTrainer`` (which therefore receives no ``peft_config``). This
+          is the fix for the v1.4.0 bug where ``mode='full'`` silently trained
+          a LoRA adapter on a 4-bit base — i.e. QLoRA, the opposite of its
+          documented contract.
+
+        bitsandbytes 4-bit is CUDA-only, so ``mode='full'`` is additionally
+        the only transformers load path that works on a CPU-only runner (CI
+        smoke): it omits ``device_map='auto'`` and loads fp32 weights on CPU.
         """
         import torch
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        # Quantization config
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
+        full_ft = self.mode == "full"
+
+        if full_ft:
+            # FULL FINE-TUNING (mode='full'): full-precision weights, no
+            # quantization, no adapter. Keep the load dtype in lockstep with the
+            # SFTConfig bf16/fp16 resolution (``_detect_optimal_dtype``) so the
+            # loaded weights and the TrainingArguments mixed-precision flags
+            # never disagree: bf16 on Ampere+, fp16 on pre-Ampere, fp32 on CPU.
+            resolved_bf16, resolved_fp16 = self._detect_optimal_dtype(
+                settings.training.bf16, settings.training.fp16
+            )
+            if resolved_bf16:
+                load_dtype = torch.bfloat16
+            elif resolved_fp16:
+                load_dtype = torch.float16
+            else:
+                # CUDA unavailable -> fp32 (the only valid CPU dtype; matches
+                # the SFTConfig CPU contract that forces bf16=fp16=False).
+                load_dtype = torch.float32
+            model_load_kwargs: dict[str, Any] = {
+                # transformers 5.x canonical kwarg (``torch_dtype`` is a
+                # deprecated BC alias there); ``dtype`` is honored everywhere CI
+                # installs.
+                "dtype": load_dtype,
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
+            # device_map='auto' only when CUDA is present (a CPU runner would
+            # need accelerate and gain nothing).
+            if torch.cuda.is_available():
+                model_load_kwargs["device_map"] = "auto"
+        elif self._load_in_4bit:
+            # LoRA / QLoRA (default): 4-bit nf4 base + adapter. bitsandbytes
+            # 4-bit requires CUDA. Byte-identical to the pre-fix path.
+            from transformers import BitsAndBytesConfig
+
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            model_load_kwargs = {
+                "quantization_config": bnb_config,
+                "device_map": "auto",
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
+        else:
+            # FP8 path (mode='lora' + FP8 effective): unquantized bf16 base so
+            # torchao's convert_to_float8_training can convert the plain
+            # nn.Linear projections to Float8Linear AFTER the LoRA attach (in
+            # load_model via _apply_fp8_to_base) — it cannot convert a
+            # bitsandbytes Linear4bit. No 4-bit on this path.
+            model_load_kwargs = {
+                "dtype": torch.bfloat16,
+                "device_map": "auto",
+                "trust_remote_code": settings.model.trust_remote_code,
+                "_label": f"transformers_from_pretrained:{self.model_name}",
+            }
 
         # Load model
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            trust_remote_code=settings.model.trust_remote_code,
-            _label=f"transformers_from_pretrained:{self.model_name}",
+            **model_load_kwargs,
         )
 
         # Load tokenizer
@@ -2369,7 +3322,28 @@ class Trainer:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Prepare for training
+        # mode='full': stop here. The full-precision model trains ALL of its
+        # parameters as-is. Calling prepare_model_for_kbit_training or
+        # get_peft_model below would re-introduce the v1.4.0 QLoRA-masquerading-
+        # as-full bug; the plain model goes straight to SFTTrainer(peft_config=
+        # None).
+        if full_ft:
+            logger.info(
+                "mode='full': loaded full-precision transformers model "
+                f"(dtype={load_dtype}, quantization=none, adapter=none); "
+                "SFTTrainer will update ALL parameters."
+            )
+            return
+
+        # ----- LoRA / QLoRA path (mode='lora', the default; incl. the FP8
+        # unquantized-base variant) -----
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+        # prepare_model_for_kbit_training is a k-bit (4/8-bit) helper; on the
+        # FP8 unquantized path there's no k-bit base to prep, but it's safe on a
+        # non-quantized model and still enables gradient checkpointing + input
+        # grads, so it runs for both LoRA variants (byte-identical to pre-v1.5
+        # for the 4-bit path).
         self._model = prepare_model_for_kbit_training(self._model)
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
@@ -2391,6 +3365,13 @@ class Trainer:
         # resolution is honored uniformly across both load paths.
         if self.use_dora:
             lora_kwargs["use_dora"] = True
+        # v1.5 T2.3 (rsLoRA): thread use_rslora into PEFT's LoraConfig (the
+        # canonical wiring point). PEFT >= 0.7 accepts use_rslora; older PEFT is
+        # handled by the strip-retry below. alpha/sqrt(r) scaling vs alpha/r;
+        # zero inference cost, merge-safe. Forwarded only when True so the
+        # legacy-shape default is byte-identical for callers who never set it.
+        if self.use_rslora:
+            lora_kwargs["use_rslora"] = True
         _init_w = self.init_lora_weights
         if _init_w and _init_w != "default":
             # PEFT's init_lora_weights accepts {True, False, "gaussian",
@@ -2400,23 +3381,199 @@ class Trainer:
         try:
             lora_config = LoraConfig(**lora_kwargs)
         except TypeError as exc:
-            # Old PEFT rejected one of the v1.3 kwargs. Strip them and
+            # Old PEFT rejected one of the v1.3/v1.5 kwargs. Strip them and
             # retry with the legacy shape so the trainer doesn't hard-
             # fail on an Unsloth-pinned environment that ships an older
             # PEFT. WARN so the operator notices the silent downgrade.
             stripped: list[str] = []
-            for k in ("use_dora", "init_lora_weights"):
+            for k in ("use_dora", "use_rslora", "init_lora_weights"):
                 if k in lora_kwargs:
                     stripped.append(k)
                     lora_kwargs.pop(k)
             logger.warning(
-                f"PEFT LoraConfig rejected v1.3 kwarg(s) {stripped!r} "
+                f"PEFT LoraConfig rejected kwarg(s) {stripped!r} "
                 f"({exc!r}); retrying with the legacy LoraConfig shape. "
-                f"Upgrade PEFT >= 0.10 (DoRA) / >= 0.7 (PiSSA/LoftQ) to "
-                f"enable these features."
+                f"Upgrade PEFT >= 0.10 (DoRA) / >= 0.7 (rsLoRA / PiSSA / "
+                f"LoftQ) to enable these features."
             )
             lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
+
+    def _build_trainer(
+        self,
+        training_args: Any,
+        train_dataset: Any,
+        callbacks: list[Any] | None,
+    ) -> Any:
+        """Construct the inner TRL trainer for the resolved objective.
+
+        v1.5 T1.2 (ORPO Wave 2): single construction site for BOTH the
+        first-attempt build AND the OOM-retry rebuild in :meth:`train`. Pre-
+        ORPO those two sites each inlined ``SFTTrainer(...)`` and drifted apart
+        once (BACKEND-A-003 — the retry path bypassed the shared SFTConfig
+        helper). Routing both through this one helper makes construction-drift
+        between the first attempt and the retry structurally impossible: when
+        the objective grows a third construction wrinkle, there is exactly one
+        place to change.
+
+        For ``method == "orpo"`` builds an ``ORPOTrainer`` (NO reference model —
+        ORPO is reference-free; NO ``peft_config`` — the LoRA adapter is
+        already attached by :meth:`load_model`'s ``get_peft_model`` before
+        train() runs, exactly as the SFT path relies on). Otherwise builds an
+        ``SFTTrainer`` identically to the pre-ORPO path. Imports are
+        method-conditional and local so the test mocks
+        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``) bind at
+        call time.
+
+        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on both
+        trainers.
+        """
+        if self.method == "orpo":
+            from trl import ORPOTrainer
+
+            # Cross-version shim (v1.5 T1.2): trl's ORPOTrainer (through 0.24)
+            # sets ``model.warnings_issued["estimate_tokens"] = True`` to mute a
+            # transformers FLOP-estimate warning. transformers 5.x REMOVED the
+            # ``warnings_issued`` attribute from ``PreTrainedModel``, so that
+            # write raises ``AttributeError`` inside the constructor — before a
+            # single step — on the project's own target stack (trl 0.24 +
+            # transformers 5.5, verified on LlamaForCausalLM under a PEFT
+            # wrapper). Provide an inert dict when the attribute is absent so
+            # ORPO works across the transformers 4.x/5.x boundary. Harmless on
+            # 4.x (the attribute is already present via ``PreTrainedModel.
+            # __init__`` and is left untouched); on 5.x it is an empty dict trl
+            # writes to and nothing reads. Scoped to the ORPO path — SFT is
+            # unaffected. Remove once trl's ORPOTrainer stops touching
+            # ``warnings_issued`` (it is slated to move to trl.experimental).
+            if not hasattr(self._model, "warnings_issued"):
+                self._model.warnings_issued = {}
+
+            return ORPOTrainer(
+                model=self._model,
+                processing_class=self._tokenizer,
+                train_dataset=train_dataset,
+                args=training_args,
+                callbacks=callbacks,
+            )
+        from trl import SFTTrainer
+
+        return SFTTrainer(
+            model=self._model,
+            processing_class=self._tokenizer,
+            train_dataset=train_dataset,
+            args=training_args,
+            callbacks=callbacks,
+        )
+
+    def _build_training_args(
+        self,
+        *,
+        steps: int | None,
+        report_to: Any,
+        run_name: str | None,
+    ) -> Any:
+        """Assemble the inner trainer's config for the resolved objective.
+
+        v1.5 T1.2 (ORPO Wave 2): single config-assembly site for BOTH the
+        first-attempt build AND the OOM-retry rebuild in :meth:`train`,
+        mirroring :meth:`_build_trainer`. The OOM-retry path reads
+        ``self.batch_size`` / ``self.gradient_accumulation`` AFTER the recovery
+        loop has halved/doubled them in place, so this reads those instance
+        attributes live (it is called fresh on each retry). Everything else is
+        a pure function of constructor-resolved state + the per-call
+        ``steps`` / ``report_to`` / ``run_name``.
+
+        For ``method == "orpo"`` delegates to :func:`_build_orpo_config`
+        (beta + max_length; NO packing / gradient checkpointing). Otherwise
+        delegates to :func:`_build_sft_config` exactly as the pre-ORPO path.
+        """
+        if self.method == "orpo":
+            return _build_orpo_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                orpo_beta=self.orpo_beta,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        sft_config = _build_sft_config(
+            output_dir=str(self.output_dir),
+            per_device_train_batch_size=self.batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation,
+            max_steps=steps or settings.training.max_steps,
+            learning_rate=self.learning_rate,
+            warmup_steps=settings.training.warmup_steps,
+            max_seq_length=self.max_seq_length,
+            seed=settings.training.seed,
+            lr_scheduler_type=settings.training.lr_scheduler_type,
+            logging_steps=settings.training.logging_steps,
+            save_steps=settings.training.save_steps,
+            weight_decay=settings.training.weight_decay,
+            report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
+            run_name=run_name,
+            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the constructor-
+            # resolved instance attributes (per-invocation kwarg OR settings
+            # fallback) through to the helper.
+            packing=self.packing,
+            optim=self.optim,
+            # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
+            # resolved training mode (``"lora"`` default | ``"full"``).
+            mode=self.mode,
+        )
+        # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
+        # SFTConfig rather than threading fp8 into _build_sft_config (which
+        # stays byte-identical — the dtype/precision logic there is untouched).
+        # torchao's float8 matmul hard-requires the contracted TOKEN dimension
+        # divisible by 16; with ordinary right-padding the token count is
+        # batch x seq, and seq is dynamically padded to the longest row in the
+        # batch (e.g. 280) — not a multiple of 16, which crashes _scaled_mm on
+        # backward (dogfood-verified, sm_120). pad_to_multiple_of=16 rounds the
+        # padded sequence length up to the next multiple of 16 so batch x seq is
+        # always %16; padding_free=False guarantees a rectangular (not flattened
+        # ragged) batch the multiple-of-16 padding can act on. Both are no-ops
+        # for the non-FP8 path (we only touch the config when effective).
+        if self._fp8_effective:
+            _set = self._set_fp8_shape_constraints_on_sft_config
+            _set(sft_config)
+        return sft_config
+
+    @staticmethod
+    def _set_fp8_shape_constraints_on_sft_config(sft_config: Any) -> None:
+        """v1.5 T2.1: set pad_to_multiple_of=16 + padding_free=False on an
+        already-built SFTConfig so FP8's float8 matmul gets 16-aligned token
+        dimensions.
+
+        Factored out (and attribute-guarded) so a TRL version whose SFTConfig
+        lacks either field degrades gracefully — we set what exists and skip
+        what doesn't, logging at DEBUG. The fields exist on trl 0.24+ (the
+        project's target stack); the guard is belt-and-braces for older/newer
+        trl that renamed them.
+        """
+        if hasattr(sft_config, "pad_to_multiple_of"):
+            sft_config.pad_to_multiple_of = 16
+        else:  # pragma: no cover - version-dependent
+            logger.debug(
+                "fp8: SFTConfig has no pad_to_multiple_of field on this trl "
+                "version; FP8 matmul may hit a non-16-divisible token dim."
+            )
+        if hasattr(sft_config, "padding_free"):
+            sft_config.padding_free = False
+        if hasattr(sft_config, "packing"):
+            # Defensive: the constructor already forced self.packing False for
+            # FP8, but re-assert on the config so a future code path that sets
+            # packing elsewhere can't silently re-enable the ragged-sequence
+            # shape FP8 can't handle.
+            sft_config.packing = False
 
     def train(
         self,
@@ -2465,7 +3622,12 @@ class Trainer:
         """
         import time
 
-        from trl import SFTTrainer
+        # v1.5 T1.2 (ORPO Wave 2): the inner-trainer class (SFTTrainer or
+        # ORPOTrainer) is imported inside :meth:`_build_trainer` so the
+        # method-conditional import resolves at construction time (and so the
+        # two test mocks ``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``
+        # both bind correctly). No module-level ``from trl import SFTTrainer``
+        # here anymore — construction is centralized in _build_trainer.
 
         # Validate inputs
         if steps is not None:
@@ -2481,12 +3643,30 @@ class Trainer:
                     suggestion="Use samples=1000 or higher"
                 )
 
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): route the WHOLE run to the
+        # MLX rail when the effective backend is "mlx". This MUST happen BEFORE
+        # ``if not self._is_loaded: self.load_model()`` — the CUDA load_model()
+        # path probes torch.cuda and would raise GPUNotAvailableError on a Mac,
+        # which is exactly the boundary this rail retires (V1_5_BRIEF finding
+        # 21). _train_with_mlx drives mlx_lm.lora via a subprocess seam and does
+        # NOT load a model into this process. The constructor already gated out
+        # orpo / fp8 / mode='full' for the MLX rail, so this path is SFT-LoRA.
+        if self._effective_backend == "mlx":
+            return self._train_with_mlx(
+                dataset, steps=steps, samples=samples, callback=callback
+            )
+
         # Load model if not loaded
         if not self._is_loaded:
             self.load_model()
 
-        # Load dataset
-        train_dataset = self._load_dataset(dataset, samples)
+        # Load dataset.
+        # v1.5 T1.2 (ORPO Wave 2): thread the objective so the loader returns
+        # raw {chosen, rejected} preference rows for ORPO (via
+        # to_preference_dataset) instead of collapsing to a single text
+        # column, and so a mismatched dataset surfaces a structured
+        # DatasetFormatError before the trainer is built.
+        train_dataset = self._load_dataset(dataset, samples, method=self.method)
 
         # Pre-tokenize for Windows safety.
         #
@@ -2500,7 +3680,15 @@ class Trainer:
         # (run_id is minted below; this log fires before that point so we
         # don't thread it here — a follow-up log line at run_id mint time
         # carries the correlation token.)
-        if os.name == "nt" and settings.windows.pre_tokenize:
+        # v1.5 T1.2 (ORPO Wave 2): the Windows pre-tokenize path tokenizes a
+        # single ``text`` column ahead of training (see _pre_tokenize). ORPO
+        # rows have NO text column — they carry raw {chosen, rejected, prompt}
+        # and ORPOTrainer tokenizes its own paired rows with the chat template
+        # at train time. Pre-tokenizing them would either KeyError on the
+        # missing text column or destroy the pairing, so we gate this to
+        # method='sft' only. ORPO on Windows defers tokenization to ORPOTrainer
+        # (same as the non-Windows SFT path).
+        if self.method == "sft" and os.name == "nt" and settings.windows.pre_tokenize:
             logger.info(
                 "Pre-tokenization: applied (os.name=nt, windows.pre_tokenize=True) "
                 "for dataset of %d samples",
@@ -2509,8 +3697,9 @@ class Trainer:
             train_dataset = self._pre_tokenize(train_dataset)
         else:
             logger.info(
-                "Pre-tokenization: deferred to SFTTrainer "
-                "(os.name=%s, windows.pre_tokenize=%s) for dataset of %d samples",
+                "Pre-tokenization: deferred to inner trainer "
+                "(method=%s, os.name=%s, windows.pre_tokenize=%s) for dataset of %d samples",
+                self.method,
                 os.name,
                 settings.windows.pre_tokenize,
                 len(train_dataset),
@@ -2628,39 +3817,20 @@ class Trainer:
         run_id = run_id_for_resume or uuid.uuid4().hex
         run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
 
-        # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: SFTConfig assembly
-        # is delegated to the module-level :func:`_build_sft_config` helper so
-        # the same defaults reach the MultiRunTrainer call site. The helper
-        # owns the consumer-card paged-optim upgrade + Ada bf16/fp16 selection;
-        # operator overrides on ``settings.training.*`` are honored.
-        training_args = _build_sft_config(
-            output_dir=str(self.output_dir),
-            per_device_train_batch_size=self.batch_size,
-            gradient_accumulation_steps=self.gradient_accumulation,
-            max_steps=steps or settings.training.max_steps,
-            learning_rate=self.learning_rate,
-            warmup_steps=settings.training.warmup_steps,
-            max_seq_length=self.max_seq_length,
-            seed=settings.training.seed,
-            lr_scheduler_type=settings.training.lr_scheduler_type,
-            logging_steps=settings.training.logging_steps,
-            save_steps=settings.training.save_steps,
-            weight_decay=settings.training.weight_decay,
-            report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
-            run_name=run_name,
-            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the constructor-
-            # resolved instance attributes (per-invocation kwarg OR settings
-            # fallback) through to the helper. Pre-fix the helper read
-            # ``settings.data.packing`` / ``settings.training.optim`` directly,
-            # silently bypassing the per-invocation override path that the
-            # CLI introspection filter now passes through.
-            packing=self.packing,
-            optim=self.optim,
-            # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
-            # resolved training mode (``"lora"`` default | ``"full"``) into
-            # the helper so SFTConfig assembly picks up the per-mode
-            # gradient_checkpointing + paged-optim contract.
-            mode=self.mode,
+        # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: training-args
+        # assembly is delegated to a module-level helper so the same defaults
+        # reach the OOM-retry rebuild (and, for SFT, the MultiRunTrainer call
+        # site). Both helpers own the consumer-card paged-optim upgrade + Ada
+        # bf16/fp16 selection + CPU downgrades; operator overrides on
+        # ``settings.training.*`` are honored.
+        #
+        # v1.5 T1.2 (ORPO Wave 2): pick the builder by objective. ORPO uses
+        # _build_orpo_config (beta + max_length; NO packing / gradient
+        # checkpointing); SFT uses _build_sft_config exactly as before. The
+        # config-build is also re-run identically in the OOM-retry block below
+        # — keep the two call shapes in lockstep.
+        training_args = self._build_training_args(
+            steps=steps, report_to=report_to, run_name=run_name
         )
 
         # F-003: build the HF-TrainerCallback bridge ONCE for this train()
@@ -2672,13 +3842,13 @@ class Trainer:
         )
         sft_callbacks = [_bridge_cb] if _bridge_cb is not None else None
 
-        # Create trainer (TRL 0.27+ uses processing_class instead of tokenizer)
-        self._trainer = SFTTrainer(
-            model=self._model,
-            processing_class=self._tokenizer,
-            train_dataset=train_dataset,
-            args=training_args,
-            callbacks=sft_callbacks,
+        # v1.5 T1.2 (ORPO Wave 2): construct via the shared _build_trainer
+        # helper (SFTTrainer or ORPOTrainer per self.method). This is the
+        # FIRST of two construction sites; the OOM-retry rebuild below calls
+        # the SAME helper so the first-attempt-vs-retry construction can never
+        # drift (kills the BACKEND-A-003 drift-bug class for ORPO too).
+        self._trainer = self._build_trainer(
+            training_args, train_dataset, sft_callbacks
         )
 
         # Apply train_on_responses_only if using Unsloth (Phase 1.1 optimization)
@@ -2690,17 +3860,26 @@ class Trainer:
         # the multi-run path silently skipped this step despite the docstring
         # claim — loss leaked back onto the user prompt for multi-run users).
         #
+        # v1.5 T1.2 (ORPO Wave 2): train_on_responses_only is MEANINGLESS for
+        # ORPO — it masks the user prompt in a single ``text`` column so loss
+        # is computed only on the assistant turn, but ORPO trains on PAIRED
+        # {chosen, rejected} rows (no single text column to mask). Gate it to
+        # method='sft' so the ORPO trainer is never passed to the Unsloth
+        # masker. resolved_response_markers stays None for ORPO.
+        #
         # F-014: track the resolved (instruction, response) marker pair so the
         # hyperparameters dict built further down can persist it into run
         # history (auditable post-mortem when a probe falls back to ChatML on
         # a non-ChatML tokenizer).
-        self._trainer, resolved_response_markers = _apply_train_on_responses_only(
-            self._trainer,
-            self._tokenizer,
-            enabled=self._train_on_responses,
-            use_unsloth=self.use_unsloth,
-            response_markers_override=self._response_markers_override,
-        )
+        resolved_response_markers: tuple[str, str] | None = None
+        if self.method == "sft":
+            self._trainer, resolved_response_markers = _apply_train_on_responses_only(
+                self._trainer,
+                self._tokenizer,
+                enabled=self._train_on_responses,
+                use_unsloth=self.use_unsloth,
+                response_markers_override=self._response_markers_override,
+            )
 
         # Train
         # B-001: ``run_id`` (the UUID4 correlation token) was minted above
@@ -2732,6 +3911,26 @@ class Trainer:
             "max_samples": samples or settings.data.max_samples,
             "use_unsloth": self.use_unsloth,
             "seed": settings.training.seed,
+            # v1.5 T1.2 (ORPO Wave 2): persist the training objective + the
+            # ORPO loss weight so a run-history audit can tell which run was
+            # ORPO vs SFT (and reproduce the beta) without re-reading the
+            # config. orpo_beta is recorded for every run (harmless for SFT;
+            # the audit field stays uniform across the run table).
+            "method": self.method,
+            "orpo_beta": self.orpo_beta,
+            # v1.5 T2.1 (FP8): persist the EFFECTIVE FP8 state (not the
+            # requested ``self.fp8``) so a run-history audit reflects what
+            # actually ran — fp8=True that degraded to bf16 on an unsupported
+            # card records ``"fp8": False`` honestly. v1.5 T2.3 (rsLoRA):
+            # persist use_rslora for adapter-scaling provenance (which scaling
+            # produced this adapter — alpha/r vs alpha/sqrt(r)).
+            "fp8": self._fp8_effective,
+            "use_rslora": self.use_rslora,
+            # v1.5 T3.2: persist whether this run kept <think> CoT in the SFT
+            # target + applied trace-length filtering (reasoning-trace recipe
+            # provenance — distinguishes an R1-distillation run from plain SFT
+            # in the run-history audit table).
+            "reasoning_trace": self.reasoning_trace,
         }
         # F-014: auditable per-run record of the chat markers actually used by
         # train_on_responses_only. Absent when the mode is disabled.
@@ -2782,43 +3981,29 @@ class Trainer:
 
             while True:
                 try:
-                    # Re-create SFTTrainer with current batch / accum on retry.
-                    # (The first iteration uses the trainer built above.)
+                    # Re-create the inner trainer with current batch / accum on
+                    # retry. (The first iteration uses the trainer built above.)
                     if oom_retries > 0:
-                        # Wave 6a BACKEND-A-003: re-build via the shared helper
-                        # so the OOM-retry path inherits the same paged/bf16
-                        # upgrades as the first attempt. The detectors are
-                        # pure functions of the configured value, so the
-                        # resolution is stable across retries.
-                        training_args = _build_sft_config(
-                            output_dir=str(self.output_dir),
-                            per_device_train_batch_size=self.batch_size,
-                            gradient_accumulation_steps=self.gradient_accumulation,
-                            max_steps=steps or settings.training.max_steps,
-                            learning_rate=self.learning_rate,
-                            warmup_steps=settings.training.warmup_steps,
-                            max_seq_length=self.max_seq_length,
-                            seed=settings.training.seed,
-                            lr_scheduler_type=settings.training.lr_scheduler_type,
-                            logging_steps=settings.training.logging_steps,
-                            save_steps=settings.training.save_steps,
-                            weight_decay=settings.training.weight_decay,
-                            report_to=report_to,  # F-005: same resolution on retry.
-                            run_name=run_name,
-                            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): same
-                            # per-invocation threading as the first attempt
-                            # so the OOM-retry path inherits the operator's
-                            # ``packing`` / ``optim`` overrides instead of
-                            # silently reverting to the settings layer.
-                            packing=self.packing,
-                            optim=self.optim,
-                            # v1.4 BACKEND-F-008 (Wave 6b features): same
-                            # per-invocation threading on retry so the OOM
-                            # rebuild stays mode-coherent.
-                            mode=self.mode,
+                        # Wave 6a BACKEND-A-003 + v1.5 T1.2 (ORPO Wave 2):
+                        # re-build via the SAME shared helpers the first attempt
+                        # used (_build_training_args + _build_trainer) so the
+                        # OOM-retry path inherits the identical paged/bf16
+                        # upgrades AND the identical objective (SFT vs ORPO).
+                        # The detectors are pure functions of the configured
+                        # value, so the resolution is stable across retries;
+                        # _build_training_args reads self.batch_size /
+                        # self.gradient_accumulation live, picking up the
+                        # recovery loop's halved/doubled values. Routing the
+                        # rebuild through the same two helpers makes
+                        # first-attempt-vs-retry drift structurally impossible —
+                        # an ORPO retry rebuilds an ORPOTrainer, never an
+                        # SFTTrainer (the BACKEND-A-003 drift-bug class, now
+                        # also closed for ORPO).
+                        training_args = self._build_training_args(
+                            steps=steps, report_to=report_to, run_name=run_name
                         )
                         # F-003: rebuild the bridge for each OOM retry so the
-                        # adapter is bound to the fresh SFTTrainer instance.
+                        # adapter is bound to the fresh trainer instance.
                         # ``callback`` is captured from the enclosing train()
                         # call; if None, sft_callbacks stays None.
                         _bridge_cb_retry = (
@@ -2827,12 +4012,8 @@ class Trainer:
                         sft_callbacks_retry = (
                             [_bridge_cb_retry] if _bridge_cb_retry is not None else None
                         )
-                        self._trainer = SFTTrainer(
-                            model=self._model,
-                            processing_class=self._tokenizer,
-                            train_dataset=train_dataset,
-                            args=training_args,
-                            callbacks=sft_callbacks_retry,
+                        self._trainer = self._build_trainer(
+                            training_args, train_dataset, sft_callbacks_retry
                         )
 
                     # F-017: thread resume_from_checkpoint into the inner
@@ -3332,10 +4513,227 @@ class Trainer:
             logger.info(f"run_ended run_id={run_id} status={status}")
             unbind_run_context("run_id", "session_kind")
 
+    def _train_with_mlx(
+        self,
+        dataset: str | Any,
+        *,
+        steps: int | None,
+        samples: int | None,
+        callback: TrainingCallback | None,
+    ) -> TrainingRun:
+        """v1.5 T3.1: train on the MLX (Apple-Silicon) rail via ``mlx_lm.lora``.
+
+        Structurally parallel to the CUDA ``train()`` bookkeeping so export /
+        run-history / model-card stay uniform across rails: it mints + binds a
+        run_id, records run-start/-completion in the on-disk run history (tagged
+        ``backend="mlx"`` in the hyperparameters), wraps the
+        :class:`~backpropagate.mlx_backend.MLXRunResult` into a
+        :class:`TrainingRun`, appends it to ``self._training_runs``, sets
+        ``self._has_trained = True``, and fires the ``on_complete`` callback.
+
+        It does NOT call :meth:`load_model` — the MLX toolchain loads the model
+        itself inside the ``mlx_lm.lora`` subprocess (unified memory; no CUDA
+        probe), which is the whole point of retiring the "no macOS training"
+        boundary. ``mlx_lm.lora`` performs its own dataset materialization from
+        the prepared data dir, so there is no in-process ``_load_dataset`` /
+        ``_pre_tokenize`` step on this rail.
+        """
+        import time
+
+        from .mlx_backend import MLXBackend, prepare_mlx_data_dir
+
+        # Mint + bind the run_id exactly like the CUDA path (single_run kind).
+        run_id = uuid.uuid4().hex
+        legacy_run_label = f"run_{len(self._training_runs) + 1}"
+        bind_run_context(run_id=run_id, session_kind="single_run")
+        start_time = time.time()
+        status = "error"  # success path overwrites to "ok"
+
+        # iters = steps (per-invocation) or the configured max_steps default.
+        iters = steps or settings.training.max_steps
+        max_samples = samples or settings.data.max_samples
+
+        # The MLX adapter dir lives under output_dir/mlx_adapter; it is plain
+        # safetensors and feeds the existing export_ollama_adapter path.
+        adapter_dir = self.output_dir / "mlx_adapter"
+        data_dir = self.output_dir / "mlx_data"
+
+        run_history = RunHistoryManager(str(self.output_dir))
+        dataset_info = dataset if isinstance(dataset, str) else type(dataset).__name__
+        hyperparameters: dict[str, Any] = {
+            "lora_r": self.lora_r,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "gradient_accumulation": self.gradient_accumulation,
+            "max_seq_length": self.max_seq_length,
+            "max_steps": iters,
+            "max_samples": max_samples,
+            "use_unsloth": False,  # never on the MLX rail
+            "seed": settings.training.seed,
+            "method": self.method,
+            "orpo_beta": self.orpo_beta,
+            "fp8": False,  # gated out for the MLX rail
+            "use_rslora": self.use_rslora,
+            "reasoning_trace": self.reasoning_trace,
+            # v1.5 T3.1: tag the rail so a run-history audit can tell an MLX run
+            # from a CUDA run without re-reading the config.
+            "backend": "mlx",
+        }
+        try:
+            run_history.record_run_started(
+                run_id=run_id,
+                model_name=self.model_name,
+                dataset_info=dataset_info,
+                hyperparameters=hyperparameters,
+                session_kind="single_run",
+                checkpoint_path=str(adapter_dir),
+                dataset_hash=_compute_dataset_hash(dataset),
+            )
+        except Exception as hist_err:
+            logger.warning(
+                f"RunHistoryManager.record_run_started failed: {hist_err}"
+            )
+
+        logger.info(
+            f"run_started run_id={run_id} legacy_label={legacy_run_label} "
+            f"backend=mlx iters={iters}"
+        )
+
+        try:
+            # Materialize the dataset into the mlx_lm.lora data-dir layout
+            # (train.jsonl + optional valid.jsonl, one chat record per line).
+            # v1.5 T3.2 / re-audit #10: thread reasoning_trace + its bounds so
+            # the <think> trace-length filter runs on THIS rail too (the CUDA
+            # rail filters in _load_dataset, which the MLX path skips). When
+            # self.reasoning_trace is False (the common path, and always under
+            # ORPO after the #7 neutralization) this is a no-op.
+            prepare_mlx_data_dir(
+                dataset,
+                data_dir,
+                seed=settings.training.seed,
+                max_samples=max_samples,
+                shuffle=settings.data.shuffle,
+                reasoning_trace=self.reasoning_trace,
+                min_trace_tokens=self.min_trace_tokens,
+                max_trace_tokens=self.max_trace_tokens,
+            )
+
+            backend = MLXBackend(
+                model=self.model_name,
+                dataset_dir=data_dir,
+                adapter_path=adapter_dir,
+                lora_r=self.lora_r,
+                lora_alpha=self.lora_alpha,
+                lora_dropout=self.lora_dropout,
+                learning_rate=self.learning_rate,
+                iters=iters,
+                batch_size=self.batch_size,
+                max_seq_length=self.max_seq_length,
+                seed=settings.training.seed,
+            )
+            result = backend.run()
+
+            duration = time.time() - start_time
+            # Re-audit LOW: a successful run whose loss could NOT be parsed from
+            # mlx_lm.lora stdout must NOT be coerced to 0.0 — 0.0 reads as a
+            # *perfect* run and silently corrupts run-history / model-card
+            # provenance. The raw value (``None`` when unparseable) is the
+            # honest signal: it flows verbatim to record_run_completed (which
+            # takes ``float | None``). The ``TrainingRun.final_loss`` field is
+            # typed ``float``, so use ``nan`` as the in-object sentinel for
+            # "ran, loss unknown" — nan is never mistaken for a real (let alone
+            # perfect) loss, and ``final_loss_parsed`` below records the truth.
+            parsed_loss = result.final_loss  # None when stdout parse missed
+            run_final_loss = parsed_loss if parsed_loss is not None else float("nan")
+            run = TrainingRun(
+                run_id=run_id,
+                steps=result.iters,
+                final_loss=run_final_loss,
+                loss_history=[],
+                duration_seconds=duration,
+                samples_seen=max_samples,
+                output_path=result.adapter_path,
+                metadata={
+                    "legacy_run_label": legacy_run_label,
+                    "backend": "mlx",
+                    # Preserve the honest "could not parse a loss" signal — the
+                    # CUDA path always has a numeric final_loss; the MLX rail's
+                    # best-effort stdout parse may not, so record the raw flag.
+                    "final_loss_parsed": parsed_loss is not None,
+                    "val_loss": result.val_loss,
+                },
+            )
+
+            self._training_runs.append(run)
+            # Mirror the CUDA path: flip the save()-tripwire flag now that a
+            # real mlx_lm.lora run completed and produced a TrainingRun.
+            self._has_trained = True
+
+            if callback and callback.on_complete:
+                try:
+                    callback.on_complete(run)
+                except Exception as cb_error:
+                    logger.warning(
+                        f"on_complete callback raised error: {cb_error}"
+                    )
+
+            loss_str = (
+                f"{parsed_loss:.4f}" if parsed_loss is not None else "unparsed"
+            )
+            logger.info(
+                f"Training complete (mlx): final_loss={loss_str}, "
+                f"time={duration:.1f}s"
+            )
+            status = "ok"
+
+            try:
+                run_history.record_run_completed(
+                    run_id=run_id,
+                    # Honest provenance: the raw parsed value (None when the
+                    # stdout loss parse missed), NOT a 0.0 that reads as perfect.
+                    final_loss=parsed_loss,
+                    loss_history=[],
+                    steps=run.steps,
+                    duration_seconds=duration,
+                    checkpoint_path=run.output_path,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_completed failed: {hist_err}"
+                )
+
+            return run
+        except Exception as exc:
+            # Record the failure in run history (best-effort) and fire on_error,
+            # then re-raise — structurally parallel to the CUDA path. MLX
+            # failures arrive as structured TrainingError / MLXUnavailableError
+            # from MLXBackend.run(), or DatasetError from prepare_mlx_data_dir.
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
+            if callback and callback.on_error:
+                try:
+                    callback.on_error(exc)
+                except Exception as cb_error:
+                    logger.warning(f"on_error callback raised error: {cb_error}")
+            raise
+        finally:
+            logger.info(f"run_ended run_id={run_id} status={status}")
+            unbind_run_context("run_id", "session_kind")
+
     def _load_dataset(
         self,
         dataset: str | Any,
         samples: int | None = None,
+        method: str = "sft",
     ) -> Any:
         """
         Load dataset from various sources.
@@ -3349,19 +4747,75 @@ class Trainer:
             - datasets.Dataset: used directly
             - DatasetLoader: calls .to_hf_dataset() directly
 
+        v1.5 T1.2 (ORPO Wave 2): when ``method == "orpo"`` the loader returns
+        RAW preference pairs (``{chosen, rejected, [prompt]}``) instead of the
+        collapsed single-text SFT shape:
+
+        * DatasetLoader paths (a ``DatasetLoader`` passed directly OR a local
+          file string) call :meth:`DatasetLoader.to_preference_dataset`, which
+          preserves the pair columns and raises ``DatasetFormatError``
+          (``INPUT_DATASET_FORMAT_UNSUPPORTED``) when no row carries both
+          ``chosen`` and ``rejected``.
+        * HF-name and in-memory ``Dataset`` paths cannot re-run format
+          detection, so they assert ``chosen`` and ``rejected`` are present in
+          ``column_names`` and raise ``DatasetFormatError`` otherwise.
+
+        Symmetrically, when ``method == "sft"`` and a DatasetLoader detects a
+        PREFERENCE-shaped file, a WARN is emitted — SFT training proceeds on
+        the ``chosen`` response (the loader knows how to render preference
+        rows for SFT: each row becomes prompt -> chosen, dropping
+        ``rejected``), and the operator is told they can pass ``--method
+        orpo`` to also learn from the ``rejected`` response.
+
         Raises:
             DatasetNotFoundError: If dataset file doesn't exist
             DatasetParseError: If dataset cannot be parsed
+            DatasetFormatError: method='orpo' on a dataset with no
+                chosen/rejected columns (code INPUT_DATASET_FORMAT_UNSUPPORTED)
             DatasetError: For other dataset-related errors
         """
         from datasets import Dataset, load_dataset
 
+        from .datasets import DatasetFormat
+        from .exceptions import DatasetFormatError
+
+        is_orpo = method == "orpo"
         max_samples = samples or settings.data.max_samples
 
         # File extensions that DatasetLoader handles
         _LOCAL_FILE_EXTENSIONS = (
             '.jsonl', '.json', '.csv', '.parquet', '.txt', '.md',
         )
+
+        # v1.5 T1.2 (ORPO Wave 2): the supported_formats list reused in every
+        # ORPO DatasetFormatError raised from the non-loader paths below.
+        _ORPO_SUPPORTED = ["{chosen, rejected}", "{prompt, chosen, rejected}"]
+
+        def _emit_sft_on_preference_warning(detected: DatasetFormat) -> None:
+            """WARN when an SFT run is pointed at a preference-shaped file."""
+            if not is_orpo and detected == DatasetFormat.PREFERENCE:
+                logger.warning(
+                    "Dataset looks like preference pairs (detected format "
+                    "'preference': rows carry {chosen, rejected}), but "
+                    "method='sft'. Training SFT on the 'chosen' response "
+                    "(each row renders as prompt -> chosen, dropping "
+                    "'rejected'). Pass --method orpo to also learn from the "
+                    "'rejected' response (reference-free ORPO preference "
+                    "training)."
+                )
+
+        def _require_preference_columns(hf_ds: Any, source: str) -> None:
+            """Assert an HF/in-memory Dataset carries chosen+rejected for ORPO."""
+            cols = getattr(hf_ds, "column_names", []) or []
+            if "chosen" not in cols or "rejected" not in cols:
+                raise DatasetFormatError(
+                    f"method='orpo' requires preference pairs but the {source} "
+                    f"has no chosen/rejected columns (columns: {list(cols)}). "
+                    f"ORPO needs each row to carry both 'chosen' and "
+                    f"'rejected' (optionally 'prompt').",
+                    detected_format=None,
+                    supported_formats=_ORPO_SUPPORTED,
+                )
 
         try:
             if dataset is None:
@@ -3372,6 +4826,8 @@ class Trainer:
                     split=settings.data.dataset_split,
                     _label=f"load_dataset:{settings.data.dataset_name}",
                 )
+                if is_orpo:
+                    _require_preference_columns(ds, "default HuggingFace dataset")
             elif isinstance(dataset, DatasetLoader):
                 # DatasetLoader passed directly — use its validated output
                 validation = dataset.validation_result
@@ -3385,7 +4841,13 @@ class Trainer:
                     )
                     for err in validation.errors[:5]:
                         logger.warning(f"  {err}")
-                ds = dataset.to_hf_dataset()
+                if is_orpo:
+                    # Preserves raw chosen/rejected/[prompt]; raises
+                    # DatasetFormatError when no pair row exists.
+                    ds = dataset.to_preference_dataset()
+                else:
+                    _emit_sft_on_preference_warning(dataset.detected_format)
+                    ds = dataset.to_hf_dataset()
             elif isinstance(dataset, str):
                 if any(dataset.lower().endswith(ext) for ext in _LOCAL_FILE_EXTENSIONS):
                     # Local file — route through DatasetLoader for format detection,
@@ -3414,7 +4876,14 @@ class Trainer:
                         for err in validation.errors[:5]:
                             logger.warning(f"  {err}")
 
-                    ds = loader.to_hf_dataset()
+                    if is_orpo:
+                        # to_preference_dataset raises DatasetFormatError when
+                        # the file is an SFT file with no chosen/rejected rows
+                        # (the "operator pointed ORPO at an SFT dataset" case).
+                        ds = loader.to_preference_dataset()
+                    else:
+                        _emit_sft_on_preference_warning(loader.detected_format)
+                        ds = loader.to_hf_dataset()
                 else:
                     # No file extension — assume HuggingFace dataset name
                     # B-017: retry on transient HF Hub failures (5xx, 429, timeouts).
@@ -3430,28 +4899,180 @@ class Trainer:
                             f"Failed to load HuggingFace dataset '{dataset}': {e}",
                             suggestion="Check dataset name and network connection"
                         ) from e
+                    if is_orpo:
+                        _require_preference_columns(
+                            ds, f"HuggingFace dataset '{dataset}'"
+                        )
             elif isinstance(dataset, Dataset):
                 ds = dataset
+                if is_orpo:
+                    _require_preference_columns(ds, "in-memory Dataset")
             else:
                 raise DatasetError(
                     f"Unsupported dataset type: {type(dataset).__name__}",
                     suggestion="Use a file path (JSONL, CSV, Parquet), HuggingFace dataset name, Dataset object, or DatasetLoader"
                 )
         except (DatasetNotFoundError, DatasetParseError, DatasetError):
+            # DatasetFormatError is a DatasetError subclass — propagates here
+            # unchanged (the ORPO format guard must not be downgraded to a
+            # generic DatasetError by the catch-all below).
             raise
         except FileNotFoundError as e:
             raise DatasetNotFoundError(str(e)) from e
         except Exception as e:
             raise DatasetError(f"Failed to load dataset: {e}") from e
 
-        # Limit samples
+        # Limit samples. Method-agnostic: preference Datasets are ordinary
+        # datasets.Dataset objects, so shuffle/select apply identically.
         if max_samples > 0 and len(ds) > max_samples:
             if settings.data.shuffle:
                 ds = ds.shuffle(seed=settings.training.seed)
             ds = ds.select(range(max_samples))
 
+        # v1.5 T3.2 (reasoning-trace SFT): drop empty / over-long <think>
+        # traces from the materialized SFT dataset. Gated on method == "sft" —
+        # reasoning-ORPO is out of scope (the ORPO path returns raw preference
+        # pairs, not a single collapsed text column, so trace filtering would
+        # not apply). load_model() runs before _load_dataset, so the tokenizer
+        # is available for an exact (non-approximate) token count.
+        if self.reasoning_trace and method == "sft":
+            ds = self._filter_reasoning_traces(ds)
+
         logger.info(f"Loaded {len(ds)} samples")
         return ds
+
+    def _filter_reasoning_traces(self, ds: Any) -> Any:
+        """Drop empty / over-long ``<think>`` traces from an SFT dataset.
+
+        v1.5 T3.2. Routes the materialized HF dataset's text rows through
+        :func:`datasets.filter_by_trace_length` (CORE's PINNED contract), which
+        keeps only rows whose ``<think>`` span tokenizes within
+        ``[self.min_trace_tokens, self.max_trace_tokens]`` and (by default)
+        carries a ``<think>`` span at all. ``<think>`` stays PLAIN TEXT — this
+        function never touches the tokenizer's vocabulary (no
+        ``add_special_tokens`` / ``resize_token_embeddings``); it only *counts*
+        tokens via ``self._tokenizer.encode`` so the merge→GGUF→Ollama export
+        pipeline is unaffected.
+
+        Also runs CORE's empty-``<think>`` advisory: if the model's chat
+        template itself injects an empty ``<think></think>`` (some R1/QwQ
+        templates do), a dataset whose targets ALSO open with ``<think>`` would
+        double the marker. The template is rendered once (the same
+        ``apply_chat_template`` probe :func:`_detect_chat_markers` uses) to
+        detect that, and the advisory warns when the combination would double.
+
+        Best-effort: a missing tokenizer or a malformed row never aborts the
+        run — the dataset is returned unfiltered with a WARN. The filter's own
+        :meth:`TraceFilterStats.summary` is logged at INFO (mirrors the
+        ``filter_by_quality`` INFO pattern).
+        """
+        from .datasets import (
+            _extract_think_spans,
+            filter_by_trace_length,
+            warn_on_doubled_think,
+        )
+
+        text_column = settings.data.text_column
+        column_names = list(getattr(ds, "column_names", []) or [])
+        if text_column not in column_names:
+            logger.warning(
+                f"reasoning_trace: dataset has no '{text_column}' column "
+                f"(columns: {column_names}); skipping trace-length filtering. "
+                "Reasoning-trace SFT expects a single collapsed text column "
+                "containing the <think>...</think> target."
+            )
+            return ds
+
+        tokenizer = getattr(self, "_tokenizer", None)
+        if tokenizer is None:
+            logger.warning(
+                "reasoning_trace: tokenizer not loaded; skipping trace-length "
+                "filtering (run load_model() before _load_dataset)."
+            )
+            return ds
+
+        def _token_counter(text: str) -> int:
+            # Plain length of the encoded ids — NO vocabulary mutation. Falls
+            # back to a whitespace count if the tokenizer rejects the text so a
+            # single odd row cannot abort the whole run.
+            try:
+                return len(tokenizer.encode(text))
+            except Exception:  # nosec B110 — best-effort token count; whitespace fallback
+                return len(text.split())
+
+        # Empty-<think> advisory: render the chat template once (same probe as
+        # _detect_chat_markers) to learn whether the template itself opens an
+        # empty <think>. CORE's warn_on_doubled_think compares that against the
+        # dataset targets and warns on the doubling case.
+        template_injects_think = False
+        try:
+            rendered = tokenizer.apply_chat_template(
+                [
+                    {"role": "user", "content": _CHAT_MARKER_PROBE_USER},
+                    {"role": "assistant", "content": _CHAT_MARKER_PROBE_ASST},
+                ],
+                tokenize=False,
+            )
+            if isinstance(rendered, str):
+                template_injects_think = bool(_extract_think_spans(rendered))
+        except Exception as exc:
+            logger.debug(
+                f"reasoning_trace: chat-template <think> probe failed ({exc!r})"
+            )
+
+        # Materialize the text rows as dicts for CORE's filter. CORE's
+        # filter_by_trace_length + warn_on_doubled_think read the literal
+        # ``"text"`` key (the convert_to_chatml shape), so build the probe
+        # dicts under ``"text"`` regardless of the configured text_column, then
+        # rebuild the HF dataset under the ORIGINAL column name below so
+        # downstream packing / pre-tokenization (which read
+        # settings.data.text_column) are unaffected when text_column != "text".
+        texts = [str(row) for row in ds[text_column]]
+        samples = [{"text": t} for t in texts]
+
+        # Advisory only — never mutates samples, never raises on the happy
+        # path; guard anyway so a future CORE change can't abort a run.
+        try:
+            warn_on_doubled_think(
+                samples, template_injects_think=template_injects_think
+            )
+        except Exception as exc:  # pragma: no cover - advisory is non-fatal
+            logger.debug(f"reasoning_trace: doubled-<think> advisory skipped ({exc!r})")
+
+        try:
+            kept, stats = filter_by_trace_length(
+                samples,
+                min_trace_tokens=self.min_trace_tokens,
+                max_trace_tokens=self.max_trace_tokens,
+                require_think=True,
+                token_counter=_token_counter,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"reasoning_trace: trace-length filtering failed ({exc!r}); "
+                "proceeding with the unfiltered dataset."
+            )
+            return ds
+
+        logger.info(f"reasoning_trace: {stats.summary()}")
+
+        if not kept:
+            logger.warning(
+                "reasoning_trace: trace-length filtering removed every sample "
+                f"(min={self.min_trace_tokens}, max={self.max_trace_tokens} "
+                "think tokens, require_think=True). Returning the unfiltered "
+                "dataset so the run does not start on an empty set — relax the "
+                "trace bounds or check that the targets carry <think> spans."
+            )
+            return ds
+
+        from datasets import Dataset
+
+        # Rebuild under the original column name (kept rows carry the "text"
+        # key CORE filtered on). When text_column == "text" this is a straight
+        # passthrough; otherwise remap so the column matches the rest of the
+        # pipeline.
+        return Dataset.from_list([{text_column: row["text"]} for row in kept])
 
     def _pre_tokenize(self, dataset: Any) -> Any:
         """Pre-tokenize dataset for Windows safety."""
@@ -3973,6 +5594,26 @@ class Trainer:
             >>> print(f"Final loss: {result.final_loss}")
         """
         from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
+
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): SLAO multi-run is
+        # PEFT-tensor-specific (it loads, merges, and re-applies LoRA A/B
+        # tensors via peft + the merge framework) and has no mlx_lm equivalent —
+        # the MLX rail produces an mlx safetensors adapter through a subprocess,
+        # not in-process PEFT tensors. Refuse the combination with a structured
+        # CONFIG_INVALID_SETTING before the CUDA GPU probe below (which would
+        # itself raise on a Mac). Single-run MLX (Trainer.train) IS supported.
+        if self._effective_backend == "mlx":
+            raise InvalidSettingError(
+                setting_name="backend",
+                value="mlx",
+                expected="multi_run() is CUDA-only in v1.5",
+                suggestion=(
+                    "SLAO multi-run LoRA merging is PEFT-tensor-specific and "
+                    "out of scope for the MLX backend in v1.5. Use the "
+                    "single-run path (Trainer.train) with backend='mlx', or run "
+                    "multi_run() on a CUDA GPU (backend='cuda'/'auto')."
+                ),
+            )
 
         # Pre-flight GPU check
         if not check_gpu_safe():

@@ -180,6 +180,13 @@ __all__ = [
     # Filtering
     "FilterStats",
     "filter_by_quality",
+    # Reasoning-trace SFT (v1.5 T3.2)
+    "TraceFilterStats",
+    "filter_by_trace_length",
+    "_extract_think_spans",
+    "_THINK_SPAN_RE",
+    "warn_on_doubled_think",
+    "dataset_has_leading_think",
     # Deduplication
     "deduplicate_exact",
     "deduplicate_minhash",
@@ -207,6 +214,13 @@ class DatasetFormat(Enum):
     ALPACA = "alpaca"
     OPENAI = "openai"
     CHATML = "chatml"
+    # v1.5 T1.2 (ORPO): preference-pair data — a dict carrying BOTH a
+    # ``chosen`` and a ``rejected`` completion (each str OR a message-list),
+    # with an optional ``prompt``. This is the dataset contract reference-free
+    # preference tuning (ORPO/SimPO/KTO) trains against; the pairing is the
+    # discriminator regardless of the value shape, so detection runs BEFORE
+    # the sharegpt/openai/alpaca checks (see ``detect_format``).
+    PREFERENCE = "preference"
     RAW_TEXT = "raw_text"
     UNKNOWN = "unknown"
 
@@ -336,6 +350,67 @@ class FilterStats:
         return "\n".join(lines)
 
 
+@dataclass
+class TraceFilterStats:
+    """Statistics from reasoning-trace-length filtering (v1.5 T3.2).
+
+    Mirrors the shape of :class:`FilterStats`: ``total_before`` / ``total_after``
+    plus a per-reason breakdown, a ``total_removed`` / ``retention_rate`` pair,
+    and a ``summary()`` renderer. Produced by :func:`filter_by_trace_length`,
+    which drops rows whose ``<think>...</think>`` reasoning span is too short,
+    too long, malformed (unbalanced tags), or absent.
+    """
+
+    total_before: int
+    total_after: int
+    removed_trace_too_short: int = 0
+    removed_trace_too_long: int = 0
+    removed_no_think: int = 0
+    removed_unbalanced_think: int = 0
+
+    @property
+    def total_removed(self) -> int:
+        return self.total_before - self.total_after
+
+    @property
+    def retention_rate(self) -> float:
+        if self.total_before == 0:
+            return 0.0
+        return self.total_after / self.total_before
+
+    def summary(self) -> str:
+        """Get human-readable summary."""
+        lines = [
+            "Reasoning-Trace Filter Results",
+            "=" * 40,
+            f"Before: {self.total_before}",
+            f"After:  {self.total_after} ({100 * self.retention_rate:.1f}% retained)",
+            f"Removed: {self.total_removed}",
+        ]
+        if self.removed_trace_too_short > 0:
+            lines.append(f"  - Trace too short: {self.removed_trace_too_short}")
+        if self.removed_trace_too_long > 0:
+            lines.append(f"  - Trace too long: {self.removed_trace_too_long}")
+        if self.removed_no_think > 0:
+            lines.append(f"  - No <think> span: {self.removed_no_think}")
+        if self.removed_unbalanced_think > 0:
+            lines.append(
+                f"  - Unbalanced <think> tags: {self.removed_unbalanced_think}"
+            )
+        # Echo the documented token-estimate caveat (see _count_tokens_approx):
+        # the default trace-token counter is a ~4 chars/token approximation and
+        # UNDER-counts CJK by ~4-8x (CJK is ~1+ token/char), so on non-ASCII
+        # reasoning traces min_trace_tokens floors are far looser than intended
+        # and short CJK traces can be wrongly dropped as too-short. Pass
+        # ``token_counter=tokenizer.encode`` for an exact count.
+        lines.append(
+            "  (note: trace token counts use a ~4 chars/token approximation "
+            "and under-count CJK by ~4-8x; for CJK-heavy data pass "
+            "token_counter=tokenizer.encode for an exact count.)"
+        )
+        return "\n".join(lines)
+
+
 # =============================================================================
 # FORMAT DETECTION
 # =============================================================================
@@ -365,6 +440,20 @@ def detect_format(data: dict | list[dict | str] | str) -> DatasetFormat:
 
     if not isinstance(data, dict):
         return DatasetFormat.UNKNOWN
+
+    # Check for preference-pair format (v1.5 T1.2 / ORPO) FIRST.
+    # A row carrying BOTH "chosen" and "rejected" is preference data — the
+    # pair of keys is the discriminator regardless of whether the values are
+    # plain strings or message-lists ([{"role","content"}, ...]). This MUST
+    # run before the sharegpt/openai/alpaca checks: a preference row whose
+    # chosen/rejected are themselves OpenAI message-lists would otherwise be
+    # misread (and a sibling "messages"/"conversations"/"instruction" key
+    # alongside the pair must not steal it). An optional "prompt" is allowed
+    # but not required. We do NOT inspect value shapes here — _validate_preference
+    # / to_preference_dataset handle per-row content; detection only keys off
+    # the discriminating pair so the SFT-method guard can rely on it.
+    if "chosen" in data and "rejected" in data:
+        return DatasetFormat.PREFERENCE
 
     # Check for ShareGPT format
     if "conversations" in data:
@@ -557,6 +646,84 @@ class FormatConverter:
         return "\n".join(parts)
 
     @staticmethod
+    def _messages_to_chatml_parts(
+        messages: list, default_role: str
+    ) -> list[str]:
+        """Render a list of ``{"role"/"from", "content"/"value"}`` dicts to
+        ChatML turn strings.
+
+        Tolerates both the OpenAI message shape (``role``/``content``) and the
+        ShareGPT shape (``from``/``value``) so a preference ``prompt``/``chosen``
+        value authored in either convention renders correctly. ``role`` is
+        normalized through the ShareGPT role map (human→user, gpt→assistant);
+        an unmapped role falls back to ``default_role``. Function calls are
+        rendered the same way the OpenAI converter handles them.
+        """
+        parts: list[str] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                # A bare string in a message-list is treated as the default role.
+                parts.append(
+                    f"<|im_start|>{default_role}\n{msg}<|im_end|>"
+                )
+                continue
+            role_raw = str(msg.get("role", msg.get("from", "")) or "").lower()
+            role = FormatConverter.ROLE_MAP_SHAREGPT.get(
+                role_raw, role_raw or default_role
+            )
+            content = msg.get("content", msg.get("value", "")) or ""
+            if msg.get("function_call"):
+                call_repr = _render_function_call(msg["function_call"])
+                content = f"{content}\n{call_repr}" if content else call_repr
+            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+        return parts
+
+    @staticmethod
+    def preference_to_chatml(sample: dict) -> str:
+        """Render a preference-pair row to ChatML for SFT (v1.5 / Phase 8).
+
+        A ``{prompt, chosen, rejected}`` row trained under ``method="sft"``
+        legitimately means *train on prompt→chosen*: the SFT objective learns to
+        reproduce the preferred completion. So this renderer emits the optional
+        ``prompt`` as the user turn(s) and ``chosen`` as the assistant turn(s)
+        and **deliberately DROPS ``rejected``** — the rejected response is only
+        meaningful to the reference-free preference objective (``method="orpo"``,
+        which routes through :meth:`DatasetLoader.to_preference_dataset` and never
+        reaches here).
+
+        Both ``prompt`` and ``chosen`` may be either a plain string OR a
+        message-list (``[{"role"/"from", "content"/"value"}, ...]`` — the
+        multi-turn / ShareGPT-or-OpenAI shape); each shape renders to the
+        appropriate ChatML turns. When ``prompt`` is absent (the implicit-prompt
+        case) only the ``chosen`` turns are emitted — the prompt is assumed to
+        live inside the ``chosen`` conversation already.
+        """
+        parts: list[str] = []
+
+        prompt = sample.get("prompt")
+        if isinstance(prompt, str):
+            if prompt.strip():
+                parts.append(f"<|im_start|>user\n{prompt}<|im_end|>")
+        elif isinstance(prompt, list):
+            parts.extend(
+                FormatConverter._messages_to_chatml_parts(
+                    prompt, default_role="user"
+                )
+            )
+
+        chosen = sample.get("chosen", "")
+        if isinstance(chosen, list):
+            parts.extend(
+                FormatConverter._messages_to_chatml_parts(
+                    chosen, default_role="assistant"
+                )
+            )
+        else:
+            parts.append(f"<|im_start|>assistant\n{chosen}<|im_end|>")
+
+        return "\n".join(parts)
+
+    @staticmethod
     def raw_to_chatml(text: str, default_role: str = "user") -> str:
         """Convert raw text to ChatML."""
         # Simple conversion - treat as single user message
@@ -584,6 +751,17 @@ class FormatConverter:
             if not isinstance(sample, dict):
                 raise ValueError(f"OpenAI format requires dict, got {type(sample)}")
             return cls.openai_to_chatml(sample)
+
+        if format_type == DatasetFormat.PREFERENCE:
+            # SFT-on-preference renders prompt→chosen (rejected dropped); see
+            # preference_to_chatml. Without this branch a preference file under
+            # method='sft' raised "Cannot convert format: PREFERENCE" per row and
+            # convert_to_chatml silently dropped EVERY row -> 0-row training set.
+            if not isinstance(sample, dict):
+                raise ValueError(
+                    f"Preference format requires dict, got {type(sample)}"
+                )
+            return cls.preference_to_chatml(sample)
 
         if format_type == DatasetFormat.RAW_TEXT:
             text = sample if isinstance(sample, str) else sample.get("text", "")
@@ -786,6 +964,32 @@ def _validate_sharegpt(sample: dict, row_index: int) -> list[ValidationError]:
     return errors
 
 
+def _is_blank(value: Any) -> bool:
+    """Return True when a field value counts as empty content.
+
+    DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
+    pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
+    the present-but-None value (the "" default only fires for ABSENT keys),
+    so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
+    has no attribute 'strip'`` and crashed validation of an otherwise-loadable
+    dataset. Treat any non-string (None, NaN, numeric) as empty content.
+
+    v1.5 T1.2: a preference ``chosen``/``rejected`` value may legitimately be a
+    NON-EMPTY message-list ([{"role","content"}, ...]) rather than a string —
+    that is valid content, not blank. So a non-empty list/dict is NOT blank;
+    an empty list/dict IS. ``_validate_alpaca`` only ever passes str-or-None
+    fields, so its behavior is unchanged.
+    """
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, dict)):
+        # A populated message-list / structured completion is real content;
+        # an empty one is not.
+        return len(value) == 0
+    # None, NaN, numerics, anything else -> treat as empty content.
+    return True
+
+
 def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate an Alpaca formatted sample."""
     errors = []
@@ -806,16 +1010,7 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Missing 'output' field",
         ))
 
-    # Check for empty values.
-    # DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
-    # pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
-    # the present-but-None value (the "" default only fires for ABSENT keys),
-    # so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
-    # has no attribute 'strip'`` and crashed validation of an otherwise-loadable
-    # dataset. Treat any non-string (None, NaN, numeric) as empty content.
-    def _is_blank(value: Any) -> bool:
-        return not isinstance(value, str) or value.strip() == ""
-
+    # Check for empty values (see ``_is_blank`` for the NaN/None rationale).
     if _is_blank(sample.get("instruction")):
         errors.append(ValidationError(
             row_index=row_index,
@@ -830,6 +1025,75 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             field="output",
             error_type="empty_content",
             message="Empty output",
+        ))
+
+    return errors
+
+
+def _validate_preference(sample: dict, row_index: int) -> list[ValidationError]:
+    """Validate a preference-pair sample (v1.5 T1.2 / ORPO).
+
+    Mirrors ``_validate_alpaca``: a valid preference row needs a non-blank
+    ``chosen`` AND a non-blank ``rejected`` (each a string OR a non-empty
+    message-list — ``_is_blank`` accepts both). A missing/blank field is an
+    error; a missing ``prompt`` is the *implicit-prompt* case (info, not an
+    error — many preference corpora embed the prompt inside the conversation).
+
+    There are deliberately NO ChatML balance checks here: the values are RAW
+    completions (string or message-list) that TRL's ORPO/SimPO/KTO trainers
+    render with the model's chat template at train time — this loader preserves
+    them verbatim (see ``DatasetLoader.to_preference_dataset``).
+    """
+    errors = []
+
+    if "chosen" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="chosen",
+            error_type="missing_field",
+            message="Missing 'chosen' field",
+        ))
+
+    if "rejected" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="rejected",
+            error_type="missing_field",
+            message="Missing 'rejected' field",
+        ))
+
+    # Empty-content checks reuse the shared _is_blank helper (handles
+    # None/NaN/empty-string AND empty message-list).
+    if _is_blank(sample.get("chosen")):
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="chosen",
+            error_type="empty_content",
+            message="Empty chosen",
+        ))
+
+    if _is_blank(sample.get("rejected")):
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="rejected",
+            error_type="empty_content",
+            message="Empty rejected",
+        ))
+
+    # A missing 'prompt' is NOT an error: implicit-prompt preference data
+    # (prompt embedded in the chosen/rejected conversations) is a first-class
+    # shape. Surface it as an info-level WARN row only when the key is wholly
+    # absent, so a curated {prompt, chosen, rejected} corpus stays silent.
+    if "prompt" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="prompt",
+            error_type="implicit_prompt",
+            message=(
+                "No 'prompt' field — treating as implicit-prompt preference "
+                "data (the prompt is assumed to live inside the chosen/rejected "
+                "conversations). This is informational, not an error."
+            ),
         ))
 
     return errors
@@ -936,6 +1200,16 @@ def validate_sample(
             )]
         return _validate_alpaca(sample, row_index)
 
+    if format_type == DatasetFormat.PREFERENCE:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"Preference format requires dict, got {type(sample).__name__}",
+            )]
+        return _validate_preference(sample, row_index)
+
     if format_type == DatasetFormat.OPENAI:
         if not isinstance(sample, dict):
             return [ValidationError(
@@ -1019,9 +1293,14 @@ def validate_dataset(
         errors = validate_sample(sample, i, row_format)
 
         if errors:
-            # Separate errors from warnings based on severity
+            # Separate errors from warnings based on severity. ``implicit_prompt``
+            # (v1.5 T1.2 preference data with no explicit prompt key) is
+            # informational, not a defect, so it joins the warning bucket
+            # alongside empty_content / invalid_role.
             for err in errors:
-                if err.error_type in ("empty_content", "invalid_role"):
+                if err.error_type in (
+                    "empty_content", "invalid_role", "implicit_prompt"
+                ):
                     all_warnings.append(err)
                 else:
                     all_errors.append(err)
@@ -1051,16 +1330,19 @@ def validate_dataset(
 def _count_tokens_approx(text: str) -> int:
     """Approximate token count (4 chars ≈ 1 token).
 
-    Stage C amend BACKEND-B-024: the 4-chars-per-token heuristic is
-    calibrated for ASCII English. CJK datasets are roughly 1 char per
-    token (so this heuristic over-counts by ~4x — the dataset will appear
-    longer than it really is and ``min_tokens`` floors will be MUCH
-    stricter than intended). Code datasets are closer to 2-3 chars per
+    Stage C amend BACKEND-B-024 (direction corrected Phase 8): the
+    4-chars-per-token heuristic is calibrated for ASCII English. CJK text is
+    roughly 1+ real token PER CHARACTER, so ``len(text)//4`` yields ~4-8x
+    FEWER tokens than the tokenizer actually emits — this heuristic
+    **UNDER-counts CJK by ~4-8x** (a CJK corpus looks far SHORTER than it
+    really is, so ``min_tokens`` / ``min_trace_tokens`` floors are far LOOSER
+    than intended and short CJK rows that a real tokenizer would keep get
+    wrongly dropped as too-short). Code datasets are closer to 2-3 chars per
     token. Operators filtering by ``min_tokens`` / ``max_tokens`` on a
-    non-ASCII-English corpus should re-derive the cutoffs against their
-    real tokenizer; v1.4 will accept an optional ``token_counter``
-    callable to plug in ``tokenizer.encode`` directly. Until then, this
-    function is a fast-path approximation only.
+    non-ASCII-English (especially CJK-heavy) corpus should pass a real
+    ``token_counter=tokenizer.encode`` (supported by the trace-length filter)
+    or re-derive the cutoffs against their tokenizer. The math here is left
+    as-is on purpose — this is a fast-path approximation only.
     """
     return len(text) // 4
 
@@ -1150,19 +1432,22 @@ def filter_by_quality(
 
     # DATA-A-005: the default min_tokens=50 combined with the coarse
     # 4-chars-per-token heuristic (_count_tokens_approx) can silently drop
-    # an entire corpus of legitimately short or non-ASCII (e.g. CJK, where
-    # the heuristic over-counts ~4x) chats. A run that filters to zero — or
-    # near-zero — is almost always a mis-calibrated threshold, not a genuinely
-    # empty dataset. Surface it loudly with the actionable cause + knob so the
-    # operator doesn't discover the empty training set the hard way.
+    # an entire corpus of legitimately short or non-ASCII chats. For CJK the
+    # heuristic UNDER-counts by ~4-8x (CJK is ~1+ token/char), so CJK rows look
+    # far shorter than they really are and get wrongly dropped as too-short
+    # against min_tokens. A run that filters to zero — or near-zero — is almost
+    # always a mis-calibrated threshold, not a genuinely empty dataset. Surface
+    # it loudly with the actionable cause + knob so the operator doesn't
+    # discover the empty training set the hard way.
     if stats.total_before > 0 and stats.total_after == 0:
         logger.warning(
             "filter_by_quality removed ALL %d samples (0 retained). The "
             "most common cause is min_tokens=%s being too high for short or "
-            "non-ASCII (e.g. CJK) content — the token estimate is ~4 chars/"
-            "token and over-counts CJK ~4x. Lower min_tokens / raise "
-            "max_tokens, or re-derive the cutoffs against your real "
-            "tokenizer. Breakdown: too_short=%d too_long=%d few_turns=%d "
+            "non-ASCII content — the token estimate is ~4 chars/token and "
+            "UNDER-counts CJK by ~4-8x, so CJK rows look shorter than they are "
+            "and trip the too-short cutoff. Lower min_tokens, or for CJK-heavy "
+            "data pass a real tokenizer / re-derive the cutoffs. Breakdown: "
+            "too_short=%d too_long=%d few_turns=%d "
             "many_turns=%d no_assistant=%d empty=%d custom=%d.",
             stats.total_before,
             min_tokens,
@@ -1180,7 +1465,8 @@ def filter_by_quality(
         logger.warning(
             "filter_by_quality retained only %d/%d samples (%.1f%%). If this "
             "is unexpected, check min_tokens=%s against your content length / "
-            "tokenizer (the 4-chars/token estimate over-counts CJK ~4x).",
+            "tokenizer (the 4-chars/token estimate under-counts CJK by ~4-8x, "
+            "so CJK rows can be wrongly dropped as too-short).",
             stats.total_after,
             stats.total_before,
             100.0 * stats.total_after / stats.total_before,
@@ -1188,6 +1474,235 @@ def filter_by_quality(
         )
 
     return filtered, stats
+
+
+# =============================================================================
+# REASONING-TRACE FILTERING (v1.5 T3.2)
+# =============================================================================
+# Reasoning-trace SFT (R1-style distillation) is pure SFT on chat data whose
+# assistant turns carry a ``<think>...</think>`` chain-of-thought before the
+# final answer (V1_5_BRIEF §2 finding 24). These blocks are PLAIN TEXT — there
+# are no special tokens involved and the tokenizer vocabulary is untouched. The
+# converters already pass assistant content verbatim, so ``<think>`` spans
+# survive ChatML conversion intact (locked by tests/test_reasoning.py); the job
+# here is the trace-length filter that keeps the reasoning band in a usable
+# range, plus the doubled-tag advisory below.
+
+# Inner body of every <think>...</think> span. DOTALL so a multi-line trace is
+# captured whole; IGNORECASE so <Think>/<THINK> variants are matched too.
+_THINK_SPAN_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_think_spans(text: str) -> list[str]:
+    """Inner bodies of all ``<think>...</think>`` spans in ``text``.
+
+    Returns a (possibly empty) list of the substrings BETWEEN each ``<think>``
+    and its matching ``</think>``. Matching is case-insensitive and spans
+    newlines (the regex is ``DOTALL``). Unclosed / unbalanced tags yield no
+    match for the dangling tag — balance is checked separately by
+    :func:`filter_by_trace_length` via a raw tag count.
+    """
+    return _THINK_SPAN_RE.findall(text)
+
+
+def filter_by_trace_length(
+    samples: list[dict],
+    min_trace_tokens: int = 8,
+    max_trace_tokens: int = 8192,
+    require_think: bool = True,
+    token_counter: Callable[[str], int] | None = None,
+) -> tuple[list[dict], TraceFilterStats]:
+    """Filter ChatML rows by the length of their ``<think>`` reasoning trace.
+
+    Reasoning-trace SFT (v1.5 T3.2) trains on assistant turns that emit a
+    ``<think>...</think>`` chain-of-thought before the final answer. This filter
+    keeps the *total reasoning band* (summed token count over ALL ``<think>``
+    spans in a row) within ``[min_trace_tokens, max_trace_tokens]`` and, when
+    ``require_think`` is set, drops rows with no trace at all. Rows whose
+    ``<think>`` / ``</think>`` tags don't balance are dropped as malformed.
+
+    Args:
+        samples: ChatML rows — dicts with a ``"text"`` key (the shape produced
+            by :func:`convert_to_chatml`). Non-dict / missing-text rows are
+            coerced to empty text (which has no trace).
+        min_trace_tokens: Drop a row whose summed think-span token count is
+            BELOW this (counts toward ``removed_trace_too_short``). An empty
+            ``<think></think>`` therefore fails here.
+        max_trace_tokens: Drop a row whose summed think-span token count is
+            ABOVE this (counts toward ``removed_trace_too_long``).
+        require_think: When True, a row with no ``<think>`` span at all is
+            dropped (``removed_no_think``); when False such rows are KEPT (the
+            filter only constrains rows that *do* reason).
+        token_counter: Optional ``str -> int`` token counter (e.g.
+            ``tokenizer.encode``). When ``None``, :func:`_count_tokens_approx`
+            is used — a ~4 chars/token heuristic that **under-counts CJK by
+            ~4-8x** (CJK is ~1+ token/char), so CJK traces look shorter than
+            they are and can be wrongly dropped as too-short against
+            ``min_trace_tokens``; for CJK-heavy reasoning data pass a real
+            tokenizer here (or re-derive the cutoffs against your tokenizer).
+
+    Returns:
+        ``(filtered_samples, TraceFilterStats)``.
+
+    Raises:
+        InvalidSettingError: if ``min_trace_tokens`` / ``max_trace_tokens`` are
+            negative or inverted (``min > max``) — ``CONFIG_INVALID_SETTING``.
+    """
+    # Fail loud on nonsensical bounds (mirrors PerplexityFilter's inverted-bounds
+    # guard): a negative floor or an inverted [min, max] band silently removes
+    # everything or nothing, which the operator only discovers via an empty (or
+    # unfiltered) result. Name the bad value + the fix.
+    if min_trace_tokens < 0:
+        raise InvalidSettingError(
+            "min_trace_tokens",
+            min_trace_tokens,
+            "a non-negative token count",
+            suggestion="min_trace_tokens is the LOW cutoff; it cannot be negative.",
+        )
+    if max_trace_tokens < 0:
+        raise InvalidSettingError(
+            "max_trace_tokens",
+            max_trace_tokens,
+            "a non-negative token count",
+            suggestion="max_trace_tokens is the HIGH cutoff; it cannot be negative.",
+        )
+    if min_trace_tokens > max_trace_tokens:
+        raise InvalidSettingError(
+            "min_trace_tokens",
+            min_trace_tokens,
+            f"value <= max_trace_tokens (got "
+            f"min_trace_tokens={min_trace_tokens}, "
+            f"max_trace_tokens={max_trace_tokens})",
+            suggestion=(
+                "Swap the two arguments — min_trace_tokens is the LOW cutoff "
+                "(drop traces shorter than this) and max_trace_tokens is the "
+                "HIGH cutoff (drop traces longer than this)."
+            ),
+        )
+
+    counter = token_counter if token_counter is not None else _count_tokens_approx
+
+    stats = TraceFilterStats(total_before=len(samples), total_after=0)
+    filtered: list[dict] = []
+
+    for sample in samples:
+        text = sample.get("text", "") if isinstance(sample, dict) else str(sample)
+
+        # Balance check first: an unclosed <think> (or stray </think>) is a
+        # malformed trace regardless of any extractable body. Use a raw tag
+        # count (case-insensitive) so it can't be fooled by the non-greedy
+        # span regex silently ignoring a dangling opener.
+        open_count = len(re.findall(r"<think>", text, re.IGNORECASE))
+        close_count = len(re.findall(r"</think>", text, re.IGNORECASE))
+        if open_count != close_count:
+            stats.removed_unbalanced_think += 1
+            continue
+
+        spans = _extract_think_spans(text)
+        if not spans:
+            # No reasoning trace. Drop only when traces are required; otherwise
+            # keep (the filter constrains reasoning rows, not non-reasoning ones).
+            if require_think:
+                stats.removed_no_think += 1
+                continue
+            filtered.append(sample)
+            continue
+
+        trace_tokens = sum(counter(span) for span in spans)
+        if trace_tokens < min_trace_tokens:
+            stats.removed_trace_too_short += 1
+            continue
+        if trace_tokens > max_trace_tokens:
+            stats.removed_trace_too_long += 1
+            continue
+
+        filtered.append(sample)
+
+    stats.total_after = len(filtered)
+
+    # Same loud-on-total-wipeout discipline as filter_by_quality: a run that
+    # removes EVERY row is almost always a mis-set knob (min_trace_tokens too
+    # high, max too low, or require_think=True on a non-reasoning corpus), not a
+    # genuinely empty dataset. Name the cause + the knobs so the empty training
+    # set isn't discovered the hard way.
+    if stats.total_before > 0 and stats.total_after == 0:
+        logger.warning(
+            "filter_by_trace_length removed ALL %d samples (0 retained). The "
+            "most common causes are min_trace_tokens=%s being too high for "
+            "short traces, max_trace_tokens=%s too low, or require_think=True "
+            "on a dataset whose rows have no <think> span. If your traces are "
+            "CJK-heavy and you did NOT pass token_counter, the default ~4 "
+            "chars/token estimate UNDER-counts CJK by ~4-8x — your traces look "
+            "shorter than they are and trip trace_too_short; pass "
+            "token_counter=tokenizer.encode (or re-derive the cutoffs). "
+            "Breakdown: trace_too_short=%d trace_too_long=%d no_think=%d "
+            "unbalanced_think=%d.",
+            stats.total_before,
+            min_trace_tokens,
+            max_trace_tokens,
+            stats.removed_trace_too_short,
+            stats.removed_trace_too_long,
+            stats.removed_no_think,
+            stats.removed_unbalanced_think,
+        )
+
+    return filtered, stats
+
+
+def dataset_has_leading_think(samples: list[dict]) -> bool:
+    """True if ANY assistant turn body opens with a ``<think>`` tag.
+
+    A cheap, pure predicate for the doubled-``<think>`` template wrinkle: some
+    chat templates inject a ``<think>`` opener of their own at generation time.
+    If the training data ALSO opens its assistant turns with ``<think>``, the
+    rendered sequence carries a doubled tag. This predicate lets a caller that
+    owns the tokenizer (the Trainer / WIRE) combine "the data leads with
+    ``<think>``" with its own "the template injects ``<think>``" probe and warn.
+
+    Operates on ChatML rows (``[{"text": ...}]``): an assistant turn "opens
+    with ``<think>``" when its body, left-stripped, starts with ``<think>``
+    (case-insensitive). See also :func:`warn_on_doubled_think` for the ready-made
+    advisory once the template behaviour is known.
+    """
+    for sample in samples:
+        text = sample.get("text", "") if isinstance(sample, dict) else str(sample)
+        for role, body in _CHATML_TURN_RE.findall(text):
+            if role == "assistant" and body.lstrip().lower().startswith("<think>"):
+                return True
+    return False
+
+
+def warn_on_doubled_think(
+    samples: list[dict], template_injects_think: bool
+) -> None:
+    """Advisory WARN for the doubled-``<think>`` chat-template wrinkle (v1.5 T3.2).
+
+    Reasoning-trace SFT keeps ``<think>`` blocks as PLAIN TEXT inside assistant
+    turns. Some newer chat templates ALSO inject a ``<think>`` opener after the
+    generation prompt. When both are true, the rendered training sequence carries
+    a *doubled* ``<think>`` — a silent data-quality bug that biases the model
+    toward emitting two openers.
+
+    This helper is **advisory only**: it never mutates ``samples``. It emits a
+    single WARN when the data leads with ``<think>`` (per
+    :func:`dataset_has_leading_think`) AND the caller reports that the model's
+    chat template injects its own ``<think>``. The Trainer (which owns the
+    tokenizer, and therefore the template render) supplies
+    ``template_injects_think``; this lives in :mod:`datasets` because it operates
+    on converted samples.
+    """
+    if not template_injects_think:
+        return
+    if dataset_has_leading_think(samples):
+        logger.warning(
+            "Doubled-<think> risk: assistant turns in this dataset already open "
+            "with a <think> tag AND the model's chat template injects its own "
+            "<think> opener. The rendered training sequence will carry two "
+            "<think> tags per turn, which biases the model toward emitting "
+            "doubled openers. Either strip the leading <think> from your data or "
+            "use a chat template that does not inject one. (This is advisory — "
+            "no rows were modified.)"
+        )
 
 
 # =============================================================================
@@ -2407,6 +2922,88 @@ class DatasetLoader:
             return {split: dataset}
         return dataset
 
+    def to_preference_dataset(self, split: str | None = None) -> Any:
+        """Build a HuggingFace ``Dataset`` of preference pairs (v1.5 T1.2 / ORPO).
+
+        Unlike :meth:`to_hf_dataset`, this preserves the RAW preference columns
+        ``{chosen, rejected, [prompt]}`` and does NOT route through
+        :meth:`to_chatml` / collapse to a single ``{"text": ...}`` column —
+        collapsing would destroy the (chosen, rejected) pairing that
+        reference-free preference trainers (TRL ORPO/SimPO/KTO) require. Each
+        ``chosen`` / ``rejected`` value is left exactly as it appears in the
+        source (a string OR a message-list); TRL renders it with the model's
+        chat template at train time.
+
+        Only rows that carry BOTH ``chosen`` and ``rejected`` are kept. The
+        ``prompt`` column is included only when at least one kept row has a
+        ``prompt`` key (rows without one get ``None`` so the schema is uniform —
+        the implicit-prompt case).
+
+        Args:
+            split: Optional split name (e.g. "train"); when set, returns
+                ``{split: Dataset}`` to mirror :meth:`to_hf_dataset`.
+
+        Returns:
+            A ``datasets.Dataset`` whose ``column_names`` include ``chosen`` and
+            ``rejected`` (and ``prompt`` when present), or ``{split: Dataset}``.
+
+        Raises:
+            DatasetFormatError: when NO row carries both ``chosen`` and
+                ``rejected`` (code ``INPUT_DATASET_FORMAT_UNSUPPORTED``).
+        """
+        try:
+            from datasets import Dataset
+        except ImportError:
+            raise ImportError("datasets required: pip install datasets")
+
+        from .exceptions import DatasetFormatError
+
+        # Keep only genuine preference rows (dict carrying BOTH keys). We do
+        # this row-by-row rather than trusting the cached single ``_format`` so
+        # a mixed file contributes only its real pairs — the same per-row
+        # philosophy the SFT converters use.
+        pair_rows: list[dict[str, Any]] = []
+        any_prompt = False
+        for sample in self._samples:
+            if not isinstance(sample, dict):
+                continue
+            if "chosen" not in sample or "rejected" not in sample:
+                continue
+            row: dict[str, Any] = {
+                # Values preserved AS-IS (str or message-list) — TRL renders
+                # them later; we must not stringify or template here.
+                "chosen": sample["chosen"],
+                "rejected": sample["rejected"],
+            }
+            if "prompt" in sample:
+                row["prompt"] = sample["prompt"]
+                any_prompt = True
+            pair_rows.append(row)
+
+        if not pair_rows:
+            # No usable pair anywhere — this is the "operator pointed ORPO at an
+            # SFT dataset" case. Reuse DatasetFormatError (already mapped to
+            # INPUT_DATASET_FORMAT_UNSUPPORTED in the catalog — no new code).
+            raise DatasetFormatError(
+                "method='orpo' requires preference pairs, but no row had both "
+                "'chosen' and 'rejected' keys.",
+                detected_format=self._format.value,
+                supported_formats=["{prompt, chosen, rejected}", "{chosen, rejected}"],
+            )
+
+        # Normalize the prompt column across rows when ANY row had one, so HF's
+        # columnar schema is consistent (implicit-prompt rows get None). When NO
+        # row had a prompt, the column is omitted entirely.
+        if any_prompt:
+            for row in pair_rows:
+                row.setdefault("prompt", None)
+
+        dataset = Dataset.from_list(pair_rows)
+
+        if split:
+            return {split: dataset}
+        return dataset
+
     def preview(self, n: int = 3, as_chatml: bool = True) -> list[str]:
         """
         Preview samples.
@@ -2616,6 +3213,54 @@ class DatasetLoader:
         logger.info(f"Perplexity filter: {stats.total_samples} -> {stats.retained_count} samples")
 
         new_loader = DatasetLoader(filtered, DatasetFormat.CHATML, validate=False)
+        return new_loader, stats
+
+    def filter_by_trace_length(
+        self,
+        *,
+        min_trace_tokens: int = 8,
+        max_trace_tokens: int = 8192,
+        require_think: bool = True,
+        token_counter: Callable[[str], int] | None = None,
+    ) -> tuple["DatasetLoader", TraceFilterStats]:
+        """Return a new loader keeping only rows with a usable ``<think>`` trace.
+
+        Reasoning-trace SFT helper (v1.5 T3.2). Converts to ChatML first, then
+        applies :func:`filter_by_trace_length` so the kept rows have a summed
+        ``<think>`` reasoning band within ``[min_trace_tokens, max_trace_tokens]``
+        (and, when ``require_think`` is set, a trace at all). See that function
+        for the per-reason semantics and the CJK token-estimate caveat.
+
+        Args:
+            min_trace_tokens: Drop rows whose summed think-span tokens fall below.
+            max_trace_tokens: Drop rows whose summed think-span tokens exceed.
+            require_think: Drop rows with no ``<think>`` span when True.
+            token_counter: Optional exact ``str -> int`` counter (e.g.
+                ``tokenizer.encode``); defaults to the ~4 chars/token estimate.
+
+        Returns:
+            ``(new DatasetLoader with the kept rows, TraceFilterStats)``.
+        """
+        chatml_samples = self.to_chatml()
+
+        filtered, stats = filter_by_trace_length(
+            chatml_samples,
+            min_trace_tokens=min_trace_tokens,
+            max_trace_tokens=max_trace_tokens,
+            require_think=require_think,
+            token_counter=token_counter,
+        )
+
+        logger.info(
+            f"Trace-length filter: {stats.total_before} -> "
+            f"{stats.total_after} samples"
+        )
+
+        new_loader = DatasetLoader(
+            cast(list[dict[Any, Any] | str], filtered),
+            DatasetFormat.CHATML,
+            validate=False,
+        )
         return new_loader, stats
 
     @classmethod

@@ -358,6 +358,17 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # PEFT accepts {"default", "pissa", "loftq"} (we map "default" -> True
         # at the call site in trainer.py to honor the PEFT API).
         init_lora_weights: str = "default"
+        # v1.5 T2.3 (rsLoRA, finding 19 — Kalajdzievski 2023, arXiv:2312.03732).
+        # Rank-Stabilized LoRA: scale the adapter by alpha/sqrt(r) instead of the
+        # standard alpha/r. Standard alpha/r over-throttles gradients at high
+        # rank, so the rank-256 default may under-train the adapter; rsLoRA's
+        # benefit GROWS with rank, at ZERO inference cost (it is a pure scaling
+        # choice — the merged weights are identical-shaped, so the GGUF -> Ollama
+        # export path is unaffected). Default OFF for backward-compat; flip to
+        # True via this field, ``BACKPROPAGATE_LORA__USE_RSLORA``, or
+        # ``Trainer(use_rslora=True)``. Threaded into PEFT's ``LoraConfig
+        # (use_rslora=...)`` at the adapter-build call site in trainer.py.
+        use_rslora: bool = False
 
     class TrainingConfig(BaseSettings):
         """Training hyperparameters."""
@@ -400,6 +411,172 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         output_dir: str = "./output"
         # Overwrite output directory
         overwrite_output_dir: bool = True
+        # v1.5 T1.2 (ORPO): training objective selector. "sft" (default) =
+        # supervised fine-tuning — byte-identical to v1.4 behavior. "orpo" =
+        # reference-free monolithic preference optimization (Hong, Lee &
+        # Thorne 2024, arXiv:2403.07691): standard SFT NLL loss + a per-step
+        # odds-ratio penalty over (chosen, rejected) pairs, single stage, no
+        # reference model — so the VRAM envelope matches SFT. A later trainer
+        # wave dispatches on this; the default preserves the existing path.
+        #
+        # NB: deliberately typed ``str`` (not ``Literal["sft", "orpo"]``) so
+        # the {"sft", "orpo"} constraint is enforced by the
+        # ``_reject_invalid_method`` after-validator below, which raises a
+        # structured ``InvalidSettingError`` (CONFIG_INVALID_SETTING) —
+        # mirroring ``_reject_bf16_and_fp16``. A ``Literal`` field would make
+        # pydantic's own type-check the gate, raising a generic
+        # ``ValidationError`` BEFORE the after-validator runs, so the
+        # contract's structured code/hint (the shape the trainer wave +
+        # operators key on) would never surface. The valid set is documented
+        # in the validator + the ``--method`` CLI choices + env-vars.md.
+        method: str = "sft"
+        # v1.5 T1.2 (ORPO): the odds-ratio weight (the ORPO "lambda" /
+        # ``beta`` in TRL's ORPOConfig). Scales the relative-ratio loss term
+        # added on top of the NLL loss. Default 0.1 (the paper's headline
+        # setting). Ignored unless ``method == "orpo"``. Keep > 0 — a
+        # non-positive weight degenerates ORPO back to plain SFT.
+        orpo_beta: float = 0.1
+        # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao's
+        # float8 (Blackwell 5th-gen tensor cores; Hong-/Dettmers-class memory
+        # win — ~1.4x throughput, up to 60% less model memory, and the adapter
+        # still merges). Experimental in v1.5: default OFF so existing runs are
+        # byte-identical. When True, the trainer converts the BASE projection
+        # linears to Float8Linear AFTER the LoRA adapter is attached (the
+        # adapter's rank-r sub-linears + lm_head + embeddings are excluded), and
+        # degrades gracefully to bf16 (one WARN, no raise) on a non-CUDA /
+        # pre-Hopper card or when torchao is absent. No validator: a bool cannot
+        # be malformed (unlike ``method``, whose {sft, orpo} set needs guarding).
+        # mode='full' + fp8 and method='orpo' + fp8 are rejected by the Trainer
+        # constructor gate ladder, NOT here (they are cross-field combinations
+        # the per-field config layer doesn't see).
+        fp8: bool = False
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): the compute-backend selector.
+        # "auto" (the default) resolves to "mlx" on an Apple-Silicon Mac with the
+        # [mlx] extra installed, else "cuda" — so existing CUDA rigs are
+        # byte-identical. "cuda" forces the canonical CUDA rail. "mlx" forces the
+        # Apple-Silicon rail (mlx_lm.lora under the hood); on a non-Apple host
+        # the Trainer constructor rejects a forced "mlx" with a structured
+        # CONFIG_INVALID_SETTING (it is an unrunnable request on that hardware).
+        #
+        # NB: deliberately typed ``str`` (not ``Literal["auto","cuda","mlx"]``)
+        # so the {auto, cuda, mlx} constraint is enforced by the
+        # ``_reject_invalid_backend`` after-validator below, which raises a
+        # structured ``InvalidSettingError`` (CONFIG_INVALID_SETTING) — mirroring
+        # ``_reject_invalid_method``. A ``Literal`` field would make pydantic's
+        # own type-check the gate, raising a generic ``ValidationError`` BEFORE
+        # the after-validator runs, so the contract's structured code/hint would
+        # never surface. Env: ``BACKPROPAGATE_TRAINING__BACKEND``.
+        backend: str = "auto"
+
+        @model_validator(mode="after")
+        def _reject_invalid_backend(self) -> "TrainingConfig":
+            """Reject a ``backend`` outside {"auto", "cuda", "mlx"} at construction.
+
+            v1.5 T3.1: ``backend`` is the compute-rail selector and the field is
+            typed ``str`` (not ``Literal``) precisely so this validator — not
+            pydantic's type machinery — decides the valid set, raising a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``) for a
+            bad value supplied either as a kwarg
+            (``TrainingConfig(backend="rocm")``) or via env var
+            (``BACKPROPAGATE_TRAINING__BACKEND=rocm``). Mirrors
+            ``_reject_invalid_method``. This validator only gates the VALUE; the
+            cross-field "backend='mlx' but this is not Apple Silicon" check lives
+            in the Trainer constructor (the config layer can't see the host).
+            A non-``ValueError`` raised from a pydantic ``after`` validator
+            propagates as-is (NOT re-wrapped in ``ValidationError``), so the
+            structured code/hint survive.
+            """
+            if self.backend not in ("auto", "cuda", "mlx"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "backend",
+                    self.backend,
+                    "one of {'auto', 'cuda', 'mlx'}",
+                    suggestion=(
+                        "Set backend='auto' (the default — routes to MLX on an "
+                        "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                        "backend='cuda' to force the CUDA rail, or backend='mlx' "
+                        "to force the Apple-Silicon rail (macOS + arm64 only)."
+                    ),
+                )
+            return self
+
+        @model_validator(mode="after")
+        def _reject_invalid_method(self) -> "TrainingConfig":
+            """Reject a ``method`` outside {"sft", "orpo"} at construction.
+
+            v1.5 T1.2: ``method`` is the ORPO/SFT objective selector and is the
+            authoritative validation gate for the field (the field is typed
+            ``str``, not ``Literal``, precisely so this validator — not
+            pydantic's type machinery — decides the valid set). It raises a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``),
+            mirroring ``_reject_bf16_and_fp16``, so a bad value supplied either
+            as a kwarg (``TrainingConfig(method="dpo")``) or via env var
+            (``BACKPROPAGATE_TRAINING__METHOD=dpo``) surfaces the SAME
+            actionable code/hint the rest of the config-validation path emits.
+            A non-``ValueError`` exception raised from a pydantic ``after``
+            validator propagates as-is (it is NOT re-wrapped in
+            ``ValidationError``), so the structured code/hint survive.
+            """
+            if self.method not in ("sft", "orpo"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "method",
+                    self.method,
+                    "one of {'sft', 'orpo'}",
+                    suggestion=(
+                        "Set method='sft' for supervised fine-tuning (the "
+                        "default) or method='orpo' for reference-free "
+                        "preference tuning (needs a {chosen, rejected} "
+                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
+                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
+                        "for those."
+                    ),
+                )
+            return self
+
+        @model_validator(mode="after")
+        def _reject_invalid_orpo_beta(self) -> "TrainingConfig":
+            """Reject a non-positive ``orpo_beta`` at construction.
+
+            v1.5 T1.2: ``orpo_beta`` is the odds-ratio weight on ORPO's
+            relative-ratio loss term. The field comment already warns "Keep
+            > 0 — a non-positive weight degenerates ORPO back to plain SFT,"
+            but nothing enforced it: ``orpo_beta=0.0`` silently zeroes the
+            odds-ratio term (the run is SFT wearing an ORPO label) and a
+            NEGATIVE beta trains TOWARD the rejected completion — both are
+            silent correctness bugs that surface only as a mysteriously bad
+            model. We gate it here, mirroring ``_reject_invalid_method``, so a
+            bad value supplied as a kwarg (``TrainingConfig(orpo_beta=0)``) or
+            via env var (``BACKPROPAGATE_TRAINING__ORPO_BETA=0``) raises a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``)
+            with an actionable hint up front. The constraint is enforced
+            unconditionally (not only when ``method == 'orpo'``) so the error
+            is deterministic regardless of field-evaluation order; a stray
+            non-positive ``orpo_beta`` left under ``method='sft'`` is still a
+            misconfiguration worth surfacing. A non-``ValueError`` exception
+            raised from a pydantic ``after`` validator propagates as-is (NOT
+            re-wrapped in ``ValidationError``), so the structured code/hint
+            survive.
+            """
+            if self.orpo_beta <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "orpo_beta",
+                    self.orpo_beta,
+                    "a positive number",
+                    suggestion=(
+                        "Set orpo_beta to a value > 0 (the ORPO paper's "
+                        "headline setting is 0.1). A value of 0 zeroes the "
+                        "odds-ratio term — the run silently degenerates to "
+                        "plain SFT — and a negative value trains toward the "
+                        "REJECTED completion."
+                    ),
+                )
+            return self
 
         @model_validator(mode="after")
         def _reject_bf16_and_fp16(self) -> "TrainingConfig":
@@ -461,6 +638,27 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # via ``--no-packing`` (CLI) or
         # ``BACKPROPAGATE_DATA__PACKING=false`` (env).
         packing: bool = True
+        # v1.5 T3.2 (reasoning-trace SFT / R1 distillation, finding 24).
+        # When True the trainer keeps the ``<think>`` chain-of-thought in the
+        # training target (the converters already preserve it — no special
+        # tokens, no embedding resize, so the merge→GGUF→Ollama export stays
+        # intact), applies trace-length filtering (drops empty / over-long
+        # traces via datasets.filter_by_trace_length), and bumps the DEFAULT
+        # max_seq_length to 8192 if the operator left it at the shipped 2048
+        # (longer CoT needs the room; an explicit max_seq_length always wins).
+        # Default False ⇒ byte-identical v1.4 SFT. SFT only — ignored under
+        # method='orpo'. Env: ``BACKPROPAGATE_DATA__REASONING_TRACE``.
+        reasoning_trace: bool = False
+        # Minimum think-span token count to keep a sample (reasoning_trace
+        # only). Samples whose ``<think>`` content tokenizes below this are
+        # dropped as empty/degenerate traces. Env:
+        # ``BACKPROPAGATE_DATA__MIN_TRACE_TOKENS``.
+        min_trace_tokens: int = 8
+        # Maximum think-span token count to keep a sample (reasoning_trace
+        # only). Samples whose ``<think>`` content tokenizes above this are
+        # dropped as over-long traces. Env:
+        # ``BACKPROPAGATE_DATA__MAX_TRACE_TOKENS``.
+        max_trace_tokens: int = 8192
 
     class UIConfig(BaseSettings):
         """Reflex (Radix UI) web interface configuration.
@@ -755,6 +953,10 @@ else:
         random_state: int = 42
         use_dora: bool = False
         init_lora_weights: str = "default"
+        # v1.5 T2.3 (rsLoRA): parity with the BaseSettings branch above —
+        # byte-identical default so a pydantic-settings-less install scales the
+        # adapter the same way. alpha/sqrt(r) vs alpha/r; zero inference cost.
+        use_rslora: bool = False
 
     @dataclass
     class TrainingConfig:  # type: ignore[no-redef]
@@ -775,6 +977,22 @@ else:
         seed: int = 42
         output_dir: str = "./output"
         overwrite_output_dir: bool = True
+        # v1.5 T1.2 (ORPO): parity with the pydantic branch above. The
+        # dataclass fallback can't express a Literal at the type level, so
+        # the {"sft", "orpo"} constraint is enforced in __post_init__ below
+        # to keep behavior byte-identical across the two installs.
+        method: str = "sft"
+        orpo_beta: float = 0.1
+        # v1.5 T2.1 (FP8 compute path): parity with the pydantic branch above —
+        # byte-identical default so a pydantic-settings-less install doesn't
+        # silently change FP8 behavior. No validation needed (a bool can't be
+        # malformed); the Trainer gate ladder enforces the cross-field rules.
+        fp8: bool = False
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): parity with the pydantic
+        # branch above. The dataclass fallback can't express a Literal at the
+        # type level, so the {auto, cuda, mlx} constraint is enforced in
+        # __post_init__ below to keep behavior byte-identical across installs.
+        backend: str = "auto"
 
         def __post_init__(self) -> None:
             # DATA-A-007 (parity with the pydantic branch above): reject the
@@ -794,6 +1012,64 @@ else:
                         "modes."
                     ),
                 )
+            # v1.5 T1.2 (ORPO): reject an invalid method here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_method
+            # validator raises.
+            if self.method not in ("sft", "orpo"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "method",
+                    self.method,
+                    "one of {'sft', 'orpo'}",
+                    suggestion=(
+                        "Set method='sft' for supervised fine-tuning (the "
+                        "default) or method='orpo' for reference-free "
+                        "preference tuning (needs a {chosen, rejected} "
+                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
+                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
+                        "for those."
+                    ),
+                )
+            # v1.5 T1.2 (ORPO): reject a non-positive orpo_beta here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_orpo_beta
+            # validator raises. A 0 weight silently degenerates ORPO to SFT;
+            # a negative weight trains toward the rejected completion.
+            if self.orpo_beta <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "orpo_beta",
+                    self.orpo_beta,
+                    "a positive number",
+                    suggestion=(
+                        "Set orpo_beta to a value > 0 (the ORPO paper's "
+                        "headline setting is 0.1). A value of 0 zeroes the "
+                        "odds-ratio term — the run silently degenerates to "
+                        "plain SFT — and a negative value trains toward the "
+                        "REJECTED completion."
+                    ),
+                )
+            # v1.5 T3.1 (MLX): reject an invalid backend here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_backend
+            # validator raises.
+            if self.backend not in ("auto", "cuda", "mlx"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "backend",
+                    self.backend,
+                    "one of {'auto', 'cuda', 'mlx'}",
+                    suggestion=(
+                        "Set backend='auto' (the default — routes to MLX on an "
+                        "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                        "backend='cuda' to force the CUDA rail, or backend='mlx' "
+                        "to force the Apple-Silicon rail (macOS + arm64 only)."
+                    ),
+                )
 
     @dataclass
     class DataConfig:  # type: ignore[no-redef]
@@ -807,6 +1083,12 @@ else:
         # v1.3 BACKEND-4: packing default flipped True (see BaseSettings
         # branch docstring above for rationale).
         packing: bool = True
+        # v1.5 T3.2 reasoning-trace SFT — see BaseSettings branch docstring
+        # above for the full rationale (keep <think>, trace-length filter,
+        # default max_seq_length bump; default False = byte-identical v1.4 SFT).
+        reasoning_trace: bool = False
+        min_trace_tokens: int = 8
+        max_trace_tokens: int = 8192
 
     @dataclass
     class UIConfig:  # type: ignore[no-redef]
@@ -1428,7 +1710,9 @@ def get_preset(name: str) -> TrainingPreset:
     return MULTI_RUN_PRESETS[name]
 
 
-def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
+def get_recommended_lr(
+    dataset_size: int, base_lr: float = 2e-4, method: str = "sft"
+) -> float:
     """
     Get recommended learning rate based on dataset size (Phase 1.3).
 
@@ -1437,7 +1721,15 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
 
     Args:
         dataset_size: Number of training samples
-        base_lr: Base learning rate (default: 2e-4)
+        base_lr: Base learning rate (default: 2e-4). Ignored when
+            ``method == "orpo"`` (the ORPO ladder is anchored on its own
+            published settings, not scaled off the SFT base).
+        method: Training objective (v1.5 T1.2). ``"sft"`` (default) returns
+            the SFT ladder UNCHANGED from earlier releases. ``"orpo"``
+            returns the ORPO ladder (small=2e-5, medium=1e-5, large=5e-6) —
+            roughly an order of magnitude below the SFT LRs because ORPO's
+            odds-ratio loss is sensitive to large steps (Hong, Lee & Thorne
+            2024, arXiv:2403.07691, train Mistral-ORPO around 5e-6 / 8e-6).
 
     Returns:
         Recommended learning rate
@@ -1451,7 +1743,29 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
         >>> lr = get_recommended_lr(500)  # Returns 5e-4
         >>> lr = get_recommended_lr(5000)  # Returns 2e-4
         >>> lr = get_recommended_lr(50000)  # Returns 1e-4
+        >>> lr = get_recommended_lr(500, method="orpo")  # Returns 2e-5
     """
+    if method == "orpo":
+        # v1.5 T1.2: ORPO ladder. Fixed anchors (not base_lr-scaled) — ORPO's
+        # odds-ratio penalty is unstable at the SFT LR magnitudes, so the
+        # published runs sit ~10x lower. Same monotone shape (small corpora
+        # tolerate a higher LR) as the SFT ladder.
+        small_lr = 2e-5
+        medium_lr = 1e-5
+        large_lr = 5e-6
+        # Keep the same strict-monotone invariant the SFT branch asserts so an
+        # anchor regression on the ORPO ladder is caught at the source too.
+        assert small_lr > medium_lr > large_lr, (
+            "get_recommended_lr ORPO ladder must satisfy small > medium > "
+            f"large (got {small_lr} / {medium_lr} / {large_lr})"
+        )
+        if dataset_size < 1000:
+            return small_lr
+        elif dataset_size < 10000:
+            return medium_lr
+        else:
+            return large_lr
+
     # Scale all ranges proportionally relative to base_lr.
     # The default base_lr (2e-4) maps to: small=5e-4, medium=2e-4, large=1e-4.
     # A custom base_lr scales these proportionally (e.g. base_lr=4e-4 gives small=1e-3).

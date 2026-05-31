@@ -81,14 +81,22 @@ def BpStatusPill(state="idle", label: str = "Idle", detail: str = "") -> rx.Comp
             ),
             rx.flex(
                 rx.text(label, size="2", weight="medium"),
-                rx.text(
-                    detail,
-                    size="1",
-                    style={
-                        "font_family": "var(--bp-mono)",
-                        "color": "var(--bp-muted)",
-                    },
-                ) if detail else rx.fragment(),
+                # ``detail`` may be a ``State.var`` even on this literal-``state``
+                # path (per the docstring), so guard with ``rx.cond`` rather than
+                # a Python truthiness check — ``if detail`` on a Var raises
+                # VarTypeError. Mirrors the always-reactive ``_pill_variant`` path.
+                rx.cond(
+                    detail != "",
+                    rx.text(
+                        detail,
+                        size="1",
+                        style={
+                            "font_family": "var(--bp-mono)",
+                            "color": "var(--bp-muted)",
+                        },
+                    ),
+                    rx.fragment(),
+                ),
                 direction="column",
                 gap="1",
             ),

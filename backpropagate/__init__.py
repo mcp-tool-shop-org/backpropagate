@@ -202,6 +202,15 @@ from .config import (
 # and emits the DeprecationWarning, per the v1.4 rename cycle.
 TRAINING_PRESETS = MULTI_RUN_PRESETS
 
+# Dataset-quality report (v1.5 T1.1 — the moat). Pure-stdlib + numpy-light
+# analysis surface; does NOT pull torch, so re-exporting these names keeps
+# the eval-path re-export below cheap. Powers `backprop data report <jsonl>`.
+from .dataset_report import (
+    ContaminationResult,
+    DataQualityReport,
+    analyze_dataset,
+)
+
 # Datasets
 from .datasets import (
     # Curriculum learning (Phase 3.3)
@@ -236,6 +245,19 @@ from .datasets import (
     order_by_difficulty,
     preview_samples,
     validate_dataset,
+)
+
+# Lightweight eval harness (v1.5 T1.1 — the moat). eval.py keeps torch LAZY
+# (imported inside evaluate_run, not at module top), so re-exporting these
+# public names is cheap — ``import backpropagate`` stays torch-free. Powers
+# `backprop eval <run_id>`.
+from .eval import (
+    EvalDiff,
+    EvalGateDecision,
+    EvalResult,
+    diff_evals,
+    eval_gate,
+    evaluate_run,
 )
 
 # Export
@@ -353,10 +375,12 @@ except PackageNotFoundError:
 # "become a hard AttributeError in v1.4", but at v1.4.0 the shim still
 # raises ImportError (the transition was deferred — the back-compat
 # contract callers wrap as ``except ImportError`` was kept one more cycle).
-# Bumped to the next planned removal (v1.5) so the warning text no longer
-# names a version that already shipped. The actual swap to AttributeError
-# happens in __getattr__ at the v1.5 cut, not here.
-_REMOVED_IN_VERSION = "v1.5"
+# Bumped to the next planned removal (v1.6) so the warning text no longer
+# names a version that already shipped (v1.5 IS the current release). The
+# actual swap to AttributeError happens in __getattr__ at the v1.6 cut, not here.
+# (History: the marker was v1.4 → v1.5 → v1.6; each cycle the ImportError grace
+# period was extended one more minor release rather than hard-breaking callers.)
+_REMOVED_IN_VERSION = "v1.6"
 
 _DEPRECATED_UI_ATTRS = {
     "launch": (
@@ -385,10 +409,10 @@ def __getattr__(name: str) -> Any:
 
     BRIDGE-B-015 (Stage C): when a user touches a removed Gradio-era
     attribute we (1) emit a DeprecationWarning naming the future removal
-    version (currently ``v1.5`` — see CLI-A-005) so callers wrapping the
+    version (currently ``v1.6`` — see CLI-A-005) so callers wrapping the
     access in ``try: ... except ImportError: pass`` still see the heads-up
     in stderr, then (2) raise ``ImportError`` with the migration hint so the
-    existing contract is preserved. At the v1.5 cut the ImportError can be
+    existing contract is preserved. At the v1.6 cut the ImportError can be
     swapped for a plain AttributeError to match the rest of
     ``__getattr__``'s contract.
     """
@@ -599,5 +623,18 @@ __all__ = [
     "order_by_difficulty",
     "get_curriculum_chunks",
     "analyze_curriculum",
+
+    # Dataset-quality report (v1.5 T1.1)
+    "analyze_dataset",
+    "DataQualityReport",
+    "ContaminationResult",
+
+    # Eval harness (v1.5 T1.1)
+    "evaluate_run",
+    "diff_evals",
+    "eval_gate",
+    "EvalResult",
+    "EvalGateDecision",
+    "EvalDiff",
 
 ]

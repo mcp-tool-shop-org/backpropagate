@@ -304,6 +304,11 @@ __all__ = [
     # F-001 / F-004
     "push_to_hub",
     "write_model_card",
+    # v1.5 T2.3 — adapter-native export ("ollama-adapter" format + adapter shelf)
+    "create_adapter_modelfile",
+    "export_ollama_adapter",
+    "list_adapter_shelf",
+    "AdapterShelfEntry",
 ]
 
 
@@ -820,6 +825,13 @@ class ExportFormat(Enum):
     LORA = "lora"
     MERGED = "merged"
     GGUF = "gguf"
+    # v1.5 T2.3 (V1_5_BRIEF findings 27–29): register a LoRA adapter with
+    # Ollama as an ADAPTER on top of a base model, WITHOUT merging. Lighter
+    # than the merged-GGUF path and enables hot-swapping sibling adapters on a
+    # single shared base ("adapter shelf"). The merged-then-quantized GGUF
+    # export (ExportFormat.GGUF) stays the DEFAULT for low-VRAM serving
+    # (finding 28); this is an OPTION alongside it, not a replacement.
+    OLLAMA_ADAPTER = "ollama-adapter"
 
 
 @dataclass
@@ -876,6 +888,84 @@ def _estimate_param_count(model: Any) -> int | None:
     except Exception:  # noqa: BLE001
         return None
     return total or None
+
+
+def _model_has_float32_params(model: Any) -> bool:
+    """Best-effort: does ``model`` carry any float32 parameter?
+
+    FP8 finding: torchao's ``Float8Linear`` keeps its master weight in f32,
+    so after ``merge_and_unload()`` the merged checkpoint is f32 (4 B/param)
+    rather than the bf16 (2 B/param) a normal LoRA merge produces. Detecting
+    f32 lets the merged/GGUF export paths down-cast to bf16 before saving so
+    the on-disk size matches the disk-guard's 2-B/param budget.
+
+    Returns ``False`` (never raises) when torch is absent or the model
+    doesn't expose ``parameters()`` with dtypes — a stub / mock model simply
+    skips the cast.
+    """
+    try:
+        params = model.parameters()
+    except Exception:  # noqa: BLE001 — non-torch / mock model
+        return False
+    try:
+        import torch  # local import: export.py must import cheaply for --help
+    except Exception:  # noqa: BLE001 — torch missing in a docs-only install
+        return False
+    try:
+        for p in params:
+            if getattr(p, "dtype", None) == torch.float32:
+                return True
+    except Exception:  # noqa: BLE001 — degenerate iterator / mock
+        return False
+    return False
+
+
+def _cast_merged_model_to_bf16(model: Any) -> Any:
+    """Down-cast a merged model to bf16 before ``save_pretrained``.
+
+    FP8 finding (DATA-B-004 late-failure guard): a model trained with the FP8
+    compute path merges to an **f32** checkpoint (torchao ``Float8Linear``
+    upcasts its weight to f32). At 4 B/param that is DOUBLE the bf16 a normal
+    LoRA merge produces, so the merged checkpoint ALONE consumes the whole
+    ``params × 2 × multiplier`` disk budget — the GGUF pre-flight then PASSES
+    and conversion dies mid-way out of disk (exactly the late failure
+    DATA-B-004 exists to prevent). Casting the merge to bf16 here both
+    restores the 2-B/param assumption AND halves the on-disk footprint. The
+    merge math is already done, so the cast is numerically fine for the
+    downstream GGUF conversion (the float8-base run's ~9% relative delta is
+    expected and unrelated to this cast).
+
+    Only casts when (a) torch is importable AND (b) the model actually carries
+    f32 params (i.e. the FP8 case) AND (c) the model exposes ``.to()``. A
+    normal bf16 merge, a stub/mock model, or a torch-less install is returned
+    unchanged. Cast failures degrade to the original model (logged at WARN)
+    so a save is never blocked by a best-effort optimization.
+    """
+    if not _model_has_float32_params(model):
+        return model
+    to_method = getattr(model, "to", None)
+    if not callable(to_method):
+        return model
+    try:
+        import torch
+
+        cast = to_method(torch.bfloat16)
+        # ``Module.to`` mutates in place and returns self; honor a returned
+        # model if the impl returns a new object.
+        result = cast if cast is not None else model
+        logger.info(
+            "Down-cast merged model to bf16 before save (FP8 merge produces "
+            "an f32 checkpoint at 4 B/param; bf16 halves on-disk size and "
+            "matches the disk-space pre-flight's 2 B/param budget)."
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — best-effort; never block the save
+        logger.warning(
+            "Could not down-cast merged model to bf16 (%s); saving as-is. The "
+            "GGUF disk pre-flight may under-budget an f32 checkpoint.",
+            exc,
+        )
+        return model
 
 
 def _check_export_disk_space(
@@ -1165,6 +1255,12 @@ def export_merged(
     except Exception as e:
         raise MergeExportError(f"Failed to merge LoRA adapters: {e}") from e
 
+    # FP8 finding: an FP8-trained model merges to an f32 checkpoint (torchao
+    # Float8Linear upcasts its weight). At 4 B/param that doubles the on-disk
+    # size the disk-space pre-flight budgeted (2 B/param), so down-cast to
+    # bf16 before saving. No-op for a normal bf16 merge / stub model.
+    merged_model = _cast_merged_model_to_bf16(merged_model)
+
     try:
         # Save model and tokenizer
         merged_model.save_pretrained(output_path)
@@ -1442,6 +1538,13 @@ def export_gguf(
             merged_model = model.merge_and_unload()
         else:
             merged_model = model
+
+        # FP8 finding: an FP8-trained model merges to an f32 checkpoint at
+        # 4 B/param — double the bf16 the disk pre-flight (which ran above
+        # with multiplier=2.0 on a 2-B/param assumption) budgeted. Down-cast
+        # to bf16 before saving so the scratch merge + quantized GGUF fit the
+        # budgeted headroom instead of dying mid-conversion out of disk.
+        merged_model = _cast_merged_model_to_bf16(merged_model)
 
         # Save in HF format
         merged_model.save_pretrained(merged_path)
@@ -1975,3 +2078,600 @@ def remove_ollama_model(model_name: str) -> bool:
             f"ollama rm failed: {error_msg}",
             suggestion=suggestion,
         ) from exc
+
+
+# =============================================================================
+# v1.5 T2.3 — ADAPTER-NATIVE OLLAMA EXPORT ("ollama-adapter") + ADAPTER SHELF
+# =============================================================================
+# V1_5_BRIEF §2 findings 27–29 / §3 T2.3:
+#
+#   27. Ollama loads LoRA adapters natively via the ``ADAPTER`` Modelfile
+#       instruction — no full merge required. A Modelfile of the shape
+#       ``FROM <base>`` + ``ADAPTER <adapter_path>`` registers the adapter on
+#       top of the base, so multiple sibling adapters can hot-swap on ONE
+#       shared base (the "adapter shelf").
+#   28. BUT adapters-on-quantized-bases degrade quality and force an
+#       unquantized base into memory. So merged-then-quantized GGUF
+#       (``export_gguf`` + ``register_with_ollama``) stays the DEFAULT for
+#       low-VRAM serving; this adapter-native path ships as an OPTION.
+#   29. vLLM is the production multi-LoRA/hot-swap leader; we own the EXPORT
+#       (emit the Modelfile + register), not a runtime router.
+#
+# MECHANISM IMPLEMENTED — SAFETENSORS ``ADAPTER`` (not GGUF-adapter conversion):
+#   The installed Ollama (>=0.x supporting safetensors adapters; verified
+#   against the 0.24 client in the dev env) accepts a *safetensors* LoRA
+#   adapter directory directly via ``ADAPTER <dir>`` for the Llama / Mistral /
+#   Gemma architecture families — which is exactly the set
+#   backpropagate's presets target (Qwen2.5/Llama-3.2/Mistral are
+#   Llama-architecture; Gemma is first-class). ``export_lora`` already writes
+#   ``adapter_model.safetensors`` + ``adapter_config.json`` into a directory,
+#   so the adapter-native path reuses that artifact verbatim — NO
+#   ``convert_lora_to_gguf.py`` dependency on the common path.
+#
+#   A GGUF adapter file (``*.gguf`` produced by llama.cpp's
+#   ``convert_lora_to_gguf.py``) is ALSO accepted by the same ``ADAPTER``
+#   directive, so a caller who already has one can pass it. We do NOT shell
+#   out to the converter ourselves: if a caller points ``adapter_path`` at a
+#   directory that holds neither a safetensors adapter NOR a ``.gguf`` adapter,
+#   we degrade with a structured ``GGUFExportError``
+#   (``code='RUNTIME_GGUF_EXPORT_FAILED'``) naming the fix — never a crash.
+
+# Adapter files Ollama's ``ADAPTER`` directive understands. A safetensors LoRA
+# adapter directory written by ``export_lora`` contains
+# ``adapter_model.safetensors``; a GGUF adapter is a single ``*.gguf`` (or the
+# llama.cpp ``*-lora.gguf`` naming). We accept either.
+_ADAPTER_SAFETENSORS_GLOB = "adapter_model.safetensors"
+_ADAPTER_BIN_GLOB = "adapter_model.bin"
+
+
+def _resolve_adapter_artifact(adapter_path: Path) -> Path:
+    """Resolve the path to hand to Ollama's ``ADAPTER`` directive.
+
+    ``adapter_path`` may be:
+      * a directory containing ``adapter_model.safetensors`` (the canonical
+        ``export_lora`` output) — return the directory (Ollama reads the
+        safetensors adapter from it);
+      * a directory containing only a legacy ``adapter_model.bin`` — return
+        the directory (Ollama's safetensors loader does not read ``.bin``, so
+        we surface this as a degrade below, not here);
+      * a single ``*.gguf`` adapter file — return the file;
+      * a single ``*.safetensors`` file — return that file.
+
+    Raises:
+        GGUFExportError: with ``code='RUNTIME_GGUF_EXPORT_FAILED'`` when the
+            path holds no adapter Ollama can consume. The message names the
+            two supported shapes (safetensors dir / GGUF adapter) and the fix
+            (``backprop export --format lora`` to produce a safetensors
+            adapter, or convert to a GGUF adapter via llama.cpp's
+            ``convert_lora_to_gguf.py``) so the operator's next step is one
+            command away — degrade, never crash (V1_5_BRIEF T2.3).
+    """
+    # Single-file inputs: a GGUF adapter or a bare safetensors file.
+    if adapter_path.is_file():
+        suffix = adapter_path.suffix.lower()
+        if suffix in (".gguf", ".safetensors"):
+            return adapter_path
+        raise GGUFExportError(
+            (
+                f"adapter file {adapter_path} is not a recognised Ollama "
+                f"adapter (got suffix '{suffix or '<none>'}'); expected a "
+                "'.safetensors' LoRA adapter or a '.gguf' adapter."
+            ),
+            output_path=str(adapter_path),
+            suggestion=(
+                "Pass a directory produced by `backprop export --format lora` "
+                "(it contains adapter_model.safetensors), or a GGUF adapter "
+                "produced by llama.cpp's convert_lora_to_gguf.py."
+            ),
+        )
+
+    if not adapter_path.is_dir():
+        raise GGUFExportError(
+            f"adapter path does not exist: {adapter_path}",
+            output_path=str(adapter_path),
+            suggestion=(
+                "Pass the directory produced by `backprop export --format "
+                "lora` (or `backprop train --output <dir>`), which contains "
+                "adapter_model.safetensors + adapter_config.json."
+            ),
+        )
+
+    # Directory input: prefer a safetensors LoRA adapter (Ollama reads it
+    # directly); accept a GGUF adapter file dropped in the directory.
+    if (adapter_path / _ADAPTER_SAFETENSORS_GLOB).exists():
+        return adapter_path
+
+    gguf_adapters = sorted(adapter_path.glob("*.gguf"))
+    if gguf_adapters:
+        # A GGUF adapter is single-file; point ADAPTER straight at it so the
+        # base model's own .gguf (if any sits in the same dir) is not picked
+        # up by mistake.
+        return gguf_adapters[0]
+
+    # Degrade path: a directory with only a legacy .bin adapter (Ollama's
+    # safetensors loader cannot read it) or no adapter at all. Reuse the
+    # EXISTING GGUF export code — naming convert_lora_to_gguf.py as the fix.
+    has_bin = (adapter_path / _ADAPTER_BIN_GLOB).exists()
+    detail = (
+        "found a legacy adapter_model.bin but no adapter_model.safetensors"
+        if has_bin
+        else "found no adapter_model.safetensors and no .gguf adapter"
+    )
+    raise GGUFExportError(
+        (
+            f"no Ollama-loadable adapter in {adapter_path} ({detail}). "
+            "Ollama's ADAPTER directive reads a safetensors LoRA adapter "
+            "directory or a GGUF adapter file."
+        ),
+        output_path=str(adapter_path),
+        suggestion=(
+            "Re-export the adapter as safetensors with `backprop export "
+            "--format lora` (writes adapter_model.safetensors), OR convert it "
+            "to a GGUF adapter with llama.cpp's convert_lora_to_gguf.py and "
+            "point --adapter at the resulting .gguf. (A .bin-only adapter is "
+            "not consumable by Ollama's safetensors loader.)"
+        ),
+    )
+
+
+def _derive_adapter_tag(adapter_path: Path) -> str:
+    """Derive an Ollama tag from the adapter location.
+
+    Mirrors the existing register-from-export derivation
+    (``cli.py``: ``args.ollama_name or model_path.name``): use the adapter
+    *directory* basename, or for a single-file adapter the file stem. The
+    result is sanitised to Ollama's tag charset ([A-Za-z0-9._-]) so a dir
+    named e.g. ``run_2026-05-30/`` still yields a legal tag; an all-illegal
+    basename falls back to ``adapter``.
+    """
+    raw = adapter_path.name if adapter_path.is_dir() else adapter_path.stem
+    # Lowercase + replace any char outside the tag allowlist with '-'. Collapse
+    # runs and strip leading/trailing separators so we never emit a leading '-'
+    # (which _validate_model_name rejects as option-injection).
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
+    return cleaned or "adapter"
+
+
+def create_adapter_modelfile(
+    base_model: str,
+    adapter_path: str | Path,
+    output_path: str | Path | None = None,
+    *,
+    system_prompt: str | None = None,
+    temperature: float = 0.7,
+    context_length: int = 4096,
+) -> Path:
+    """v1.5 T2.3: write an Ollama Modelfile that stacks a LoRA adapter on a base.
+
+    Emits the adapter-native shape (V1_5_BRIEF finding 27)::
+
+        FROM <base_model>
+        ADAPTER "<adapter_path>"
+        PARAMETER temperature <temperature>
+        PARAMETER num_ctx <context_length>
+        [SYSTEM "<system_prompt>"]
+
+    Unlike :func:`create_modelfile` (which points ``FROM`` at a merged GGUF
+    file), here ``FROM`` names the BASE model — an Ollama model name
+    (``llama3.2``) OR a path to a base GGUF — and ``ADAPTER`` points at the
+    unmerged LoRA adapter. This is what lets several sibling adapters share one
+    base ("adapter shelf").
+
+    The base-model identity is load-bearing: Ollama warns that "if the base
+    model is not the same as the base model that the adapter was tuned from the
+    behaviour will be erratic," so the caller is responsible for passing the
+    matching base.
+
+    Args:
+        base_model: Base model for the ``FROM`` line — an Ollama model name
+            (e.g. ``"llama3.2"`` / ``"mistral:7b"``) or a path to a base GGUF.
+        adapter_path: Path Ollama's ``ADAPTER`` directive will read — a
+            safetensors LoRA adapter directory (the ``export_lora`` output) or
+            a ``.gguf`` adapter file. Resolved via
+            :func:`_resolve_adapter_artifact`, which degrades with a structured
+            error (not a crash) when no loadable adapter is present.
+        output_path: Where to write the Modelfile. Defaults to
+            ``<adapter_dir>/Modelfile`` (adapter dir, or the file's parent for
+            a single-file adapter).
+        system_prompt: Optional system prompt baked into the Modelfile.
+        temperature: ``PARAMETER temperature`` (default 0.7, matching
+            :func:`create_modelfile`).
+        context_length: ``PARAMETER num_ctx`` (default 4096).
+
+    Returns:
+        Path to the written Modelfile.
+
+    Raises:
+        ExportError: ``code='INPUT_VALIDATION_FAILED'`` when ``base_model``,
+            the resolved adapter path, or ``system_prompt`` contains a C0
+            control char (other than TAB) — same Modelfile-corruption rule
+            :func:`create_modelfile` enforces (a stray newline would split the
+            FROM/ADAPTER directive and open a directive-injection surface).
+        GGUFExportError: ``code='RUNTIME_GGUF_EXPORT_FAILED'`` (via
+            :func:`_resolve_adapter_artifact`) when ``adapter_path`` holds no
+            Ollama-loadable adapter.
+    """
+    adapter_path_p = Path(adapter_path).resolve()
+    artifact = _resolve_adapter_artifact(adapter_path_p)
+    artifact = artifact.resolve()
+
+    # BRIDGE-B-011 reuse: reject every C0 control (except TAB) in any string
+    # that flows into Modelfile body text — base name, adapter path, system
+    # prompt. The Modelfile parser treats control chars as statement
+    # separators / line breaks, so a stray newline would split a directive.
+    # We mirror create_modelfile's _reject_modelfile_unsafe verbatim.
+    _c0_names = {
+        "\x00": "NUL",
+        "\n": "newline",
+        "\r": "CR",
+        "\x0c": "form-feed",
+        "\x0b": "vertical-tab",
+    }
+
+    def _reject_modelfile_unsafe(value: str, *, field: str) -> None:
+        for ch in value:
+            if ord(ch) < 0x20 and ch != "\t":
+                ch_name = _c0_names.get(ch, f"control char U+{ord(ch):04X}")
+                raise ExportError(
+                    f"{field} contains a {ch_name} character; the Ollama "
+                    "Modelfile format treats control characters as statement "
+                    "separators / line breaks and the file would split into "
+                    "multiple directives.",
+                    suggestion=(
+                        f"Strip the embedded {ch_name} from {field}. If it "
+                        "comes from a path with an unusual filename, rename "
+                        "before exporting; if from --system-prompt, remove the "
+                        "control character."
+                    ),
+                    code="INPUT_VALIDATION_FAILED",
+                )
+
+    _reject_modelfile_unsafe(base_model, field="base_model")
+    _reject_modelfile_unsafe(str(artifact), field="adapter_path")
+    if system_prompt is not None:
+        _reject_modelfile_unsafe(system_prompt, field="system_prompt")
+
+    if output_path:
+        modelfile_path = Path(output_path)
+    else:
+        anchor = artifact if artifact.is_dir() else artifact.parent
+        modelfile_path = anchor / "Modelfile"
+
+    # BRIDGE-A-001 reuse: escape backslash FIRST, then double-quote, so a
+    # Windows path (C:\...) / UNC path in either FROM or ADAPTER produces a
+    # well-formed Modelfile. ``base_model`` is usually a bare Ollama name with
+    # neither char, but a base-GGUF path needs the same treatment.
+    def _escape(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    base_str = _escape(base_model)
+    adapter_str = _escape(str(artifact))
+
+    # FROM: only quote when the value looks like a path (contains a separator
+    # or drive colon). A bare Ollama model name (``llama3.2``) is conventionally
+    # unquoted in Modelfiles; quoting a path keeps spaces/backslashes safe.
+    from_needs_quotes = any(sep in base_model for sep in ("/", "\\", " ")) or (
+        len(base_model) > 1 and base_model[1] == ":"
+    )
+    from_line = f'FROM "{base_str}"' if from_needs_quotes else f"FROM {base_model}"
+
+    lines = [
+        from_line,
+        f'ADAPTER "{adapter_str}"',
+        "",
+        f"PARAMETER temperature {temperature}",
+        f"PARAMETER num_ctx {context_length}",
+    ]
+
+    if system_prompt:
+        lines.extend(["", f'SYSTEM "{_escape(system_prompt)}"'])
+
+    modelfile_path.parent.mkdir(parents=True, exist_ok=True)
+    modelfile_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return modelfile_path
+
+
+def export_ollama_adapter(
+    adapter_path: str | Path,
+    *,
+    base_model: str,
+    tag: str | None = None,
+    modelfile_only: bool = False,
+    system_prompt: str | None = None,
+    temperature: float = 0.7,
+    context_length: int = 4096,
+    keep_modelfile: bool = False,
+) -> ExportResult:
+    """v1.5 T2.3: register a LoRA adapter with Ollama on top of a base, unmerged.
+
+    Builds a ``FROM <base_model>`` + ``ADAPTER <adapter_path>`` Modelfile and
+    (unless ``modelfile_only``) runs ``ollama create <model_name> -f
+    <Modelfile>`` so ``ollama run <model_name>`` serves the base with the
+    adapter applied — WITHOUT the merge step. Lighter than the merged-GGUF
+    path (``export_gguf`` + ``register_with_ollama``) and the building block
+    for the "adapter shelf": register several sibling adapters against the same
+    base under different tags and hot-swap by changing the tag at run time.
+
+    The resulting Ollama model name is ``<base_tag>:<tag>`` where ``base_tag``
+    is the base model's leading segment (``llama3.2:7b`` → ``llama3.2``) — so
+    ``ollama run llama3.2:taskA`` / ``ollama run llama3.2:taskB`` swap only the
+    adapter. ``tag`` defaults to the adapter directory basename (sanitised),
+    mirroring the existing register-from-export name derivation.
+
+    Args:
+        adapter_path: Safetensors LoRA adapter directory (the ``export_lora``
+            output) or a ``.gguf`` adapter file.
+        base_model: The base the adapter was tuned from — an Ollama model name
+            (``"llama3.2"``) or a base-GGUF path. MUST match the adapter's
+            origin base or Ollama's output is erratic (finding 27 caveat).
+        tag: Adapter tag for the ``<base>:<tag>`` model name. Defaults to a
+            sanitised adapter-dir basename.
+        modelfile_only: When True, write the Modelfile and return WITHOUT
+            invoking ``ollama`` (no subprocess). Useful for inspection / CI /
+            air-gapped hosts.
+        system_prompt: Optional system prompt baked into the Modelfile.
+        temperature: ``PARAMETER temperature`` (default 0.7).
+        context_length: ``PARAMETER num_ctx`` (default 4096).
+        keep_modelfile: When True, leave the Modelfile on disk after a
+            successful ``ollama create`` (default False removes it, matching
+            :func:`register_with_ollama`). The Modelfile is ALWAYS kept when
+            ``modelfile_only=True``.
+
+    Returns:
+        ExportResult with ``format=ExportFormat.OLLAMA_ADAPTER``. ``path`` is
+        the written Modelfile (whether or not registration ran). The derived
+        ``<base>:<tag>`` model name is recorded in ``ExportResult.quantization``
+        (re-used as a free-form tag slot — adapter-native export has no
+        quantization of its own) so callers / the CLI can echo
+        ``ollama run <name>`` without re-deriving it.
+
+    Raises:
+        ExportError: ``code='INPUT_VALIDATION_FAILED'`` when the derived
+            ``<base>:<tag>`` model name fails the Ollama allowlist
+            (``_validate_model_name``), or a Modelfile input carries a control
+            char.
+        GGUFExportError: ``code='RUNTIME_GGUF_EXPORT_FAILED'`` when
+            ``adapter_path`` holds no Ollama-loadable adapter (degrade path).
+        OllamaRegistrationError: ``code='DEP_OLLAMA_REGISTRATION_FAILED'`` when
+            the ``ollama create`` invocation fails / times out (only when
+            ``modelfile_only=False``).
+    """
+    start_time = time.time()
+    adapter_path_p = Path(adapter_path).resolve()
+
+    derived_tag = tag if tag else _derive_adapter_tag(adapter_path_p)
+    # Validate the tag fragment up front so a bad --tag fails before we touch
+    # the filesystem. The tag is the segment after ':' so it must not itself
+    # contain ':' / '/' / control chars; reuse the model-name allowlist on the
+    # bare tag (it is a strict subset of the full name charset).
+    base_tag = base_model.split(":", 1)[0].strip()
+    model_name = f"{base_tag}:{derived_tag}"
+    # _validate_model_name accepts the ``name:tag`` shape (':' is allowed) and
+    # rejects leading '-', control chars, path separators — exactly the
+    # protection we want before the argv reaches the ollama CLI.
+    _validate_model_name(model_name)
+
+    # Build the Modelfile (also resolves + validates the adapter artifact and
+    # rejects control chars in base/adapter/system_prompt).
+    modelfile_path = create_adapter_modelfile(
+        base_model,
+        adapter_path_p,
+        system_prompt=system_prompt,
+        temperature=temperature,
+        context_length=context_length,
+    )
+
+    if modelfile_only:
+        logger.info(
+            "ollama-adapter Modelfile written (modelfile_only=True; no "
+            "registration): base=%s adapter=%s model_name=%s path=%s",
+            base_model,
+            adapter_path_p,
+            model_name,
+            modelfile_path,
+        )
+        size_mb = _get_dir_size_mb(modelfile_path)
+        return ExportResult(
+            format=ExportFormat.OLLAMA_ADAPTER,
+            path=modelfile_path,
+            size_mb=size_mb,
+            quantization=model_name,
+            export_time_seconds=time.time() - start_time,
+        )
+
+    # Registration path: require the ollama CLI, then `ollama create`.
+    if not shutil.which("ollama"):
+        # Leave the Modelfile in place so the operator can register manually
+        # once Ollama is installed (`ollama create <name> -f <Modelfile>`).
+        raise OllamaRegistrationError(
+            model_name,
+            "Ollama CLI not found in PATH",
+            suggestion=(
+                "Install Ollama from https://ollama.com and ensure it is on "
+                f"PATH. The Modelfile was written to {modelfile_path}; once "
+                f"Ollama is installed you can register manually with "
+                f"`ollama create {model_name} -f {modelfile_path}`. Or pass "
+                "modelfile_only=True to skip registration entirely."
+            ),
+        )
+
+    try:
+        # BRIDGE-A-004 reuse: Popen-based runner so Ctrl+C during `ollama
+        # create` propagates to the child instead of leaving a zombie.
+        _run_subprocess_interruptible(
+            ["ollama", "create", model_name, "-f", str(modelfile_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=600,
+        )
+        logger.info(
+            "Registered adapter '%s' with Ollama (base=%s, adapter=%s, "
+            "unmerged ADAPTER export)",
+            model_name,
+            base_model,
+            adapter_path_p,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise OllamaRegistrationError(
+            model_name,
+            "ollama create timed out after 10 minutes",
+            suggestion=(
+                "The base model may be downloading or Ollama may be "
+                "unresponsive. Check `ollama serve` status and that the base "
+                f"model '{base_tag}' is pullable, then retry."
+            ),
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        error_msg = (exc.stderr or "").strip()[:500] or "Unknown error"
+        raise OllamaRegistrationError(
+            model_name,
+            f"ollama create failed: {error_msg}",
+            suggestion=(
+                "Ensure Ollama is running (`ollama serve`) and the base model "
+                f"'{base_tag}' exists locally (`ollama pull {base_tag}`) or is "
+                "a valid base-GGUF path. The adapter's base MUST match the "
+                "base it was tuned from, or Ollama rejects/garbles it."
+            ),
+        ) from exc
+    finally:
+        # Clean up the Modelfile on the registration path unless asked to keep
+        # it — mirrors register_with_ollama. Tolerate cleanup OSErrors so they
+        # never mask a real OllamaRegistrationError from the except branches.
+        if not keep_modelfile:
+            try:
+                if modelfile_path.exists():
+                    modelfile_path.unlink()
+            except OSError as cleanup_exc:
+                logger.warning(
+                    "Failed to clean up adapter Modelfile at %s: %s",
+                    modelfile_path,
+                    cleanup_exc,
+                )
+
+    size_mb = _get_dir_size_mb(modelfile_path) if modelfile_path.exists() else 0.0
+    return ExportResult(
+        format=ExportFormat.OLLAMA_ADAPTER,
+        path=modelfile_path,
+        size_mb=size_mb,
+        quantization=model_name,
+        export_time_seconds=time.time() - start_time,
+    )
+
+
+@dataclass
+class AdapterShelfEntry:
+    """v1.5 T2.3: one adapter registered against a base on the Ollama shelf.
+
+    Returned by :func:`list_adapter_shelf`. ``model_name`` is the full Ollama
+    name (``llama3.2:taskA``); ``tag`` is the segment after ':' (``taskA``);
+    ``base`` is the segment before (``llama3.2``). ``size`` / ``modified`` are
+    the raw columns from ``ollama list`` (best-effort; empty when the parse
+    can't recover them).
+    """
+
+    model_name: str
+    base: str
+    tag: str
+    size: str = ""
+    modified: str = ""
+
+
+def list_adapter_shelf(base_model: str) -> list[AdapterShelfEntry]:
+    """v1.5 T2.3: list the adapters registered against ``base_model`` on Ollama.
+
+    The "adapter shelf" is the set of Ollama models that share one base and
+    differ only by adapter tag (``llama3.2:taskA``, ``llama3.2:taskB``, …),
+    produced by :func:`export_ollama_adapter`. This is the "what's on the
+    shelf for a given base" query the brief asks for — best-effort over
+    ``ollama list`` (we own the export + the listing, not a runtime router).
+
+    Matching: every ``ollama list`` model whose leading ``name`` segment
+    (before ':') equals ``base_model``'s leading segment. The bare base model
+    itself (``llama3.2:latest`` / ``llama3.2``) is EXCLUDED — the shelf is the
+    adapter variants, not the plain base. SLAO branch outputs registered as
+    ``<base>:branchA`` / ``<base>:branchB`` therefore show up naturally.
+
+    Args:
+        base_model: Base model name; only its leading segment is used
+            (``"llama3.2:7b"`` and ``"llama3.2"`` match the same shelf).
+
+    Returns:
+        A list of :class:`AdapterShelfEntry`, one per matching tagged model
+        (empty when Ollama is absent / the daemon is down / nothing matches —
+        the cause is WARN-logged, mirroring :func:`list_ollama_models`).
+    """
+    base_tag = base_model.split(":", 1)[0].strip()
+
+    if not shutil.which("ollama"):
+        logger.warning(
+            "list_adapter_shelf: the 'ollama' CLI is not on PATH; returning "
+            "an empty shelf. Install Ollama (https://ollama.com) and ensure "
+            "it is on PATH to list adapters registered against '%s'.",
+            base_tag,
+        )
+        return []
+
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        logger.warning(
+            "list_adapter_shelf: 'ollama list' failed (exit %s)%s; returning "
+            "an empty shelf. Is the daemon running? Start it with "
+            "'ollama serve'.",
+            exc.returncode,
+            f": {stderr[:200]}" if stderr else "",
+        )
+        return []
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "list_adapter_shelf: 'ollama list' timed out after 30s; returning "
+            "an empty shelf. The daemon may be hung or starting up."
+        )
+        return []
+
+    entries: list[AdapterShelfEntry] = []
+    lines = result.stdout.strip().split("\n")
+    for line in lines[1:]:  # Skip the NAME/ID/SIZE/MODIFIED header.
+        if not line.strip():
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        full_name = parts[0]
+        # ``ollama list`` always shows a tag (``name:tag``); split on the LAST
+        # ':' is unnecessary because Ollama names have at most one ':'.
+        name_segment, _, tag_segment = full_name.partition(":")
+        if name_segment != base_tag:
+            continue
+        # Exclude the bare base itself — the shelf is adapter VARIANTS. The
+        # plain base shows as ``<base>:latest`` (or no tag); treat 'latest' /
+        # empty tag as "not an adapter variant".
+        if tag_segment in ("", "latest"):
+            continue
+        # Best-effort SIZE (cols 2..3 in `ollama list`: ID SIZE_NUM SIZE_UNIT
+        # MODIFIED...). We don't hard-depend on column positions; recover what
+        # we can and leave blanks otherwise.
+        size = ""
+        modified = ""
+        if len(parts) >= 4:
+            size = " ".join(parts[2:4])
+        if len(parts) >= 5:
+            modified = " ".join(parts[4:])
+        entries.append(
+            AdapterShelfEntry(
+                model_name=full_name,
+                base=name_segment,
+                tag=tag_segment,
+                size=size,
+                modified=modified,
+            )
+        )
+    return entries

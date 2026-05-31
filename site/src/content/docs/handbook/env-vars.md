@@ -100,6 +100,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_LORA__LORA_DROPOUT` | `0.05` | LoRA dropout rate. |
 | `BACKPROPAGATE_LORA__USE_GRADIENT_CHECKPOINTING` | `unsloth` | `unsloth` / `true` / `false`. |
 | `BACKPROPAGATE_LORA__RANDOM_STATE` | `42` | RNG seed for LoRA init reproducibility. |
+| `BACKPROPAGATE_LORA__USE_RSLORA` | `false` | **v1.5** — rank-stabilized LoRA scaling (`alpha/sqrt(r)` instead of `alpha/r`). Zero inference cost, still mergeable; the benefit grows with rank (relevant at the rank-256 default). Equivalent to `--use-rslora` on the CLI. |
 
 ## Training
 
@@ -122,6 +123,10 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_TRAINING__SEED` | `42` | RNG seed. |
 | `BACKPROPAGATE_TRAINING__OUTPUT_DIR` | `./output` | Where to write checkpoints and exports. |
 | `BACKPROPAGATE_TRAINING__OVERWRITE_OUTPUT_DIR` | `true` | Whether to overwrite an existing output dir. |
+| `BACKPROPAGATE_TRAINING__METHOD` | `sft` | **v1.5** — training objective. `sft` (default) = supervised fine-tuning. `orpo` = reference-free preference tuning (needs a `{chosen, rejected}` dataset; single-stage, no reference model). Any other value is rejected with `CONFIG_INVALID_SETTING`. |
+| `BACKPROPAGATE_TRAINING__ORPO_BETA` | `0.1` | **v1.5** — ORPO odds-ratio weight (lambda). Keep > 0. Ignored unless `METHOD=orpo`. |
+| `BACKPROPAGATE_TRAINING__FP8` | `false` | **v1.5 (experimental)** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao. Base weights in float8 (~1.4x throughput, ~60% less base memory); the LoRA adapter stays bf16 and the result is still mergeable. `mode='lora'` + `method='sft'` only in v1.5; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Equivalent to `--fp8` on the CLI. |
+| `BACKPROPAGATE_TRAINING__BACKEND` | `auto` | **v1.5 T3.1 (experimental — Apple-Silicon rail BUILT-BUT-UNVERIFIED)** — the compute rail. One of `auto` / `cuda` / `mlx`. `auto` (default) routes to CUDA on an NVIDIA host and to the MLX (`mlx_lm.lora`) rail on an Apple-Silicon Mac with the `[mlx]` extra — existing CUDA rigs stay byte-identical. `cuda` forces the CUDA rail; `mlx` forces the Apple-Silicon rail. MLX is LoRA SFT only in v1.5 (`method='orpo'` / `mode='full'` / `fp8=True` / multi-run rejected with `CONFIG_INVALID_SETTING`). A forced `mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; if the resolved rail is `mlx` but `mlx_lm` is missing, the run raises `DEP_MLX_UNAVAILABLE` (`pip install 'backpropagate[mlx]'`). Equivalent to `--backend` on the CLI. The MLX rail is built + unit-tested (mocked), pending dogfood verification on real Apple Silicon. |
 
 ## Data
 
@@ -135,6 +140,9 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_DATA__PRE_TOKENIZE` | `true` | Pre-tokenize before training (Windows-safe). |
 | `BACKPROPAGATE_DATA__SHUFFLE` | `true` | Shuffle the dataset. |
 | `BACKPROPAGATE_DATA__PACKING` | `true` | Combine short sequences via TRL sample packing. v1.3 default flipped from `false` to `true` per BACKEND-4 — 1.7-3× wall-clock throughput on SFT runs. Set to `false` to opt out (boundary-token leakage with exotic chat templates is the documented edge case). |
+| `BACKPROPAGATE_DATA__REASONING_TRACE` | `false` | **v1.5 T3.2** — reasoning-trace SFT (R1/QwQ distillation). When `true` the trainer keeps the `<think>` chain-of-thought in the SFT target, applies trace-length filtering (drops empty / over-long traces), and raises the default `max_seq_length` to `8192` if it was left at the shipped `2048`. `<think>` is plain text — no special tokens, no embedding resize — so the merge→GGUF→Ollama export is unaffected. SFT only (ignored under `method='orpo'`). Default `false` = byte-identical v1.4 SFT. Equivalent to `--reasoning-trace` on the CLI. |
+| `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` | `8` | Minimum `<think>` token count to keep a sample under `reasoning_trace`. Samples whose reasoning span tokenizes below this are dropped as empty / degenerate traces. |
+| `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS` | `8192` | Maximum `<think>` token count to keep a sample under `reasoning_trace`. Samples whose reasoning span tokenizes above this are dropped as over-long traces. |
 
 ## Windows
 

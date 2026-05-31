@@ -163,7 +163,11 @@ def _run_row(run: dict) -> rx.Component:
                     "text_underline_offset": "3px",
                 },
             ),
-            href="/runs/" + run["run_id"],
+            # f-string, not ``"/runs/" + run["run_id"]``: the foreach item
+            # access is an untyped Var (no string ``__radd__``), so ``str + Var``
+            # raises TypeError at compile. f-string interpolation binds it
+            # reactively instead.
+            href=f"/runs/{run['run_id']}",
             aria_label="Open run detail page for this run id",
         ),
         rx.text(

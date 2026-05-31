@@ -1771,6 +1771,114 @@ class TestStageCDiskSpaceGuard:
         )
 
 
+class TestFP8MergedBf16Cast:
+    """FP8 finding: an FP8-trained model merges to an f32 checkpoint (torchao
+    Float8Linear upcasts its weight to f32). At 4 B/param that doubles the
+    on-disk size the disk pre-flight budgeted (2 B/param), so the merged/GGUF
+    export paths down-cast the merge to bf16 BEFORE save_pretrained. These
+    tests pin that contract with tiny stub models — no real FP8 run needed.
+    """
+
+    def _f32_stub_model(self):
+        """A stub model whose params report torch.float32 and whose ``.to()``
+        records the requested dtype (mimicking the post-merge FP8 model)."""
+        import torch
+
+        class _F32Stub:
+            def __init__(self):
+                self._dtype = torch.float32
+                self.to_calls: list = []
+                self.save_pretrained = MagicMock()
+
+            def parameters(self):
+                # One real f32 tensor so _model_has_float32_params sees f32.
+                return [torch.zeros(2, 2, dtype=self._dtype)]
+
+            def to(self, dtype):
+                self.to_calls.append(dtype)
+                self._dtype = dtype
+                return self  # Module.to mutates in place and returns self
+
+        return _F32Stub()
+
+    def test_helper_casts_f32_model_to_bf16(self):
+        """``_cast_merged_model_to_bf16`` invokes ``.to(torch.bfloat16)`` on a
+        model carrying f32 params and the result reports bf16 afterward."""
+        import torch
+
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        stub = self._f32_stub_model()
+        result = _cast_merged_model_to_bf16(stub)
+        assert torch.bfloat16 in stub.to_calls, (
+            "FP8 finding: an f32 merged model must be cast via .to(bfloat16)."
+        )
+        # The returned model's params now report bf16.
+        assert all(p.dtype == torch.bfloat16 for p in result.parameters())
+
+    def test_helper_noop_on_bf16_model(self):
+        """A model already in bf16 (the normal LoRA merge) must NOT be cast —
+        no spurious .to() call, returned unchanged."""
+        import torch
+
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        class _Bf16Stub:
+            def __init__(self):
+                self.to_calls: list = []
+
+            def parameters(self):
+                return [torch.zeros(2, 2, dtype=torch.bfloat16)]
+
+            def to(self, dtype):
+                self.to_calls.append(dtype)
+                return self
+
+        stub = _Bf16Stub()
+        result = _cast_merged_model_to_bf16(stub)
+        assert stub.to_calls == [], (
+            "FP8 finding: a bf16 merge must not be re-cast (no .to() call)."
+        )
+        assert result is stub
+
+    def test_helper_noop_on_stub_without_dtypes(self):
+        """A non-torch / mock model (no real dtypes) is returned unchanged and
+        never raises — the cast is best-effort."""
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        class _NoParams:
+            pass
+
+        sentinel = _NoParams()
+        assert _cast_merged_model_to_bf16(sentinel) is sentinel
+
+    def test_export_merged_casts_f32_merge_to_bf16(self, temp_dir, mock_tokenizer):
+        """End-to-end: export_merged of a PEFT model whose merge yields an
+        f32 model down-casts to bf16 before save_pretrained, so the saved
+        checkpoint matches the disk-guard's 2 B/param budget."""
+        import torch
+
+        from backpropagate.export import export_merged
+
+        merged_f32 = self._f32_stub_model()
+        mock_peft = MagicMock()
+        mock_peft.merge_and_unload.return_value = merged_f32
+
+        with patch("backpropagate.export._is_peft_model", return_value=True):
+            export_merged(
+                model=mock_peft,
+                tokenizer=mock_tokenizer,
+                output_dir=temp_dir / "merged_fp8",
+                emit_model_card=False,
+            )
+
+        assert torch.bfloat16 in merged_f32.to_calls, (
+            "FP8 finding: export_merged must down-cast an f32 merge to bf16 "
+            "before saving."
+        )
+        merged_f32.save_pretrained.assert_called_once()
+
+
 class TestStageCListOllamaWarns:
     """DATA-B-005: list_ollama_models WARNs (naming the cause) on a
     missing CLI / daemon-down / timeout instead of silently returning []."""
@@ -1869,3 +1977,487 @@ class TestStageCExportProgressLogged:
             )
 
         assert any("Exporting to GGUF" in r.message for r in caplog.records)
+
+
+# =============================================================================
+# v1.5 T2.3 — ADAPTER-NATIVE OLLAMA EXPORT ("ollama-adapter") + ADAPTER SHELF
+# =============================================================================
+#
+# V1_5_BRIEF §2 findings 27–29 / §3 T2.3. We implement the SAFETENSORS
+# ``ADAPTER`` mechanism (Ollama loads a safetensors LoRA adapter directory
+# directly via the ADAPTER Modelfile directive — no GGUF-adapter conversion).
+# These tests mock the filesystem (a fake safetensors adapter dir) and the
+# ollama subprocess; they never require a real Ollama daemon.
+
+
+def _make_safetensors_adapter(root: Path, name: str = "my-adapter") -> Path:
+    """Create a minimal safetensors LoRA adapter directory (export_lora shape)."""
+    adapter_dir = root / name
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    (adapter_dir / "adapter_config.json").write_text('{"r": 16}', encoding="utf-8")
+    (adapter_dir / "adapter_model.safetensors").write_bytes(b"mock safetensors")
+    return adapter_dir
+
+
+class TestCreateAdapterModelfile:
+    """create_adapter_modelfile emits FROM <base> + ADAPTER <path>."""
+
+    def test_emits_from_and_adapter_directives(self, temp_dir):
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+
+        modelfile = create_adapter_modelfile("llama3.2", adapter_dir)
+
+        assert modelfile.exists()
+        content = modelfile.read_text(encoding="utf-8")
+        # FROM names the BASE (bare Ollama name -> unquoted).
+        assert "FROM llama3.2" in content
+        # ADAPTER points at the resolved adapter dir (escaped FROM-style).
+        expected_adapter = (
+            str(adapter_dir.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+        )
+        assert f'ADAPTER "{expected_adapter}"' in content
+        # No merge happened: there is no merged GGUF FROM line.
+        assert "ADAPTER" in content
+
+    def test_default_modelfile_path_is_in_adapter_dir(self, temp_dir):
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        modelfile = create_adapter_modelfile("llama3.2", adapter_dir)
+        assert modelfile.name == "Modelfile"
+        assert modelfile.parent == adapter_dir.resolve()
+
+    def test_base_model_path_is_quoted(self, temp_dir):
+        """A base given as a path (drive colon / separator) is quoted in FROM."""
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        base_path = str(temp_dir / "base.gguf")
+        modelfile = create_adapter_modelfile(base_path, adapter_dir)
+        content = modelfile.read_text(encoding="utf-8")
+        escaped_base = base_path.replace("\\", "\\\\").replace('"', '\\"')
+        assert f'FROM "{escaped_base}"' in content
+
+    def test_options_baked_in(self, temp_dir):
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        modelfile = create_adapter_modelfile(
+            "llama3.2",
+            adapter_dir,
+            system_prompt="You are helpful.",
+            temperature=0.9,
+            context_length=8192,
+        )
+        content = modelfile.read_text(encoding="utf-8")
+        assert "0.9" in content
+        assert "8192" in content
+        assert "You are helpful." in content
+
+    def test_accepts_gguf_adapter_file(self, temp_dir):
+        """A .gguf adapter file is accepted directly by ADAPTER."""
+        from backpropagate.export import create_adapter_modelfile
+
+        gguf_adapter = temp_dir / "ollama-lora.gguf"
+        gguf_adapter.write_bytes(b"GGUF adapter")
+        modelfile = create_adapter_modelfile(
+            "llama3.2", gguf_adapter, output_path=temp_dir / "Modelfile"
+        )
+        content = modelfile.read_text(encoding="utf-8")
+        expected = (
+            str(gguf_adapter.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+        )
+        assert f'ADAPTER "{expected}"' in content
+
+    def test_rejects_control_char_in_base(self, temp_dir):
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        with pytest.raises(ExportError) as exc:
+            create_adapter_modelfile("llama\n3.2", adapter_dir)
+        assert exc.value.code == "INPUT_VALIDATION_FAILED"
+
+    def test_rejects_control_char_in_system_prompt(self, temp_dir):
+        from backpropagate.exceptions import ExportError
+        from backpropagate.export import create_adapter_modelfile
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        with pytest.raises(ExportError) as exc:
+            create_adapter_modelfile(
+                "llama3.2", adapter_dir, system_prompt="bad\x00prompt"
+            )
+        assert exc.value.code == "INPUT_VALIDATION_FAILED"
+
+
+class TestExportOllamaAdapterDegrade:
+    """The degrade path: no Ollama-loadable adapter -> structured GGUFExportError."""
+
+    def test_bin_only_adapter_degrades_with_actionable_hint(self, temp_dir):
+        """A .bin-only adapter dir (no safetensors, no gguf) degrades cleanly."""
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = temp_dir / "legacy"
+        adapter_dir.mkdir()
+        (adapter_dir / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (adapter_dir / "adapter_model.bin").write_bytes(b"legacy bin")
+
+        with pytest.raises(GGUFExportError) as exc:
+            export_ollama_adapter(adapter_dir, base_model="llama3.2")
+        # Reuses the EXISTING GGUF export code — no new code added.
+        assert exc.value.code == "RUNTIME_GGUF_EXPORT_FAILED"
+        # Names the fix: re-export safetensors OR convert_lora_to_gguf.py.
+        assert "convert_lora_to_gguf.py" in exc.value.suggestion
+        assert "--format lora" in exc.value.suggestion
+
+    def test_empty_dir_degrades(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_ollama_adapter
+
+        empty = temp_dir / "empty"
+        empty.mkdir()
+        with pytest.raises(GGUFExportError) as exc:
+            export_ollama_adapter(empty, base_model="llama3.2")
+        assert exc.value.code == "RUNTIME_GGUF_EXPORT_FAILED"
+
+    def test_missing_path_degrades(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_ollama_adapter
+
+        with pytest.raises(GGUFExportError) as exc:
+            export_ollama_adapter(temp_dir / "nope", base_model="llama3.2")
+        assert exc.value.code == "RUNTIME_GGUF_EXPORT_FAILED"
+
+    def test_unrecognised_file_suffix_degrades(self, temp_dir):
+        from backpropagate.exceptions import GGUFExportError
+        from backpropagate.export import export_ollama_adapter
+
+        bad = temp_dir / "adapter.bin"
+        bad.write_bytes(b"x")
+        with pytest.raises(GGUFExportError) as exc:
+            export_ollama_adapter(bad, base_model="llama3.2")
+        assert exc.value.code == "RUNTIME_GGUF_EXPORT_FAILED"
+
+
+class TestExportOllamaAdapterModelfileOnly:
+    """modelfile_only=True writes the Modelfile without invoking ollama."""
+
+    def test_modelfile_only_no_subprocess(self, temp_dir):
+        from backpropagate.export import ExportFormat, export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir, name="taskA")
+
+        # If ANY subprocess fires, fail loudly.
+        with patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            side_effect=AssertionError("ollama must NOT be invoked when modelfile_only=True"),
+        ), patch("subprocess.run", side_effect=AssertionError("no subprocess allowed")):
+            result = export_ollama_adapter(
+                adapter_dir, base_model="llama3.2", modelfile_only=True
+            )
+
+        assert result.format == ExportFormat.OLLAMA_ADAPTER
+        # The Modelfile is written and kept.
+        assert result.path.exists()
+        content = result.path.read_text(encoding="utf-8")
+        assert "FROM llama3.2" in content
+        assert "ADAPTER" in content
+        # Derived model name recorded in the quantization slot.
+        assert result.quantization == "llama3.2:taskA"
+
+    def test_modelfile_only_does_not_require_ollama_on_path(self, temp_dir):
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        # Even with no ollama CLI, modelfile_only must succeed.
+        with patch("shutil.which", return_value=None):
+            result = export_ollama_adapter(
+                adapter_dir, base_model="llama3.2", modelfile_only=True
+            )
+        assert result.path.exists()
+
+
+class TestExportOllamaAdapterRegistration:
+    """The registration path mocks `ollama create` and asserts the argv."""
+
+    def test_registration_calls_ollama_create_with_right_args(self, temp_dir):
+        import subprocess as _sp
+
+        from backpropagate.export import ExportFormat, export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir, name="taskB")
+
+        mock_result = _sp.CompletedProcess(
+            args=["ollama", "create"], returncode=0, stdout="", stderr=""
+        )
+
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            return_value=mock_result,
+        ) as mock_run:
+            result = export_ollama_adapter(adapter_dir, base_model="llama3.2")
+
+        assert result.format == ExportFormat.OLLAMA_ADAPTER
+        mock_run.assert_called_once()
+        argv = mock_run.call_args.args[0]
+        # ['ollama', 'create', '<base>:<tag>', '-f', '<Modelfile>']
+        assert argv[0] == "ollama"
+        assert argv[1] == "create"
+        assert argv[2] == "llama3.2:taskB"
+        assert argv[3] == "-f"
+        # The Modelfile arg is a real path string.
+        assert argv[4].endswith("Modelfile")
+        # Default behaviour cleans up the Modelfile after a successful create.
+        assert not result.path.exists()
+
+    def test_registration_keep_modelfile(self, temp_dir):
+        import subprocess as _sp
+
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        mock_result = _sp.CompletedProcess(
+            args=["ollama", "create"], returncode=0, stdout="", stderr=""
+        )
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            return_value=mock_result,
+        ):
+            result = export_ollama_adapter(
+                adapter_dir, base_model="llama3.2", keep_modelfile=True
+            )
+        assert result.path.exists()
+
+    def test_base_tag_strips_base_model_tag(self, temp_dir):
+        """base_model='mistral:7b' -> model name 'mistral:<adapter-tag>'."""
+        import subprocess as _sp
+
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir, name="custom")
+        mock_result = _sp.CompletedProcess(
+            args=["ollama", "create"], returncode=0, stdout="", stderr=""
+        )
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            return_value=mock_result,
+        ) as mock_run:
+            export_ollama_adapter(adapter_dir, base_model="mistral:7b")
+        argv = mock_run.call_args.args[0]
+        # The base's own ':7b' tag is dropped; the adapter tag takes its place.
+        assert argv[2] == "mistral:custom"
+
+    def test_registration_failure_raises_ollama_error(self, temp_dir):
+        import subprocess
+
+        from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            side_effect=subprocess.CalledProcessError(1, "ollama"),
+        ):
+            with pytest.raises(OllamaRegistrationError, match="ollama create failed"):
+                export_ollama_adapter(adapter_dir, base_model="llama3.2")
+
+    def test_registration_timeout_raises_ollama_error(self, temp_dir):
+        import subprocess
+
+        from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "backpropagate.export._run_subprocess_interruptible",
+            side_effect=subprocess.TimeoutExpired(cmd="ollama create", timeout=600),
+        ):
+            with pytest.raises(OllamaRegistrationError, match="timed out"):
+                export_ollama_adapter(adapter_dir, base_model="llama3.2")
+
+    def test_no_ollama_cli_raises_with_manual_hint(self, temp_dir):
+        from backpropagate.exceptions import OllamaRegistrationError
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir)
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(OllamaRegistrationError) as exc:
+                export_ollama_adapter(adapter_dir, base_model="llama3.2")
+        # Names the manual register fallback + the Modelfile path.
+        assert "ollama create" in exc.value.suggestion
+        assert exc.value.code == "DEP_OLLAMA_REGISTRATION_FAILED"
+
+
+class TestAdapterTagDerivation:
+    """tag=None derives from the adapter dir basename (sanitised)."""
+
+    def test_tag_defaults_to_dir_basename(self, temp_dir):
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir, name="sentiment-v2")
+        result = export_ollama_adapter(
+            adapter_dir, base_model="llama3.2", modelfile_only=True
+        )
+        assert result.quantization == "llama3.2:sentiment-v2"
+
+    def test_explicit_tag_overrides(self, temp_dir):
+        from backpropagate.export import export_ollama_adapter
+
+        adapter_dir = _make_safetensors_adapter(temp_dir, name="ignored")
+        result = export_ollama_adapter(
+            adapter_dir, base_model="llama3.2", tag="prod", modelfile_only=True
+        )
+        assert result.quantization == "llama3.2:prod"
+
+    def test_dirty_basename_is_sanitised(self, temp_dir):
+        """A dir name with illegal tag chars is sanitised, never a leading dash."""
+        import re as _re
+
+        from backpropagate.export import _derive_adapter_tag
+
+        # _derive_adapter_tag works off the basename of the path object.
+        tag = _derive_adapter_tag(temp_dir / "@@bad name!!")
+        assert tag and not tag.startswith("-")
+        # All chars are in the Ollama tag allowlist.
+        assert _re.fullmatch(r"[A-Za-z0-9._-]+", tag)
+
+
+class TestListAdapterShelf:
+    """list_adapter_shelf parses `ollama list` for adapters on a base."""
+
+    def test_lists_adapters_for_base(self):
+        from backpropagate.export import list_adapter_shelf
+
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            "NAME                 ID              SIZE      MODIFIED\n"
+            "llama3.2:taskA       abc123          4.7 GB    2 days ago\n"
+            "llama3.2:taskB       def456          4.7 GB    1 day ago\n"
+            "llama3.2:latest      000000          4.7 GB    3 days ago\n"
+            "mistral:other        111111          4.1 GB    5 days ago\n"
+        )
+        mock_result.returncode = 0
+
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run", return_value=mock_result
+        ):
+            shelf = list_adapter_shelf("llama3.2")
+
+        tags = {e.tag for e in shelf}
+        # Only the llama3.2 adapter VARIANTS — not :latest (the bare base),
+        # not the unrelated mistral model.
+        assert tags == {"taskA", "taskB"}
+        for e in shelf:
+            assert e.base == "llama3.2"
+            assert e.model_name.startswith("llama3.2:")
+
+    def test_base_model_tag_is_ignored_for_matching(self):
+        """Passing 'llama3.2:7b' matches the same shelf as 'llama3.2'."""
+        from backpropagate.export import list_adapter_shelf
+
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            "NAME              ID        SIZE      MODIFIED\n"
+            "llama3.2:taskA    abc       4.7 GB    2 days ago\n"
+        )
+        mock_result.returncode = 0
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run", return_value=mock_result
+        ):
+            shelf = list_adapter_shelf("llama3.2:7b")
+        assert [e.tag for e in shelf] == ["taskA"]
+
+    def test_parses_size_and_modified(self):
+        from backpropagate.export import list_adapter_shelf
+
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            "NAME              ID        SIZE      MODIFIED\n"
+            "llama3.2:taskA    abc       4.7 GB    2 days ago\n"
+        )
+        mock_result.returncode = 0
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run", return_value=mock_result
+        ):
+            shelf = list_adapter_shelf("llama3.2")
+        assert shelf[0].size == "4.7 GB"
+        assert "2 days ago" in shelf[0].modified
+
+    def test_empty_when_no_ollama(self, caplog):
+        import logging
+
+        from backpropagate.export import list_adapter_shelf
+
+        with patch("shutil.which", return_value=None):
+            with caplog.at_level(logging.WARNING, logger="backpropagate.export"):
+                shelf = list_adapter_shelf("llama3.2")
+        assert shelf == []
+        assert any("not on PATH" in r.message for r in caplog.records)
+
+    def test_empty_on_daemon_error(self, caplog):
+        import logging
+
+        from backpropagate.export import list_adapter_shelf
+
+        err = subprocess.CalledProcessError(1, "ollama")
+        err.stderr = "connection refused"
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run", side_effect=err
+        ):
+            with caplog.at_level(logging.WARNING, logger="backpropagate.export"):
+                shelf = list_adapter_shelf("llama3.2")
+        assert shelf == []
+        assert any("ollama serve" in r.message for r in caplog.records)
+
+    def test_empty_on_timeout(self):
+        from backpropagate.export import list_adapter_shelf
+
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired("ollama", 30),
+        ):
+            shelf = list_adapter_shelf("llama3.2")
+        assert shelf == []
+
+    def test_no_match_returns_empty(self):
+        from backpropagate.export import list_adapter_shelf
+
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            "NAME              ID        SIZE      MODIFIED\n"
+            "qwen2.5:taskA     abc       4.7 GB    2 days ago\n"
+        )
+        mock_result.returncode = 0
+        with patch("shutil.which", return_value="/usr/bin/ollama"), patch(
+            "subprocess.run", return_value=mock_result
+        ):
+            shelf = list_adapter_shelf("llama3.2")
+        assert shelf == []
+
+
+class TestOllamaAdapterFormatEnum:
+    """The new ExportFormat value exists alongside the existing ones."""
+
+    def test_ollama_adapter_format_value(self):
+        from backpropagate.export import ExportFormat
+
+        assert ExportFormat.OLLAMA_ADAPTER.value == "ollama-adapter"
+        # The existing values are untouched.
+        assert ExportFormat.LORA.value == "lora"
+        assert ExportFormat.MERGED.value == "merged"
+        assert ExportFormat.GGUF.value == "gguf"
+
+    def test_export_result_summary_includes_adapter_format(self, temp_dir):
+        from backpropagate.export import ExportFormat, ExportResult
+
+        result = ExportResult(
+            format=ExportFormat.OLLAMA_ADAPTER,
+            path=temp_dir / "Modelfile",
+            size_mb=0.001,
+            quantization="llama3.2:taskA",
+        )
+        summary = result.summary()
+        assert "ollama-adapter" in summary.lower()

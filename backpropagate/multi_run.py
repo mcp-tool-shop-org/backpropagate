@@ -57,6 +57,7 @@ from .checkpoints import (
 )
 from .config import settings
 from .datasets import DatasetLoader
+from .eval import EvalResult, eval_gate, evaluate_run
 from .exceptions import (
     BackpropagateError,
     CheckpointError,
@@ -77,7 +78,13 @@ from .gpu_safety import (
     wait_for_safe_gpu,
 )
 from .logging_config import bind_run_context, unbind_run_context
-from .slao import MergeResult, SLAOConfig, SLAOMerger
+from .slao import (
+    MergeResult,
+    MergeStrategyConfig,
+    SLAOConfig,
+    SLAOMerger,
+    drift_gate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +442,7 @@ class MultiRunConfig:
     # v1.4 BACKEND-F-008 (Wave 6b features): training mode forwarded to the
     # inner Trainer instance. ``"lora"`` (default) preserves pre-Wave-6b
     # multi-run behavior byte-identically; ``"full"`` enables full
-    # fine-tuning for models <=3B parameters. mode='full' on a model >3B
+    # fine-tuning for models <=4B parameters. mode='full' on a model >4B
     # raises RUNTIME_FULL_FT_MODEL_TOO_LARGE at MultiRunTrainer
     # construction time via the inner Trainer's construction-time gate
     # (and again at the inner Trainer's load_model() time as belt-and-
@@ -443,6 +450,31 @@ class MultiRunConfig:
     # divisor logic lives in the shared ``_build_sft_config`` helper so
     # multi-run inherits the same contract end-to-end.
     mode: str = "lora"
+
+    # v1.5 T2.2: SLAO merge-strategy framework + drift gate + eval gate.
+    #
+    # ALL config for these features lives HERE on MultiRunConfig (NOT config.py)
+    # so the FP8 wave's config.py edits can't collide. The CLI agent (GLUE)
+    # threads --merge-strategy / --drift-gate / --eval-gate etc. into these
+    # fields via the same dataclasses.fields() introspection filter as the
+    # Wave 6b knobs; this agent only guarantees the fields exist + are honored.
+    #
+    # DEFAULTS ARE BEHAVIOR-PRESERVING: merge_strategy="qiao_mahdavi" +
+    # drift_gate=False + eval_gate=False ⇒ a default multi-run is byte-identical
+    # to pre-T2.2 (the gates are inert and the merger routes to the unchanged
+    # SLAO path).
+    merge_strategy: str = "qiao_mahdavi"  # qiao_mahdavi | linear | ties | dare
+    ties_trim_threshold: float = 0.2      # TIES trim quantile (bottom 20%)
+    dare_drop_rate: float = 0.5           # DARE Bernoulli drop probability
+    dare_seed: int | None = None          # LOCAL-generator seed (None → run-derived)
+    # Drift gate: decide merge-vs-branch from .lora_B. cosine similarity.
+    drift_gate: bool = False              # When False the gate is inert (always merge)
+    drift_threshold: float = 0.0          # similarity < threshold ⇒ branch
+    # Eval gate: reject a merge that regresses the held-out loss (Design A —
+    # reuses eval.evaluate_run + eval.eval_gate, the shipped T1.1 seam).
+    eval_gate: bool = False               # When False the gate is inert (always accept)
+    eval_max_regression: float = 0.0      # Tolerated held-out-loss increase
+    eval_heldout_path: str | None = None  # Held-out set; None → reuse the run's last-10% holdout
 
 
 # Backwards compatibility alias
@@ -472,6 +504,14 @@ class RunResult:
     # B-002: number of OOM-driven retries the run survived (0 on the happy
     # path). When >0, batch_size / gradient_accumulation differ from config.
     oom_retries: int = 0
+    # v1.5 T2.2: True when the drift gate decided to BRANCH this run (kept as a
+    # sibling on disk; the SLAO accumulator was NOT advanced).
+    branched: bool = False
+    # v1.5 T2.2: the merge strategy used for this run ("qiao_mahdavi" default).
+    merge_strategy: str = "qiao_mahdavi"
+    # v1.5 T2.2: True when the eval gate REJECTED this run's merge (the pre-merge
+    # accumulator snapshot was restored; the run is kept as a sibling).
+    eval_gate_rejected: bool = False
 
 
 @dataclass
@@ -494,6 +534,9 @@ class MultiRunResult:
     # B-001: stable session-wide correlation token. Persist this and grep
     # logs/checkpoints/run_history.json/merge_history.json by it.
     run_id: str | None = None
+    # v1.5 T2.2: the run indices the drift gate BRANCHED (kept as siblings
+    # instead of merging into the accumulator). Empty on a default run.
+    branched_runs: list[int] = field(default_factory=list)
 
 
 # Backwards compatibility alias
@@ -699,6 +742,11 @@ class MultiRunTrainer:
         self._runs: list[RunResult] = []
         self._aggregate_loss: list[float] = []
         self._run_boundaries: list[int] = []
+        # v1.5 T2.2: run indices the drift gate branched (kept as siblings).
+        self._branched_runs: list[int] = []
+        # v1.5 T2.2: cached after-eval of the last ACCEPTED merge, reused as the
+        # next run's before-eval so the eval gate costs ~1 eval/run steady-state.
+        self._eval_cache: EvalResult | None = None
 
         # GPU tracking
         self._gpu_max_temp = 0.0
@@ -1191,13 +1239,27 @@ class MultiRunTrainer:
         # may still treat these as no-ops in v1.1.0, but the data contract is
         # now end-to-end and merge_history.json carries the flag values for
         # post-hoc audit.
+        # v1.5 T2.2: thread the merge-strategy fields into a MergeStrategyConfig
+        # so the merger routes to the selected per-tensor rule. The behavior-
+        # preserving default (merge_strategy="qiao_mahdavi" + thresholds 0.2/0.5)
+        # produces a byte-identical SLAO merge. The SLAOMerger constructor
+        # validates the strategy + thresholds and raises InvalidSettingError
+        # (code=CONFIG_INVALID_SETTING) on a bad value, BEFORE any training.
         if self.config.merge_mode == MergeMode.SLAO:
-            self._slao_merger = SLAOMerger(SLAOConfig(
-                scaling_type="sqrt",
-                use_orthogonal_init=True,
-                use_adaptive_scaling=self.config.adaptive_scaling,
-                use_layer_scaling=self.config.layer_scaling,
-            ))
+            self._slao_merger = SLAOMerger(
+                SLAOConfig(
+                    scaling_type="sqrt",
+                    use_orthogonal_init=True,
+                    use_adaptive_scaling=self.config.adaptive_scaling,
+                    use_layer_scaling=self.config.layer_scaling,
+                ),
+                strategy_config=MergeStrategyConfig(
+                    strategy=self.config.merge_strategy,
+                    trim_threshold=self.config.ties_trim_threshold,
+                    drop_rate=self.config.dare_drop_rate,
+                    dare_seed=self.config.dare_seed,
+                ),
+            )
 
         # Pre-flight GPU check
         if not self._preflight_gpu_check():
@@ -1263,7 +1325,7 @@ class MultiRunTrainer:
                 optim=self.config.optim,
                 # v1.4 BACKEND-F-008 (Wave 6b features): forward the multi-run
                 # mode setting to the inner Trainer. mode='full' on a model
-                # >3B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE here (Trainer
+                # >4B raises RUNTIME_FULL_FT_MODEL_TOO_LARGE here (Trainer
                 # construction); mode='lora' (default) preserves byte-
                 # identical pre-Wave-6b multi-run behavior.
                 mode=self.config.mode,
@@ -2173,23 +2235,38 @@ class MultiRunTrainer:
         # broken/empty LoRA state would either produce nonsense or
         # propagate a misleading error.
         merge_result = None
+        # v1.5 T2.2: per-run gate outcomes threaded onto the RunResult below.
+        branched = False
+        eval_gate_rejected = False
         if not run_failed and self.config.merge_mode == MergeMode.SLAO and self._slao_merger:
             logger.info(
                 f"merge_started run_id={self._run_id} run_index={run_idx} "
-                f"merge_mode=slao"
+                f"merge_mode=slao strategy={self.config.merge_strategy}"
             )
             try:
                 lora_state = self._get_lora_state_dict()
-                merge_result = self._slao_merger.merge(
-                    lora_state,
-                    run_index=run_idx,
-                    run_id=self._run_id,
-                )
-                logger.info(
-                    f"merge_complete run_id={self._run_id} run_index={run_idx} "
-                    f"a_merged={merge_result.a_matrices_merged} "
-                    f"b_merged={merge_result.b_matrices_merged}"
-                )
+                # v1.5 T2.2: route through the gated merge helper. It applies
+                # the drift gate (cheap, FIRST) and — if drift says MERGE and
+                # the eval gate is enabled — the eval gate (Design A). On a
+                # BRANCH or an eval REJECT it leaves the accumulator + run_index
+                # untouched and returns (merge_result_or_None, branched,
+                # eval_gate_rejected); the run's run_NNN/lora is kept as a
+                # sibling on disk by the save block below.
+                (
+                    merge_result,
+                    branched,
+                    eval_gate_rejected,
+                ) = self._gated_merge(lora_state, run_idx, full_dataset)
+                if branched:
+                    self._branched_runs.append(run_idx)
+                if merge_result is not None:
+                    logger.info(
+                        f"merge_complete run_id={self._run_id} "
+                        f"run_index={run_idx} "
+                        f"a_merged={merge_result.a_matrices_merged} "
+                        f"b_merged={merge_result.b_matrices_merged} "
+                        f"branched={merge_result.branched}"
+                    )
                 # Stage C amend BACKEND-B-015: only reset the OOM
                 # consecutive-at-min-batch counter AFTER both train AND
                 # merge have succeeded. Pre-fix the reset happened
@@ -2350,6 +2427,10 @@ class MultiRunTrainer:
             failure_reason=failure_reason,
             run_id=self._run_id,
             oom_retries=oom_retries,
+            # v1.5 T2.2: gate outcomes for this run.
+            branched=branched,
+            merge_strategy=self.config.merge_strategy,
+            eval_gate_rejected=eval_gate_rejected,
         )
 
         # VRAM cleanup between runs (FT-003): release the per-run SFTTrainer
@@ -2874,6 +2955,301 @@ class MultiRunTrainer:
                 lora_state[name] = param.data.clone()
 
         return lora_state
+
+    def _gated_merge(
+        self,
+        lora_state: dict[str, Any],
+        run_idx: int,
+        full_dataset: Any,
+    ) -> tuple[MergeResult | None, bool, bool]:
+        """v1.5 T2.2: apply the drift gate (first) + eval gate (Design A).
+
+        Ordering (cheap-first): the drift gate runs BEFORE any merge because it
+        is a single cosine similarity over ``.lora_B.``. Only when it says
+        MERGE do we consider the (expensive) eval gate.
+
+        Returns ``(merge_result, branched, eval_gate_rejected)``:
+
+        - **BRANCH** (drift similarity < threshold): the accumulator + run_index
+          are left UNTOUCHED, ``branched=True``, and a branched
+          :class:`MergeResult` (a/b counts 0, ``branched=True``,
+          ``task_similarity`` set) is returned so the per-run record + history
+          carry the decision. The run's ``run_NNN/lora`` stays on disk as a
+          sibling (the caller's save block writes it regardless).
+        - **EVAL REJECT** (eval gate enabled and the candidate merge regressed
+          the held-out loss past ``eval_max_regression``): the pre-merge
+          accumulator snapshot + run_index are RESTORED, ``eval_gate_rejected
+          =True``, the merge is logged with ``code="RUNTIME_EVAL_GATE_REGRESSED"``
+          (a log, not a raise — the code EXISTS in the catalog), and a branched
+          :class:`MergeResult` is returned. The run is kept as a sibling.
+        - **MERGE / ACCEPT**: the merge is applied in place, the temp eval
+          artifacts (if any) are deleted, and the real :class:`MergeResult` is
+          returned with ``branched=False``.
+
+        The eval gate snapshots the pre-merge accumulator (deepcopy), performs
+        the candidate merge in-memory, evaluates before vs after against the
+        reserved last-10% held-out split (or ``eval_heldout_path``), and decides
+        via :func:`eval_gate`. Steady-state it costs ONE eval/run: the previous
+        run's after-eval is cached and reused as this run's before-eval.
+        """
+        assert self._slao_merger is not None
+
+        before_accumulator = self._slao_merger.get_merged_lora()
+
+        # ---- Drift gate (cheap, FIRST) ----------------------------------
+        decision = drift_gate(
+            before_accumulator,
+            lora_state,
+            threshold=self.config.drift_threshold,
+            enabled=self.config.drift_gate,
+        )
+        if decision.action == "branch":
+            logger.warning(
+                "drift_gate run_id=%s run_index=%d action=branch "
+                "similarity=%s threshold=%s reason=%r — keeping run as a "
+                "sibling; SLAO accumulator NOT advanced.",
+                self._run_id,
+                run_idx,
+                decision.similarity,
+                decision.threshold,
+                decision.reason,
+            )
+            branched_result = MergeResult(
+                run_index=run_idx,
+                scale_factor=0.0,
+                a_matrices_merged=0,
+                b_matrices_merged=0,
+                total_params_merged=0,
+                merge_time_seconds=0.0,
+                strategy=self.config.merge_strategy,
+                branched=True,
+                task_similarity=decision.similarity,
+            )
+            return branched_result, True, False
+
+        # ---- Eval gate (expensive) — only when drift says MERGE ---------
+        if not self.config.eval_gate:
+            # No eval gate: merge directly (the common path). Annotate the
+            # drift similarity onto the result for observability.
+            merge_result = self._slao_merger.merge(
+                lora_state, run_index=run_idx, run_id=self._run_id
+            )
+            merge_result.task_similarity = decision.similarity
+            return merge_result, False, False
+
+        return self._eval_gated_merge(
+            lora_state, run_idx, full_dataset, decision.similarity
+        )
+
+    def _eval_gated_merge(
+        self,
+        lora_state: dict[str, Any],
+        run_idx: int,
+        full_dataset: Any,
+        drift_similarity: float | None,
+    ) -> tuple[MergeResult | None, bool, bool]:
+        """v1.5 T2.2 eval-gate core (Design A) — snapshot → merge → eval → decide.
+
+        Split out of :meth:`_gated_merge` so the drift-only path stays simple.
+        See :meth:`_gated_merge` for the contract. On any non-accept outcome —
+        an eval-gate REJECT *or* an exception raised mid-gate (a diverged merge,
+        or an after-eval crash) — the pre-merge accumulator snapshot +
+        ``_run_index`` + ``_merge_history`` are restored byte-for-byte; an
+        exception is then re-raised so the caller sees the original error.
+        """
+        import copy
+
+        assert self._slao_merger is not None
+
+        # Snapshot the pre-merge accumulator + run_index + history length so a
+        # REJECT — or a mid-gate exception — restores the exact prior state
+        # (deepcopy: torch tensors are cloned).
+        before_state = copy.deepcopy(self._slao_merger.get_merged_lora())
+        before_run_index = self._slao_merger.run_index
+        before_history_len = len(self._slao_merger._merge_history)
+
+        def _restore_pre_merge() -> None:
+            """Roll the merger back to the pre-candidate-merge snapshot.
+
+            Shared by the REJECT branch and the exception guard below.
+            ``merge()`` advances ``_run_index`` + mutates ``_merged_state`` in
+            place and appends to ``_merge_history`` LAST, so a plain assignment
+            restores the accumulator and a length-truncation drops the
+            candidate entry. Truncation (vs ``.pop()``) is correct even when
+            ``merge()`` itself raised before appending — it removes nothing in
+            that case, rather than clobbering a prior legitimate entry.
+            """
+            # mypy resets attribute-narrowing inside a closure, so the
+            # enclosing-scope assert above does not carry in here. Re-narrow:
+            # _restore_pre_merge is only ever called synchronously within
+            # _eval_gated_merge, where _slao_merger is guaranteed non-None and
+            # never reassigned, so this never fires at runtime.
+            assert self._slao_merger is not None
+            self._slao_merger._merged_state = before_state
+            self._slao_merger._run_index = before_run_index
+            del self._slao_merger._merge_history[before_history_len:]
+
+        # before-eval: reuse the cached after-eval from the previous accepted
+        # run when available (1 eval/run steady-state); else evaluate now.
+        # This runs BEFORE any mutation, so a raise here needs no rollback.
+        before_eval = self._eval_cache
+        if before_eval is None:
+            before_eval = self._evaluate_accumulator(
+                before_state, run_idx, full_dataset, phase="before"
+            )
+
+        # The candidate merge mutates the accumulator IN PLACE, and both the
+        # merge (SLAO_MERGE_DIVERGED) and the after-eval (evaluate_run ->
+        # RUNTIME_EVAL_FAILED on a model-load/generation crash, or
+        # INPUT_EVAL_HELDOUT_UNRESOLVED when the held-out set can't resolve)
+        # can raise. Guard the whole mutate → eval → decide window so ANY
+        # exception restores the pre-merge accumulator + run_index + history
+        # byte-for-byte before propagating — the eval gate's invariant is that
+        # every non-accept outcome preserves the prior state exactly.
+        try:
+            # Candidate merge IN PLACE (advances run_index + mutates _merged_state).
+            candidate = self._slao_merger.merge(
+                lora_state, run_index=run_idx, run_id=self._run_id
+            )
+            candidate.task_similarity = drift_similarity
+
+            after_eval = self._evaluate_accumulator(
+                self._slao_merger.get_merged_lora(), run_idx, full_dataset,
+                phase="after",
+            )
+
+            gate = eval_gate(
+                before_eval,
+                after_eval,
+                max_regression=self.config.eval_max_regression,
+            )
+        except Exception:
+            # Mid-gate failure: restore the snapshot and re-raise unchanged.
+            # The caller sees the original error; the merger is left exactly as
+            # it was before the candidate merge (no un-gated merge leaks through).
+            _restore_pre_merge()
+            raise
+
+        if not gate.accept:
+            # REJECT: restore the snapshot + run_index; keep the run as a
+            # sibling. The code is a LOG (it exists in the catalog), not a
+            # raise — multi-run's contract is "record + continue."
+            _restore_pre_merge()
+            logger.warning(
+                "event=eval_gate_rejected code=RUNTIME_EVAL_GATE_REGRESSED "
+                "run_id=%s run_index=%d regression=%s "
+                "max_regression=%s reason=%r — restored pre-merge accumulator; "
+                "run kept as a sibling, _run_index NOT advanced.",
+                self._run_id,
+                run_idx,
+                gate.regression,
+                self.config.eval_max_regression,
+                gate.reason,
+            )
+            # The before-eval stays cached (the accumulator is unchanged), so
+            # the next run can reuse it as its before-eval.
+            self._eval_cache = before_eval
+            rejected_result = MergeResult(
+                run_index=run_idx,
+                scale_factor=0.0,
+                a_matrices_merged=0,
+                b_matrices_merged=0,
+                total_params_merged=0,
+                merge_time_seconds=0.0,
+                strategy=self.config.merge_strategy,
+                branched=False,
+                task_similarity=drift_similarity,
+            )
+            return rejected_result, False, True
+
+        # ACCEPT: keep the merge. Cache this run's after-eval as the next
+        # run's before-eval (steady-state 1 eval/run).
+        logger.info(
+            "event=eval_gate_accepted run_id=%s run_index=%d "
+            "regression=%s reason=%r",
+            self._run_id,
+            run_idx,
+            gate.regression,
+            gate.reason,
+        )
+        self._eval_cache = after_eval
+        return candidate, False, False
+
+    def _evaluate_accumulator(
+        self,
+        accumulator_state: dict[str, Any] | None,
+        run_idx: int,
+        full_dataset: Any,  # noqa: ARG002 — reserved (holdout re-derivation hook)
+        *,
+        phase: str,
+    ) -> EvalResult:
+        """v1.5 T2.2: evaluate a SLAO accumulator snapshot for the eval gate.
+
+        Writes ``accumulator_state`` to a temp adapter dir, records a TRANSIENT
+        run-history entry pointing at it (so :func:`evaluate_run` — the shipped
+        T1.1 seam — can resolve + load it), and returns the
+        :class:`EvalResult`. The held-out set is ``eval_heldout_path`` when set,
+        else :func:`evaluate_run` re-derives the run's reserved last-10% split.
+
+        The temp dir + transient history entry are cleaned up before returning.
+        In tests, ``backpropagate.multi_run.evaluate_run`` is mocked so neither
+        the disk write's adapter nor a model load actually happens — the entry
+        + dir still round-trip so the contract is exercised.
+        """
+        import shutil
+        import tempfile
+
+        import torch
+
+        assert self._checkpoint_manager is not None
+        eval_run_id = f"{self._run_id}-evalgate-{phase}-{run_idx:03d}"
+        tmp_root = Path(tempfile.mkdtemp(prefix=f"backprop-evalgate-{phase}-"))
+        adapter_dir = tmp_root / "lora"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Persist the accumulator so evaluate_run's adapter load has a path.
+            if accumulator_state is not None:
+                torch.save(accumulator_state, adapter_dir / "adapter_model.bin")
+
+            # Transient run-history entry under the SAME checkpoint_dir so
+            # evaluate_run(output_dir=checkpoint_dir) resolves it.
+            history = RunHistoryManager(str(self._checkpoint_manager.checkpoint_dir))
+            hold_path = self.config.eval_heldout_path
+            try:
+                history.record_run_started(
+                    run_id=eval_run_id,
+                    model_name=self.model_name,
+                    dataset_info=hold_path,
+                    hyperparameters={
+                        "max_seq_length": self._trainer.max_seq_length
+                        if self._trainer is not None
+                        else 1024,
+                    },
+                    session_kind="eval_gate_transient",
+                    checkpoint_path=str(adapter_dir),
+                )
+            except Exception as hist_err:  # noqa: BLE001 — transient bookkeeping
+                logger.debug(
+                    f"eval_gate: transient history write failed (non-fatal): "
+                    f"{hist_err}"
+                )
+
+            return evaluate_run(
+                eval_run_id,
+                output_dir=str(self._checkpoint_manager.checkpoint_dir),
+                heldout=hold_path,
+            )
+        finally:
+            # Best-effort cleanup of the transient artifacts.
+            try:
+                history = RunHistoryManager(
+                    str(self._checkpoint_manager.checkpoint_dir)
+                )
+                history.delete_run(eval_run_id)
+            except Exception:  # noqa: BLE001  # nosec B110 — cleanup is best-effort
+                pass
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
     def _verify_peft_api(self) -> None:
         """B-005: invariant check at session start.
@@ -3611,6 +3987,8 @@ class MultiRunTrainer:
             # B-001: correlation token surfaced on the aggregate result so
             # callers can persist it alongside their own bookkeeping.
             run_id=self._run_id,
+            # v1.5 T2.2: the run indices the drift gate branched as siblings.
+            branched_runs=list(self._branched_runs),
         )
 
     def _create_abort_result(self, reason: str) -> SpeedrunResult:

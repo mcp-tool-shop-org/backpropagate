@@ -251,9 +251,22 @@ def generate_model_card(
 
     model_short = infer_model_short_name(base_model)
 
+    # HIGH #4: the training method drives both the tag set and a property
+    # row below, so resolve it once up front from the captured
+    # hyperparameters (the trainer stamps "method" into its run-history
+    # hyperparameters dict, threaded here as extra_hyperparameters).
+    _hp = extra_hyperparameters or {}
+    _method = _hp.get("method")
+    _is_orpo = isinstance(_method, str) and _method.lower() == "orpo"
+
     tags = ["llm", "fine-tuned", "lora"]
     if quantization:
         tags.append("gguf")
+    # HIGH #4: tag an ORPO run as "orpo" so the HF Hub model card is
+    # discoverable/honest about the objective. Pre-fix every run was tagged
+    # only ["llm","fine-tuned","lora"] regardless of objective.
+    if _is_orpo and "orpo" not in tags:
+        tags.append("orpo")
     if extra_tags:
         for tag in extra_tags:
             if tag and tag not in tags:
@@ -330,6 +343,16 @@ def generate_model_card(
         dataset_line = f"(remote) sha256: `{_sanitize_codespan(dataset_hash)}`"
     lines.append(f"| Dataset | {dataset_line} |")
     lines.append(f"| Steps | {_format_value(steps)} |")
+    # HIGH #4: surface the training objective for an ORPO run so the card
+    # is honest about how the model was trained (the reproduce command emits
+    # --method orpo to match). SFT runs omit the row — the card is then
+    # byte-identical to its pre-fix shape (no spurious row on the common case).
+    if _is_orpo:
+        _beta = _hp.get("orpo_beta")
+        if isinstance(_beta, (int, float)):
+            lines.append(f"| Method | `orpo` (beta={_format_value(_beta)}) |")
+        else:
+            lines.append("| Method | `orpo` |")
     lines.append(f"| Final loss | {_format_value(final_loss)} |")
     lines.append(f"| LoRA rank | {_format_value(lora_r)} |")
     lines.append(f"| LoRA alpha | {_format_value(lora_alpha)} |")
@@ -530,6 +553,40 @@ def _build_reproduce_block(
             f"  --lora-r {_fmt_num(_lora_r, '16')} \\",
             f"  --lora-alpha {_fmt_num(_lora_alpha, '<lora-alpha>')} \\",
         ]
+        # v1.5 (HIGH #4 — honest reproduce command): pre-fix this block
+        # emitted ONLY the SFT-shaped flags, so re-running an ORPO / FP8 /
+        # rsLoRA / reasoning-trace / MLX run trained a DIFFERENT model
+        # (silently dropping --method orpo etc. fell back to plain SFT on
+        # the default CUDA rail). Emit each v1.5 training knob present in
+        # the captured hyperparameters so the printed command actually
+        # reproduces the run. Keys match what the trainer stamps into its
+        # hyperparameters dict (trainer.py record_run_started): method,
+        # orpo_beta, fp8 (effective), use_rslora, reasoning_trace, backend.
+        method = extra_hyperparameters.get("method")
+        if isinstance(method, str) and method.lower() == "orpo":
+            cmd_lines.append("  --method orpo \\")
+            # --orpo-beta only when present and not the default (0.1). The
+            # trainer records orpo_beta for SFT runs too (audit uniformity),
+            # so gate on method==orpo AND a non-default value to avoid a
+            # spurious flag on the common case.
+            orpo_beta = extra_hyperparameters.get("orpo_beta")
+            if isinstance(orpo_beta, (int, float)) and orpo_beta != 0.1:
+                cmd_lines.append(f"  --orpo-beta {_fmt_num(orpo_beta, '0.1')} \\")
+        # Boolean store_true flags — emit only when truthy. fp8 is the
+        # EFFECTIVE state (a requested fp8 that degraded to bf16 records
+        # False), so the printed --fp8 matches what actually ran.
+        if extra_hyperparameters.get("fp8"):
+            cmd_lines.append("  --fp8 \\")
+        if extra_hyperparameters.get("use_rslora"):
+            cmd_lines.append("  --use-rslora \\")
+        if extra_hyperparameters.get("reasoning_trace"):
+            cmd_lines.append("  --reasoning-trace \\")
+        # backend is stamped only on the MLX rail (the CUDA path omits it);
+        # "auto"/"cuda" need no flag (auto is the default and resolves to
+        # cuda on NVIDIA), so emit --backend only for a non-default rail.
+        backend = extra_hyperparameters.get("backend")
+        if isinstance(backend, str) and backend.lower() not in ("", "auto", "cuda"):
+            cmd_lines.append(f"  --backend {_sanitize_codespan(backend)} \\")
         # --no-unsloth is the right flag when the run was trained
         # without unsloth (some operator environments explicitly opt
         # out). Only emit it when use_unsloth was captured as False;

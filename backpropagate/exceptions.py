@@ -86,6 +86,7 @@ __all__ = [
     "ModelLoadError",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
+    "MLXUnavailableError",
     "TrainingAbortedError",
     "CheckpointError",
     # Export
@@ -176,6 +177,63 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Convert to one of the supported formats (JSONL, ShareGPT, Alpaca, OpenAI).",
         "retryable": "no",
     },
+    # v1.5 T1.1 (dataset-quality report): a `backprop data report` gate flag
+    # (--fail-on-dups / --fail-on-contamination / --max-outlier-rate / --strict)
+    # tripped. Returned as exit 65 (EX_DATAERR) directly by cmd_data_report,
+    # not raised — the code is stamped into the structured log line that
+    # accompanies the non-zero return so the catalog scanner counts it as
+    # emitted and operators can grep the failing gate.
+    "INPUT_DATASET_REPORT_THRESHOLD": {
+        "description": (
+            "A `backprop data report` quality gate was breached — a "
+            "--fail-on-dups / --fail-on-contamination / --max-outlier-rate "
+            "threshold was exceeded, or --strict promoted a WARN verdict to "
+            "FAIL. The dataset is parseable but did not meet the gate you set."
+        ),
+        "default_hint": (
+            "Inspect the report's failed_thresholds list (re-run without "
+            "--json for the human summary). Either clean the dataset "
+            "(dedupe / trim outliers / remove contamination against the "
+            "--against set) or relax the threshold you passed. Drop the "
+            "--fail-* flags entirely to run the report in advisory mode "
+            "(exit 0)."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): `backprop eval <run_id>` could not resolve the
+    # run_id in the on-disk run history under the configured --output dir.
+    # Returned as exit 1 by cmd_eval (user error), with the code stamped into
+    # the structured log line.
+    "INPUT_EVAL_RUN_NOT_FOUND": {
+        "description": (
+            "`backprop eval <run_id>` (or --vs / --gate-against) named a "
+            "run_id that is not present in the on-disk run history under the "
+            "configured --output directory."
+        ),
+        "default_hint": (
+            "Run `backprop runs --output <dir>` to list available run_ids. "
+            "If the run was trained under a different output directory, "
+            "re-run with `--output <that-dir>`. Partial-prefix matches are "
+            "accepted as long as the prefix is unambiguous."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): a held-out dataset / prompt set passed via
+    # --heldout / --prompts could not be located or read. Returned as exit 1
+    # by cmd_eval (user error), code stamped into the structured log line.
+    "INPUT_EVAL_HELDOUT_UNRESOLVED": {
+        "description": (
+            "`backprop eval` could not resolve the held-out evaluation set — "
+            "the --heldout path is missing/unreadable, or the --prompts file "
+            "could not be opened."
+        ),
+        "default_hint": (
+            "Pass a readable path to --heldout (a JSONL held-out split) or "
+            "--prompts (a newline- or JSONL-delimited prompt file). Check the "
+            "path resolves from the current working directory and is UTF-8."
+        ),
+        "retryable": "no",
+    },
     # Configuration
     "CONFIG_INVALID": {
         "description": "Configuration object is invalid or malformed.",
@@ -191,6 +249,48 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "RUNTIME_TRAINING_FAILED": {
         "description": "Training crashed for an internal reason (model bug, library mismatch, etc.).",
         "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
+        "retryable": "sometimes",
+    },
+    # v1.5 T1.1 (eval harness): `backprop eval --gate-against <baseline>` found
+    # the after-run regressed the held-out metric beyond --max-regression.
+    # Returned as exit 65 (EX_DATAERR) directly by cmd_eval — NOT raised — so
+    # the code is stamped into the structured log line that accompanies the
+    # non-zero return (the catalog scanner counts the code= literal there).
+    # This is the eval-gate that backstops SLAO merges (V1_5_BRIEF T2.2).
+    "RUNTIME_EVAL_GATE_REGRESSED": {
+        "description": (
+            "`backprop eval --gate-against <baseline_run_id>` determined the "
+            "evaluated run regressed the held-out metric beyond the allowed "
+            "--max-regression. The eval-gate rejected the run (this is the "
+            "gate that protects continual-merge / SLAO campaigns)."
+        ),
+        "default_hint": (
+            "The after-run is worse than the baseline by more than "
+            "--max-regression. Inspect the eval diff (re-run with --vs "
+            "<baseline> for the side-by-side). Either keep the baseline "
+            "(reject this run/merge), raise --max-regression if a small "
+            "regression is acceptable, or retrain with a higher learning "
+            "rate / more steps / cleaner data."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): the evaluation itself failed to run — model
+    # load, held-out forward pass, or generation crashed. Surfaced via the
+    # cli.py catch-all exit-code mapper (model/OOM/Hub buckets) the same way
+    # training failures are.
+    "RUNTIME_EVAL_FAILED": {
+        "description": (
+            "`backprop eval` failed to complete the evaluation — the model "
+            "could not be loaded, the held-out forward pass crashed, or "
+            "sample generation raised. Distinct from a clean regression "
+            "(RUNTIME_EVAL_GATE_REGRESSED); here the eval did not finish."
+        ),
+        "default_hint": (
+            "Re-run with --verbose (or BACKPROPAGATE_DEBUG=1) for the full "
+            "traceback. Confirm the run's checkpoint loads via `backprop "
+            "show-run <run_id>` and that the model fits in VRAM at eval time "
+            "(lower -n / --max-new-tokens if you OOM during generation)."
+        ),
         "retryable": "sometimes",
     },
     "RUNTIME_UI_AUTH_NOT_ENFORCED": {
@@ -314,6 +414,29 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
         "retryable": "no",
     },
+    # v1.5 T3.1 (MLX / Apple-Silicon backend): the MLX rail's ONE un-runnable
+    # axis. Raised by mlx_backend.MLXBackend.run() when the resolved backend is
+    # 'mlx' but the ``mlx_lm`` toolchain is not importable on this host —
+    # ``mlx-lm`` is Apple-Silicon-ONLY (macOS + arm64), so on a Windows / CUDA
+    # rig the [mlx] extra cannot install and this fires. Distinct from
+    # DEP_GPU_NOT_AVAILABLE (that is the CUDA rail's "no GPU" code); this is the
+    # MLX rail's "no mlx-lm" code. The forced-``backend='mlx'``-on-non-Apple
+    # MISCONFIG is caught EARLIER as CONFIG_INVALID_SETTING by the Trainer
+    # constructor guard; this code is the deeper backstop for the actual
+    # subprocess-launch attempt (e.g. a corrupted mlx-lm install on a real Mac).
+    "DEP_MLX_UNAVAILABLE": {
+        "description": (
+            "The MLX (Apple-Silicon) training backend was selected but the "
+            "`mlx_lm` toolchain is not available on this host. mlx-lm is "
+            "macOS + arm64 ONLY."
+        ),
+        "default_hint": (
+            "Run on an Apple-Silicon Mac (macOS + arm64) and install the "
+            "extra: pip install 'backpropagate[mlx]'. On a non-Apple host use "
+            "backend='auto' (routes to CUDA) — backend='mlx' cannot run here."
+        ),
+        "retryable": "no",
+    },
     # Wave 6a RUNTIME_GPU_OOM Option A activated 2026-05-25: the raise site
     # in trainer.py:Trainer.train() oom_recovery=False branch (search for
     # ``Wave 6a RUNTIME_GPU_OOM Option A``) wraps the OOM into a
@@ -340,26 +463,53 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     },
     # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate.
     # Raised at Trainer / MultiRunTrainer construction time when the operator
-    # selects mode='full' for a model whose parameter count exceeds the 3B
-    # consumer-GPU ceiling (16GB VRAM tier per the v1.3 16GB fine-tuning
-    # study-swarm; Biderman 2024 / Thinking Machines 2025). The 3B ceiling is
-    # the documented production-feasible boundary — full FT of a 7B requires
-    # a 24GB+ datacenter card AND paged optimizer state AND aggressive
-    # gradient checkpointing, which the trainer does not configure for
-    # consumer hardware.
+    # selects mode='full' for a model whose parameter count exceeds the 4B
+    # full-fine-tuning ceiling. The ceiling bounds the parameter COUNT so the
+    # marketed "3B" presets (true count 3.08-3.24B) and the 3.8-4B class clear
+    # it; full FT of a 7B+ requires aggressive memory engineering the trainer
+    # does not configure for consumer hardware (Biderman 2024 / Thinking
+    # Machines 2025). VRAM split: a genuine ~3B fits 16GB; 3.8-4B needs 24GB+.
     "RUNTIME_FULL_FT_MODEL_TOO_LARGE": {
         "description": (
-            "mode='full' was selected but the target model exceeds the 3B "
-            "parameter ceiling for full fine-tuning on consumer hardware "
-            "(16GB VRAM tier per the v1.3 16GB fine-tuning study-swarm)."
+            "mode='full' was selected but the target model exceeds the 4B "
+            "parameter ceiling for full fine-tuning. (A genuine ~3B fits a "
+            "16GB card; the 3.8-4B class needs 24GB+.)"
         ),
         "default_hint": (
             "Re-run with mode='lora' (the default) to fine-tune a LoRA "
-            "adapter on the same model, OR switch to a smaller model whose "
-            "parameter count fits the 3B ceiling — phi-4-mini-3.8b / "
-            "qwen3.5-4b / smollm3-3b all carry preset entries and support "
-            "mode='full'. See handbook/full-finetuning.md for the "
+            "adapter on the same model, OR switch to a model whose parameter "
+            "count fits the 4B ceiling — smollm3-3b / qwen2.5-3b / "
+            "llama-3.2-3b / llama-3.2-1b fit 16GB; phi-4-mini-3.8b / "
+            "qwen3.5-4b also support mode='full' but need a 24GB+ card. "
+            "See handbook/full-fine-tuning.md for the "
             "Biderman 2024 + Thinking Machines 2025 quality math."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): the experimental FP8 compute
+    # path hard-fails. Raised by trainer.py:_apply_fp8_to_base (search for
+    # ``RUNTIME_FP8_UNSUPPORTED``) on the ONE non-degradable axis — the
+    # ``import torchao.float8`` step: the gate ladder already promised FP8
+    # (find_spec(torchao) succeeded) but the import then fails, which means a
+    # half-installed / ABI-mismatched torchao that can't be silently downgraded
+    # to bf16 without breaking the contract the gate made. Every OTHER FP8
+    # failure axis (no CUDA, sm<9, conversion error, first-GEMM error) degrades
+    # to bf16 with a WARN and never reaches here. The fp8+mode='full',
+    # fp8+method='orpo', and fp8+explicit-4bit combinations are rejected
+    # earlier as CONFIG_INVALID_SETTING (a different, pre-load gate).
+    "RUNTIME_FP8_UNSUPPORTED": {
+        "description": (
+            "The experimental FP8 compute path was enabled but FP8 conversion "
+            "/ the first float8 GEMM failed at runtime (e.g. a broken torchao "
+            "import, a model dim not divisible by 16, or a torch/torchao kernel "
+            "mismatch on this GPU)."
+        ),
+        "default_hint": (
+            "Re-run without fp8=True to train in bf16 (correct, no FP8 "
+            "speedup). FP8 needs base-layer inner dims divisible by 16 and "
+            "torchao installed (pip install 'backpropagate[fp8]'); torch>=2.11 "
+            "gives the compiled torchao kernels (2.10 uses the slower "
+            "_scaled_mm fallback)."
         ),
         "retryable": "no",
     },
@@ -859,20 +1009,24 @@ class ModelLoadError(TrainingError):
 
 class FullFinetuneModelTooLargeError(TrainingError):
     """v1.4 BACKEND-F-008 (Wave 6b): raised when mode='full' is requested for a model
-    whose parameter count exceeds the 3B ceiling for consumer-GPU full fine-tuning.
+    whose parameter count exceeds the 4B full-fine-tuning ceiling.
 
-    The 3B ceiling tracks the v1.3 16GB fine-tuning study-swarm: full FT of a 3B
-    model on a 16GB consumer card (RTX 5080 / 4080) is the documented
-    production-feasible boundary even with 8-bit paged optimizer + gradient
-    checkpointing. Models >3B require a 24GB+ datacenter card AND more
-    aggressive memory engineering than this trainer configures by default.
+    The ceiling bounds the parameter COUNT (it does not promise a 16GB fit for
+    every admitted model). It is 4B so the marketed "3B" presets — whose true
+    num_parameters() are 3.08-3.24B — actually clear the gate, alongside the
+    3.8-4B class. VRAM reality (v1.3 16GB study-swarm): full FT of a genuine
+    ~3B in bf16 + 8-bit paged optimizer + gradient checkpointing fits a 16GB
+    consumer card (RTX 5080 / 4080); the 3.8-4B class (phi-4-mini-3.8b,
+    qwen3.5-4b) is admitted but needs a 24GB+ card. Models >4B require
+    mode='lora' or transformers.Trainer directly.
 
     The operator's two recoveries are:
       1. Re-run with mode='lora' (the default) — LoRA fits 7B+ on a 16GB card
          and is the recommended path for most fine-tuning workflows.
-      2. Switch to a model that fits the ceiling. phi-4-mini-3.8b (MIT),
-         qwen3.5-4b (Apache 2.0), smollm3-3b (Apache 2.0) all carry preset
-         entries and the catalog calls each one out as commercial-safe.
+      2. Switch to a model that fits the ceiling. smollm3-3b (Apache 2.0),
+         qwen2.5-3b, llama-3.2-3b, and llama-3.2-1b are <=~3.2B and fit 16GB;
+         phi-4-mini-3.8b and qwen3.5-4b also support mode='full' but want a
+         24GB+ card. All carry preset entries.
 
     Carries ``code='RUNTIME_FULL_FT_MODEL_TOO_LARGE'`` so the cli.py exit-code
     mapper + handbook/error-codes.md surface it consistently.
@@ -882,7 +1036,7 @@ class FullFinetuneModelTooLargeError(TrainingError):
         self,
         model_name: str,
         param_count_billions: float | None = None,
-        ceiling_billions: float = 3.0,
+        ceiling_billions: float = 4.0,
         suggestion: str | None = None,
     ):
         self.model_name = model_name
@@ -896,19 +1050,18 @@ class FullFinetuneModelTooLargeError(TrainingError):
                 f"has approximately {param_count_billions:.1f}B parameters"
             )
         else:
-            # Preset table lookup said "this is a >3B model" without an exact
-            # count (e.g. fallback heuristic). The operator still needs the
-            # actionable hint even when the precise number is unknown.
+            # Preset table lookup said "this is an oversized model" without an
+            # exact count (e.g. fallback heuristic). The operator still needs
+            # the actionable hint even when the precise number is unknown.
             size_phrase = "exceeds the documented parameter ceiling"
 
         message = (
             f"model {model_name!r} {size_phrase}; mode='full' supports "
-            f"models up to {ceiling_billions:.0f}B (the 16GB consumer GPU "
-            f"ceiling per the v1.3 16GB fine-tuning study-swarm). "
+            f"models up to {ceiling_billions:.0f}B parameters. "
             f"Re-run with mode='lora' (the default) to fine-tune a LoRA "
             f"adapter, OR switch to a smaller model "
-            f"(phi-4-mini-3.8b / qwen3.5-4b / smollm3-3b presets all "
-            f"support mode='full')."
+            f"(smollm3-3b / qwen2.5-3b / llama-3.2-3b / llama-3.2-1b fit 16GB; "
+            f"phi-4-mini-3.8b / qwen3.5-4b need 24GB+)."
         )
 
         details: dict[str, Any] = {
@@ -923,6 +1076,44 @@ class FullFinetuneModelTooLargeError(TrainingError):
             details=details,
             suggestion=suggestion,
             code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
+            retryable=False,
+        )
+
+
+class MLXUnavailableError(TrainingError):
+    """v1.5 T3.1: raised when the MLX backend is selected but ``mlx_lm`` is absent.
+
+    ``mlx-lm`` is Apple-Silicon-ONLY (macOS + arm64). The Trainer constructor
+    already refuses a FORCED ``backend='mlx'`` on a non-Apple host with a
+    ``CONFIG_INVALID_SETTING`` (a misconfiguration the operator can fix). This
+    class is the deeper backstop raised by
+    :meth:`backpropagate.mlx_backend.MLXBackend.run` at the actual
+    subprocess-launch attempt — it fires when the resolved backend is 'mlx' and
+    ``feature_flags.check_feature("mlx")`` is False (e.g. a corrupted mlx-lm
+    install on a real Mac, or a code path that reached ``run()`` without the
+    constructor guard). Carries ``code='DEP_MLX_UNAVAILABLE'`` so the cli.py
+    exit-code mapper + handbook/error-codes.md surface it uniformly, and is a
+    ``TrainingError`` subclass so callers catching ``TrainingError`` see it.
+    """
+
+    def __init__(self, reason: str | None = None, suggestion: str | None = None):
+        self.reason = reason
+        message = (
+            "MLX backend unavailable: the mlx_lm toolchain is not importable "
+            "on this host (mlx-lm is macOS + arm64 ONLY)."
+        )
+        if reason:
+            message = f"{message} {reason}"
+        super().__init__(
+            message,
+            details={"reason": reason} if reason else None,
+            suggestion=suggestion
+            or (
+                "Run on an Apple-Silicon Mac and install the extra: "
+                "pip install 'backpropagate[mlx]'. On a non-Apple host use "
+                "backend='auto' (routes to CUDA)."
+            ),
+            code="DEP_MLX_UNAVAILABLE",
             retryable=False,
         )
 

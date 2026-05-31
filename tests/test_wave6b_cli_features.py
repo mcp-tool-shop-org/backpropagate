@@ -472,6 +472,8 @@ class TestRootHelpEpilog:
             "train", "multi-run", "resume", "replay",
             "info", "config", "list-runs", "runs", "show-run", "diff-runs",
             "export-runs", "validate", "estimate-vram",
+            # v1.5 T1.1 additions (data-quality moat + eval harness)
+            "data report", "eval",
             "export", "push",
             "ollama register", "ollama list", "ollama rm",
             "ui",
@@ -660,3 +662,864 @@ class TestModeFlag:
         from backpropagate.cli import _REPLAY_ALLOWED_OVERRIDE_KEYS
 
         assert "mode" in _REPLAY_ALLOWED_OVERRIDE_KEYS
+
+
+# =============================================================================
+# v1.5 T1.2 (ORPO): --method / --orpo-beta flag wiring
+# =============================================================================
+
+
+class TestOrpoMethodFlag:
+    """v1.5 T1.2 (ORPO Wave 1): ``--method`` + ``--orpo-beta`` on ``train``.
+
+    The flags parse onto ``args`` and thread into the
+    ``wave6b_candidate_kwargs`` introspection-filter dict. We pin BOTH ends:
+    the parser surface, and that the keys reach the Trainer constructor when
+    the installed Trainer advertises a catch-all signature (a future trainer
+    wave adds the matching ``__init__`` kwargs; until then the filter drops
+    them for a concrete signature — that's the forward-compatible contract).
+    """
+
+    def test_train_method_default_is_sft(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.method == "sft"
+
+    def test_train_method_orpo(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl", "--method", "orpo"])
+        assert args.method == "orpo"
+
+    def test_train_orpo_beta_default(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.orpo_beta == 0.1
+
+    def test_train_orpo_beta_custom(self, cli_parser):
+        args = cli_parser.parse_args([
+            "train", "-d", "data.jsonl", "--orpo-beta", "0.2",
+        ])
+        assert args.orpo_beta == pytest.approx(0.2)
+
+    def test_train_method_rejects_unknown_choice(self, cli_parser):
+        """--method dpo (not implemented in v1.5) fails argparse choice check."""
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["train", "-d", "data.jsonl", "--method", "dpo"])
+
+    def test_method_and_orpo_beta_thread_into_trainer_kwargs(self, tmp_path):
+        """``--method orpo`` + ``--orpo-beta 0.2`` reach the Trainer constructor.
+
+        Uses the same catch-all-MagicMock pattern as the replay tests: a
+        MagicMock Trainer advertises ``(*args, **kwargs)``, so cmd_train's
+        ``_trainer_sig_params`` filter sets the sentinel ``None`` and forwards
+        EVERY wave6b_candidate_kwargs key unfiltered. This pins that the two
+        new keys are present in the dict construction without asserting the
+        real Trainer.__init__ accepts them yet (the trainer wave adds those).
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        # train()/save() return numeric-fielded results so cmd_train's
+        # f"{result.final_loss:.4f}" / duration formatting doesn't blow up on
+        # a bare MagicMock (mirrors test_replay_dispatches_single_run).
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.42, duration_seconds=1.0, run_id="r-orpo"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="orpo",
+            orpo_beta=0.2,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("method") == "orpo", (
+            f"--method orpo must thread into the Trainer kwargs; got "
+            f"method={init_kwargs.get('method')!r}"
+        )
+        assert init_kwargs.get("orpo_beta") == pytest.approx(0.2), (
+            f"--orpo-beta 0.2 must thread into the Trainer kwargs; got "
+            f"orpo_beta={init_kwargs.get('orpo_beta')!r}"
+        )
+
+    def test_method_defaults_thread_into_trainer_kwargs(self, tmp_path):
+        """Default invocation forwards method='sft' + orpo_beta=0.1.
+
+        The forward-compatible default path must carry the SFT default so a
+        later trainer wave's dispatch sees 'sft' (byte-identical v1.4 behavior)
+        when the operator passes nothing.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-sft"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("method") == "sft"
+        assert init_kwargs.get("orpo_beta") == pytest.approx(0.1)
+
+
+# =============================================================================
+# v1.5 T2.1 (Wave 6b GLUE): train --fp8 / --use-rslora
+# =============================================================================
+
+
+class TestTrainFp8RsLoraFlags:
+    """``backprop train --fp8`` / ``--use-rslora`` parse + thread contract."""
+
+    def test_fp8_flag_parses(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl", "--fp8"])
+        assert args.fp8 is True
+
+    def test_use_rslora_flag_parses(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl", "--use-rslora"])
+        assert args.use_rslora is True
+
+    def test_fp8_and_rslora_default_false(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.fp8 is False
+        assert args.use_rslora is False
+
+    def test_fp8_and_rslora_thread_into_trainer_kwargs(self, tmp_path):
+        """``--fp8`` + ``--use-rslora`` reach the Trainer constructor kwargs.
+
+        Same catch-all-MagicMock pattern as the ORPO threading test: a
+        MagicMock Trainer advertises ``(*args, **kwargs)`` so cmd_train's
+        introspection filter forwards every wave6b_candidate_kwargs key
+        unfiltered. Pins that ``fp8`` / ``use_rslora`` (named to match
+        Trainer.__init__) land in the threaded dict.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.42, duration_seconds=1.0, run_id="r-fp8"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=True,
+            use_rslora=True,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("fp8") is True, (
+            f"--fp8 must thread into the Trainer kwargs; got "
+            f"fp8={init_kwargs.get('fp8')!r}"
+        )
+        assert init_kwargs.get("use_rslora") is True, (
+            f"--use-rslora must thread into the Trainer kwargs; got "
+            f"use_rslora={init_kwargs.get('use_rslora')!r}"
+        )
+
+    def test_fp8_rslora_defaults_thread_false(self, tmp_path):
+        """Default invocation forwards fp8=False + use_rslora=False."""
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-nofp8"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("fp8") is False
+        assert init_kwargs.get("use_rslora") is False
+
+
+class TestTrainReasoningTraceFlag:
+    """v1.5 T3.2: ``backprop train --reasoning-trace`` parse + thread contract.
+
+    Pins BOTH ends of the wave6b introspection-filter wiring: the flag binds
+    onto ``args.reasoning_trace`` at parse time, and ``cmd_train`` forwards a
+    ``reasoning_trace`` kwarg (named to match ``Trainer.__init__``) so the
+    introspection filter passes it through to the constructor.
+    """
+
+    def test_reasoning_trace_flag_parses(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--reasoning-trace"]
+        )
+        assert args.reasoning_trace is True
+
+    def test_reasoning_trace_default_false(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.reasoning_trace is False
+
+    def test_reasoning_trace_threads_into_trainer_kwargs(self, tmp_path):
+        """``--reasoning-trace`` reaches the Trainer constructor kwargs.
+
+        Same catch-all-MagicMock pattern as the fp8/rsLoRA threading test: a
+        MagicMock Trainer advertises ``(*args, **kwargs)`` so cmd_train's
+        introspection filter forwards every wave6b_candidate_kwargs key
+        unfiltered. Pins that ``reasoning_trace`` lands in the threaded dict.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.33, duration_seconds=1.0, run_id="r-think"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=True,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("reasoning_trace") is True, (
+            f"--reasoning-trace must thread into the Trainer kwargs; got "
+            f"reasoning_trace={init_kwargs.get('reasoning_trace')!r}"
+        )
+
+    def test_reasoning_trace_default_threads_false(self, tmp_path):
+        """Default invocation forwards reasoning_trace=False."""
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-nothink"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=False,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("reasoning_trace") is False
+
+
+# =============================================================================
+# v1.5 T3.1 (Wave 6b GLUE): train --backend (MLX / Apple-Silicon selector)
+# =============================================================================
+
+
+class TestTrainBackendFlag:
+    """v1.5 T3.1: ``backprop train --backend`` parse + thread contract.
+
+    Pins BOTH ends of the wave6b introspection-filter wiring: the flag binds
+    onto ``args.backend`` at parse time (with the {auto, cuda, mlx} set enforced
+    by argparse ``choices``), and ``cmd_train`` forwards a ``backend`` kwarg
+    (named to match ``Trainer.__init__``) so the introspection filter passes it
+    through to the constructor. The cross-field "mlx forced on non-Apple" gate
+    lives in the Trainer constructor, NOT here — these tests only assert the CLI
+    surface + threading, so no Apple-Silicon host is required.
+    """
+
+    def test_backend_default_is_auto(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.backend == "auto"
+
+    def test_backend_mlx_parses(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--backend", "mlx"]
+        )
+        assert args.backend == "mlx"
+
+    def test_backend_cuda_parses(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--backend", "cuda"]
+        )
+        assert args.backend == "cuda"
+
+    def test_backend_rejects_unknown_choice(self, cli_parser):
+        """An out-of-set value (e.g. ``zzz``) is rejected by argparse choices."""
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(
+                ["train", "-d", "data.jsonl", "--backend", "zzz"]
+            )
+
+    def test_backend_threads_into_trainer_kwargs(self, tmp_path):
+        """``--backend mlx`` reaches the Trainer constructor kwargs.
+
+        Same catch-all-MagicMock pattern as the fp8/rsLoRA/reasoning-trace
+        threading tests: a MagicMock Trainer advertises ``(*args, **kwargs)`` so
+        cmd_train's introspection filter forwards every wave6b_candidate_kwargs
+        key unfiltered. Pins that ``backend`` lands in the threaded dict.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.21, duration_seconds=1.0, run_id="r-mlx"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=False,
+            backend="mlx",
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("backend") == "mlx", (
+            f"--backend must thread into the Trainer kwargs; got "
+            f"backend={init_kwargs.get('backend')!r}"
+        )
+
+    def test_backend_default_threads_auto(self, tmp_path):
+        """Default invocation forwards backend='auto'."""
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-auto"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=False,
+            backend="auto",
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("backend") == "auto"
+
+
+# =============================================================================
+# v1.5 T2.2 (Wave 6b GLUE): multi-run merge framework flags
+# =============================================================================
+
+
+class TestMultiRunMergeFlags:
+    """``backprop multi-run`` merge-strategy / drift-gate / eval-gate parse."""
+
+    def test_merge_strategy_default_qiao_mahdavi(self, cli_parser):
+        args = cli_parser.parse_args(["multi-run", "-d", "data.jsonl"])
+        assert args.merge_strategy == "qiao_mahdavi"
+
+    @pytest.mark.parametrize("strategy", ["qiao_mahdavi", "linear", "ties", "dare"])
+    def test_merge_strategy_accepts_choices(self, cli_parser, strategy):
+        args = cli_parser.parse_args(
+            ["multi-run", "-d", "data.jsonl", "--merge-strategy", strategy]
+        )
+        assert args.merge_strategy == strategy
+
+    def test_merge_strategy_rejects_unknown(self, cli_parser):
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(
+                ["multi-run", "-d", "data.jsonl", "--merge-strategy", "slerp"]
+            )
+
+    def test_ties_trim_rejects_out_of_unit_range(self, cli_parser):
+        # _unit_float rejects > 1 (argparse exits 2).
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(
+                ["multi-run", "-d", "data.jsonl", "--ties-trim", "5"]
+            )
+
+    def test_merge_and_gate_flags_parse(self, cli_parser):
+        args = cli_parser.parse_args([
+            "multi-run", "-d", "data.jsonl",
+            "--merge-strategy", "ties",
+            "--ties-trim", "0.3",
+            "--dare-drop-rate", "0.4",
+            "--dare-seed", "7",
+            "--drift-gate",
+            "--drift-threshold", "0.15",
+            "--eval-gate",
+            "--eval-max-regression", "0.05",
+            "--eval-heldout", "held.jsonl",
+        ])
+        assert args.merge_strategy == "ties"
+        assert args.ties_trim == pytest.approx(0.3)
+        assert args.dare_drop_rate == pytest.approx(0.4)
+        assert args.dare_seed == 7
+        assert args.drift_gate is True
+        assert args.drift_threshold == pytest.approx(0.15)
+        assert args.eval_gate is True
+        assert args.eval_max_regression == pytest.approx(0.05)
+        assert args.eval_heldout == "held.jsonl"
+
+    def test_merge_flags_thread_into_multirun_config(self, tmp_path):
+        """The 9 merge knobs reach MultiRunConfig (flag→field mapping).
+
+        cmd_multi_run threads them via the dataclasses.fields(MultiRunConfig)
+        filter. A real MultiRunConfig is a dataclass with the T2.2 fields, so
+        the keys route to wave6b_cfg_kwargs and land on the constructed
+        config. We patch MultiRunTrainer (so no real training fires) and read
+        the MultiRunConfig the handler built off the trainer's call kwargs.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_multi_run
+
+        fake_trainer = MagicMock()
+        fake_trainer.run.return_value = MagicMock(
+            total_runs=2,
+            final_loss=0.3,
+            total_duration_seconds=1.0,
+            final_checkpoint_path=str(tmp_path / "out"),
+            failed_runs=0,
+        )
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            runs=2,
+            steps=10,
+            samples=100,
+            merge_mode="slao",
+            output=str(tmp_path),
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            merge_strategy="ties",
+            ties_trim=0.3,
+            dare_drop_rate=0.4,
+            dare_seed=7,
+            drift_gate=True,
+            drift_threshold=0.15,
+            eval_gate=True,
+            eval_max_regression=0.05,
+            eval_heldout="held.jsonl",
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.multi_run.MultiRunTrainer", return_value=fake_trainer
+        ) as mock_trainer_cls:
+            rc = cmd_multi_run(args)
+
+        assert rc == EXIT_OK
+        # The handler built a real MultiRunConfig and passed it as the
+        # ``config=`` kwarg to MultiRunTrainer.
+        cfg = mock_trainer_cls.call_args.kwargs["config"]
+        assert cfg.merge_strategy == "ties"
+        assert cfg.ties_trim_threshold == pytest.approx(0.3)
+        assert cfg.dare_drop_rate == pytest.approx(0.4)
+        assert cfg.dare_seed == 7
+        assert cfg.drift_gate is True
+        assert cfg.drift_threshold == pytest.approx(0.15)
+        assert cfg.eval_gate is True
+        assert cfg.eval_max_regression == pytest.approx(0.05)
+        assert cfg.eval_heldout_path == "held.jsonl"
+
+    def test_multirun_banner_names_strategy_and_gates(self, tmp_path, capsys):
+        """The multi-run banner surfaces the chosen strategy + gate state."""
+        from backpropagate.cli import EXIT_OK, cmd_multi_run
+
+        fake_trainer = MagicMock()
+        fake_trainer.run.return_value = MagicMock(
+            total_runs=1,
+            final_loss=0.3,
+            total_duration_seconds=1.0,
+            final_checkpoint_path=str(tmp_path / "out"),
+            failed_runs=0,
+        )
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            runs=1,
+            steps=10,
+            samples=100,
+            merge_mode="slao",
+            output=str(tmp_path),
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            merge_strategy="dare",
+            ties_trim=0.2,
+            dare_drop_rate=0.5,
+            dare_seed=None,
+            drift_gate=True,
+            drift_threshold=0.1,
+            eval_gate=False,
+            eval_max_regression=0.0,
+            eval_heldout=None,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.multi_run.MultiRunTrainer", return_value=fake_trainer
+        ):
+            rc = cmd_multi_run(args)
+
+        assert rc == EXIT_OK
+        out = capsys.readouterr().out
+        assert "Merge strategy: dare" in out
+        assert "drift=on" in out
+        assert "eval=off" in out
+
+
+# =============================================================================
+# v1.5 T2.3 (Wave 6b GLUE): export --format ollama-adapter + ollama shelf
+# =============================================================================
+
+
+class TestExportOllamaAdapter:
+    """``backprop export --format ollama-adapter`` parse + handler contract."""
+
+    def test_format_accepts_ollama_adapter(self, cli_parser):
+        args = cli_parser.parse_args([
+            "export", "./out/lora", "--format", "ollama-adapter",
+            "--base-model", "llama3.2",
+        ])
+        assert args.format == "ollama-adapter"
+        assert args.base_model == "llama3.2"
+
+    def test_adapter_tag_parses(self, cli_parser):
+        args = cli_parser.parse_args([
+            "export", "./out/lora", "--format", "ollama-adapter",
+            "--base-model", "llama3.2", "--adapter-tag", "taskA",
+        ])
+        assert args.adapter_tag == "taskA"
+
+    def test_ollama_adapter_calls_export_ollama_adapter(self, tmp_path, capsys):
+        """A mocked export_ollama_adapter is invoked with base_model + tag."""
+        from backpropagate.cli import EXIT_OK, cmd_export
+        from backpropagate.export import ExportFormat
+
+        model_path = tmp_path / "lora"
+        model_path.mkdir()
+
+        mock_result = MagicMock()
+        mock_result.path = model_path / "Modelfile"
+        mock_result.size_mb = 0.01
+        mock_result.export_time_seconds = 0.5
+        # export_ollama_adapter records the derived <base>:<tag> name here.
+        mock_result.quantization = "llama3.2:taskA"
+        mock_result.format = ExportFormat.OLLAMA_ADAPTER
+
+        with patch(
+            "backpropagate.export.export_ollama_adapter", return_value=mock_result
+        ) as mock_export:
+            args = Namespace(
+                model_path=str(model_path),
+                format="ollama-adapter",
+                quantization="q4_k_m",
+                output=str(tmp_path / "output"),
+                ollama=False,
+                ollama_name=None,
+                base_model="llama3.2",
+                adapter_tag="taskA",
+                no_model_card=False,
+                push_to_hub=None,
+                cli_run_id=None,
+                verbose=False,
+            )
+            rc = cmd_export(args)
+
+        assert rc == EXIT_OK
+        mock_export.assert_called_once()
+        call = mock_export.call_args
+        # adapter_path is the first positional; base_model + tag are kw-only.
+        assert call.kwargs["base_model"] == "llama3.2"
+        assert call.kwargs["tag"] == "taskA"
+        out = capsys.readouterr().out
+        assert "Registered with Ollama: llama3.2:taskA" in out
+        assert "ollama run llama3.2:taskA" in out
+
+    def test_ollama_adapter_missing_base_model_is_user_error(self, tmp_path, capsys):
+        """--format ollama-adapter without --base-model → EXIT_USER_ERROR."""
+        from backpropagate.cli import EXIT_USER_ERROR, cmd_export
+
+        model_path = tmp_path / "lora"
+        model_path.mkdir()
+
+        args = Namespace(
+            model_path=str(model_path),
+            format="ollama-adapter",
+            quantization="q4_k_m",
+            output=str(tmp_path / "output"),
+            ollama=False,
+            ollama_name=None,
+            base_model=None,
+            adapter_tag=None,
+            no_model_card=False,
+            push_to_hub=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+        rc = cmd_export(args)
+
+        assert rc == EXIT_USER_ERROR
+        err = capsys.readouterr().err
+        assert "--base-model" in err
+
+
+class TestOllamaShelfVerb:
+    """``backprop ollama shelf <base>`` parse + handler contract."""
+
+    def test_shelf_parses(self, cli_parser):
+        args = cli_parser.parse_args(["ollama", "shelf", "llama3.2"])
+        assert args.command == "ollama"
+        assert args.ollama_command == "shelf"
+        assert args.base_model == "llama3.2"
+
+    def test_shelf_requires_base_model(self, cli_parser):
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["ollama", "shelf"])
+
+    def test_shelf_lists_entries(self, capsys):
+        """A mocked list_adapter_shelf prints each entry + a count."""
+        from backpropagate.cli import EXIT_OK, cmd_ollama_shelf
+        from backpropagate.export import AdapterShelfEntry
+
+        entries = [
+            AdapterShelfEntry(
+                model_name="llama3.2:taskA", base="llama3.2", tag="taskA",
+                size="2.0 GB", modified="2 hours ago",
+            ),
+            AdapterShelfEntry(
+                model_name="llama3.2:taskB", base="llama3.2", tag="taskB",
+            ),
+        ]
+
+        with patch(
+            "backpropagate.export.list_adapter_shelf", return_value=entries
+        ) as mock_shelf:
+            args = Namespace(base_model="llama3.2", verbose=False)
+            rc = cmd_ollama_shelf(args)
+
+        assert rc == EXIT_OK
+        mock_shelf.assert_called_once_with("llama3.2")
+        out = capsys.readouterr().out
+        assert "llama3.2:taskA" in out
+        assert "llama3.2:taskB" in out
+        assert "Listed 2 adapter(s)" in out
+
+    def test_shelf_empty_when_ollama_missing(self, capsys):
+        """Empty shelf + ollama CLI absent → EX_UNAVAILABLE."""
+        from backpropagate.cli import EXIT_UNAVAILABLE, cmd_ollama_shelf
+
+        # cmd_ollama_shelf does a local ``import shutil`` then ``shutil.which``;
+        # patch the global shutil.which (no module-level cli.shutil to patch).
+        with patch(
+            "backpropagate.export.list_adapter_shelf", return_value=[]
+        ), patch("shutil.which", return_value=None):
+            args = Namespace(base_model="llama3.2", verbose=False)
+            rc = cmd_ollama_shelf(args)
+
+        assert rc == EXIT_UNAVAILABLE

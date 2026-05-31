@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backpropagate"
-version = "1.4.0"
+version = "1.5.0"
 description = "Production-ready headless LLM fine-tuning with smart defaults, Windows support, and modular architecture"
 readme = "README.md"
 license = "MIT"
@@ -99,13 +99,38 @@ security = [
     "PyJWT>=2.8.0",  # JWT authentication
     "cryptography>=42.0.0",  # Secure token generation
 ]
+# v1.5 T2.1: EXPERIMENTAL FP8 compute path (Blackwell/Hopper sm_90+) via
+# torchao float8. torchao's kernels track torch's ABI — same upper-cap
+# doctrine as torch/transformers above: on torch<2.11 torchao falls back to
+# the slower `_scaled_mm` path; torch>=2.11 ships the compiled torchao
+# kernels. No upper cap is pinned here yet (torchao is pre-1.0 and tracks
+# torch minor-for-minor); revisit alongside the torch 3.x smoke cell. Only
+# folded into the `full` bundle — FP8 is experimental and NOT part of
+# standard / production.
+fp8 = [
+    "torchao>=0.10.0",  # float8 training (convert_to_float8_training)
+]
+
+# v1.5 T3.1 (MLX / Apple-Silicon backend). Apple-Silicon ONLY (macOS + arm64);
+# BUILT-BUT-UNVERIFIED on non-Apple rigs (this repo's CI/dev box is Windows +
+# CUDA, where mlx-lm cannot install). Provides the `mlx_lm.lora` / `mlx_lm.fuse`
+# entry points the MLX training backend drives via a subprocess seam.
+#
+# CRITICAL DIVERGENCE from `fp8` above: `mlx` is deliberately NOT folded into
+# the `full` / `standard` / `production` bundles. mlx-lm has no wheels for
+# Linux/Windows, so adding it to a bundle would break `pip install
+# 'backpropagate[full]'` on every non-Apple platform. Mac users opt in
+# explicitly with `pip install 'backpropagate[mlx]'`.
+mlx = [
+    "mlx-lm>=0.31.0",  # mlx_lm.lora / mlx_lm.fuse — Apple-Silicon LoRA SFT rail
+]
 
 # Bundle presets for convenience
 standard = [
     "backpropagate[unsloth,ui]",  # Recommended for most users
 ]
 full = [
-    "backpropagate[unsloth,ui,validation,export,monitoring,logging,security]",  # Everything
+    "backpropagate[unsloth,ui,validation,export,monitoring,logging,security,fp8]",  # Everything (incl. experimental FP8)
 ]
 production = [
     "backpropagate[unsloth,ui,validation,logging,security]",  # Production deployment

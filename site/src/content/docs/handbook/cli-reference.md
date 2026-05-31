@@ -55,6 +55,12 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--init-lora-weights` | `default` | One of `default` / `pissa` / `loftq`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
 | `--optim` | auto | Optimizer string. `auto` picks `paged_adamw_8bit` on consumer GPUs (<24GB VRAM), `adamw_torch_fused` otherwise. Override with `adamw_torch` / `paged_adamw_8bit` / `adamw_8bit` etc. |
 | `--mode` | `lora` | **v1.4** — one of `lora` / `full`. `lora` (the default) trains a low-rank adapter; `full` updates every weight of the base model. `full` is supported only for models up to 3B parameters on consumer 16GB cards — picking `--mode=full` with a >3B model exits `2` with `[RUNTIME_FULL_FT_MODEL_TOO_LARGE]` naming `--mode=lora` + the three sub-3B presets (Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B) as the recovery options. See [full fine-tuning →](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math and the Biderman 2024 / Thinking Machines 2025 citations. |
+| `--method` | `sft` | **v1.5** — one of `sft` / `orpo`. `sft` (the default) is supervised fine-tuning. `orpo` is reference-free preference tuning (Hong, Lee & Thorne 2024) — needs a `{chosen, rejected}` (or `{prompt, chosen, rejected}`) dataset, runs single-stage with no reference model, and so stays in the same VRAM envelope as SFT. ORPO supports `--mode lora` only in v1.5. |
+| `--orpo-beta` | `0.1` | **v1.5** — ORPO odds-ratio weight (the `lambda` / `beta` in TRL's `ORPOConfig`). Keep > 0. Ignored unless `--method orpo`. |
+| `--fp8` | off | **v1.5 (experimental)** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao. Base weights in float8 (~1.4× throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge still works. `--mode lora` + `--method sft` only in v1.5; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Sets `BACKPROPAGATE_TRAINING__FP8`. |
+| `--use-rslora` | off | **v1.5** — rank-stabilized LoRA scaling (`alpha/sqrt(r)` instead of `alpha/r`). Zero inference cost, still mergeable; the benefit grows with rank (relevant at the rank-256 default). Sets `BACKPROPAGATE_LORA__USE_RSLORA`. |
+| `--reasoning-trace` | off | **v1.5 T3.2** — reasoning-trace SFT (R1/QwQ distillation). Keeps the `<think>` chain-of-thought in the SFT target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to `8192` (set `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` to override). `<think>` is plain text — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama. SFT only (`--method sft`). Sets `BACKPROPAGATE_DATA__REASONING_TRACE`; tune the band with `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` / `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS`. |
+| `--backend` | `auto` | **v1.5 T3.1 (experimental — Apple-Silicon rail BUILT-BUT-UNVERIFIED)** — one of `auto` / `cuda` / `mlx`. The compute rail. `auto` (the default) routes to CUDA on an NVIDIA host and to the MLX rail on an Apple-Silicon Mac with the `[mlx]` extra installed — so existing CUDA rigs are byte-identical. `cuda` forces the CUDA rail; `mlx` forces the Apple-Silicon (`mlx_lm.lora`) rail. **MLX is LoRA SFT only in v1.5** — `--method orpo`, `--mode full`, `--fp8`, and `multi-run` are not supported on the MLX rail and are rejected at construction with `CONFIG_INVALID_SETTING`. Forcing `--backend mlx` on a non-Apple host is unrunnable (`mlx-lm` is macOS + arm64 only) and errors with `CONFIG_INVALID_SETTING`; if the resolved rail is `mlx` but `mlx_lm` is missing the run raises `DEP_MLX_UNAVAILABLE` — install `pip install 'backpropagate[mlx]'`. Sets `BACKPROPAGATE_TRAINING__BACKEND`. The MLX rail is built + unit-tested (mocked) but not yet dogfood-verified on real Apple Silicon as of v1.5 — see the [README MLX note](https://github.com/mcp-tool-shop-org/backpropagate#apple-silicon-mlx--experimental-v15). |
 
 The CLI default aligns with `config.py`'s `ModelConfig.name` as of v1.3 (F-018). Pass `--model unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to opt into the pre-quantized variant, but only with the `[unsloth]` extra installed.
 
@@ -80,7 +86,16 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--no-packing` | (packing ON by default) | Same as `backprop train`. |
 | `--init-lora-weights` | `default` | Same as `backprop train`. |
 | `--optim` | auto | Same as `backprop train`. |
-| `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 3B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
+| `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 4B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
+| `--merge-strategy` | `qiao_mahdavi` | **v1.5** — per-tensor LoRA merge rule. `qiao_mahdavi` (default) = the v1.4 SLAO merge (behavior-preserving). `linear` = plain weighted average. `ties` = trim + elect-sign + disjoint-merge (uses `--ties-trim`). `dare` = Bernoulli-drop + rescale (uses `--dare-drop-rate`). All stay mergeable with zero inference cost. Applies only with `--merge-mode slao`. |
+| `--ties-trim` | `0.2` | **v1.5** — TIES trim quantile in `[0, 1]` (fraction of lowest-magnitude delta params zeroed before the sign election; `0.2` = bottom 20%). Only used with `--merge-strategy ties`. |
+| `--dare-drop-rate` | `0.5` | **v1.5** — DARE Bernoulli drop probability in `[0, 1)` (fraction of delta params randomly dropped; survivors rescaled by `1/(1-p)`). Only used with `--merge-strategy dare`. |
+| `--dare-seed` | unset | **v1.5** — seed for DARE's local RNG (deterministic drop mask). Default derives from the run. Only used with `--merge-strategy dare`. |
+| `--drift-gate` | off | **v1.5** — enable the drift gate: skip a merge whose LoRA-B cosine similarity to the running accumulator falls below `--drift-threshold`, keeping the run as a sibling branch instead of corrupting the merge. |
+| `--drift-threshold` | `0.0` | **v1.5** — cosine-similarity floor for the drift gate (range `[-1, 1]`). `similarity < threshold ⇒ branch`. Only consulted when `--drift-gate` is set. |
+| `--eval-gate` | off | **v1.5** — enable the eval gate: after each candidate merge, evaluate held-out loss and reject (restore the pre-merge accumulator) if the merge regressed loss past `--eval-max-regression`. Reuses the v1.5 eval seam. |
+| `--eval-max-regression` | `0.0` | **v1.5** — tolerated held-out-loss increase for the eval gate (`0.0` = zero-tolerance). A merge whose after-loss exceeds before-loss by more than this is rejected (`RUNTIME_EVAL_GATE_REGRESSED`). Only consulted when `--eval-gate` is set. |
+| `--eval-heldout` | unset | **v1.5** — held-out JSONL set for the eval gate. Default reuses the run's reserved last-10% holdout. Only consulted when `--eval-gate` is set. |
 
 ## `backprop diff-runs` (v1.3, experimental)
 
@@ -146,11 +161,13 @@ backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --oll
 | Flag | Default | Description |
 |------|---------|-------------|
 | `model_path` (positional) | **required** | Path to the trained LoRA adapter directory. |
-| `--format`, `-f` | `lora` | One of `lora` / `merged` / `gguf`. |
+| `--format`, `-f` | `lora` | One of `lora` / `merged` / `gguf` / `ollama-adapter`. **v1.5** `ollama-adapter` registers the LoRA adapter with Ollama UNMERGED on top of `--base-model` (a `FROM`+`ADAPTER` Modelfile + `ollama create`) — no model load, no merge, no quantization. Lighter than the merged-GGUF path and the building block for the adapter shelf (swap adapters on one base by tag). Requires `--base-model`. |
 | `--quantization`, `-q` | `q4_k_m` | One of `f16` / `q8_0` / `q5_k_m` / `q4_k_m` / `q4_0` / `q2_k`. |
 | `--output`, `-o` | unset | Output directory (defaults to `<model_path>/<format>`). |
 | `--ollama` | off | After GGUF export, register with Ollama. |
 | `--ollama-name` | unset | Name to use when registering with Ollama. |
+| `--base-model` | unset | **v1.5** — base model for `--format ollama-adapter` (an Ollama model name like `llama3.2` or a base-GGUF path). **Required** with `ollama-adapter`; missing it errors with `INPUT_VALIDATION_FAILED` (exit 1). MUST match the adapter's origin base. Ignored by other formats. |
+| `--adapter-tag` | unset | **v1.5** — adapter tag for the derived `<base>:<tag>` Ollama model name (`--format ollama-adapter`). Default: a sanitised adapter-dir basename. Lets you shelf sibling adapters on one base (`llama3.2:taskA` / `llama3.2:taskB`). Ignored by other formats. |
 | `--hub-token` | unset | HuggingFace Hub token for `--push` flow. Visible to `ps aux` + shell history — prefer `--hub-token-file` or `HF_TOKEN` env var on shared hosts. |
 | `--hub-token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--hub-token`. Mirrors v1.3 `--auth-file` pattern for keeping credentials off argv. |
 
@@ -167,7 +184,22 @@ backprop ollama list
 
 # Unregister a model (mirrors `ollama rm`)
 backprop ollama rm my-finetune
+
+# List the adapter shelf for a base (v1.5) — the <base>:<tag> variants
+# produced by `backprop export --format ollama-adapter`
+backprop ollama shelf llama3.2
 ```
+
+| Verb | Positional / Flag | Description |
+|------|-------------------|-------------|
+| `backprop ollama register` | `path` (positional), `--name`, `--modelfile` | Register an already-exported GGUF (or a directory containing one) with the local daemon. |
+| `backprop ollama list` | — | List currently-registered models (mirrors `ollama list`). |
+| `backprop ollama rm` | `name` (positional) | Unregister a model (mirrors `ollama rm`). |
+| `backprop ollama shelf` | `base_model` (positional) | **v1.5** — list the adapter variants registered against a base model: every Ollama `<base>:<tag>` model (produced by `backprop export --format ollama-adapter`) that shares the given base. The bare base itself is excluded; the shelf is the adapter VARIANTS you hot-swap by tag. Best-effort over `ollama list`. |
+
+### Adapter shelf (v1.5)
+
+The "adapter shelf" is the set of Ollama models that share one base and differ only by adapter tag — `llama3.2:taskA`, `llama3.2:taskB`, … — each produced by `backprop export --format ollama-adapter --base-model llama3.2 --adapter-tag taskA`. Because the adapter is applied UNMERGED (a `FROM`+`ADAPTER` Modelfile), the base weights are loaded once and only the small rank-`r` adapter differs per tag, so `ollama run llama3.2:taskA` / `ollama run llama3.2:taskB` swap behaviour without re-quantizing a full model each time. `backprop ollama shelf <base>` lists what's currently on a base's shelf.
 
 ### Architectural deviation note
 
@@ -304,6 +336,69 @@ backprop validate my_data.jsonl --format sharegpt --max-errors 50
 | `--json` | off | **v1.4** — emit a JSON payload (`dataset`, `format_detected`, `total_samples`, `errors[]`) under a `schema_version` field instead of the human-readable banner. Useful for CI consumers and `jq` pipelines. |
 
 Exit codes: `0` on clean validation, `1` on input problem (missing file / unreadable / bad encoding), `65` (`EX_DATAERR`) on detected validation errors.
+
+## `backprop data report` (v1.5)
+
+Dataset-quality report — duplicate clusters, length/format outliers, optional train/test contamination against a held-out split, format-validity, and a token-length distribution. Reads the JSONL file directly (no HuggingFace download, no torch), so it is safe to run as a pre-flight in CI. The advisory report becomes a **gate** when you pass any `--fail-*` flag (or `--strict`).
+
+`data` is the second nested subparser in the otherwise-flat CLI (after `ollama`); the dataset-quality surface is grouped under a noun so future verbs (`data dedupe`, `data split`) extend the same group rather than sprinkling flat verbs at the root. `backprop validate` stays flat (it pre-dates this grouping); the new quality *report* lives under `data report` as the first of a family.
+
+```bash
+# Advisory report (human summary)
+backprop data report my_data.jsonl
+
+# Contamination check against a held-out split
+backprop data report my_data.jsonl --against heldout.jsonl
+
+# CI gate: fail if >10% near-duplicates or any contamination
+backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.0 --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `dataset` (positional) | **required** | Path to the JSONL dataset to analyze. |
+| `--format` | `auto` | Format hint: `auto` / `sharegpt` / `alpaca` / `openai` / `raw`. `auto` detects from the first row. |
+| `--against` | unset | Path to a held-out JSONL split to check the main dataset for train/test contamination against. |
+| `--max-samples` | unset (all) | Maximum samples to analyze. Caps reads on huge files. |
+| `--dup-threshold` | `0.9` | Similarity threshold in `[0, 1]` above which two samples count as near-duplicates. Validated by `_unit_float`. |
+| `--fail-on-dups` | unset | Gate: fail (exit `65`) if the near-duplicate **rate** exceeds this fraction in `[0, 1]` (e.g. `0.1` for 10%). Omit to stay advisory. |
+| `--fail-on-contamination` | unset | Gate: fail (exit `65`) if the contamination rate against `--against` exceeds this fraction in `[0, 1]`. Omit to stay advisory. |
+| `--max-outlier-rate` | unset | Gate: fail (exit `65`) if the length/format-outlier rate exceeds this fraction in `[0, 1]`. Omit to stay advisory. |
+| `--strict` | off | Promote a WARN verdict to FAIL (exit `65`). For strict CI gates. |
+| `--json` | off | Emit the report as JSON (`schema_version` + the `DataQualityReport` fields, including `verdict` and `failed_thresholds`) instead of the human summary. |
+
+Exit codes: `0` advisory run or all gates passed / clean; `1` on bad input (dataset missing / is a directory / not UTF-8 / unreadable, or `--against` was passed but its file is missing); `65` (`EX_DATAERR`) when a `--fail-*` / `--strict` gate trips **or** the dataset has zero parseable rows. A tripped gate stamps `INPUT_DATASET_REPORT_THRESHOLD` into the structured log so the failure is greppable.
+
+## `backprop eval` (v1.5)
+
+Lightweight post-train eval harness — held-out loss + perplexity + N sample generations against a fixed prompt set, with an optional before/after diff (`--vs`) and an **eval-gate** (`--gate-against`) that backstops continual-merge / SLAO campaigns. Flat top-level subcommand, modeled on `diff-runs`. Imports the (torch-heavy) eval engine lazily, after the cheap run-resolution checks, so a typo'd run_id fails fast without loading a model.
+
+```bash
+# Evaluate one run
+backprop eval <run_id> --output ./output
+
+# Before/after diff between two runs
+backprop eval <run_id> --vs <baseline_run_id>
+
+# Gate: reject if <run_id> regressed the held-out metric vs the baseline
+backprop eval <run_id> --gate-against <baseline_run_id> --max-regression 0.0
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `run_id` (positional) | **required** | The run_id to evaluate (or any unambiguous prefix). |
+| `--vs` | unset | Second run_id to evaluate and diff against (before/after comparison). If both `--vs` and `--gate-against` are passed, `--gate-against` wins. |
+| `--gate-against` | unset | Baseline run_id to gate against. Evaluates both runs and runs the eval-gate; exits `65` if the evaluated run regressed beyond `--max-regression`. |
+| `--output`, `-o` | `./output` | Output directory containing `run_history.json`. |
+| `--heldout` | unset | Path to a held-out JSONL split for the held-out-loss metric. Default: the harness re-splits the run's recorded dataset (with a loud WARN that overlap is possible). |
+| `--prompts` | unset | Path to a fixed prompt set (one prompt per line, or JSONL `{"prompt": ...}`). Default: the harness's built-in prompt set. |
+| `--num-samples`, `-n` | `5` | Number of sample generations to produce. |
+| `--max-new-tokens` | `128` | Max new tokens per sample generation. |
+| `--max-regression` | `0.0` | Maximum tolerated regression for `--gate-against` (`0.0` = any regression rejects). Raise to allow a small regression. |
+| `--seed` | `0` | Random seed for the re-split + generation determinism. |
+| `--json` | off | Emit the eval outcome (single / diff / gate) as JSON under a `schema_version` field for CI consumers. |
+
+Exit codes: `0` the eval ran (and, with `--gate-against`, the gate ACCEPTED); `1` run-not-found (eval target / `--vs` / `--gate-against`) or `--heldout` / `--prompts` could not be resolved / read; `65` (`EX_DATAERR`) when `--gate-against` tripped — the run regressed beyond `--max-regression` (stamps `RUNTIME_EVAL_GATE_REGRESSED`). An eval that crashes inside the engine surfaces via the catch-all: `RUNTIME_EVAL_FAILED` → `2`, CUDA OOM → `137`, Hub failure → `69`.
 
 ## `backprop estimate-vram` (v1.3)
 

@@ -311,6 +311,27 @@ def _positive_float(value: str) -> float:
     return n
 
 
+def _unit_float(value: str) -> float:
+    """argparse type for floats in the closed unit interval [0, 1].
+
+    Used by the v1.5 `backprop data report` gate flags (--dup-threshold /
+    --fail-on-dups / --fail-on-contamination / --max-outlier-rate), each of
+    which expresses a fraction (a similarity cutoff or a tripwire rate). A
+    value outside [0, 1] is almost always a typo (e.g. 90 meant 0.9), so we
+    reject it at the argparse boundary with a message that names the range.
+    """
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a float, got {value!r}")
+    if n < 0.0 or n > 1.0:
+        raise argparse.ArgumentTypeError(
+            f"must be in [0, 1], got {n} (these flags express a fraction — "
+            f"e.g. 0.9 for 90%)"
+        )
+    return n
+
+
 # BRIDGE-B-005 (Stage C humanization): tighten --auth parsing so a malformed
 # value fails on the argparse side with a humanized error that names the
 # offending character class. Pre-fix the only validation was downstream in
@@ -668,6 +689,36 @@ def cmd_train(args: argparse.Namespace) -> int:
             # kwarg silently when the installed Trainer doesn't accept
             # it (pre-Wave-6b builds), so this flag is forward-compatible.
             "mode": getattr(args, "mode", "lora"),
+            # v1.5 T1.2 (ORPO): --method / --orpo-beta thread to
+            # Trainer(method=..., orpo_beta=...). Same introspection filter
+            # contract — these are dropped until the trainer wave adds the
+            # matching __init__ kwargs, so the CLI surface is live now and
+            # forward-compatible. Default 'sft' / 0.1 preserve v1.4 behavior.
+            "method": getattr(args, "method", "sft"),
+            "orpo_beta": getattr(args, "orpo_beta", 0.1),
+            # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): Trainer.__init__ accepts
+            # ``fp8`` / ``use_rslora`` (named to match) so the introspection
+            # filter below threads them through. fp8=True is EXPERIMENTAL —
+            # the Trainer's gate ladder degrades to bf16 (or raises
+            # RUNTIME_FP8_UNSUPPORTED on a broken torchao import); use_rslora
+            # routes to LoraConfig(use_rslora=...).
+            "fp8": getattr(args, "fp8", False),
+            "use_rslora": getattr(args, "use_rslora", False),
+            # v1.5 T3.2 (reasoning-trace SFT): Trainer.__init__ accepts
+            # ``reasoning_trace`` (named to match) so the introspection filter
+            # below threads it through. When on, the trainer keeps <think> CoT
+            # in the SFT target, applies trace-length filtering, and bumps the
+            # default max_seq_length to 8192. Default False = byte-identical
+            # v1.4 SFT; dropped silently on a pre-T3.2 Trainer build.
+            "reasoning_trace": bool(getattr(args, "reasoning_trace", False)),
+            # v1.5 T3.1 (MLX / Apple-Silicon backend): Trainer.__init__ accepts
+            # ``backend`` (named to match) so the introspection filter below
+            # threads it through. "auto" routes to MLX on an Apple-Silicon Mac
+            # with the [mlx] extra, else CUDA (byte-identical on CUDA rigs);
+            # "cuda"/"mlx" force a rail. Forcing "mlx" on a non-Apple host
+            # raises CONFIG_INVALID_SETTING from the Trainer guard. Dropped
+            # silently on a pre-T3.1 Trainer build.
+            "backend": getattr(args, "backend", "auto"),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -845,6 +896,28 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
     _print_info(f"Steps/run: {args.steps}")
     _print_info(f"Samples/run: {args.samples}")
     _print_info(f"Merge mode: {args.merge_mode}")
+    # v1.5 T2.2 (merge framework, Wave 6b GLUE): surface the chosen per-tensor
+    # merge strategy + whether the drift / eval gates are armed so the operator
+    # sees the merge contract before a long overnight multi-run, not just in
+    # the logs after.
+    _print_info(f"Merge strategy: {getattr(args, 'merge_strategy', 'qiao_mahdavi')}")
+    _drift_on = bool(getattr(args, "drift_gate", False))
+    _eval_on = bool(getattr(args, "eval_gate", False))
+    _print_info(
+        "Gates: "
+        + (
+            f"drift={'on' if _drift_on else 'off'} "
+            f"(threshold {getattr(args, 'drift_threshold', 0.0)}), "
+            if _drift_on
+            else "drift=off, "
+        )
+        + (
+            f"eval={'on' if _eval_on else 'off'} "
+            f"(max-regression {getattr(args, 'eval_max_regression', 0.0)})"
+            if _eval_on
+            else "eval=off"
+        )
+    )
 
     try:
         # C-CLI-002 phase banner — the multi-run trainer also loads + tokenises
@@ -906,6 +979,21 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             # below route the kwarg to the right binding point and drop
             # it silently when the installed build doesn't accept it.
             "mode": getattr(args, "mode", "lora"),
+            # v1.5 T2.2 (merge framework, Wave 6b GLUE): the 9 merge-strategy /
+            # drift-gate / eval-gate knobs. Each is a MultiRunConfig dataclass
+            # FIELD, so the dataclasses.fields(MultiRunConfig) filter below
+            # routes them to wave6b_cfg_kwargs (and drops them on a pre-T2.2
+            # backend). The flag→field mapping is encoded here: argparse stores
+            # --ties-trim → args.ties_trim → ties_trim_threshold, etc.
+            "merge_strategy": getattr(args, "merge_strategy", "qiao_mahdavi"),
+            "ties_trim_threshold": getattr(args, "ties_trim", 0.2),
+            "dare_drop_rate": getattr(args, "dare_drop_rate", 0.5),
+            "dare_seed": getattr(args, "dare_seed", None),
+            "drift_gate": bool(getattr(args, "drift_gate", False)),
+            "drift_threshold": getattr(args, "drift_threshold", 0.0),
+            "eval_gate": bool(getattr(args, "eval_gate", False)),
+            "eval_max_regression": getattr(args, "eval_max_regression", 0.0),
+            "eval_heldout_path": getattr(args, "eval_heldout", None),
         }
         wave6b_cfg_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -1177,6 +1265,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         export_gguf,
         export_lora,
         export_merged,
+        export_ollama_adapter,
         register_with_ollama,
     )
     from .logging_config import bind_run_context, get_logger
@@ -1240,6 +1329,29 @@ def cmd_export(args: argparse.Namespace) -> int:
             ),
             code="INPUT_VALIDATION_FAILED",
         )
+
+    # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): --format ollama-adapter
+    # REQUIRES --base-model (the FROM line of the generated Modelfile). Reject
+    # the missing-base case up front with a friendly message + EXIT_USER_ERROR
+    # (exit 1) — the same print-then-return shape as the bare-model-path and
+    # unknown-format branches in this handler, so a direct handler call (and a
+    # wrapper) sees exit 1 rather than a deep stack trace at
+    # export_ollama_adapter. (Distinct from the --ollama/non-gguf mutex above,
+    # which raises pre-try and lands as EX_USAGE via main()'s catch-all.)
+    if args.format == "ollama-adapter" and not getattr(args, "base_model", None):
+        _print_error(
+            "--format ollama-adapter requires --base-model <model> (the base "
+            "the adapter was tuned from — an Ollama model name like "
+            "'llama3.2' or a base-GGUF path)."
+        )
+        _print_info(
+            "Re-run with --base-model <model> to build the FROM+ADAPTER "
+            "Modelfile, e.g. `backprop export ./output/lora --format "
+            "ollama-adapter --base-model llama3.2 --adapter-tag taskA`. "
+            "The base MUST match the adapter's origin base or Ollama's "
+            "output is erratic."
+        )
+        return EXIT_USER_ERROR
 
     # BRIDGE-B-002: reuse main()'s cli_run_id so a single token correlates
     # CLI output / structured logs / model_card.md / Hub push metadata.
@@ -1437,6 +1549,24 @@ def cmd_export(args: argparse.Namespace) -> int:
                 emit_model_card=emit_card,
                 output_root=output_dir.parent,
             )
+        elif args.format == "ollama-adapter":
+            # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): register the
+            # LoRA adapter with Ollama UNMERGED on top of --base-model (a
+            # FROM+ADAPTER Modelfile + `ollama create`). No model load / no
+            # merge / no quantization — far lighter than the gguf path. The
+            # --base-model required-check fired up front; export_ollama_adapter
+            # writes the Modelfile, runs `ollama create`, and records the
+            # derived <base>:<tag> model name in result.quantization.
+            _print_info(
+                f"==> Registering adapter with Ollama on base "
+                f"'{args.base_model}' (FROM+ADAPTER Modelfile + ollama "
+                "create; no merge / no quantization)..."
+            )
+            result = export_ollama_adapter(
+                model_path,
+                base_model=args.base_model,
+                tag=getattr(args, "adapter_tag", None),
+            )
         else:
             # NEW-STAGE-C-4 (humanization): name the next step. argparse's
             # choices= constraint catches the common case at parse time;
@@ -1445,8 +1575,9 @@ def cmd_export(args: argparse.Namespace) -> int:
             # formats so the operator can pick one immediately.
             _print_error(f"Unknown format: {args.format!r}")
             _print_info(
-                "Supported: --format lora (default) / merged / gguf. "
-                "See `backprop export --help` for the full flag list."
+                "Supported: --format lora (default) / merged / gguf / "
+                "ollama-adapter. See `backprop export --help` for the full "
+                "flag list."
             )
             return EXIT_USER_ERROR
 
@@ -1454,6 +1585,17 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_kv("Path", str(result.path))
         _print_kv("Size", f"{result.size_mb:.1f} MB")
         _print_kv("Time", f"{result.export_time_seconds:.1f}s")
+
+        # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): export_ollama_adapter
+        # ran `ollama create` itself (the registration is part of the export,
+        # unlike the gguf path where --ollama drives a separate step). Echo the
+        # registered <base>:<tag> model name (recorded in result.quantization)
+        # + the run command so the operator can use it immediately.
+        if args.format == "ollama-adapter":
+            registered_name = result.quantization or (args.adapter_tag or "")
+            if registered_name:
+                _print_success(f"Registered with Ollama: {registered_name}")
+                _print_info(f"Run with: ollama run {registered_name}")
 
         # Register with Ollama if requested
         if args.ollama and args.format == "gguf":
@@ -5083,6 +5225,534 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# COMMAND: data report (v1.5 T1.1 — dataset-quality moat)
+# =============================================================================
+#
+# `backprop data` is the SECOND nested-subparser in the CLI (after `ollama`).
+# Where `ollama` mirrors upstream Ollama's verb grammar, `data` groups the
+# dataset-quality surface under a noun so v1.5+ can extend it
+# (`data report`, and later e.g. `data dedupe` / `data split`) without
+# sprinkling flat `data-report` / `data-dedupe` verbs across the root parser.
+# `validate` stays flat (it pre-dates this grouping and downstream docs +
+# muscle memory point at `backprop validate`); the new quality REPORT lives
+# under `data report` because it is the first of a family.
+#
+# cmd_data_report reads JSONL plainly (like cmd_validate) — no DatasetLoader,
+# no torch — and hands the parsed rows to analyze_dataset(), which is also
+# torch-free. The whole `backprop data report` path stays cold-start cheap.
+
+
+def cmd_data_report(args: argparse.Namespace) -> int:
+    """Execute ``backprop data report <dataset>`` (v1.5 T1.1).
+
+    Runs the dataset-quality analysis (duplicate clusters, length/format
+    outliers, optional train/test contamination against a held-out set,
+    format-validity, token-length distribution) over a JSONL dataset and
+    prints a human report — or a ``--json`` payload carrying
+    ``schema_version`` + ``DataQualityReport.to_dict()`` for CI consumers.
+
+    The ``--fail-on-dups`` / ``--fail-on-contamination`` / ``--max-outlier-rate``
+    flags turn the advisory report into a CI gate; ``--strict`` promotes a
+    WARN verdict to FAIL. When a gate trips the handler returns exit 65
+    (EX_DATAERR) and stamps ``code="INPUT_DATASET_REPORT_THRESHOLD"`` into a
+    structured log line so the failure is greppable + the catalog scanner
+    counts the code as emitted.
+
+    Imports ``backpropagate.dataset_report`` LAZILY (it does not pull torch,
+    but the lazy import keeps the import surface uniform with the other
+    handlers and avoids paying for it on unrelated subcommands).
+
+    Exit codes:
+        0   report rendered (advisory mode, or all gates passed / clean)
+        1   user error — dataset missing / is a directory / not UTF-8 /
+            unreadable, or --against was passed but its file is missing
+        65  EX_DATAERR — a --fail-* / --strict gate tripped, OR the dataset
+            had zero parseable rows (nothing to analyze)
+    """
+    from .logging_config import get_logger
+
+    emit_json = bool(getattr(args, "json", False))
+
+    if not emit_json:
+        _print_header("Backpropagate Dataset Quality Report")
+
+    dataset_path = Path(args.dataset).expanduser()
+    if not dataset_path.exists():
+        if emit_json:
+            import json as _json
+            print(_json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "error": "dataset_not_found",
+            }, default=str))
+        else:
+            _print_error(f"Dataset not found: {dataset_path}")
+            _print_info(
+                "Pass a local JSONL file path. `backprop data report` reads "
+                "the file directly (no HuggingFace download)."
+            )
+        return EXIT_USER_ERROR
+
+    if dataset_path.is_dir():
+        if emit_json:
+            import json as _json
+            print(_json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "error": "dataset_path_is_directory",
+            }, default=str))
+        else:
+            _print_error(
+                f"Dataset path is a directory, expected a file: {dataset_path}"
+            )
+        return EXIT_USER_ERROR
+
+    # Resolve the optional --against held-out set up front so a missing path
+    # fails as a user error (exit 1) BEFORE we spend time parsing the main
+    # dataset. The contamination check is the only consumer.
+    against_path: Path | None = None
+    if getattr(args, "against", None):
+        against_path = Path(args.against).expanduser()
+        if not against_path.exists() or against_path.is_dir():
+            if emit_json:
+                import json as _json
+                print(_json.dumps({
+                    "schema_version": CLI_JSON_SCHEMA_VERSION,
+                    "dataset": str(dataset_path),
+                    "error": "against_not_found",
+                    "against": str(against_path),
+                }, default=str))
+            else:
+                _print_error(
+                    f"--against dataset not found (or is a directory): "
+                    f"{against_path}"
+                )
+                _print_info(
+                    "Pass a JSONL file to --against to check the main dataset "
+                    "for train/test contamination against it."
+                )
+            return EXIT_USER_ERROR
+
+    # Plain JSONL line-read (same approach as cmd_validate — no DatasetLoader,
+    # no torch). Cap at --max-samples when set so a huge file doesn't get
+    # fully materialised just to report on the first N rows.
+    import json
+
+    def _read_jsonl(path: Path, cap: int | None) -> list[Any]:
+        rows: list[Any] = []
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    rows.append(json.loads(stripped))
+                except json.JSONDecodeError:
+                    # Mirror cmd_validate's tolerance: skip unparseable lines;
+                    # the report's format-validity surface reflects the gaps.
+                    continue
+                if cap is not None and len(rows) >= cap:
+                    break
+        return rows
+
+    cap = args.max_samples if getattr(args, "max_samples", None) else None
+
+    try:
+        samples = _read_jsonl(dataset_path, cap)
+        against_samples = (
+            _read_jsonl(against_path, None) if against_path is not None else None
+        )
+    except UnicodeDecodeError as exc:
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "error": "not_utf8",
+                "detail": str(exc),
+            }, default=str))
+        else:
+            _print_error(f"Dataset is not valid UTF-8: {exc}")
+            _print_info("Re-encode the file: `iconv -f <enc> -t utf-8 < src > dst`")
+        return EXIT_USER_ERROR
+    except OSError as exc:
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "error": "read_failed",
+                "detail": str(exc),
+            }, default=str))
+        else:
+            _print_error(f"Could not read dataset: {exc}")
+        return EXIT_USER_ERROR
+
+    if not samples:
+        # Zero parseable rows — nothing to analyze. Per the exit contract this
+        # is a data error (65), not a user error (the file existed + was
+        # readable; it just had no usable content).
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "dataset": str(dataset_path),
+                "error": "no_parseable_rows",
+            }, default=str))
+        else:
+            _print_error("Dataset has no parseable rows — nothing to report.")
+        return EXIT_DATA_ERR
+
+    # Resolve the format hint: "auto" -> None (let analyze_dataset detect).
+    format_hint = None if args.format == "auto" else args.format
+
+    # Lazy import AFTER the cheap user-error returns above (missing file /
+    # dir / not-UTF8 / --against missing) so those paths don't pay the
+    # dataset_report import cost. dataset_report is torch-free.
+    from .dataset_report import analyze_dataset
+
+    report = analyze_dataset(
+        samples,
+        format_hint=format_hint,
+        dup_threshold=args.dup_threshold,
+        against=against_samples,
+        against_path=str(against_path) if against_path is not None else None,
+        fail_on_dups=getattr(args, "fail_on_dups", None),
+        fail_on_contamination=getattr(args, "fail_on_contamination", None),
+        max_outlier_rate=getattr(args, "max_outlier_rate", None),
+        strict=bool(getattr(args, "strict", False)),
+    )
+
+    gate_tripped = report.verdict == "FAIL"
+
+    if emit_json:
+        payload: dict[str, Any] = {
+            "schema_version": CLI_JSON_SCHEMA_VERSION,
+            **report.to_dict(),
+        }
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        print(report.summary())
+        print()
+        if report.verdict == "PASS":
+            _print_success("Dataset quality: PASS")
+        elif report.verdict == "WARN":
+            _print_warning("Dataset quality: WARN (advisory — no gate tripped)")
+        else:
+            _print_error("Dataset quality: FAIL — see failed thresholds above")
+
+    if gate_tripped:
+        # Stamp the structured log line with the catalog code so the failure
+        # is greppable and the catalog scanner counts the code as emitted.
+        # The gate is returned as exit 65 directly (not raised) per the
+        # v1.5 CLI contract.
+        try:
+            get_logger(__name__).warning(
+                "data_report_gate_tripped",
+                code="INPUT_DATASET_REPORT_THRESHOLD",
+                dataset=str(dataset_path),
+                verdict=report.verdict,
+                failed_thresholds=list(getattr(report, "failed_thresholds", []) or []),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        return EXIT_DATA_ERR
+
+    return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: eval (v1.5 T1.1 — lightweight eval harness)
+# =============================================================================
+#
+# `backprop eval <run_id>` is a flat top-level subcommand (modeled on
+# diff-runs): held-out loss + N sample generations against a fixed prompt
+# set, with an optional before/after diff (--vs) and an eval-gate
+# (--gate-against) that backstops continual-merge / SLAO campaigns.
+#
+# cmd_eval imports backpropagate.eval LAZILY because eval.evaluate_run pulls
+# torch + the model — we must NOT pay that on `backprop --help` or any
+# unrelated subcommand. Run-resolution (run-not-found) and dataset-resolution
+# (heldout/prompts unreadable) happen BEFORE the lazy import where possible
+# so the cheap user-error paths don't drag torch in.
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Execute ``backprop eval <run_id>`` (v1.5 T1.1).
+
+    Three shapes, selected by flags:
+      * bare ``eval <run_id>``       — evaluate one run (held-out loss + N
+        sample generations), print the EvalResult.
+      * ``eval <run_id> --vs <B>``   — evaluate <run_id> AND <B>, print a
+        diff_evals() side-by-side table (cmd_diff_runs-style).
+      * ``eval <run_id> --gate-against <baseline>`` — evaluate both and run
+        eval_gate(); accept/reject decision gates the exit code.
+
+    Imports ``backpropagate.eval`` LAZILY (it pulls torch + the model).
+
+    Exit codes:
+        0   eval ran (and, if --gate-against, the gate ACCEPTED)
+        1   run-not-found (eval target / --vs / --gate-against), or
+            --heldout / --prompts could not be resolved / read
+        65  EX_DATAERR — --gate-against tripped: the run regressed beyond
+            --max-regression. Stamps code="RUNTIME_EVAL_GATE_REGRESSED".
+        2 / 137 / 69 — inherited from main()'s catch-all for an eval that
+            crashed (RUNTIME_EVAL_FAILED), a CUDA OOM, or a Hub failure.
+    """
+    import uuid
+
+    from .checkpoints import RunHistoryManager
+    from .logging_config import bind_run_context, get_logger
+
+    emit_json = bool(getattr(args, "json", False))
+
+    if not emit_json:
+        _print_header("Backpropagate Eval")
+
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="eval")
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    try:
+        get_logger(__name__).info(
+            "eval_invoked",
+            cli_run_id=cli_run_id_full,
+            target_run_id=getattr(args, "run_id", None),
+            vs_run_id=getattr(args, "vs", None),
+            gate_against=getattr(args, "gate_against", None),
+        )
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
+
+    output_dir = Path(args.output).expanduser()
+    if not output_dir.exists():
+        _print_error(f"No output directory: {output_dir}")
+        _print_info(
+            "Pass --output <dir> to point at the output directory used "
+            "during training (it holds run_history.json)."
+        )
+        try:
+            get_logger(__name__).warning(
+                "eval_run_not_found",
+                code="INPUT_EVAL_RUN_NOT_FOUND",
+                output_dir=str(output_dir),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        return EXIT_USER_ERROR
+
+    # Resolve every referenced run_id against the on-disk history BEFORE
+    # the lazy torch import — a typo'd run_id is a cheap user error and
+    # shouldn't pay the torch import cost.
+    manager = RunHistoryManager(str(output_dir))
+
+    def _resolve(run_id: str | None, label: str) -> bool:
+        """Return True if run_id resolves; emit the structured error + hint
+        and return False otherwise."""
+        if run_id is None:
+            return True
+        if manager.get_run(run_id) is not None:
+            return True
+        _print_error(
+            f"{label}={run_id!r} not found in run history under {output_dir}"
+        )
+        _print_info(
+            "Next step: `backprop runs --output <dir>` to list available "
+            "run_ids; widen the prefix if your first 8 characters collide "
+            "with multiple runs; or re-run with `--output <other-dir>`."
+        )
+        try:
+            get_logger(__name__).warning(
+                "eval_run_not_found",
+                code="INPUT_EVAL_RUN_NOT_FOUND",
+                label=label,
+                run_id=run_id,
+                output_dir=str(output_dir),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        return False
+
+    if not _resolve(args.run_id, "run_id"):
+        return EXIT_USER_ERROR
+    if not _resolve(getattr(args, "vs", None), "--vs"):
+        return EXIT_USER_ERROR
+    if not _resolve(getattr(args, "gate_against", None), "--gate-against"):
+        return EXIT_USER_ERROR
+
+    # Resolve --heldout / --prompts paths (cheap user errors before torch).
+    heldout_path: Path | None = None
+    if getattr(args, "heldout", None):
+        heldout_path = Path(args.heldout).expanduser()
+        if not heldout_path.exists() or heldout_path.is_dir():
+            _print_error(
+                f"--heldout dataset not found (or is a directory): {heldout_path}"
+            )
+            _print_info("Pass a readable JSONL held-out split to --heldout.")
+            try:
+                get_logger(__name__).warning(
+                    "eval_heldout_unresolved",
+                    code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                    heldout=str(heldout_path),
+                )
+            except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+                pass
+            return EXIT_USER_ERROR
+
+    prompts_path: Path | None = None
+    if getattr(args, "prompts", None):
+        prompts_path = Path(args.prompts).expanduser()
+        if not prompts_path.exists() or prompts_path.is_dir():
+            _print_error(
+                f"--prompts file not found (or is a directory): {prompts_path}"
+            )
+            _print_info(
+                "Pass a readable prompt file to --prompts (one prompt per "
+                "line, or JSONL)."
+            )
+            try:
+                get_logger(__name__).warning(
+                    "eval_heldout_unresolved",
+                    code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                    prompts=str(prompts_path),
+                )
+            except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+                pass
+            return EXIT_USER_ERROR
+
+    # All references resolved — NOW pull the torch-heavy eval module. Any
+    # crash inside evaluate_run (model load, forward pass, generation)
+    # propagates to main()'s catch-all, which maps it to the right sysexits
+    # bucket (RUNTIME_EVAL_FAILED -> 2, CUDA OOM -> 137, Hub -> 69).
+    from .eval import diff_evals, eval_gate, evaluate_run
+
+    eval_kwargs: dict[str, Any] = {
+        "output_dir": str(output_dir),
+        "heldout": str(heldout_path) if heldout_path is not None else None,
+        "prompts": str(prompts_path) if prompts_path is not None else None,
+        "n": args.num_samples,
+        "seed": args.seed,
+        "max_new_tokens": args.max_new_tokens,
+    }
+
+    primary = evaluate_run(args.run_id, **eval_kwargs)
+
+    import json
+
+    # --gate-against: evaluate the baseline, run the eval-gate, gate the exit.
+    if getattr(args, "gate_against", None):
+        baseline = evaluate_run(args.gate_against, **eval_kwargs)
+        # eval_gate(before, after): the baseline is "before", the run under
+        # test is "after".
+        decision = eval_gate(
+            baseline, primary, max_regression=args.max_regression
+        )
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "mode": "gate",
+                "run_id": args.run_id,
+                "baseline_run_id": args.gate_against,
+                "accept": bool(decision.accept),
+                "reason": decision.reason,
+                "regression": decision.regression,
+                "result": primary.to_dict() if hasattr(primary, "to_dict") else None,
+                "baseline": baseline.to_dict() if hasattr(baseline, "to_dict") else None,
+            }, indent=2, default=str))
+        else:
+            _print_kv("Run", str(args.run_id)[:12])
+            _print_kv("Baseline", str(args.gate_against)[:12])
+            _print_kv("Regression", f"{decision.regression}")
+            _print_kv("Reason", str(decision.reason))
+            print()
+            if decision.accept:
+                _print_success("Eval gate: ACCEPT")
+            else:
+                _print_error("Eval gate: REJECT — run regressed the held-out metric")
+
+        if not decision.accept:
+            # Gate tripped → exit 65 directly (not raised). Stamp the catalog
+            # code into the structured log line so it's greppable + the
+            # catalog scanner counts the code as emitted.
+            try:
+                get_logger(__name__).warning(
+                    "eval_gate_regressed",
+                    code="RUNTIME_EVAL_GATE_REGRESSED",
+                    run_id=args.run_id,
+                    baseline_run_id=args.gate_against,
+                    regression=decision.regression,
+                    max_regression=args.max_regression,
+                    reason=str(decision.reason),
+                )
+            except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+                pass
+            return EXIT_DATA_ERR
+        return EXIT_OK
+
+    # --vs: evaluate the second run and render a diff (cmd_diff_runs-style).
+    if getattr(args, "vs", None):
+        other = evaluate_run(args.vs, **eval_kwargs)
+        diff = diff_evals(primary, other)
+        if emit_json:
+            print(json.dumps({
+                "schema_version": CLI_JSON_SCHEMA_VERSION,
+                "mode": "diff",
+                "run_a": args.run_id,
+                "run_b": args.vs,
+                "diff": diff.to_dict() if hasattr(diff, "to_dict") else None,
+                "result_a": primary.to_dict() if hasattr(primary, "to_dict") else None,
+                "result_b": other.to_dict() if hasattr(other, "to_dict") else None,
+            }, indent=2, default=str))
+        else:
+            run_a_id = str(args.run_id)[:12]
+            run_b_id = str(args.vs)[:12]
+            _print_header(f"Eval diff: {run_a_id} vs {run_b_id}")
+            # EvalDiff carries (metric, value_a, value_b) rows ready for a
+            # two-column table (cmd_diff_runs-style).
+            rows = list(getattr(diff, "rows", []) or [])
+            if rows:
+                width_metric = max(len("METRIC"), *(len(str(r[0])) for r in rows))
+                print(
+                    f"{Colors.BOLD}{'METRIC'.ljust(width_metric)}  "
+                    f"{run_a_id}  {run_b_id}{Colors.RESET}"
+                )
+                for metric, val_a, val_b in rows:
+                    print(f"  {str(metric).ljust(width_metric)}  {val_a}  {val_b}")
+            else:
+                print(str(diff))
+        return EXIT_OK
+
+    # Bare eval — print the single EvalResult.
+    if emit_json:
+        print(json.dumps({
+            "schema_version": CLI_JSON_SCHEMA_VERSION,
+            "mode": "single",
+            "run_id": args.run_id,
+            "result": primary.to_dict() if hasattr(primary, "to_dict") else None,
+        }, indent=2, default=str))
+    else:
+        _print_kv("Run", str(getattr(primary, "run_id", args.run_id))[:12])
+        _print_kv("Model", str(getattr(primary, "model_name", "-")))
+        held_out_loss = getattr(primary, "held_out_loss", None)
+        perplexity = getattr(primary, "perplexity", None)
+        _print_kv(
+            "Held-out loss",
+            f"{held_out_loss:.4f}" if isinstance(held_out_loss, (int, float)) else "n/a",
+        )
+        _print_kv(
+            "Perplexity",
+            f"{perplexity:.4f}" if isinstance(perplexity, (int, float)) else "n/a",
+        )
+        _print_kv("Prompts", str(getattr(primary, "n_prompts", 0)))
+        print()
+        _print_success("Eval complete")
+    return EXIT_OK
+
+
+# =============================================================================
 # COMMAND: estimate-vram (BRIDGE-F-008)
 # =============================================================================
 
@@ -5479,6 +6149,57 @@ def cmd_ollama_rm(args: argparse.Namespace) -> int:
     return EXIT_UNAVAILABLE
 
 
+def cmd_ollama_shelf(args: argparse.Namespace) -> int:
+    """Execute ``backprop ollama shelf <base-model>`` (v1.5 T2.3 GLUE).
+
+    Thin wrapper around :func:`backpropagate.export.list_adapter_shelf`.
+    Lists the adapter variants registered against ``<base-model>`` on the
+    local Ollama daemon — the ``<base>:<tag>`` models produced by
+    ``backprop export --format ollama-adapter`` (the bare base itself is
+    excluded; the shelf is the adapter VARIANTS).
+
+    Exit codes:
+        0   listed (possibly empty) — the daemon answered
+        69  EX_UNAVAILABLE (Ollama CLI not on PATH)
+    """
+    from .export import list_adapter_shelf
+
+    _print_header("Backpropagate Ollama Adapter Shelf")
+
+    _print_info(f"Base: {args.base_model}")
+
+    entries = list_adapter_shelf(args.base_model)
+
+    if not entries:
+        # list_adapter_shelf WARN-logs the cause (CLI absent / daemon down /
+        # nothing matches) and returns []; distinguish "CLI absent" so the
+        # operator gets the install hint + the EX_UNAVAILABLE exit code that
+        # the sibling ollama verbs use.
+        import shutil
+        if not shutil.which("ollama"):
+            _print_warning("Ollama CLI not found on PATH.")
+            _print_info(
+                "Install from https://ollama.com and ensure `ollama` is "
+                "on PATH."
+            )
+            return EXIT_UNAVAILABLE
+        _print_info(f"No adapters on the shelf for base '{args.base_model}'.")
+        _print_info(
+            "Register one with `backprop export <adapter> --format "
+            "ollama-adapter --base-model <base> --adapter-tag <tag>`."
+        )
+        return EXIT_OK
+
+    print(f"{Colors.BOLD}MODEL{Colors.RESET}\t{Colors.BOLD}TAG{Colors.RESET}\t"
+          f"{Colors.BOLD}SIZE{Colors.RESET}\t{Colors.BOLD}MODIFIED{Colors.RESET}")
+    print(f"{Colors.DIM}-----\t---\t----\t--------{Colors.RESET}")
+    for entry in entries:
+        print(f"{entry.model_name}\t{entry.tag}\t{entry.size}\t{entry.modified}")
+    print()
+    _print_info(f"Listed {len(entries)} adapter(s) on base '{args.base_model}'.")
+    return EXIT_OK
+
+
 # =============================================================================
 # PARSER
 # =============================================================================
@@ -5589,16 +6310,19 @@ Subcommands (grouped by workflow):
     diff-runs       Side-by-side comparison of two runs
     export-runs     Bulk export of run history (JSONL)
     validate        Pre-flight a JSONL dataset before training
+    data report     Dataset-quality report (dups / outliers / contamination)
+    eval            Evaluate a run (held-out loss + samples; diff / gate)
     estimate-vram   Pre-flight VRAM tier table for a model / GPU
 
   Export:
     export          Export trained model (LoRA / merged / GGUF)
     push            Push a local export to the Hugging Face Hub
 
-  Ollama (new in v1.4):
+  Ollama (new in v1.4; shelf added v1.5):
     ollama register Register an existing GGUF with the local Ollama daemon
     ollama list     List models registered with Ollama
     ollama rm       Remove a model from Ollama
+    ollama shelf    List adapter variants registered against a base model
 
   UI:
     ui              Launch the Reflex (Radix UI) web interface
@@ -5824,9 +6548,94 @@ Tips:
         help=(
             "Training mode. 'lora' (default) = LoRA adapter training "
             "(rank, alpha, dropout govern). 'full' = full fine-tuning "
-            "(no adapter; trains all params). Full FT is consumer-feasible "
-            "up to ~3B params on 16GB cards; the backend refuses full FT "
-            "on larger models. (16GB study-swarm Wave 6b)"
+            "(no adapter; trains all params). Full FT is allowed up to 4B "
+            "params; a genuine ~3B fits a 16GB card, the 3.8-4B class needs "
+            "24GB+. The backend refuses full FT on >4B models. (Wave 6b)"
+        ),
+    )
+    # v1.5 T1.2 (ORPO): --method selector + --orpo-beta. Threaded into the
+    # wave6b_candidate_kwargs introspection-filter dict below; the filter
+    # drops them until the trainer wave adds the matching Trainer.__init__
+    # kwargs, so the flags are forward-compatible (parse + bind to args now,
+    # reach the backend once it lands). Default 'sft' preserves byte-identical
+    # v1.4 behavior.
+    train_parser.add_argument(
+        "--method",
+        choices=["sft", "orpo"],
+        default="sft",
+        help="Training objective. 'sft' (default) = supervised fine-tuning. 'orpo' = reference-free "
+             "preference tuning (needs a {chosen, rejected} dataset). Single-stage, no reference model "
+             "— same VRAM envelope as SFT. ORPO supports mode='lora' only in v1.5.",
+    )
+    train_parser.add_argument(
+        "--orpo-beta",
+        type=float,
+        default=0.1,
+        help="ORPO odds-ratio weight (lambda). Default 0.1. Ignored unless --method orpo.",
+    )
+    # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): both thread into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ now accepts ``fp8`` / ``use_rslora`` (named EXACTLY so
+    # the filter passes them through); the default False threaded by argparse
+    # is forwarded only when the kwarg exists, so a pre-T2.1 Trainer build sees
+    # the flags AVAILABLE but inert (no crash). Both bind onto args at parse
+    # time regardless.
+    train_parser.add_argument(
+        "--fp8",
+        action="store_true",
+        default=False,
+        help=(
+            "EXPERIMENTAL: FP8 compute path on Blackwell/Hopper (sm_90+) via "
+            "torchao — base weights in float8 (~1.4x throughput, ~60%% less base "
+            "memory), LoRA adapter stays bf16, result still mergeable. "
+            "mode='lora' + method='sft' only in v1.5; falls back to bf16 with a "
+            "warning if unsupported. Needs pip install 'backpropagate[fp8]'."
+        ),
+    )
+    train_parser.add_argument(
+        "--use-rslora",
+        action="store_true",
+        default=False,
+        help=(
+            "Use rank-stabilized LoRA scaling (alpha/sqrt(r) instead of "
+            "alpha/r). Zero inference cost, mergeable; benefit grows with rank "
+            "(relevant at the rank-256 default)."
+        ),
+    )
+    # v1.5 T3.2 (reasoning-trace SFT, Wave 6b GLUE): threads into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ accepts ``reasoning_trace`` (named EXACTLY so the filter
+    # passes it through); default False is forwarded only when the kwarg exists,
+    # so a pre-T3.2 Trainer build sees the flag AVAILABLE but inert. Binds onto
+    # args at parse time regardless.
+    train_parser.add_argument(
+        "--reasoning-trace",
+        action="store_true",
+        default=False,
+        help=(
+            "Reasoning-trace SFT (R1/QwQ distillation): keeps <think> CoT in "
+            "the target, drops empty/over-long traces, raises default "
+            "max_seq_length to 8192. SFT only."
+        ),
+    )
+    # v1.5 T3.1 (MLX / Apple-Silicon backend, Wave 6b GLUE): threads into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ accepts ``backend`` (named EXACTLY so the filter passes
+    # it through). Default "auto" is forwarded only when the kwarg exists, so a
+    # pre-T3.1 Trainer build sees the flag AVAILABLE but inert. Binds onto args
+    # at parse time regardless. The {auto, cuda, mlx} set is enforced by argparse
+    # ``choices`` here; the cross-field "mlx forced on non-Apple" gate lives in
+    # the Trainer constructor (CONFIG_INVALID_SETTING), which the config layer
+    # can't see.
+    train_parser.add_argument(
+        "--backend",
+        choices=["auto", "cuda", "mlx"],
+        default="auto",
+        help=(
+            "Training backend. 'auto' (default) uses CUDA on NVIDIA, MLX on "
+            "Apple Silicon (needs the [mlx] extra). 'cuda'/'mlx' force a "
+            "backend. MLX = LoRA SFT only, Apple-Silicon only; forcing 'mlx' "
+            "on non-Apple errors cleanly."
         ),
     )
     train_parser.add_argument(
@@ -5969,6 +6778,112 @@ Tips:
             "the full mode contract."
         ),
     )
+    # v1.5 T2.2 (merge framework, Wave 6b GLUE): the four merge strategies +
+    # drift gate + eval gate. Each flag binds to a MultiRunConfig dataclass
+    # FIELD of the named mapping below; cmd_multi_run threads them via the
+    # dataclasses.fields(MultiRunConfig) filter (the introspection net that
+    # drops a kwarg silently on a pre-T2.2 backend). The behavior-preserving
+    # defaults (merge_strategy='qiao_mahdavi' + both gates off) keep a default
+    # `multi-run` byte-identical to pre-T2.2.
+    multi_parser.add_argument(
+        "--merge-strategy",
+        choices=["qiao_mahdavi", "linear", "ties", "dare"],
+        default="qiao_mahdavi",
+        help=(
+            "Per-tensor LoRA merge rule (default: qiao_mahdavi, the v1.4 SLAO "
+            "merge — behavior-preserving). 'linear' = plain weighted average; "
+            "'ties' = trim + elect-sign + disjoint-merge (--ties-trim quantile); "
+            "'dare' = Bernoulli-drop + rescale (--dare-drop-rate). All stay "
+            "mergeable + zero inference cost. Applies only with --merge-mode slao."
+        ),
+    )
+    multi_parser.add_argument(
+        "--ties-trim",
+        type=_unit_float,
+        default=0.2,
+        metavar="FLOAT",
+        help=(
+            "TIES trim quantile in [0, 1] — fraction of lowest-magnitude "
+            "delta params zeroed before the sign election (default: 0.2 = "
+            "bottom 20%%). Only used with --merge-strategy ties."
+        ),
+    )
+    multi_parser.add_argument(
+        "--dare-drop-rate",
+        type=_unit_float,
+        default=0.5,
+        metavar="FLOAT",
+        help=(
+            "DARE Bernoulli drop probability in [0, 1) — fraction of delta "
+            "params randomly dropped, survivors rescaled by 1/(1-p) (default: "
+            "0.5). Only used with --merge-strategy dare."
+        ),
+    )
+    multi_parser.add_argument(
+        "--dare-seed",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "Seed for DARE's LOCAL RNG (deterministic drop mask). Default "
+            "unset -> derived from the run. Only used with --merge-strategy dare."
+        ),
+    )
+    multi_parser.add_argument(
+        "--drift-gate",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the drift gate: skip a merge whose LoRA-B cosine "
+            "similarity to the running accumulator falls below "
+            "--drift-threshold, keeping the run as a sibling branch instead "
+            "of corrupting the merge. Off by default (the gate is inert)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--drift-threshold",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help=(
+            "Cosine-similarity floor for the drift gate (range [-1, 1]; "
+            "default 0.0). similarity < threshold => branch (don't merge). "
+            "Only consulted when --drift-gate is set."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-gate",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the eval gate: after each candidate merge, evaluate "
+            "held-out loss and REJECT (restore the pre-merge accumulator) if "
+            "the merge regressed loss past --eval-max-regression. Reuses the "
+            "T1.1 eval seam. Off by default (the gate is inert)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-max-regression",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help=(
+            "Tolerated held-out-loss increase for the eval gate (default 0.0 "
+            "= zero-tolerance). A merge whose after-loss exceeds before-loss "
+            "by more than this is rejected. Only consulted when --eval-gate "
+            "is set."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-heldout",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Held-out JSONL set for the eval gate. Default unset -> reuse the "
+            "run's reserved last-10%% holdout. Only consulted when --eval-gate "
+            "is set."
+        ),
+    )
     multi_parser.add_argument(
         "--output", "-o",
         default="./output",
@@ -6044,9 +6959,15 @@ Quantization tradeoffs (fastest -> smallest):
     )
     export_parser.add_argument(
         "--format", "-f",
-        choices=["lora", "merged", "gguf"],
+        choices=["lora", "merged", "gguf", "ollama-adapter"],
         default="lora",
-        help="Export format (default: lora)",
+        help=(
+            "Export format (default: lora). 'ollama-adapter' (v1.5 T2.3) "
+            "registers the LoRA adapter with Ollama UNMERGED on top of "
+            "--base-model (a FROM+ADAPTER Modelfile) — lighter than the "
+            "merged-GGUF path and the building block for the adapter shelf "
+            "(swap adapters on one base by tag). Requires --base-model."
+        ),
     )
     export_parser.add_argument(
         "--quantization", "-q",
@@ -6068,6 +6989,33 @@ Quantization tradeoffs (fastest -> smallest):
         "--ollama-name",
         default=None,
         help="Name for Ollama model",
+    )
+    # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): --base-model is
+    # REQUIRED for --format ollama-adapter (the FROM line of the Modelfile).
+    # --adapter-tag is the optional ':<tag>' for the derived <base>:<tag>
+    # model name (defaults to a sanitised adapter-dir basename). Both are
+    # ignored by the lora / merged / gguf formats.
+    export_parser.add_argument(
+        "--base-model",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Base model for --format ollama-adapter — an Ollama model name "
+            "(e.g. 'llama3.2') or a base-GGUF path. REQUIRED with "
+            "ollama-adapter; MUST match the adapter's origin base. Ignored "
+            "by other formats."
+        ),
+    )
+    export_parser.add_argument(
+        "--adapter-tag",
+        default=None,
+        metavar="TAG",
+        help=(
+            "Adapter tag for the derived '<base>:<tag>' Ollama model name "
+            "(--format ollama-adapter). Default: a sanitised adapter-dir "
+            "basename. Lets you shelf sibling adapters on one base "
+            "(llama3.2:taskA / llama3.2:taskB). Ignored by other formats."
+        ),
     )
     # F-004: model card is emitted next to every export by default; this
     # flag is the explicit opt-out for users who'd rather author a card by
@@ -6822,6 +7770,258 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     )
     estimate_vram_parser.set_defaults(func=cmd_estimate_vram)
 
+    # eval command (v1.5 T1.1 — lightweight eval harness). Flat top-level
+    # subcommand, modeled on diff-runs: held-out loss + N sample generations,
+    # with an optional --vs diff and a --gate-against eval-gate that
+    # backstops continual-merge / SLAO campaigns.
+    eval_parser = subparsers.add_parser(
+        "eval",
+        parents=[_common],
+        help="Evaluate a run (held-out loss + sample generations); diff / gate",
+        description=(
+            "Evaluate a recorded training run against a held-out split + a "
+            "fixed prompt set (held-out loss + N sample generations). Pass "
+            "--vs <run_id> for a before/after diff, or --gate-against "
+            "<baseline_run_id> to gate the exit code on whether the run "
+            "regressed the held-out metric (the eval-gate that protects "
+            "SLAO / continual-merge campaigns)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Evaluate one run
+  backprop eval <run_id> --output ./output
+
+  # Before/after diff between two runs
+  backprop eval <run_id> --vs <baseline_run_id>
+
+  # Gate: reject if <run_id> regressed the held-out metric vs the baseline
+  backprop eval <run_id> --gate-against <baseline_run_id> --max-regression 0.0
+
+A tripped --gate-against exits 65 (EX_DATAERR) and stamps
+RUNTIME_EVAL_GATE_REGRESSED in the structured log.
+        """,
+    )
+    eval_parser.add_argument(
+        "run_id",
+        help="The run_id to evaluate (or any unambiguous prefix).",
+    )
+    eval_parser.add_argument(
+        "--vs",
+        metavar="RUN_ID_B",
+        default=None,
+        help=(
+            "Second run_id to evaluate and diff against (before/after "
+            "comparison). Mutually exclusive in spirit with --gate-against "
+            "(if both are passed, --gate-against wins)."
+        ),
+    )
+    eval_parser.add_argument(
+        "--gate-against",
+        metavar="BASELINE_RUN_ID",
+        default=None,
+        help=(
+            "Baseline run_id to gate against. Evaluates both runs and runs "
+            "the eval-gate; exits 65 (RUNTIME_EVAL_GATE_REGRESSED) if the "
+            "evaluated run regressed beyond --max-regression."
+        ),
+    )
+    eval_parser.add_argument(
+        "--output", "-o",
+        default="./output",
+        help="Output directory containing run_history.json (default: ./output)",
+    )
+    eval_parser.add_argument(
+        "--heldout",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to a held-out JSONL split for the held-out-loss metric. "
+            "Default: the eval harness uses its built-in held-out resolution "
+            "(see handbook/cli-reference.md)."
+        ),
+    )
+    eval_parser.add_argument(
+        "--prompts",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to a fixed prompt set (one prompt per line, or JSONL) for "
+            "the sample-generation metric. Default: the harness's built-in "
+            "prompt set."
+        ),
+    )
+    eval_parser.add_argument(
+        "-n", "--num-samples",
+        type=int,
+        default=5,
+        help="Number of sample generations to produce (default: 5).",
+    )
+    eval_parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Max new tokens per sample generation (default: 128).",
+    )
+    eval_parser.add_argument(
+        "--max-regression",
+        type=float,
+        default=0.0,
+        help=(
+            "Maximum tolerated regression for --gate-against (default: 0.0 — "
+            "any regression rejects). Raise to allow a small regression."
+        ),
+    )
+    eval_parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for sample generation (default: 0).",
+    )
+    eval_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the eval outcome (single / diff / gate) as JSON with a "
+            "schema_version field for CI consumers."
+        ),
+    )
+    eval_parser.set_defaults(func=cmd_eval)
+
+    # data command (v1.5 T1.1 — dataset-quality moat). The SECOND nested
+    # subparser in the CLI (after `ollama`): groups the dataset-quality
+    # surface under a noun so v1.5+ can extend it (`data report`, later
+    # `data dedupe` / `data split`) without flat verbs. See the
+    # architectural note above cmd_data_report.
+    data_parser = subparsers.add_parser(
+        "data",
+        parents=[_common],
+        help="Dataset-quality tools (report)",
+        description=(
+            "Dataset-quality tooling. Today exposes `data report` (duplicate "
+            "clusters, length/format outliers, optional train/test "
+            "contamination, format-validity, token-length distribution); "
+            "future verbs extend this nested group."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Advisory report
+  backprop data report my_data.jsonl
+
+  # Contamination check against a held-out split
+  backprop data report my_data.jsonl --against heldout.jsonl
+
+  # CI gate: fail if >10%% near-duplicates or any contamination
+  backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.0
+        """,
+    )
+    data_subparsers = data_parser.add_subparsers(
+        dest="data_command",
+        title="data subcommands",
+        help="Available data actions",
+    )
+
+    # backprop data report <dataset> [flags]
+    data_report_parser = data_subparsers.add_parser(
+        "report",
+        parents=[_common],
+        help="Analyze a JSONL dataset's quality (dups / outliers / contamination)",
+        description=(
+            "Run the dataset-quality analysis over a JSONL dataset and print "
+            "a report (or --json payload). Reads the file directly (no "
+            "HuggingFace download, no torch). The --fail-* / --strict flags "
+            "turn the advisory report into a CI gate (exit 65 on trip)."
+        ),
+    )
+    data_report_parser.add_argument(
+        "dataset",
+        help="Path to the JSONL dataset to analyze.",
+    )
+    data_report_parser.add_argument(
+        "--format",
+        choices=["auto", "sharegpt", "alpaca", "openai", "raw"],
+        default="auto",
+        help="Format hint (default: auto-detect from the first row).",
+    )
+    data_report_parser.add_argument(
+        "--against",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to a held-out JSONL split to check the main dataset for "
+            "train/test contamination against."
+        ),
+    )
+    data_report_parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Maximum samples to analyze (default: all). Caps reads on huge files.",
+    )
+    data_report_parser.add_argument(
+        "--dup-threshold",
+        type=_unit_float,
+        default=0.9,
+        help=(
+            "Similarity threshold in [0, 1] above which two samples are "
+            "considered near-duplicates (default: 0.9)."
+        ),
+    )
+    data_report_parser.add_argument(
+        "--fail-on-dups",
+        type=_unit_float,
+        default=None,
+        metavar="RATE",
+        help=(
+            "Gate: fail (exit 65) if the near-duplicate rate exceeds RATE "
+            "(a fraction in [0, 1], e.g. 0.1 for 10%%). Omit to stay advisory."
+        ),
+    )
+    data_report_parser.add_argument(
+        "--fail-on-contamination",
+        type=_unit_float,
+        default=None,
+        metavar="RATE",
+        help=(
+            "Gate: fail (exit 65) if the train/test contamination rate "
+            "against --against exceeds RATE (a fraction in [0, 1]). Omit to "
+            "stay advisory."
+        ),
+    )
+    data_report_parser.add_argument(
+        "--max-outlier-rate",
+        type=_unit_float,
+        default=None,
+        metavar="RATE",
+        help=(
+            "Gate: fail (exit 65) if the length/format-outlier rate exceeds "
+            "RATE (a fraction in [0, 1]). Omit to stay advisory."
+        ),
+    )
+    data_report_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Promote a WARN verdict to FAIL (exit 65). For strict CI gates.",
+    )
+    data_report_parser.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the report as JSON (schema_version + DataQualityReport "
+            "fields) instead of the human summary."
+        ),
+    )
+    data_report_parser.set_defaults(func=cmd_data_report)
+
+    # When `backprop data` is invoked with no subcommand, print the data
+    # subparser's help text and exit non-zero (mirror _ollama_no_subcommand).
+    def _data_no_subcommand(args: argparse.Namespace) -> int:  # noqa: ARG001
+        data_parser.print_help(sys.stderr)
+        return EXIT_USER_ERROR
+
+    data_parser.set_defaults(func=_data_no_subcommand)
+
     # ollama command (BRIDGE Wave 6b Item 1 / Wave 5 Decision 4) —
     # nested subparser mirroring upstream Ollama CLI shape:
     # ``backprop ollama {register,list,rm}``. See the architectural-
@@ -6831,7 +8031,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     ollama_parser = subparsers.add_parser(
         "ollama",
         parents=[_common],
-        help="Manage Ollama models (register / list / rm)",
+        help="Manage Ollama models (register / list / rm / shelf)",
         description=(
             "Manage local Ollama daemon models. Mirrors upstream Ollama "
             "CLI shape: `ollama create`, `ollama list`, `ollama rm`. "
@@ -6851,9 +8051,15 @@ Examples:
   # Drop a model
   backprop ollama rm my-model
 
+  # List the adapter shelf for a base (v1.5 T2.3 — the <base>:<tag> variants
+  # produced by `backprop export --format ollama-adapter`)
+  backprop ollama shelf llama3.2
+
 For the one-shot export+register path use `backprop export --format gguf
 --ollama --ollama-name <name>` instead; the triad above is for the case
-where you already have a GGUF and only need the Ollama-side wiring.
+where you already have a GGUF and only need the Ollama-side wiring. For the
+UNMERGED adapter-on-base path (the adapter shelf) use `backprop export
+--format ollama-adapter --base-model <base> --adapter-tag <tag>`.
         """,
     )
     ollama_subparsers = ollama_parser.add_subparsers(
@@ -6930,6 +8136,31 @@ where you already have a GGUF and only need the Ollama-side wiring.
         help="Ollama model name to remove (run `backprop ollama list` to see).",
     )
     ollama_rm_parser.set_defaults(func=cmd_ollama_rm)
+
+    # backprop ollama shelf <base-model>  (v1.5 T2.3 GLUE)
+    ollama_shelf_parser = ollama_subparsers.add_parser(
+        "shelf",
+        parents=[_common],
+        help="List adapter variants registered against a base model",
+        description=(
+            "List the adapter 'shelf' for a base model — every Ollama "
+            "<base>:<tag> model produced by `backprop export --format "
+            "ollama-adapter` that shares the given base. The bare base "
+            "itself is excluded; the shelf is the adapter VARIANTS you can "
+            "hot-swap by tag (llama3.2:taskA / llama3.2:taskB). Best-effort "
+            "over `ollama list`."
+        ),
+    )
+    ollama_shelf_parser.add_argument(
+        "base_model",
+        metavar="BASE_MODEL",
+        help=(
+            "Base model whose adapter shelf to list (only its leading "
+            "segment is used — 'llama3.2:7b' and 'llama3.2' match the same "
+            "shelf)."
+        ),
+    )
+    ollama_shelf_parser.set_defaults(func=cmd_ollama_shelf)
 
     # When `backprop ollama` is invoked with no subcommand, print the
     # ollama subparser's help text. argparse doesn't surface this

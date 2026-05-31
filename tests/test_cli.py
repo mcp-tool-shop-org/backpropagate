@@ -2576,3 +2576,150 @@ class TestDeprecationMarkerLifecycle:
         )
         # Must parse cleanly as a PEP 440 version once the prefix is stripped.
         Version(removed_in.lstrip("vV"))
+
+
+# ---------------------------------------------------------------------------
+# Help-surface rendering guard (Phase 8 re-audit remediation)
+# ---------------------------------------------------------------------------
+#
+# Two SHIPPED --help crashes slipped past every prior test because nothing
+# actually *rendered* the help for any subcommand:
+#
+#   1. `backprop train --help` crashed on EVERY platform: the --fp8 flag's help
+#      embedded a literal lone "%" ("~60% less base memory"). argparse runs
+#      `help % action.__dict__` on every action while formatting → TypeError:
+#      "must be real number, not dict".
+#   2. `backprop multi-run --help` crashed on a default Windows console
+#      (cp1252) because three v1.5 multi-run flag help strings embedded
+#      non-cp1252 glyphs (→, ⇒). Rendering them to a cp1252 stdout raised
+#      UnicodeEncodeError. (`backprop data --help` had the same shape in its
+#      epilog: ">10% near-duplicates".)
+#
+# The class below renders format_help() for the top-level parser AND every
+# subparser (discovered by walking the parser tree, so it auto-covers future
+# subcommands + the nested ollama/data verbs), asserting it neither raises nor
+# contains a byte that cp1252 cannot encode. One of these two assertions would
+# have caught each crash; together they guard the whole help surface going
+# forward. This is deliberately introspective rather than a hand-maintained
+# command list precisely because the hand-maintained surface is what drifted.
+
+
+def _walk_parsers(parser, prefix=""):
+    """Yield (command_path, parser) for `parser` and every nested subparser.
+
+    Recurses through argparse `_SubParsersAction` so nested groups (e.g.
+    `ollama register`, `data report`) are covered, not just top-level verbs.
+    """
+    import argparse as _argparse
+
+    label = prefix or "<top-level>"
+    yield (label, parser)
+    for action in parser._actions:
+        if isinstance(action, _argparse._SubParsersAction):
+            # `choices` maps subcommand name -> its ArgumentParser. Sort for
+            # deterministic parametrization order / stable test IDs.
+            for name, subparser in sorted(action.choices.items()):
+                child_prefix = f"{prefix} {name}".strip()
+                yield from _walk_parsers(subparser, child_prefix)
+
+
+def _collect_help_cases():
+    """Build the (command_path, parser) list once for parametrization."""
+    from backpropagate.cli import create_parser
+
+    return list(_walk_parsers(create_parser()))
+
+
+_HELP_CASES = _collect_help_cases()
+_HELP_IDS = [path for path, _ in _HELP_CASES]
+
+
+class TestHelpSurfaceRenders:
+    """Every parser's --help must render and be Windows-console (cp1252) safe."""
+
+    def test_help_surface_is_nontrivial(self):
+        """Sanity: the walk found the top-level parser + a healthy fan-out.
+
+        If a refactor accidentally flattens the parser tree (or `create_parser`
+        stops wiring subparsers), the parametrized guards below would silently
+        shrink to ~1 case and stop protecting anything. Pin a floor so that
+        regression is loud. The shipped surface has ~25 parsers (top-level +
+        ~20 verbs + nested ollama/data verbs); 15 is a comfortable floor.
+        """
+        assert len(_HELP_CASES) >= 15, (
+            f"Help-surface walk only found {len(_HELP_CASES)} parsers "
+            f"({_HELP_IDS}); expected >=15. The subparser tree may have been "
+            f"flattened or create_parser() stopped wiring subcommands — these "
+            f"guards are only meaningful if they cover the real surface."
+        )
+        # The two commands whose --help shipped broken must be present.
+        assert "train" in _HELP_IDS
+        assert "multi-run" in _HELP_IDS
+
+    @pytest.mark.parametrize("command_path,parser", _HELP_CASES, ids=_HELP_IDS)
+    def test_format_help_does_not_raise(self, command_path, parser):
+        """`format_help()` must not raise for any parser.
+
+        Directly catches the argparse %-expansion crash: a lone "%" in any
+        help/description/epilog makes argparse do `text % params` and blow up
+        with TypeError. This is exactly what `train --help` did via --fp8.
+        """
+        try:
+            rendered = parser.format_help()
+        except Exception as exc:  # noqa: BLE001 - we want ANY failure surfaced
+            pytest.fail(
+                f"`{command_path} --help` (format_help) raised "
+                f"{type(exc).__name__}: {exc}. A lone '%' in a help/"
+                f"description/epilog string triggers argparse's "
+                f"`text % params` expansion — escape it as '%%'."
+            )
+        assert isinstance(rendered, str) and rendered, (
+            f"`{command_path} --help` rendered empty/None help."
+        )
+
+    @pytest.mark.parametrize("command_path,parser", _HELP_CASES, ids=_HELP_IDS)
+    def test_help_is_cp1252_encodable(self, command_path, parser):
+        """Rendered help must encode under cp1252 (default Windows console).
+
+        Directly catches the Windows-console crash class: a glyph that cp1252
+        cannot encode (→, ⇒, ✓, ✗, ≥, ≤, ×, …) makes Python's stdout writer
+        raise UnicodeEncodeError when argparse prints --help on a default
+        Windows terminal. This is what `multi-run --help` did via the v1.5
+        merge-gate flags. Note: em-dash (—, U+2014) IS cp1252-safe and is
+        intentionally allowed.
+        """
+        rendered = parser.format_help()
+        try:
+            rendered.encode("cp1252")
+        except UnicodeEncodeError as exc:
+            # Surface the exact offending character for a fast fix.
+            bad = rendered[exc.start:exc.end]
+            pytest.fail(
+                f"`{command_path} --help` contains {bad!r} "
+                f"(U+{ord(bad[0]):04X}) which cp1252 cannot encode — it would "
+                f"crash `--help` on a default Windows console with "
+                f"UnicodeEncodeError. Use an ASCII equivalent (e.g. '->' for "
+                f"'→', '=>' for '⇒')."
+            )
+
+    @pytest.mark.parametrize(
+        "subcommand",
+        ["train", "multi-run", "data"],
+        ids=["train", "multi-run", "data"],
+    )
+    def test_parse_args_help_exits_cleanly(self, cli_parser, subcommand):
+        """End-to-end: `parse_args(['<sub>', '--help'])` exits 0, not crashes.
+
+        Mirrors the exact code path a user hits (argparse prints help then
+        SystemExit(0)). The three named regressions (`train`/`multi-run`/`data`)
+        are pinned explicitly; the parametrized guards above cover the rest of
+        the surface via format_help(). A %-expansion or other rendering error
+        would surface here as a non-SystemExit exception or a nonzero code.
+        """
+        with pytest.raises(SystemExit) as exc_info:
+            cli_parser.parse_args([subcommand, "--help"])
+        # argparse exits 0 on a successful --help render.
+        assert exc_info.value.code == 0, (
+            f"`backprop {subcommand} --help` exited with code "
+            f"{exc_info.value.code!r}; expected 0 (clean help render)."
+        )

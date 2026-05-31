@@ -1,17 +1,17 @@
 ---
 title: Full fine-tuning (mode="full")
-description: When to use full fine-tuning over LoRA, the 3B parameter ceiling, and the quality math from Biderman 2024 / Thinking Machines 2025.
+description: When to use full fine-tuning over LoRA, the 4B parameter ceiling, and the quality math from Biderman 2024 / Thinking Machines 2025.
 sidebar:
   order: 2.5
 ---
 
-`mode="full"` updates every weight of the base model during training, the same way HuggingFace's `transformers.Trainer` does on a 24GB+ datacenter card. It ships in v1.4 with a hard 3B parameter ceiling for the consumer 16GB GPU tier — operators with bigger cards or a 7B+ model still reach for `transformers.Trainer` directly. This page covers when to use it, when NOT to use it, and how the trainer enforces the ceiling.
+`mode="full"` updates every weight of the base model during training, the same way HuggingFace's `transformers.Trainer` does on a 24GB+ datacenter card. It ships in v1.4 with a hard 4B parameter ceiling: the genuine ~3B presets fit a 16GB consumer card, the 3.8–4B class needs a 24GB+ card, and operators with a 7B+ model still reach for `transformers.Trainer` directly. This page covers when to use it, when NOT to use it, and how the trainer enforces the ceiling.
 
 ## TL;DR
 
 - **Default is `mode="lora"`** (low-rank adapter; tracks ~70% of compute and matches full fine-tuning on most post-training tasks per [Biderman 2024](https://arxiv.org/abs/2405.09673) and [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)).
-- **`mode="full"` only for ≤3B parameter models** on a 16GB consumer card. Bigger models exit with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` — see [error codes](/backpropagate/handbook/error-codes/#runtime_full_ft_model_too_large).
-- **The escape hatches when the gate fires** are `mode="lora"` (the default) OR a smaller preset: Phi-4-mini-3.8B, Qwen-3.5-4B, SmolLM3-3B — all three sit under the ceiling.
+- **`mode="full"` only for ≤4B parameter models.** The genuine ~3B presets (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B, Llama-3.2-1B) fit a 16GB card; the 3.8–4B class (Phi-4-mini-3.8B, Qwen-3.5-4B) is admitted but wants a 24GB+ card. Models >4B exit with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` — see [error codes](/backpropagate/handbook/error-codes/#runtime_full_ft_model_too_large).
+- **The escape hatches when the gate fires** are `mode="lora"` (the default — fits 7B+ on 16GB) OR a preset under the ceiling: on a 16GB card pick a genuine ~3B (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B) or Llama-3.2-1B.
 
 ## When to use `mode="full"`
 
@@ -28,7 +28,7 @@ If you're in one of the last two categories AND you've benchmarked the gap on yo
 ## When to STAY with LoRA
 
 - You haven't measured a gap on your specific task.
-- Your model is > 3B parameters (the trainer will refuse `mode="full"`).
+- Your model is > 4B parameters (the trainer will refuse `mode="full"`).
 - You're prototyping (LoRA's faster iteration loop dominates the trade-off).
 - You're doing single-task instruction tuning, persona transfer, or domain adaptation — the three cases the literature has settled in LoRA's favor.
 
@@ -41,7 +41,7 @@ from backpropagate import Trainer
 trainer = Trainer("phi-4-mini-3.8b")
 trainer.train("my_data.jsonl", steps=100)
 
-# Full fine-tuning. The 3B ceiling fires at __init__ for known presets.
+# Full fine-tuning. The 4B ceiling fires at __init__ for known presets.
 trainer = Trainer("phi-4-mini-3.8b", mode="full")
 trainer.train("my_data.jsonl", steps=100)
 
@@ -74,18 +74,18 @@ The trainer applies four mode-specific settings inside `_build_sft_config`:
 3. **`paged_adamw_8bit` optimizer** — the same paged 8-bit Adam the consumer-card LoRA path uses, but applied to every parameter (not just the adapter). 2 momentum buffers × 1 byte each + the gradient in bf16 keeps total optimizer state under the ceiling.
 4. **Learning rate divided by 10** — full FT literature (Biderman 2024 / Thinking Machines 2025) consistently recommends ~10× lower LR than LoRA. Default LoRA LR is `2e-4`; default full FT LR becomes `2e-5`. Override via `Trainer(learning_rate=...)` to set explicitly.
 
-## The 3B parameter ceiling
+## The 4B parameter ceiling
 
-`mode="full"` for models > 3B raises `FullFinetuneModelTooLargeError` (code `RUNTIME_FULL_FT_MODEL_TOO_LARGE`). The ceiling is enforced in two places:
+`mode="full"` for models > 4B raises `FullFinetuneModelTooLargeError` (code `RUNTIME_FULL_FT_MODEL_TOO_LARGE`). The ceiling is 4B (not 3B) on purpose: the marketed "3B" models have a true `num_parameters()` of 3.08–3.24B, so a 3.0B ceiling rejected every one of them at load time. The ceiling bounds the parameter COUNT only — it does not promise a 16GB fit (a genuine ~3B fits 16GB; the 3.8–4B class needs 24GB+). The ceiling is enforced in two places:
 
 1. **`Trainer.__init__`** — preset-table lookup. If the model name resolves to a known preset (e.g. `qwen2.5-7b`), the parameter count is read from the preset and the gate fires before the model is loaded.
 2. **`Trainer.load_model()`** — second check, this time using `model.num_parameters()` directly. Catches the case where the preset table doesn't know about the model id (custom HF model, fine-tune of a fine-tune, etc.); the actual loaded parameter count is the authoritative signal.
 
-This is intentional belt-and-braces. An unknown 7B fine-tune that slips past the preset-table check still gets caught at load time. The trainer never starts training a >3B model in `mode="full"`.
+This is intentional belt-and-braces. An unknown 7B fine-tune that slips past the preset-table check still gets caught at load time. The trainer never starts training a >4B model in `mode="full"`.
 
 ### What if I genuinely have a 24GB card?
 
-The 3B ceiling is conservative — it's calibrated to 16GB consumer cards (RTX 4080 / 5080 / 4070 Ti Super). Operators on 24GB cards (RTX 4090 / 3090 / A5000) can technically full-FT a 7B model with paged-Adam and aggressive gradient checkpointing, and operators on 40GB+ datacenter cards (A100, H100) can full-FT 13B+. v1.4 does NOT expose a `--full-ft-ceiling-billions` flag; v1.5 may. For now, the path on a 24GB+ card is to drop down to HuggingFace `transformers.Trainer` directly. Backpropagate's value-add is the consumer-GPU path, and the consumer-GPU path tops out at 3B for full FT.
+The 4B ceiling bounds the parameter count; the VRAM reality is tiered. The genuine ~3B presets fit a 16GB consumer card (RTX 4080 / 5080 / 4070 Ti Super). The 3.8–4B class (Phi-4-mini-3.8B, Qwen-3.5-4B) is admitted by the ceiling but wants a 24GB card (RTX 4090 / 3090 / A5000) — weights + gradients alone approach 16GB before the optimizer and activations. Operators on 24GB cards can also full-FT a 7B with more aggressive memory engineering, and 40GB+ datacenter cards (A100, H100) handle 13B+ — but for those v1.4 does NOT expose a `--full-ft-ceiling-billions` flag (v1.5 may), so the path is HuggingFace `transformers.Trainer` directly. Backpropagate's full-FT value-add tops out at 4B.
 
 ## Quality math: should I switch from LoRA to full FT?
 

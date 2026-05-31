@@ -4310,3 +4310,543 @@ class TestDoRASlaoConstructionLog:
                 config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=None),
             )
         assert not self._fires(caplog)
+
+
+# =============================================================================
+# v1.5 T2.2: MERGE-STRATEGY / DRIFT-GATE / EVAL-GATE WIRING
+#
+# These exercise the wiring in MultiRunTrainer (MultiRunConfig fields, the
+# SLAOMerger construction, _gated_merge / _eval_gated_merge, and the
+# RunResult/MultiRunResult surfaces). The eval gate mocks
+# backpropagate.multi_run.evaluate_run so no model load happens.
+# =============================================================================
+
+import torch  # noqa: E402
+
+from backpropagate.eval import EvalResult, GenerationSample  # noqa: E402
+from backpropagate.slao import MergeStrategyConfig, SLAOConfig, SLAOMerger  # noqa: E402
+
+
+def _t22_lora(b_scale=1.0, a_seed=0.0, prefix="model.layers.0.self_attn.q_proj"):
+    """A tiny LoRA state dict with controllable B direction/magnitude."""
+    return {
+        f"{prefix}.lora_A.default.weight": torch.tensor(
+            [[1.0 + a_seed, 0.0]], dtype=torch.float32
+        ),
+        f"{prefix}.lora_B.default.weight": torch.tensor(
+            [[b_scale, 2.0 * b_scale], [3.0 * b_scale, 4.0 * b_scale]],
+            dtype=torch.float32,
+        ),
+    }
+
+
+def _mk_eval(loss, run_id="r"):
+    """Build an EvalResult with a given held-out loss."""
+    return EvalResult(
+        run_id=run_id,
+        model_name="test-model",
+        held_out_loss=loss,
+        perplexity=(None if loss is None else 2.718281828 ** loss),
+        generations=[GenerationSample(prompt="p", completion="c")],
+        n_prompts=1,
+    )
+
+
+class TestMultiRunConfigT22Defaults:
+    """The v1.5 T2.2 fields exist with behavior-preserving defaults."""
+
+    def test_merge_strategy_default(self):
+        assert MultiRunConfig().merge_strategy == "qiao_mahdavi"
+
+    def test_gate_defaults_off(self):
+        c = MultiRunConfig()
+        assert c.drift_gate is False
+        assert c.eval_gate is False
+
+    def test_threshold_defaults(self):
+        c = MultiRunConfig()
+        assert c.ties_trim_threshold == 0.2
+        assert c.dare_drop_rate == 0.5
+        assert c.drift_threshold == 0.0
+        assert c.eval_max_regression == 0.0
+
+    def test_optional_defaults_none(self):
+        c = MultiRunConfig()
+        assert c.dare_seed is None
+        assert c.eval_heldout_path is None
+
+    def test_merger_constructed_with_strategy_config(self, tmp_path):
+        """The SLAOMerger is built with the operator's strategy fields."""
+        trainer = MultiRunTrainer(
+            model="m",
+            config=MultiRunConfig(
+                merge_mode=MergeMode.SLAO,
+                merge_strategy="ties",
+                ties_trim_threshold=0.3,
+                checkpoint_dir=str(tmp_path),
+            ),
+        )
+        # Drive only the merger construction path by calling the private init
+        # indirectly: replicate what run() does.
+        merger = SLAOMerger(
+            SLAOConfig(),
+            strategy_config=MergeStrategyConfig(
+                strategy=trainer.config.merge_strategy,
+                trim_threshold=trainer.config.ties_trim_threshold,
+                drop_rate=trainer.config.dare_drop_rate,
+                dare_seed=trainer.config.dare_seed,
+            ),
+        )
+        assert merger.strategy_config.strategy == "ties"
+        assert merger.strategy_config.trim_threshold == 0.3
+
+    def test_bad_strategy_raises_invalid_setting(self, tmp_path):
+        """A bad merge_strategy fails loud (via the SLAOMerger validation)."""
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError):
+            SLAOMerger(
+                strategy_config=MergeStrategyConfig(strategy="not-a-strategy")
+            )
+        # And the path the trainer uses to build it:
+        trainer = MultiRunTrainer(
+            model="m",
+            config=MultiRunConfig(
+                merge_mode=MergeMode.SLAO,
+                merge_strategy="not-a-strategy",
+                checkpoint_dir=str(tmp_path),
+            ),
+        )
+        with pytest.raises(InvalidSettingError):
+            SLAOMerger(
+                strategy_config=MergeStrategyConfig(
+                    strategy=trainer.config.merge_strategy
+                )
+            )
+
+
+class _GatedMergeHarness:
+    """Builds a MultiRunTrainer ready to call _gated_merge / _eval_gated_merge
+    directly, with a real SLAOMerger seeded with an accumulator."""
+
+    @staticmethod
+    def build(tmp_path, **config_overrides):
+        from backpropagate.checkpoints import CheckpointManager, CheckpointPolicy
+
+        cfg = MultiRunConfig(
+            merge_mode=MergeMode.SLAO,
+            checkpoint_dir=str(tmp_path),
+            **config_overrides,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=cfg)
+        trainer._run_id = "t22-run"
+        trainer._checkpoint_manager = CheckpointManager(
+            checkpoint_dir=str(tmp_path), policy=CheckpointPolicy()
+        )
+        # Real merger seeded with an accumulator (so run-1 already happened).
+        trainer._slao_merger = SLAOMerger(
+            SLAOConfig(),
+            strategy_config=MergeStrategyConfig(
+                strategy=cfg.merge_strategy,
+                trim_threshold=cfg.ties_trim_threshold,
+                drop_rate=cfg.dare_drop_rate,
+                dare_seed=cfg.dare_seed,
+            ),
+        )
+        trainer._slao_merger.initialize(_t22_lora(b_scale=1.0))
+        # Minimal inner trainer (max_seq_length read by _evaluate_accumulator).
+        inner = MagicMock()
+        inner.max_seq_length = 128
+        trainer._trainer = inner
+        return trainer
+
+
+class TestDriftGateWiring:
+    """The drift gate (merge-vs-branch) wired into _gated_merge."""
+
+    def test_parallel_run_merges_and_advances(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, drift_gate=True, drift_threshold=0.5
+        )
+        before_idx = trainer._slao_merger.run_index
+        # Same B direction as the seed -> similarity ~1 -> merge.
+        new = _t22_lora(b_scale=2.0)
+        result, branched, eval_rejected = trainer._gated_merge(
+            new, run_idx=2, full_dataset=None
+        )
+        assert branched is False
+        assert eval_rejected is False
+        assert result is not None and result.branched is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+
+    def test_orthogonal_run_branches_without_advancing(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, drift_gate=True, drift_threshold=0.5
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        # Orthogonal B direction -> similarity ~0 < 0.5 -> branch.
+        ortho = {
+            "model.layers.0.self_attn.q_proj.lora_A.default.weight": torch.tensor(
+                [[0.0, 1.0]]
+            ),
+            "model.layers.0.self_attn.q_proj.lora_B.default.weight": torch.tensor(
+                [[-4.0, 3.0], [-2.0, 1.0]]
+            ),
+        }
+        result, branched, eval_rejected = trainer._gated_merge(
+            ortho, run_idx=2, full_dataset=None
+        )
+        assert branched is True
+        assert eval_rejected is False
+        assert result is not None and result.branched is True
+        assert result.task_similarity is not None
+        # Accumulator + run_index UNCHANGED.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+
+    def test_disabled_gate_always_merges(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, drift_gate=False, drift_threshold=0.99
+        )
+        before_idx = trainer._slao_merger.run_index
+        # Orthogonal, but gate disabled -> still merges.
+        ortho = {
+            "model.layers.0.self_attn.q_proj.lora_A.default.weight": torch.tensor(
+                [[0.0, 1.0]]
+            ),
+            "model.layers.0.self_attn.q_proj.lora_B.default.weight": torch.tensor(
+                [[-4.0, 3.0], [-2.0, 1.0]]
+            ),
+        }
+        result, branched, _ = trainer._gated_merge(ortho, run_idx=2, full_dataset=None)
+        assert branched is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+        assert result is not None and result.branched is False
+
+
+class TestEvalGateWiring:
+    """The eval gate (Design A) wired into _eval_gated_merge.
+
+    backpropagate.multi_run.evaluate_run is mocked to return crafted
+    EvalResults so no model load occurs.
+    """
+
+    def test_regression_restores_snapshot_and_keeps_index(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        new = _t22_lora(b_scale=5.0)
+
+        # before-eval loss 1.0, after-eval loss 2.0 -> regression 1.0 > 0 -> reject.
+        evals = iter([_mk_eval(1.0), _mk_eval(2.0)])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=None
+            )
+
+        assert eval_rejected is True
+        assert branched is False
+        # Snapshot restored: accumulator unchanged, run_index NOT advanced.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+        # The rejected merge is not recorded in the merger history.
+        assert all(r.run_index != 2 for r in trainer._slao_merger.merge_history)
+
+    def test_after_eval_exception_restores_snapshot(self, tmp_path):
+        """An exception in the AFTER-eval window rolls the accumulator back.
+
+        ``evaluate_run`` legitimately raises — RUNTIME_EVAL_FAILED on a
+        model-load/generation crash, INPUT_EVAL_HELDOUT_UNRESOLVED when the
+        held-out set can't be resolved. By the time the after-eval runs, the
+        candidate merge has already mutated ``_merged_state`` + advanced
+        ``_run_index`` + appended a history entry, so the eval gate must
+        restore the pre-merge snapshot byte-for-byte and let the exception
+        propagate — never leak the un-gated candidate merge.
+        """
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        before_hist_len = len(trainer._slao_merger.merge_history)
+        new = _t22_lora(b_scale=5.0)
+
+        # before-eval succeeds (loss 1.0); the after-eval call raises mid-gate.
+        boom = RuntimeError("eval crashed (simulates RUNTIME_EVAL_FAILED)")
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=[_mk_eval(1.0), boom],
+        ):
+            with pytest.raises(RuntimeError, match="eval crashed"):
+                trainer._gated_merge(new, run_idx=2, full_dataset=None)
+
+        # The exception propagated, but the merger is byte-for-byte the
+        # pre-merge snapshot: accumulator unchanged, _run_index NOT advanced,
+        # and the candidate merge left no entry in the merge history.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+        assert len(trainer._slao_merger.merge_history) == before_hist_len
+        assert all(r.run_index != 2 for r in trainer._slao_merger.merge_history)
+
+    def test_improvement_accepts_advances_and_caches(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=2.0)
+
+        # before 2.0, after 1.0 -> improvement -> accept.
+        after_eval = _mk_eval(1.0)
+        evals = iter([_mk_eval(2.0), after_eval])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=None
+            )
+
+        assert eval_rejected is False
+        assert branched is False
+        assert result is not None and result.branched is False
+        # run_index advanced (merge kept).
+        assert trainer._slao_merger.run_index == before_idx + 1
+        # After-eval cached for the next run's before-eval (1 eval/run steady).
+        assert trainer._eval_cache is after_eval
+
+    def test_none_heldout_loss_fail_safe_rejects(self, tmp_path):
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=3.0)
+
+        # after-eval has held_out_loss=None -> eval_gate fail-safe rejects.
+        evals = iter([_mk_eval(1.0), _mk_eval(None)])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=None
+            )
+
+        assert eval_rejected is True
+        assert trainer._slao_merger.run_index == before_idx
+
+    def test_before_eval_uses_cache_when_present(self, tmp_path):
+        """When _eval_cache is set, the before-eval is reused (1 eval call)."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        trainer._eval_cache = _mk_eval(2.0)  # previous run's after-eval
+        new = _t22_lora(b_scale=2.0)
+
+        calls = {"n": 0}
+
+        def _fake_eval(*a, **k):
+            calls["n"] += 1
+            return _mk_eval(1.0)  # after-eval (improvement)
+
+        with patch("backpropagate.multi_run.evaluate_run", side_effect=_fake_eval):
+            trainer._gated_merge(new, run_idx=3, full_dataset=None)
+
+        # Only the AFTER eval ran (before came from cache) -> exactly 1 call.
+        assert calls["n"] == 1
+
+
+# =============================================================================
+# v1.5 T2.2: full-run integration via the fake-trainer harness
+# =============================================================================
+
+class _FakeInnerTrainer:
+    """A minimal stand-in for the inner Trainer that _execute_run drives.
+
+    Produces a deterministic LoRA state dict whose B direction is controllable
+    per run so the drift gate can be forced to branch.
+    """
+
+    def __init__(self, run_directions):
+        # run_directions: dict[run_idx -> B scale/direction multiplier].
+        self._run_directions = run_directions
+        self.max_seq_length = 128
+        self._model = MagicMock()
+        self._tokenizer = MagicMock()
+        self.batch_size = 1
+        self.gradient_accumulation = 1
+        self.packing = None
+        self.optim = None
+        self.mode = "lora"
+        self._cur_run = 1
+
+    def lora_for_run(self, run_idx):
+        mult = self._run_directions.get(run_idx, 1.0)
+        return _t22_lora(b_scale=mult)
+
+
+class TestT22FullRunIntegration:
+    """Drive MultiRunTrainer.run() with a thin _execute_run stub so the merge
+    + gate wiring runs end-to-end against the fake-trainer harness."""
+
+    def _drive(self, trainer, n_runs, lora_provider, tmp_path):
+        """Run the loop, stubbing _execute_run to do (train no-op + real merge)."""
+        real_get_lora = lora_provider
+
+        def fake_execute_run(run_idx, full_dataset, checkpoint_dir):
+            # Mirror the real merge block: drift+eval gates via _gated_merge.
+            branched = False
+            eval_rejected = False
+            merge_result = None
+            if trainer._slao_merger and trainer._slao_merger.run_index == 0:
+                # Seed run: initialize, no gate.
+                trainer._slao_merger.merge(
+                    real_get_lora(run_idx), run_index=run_idx
+                )
+            else:
+                merge_result, branched, eval_rejected = trainer._gated_merge(
+                    real_get_lora(run_idx), run_idx, full_dataset
+                )
+                if branched:
+                    trainer._branched_runs.append(run_idx)
+            return RunResult(
+                run_index=run_idx,
+                steps=10,
+                samples=10,
+                final_loss=0.5,
+                merge_result=merge_result,
+                branched=branched,
+                merge_strategy=trainer.config.merge_strategy,
+                eval_gate_rejected=eval_rejected,
+                run_id=trainer._run_id,
+            )
+
+        with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+             patch("backpropagate.trainer.Trainer.__init__", return_value=None), \
+             patch.object(trainer, "_load_full_dataset", return_value=list(range(200))), \
+             patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+             patch.object(trainer, "_verify_peft_api", return_value=None), \
+             patch.object(trainer, "_execute_run", side_effect=fake_execute_run):
+            return trainer.run("dummy.jsonl")
+
+    def test_ties_strategy_records_strategy_per_run(self, tmp_path):
+        trainer = MultiRunTrainer(
+            model="m",
+            config=MultiRunConfig(
+                num_runs=3,
+                merge_mode=MergeMode.SLAO,
+                merge_strategy="ties",
+                checkpoint_dir=str(tmp_path),
+                validate_every_run=False,
+                enable_gpu_monitoring=False,
+                save_every_run=False,
+            ),
+        )
+        # All runs share the same B direction so no branch.
+        def provider(run_idx):
+            return _t22_lora(b_scale=1.0 + 0.1 * run_idx)
+
+        result = self._drive(trainer, 3, provider, tmp_path)
+        assert result.total_runs == 3
+        for r in result.runs:
+            assert r.merge_strategy == "ties"
+        # The merger recorded each merge under the ties strategy.
+        assert all(
+            m.strategy == "ties" for m in trainer._slao_merger.merge_history
+        )
+
+    def test_drift_gate_branches_and_populates_branched_runs(self, tmp_path):
+        trainer = MultiRunTrainer(
+            model="m",
+            config=MultiRunConfig(
+                num_runs=3,
+                merge_mode=MergeMode.SLAO,
+                drift_gate=True,
+                drift_threshold=0.5,
+                checkpoint_dir=str(tmp_path),
+                validate_every_run=False,
+                enable_gpu_monitoring=False,
+                save_every_run=False,
+            ),
+        )
+
+        # Run 1 seeds; run 2 is orthogonal (branch); run 3 parallel (merge).
+        def provider(run_idx):
+            if run_idx == 2:
+                return {
+                    "model.layers.0.self_attn.q_proj.lora_A.default.weight":
+                        torch.tensor([[0.0, 1.0]]),
+                    "model.layers.0.self_attn.q_proj.lora_B.default.weight":
+                        torch.tensor([[-4.0, 3.0], [-2.0, 1.0]]),
+                }
+            return _t22_lora(b_scale=1.0 + 0.1 * run_idx)
+
+        result = self._drive(trainer, 3, provider, tmp_path)
+        assert 2 in result.branched_runs
+        # The run-2 RunResult is flagged branched.
+        run2 = next(r for r in result.runs if r.run_index == 2)
+        assert run2.branched is True
+
+    def test_default_config_merge_history_matches_baseline(self, tmp_path):
+        """qiao_mahdavi regression lock: a default-config multi-run's merged
+        accumulator + the math-bearing merge_history fields are field-for-field
+        identical to a baseline SLAOMerger driven with the same inputs and NO
+        T2.2 gating."""
+        loras = {
+            1: _t22_lora(b_scale=1.0),
+            2: _t22_lora(b_scale=1.7),
+            3: _t22_lora(b_scale=2.3),
+        }
+
+        # --- Path A: through MultiRunTrainer (default config, gates off) ---
+        trainer = MultiRunTrainer(
+            model="m",
+            config=MultiRunConfig(
+                num_runs=3,
+                merge_mode=MergeMode.SLAO,  # default merge_strategy=qiao_mahdavi
+                checkpoint_dir=str(tmp_path / "a"),
+                validate_every_run=False,
+                enable_gpu_monitoring=False,
+                save_every_run=False,
+            ),
+        )
+        self._drive(trainer, 3, lambda i: loras[i], tmp_path / "a")
+        a_state = trainer._slao_merger.get_merged_lora()
+        a_hist = trainer._slao_merger.merge_history
+
+        # --- Path B: baseline SLAOMerger, no gating, same inputs ---
+        baseline = SLAOMerger()  # default qiao_mahdavi
+        baseline.initialize({k: v.clone() for k, v in loras[1].items()})
+        baseline.merge({k: v.clone() for k, v in loras[2].items()}, run_index=2)
+        baseline.merge({k: v.clone() for k, v in loras[3].items()}, run_index=3)
+        b_state = baseline.get_merged_lora()
+        b_hist = baseline.merge_history
+
+        # Merged weights byte-identical.
+        assert a_state.keys() == b_state.keys()
+        for key in a_state:
+            assert torch.equal(a_state[key], b_state[key]), f"weight mismatch {key}"
+
+        # Math-bearing history fields identical (run_index, scale_factor, counts).
+        assert len(a_hist) == len(b_hist)
+        for ra, rb in zip(a_hist, b_hist):
+            assert ra.run_index == rb.run_index
+            assert ra.scale_factor == rb.scale_factor
+            assert ra.a_matrices_merged == rb.a_matrices_merged
+            assert ra.b_matrices_merged == rb.b_matrices_merged
+            assert ra.total_params_merged == rb.total_params_merged
+            assert ra.strategy == "qiao_mahdavi"

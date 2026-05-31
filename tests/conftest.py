@@ -145,6 +145,42 @@ except ImportError:  # pragma: no cover — hypothesis is a test-only dep
 # CUDA/GPU FIXTURES
 # =============================================================================
 
+
+@pytest.fixture(autouse=True)
+def _default_backend_to_cuda(request, monkeypatch):
+    """Default the training backend to CUDA for the whole suite.
+
+    v1.5 T3.1 added the MLX/Apple-Silicon backend: ``backend='auto'`` resolves to
+    ``mlx`` on an Apple-Silicon host where ``mlx_lm`` is importable — which holds
+    on GitHub's ``macos-15-arm64`` runners (something in the ``[full]`` extra
+    pulls ``mlx_lm`` there). The bulk of the suite predates MLX and assumes the
+    CUDA/SFT path; on an Apple runner those tests misroute to MLX (the fp8+mlx
+    construction gate fires, and real-train paths shell out to ``mlx_lm.lora``).
+    Force ``detect_apple_silicon()`` -> False so ``auto`` resolves to CUDA on
+    every host, matching the Linux/Windows behavior the suite was written
+    against. MLX tests (nodeid contains "mlx") opt OUT — they exercise real
+    backend resolution through their own platform / check_feature mocks.
+    """
+    if "mlx" in request.node.nodeid:
+        return
+    # Force 'auto' -> 'cuda' at the Trainer's exact resolution site: __init__
+    # calls resolve_backend(self.backend) (trainer.py ~2206). Patching that
+    # binding is the most direct lever — it does NOT depend on
+    # detect_apple_silicon propagating through resolve_backend. Also neutralize
+    # the detect bindings the forced-'mlx'-on-non-Apple guard (~2214) consults.
+    def _resolve_cuda(requested):
+        return "cuda" if requested in (None, "auto") else requested
+
+    monkeypatch.setattr(
+        "backpropagate.trainer.resolve_backend", _resolve_cuda, raising=False
+    )
+    for _t in (
+        "backpropagate.trainer.detect_apple_silicon",
+        "backpropagate.mlx_backend.detect_apple_silicon",
+    ):
+        monkeypatch.setattr(_t, lambda: False, raising=False)
+
+
 @pytest.fixture
 def mock_torch_cuda():
     """Mock torch.cuda for testing without GPU."""

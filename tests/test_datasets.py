@@ -3015,3 +3015,359 @@ class TestStageCStreamHfSingleIteration:
 
         # Exactly 4 rows, in order, with no duplicate of row 0.
         assert out == rows
+
+
+# =============================================================================
+# PREFERENCE-PAIR FORMAT TESTS (v1.5 T1.2 / ORPO)
+# =============================================================================
+
+class TestPreferenceFormat:
+    """detect_format / _validate_preference / to_preference_dataset for the
+    {chosen, rejected} preference-pair contract reference-free preference
+    tuning (ORPO/SimPO/KTO) trains against."""
+
+    # ---- detection -------------------------------------------------------
+
+    def test_detect_preference_string_pair(self):
+        """A bare {chosen, rejected} string pair detects as PREFERENCE."""
+        assert detect_format({"chosen": "a", "rejected": "b"}) == DatasetFormat.PREFERENCE
+
+    def test_detect_preference_with_prompt(self):
+        """{prompt, chosen, rejected} detects as PREFERENCE."""
+        sample = {"prompt": "p", "chosen": "a", "rejected": "b"}
+        assert detect_format(sample) == DatasetFormat.PREFERENCE
+
+    def test_detect_preference_message_list_pair(self):
+        """ShareGPT-style message-list chosen/rejected still detects as
+        PREFERENCE — the chosen/rejected keys are the discriminator regardless
+        of value shape."""
+        sample = {
+            "prompt": [{"role": "user", "content": "Hi"}],
+            "chosen": [{"role": "assistant", "content": "Hello!"}],
+            "rejected": [{"role": "assistant", "content": "go away"}],
+        }
+        assert detect_format(sample) == DatasetFormat.PREFERENCE
+
+    def test_detect_preference_from_list(self):
+        """Detection from a list inspects the first sample."""
+        samples = [{"chosen": "a", "rejected": "b"}]
+        assert detect_format(samples) == DatasetFormat.PREFERENCE
+
+    def test_detect_preference_runs_before_openai(self):
+        """A preference row whose values are OpenAI message-lists AND that also
+        carries a stray 'messages' key must still be PREFERENCE — the pair wins
+        over the SFT discriminators (ordering contract)."""
+        sample = {
+            "messages": [{"role": "user", "content": "noise"}],
+            "chosen": [{"role": "assistant", "content": "good"}],
+            "rejected": [{"role": "assistant", "content": "bad"}],
+        }
+        assert detect_format(sample) == DatasetFormat.PREFERENCE
+
+    def test_detect_preference_runs_before_alpaca(self):
+        """A row with both alpaca keys and a chosen/rejected pair is
+        PREFERENCE (the pair is the discriminator)."""
+        sample = {
+            "instruction": "noise",
+            "output": "noise",
+            "chosen": "good",
+            "rejected": "bad",
+        }
+        assert detect_format(sample) == DatasetFormat.PREFERENCE
+
+    # ---- no regression on existing SFT formats ---------------------------
+
+    def test_no_regression_alpaca(self):
+        """An ordinary Alpaca row still detects as ALPACA (no preference keys)."""
+        sample = {"instruction": "Translate", "input": "Hi", "output": "Bonjour"}
+        assert detect_format(sample) == DatasetFormat.ALPACA
+
+    def test_no_regression_sharegpt(self):
+        """An ordinary ShareGPT row still detects as SHAREGPT."""
+        sample = {"conversations": [{"from": "human", "value": "Hi"}]}
+        assert detect_format(sample) == DatasetFormat.SHAREGPT
+
+    def test_no_regression_openai(self):
+        """An ordinary OpenAI row still detects as OPENAI."""
+        sample = {"messages": [{"role": "user", "content": "Hi"}]}
+        assert detect_format(sample) == DatasetFormat.OPENAI
+
+    def test_chosen_without_rejected_not_preference(self):
+        """A lone 'chosen' (no 'rejected') is NOT preference — both keys
+        required. With no other discriminator it falls through to UNKNOWN."""
+        assert detect_format({"chosen": "a"}) == DatasetFormat.UNKNOWN
+
+    # ---- _validate_preference -------------------------------------------
+
+    def test_validate_preference_accepts_valid_pair(self):
+        """A {prompt, chosen, rejected} row validates clean (no errors)."""
+        samples = [{"prompt": "p", "chosen": "good", "rejected": "bad"}]
+        result = validate_dataset(samples, DatasetFormat.PREFERENCE)
+        assert result.is_valid
+        assert result.valid_rows == 1
+        assert result.error_count == 0
+
+    def test_validate_preference_missing_rejected_is_error(self):
+        """A row missing 'rejected' is flagged as an error."""
+        from backpropagate.datasets import _validate_preference
+
+        errors = _validate_preference({"prompt": "p", "chosen": "good"}, 0)
+        assert any(
+            e.field == "rejected" and e.error_type == "missing_field"
+            for e in errors
+        )
+
+    def test_validate_preference_missing_prompt_is_not_error(self):
+        """A missing 'prompt' is informational (implicit-prompt), never a hard
+        validation error — the dataset stays valid."""
+        samples = [{"chosen": "good", "rejected": "bad"}]
+        result = validate_dataset(samples, DatasetFormat.PREFERENCE)
+        # No prompt key -> implicit_prompt WARNING, not an error.
+        assert result.is_valid
+        assert result.error_count == 0
+        assert any(e.error_type == "implicit_prompt" for e in result.warnings)
+
+    def test_validate_preference_blank_chosen_is_warning(self):
+        """An empty 'chosen' is flagged as empty_content (a warning, mirroring
+        alpaca's empty-field handling)."""
+        from backpropagate.datasets import _validate_preference
+
+        errors = _validate_preference({"prompt": "p", "chosen": "", "rejected": "bad"}, 0)
+        assert any(
+            e.field == "chosen" and e.error_type == "empty_content"
+            for e in errors
+        )
+
+    def test_validate_preference_none_field_does_not_crash(self):
+        """A None chosen/rejected (CSV/parquet empty cell) is treated as empty,
+        not an AttributeError (DATA-B-002 sibling)."""
+        from backpropagate.datasets import _validate_preference
+
+        # Must not raise.
+        errors = _validate_preference(
+            {"prompt": "p", "chosen": None, "rejected": "bad"}, 0
+        )
+        assert any(e.field == "chosen" and e.error_type == "empty_content" for e in errors)
+
+    def test_validate_preference_message_list_is_valid_content(self):
+        """A non-empty message-list chosen/rejected counts as real content
+        (not blank)."""
+        from backpropagate.datasets import _validate_preference
+
+        sample = {
+            "prompt": [{"role": "user", "content": "Hi"}],
+            "chosen": [{"role": "assistant", "content": "Hello!"}],
+            "rejected": [{"role": "assistant", "content": "no"}],
+        }
+        errors = _validate_preference(sample, 0)
+        # No empty_content for chosen/rejected; only fields are present + non-empty.
+        assert not any(e.error_type == "empty_content" for e in errors)
+
+    def test_is_blank_shared_helper(self):
+        """The shared _is_blank helper handles str/None/empty-list/list."""
+        from backpropagate.datasets import _is_blank
+
+        assert _is_blank("") is True
+        assert _is_blank("   ") is True
+        assert _is_blank(None) is True
+        assert _is_blank([]) is True
+        assert _is_blank({}) is True
+        assert _is_blank("hi") is False
+        assert _is_blank([{"role": "user", "content": "x"}]) is False
+
+    # ---- to_preference_dataset ------------------------------------------
+
+    def test_to_preference_dataset_string_pairs(self):
+        """to_preference_dataset preserves raw chosen/rejected columns (NOT
+        collapsed to 'text')."""
+        pytest.importorskip("datasets")
+        from datasets import Dataset
+
+        samples = [
+            {"prompt": "p1", "chosen": "good1", "rejected": "bad1"},
+            {"prompt": "p2", "chosen": "good2", "rejected": "bad2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_preference_dataset()
+
+        assert isinstance(ds, Dataset)
+        assert len(ds) == 2
+        assert "chosen" in ds.column_names
+        assert "rejected" in ds.column_names
+        assert "prompt" in ds.column_names
+        # Crucially NOT collapsed to a single text column.
+        assert "text" not in ds.column_names
+        assert ds[0]["chosen"] == "good1"
+        assert ds[0]["rejected"] == "bad1"
+
+    def test_to_preference_dataset_omits_prompt_when_absent(self):
+        """When NO row has a prompt, the prompt column is omitted; chosen +
+        rejected remain."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"chosen": "good1", "rejected": "bad1"},
+            {"chosen": "good2", "rejected": "bad2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_preference_dataset()
+
+        assert "chosen" in ds.column_names
+        assert "rejected" in ds.column_names
+        assert "prompt" not in ds.column_names
+
+    def test_to_preference_dataset_preserves_message_lists(self):
+        """Message-list chosen/rejected values are preserved verbatim (TRL
+        renders them later — we must not stringify/template)."""
+        pytest.importorskip("datasets")
+
+        chosen = [{"role": "assistant", "content": "Hello!"}]
+        rejected = [{"role": "assistant", "content": "no"}]
+        samples = [{
+            "prompt": [{"role": "user", "content": "Hi"}],
+            "chosen": chosen,
+            "rejected": rejected,
+        }]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_preference_dataset()
+
+        assert ds[0]["chosen"] == chosen
+        assert ds[0]["rejected"] == rejected
+
+    def test_to_preference_dataset_with_split(self):
+        """split= returns {split: Dataset}, mirroring to_hf_dataset."""
+        pytest.importorskip("datasets")
+
+        samples = [{"chosen": "a", "rejected": "b"}]
+        loader = DatasetLoader(samples, validate=False)
+        result = loader.to_preference_dataset(split="train")
+
+        assert isinstance(result, dict)
+        assert "train" in result
+
+    def test_to_preference_dataset_mixed_keeps_only_pairs(self):
+        """A mixed file contributes only the rows carrying BOTH keys."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"chosen": "good", "rejected": "bad"},   # kept
+            {"instruction": "x", "output": "y"},      # dropped (no pair)
+            {"chosen": "lone"},                        # dropped (no rejected)
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_preference_dataset()
+        assert len(ds) == 1
+
+    def test_to_preference_dataset_raises_on_non_preference(self):
+        """to_preference_dataset on an SFT dataset raises DatasetFormatError
+        with code INPUT_DATASET_FORMAT_UNSUPPORTED (no new code)."""
+        pytest.importorskip("datasets")
+        from backpropagate.exceptions import DatasetFormatError
+
+        samples = [
+            {"instruction": "Translate", "input": "Hi", "output": "Bonjour"},
+            {"instruction": "Summarize", "output": "..."},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+
+        with pytest.raises(DatasetFormatError) as exc_info:
+            loader.to_preference_dataset()
+
+        assert exc_info.value.code == "INPUT_DATASET_FORMAT_UNSUPPORTED"
+        # The detected (SFT) format is surfaced for the operator.
+        assert exc_info.value.detected_format == DatasetFormat.ALPACA.value
+
+    # ---- PREFERENCE -> ChatML (SFT-on-preference; Phase 8 fix) ----------
+    # Before the fix, FormatConverter.to_chatml had NO PREFERENCE branch, so a
+    # preference row under method='sft' raised "Cannot convert format:
+    # PREFERENCE" and convert_to_chatml dropped EVERY row -> a silent 0-row
+    # training set. The fix renders prompt->chosen (rejected dropped).
+
+    def test_preference_to_chatml_renders_prompt_and_chosen(self):
+        """A {prompt, chosen, rejected} row renders prompt->user, chosen->assistant."""
+        sample = {"prompt": "What is 2+2?", "chosen": "It is 4.", "rejected": "It is 5."}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nWhat is 2+2?<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nIt is 4.<|im_end|>" in chatml
+
+    def test_preference_to_chatml_drops_rejected(self):
+        """The 'rejected' completion is NOT rendered under SFT (correct semantics)."""
+        sample = {"prompt": "q", "chosen": "good answer", "rejected": "BAD_ANSWER_XYZ"}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "BAD_ANSWER_XYZ" not in chatml
+        assert "good answer" in chatml
+
+    def test_preference_to_chatml_implicit_prompt_renders_chosen_only(self):
+        """With no prompt key, only the chosen turns are emitted (no empty user)."""
+        sample = {"chosen": "standalone chosen", "rejected": "no"}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>assistant\nstandalone chosen<|im_end|>" in chatml
+        # No empty user turn injected when there's no prompt.
+        assert "<|im_start|>user\n<|im_end|>" not in chatml
+        assert chatml.count("<|im_start|>") == 1
+
+    def test_preference_to_chatml_message_list_chosen_multi_turn(self):
+        """A message-list prompt+chosen (multi-turn) renders each turn to ChatML."""
+        sample = {
+            "prompt": [{"role": "user", "content": "Hi"}],
+            "chosen": [
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": "thanks"},
+                {"role": "assistant", "content": "you're welcome"},
+            ],
+            "rejected": [{"role": "assistant", "content": "go away"}],
+        }
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nHi<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nHello!<|im_end|>" in chatml
+        assert "<|im_start|>user\nthanks<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nyou're welcome<|im_end|>" in chatml
+        # rejected dropped.
+        assert "go away" not in chatml
+
+    def test_preference_to_chatml_sharegpt_shape_message_list(self):
+        """A ShareGPT-shaped (from/value) message-list chosen renders too."""
+        sample = {
+            "prompt": [{"from": "human", "value": "ping"}],
+            "chosen": [{"from": "gpt", "value": "pong"}],
+            "rejected": [{"from": "gpt", "value": "nope"}],
+        }
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nping<|im_end|>" in chatml
+        assert "<|im_start|>assistant\npong<|im_end|>" in chatml
+        assert "nope" not in chatml
+
+    def test_preference_to_chatml_non_dict_raises(self):
+        """A non-dict sample under PREFERENCE raises a clear ValueError."""
+        with pytest.raises(ValueError, match="Preference format requires dict"):
+            FormatConverter.to_chatml("not a dict", DatasetFormat.PREFERENCE)
+
+    def test_convert_to_chatml_preference_not_zero_rows(self):
+        """convert_to_chatml on preference rows keeps ALL rows (regression for the
+        0-row bug): auto per-sample detection routes them through the PREFERENCE
+        branch instead of dropping them."""
+        samples = [
+            {"prompt": "p1", "chosen": "c1", "rejected": "r1"},
+            {"prompt": "p2", "chosen": "c2", "rejected": "r2"},
+        ]
+        rows = convert_to_chatml(samples)  # no explicit format -> per-sample detect
+        assert len(rows) == 2
+        assert all("text" in r and r["text"] for r in rows)
+        assert "c1" in rows[0]["text"] and "r1" not in rows[0]["text"]
+
+    def test_loader_to_hf_dataset_preference_under_sft_not_empty(self):
+        """DatasetLoader.to_hf_dataset (the SFT path) yields real rows for a
+        preference file — the end-to-end repro of the silent 0-row finding."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"prompt": "q1", "chosen": "a1", "rejected": "x1"},
+            {"prompt": "q2", "chosen": "a2", "rejected": "x2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_hf_dataset()
+        assert len(ds) == 2
+        # SFT collapses to a single text column carrying chosen, not rejected.
+        assert "text" in ds.column_names
+        assert "a1" in ds[0]["text"]
+        assert "x1" not in ds[0]["text"]

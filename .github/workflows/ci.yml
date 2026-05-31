@@ -268,6 +268,120 @@ jobs:
           # interpreter without a manual `source .venv/bin/activate` step.
           uv run pytest tests/ -v --tb=short -m "not gpu and not slow and not integration"
 
+  # UICOMPILE-A (v1.5 Stage A) — Reflex dry-run compile smoke.
+  #
+  # The ~2500-test unit suite never compiles the full Reflex app: it
+  # smoke-IMPORTS the page tree (`from backpropagate.ui_app.app import app`)
+  # but never calls app._compile(). An import succeeds even when a page's
+  # render tree holds a Var-type error — e.g. truthiness-branching on an
+  # untyped Var, or str-concat on a foreach-item Var — because those crash
+  # only at _compile() time, when Reflex walks the tree and codegens React.
+  # The v1.5 Stage A re-audit found two such families latent across
+  # recovery_banner / error_callout / status_pill / runs / run_detail /
+  # models: the app had literally never compiled, yet CI was green.
+  #
+  # `app._compile(dry_run=True)` walks every page and surfaces any
+  # VarTypeError / TypeError with a page + line trace, WITHOUT writing the
+  # compiled output (dry_run) and WITHOUT a `reflex init` / pre-existing
+  # .web/ (verified locally: the dry run scaffolds a throwaway .web and exits
+  # 0 on a clean checkout).
+  #
+  # Cost discipline (.claude/rules/github-actions.md): one ubuntu job, no
+  # matrix. The expensive part is `pip install -e .[ui]` (Reflex + the
+  # mandatory core stack incl. torch — torch loads during compile, so there
+  # is no torch-free shortcut). dorny/paths-filter short-circuits that
+  # install on commits that don't touch the UI surface, so non-UI CI runs
+  # pay only a ~10s checkout + filter. GHA has no native per-JOB paths:
+  # filter (the workflow-level paths: gate already admits backpropagate/** +
+  # pyproject.toml for the whole run); the changed-files action provides the
+  # per-job filter the task asks for.
+  #
+  # Filter surface: the page tree under ui_app/**, PLUS the siblings the
+  # pages import + render Vars from — ui_state.py (the rx.State subclasses
+  # whose field types drive the Var ops) and ui_theme.py (RADIX_THEME /
+  # TOKENS_CSS / STYLESHEETS wired in app.py) — PLUS pyproject.toml (the
+  # [ui] extra / reflex pin) and this workflow file (so an edit to the job
+  # itself re-runs it, including the PR that introduces it). Gating on
+  # ui_app/** alone would miss a compile break introduced via a ui_state.py
+  # field-type change — exactly the false-green class this job exists to kill.
+  ui-compile-smoke:
+    name: Reflex UI dry-run compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Filter UI-relevant paths
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
+        with:
+          filters: |
+            ui:
+              - 'backpropagate/ui_app/**'
+              - 'backpropagate/ui_state.py'
+              - 'backpropagate/ui_theme.py'
+              - 'pyproject.toml'
+              - '.github/workflows/ci.yml'
+
+      - name: Set up Python
+        if: steps.filter.outputs.ui == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install the [ui] extra
+        id: install-ui
+        if: steps.filter.outputs.ui == 'true'
+        # Graceful skip: if the [ui] extra can't resolve on this runner, let
+        # the job continue — the compile step below detects the missing
+        # Reflex import and skips with a ::notice:: rather than failing. A
+        # genuine install regression is still caught by the `test` matrix,
+        # which installs .[dev,full] (a superset of [ui]) as a hard gate.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e ".[ui]"
+
+      - name: Reflex dry-run compile (all pages)
+        if: steps.filter.outputs.ui == 'true'
+        # shell: python so the compile payload is plain Python — no bash
+        # heredoc whose closing-delimiter column could itself silently become
+        # an IndentationError on the runner (the very class of CI-only
+        # breakage this job exists to catch).
+        shell: python
+        env:
+          # Headless: the repro unsets BACKPROPAGATE_UI_AUTH. Empty is the
+          # equivalent — the in-app FRONTEND-B-001 guard fires only when the
+          # var is TRUTHY and auth enforcement is unavailable, so empty keeps
+          # the compile headless + inert.
+          BACKPROPAGATE_UI_AUTH: ""
+          # Don't phone home from CI. Reflex maps config fields to REFLEX_*
+          # env vars, so this flips get_config().telemetry_enabled False and
+          # _compile()'s TelemetryContext.start() returns None (no POST).
+          # (Verified: reflex_base interpret_boolean_env treats "false" as
+          # False.)
+          REFLEX_TELEMETRY_ENABLED: "false"
+        run: |
+          import sys
+
+          try:
+              import reflex  # presence probe for the [ui] extra
+          except ModuleNotFoundError:
+              print("::notice::Reflex ([ui] extra) not installed — skipping UI dry-run compile smoke.")
+              sys.exit(0)
+
+          # Importing the app builds the page tree; _compile(dry_run=True)
+          # walks every page and codegens React in-memory, surfacing any
+          # render-time VarTypeError / TypeError that the import-only unit
+          # tests never trigger. dry_run => nothing is written to disk.
+          from backpropagate.ui_app import app as a
+
+          a.app._compile(dry_run=True)
+          print("Reflex dry-run compile: OK — all pages compiled.")
+
   # --- Security scanning (merged from security.yml) ---
 
   bandit:

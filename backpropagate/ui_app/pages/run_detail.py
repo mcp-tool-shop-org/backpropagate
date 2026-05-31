@@ -283,7 +283,10 @@ def _checkpoint_list() -> rx.Component:
                             },
                         ),
                         rx.text(
-                            cp["size_mb"] + " MB",
+                            # f-string, not ``+``: ``cp["size_mb"]`` is an
+                            # untyped foreach-item Var; ``Var + str`` raises
+                            # TypeError at compile.
+                            f"{cp['size_mb']} MB",
                             size="2",
                             class_name="bp-num",
                             style={

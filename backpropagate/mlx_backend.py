@@ -317,7 +317,9 @@ def prepare_mlx_data_dir(
     # Shuffle (seeded) then cap — same ordering as _load_dataset's
     # shuffle-then-select so a samples cap is a random subset, not a head slice.
     if shuffle:
-        random.Random(seed).shuffle(records)
+        # nosec B311 - deterministic, reproducible data subsampling (seeded),
+        # not a security/cryptographic context.
+        random.Random(seed).shuffle(records)  # nosec B311
     if max_samples and max_samples > 0 and len(records) > max_samples:
         records = records[:max_samples]
 

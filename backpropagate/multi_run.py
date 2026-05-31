@@ -3247,7 +3247,7 @@ class MultiRunTrainer:
                     str(self._checkpoint_manager.checkpoint_dir)
                 )
                 history.delete_run(eval_run_id)
-            except Exception:  # noqa: BLE001 — cleanup is best-effort
+            except Exception:  # noqa: BLE001  # nosec B110 — cleanup is best-effort
                 pass
             shutil.rmtree(tmp_root, ignore_errors=True)
 

@@ -268,6 +268,66 @@ class TestLoRAConfig:
         assert config.target_modules == "all-linear"
 
 
+class TestUseRsloraConfig:
+    """v1.5 T2.3 (rsLoRA, finding 19): the ``use_rslora`` LoRAConfig field.
+
+    rsLoRA scales the adapter by alpha/sqrt(r) instead of alpha/r; its benefit
+    grows with rank (relevant at the rank-256 default) at zero inference cost
+    and is merge-safe. Default OFF for backward-compat; opt in via the field,
+    ``BACKPROPAGATE_LORA__USE_RSLORA``, or ``Trainer(use_rslora=True)``.
+    """
+
+    def test_use_rslora_default_false(self):
+        """use_rslora defaults False — adapter scaling stays alpha/r (pre-v1.5)."""
+        from backpropagate.config import LoRAConfig
+
+        assert LoRAConfig().use_rslora is False
+
+    def test_use_rslora_accepts_true(self):
+        """use_rslora=True round-trips on the field."""
+        from backpropagate.config import LoRAConfig
+
+        assert LoRAConfig(use_rslora=True).use_rslora is True
+
+    def test_use_rslora_via_env(self, monkeypatch):
+        """BACKPROPAGATE_LORA__USE_RSLORA=true round-trips (pydantic env prefix)."""
+        from backpropagate.config import LoRAConfig
+
+        monkeypatch.setenv("BACKPROPAGATE_LORA__USE_RSLORA", "true")
+        assert LoRAConfig().use_rslora is True
+
+    def test_use_rslora_dataclass_fallback_parity(self):
+        """The dataclass-fallback LoRAConfig must default use_rslora False too.
+
+        Re-execs config.py with pydantic_settings blocked so the dataclass
+        branch materialises (mirrors TestOrpoDataclassFallback). Guards a
+        byte-identical default across the two installs.
+        """
+        import importlib
+        import sys
+        import types
+
+        import backpropagate.config as cfg
+
+        source = Path(cfg.__file__).read_text(encoding="utf-8")
+        fake = types.ModuleType("backpropagate._config_dataclass_probe_rslora")
+        fake.__dict__["__file__"] = cfg.__file__
+        fake.__dict__["__name__"] = "backpropagate.config"
+        sys.modules.setdefault(
+            "backpropagate", importlib.import_module("backpropagate")
+        )
+        with patch.dict(sys.modules, {"pydantic_settings": None}):
+            try:
+                exec(compile(source, cfg.__file__, "exec"), fake.__dict__)  # noqa: S102
+            except Exception:
+                pytest.skip("dataclass fallback branch not materialisable here")
+        if fake.__dict__.get("PYDANTIC_SETTINGS_AVAILABLE", True):
+            pytest.skip("dataclass fallback branch not materialisable here")
+        lora_cls = fake.__dict__["LoRAConfig"]
+        assert lora_cls().use_rslora is False
+        assert lora_cls(use_rslora=True).use_rslora is True
+
+
 class TestTrainingConfig:
     """Tests for TrainingConfig class."""
 

@@ -26,6 +26,7 @@ Installation commands for each feature:
     pip install backpropagate[monitoring]  # + WandB & system monitoring
     pip install backpropagate[logging]     # + structlog (structured JSON logs)
     pip install backpropagate[security]    # + PyJWT + cryptography (auth helpers)
+    pip install backpropagate[fp8]         # + torchao FP8 compute path (Blackwell sm_90+; experimental)
     pip install backpropagate[standard]    # unsloth + ui (recommended)
     pip install backpropagate[production]  # unsloth + ui + validation + logging + security
     pip install backpropagate[full]        # Everything
@@ -71,6 +72,13 @@ FEATURES: dict[str, bool] = {
     "monitoring": False,
     "flash_attention": False,
     "triton": False,
+    # v1.5 T2.1 (FP8 compute path): torchao's float8 training (Blackwell 5th-gen
+    # tensor cores). Detected via find_spec("torchao") only — never imported at
+    # CLI startup (torchao prints a cpp-extension banner + probes torch on
+    # import). The [fp8] pyproject extra installs torchao; the trainer's
+    # _fp8_supported() adds the CUDA-available + sm>=9 capability gate on top of
+    # this library-presence flag.
+    "fp8": False,
     # F-005: per-tracker availability so the trainer's report_to resolver can
     # decide whether to wire wandb / tensorboard / mlflow into SFTConfig.
     # ``monitoring`` is the [monitoring] extra (covers wandb + psutil); the
@@ -134,6 +142,14 @@ INSTALL_HINTS: dict[str, str] = {
         "Without it: Unsloth falls back to its pure-PyTorch path (correct "
         "but loses the kernel-fusion speedup)."
     ),
+    "fp8": (
+        "pip install 'backpropagate[fp8]' — installs torchao for the FP8 "
+        "compute path (Blackwell sm_90+ tensor cores; ~1.4x throughput, up to "
+        "60% less model memory; the adapter still merges). "
+        "Without it (or on a pre-Hopper / non-CUDA card): Trainer(fp8=True) "
+        "logs ONE warning and trains in bf16 — correct, just without the FP8 "
+        "speed/memory win."
+    ),
     # F-005 per-tracker hints.
     "wandb": (
         "pip install 'backpropagate[monitoring]' — bundles wandb + psutil. "
@@ -161,6 +177,7 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
     "monitoring": "WandB logging and system monitoring (psutil)",
     "flash_attention": "Flash Attention 2 for faster attention",
     "triton": "Triton kernels for optimized operations",
+    "fp8": "FP8 compute path via torchao (Blackwell sm_90+; experimental)",
     # F-005 per-tracker descriptions.
     "wandb": "Weights & Biases experiment tracking",
     "tensorboard": "TensorBoard local experiment logs",
@@ -317,6 +334,18 @@ def _detect_features() -> None:
         logger.debug("Feature 'triton' available")
     else:
         logger.debug("Feature 'triton' unavailable")
+
+    # v1.5 T2.1: FP8 compute path (torchao float8). find_spec ONLY — importing
+    # torchao at CLI startup prints a cpp-extension banner and probes torch,
+    # which we must not pay for on `backprop --help`. This flag reports only
+    # LIBRARY presence; the trainer's _fp8_supported() layers the CUDA-available
+    # + compute-capability >= 9 (Hopper / Blackwell) gate on top before any FP8
+    # conversion is attempted.
+    if _has_module("torchao"):
+        FEATURES["fp8"] = True
+        logger.debug("Feature 'fp8' available: torchao installed")
+    else:
+        logger.debug("Feature 'fp8' unavailable: torchao not installed")
 
     # F-005: per-tracker detection — each one toggles a different report_to
     # branch in the trainer's auto-resolver. Detect via find_spec only so we

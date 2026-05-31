@@ -1615,6 +1615,37 @@ class Trainer:
         # Defaults to None so ``settings.training.orpo_beta`` (default 0.1)
         # governs when omitted.
         orpo_beta: float | None = None,
+        # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao float8
+        # (Blackwell sm_90+). None ⇒ ``settings.training.fp8`` (default False)
+        # governs. When True AND the card supports it (CUDA + sm>=9 + torchao
+        # present), the BASE projection linears are converted to Float8Linear
+        # AFTER the LoRA adapter is attached (adapter rank-r sub-linears,
+        # lm_head, and embeddings excluded — converting the rank-r linears
+        # crashes on backward because r is not divisible by 16). On an
+        # unsupported card / missing torchao the trainer logs ONE WARN and
+        # trains in bf16 (graceful degrade, no raise). mode='full'+fp8 and
+        # method='orpo'+fp8 and explicit-4bit+fp8 are rejected by the gate
+        # ladder below. Named EXACTLY ``fp8`` so the CLI's wave6b introspection
+        # filter threads ``--fp8`` through (GLUE owns the flag).
+        fp8: bool | None = None,
+        # v1.5 T2.3 (rsLoRA, finding 19): rank-stabilized LoRA — alpha/sqrt(r)
+        # scaling instead of alpha/r. None ⇒ ``settings.lora.use_rslora``
+        # (default False). Threaded into PEFT's ``LoraConfig(use_rslora=...)``
+        # at the adapter-build call site (both the unsloth + transformers
+        # loaders). Zero inference cost; the merged adapter is unaffected.
+        # Named EXACTLY ``use_rslora`` so the CLI introspection filter threads
+        # ``--use-rslora`` through (GLUE owns the flag).
+        use_rslora: bool | None = None,
+        # v1.5 T2.1 (FP8 compute path): explicit 4-bit-quantization control.
+        # Pre-v1.5 the trainer always loaded the base in 4-bit (nf4) — there
+        # was no constructor knob, so 4-bit was *only ever the default*. This
+        # kwarg makes an EXPLICIT 4-bit request detectable so the FP8 gate
+        # ladder can refuse the stacked combination (FP8 and 4-bit are
+        # alternatives, not stackable). None ⇒ the historical default-on
+        # behavior (and FP8, when effective, silently flips it off with an INFO
+        # log). load_in_4bit=True is an EXPLICIT request and FP8 + it raises;
+        # load_in_4bit=False forces an unquantized base load.
+        load_in_4bit: bool | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -1805,6 +1836,28 @@ class Trainer:
             orpo_beta if orpo_beta is not None else settings.training.orpo_beta
         )
 
+        # v1.5 T2.1 (FP8) / T2.3 (rsLoRA): resolve the two new feature knobs,
+        # kwarg-authoritative with the settings layer as fallback (same
+        # ``is not None`` discipline as the load-bearing fields above so a
+        # legitimate ``False`` is not mistaken for "unset").
+        self.fp8 = fp8 if fp8 is not None else settings.training.fp8
+        self.use_rslora = (
+            use_rslora if use_rslora is not None else settings.lora.use_rslora
+        )
+        # v1.5 T2.1: remember whether the operator EXPLICITLY asked for 4-bit
+        # (vs relying on the historical default-on behavior). The gate ladder
+        # below refuses ``fp8 + explicit-4bit``; when 4-bit is only the default
+        # an active FP8 path flips it off with an INFO log instead of raising.
+        # ``self._load_in_4bit`` holds the resolved effective value the loaders
+        # thread into BitsAndBytesConfig / FastLanguageModel.
+        self._load_in_4bit_explicit = load_in_4bit is not None
+        self._load_in_4bit = load_in_4bit if load_in_4bit is not None else True
+        # v1.5 T2.1: FP8-effective state. Stays False unless load_model()
+        # successfully converts ≥1 base linear to Float8Linear; the gate ladder
+        # below may also force it False (unsupported card / missing lib) BEFORE
+        # any load. Persisted into run-history hyperparameters.
+        self._fp8_effective = False
+
         # v1.5 T1.2 (ORPO Wave 2): ORPO + mode='full' guard. ORPO is supported
         # with mode='lora' ONLY in v1.5 — the adapter is attached by
         # load_model()'s get_peft_model before train(), and the ORPO+full
@@ -1886,6 +1939,123 @@ class Trainer:
                     f"learning_rate={self.learning_rate:.2e} (no ORPO default "
                     f"applied; explicit override wins)."
                 )
+
+        # v1.5 T2.1 (FP8 compute path): the gate ladder. Two distinct failure
+        # philosophies, in priority order:
+        #   * MISCONFIGURATION (a combination that can never work) → raise an
+        #     InvalidSettingError (CONFIG_INVALID_SETTING) at construction so
+        #     the operator fixes their call. These fire regardless of hardware.
+        #   * ENVIRONMENT DEGRADE (fp8 asked for, hardware/library can't honor
+        #     it) → log ONE WARN naming the reason + fix, set
+        #     ``_fp8_effective=False``, and proceed in bf16. NEVER raise — this
+        #     mirrors the unsloth→transformers fallback (a missing capability is
+        #     not an operator error).
+        # The ladder only runs when fp8 was requested; ``self._fp8_effective``
+        # is already False from the resolution block above for the common path.
+        if self.fp8:
+            # (1) MISCONFIG: FP8 + full fine-tuning. FP8 is validated only for
+            # the LoRA path in v1.5 (the adapter-excluding module filter assumes
+            # an attached PEFT adapter; full-FT has no adapter to exclude and the
+            # combined FP8 + full-param + checkpointing memory profile is
+            # untested). Mirrors the ORPO+full guard above.
+            if self.mode == "full":
+                raise InvalidSettingError(
+                    setting_name="fp8+mode",
+                    value={"fp8": True, "mode": "full"},
+                    expected="FP8 is supported with mode='lora' only in v1.5",
+                    suggestion=(
+                        "FP8 + full FT not supported in v1.5; use mode='lora'."
+                    ),
+                )
+            # (2) MISCONFIG: FP8 + ORPO. FP8 was dogfood-validated with
+            # method='sft' only in v1.5; the ORPO odds-ratio loss on FP8 base
+            # linears is unverified.
+            if self.method == "orpo":
+                raise InvalidSettingError(
+                    setting_name="fp8+method",
+                    value={"fp8": True, "method": "orpo"},
+                    expected="FP8 is supported with method='sft' only in v1.5",
+                    suggestion=(
+                        "FP8 validated with method='sft' only in v1.5."
+                    ),
+                )
+            # (3) FP8 vs 4-bit. They are alternatives: FP8 keeps the base in
+            # float8, 4-bit keeps it in nf4 — you cannot do both. If the
+            # operator EXPLICITLY requested 4-bit (load_in_4bit=True), refuse
+            # the stack. If 4-bit is only the historical default, flip it off
+            # for this FP8 run with an INFO log (same "default vs explicit"
+            # detection the mode='full' LR block uses).
+            if self._load_in_4bit_explicit and self._load_in_4bit:
+                raise InvalidSettingError(
+                    setting_name="fp8+load_in_4bit",
+                    value={"fp8": True, "load_in_4bit": True},
+                    expected="FP8 and 4-bit are alternatives, not stackable",
+                    suggestion=(
+                        "FP8 and 4-bit are alternatives, not stackable. Drop "
+                        "load_in_4bit=True (FP8 keeps the base in float8) or "
+                        "drop fp8=True."
+                    ),
+                )
+            if self._load_in_4bit and not self._load_in_4bit_explicit:
+                # 4-bit was only the default; FP8 supersedes it.
+                self._load_in_4bit = False
+                logger.info(
+                    "fp8=True: disabling the default 4-bit base quantization "
+                    "(FP8 keeps the base in float8 — the two are alternatives). "
+                    "Pass load_in_4bit=True to force 4-bit, which conflicts "
+                    "with fp8 and will raise."
+                )
+            # (4) ENVIRONMENT axis: is FP8 actually runnable here? CPU /
+            # pre-Hopper / torchao-absent → degrade to bf16 with ONE WARN, no
+            # raise. The capability + library probe is centralized in
+            # ``_fp8_supported`` so load_model() and the tests share one truth.
+            supported, reason = self._fp8_supported()
+            if not supported:
+                logger.warning(
+                    "fp8=True requested but unavailable on this host: %s. "
+                    "Falling back to bf16 (training proceeds, just without the "
+                    "FP8 speed/memory win). This is an environment degrade, not "
+                    "an error.",
+                    reason,
+                )
+                self._fp8_effective = False
+            else:
+                # Provisionally effective — load_model()'s _apply_fp8_to_base
+                # may still flip this False if the actual conversion raises
+                # (try/except → bf16 fallback). The ONE experimental WARN fires
+                # here so it is emitted exactly once per Trainer, at construction.
+                self._fp8_effective = True
+                logger.warning(
+                    "fp8=True: FP8 training is EXPERIMENTAL in v1.5 (torchao "
+                    "float8 path, validated on Blackwell sm_120). The base "
+                    "projection linears will be converted to Float8Linear after "
+                    "the LoRA adapter is attached; the adapter, lm_head, and "
+                    "embeddings stay in bf16. Report anomalies (loss spikes, "
+                    "export mismatches) so the path can graduate to stable."
+                )
+                # v1.5 T2.1 (FP8): packing is INCOMPATIBLE with FP8 and must be
+                # off. TRL's ``packing=True`` enables padding-free training,
+                # which flattens a batch into ONE variable-length sequence; the
+                # token count is then whatever the rows happen to sum to (e.g.
+                # 211). torchao's float8 matmul (``_scaled_mm``) hard-requires
+                # the contracted dimension divisible by 16 and raises
+                # "Expected trailing dimension of mat1 to be divisible by 16"
+                # on the FIRST backward otherwise (dogfood-verified on sm_120,
+                # SmolLM2-135M). With packing off, sequences pad to the fixed
+                # ``max_seq_length`` so the token dim is batch x max_seq_length —
+                # a multiple of 16 whenever max_seq_length is. Force it off here
+                # (the resolved ``self.packing`` is what _build_sft_config reads;
+                # the builder itself stays untouched) with an INFO breadcrumb so
+                # an operator who set packing=True sees why it was overridden.
+                if self.packing:
+                    logger.info(
+                        "fp8: disabling packing (was on). FP8's float8 matmul "
+                        "requires the token dimension divisible by 16; packing's "
+                        "padding-free variable-length sequences violate that and "
+                        "crash on backward. Sequences now pad to max_seq_length="
+                        f"{self.max_seq_length}."
+                    )
+                self.packing = False
 
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
@@ -2214,6 +2384,212 @@ class Trainer:
         )
         return configured_optim
 
+    def _fp8_supported(self) -> tuple[bool, str | None]:
+        """v1.5 T2.1: is the FP8 (torchao float8) compute path runnable here?
+
+        Three AND-ed requirements, each a distinct ENVIRONMENT axis (not an
+        operator misconfiguration — those are handled by the constructor gate
+        ladder). Returns ``(True, None)`` when all hold, else ``(False, reason)``
+        where ``reason`` names the exact missing piece + the fix, so the
+        constructor can emit ONE actionable degrade-to-bf16 WARN.
+
+        1. **CUDA present.** FP8 tensor-core ops have no CPU kernel; on a
+           CPU-only host FP8 is meaningless. (Also the most common test path —
+           ``torch.cuda.is_available()`` patched False.)
+        2. **torchao installed.** The float8 conversion lives in
+           ``torchao.float8``; without the library there is nothing to convert
+           with. Probed via ``feature_flags.check_feature("fp8")`` (find_spec —
+           no import cost) so a late ``pip install`` is honored after
+           ``refresh_features()``.
+        3. **Compute capability >= 9.0 (Hopper / Blackwell).** FP8 needs 4th-gen
+           (Hopper sm_90) or 5th-gen (Blackwell sm_120) tensor cores. Ada
+           (sm_89) and earlier lack the FP8 matmul path — torchao would fall
+           back to emulation or fail. The brief's verified contract targets the
+           RTX 5090 (sm_120).
+
+        torch import failures / capability-query errors are swallowed into a
+        ``(False, reason)`` so a half-broken CUDA stack degrades rather than
+        crashes (consistent with ``_detect_optimal_dtype``'s defensive query).
+        """
+        try:
+            import torch
+        except Exception as exc:  # noqa: BLE001 - torch genuinely optional at import edges
+            return False, (
+                f"PyTorch is not importable ({exc!r}); FP8 needs torch + CUDA. "
+                "Install the training extras: pip install 'backpropagate[fp8]'."
+            )
+        if not torch.cuda.is_available():
+            return False, (
+                "CUDA is not available (CPU-only host); FP8 tensor-core ops have "
+                "no CPU kernel. Run on a Hopper/Blackwell GPU, or drop fp8=True."
+            )
+        if not check_feature("fp8"):
+            return False, (
+                "torchao is not installed; the float8 conversion lives in "
+                "torchao.float8. Install it: pip install 'backpropagate[fp8]' "
+                "(or pip install torchao)."
+            )
+        try:
+            major, _minor = torch.cuda.get_device_capability(0)
+        except Exception as exc:  # noqa: BLE001 - defensive capability probe
+            return False, (
+                f"could not query CUDA compute capability ({exc!r}); cannot "
+                "confirm FP8 (Hopper sm_90+) support. Drop fp8=True to be safe."
+            )
+        if major < 9:
+            try:
+                name = torch.cuda.get_device_name(0)
+            except Exception:  # noqa: BLE001 - name is best-effort for the message
+                name = "this GPU"
+            return False, (
+                f"GPU compute capability is sm_{major}x ({name}); FP8 needs "
+                "sm_90+ (Hopper) or sm_120 (Blackwell). Ada (sm_89) and earlier "
+                "have no FP8 matmul path. Drop fp8=True; bf16 is the right mode "
+                "for this card."
+            )
+        return True, None
+
+    @staticmethod
+    def _fp8_module_filter(module: Any, fqn: str) -> bool:
+        """v1.5 T2.1: which modules torchao should convert to Float8Linear.
+
+        THE LOAD-BEARING GOTCHA (dogfood-verified on Blackwell sm_120): a naive
+        ``convert_to_float8_training(peft_model)`` crashes on the FIRST backward
+        pass. torchao's default filter converts EVERY ``nn.Linear``, including
+        the LoRA adapter's rank-``r`` sub-linears (``lora_A`` / ``lora_B``). FP8
+        scaled-matmul requires inner dimensions divisible by 16; a rank like
+        r=16 happens to pass but r=8 / r=24 / r=anything-not-%16 does not, and
+        even when r%16==0 the adapter math is numerically fragile in float8.
+        The fix is to convert ONLY the base projection linears and EXCLUDE:
+
+        * any module whose FQN contains ``"lora_"`` (the adapter A/B linears);
+        * the ``lm_head`` (output projection — float8 there hurts logit quality
+          and the vocab dim is often not %16-friendly);
+        * token / positional embeddings (``nn.Embedding`` — not a Linear, but
+          some architectures wrap an ``embed``-named Linear; exclude by name).
+
+        Returns True ⇒ convert this module. The predicate is intentionally a
+        pure, static function of ``(module, fqn)`` so it can be unit-tested on a
+        tiny mocked module tree without standing up torchao or a real model.
+        """
+        import torch.nn as nn
+
+        # Only Linear layers are convertible at all.
+        if not isinstance(module, nn.Linear):
+            return False
+        lowered = fqn.lower()
+        # Exclude the LoRA adapter sub-linears (the load-bearing exclusion), the
+        # LM head, and any embedding-named projection. Everything else — the
+        # base q/k/v/o/gate/up/down projection linears — is converted.
+        excluded_markers = ("lora_", "lm_head", "embed", "embedding")
+        return not any(marker in lowered for marker in excluded_markers)
+
+    def _apply_fp8_to_base(self) -> None:
+        """v1.5 T2.1: convert the base projection linears to torchao Float8Linear.
+
+        Called from :meth:`load_model` AFTER the LoRA adapter is attached (so
+        the adapter's rank-``r`` sub-linears are present in the module tree and
+        the :meth:`_fp8_module_filter` predicate can exclude them). No-op unless
+        ``self._fp8_effective`` is True (the constructor gate ladder already
+        confirmed CUDA + torchao + sm>=9 and emitted the experimental WARN).
+
+        Failure policy mirrors the unsloth→transformers fallback: ANY exception
+        during the CONVERSION (an architecture the filter mishandles, a
+        torch-version skew, a torchao runtime quirk) is caught, logged at WARN,
+        and the run continues in bf16 with ``self._fp8_effective`` flipped back
+        to False — a partial/aborted FP8 conversion must never take training
+        down.
+
+        The ONE structured hard-failure escape hatch is the IMPORT: if
+        ``_fp8_supported()`` reported torchao present (find_spec succeeded) but
+        ``import torchao.float8`` then fails, the install is in a contradictory,
+        unrecoverable state (half-installed torchao). That is NOT a graceful
+        environment degrade — the gate already promised FP8 — so it re-raises as
+        a structured ``TrainingError(code="RUNTIME_FP8_UNSUPPORTED")`` rather
+        than silently dropping to bf16. (The GLUE agent registers that catalog
+        row in exceptions.py this wave; referencing it by string before the row
+        lands is safe — BackpropagateError WARNs on an unknown code, it does not
+        crash.)
+
+        torchao prints a "Skipping import of cpp extensions / upgrade to torch
+        >= 2.11" banner on import — that is NOISE (it falls back to torch-native
+        ``_scaled_mm``, which works on sm_120), not a fatal error.
+        """
+        if not self._fp8_effective:
+            return
+        # Import is the hard-failure axis (see docstring): a broken torchao that
+        # passed the find_spec gate but can't actually import is a structured
+        # RUNTIME_FP8_UNSUPPORTED, not a silent bf16 degrade.
+        try:
+            from torchao.float8 import (
+                Float8LinearConfig,
+                convert_to_float8_training,
+            )
+        except Exception as exc:  # noqa: BLE001 - broken-install detection
+            self._fp8_effective = False
+            raise TrainingError(
+                "FP8 was reported available (torchao spec found) but "
+                "'torchao.float8' could not be imported — the torchao install "
+                f"is broken or incompatible ({type(exc).__name__}: {exc}).",
+                suggestion=(
+                    "Reinstall torchao matching your torch build: "
+                    "pip install --force-reinstall 'backpropagate[fp8]'. Or run "
+                    "without FP8 (drop fp8=True) to train in bf16."
+                ),
+                code="RUNTIME_FP8_UNSUPPORTED",
+                cause=exc,
+            ) from exc
+        # Conversion is the graceful-degrade axis: ANY failure → bf16 + WARN.
+        try:
+            # Default rowwise-ish recipe is fine for LoRA fine-tuning; an
+            # explicit config future-proofs against torchao default drift.
+            fp8_config = Float8LinearConfig()
+            convert_to_float8_training(
+                self._model,
+                config=fp8_config,
+                module_filter_fn=self._fp8_module_filter,
+            )
+            # Count what we converted so the smoke can assert ≥1 base
+            # Float8Linear AND zero lora_* Float8Linear, and so a post-mortem
+            # log shows the conversion actually bit.
+            try:
+                from torchao.float8.float8_linear import Float8Linear
+
+                converted = sum(
+                    1
+                    for _n, m in self._model.named_modules()
+                    if isinstance(m, Float8Linear)
+                )
+            except Exception:  # noqa: BLE001 - counting is best-effort telemetry
+                converted = -1
+            if converted == 0:
+                # Nothing matched the filter — the adapter is attached but no
+                # base linear was converted. Treat as a soft degrade: FP8 is
+                # not actually active, so be honest about it.
+                self._fp8_effective = False
+                logger.warning(
+                    "fp8: convert_to_float8_training matched 0 base linears "
+                    "(model architecture may not expose nn.Linear projections "
+                    "the filter recognizes); proceeding in bf16."
+                )
+                return
+            logger.info(
+                "fp8: converted %s base projection linear(s) to Float8Linear "
+                "(LoRA adapter, lm_head, embeddings excluded). FP8 compute "
+                "path active.",
+                converted if converted >= 0 else "an unknown number of",
+            )
+        except Exception as exc:  # noqa: BLE001 - broad by design: degrade, don't crash
+            self._fp8_effective = False
+            logger.warning(
+                "fp8: conversion to Float8Linear failed (%s: %s); falling back "
+                "to bf16. Training proceeds without the FP8 speed/memory win. "
+                "Set fp8=False to silence this, or report the stack so the "
+                "torchao float8 path can be hardened.",
+                type(exc).__name__,
+                exc,
+            )
+
     @staticmethod
     def _detect_optimal_dtype(configured_bf16: bool, configured_fp16: bool) -> tuple[bool, bool]:
         """v1.3 BACKEND-7: resolve (bf16, fp16) for the current GPU.
@@ -2403,6 +2779,22 @@ class Trainer:
 
         logger.info(f"Loading model: {self.model_name}")
 
+        # v1.5 T2.1 (FP8): FP8 prefers the transformers backend. Unsloth may
+        # inject its own quantized / fused linears that the nn.Linear module
+        # filter does not recognize (so they would either be missed or
+        # mis-converted), and the dogfood-verified contract is transformers +
+        # PEFT + torchao float8. When FP8 is effective and the operator left
+        # Unsloth on, force the transformers loader with an INFO log so the
+        # behavior is visible rather than silent. (No-op when fp8 is inactive.)
+        if self._fp8_effective and self.use_unsloth:
+            logger.info(
+                "fp8: forcing the transformers backend (use_unsloth disabled "
+                "for this run). Unsloth injects fused/quantized linears the FP8 "
+                "nn.Linear filter can miss; the verified FP8 path is "
+                "transformers + PEFT + torchao float8."
+            )
+            self.use_unsloth = False
+
         try:
             if self.use_unsloth:
                 try:
@@ -2482,6 +2874,15 @@ class Trainer:
                 self.model_name, loaded_model=self._model
             )
 
+        # v1.5 T2.1 (FP8): convert the base projection linears to Float8Linear
+        # AFTER the LoRA adapter is attached (the loaders call get_peft_model
+        # before returning), so the module filter can see — and exclude — the
+        # adapter's rank-r sub-linears. No-op unless self._fp8_effective is True
+        # (the gate ladder confirmed CUDA + torchao + sm>=9 at construction).
+        # Any conversion failure inside degrades to bf16 with a WARN; a broken
+        # torchao install raises RUNTIME_FP8_UNSUPPORTED.
+        self._apply_fp8_to_base()
+
     def _load_with_unsloth(self) -> None:
         """Load model using Unsloth for 2x faster training.
 
@@ -2497,7 +2898,10 @@ class Trainer:
                 model_name=self.model_name,
                 max_seq_length=self.max_seq_length,
                 dtype=None,  # Auto-detect
-                load_in_4bit=True,
+                # v1.5 T2.1 (FP8): was hardcoded True. Now reads the resolved
+                # ``self._load_in_4bit`` — the gate ladder flips it False when
+                # FP8 is effective (FP8 keeps the base in float8, not nf4).
+                load_in_4bit=self._load_in_4bit,
                 trust_remote_code=settings.model.trust_remote_code,
                 _label=f"unsloth_from_pretrained:{self.model_name}",
             )
@@ -2536,6 +2940,11 @@ class Trainer:
         # default). Same shape for ``self.init_lora_weights``.
         if self.use_dora:
             lora_kwargs["use_dora"] = True
+        # v1.5 T2.3 (rsLoRA): forward use_rslora only when True so we don't
+        # tickle the kwarg on an older Unsloth/PEFT that may not accept it
+        # (same defensive shape as use_dora). alpha/sqrt(r) scaling.
+        if self.use_rslora:
+            lora_kwargs["use_rslora"] = True
         # v1.3 BACKEND-6: forward init_lora_weights only when the
         # operator picked something other than the PEFT default. PEFT
         # accepts the string {"pissa", "loftq"} OR the bool True
@@ -2569,22 +2978,36 @@ class Trainer:
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-        # Quantization config
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
+        # v1.5 T2.1 (FP8): the base-load shape now depends on self._load_in_4bit
+        # (was unconditionally nf4 4-bit). When FP8 is effective the gate ladder
+        # flipped _load_in_4bit False, so we load an UNQUANTIZED bf16 base —
+        # torchao's convert_to_float8_training operates on plain nn.Linear
+        # layers, not bitsandbytes Linear4bit (which it can't convert). When
+        # FP8 is inactive this is byte-identical to the pre-v1.5 nf4 path.
+        from_pretrained_kwargs: dict[str, Any] = {
+            "device_map": "auto",
+            "trust_remote_code": settings.model.trust_remote_code,
+            "_label": f"transformers_from_pretrained:{self.model_name}",
+        }
+        if self._load_in_4bit:
+            # Quantization config (the historical default path).
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            from_pretrained_kwargs["quantization_config"] = bnb_config
+        else:
+            # FP8 path: unquantized bf16 base so torchao can convert the
+            # plain nn.Linear projections to Float8Linear post-LoRA-attach.
+            from_pretrained_kwargs["torch_dtype"] = torch.bfloat16
 
         # Load model
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            trust_remote_code=settings.model.trust_remote_code,
-            _label=f"transformers_from_pretrained:{self.model_name}",
+            **from_pretrained_kwargs,
         )
 
         # Load tokenizer
@@ -2597,7 +3020,11 @@ class Trainer:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Prepare for training
+        # Prepare for training. prepare_model_for_kbit_training is a k-bit
+        # (4/8-bit) helper; on the FP8 unquantized path there is no k-bit base
+        # to prepare, but the call is still useful for gradient-checkpointing +
+        # input-grad enablement and is safe on a non-quantized model, so it
+        # runs in both paths (byte-identical to pre-v1.5 for the 4-bit path).
         self._model = prepare_model_for_kbit_training(self._model)
 
         # Apply LoRA. v1.3 BACKEND-3 / BACKEND-6: thread use_dora and
@@ -2619,6 +3046,13 @@ class Trainer:
         # resolution is honored uniformly across both load paths.
         if self.use_dora:
             lora_kwargs["use_dora"] = True
+        # v1.5 T2.3 (rsLoRA): thread use_rslora into PEFT's LoraConfig (the
+        # canonical wiring point). PEFT >= 0.7 accepts use_rslora; older PEFT is
+        # handled by the strip-retry below. alpha/sqrt(r) scaling vs alpha/r;
+        # zero inference cost, merge-safe. Forwarded only when True so the
+        # legacy-shape default is byte-identical for callers who never set it.
+        if self.use_rslora:
+            lora_kwargs["use_rslora"] = True
         _init_w = self.init_lora_weights
         if _init_w and _init_w != "default":
             # PEFT's init_lora_weights accepts {True, False, "gaussian",
@@ -2628,20 +3062,20 @@ class Trainer:
         try:
             lora_config = LoraConfig(**lora_kwargs)
         except TypeError as exc:
-            # Old PEFT rejected one of the v1.3 kwargs. Strip them and
+            # Old PEFT rejected one of the v1.3/v1.5 kwargs. Strip them and
             # retry with the legacy shape so the trainer doesn't hard-
             # fail on an Unsloth-pinned environment that ships an older
             # PEFT. WARN so the operator notices the silent downgrade.
             stripped: list[str] = []
-            for k in ("use_dora", "init_lora_weights"):
+            for k in ("use_dora", "use_rslora", "init_lora_weights"):
                 if k in lora_kwargs:
                     stripped.append(k)
                     lora_kwargs.pop(k)
             logger.warning(
-                f"PEFT LoraConfig rejected v1.3 kwarg(s) {stripped!r} "
+                f"PEFT LoraConfig rejected kwarg(s) {stripped!r} "
                 f"({exc!r}); retrying with the legacy LoraConfig shape. "
-                f"Upgrade PEFT >= 0.10 (DoRA) / >= 0.7 (PiSSA/LoftQ) to "
-                f"enable these features."
+                f"Upgrade PEFT >= 0.10 (DoRA) / >= 0.7 (rsLoRA / PiSSA / "
+                f"LoftQ) to enable these features."
             )
             lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
@@ -2753,7 +3187,7 @@ class Trainer:
                 run_name=run_name,
                 optim=self.optim,
             )
-        return _build_sft_config(
+        sft_config = _build_sft_config(
             output_dir=str(self.output_dir),
             per_device_train_batch_size=self.batch_size,
             gradient_accumulation_steps=self.gradient_accumulation,
@@ -2777,6 +3211,50 @@ class Trainer:
             # resolved training mode (``"lora"`` default | ``"full"``).
             mode=self.mode,
         )
+        # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
+        # SFTConfig rather than threading fp8 into _build_sft_config (which
+        # stays byte-identical — the dtype/precision logic there is untouched).
+        # torchao's float8 matmul hard-requires the contracted TOKEN dimension
+        # divisible by 16; with ordinary right-padding the token count is
+        # batch x seq, and seq is dynamically padded to the longest row in the
+        # batch (e.g. 280) — not a multiple of 16, which crashes _scaled_mm on
+        # backward (dogfood-verified, sm_120). pad_to_multiple_of=16 rounds the
+        # padded sequence length up to the next multiple of 16 so batch x seq is
+        # always %16; padding_free=False guarantees a rectangular (not flattened
+        # ragged) batch the multiple-of-16 padding can act on. Both are no-ops
+        # for the non-FP8 path (we only touch the config when effective).
+        if self._fp8_effective:
+            _set = self._set_fp8_shape_constraints_on_sft_config
+            _set(sft_config)
+        return sft_config
+
+    @staticmethod
+    def _set_fp8_shape_constraints_on_sft_config(sft_config: Any) -> None:
+        """v1.5 T2.1: set pad_to_multiple_of=16 + padding_free=False on an
+        already-built SFTConfig so FP8's float8 matmul gets 16-aligned token
+        dimensions.
+
+        Factored out (and attribute-guarded) so a TRL version whose SFTConfig
+        lacks either field degrades gracefully — we set what exists and skip
+        what doesn't, logging at DEBUG. The fields exist on trl 0.24+ (the
+        project's target stack); the guard is belt-and-braces for older/newer
+        trl that renamed them.
+        """
+        if hasattr(sft_config, "pad_to_multiple_of"):
+            sft_config.pad_to_multiple_of = 16
+        else:  # pragma: no cover - version-dependent
+            logger.debug(
+                "fp8: SFTConfig has no pad_to_multiple_of field on this trl "
+                "version; FP8 matmul may hit a non-16-divisible token dim."
+            )
+        if hasattr(sft_config, "padding_free"):
+            sft_config.padding_free = False
+        if hasattr(sft_config, "packing"):
+            # Defensive: the constructor already forced self.packing False for
+            # FP8, but re-assert on the config so a future code path that sets
+            # packing elsewhere can't silently re-enable the ragged-sequence
+            # shape FP8 can't handle.
+            sft_config.packing = False
 
     def train(
         self,
@@ -3108,6 +3586,14 @@ class Trainer:
             # the audit field stays uniform across the run table).
             "method": self.method,
             "orpo_beta": self.orpo_beta,
+            # v1.5 T2.1 (FP8): persist the EFFECTIVE FP8 state (not the
+            # requested ``self.fp8``) so a run-history audit reflects what
+            # actually ran — fp8=True that degraded to bf16 on an unsupported
+            # card records ``"fp8": False`` honestly. v1.5 T2.3 (rsLoRA):
+            # persist use_rslora for adapter-scaling provenance (which scaling
+            # produced this adapter — alpha/r vs alpha/sqrt(r)).
+            "fp8": self._fp8_effective,
+            "use_rslora": self.use_rslora,
         }
         # F-014: auditable per-run record of the chat markers actually used by
         # train_on_responses_only. Absent when the mode is disabled.

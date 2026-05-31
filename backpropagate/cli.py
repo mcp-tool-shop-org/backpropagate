@@ -696,6 +696,14 @@ def cmd_train(args: argparse.Namespace) -> int:
             # forward-compatible. Default 'sft' / 0.1 preserve v1.4 behavior.
             "method": getattr(args, "method", "sft"),
             "orpo_beta": getattr(args, "orpo_beta", 0.1),
+            # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): Trainer.__init__ accepts
+            # ``fp8`` / ``use_rslora`` (named to match) so the introspection
+            # filter below threads them through. fp8=True is EXPERIMENTAL —
+            # the Trainer's gate ladder degrades to bf16 (or raises
+            # RUNTIME_FP8_UNSUPPORTED on a broken torchao import); use_rslora
+            # routes to LoraConfig(use_rslora=...).
+            "fp8": getattr(args, "fp8", False),
+            "use_rslora": getattr(args, "use_rslora", False),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -873,6 +881,28 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
     _print_info(f"Steps/run: {args.steps}")
     _print_info(f"Samples/run: {args.samples}")
     _print_info(f"Merge mode: {args.merge_mode}")
+    # v1.5 T2.2 (merge framework, Wave 6b GLUE): surface the chosen per-tensor
+    # merge strategy + whether the drift / eval gates are armed so the operator
+    # sees the merge contract before a long overnight multi-run, not just in
+    # the logs after.
+    _print_info(f"Merge strategy: {getattr(args, 'merge_strategy', 'qiao_mahdavi')}")
+    _drift_on = bool(getattr(args, "drift_gate", False))
+    _eval_on = bool(getattr(args, "eval_gate", False))
+    _print_info(
+        "Gates: "
+        + (
+            f"drift={'on' if _drift_on else 'off'} "
+            f"(threshold {getattr(args, 'drift_threshold', 0.0)}), "
+            if _drift_on
+            else "drift=off, "
+        )
+        + (
+            f"eval={'on' if _eval_on else 'off'} "
+            f"(max-regression {getattr(args, 'eval_max_regression', 0.0)})"
+            if _eval_on
+            else "eval=off"
+        )
+    )
 
     try:
         # C-CLI-002 phase banner — the multi-run trainer also loads + tokenises
@@ -934,6 +964,21 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             # below route the kwarg to the right binding point and drop
             # it silently when the installed build doesn't accept it.
             "mode": getattr(args, "mode", "lora"),
+            # v1.5 T2.2 (merge framework, Wave 6b GLUE): the 9 merge-strategy /
+            # drift-gate / eval-gate knobs. Each is a MultiRunConfig dataclass
+            # FIELD, so the dataclasses.fields(MultiRunConfig) filter below
+            # routes them to wave6b_cfg_kwargs (and drops them on a pre-T2.2
+            # backend). The flag→field mapping is encoded here: argparse stores
+            # --ties-trim → args.ties_trim → ties_trim_threshold, etc.
+            "merge_strategy": getattr(args, "merge_strategy", "qiao_mahdavi"),
+            "ties_trim_threshold": getattr(args, "ties_trim", 0.2),
+            "dare_drop_rate": getattr(args, "dare_drop_rate", 0.5),
+            "dare_seed": getattr(args, "dare_seed", None),
+            "drift_gate": bool(getattr(args, "drift_gate", False)),
+            "drift_threshold": getattr(args, "drift_threshold", 0.0),
+            "eval_gate": bool(getattr(args, "eval_gate", False)),
+            "eval_max_regression": getattr(args, "eval_max_regression", 0.0),
+            "eval_heldout_path": getattr(args, "eval_heldout", None),
         }
         wave6b_cfg_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -1205,6 +1250,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         export_gguf,
         export_lora,
         export_merged,
+        export_ollama_adapter,
         register_with_ollama,
     )
     from .logging_config import bind_run_context, get_logger
@@ -1268,6 +1314,29 @@ def cmd_export(args: argparse.Namespace) -> int:
             ),
             code="INPUT_VALIDATION_FAILED",
         )
+
+    # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): --format ollama-adapter
+    # REQUIRES --base-model (the FROM line of the generated Modelfile). Reject
+    # the missing-base case up front with a friendly message + EXIT_USER_ERROR
+    # (exit 1) — the same print-then-return shape as the bare-model-path and
+    # unknown-format branches in this handler, so a direct handler call (and a
+    # wrapper) sees exit 1 rather than a deep stack trace at
+    # export_ollama_adapter. (Distinct from the --ollama/non-gguf mutex above,
+    # which raises pre-try and lands as EX_USAGE via main()'s catch-all.)
+    if args.format == "ollama-adapter" and not getattr(args, "base_model", None):
+        _print_error(
+            "--format ollama-adapter requires --base-model <model> (the base "
+            "the adapter was tuned from — an Ollama model name like "
+            "'llama3.2' or a base-GGUF path)."
+        )
+        _print_info(
+            "Re-run with --base-model <model> to build the FROM+ADAPTER "
+            "Modelfile, e.g. `backprop export ./output/lora --format "
+            "ollama-adapter --base-model llama3.2 --adapter-tag taskA`. "
+            "The base MUST match the adapter's origin base or Ollama's "
+            "output is erratic."
+        )
+        return EXIT_USER_ERROR
 
     # BRIDGE-B-002: reuse main()'s cli_run_id so a single token correlates
     # CLI output / structured logs / model_card.md / Hub push metadata.
@@ -1465,6 +1534,24 @@ def cmd_export(args: argparse.Namespace) -> int:
                 emit_model_card=emit_card,
                 output_root=output_dir.parent,
             )
+        elif args.format == "ollama-adapter":
+            # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): register the
+            # LoRA adapter with Ollama UNMERGED on top of --base-model (a
+            # FROM+ADAPTER Modelfile + `ollama create`). No model load / no
+            # merge / no quantization — far lighter than the gguf path. The
+            # --base-model required-check fired up front; export_ollama_adapter
+            # writes the Modelfile, runs `ollama create`, and records the
+            # derived <base>:<tag> model name in result.quantization.
+            _print_info(
+                f"==> Registering adapter with Ollama on base "
+                f"'{args.base_model}' (FROM+ADAPTER Modelfile + ollama "
+                "create; no merge / no quantization)..."
+            )
+            result = export_ollama_adapter(
+                model_path,
+                base_model=args.base_model,
+                tag=getattr(args, "adapter_tag", None),
+            )
         else:
             # NEW-STAGE-C-4 (humanization): name the next step. argparse's
             # choices= constraint catches the common case at parse time;
@@ -1473,8 +1560,9 @@ def cmd_export(args: argparse.Namespace) -> int:
             # formats so the operator can pick one immediately.
             _print_error(f"Unknown format: {args.format!r}")
             _print_info(
-                "Supported: --format lora (default) / merged / gguf. "
-                "See `backprop export --help` for the full flag list."
+                "Supported: --format lora (default) / merged / gguf / "
+                "ollama-adapter. See `backprop export --help` for the full "
+                "flag list."
             )
             return EXIT_USER_ERROR
 
@@ -1482,6 +1570,17 @@ def cmd_export(args: argparse.Namespace) -> int:
         _print_kv("Path", str(result.path))
         _print_kv("Size", f"{result.size_mb:.1f} MB")
         _print_kv("Time", f"{result.export_time_seconds:.1f}s")
+
+        # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): export_ollama_adapter
+        # ran `ollama create` itself (the registration is part of the export,
+        # unlike the gguf path where --ollama drives a separate step). Echo the
+        # registered <base>:<tag> model name (recorded in result.quantization)
+        # + the run command so the operator can use it immediately.
+        if args.format == "ollama-adapter":
+            registered_name = result.quantization or (args.adapter_tag or "")
+            if registered_name:
+                _print_success(f"Registered with Ollama: {registered_name}")
+                _print_info(f"Run with: ollama run {registered_name}")
 
         # Register with Ollama if requested
         if args.ollama and args.format == "gguf":
@@ -6035,6 +6134,57 @@ def cmd_ollama_rm(args: argparse.Namespace) -> int:
     return EXIT_UNAVAILABLE
 
 
+def cmd_ollama_shelf(args: argparse.Namespace) -> int:
+    """Execute ``backprop ollama shelf <base-model>`` (v1.5 T2.3 GLUE).
+
+    Thin wrapper around :func:`backpropagate.export.list_adapter_shelf`.
+    Lists the adapter variants registered against ``<base-model>`` on the
+    local Ollama daemon — the ``<base>:<tag>`` models produced by
+    ``backprop export --format ollama-adapter`` (the bare base itself is
+    excluded; the shelf is the adapter VARIANTS).
+
+    Exit codes:
+        0   listed (possibly empty) — the daemon answered
+        69  EX_UNAVAILABLE (Ollama CLI not on PATH)
+    """
+    from .export import list_adapter_shelf
+
+    _print_header("Backpropagate Ollama Adapter Shelf")
+
+    _print_info(f"Base: {args.base_model}")
+
+    entries = list_adapter_shelf(args.base_model)
+
+    if not entries:
+        # list_adapter_shelf WARN-logs the cause (CLI absent / daemon down /
+        # nothing matches) and returns []; distinguish "CLI absent" so the
+        # operator gets the install hint + the EX_UNAVAILABLE exit code that
+        # the sibling ollama verbs use.
+        import shutil
+        if not shutil.which("ollama"):
+            _print_warning("Ollama CLI not found on PATH.")
+            _print_info(
+                "Install from https://ollama.com and ensure `ollama` is "
+                "on PATH."
+            )
+            return EXIT_UNAVAILABLE
+        _print_info(f"No adapters on the shelf for base '{args.base_model}'.")
+        _print_info(
+            "Register one with `backprop export <adapter> --format "
+            "ollama-adapter --base-model <base> --adapter-tag <tag>`."
+        )
+        return EXIT_OK
+
+    print(f"{Colors.BOLD}MODEL{Colors.RESET}\t{Colors.BOLD}TAG{Colors.RESET}\t"
+          f"{Colors.BOLD}SIZE{Colors.RESET}\t{Colors.BOLD}MODIFIED{Colors.RESET}")
+    print(f"{Colors.DIM}-----\t---\t----\t--------{Colors.RESET}")
+    for entry in entries:
+        print(f"{entry.model_name}\t{entry.tag}\t{entry.size}\t{entry.modified}")
+    print()
+    _print_info(f"Listed {len(entries)} adapter(s) on base '{args.base_model}'.")
+    return EXIT_OK
+
+
 # =============================================================================
 # PARSER
 # =============================================================================
@@ -6153,10 +6303,11 @@ Subcommands (grouped by workflow):
     export          Export trained model (LoRA / merged / GGUF)
     push            Push a local export to the Hugging Face Hub
 
-  Ollama (new in v1.4):
+  Ollama (new in v1.4; shelf added v1.5):
     ollama register Register an existing GGUF with the local Ollama daemon
     ollama list     List models registered with Ollama
     ollama rm       Remove a model from Ollama
+    ollama shelf    List adapter variants registered against a base model
 
   UI:
     ui              Launch the Reflex (Radix UI) web interface
@@ -6407,6 +6558,35 @@ Tips:
         default=0.1,
         help="ORPO odds-ratio weight (lambda). Default 0.1. Ignored unless --method orpo.",
     )
+    # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): both thread into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ now accepts ``fp8`` / ``use_rslora`` (named EXACTLY so
+    # the filter passes them through); the default False threaded by argparse
+    # is forwarded only when the kwarg exists, so a pre-T2.1 Trainer build sees
+    # the flags AVAILABLE but inert (no crash). Both bind onto args at parse
+    # time regardless.
+    train_parser.add_argument(
+        "--fp8",
+        action="store_true",
+        default=False,
+        help=(
+            "EXPERIMENTAL: FP8 compute path on Blackwell/Hopper (sm_90+) via "
+            "torchao — base weights in float8 (~1.4x throughput, ~60% less base "
+            "memory), LoRA adapter stays bf16, result still mergeable. "
+            "mode='lora' + method='sft' only in v1.5; falls back to bf16 with a "
+            "warning if unsupported. Needs pip install 'backpropagate[fp8]'."
+        ),
+    )
+    train_parser.add_argument(
+        "--use-rslora",
+        action="store_true",
+        default=False,
+        help=(
+            "Use rank-stabilized LoRA scaling (alpha/sqrt(r) instead of "
+            "alpha/r). Zero inference cost, mergeable; benefit grows with rank "
+            "(relevant at the rank-256 default)."
+        ),
+    )
     train_parser.add_argument(
         "--output", "-o",
         default="./output",
@@ -6547,6 +6727,112 @@ Tips:
             "the full mode contract."
         ),
     )
+    # v1.5 T2.2 (merge framework, Wave 6b GLUE): the four merge strategies +
+    # drift gate + eval gate. Each flag binds to a MultiRunConfig dataclass
+    # FIELD of the named mapping below; cmd_multi_run threads them via the
+    # dataclasses.fields(MultiRunConfig) filter (the introspection net that
+    # drops a kwarg silently on a pre-T2.2 backend). The behavior-preserving
+    # defaults (merge_strategy='qiao_mahdavi' + both gates off) keep a default
+    # `multi-run` byte-identical to pre-T2.2.
+    multi_parser.add_argument(
+        "--merge-strategy",
+        choices=["qiao_mahdavi", "linear", "ties", "dare"],
+        default="qiao_mahdavi",
+        help=(
+            "Per-tensor LoRA merge rule (default: qiao_mahdavi, the v1.4 SLAO "
+            "merge — behavior-preserving). 'linear' = plain weighted average; "
+            "'ties' = trim + elect-sign + disjoint-merge (--ties-trim quantile); "
+            "'dare' = Bernoulli-drop + rescale (--dare-drop-rate). All stay "
+            "mergeable + zero inference cost. Applies only with --merge-mode slao."
+        ),
+    )
+    multi_parser.add_argument(
+        "--ties-trim",
+        type=_unit_float,
+        default=0.2,
+        metavar="FLOAT",
+        help=(
+            "TIES trim quantile in [0, 1] — fraction of lowest-magnitude "
+            "delta params zeroed before the sign election (default: 0.2 = "
+            "bottom 20%%). Only used with --merge-strategy ties."
+        ),
+    )
+    multi_parser.add_argument(
+        "--dare-drop-rate",
+        type=_unit_float,
+        default=0.5,
+        metavar="FLOAT",
+        help=(
+            "DARE Bernoulli drop probability in [0, 1) — fraction of delta "
+            "params randomly dropped, survivors rescaled by 1/(1-p) (default: "
+            "0.5). Only used with --merge-strategy dare."
+        ),
+    )
+    multi_parser.add_argument(
+        "--dare-seed",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "Seed for DARE's LOCAL RNG (deterministic drop mask). Default "
+            "unset → derived from the run. Only used with --merge-strategy dare."
+        ),
+    )
+    multi_parser.add_argument(
+        "--drift-gate",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the drift gate: skip a merge whose LoRA-B cosine "
+            "similarity to the running accumulator falls below "
+            "--drift-threshold, keeping the run as a sibling branch instead "
+            "of corrupting the merge. Off by default (the gate is inert)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--drift-threshold",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help=(
+            "Cosine-similarity floor for the drift gate (range [-1, 1]; "
+            "default 0.0). similarity < threshold ⇒ branch (don't merge). "
+            "Only consulted when --drift-gate is set."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-gate",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the eval gate: after each candidate merge, evaluate "
+            "held-out loss and REJECT (restore the pre-merge accumulator) if "
+            "the merge regressed loss past --eval-max-regression. Reuses the "
+            "T1.1 eval seam. Off by default (the gate is inert)."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-max-regression",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help=(
+            "Tolerated held-out-loss increase for the eval gate (default 0.0 "
+            "= zero-tolerance). A merge whose after-loss exceeds before-loss "
+            "by more than this is rejected. Only consulted when --eval-gate "
+            "is set."
+        ),
+    )
+    multi_parser.add_argument(
+        "--eval-heldout",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Held-out JSONL set for the eval gate. Default unset → reuse the "
+            "run's reserved last-10%% holdout. Only consulted when --eval-gate "
+            "is set."
+        ),
+    )
     multi_parser.add_argument(
         "--output", "-o",
         default="./output",
@@ -6622,9 +6908,15 @@ Quantization tradeoffs (fastest -> smallest):
     )
     export_parser.add_argument(
         "--format", "-f",
-        choices=["lora", "merged", "gguf"],
+        choices=["lora", "merged", "gguf", "ollama-adapter"],
         default="lora",
-        help="Export format (default: lora)",
+        help=(
+            "Export format (default: lora). 'ollama-adapter' (v1.5 T2.3) "
+            "registers the LoRA adapter with Ollama UNMERGED on top of "
+            "--base-model (a FROM+ADAPTER Modelfile) — lighter than the "
+            "merged-GGUF path and the building block for the adapter shelf "
+            "(swap adapters on one base by tag). Requires --base-model."
+        ),
     )
     export_parser.add_argument(
         "--quantization", "-q",
@@ -6646,6 +6938,33 @@ Quantization tradeoffs (fastest -> smallest):
         "--ollama-name",
         default=None,
         help="Name for Ollama model",
+    )
+    # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): --base-model is
+    # REQUIRED for --format ollama-adapter (the FROM line of the Modelfile).
+    # --adapter-tag is the optional ':<tag>' for the derived <base>:<tag>
+    # model name (defaults to a sanitised adapter-dir basename). Both are
+    # ignored by the lora / merged / gguf formats.
+    export_parser.add_argument(
+        "--base-model",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Base model for --format ollama-adapter — an Ollama model name "
+            "(e.g. 'llama3.2') or a base-GGUF path. REQUIRED with "
+            "ollama-adapter; MUST match the adapter's origin base. Ignored "
+            "by other formats."
+        ),
+    )
+    export_parser.add_argument(
+        "--adapter-tag",
+        default=None,
+        metavar="TAG",
+        help=(
+            "Adapter tag for the derived '<base>:<tag>' Ollama model name "
+            "(--format ollama-adapter). Default: a sanitised adapter-dir "
+            "basename. Lets you shelf sibling adapters on one base "
+            "(llama3.2:taskA / llama3.2:taskB). Ignored by other formats."
+        ),
     )
     # F-004: model card is emitted next to every export by default; this
     # flag is the explicit opt-out for users who'd rather author a card by
@@ -7661,7 +7980,7 @@ Examples:
     ollama_parser = subparsers.add_parser(
         "ollama",
         parents=[_common],
-        help="Manage Ollama models (register / list / rm)",
+        help="Manage Ollama models (register / list / rm / shelf)",
         description=(
             "Manage local Ollama daemon models. Mirrors upstream Ollama "
             "CLI shape: `ollama create`, `ollama list`, `ollama rm`. "
@@ -7681,9 +8000,15 @@ Examples:
   # Drop a model
   backprop ollama rm my-model
 
+  # List the adapter shelf for a base (v1.5 T2.3 — the <base>:<tag> variants
+  # produced by `backprop export --format ollama-adapter`)
+  backprop ollama shelf llama3.2
+
 For the one-shot export+register path use `backprop export --format gguf
 --ollama --ollama-name <name>` instead; the triad above is for the case
-where you already have a GGUF and only need the Ollama-side wiring.
+where you already have a GGUF and only need the Ollama-side wiring. For the
+UNMERGED adapter-on-base path (the adapter shelf) use `backprop export
+--format ollama-adapter --base-model <base> --adapter-tag <tag>`.
         """,
     )
     ollama_subparsers = ollama_parser.add_subparsers(
@@ -7760,6 +8085,31 @@ where you already have a GGUF and only need the Ollama-side wiring.
         help="Ollama model name to remove (run `backprop ollama list` to see).",
     )
     ollama_rm_parser.set_defaults(func=cmd_ollama_rm)
+
+    # backprop ollama shelf <base-model>  (v1.5 T2.3 GLUE)
+    ollama_shelf_parser = ollama_subparsers.add_parser(
+        "shelf",
+        parents=[_common],
+        help="List adapter variants registered against a base model",
+        description=(
+            "List the adapter 'shelf' for a base model — every Ollama "
+            "<base>:<tag> model produced by `backprop export --format "
+            "ollama-adapter` that shares the given base. The bare base "
+            "itself is excluded; the shelf is the adapter VARIANTS you can "
+            "hot-swap by tag (llama3.2:taskA / llama3.2:taskB). Best-effort "
+            "over `ollama list`."
+        ),
+    )
+    ollama_shelf_parser.add_argument(
+        "base_model",
+        metavar="BASE_MODEL",
+        help=(
+            "Base model whose adapter shelf to list (only its leading "
+            "segment is used — 'llama3.2:7b' and 'llama3.2' match the same "
+            "shelf)."
+        ),
+    )
+    ollama_shelf_parser.set_defaults(func=cmd_ollama_shelf)
 
     # When `backprop ollama` is invoked with no subcommand, print the
     # ollama subparser's help text. argparse doesn't surface this

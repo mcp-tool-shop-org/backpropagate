@@ -1339,3 +1339,494 @@ class TestMergeLoraWeightsAverageKeyUnion:
         assert result["layer.lora_B.weight"][0, 0] != 999.0, (
             "new-only key was stored by reference, not cloned"
         )
+
+
+# =============================================================================
+# v1.5 T2.2: PLUGGABLE MERGE-STRATEGY FRAMEWORK
+#
+# Strategy math on tiny hand-computed lora_A/lora_B dicts (r=2 shaped), dispatch
+# validation, finite-check (SLAO_MERGE_DIVERGED), and the qiao_mahdavi
+# regression lock (== direct SLAOMerger.merge).
+# =============================================================================
+
+from backpropagate.exceptions import BackpropagateError, InvalidSettingError
+from backpropagate.slao import (
+    MERGE_STRATEGIES,
+    DriftDecision,
+    MergeStrategyConfig,
+    apply_merge_strategy,
+    drift_gate,
+    merge_strategy_dare,
+    merge_strategy_linear,
+    merge_strategy_qiao_mahdavi,
+    merge_strategy_ties,
+)
+
+
+def _tiny_lora(a_vals, b_vals, key_prefix="model.layers.0.self_attn.q_proj"):
+    """Build a tiny LoRA state dict with one A + one B tensor (r=2 shaped)."""
+    return {
+        f"{key_prefix}.lora_A.default.weight": torch.tensor(a_vals, dtype=torch.float32),
+        f"{key_prefix}.lora_B.default.weight": torch.tensor(b_vals, dtype=torch.float32),
+    }
+
+
+class TestMergeStrategyConfigDefaults:
+    """Behavior-preserving defaults for the strategy config."""
+
+    def test_default_strategy_is_qiao_mahdavi(self):
+        assert MergeStrategyConfig().strategy == "qiao_mahdavi"
+
+    def test_default_trim_threshold(self):
+        assert MergeStrategyConfig().trim_threshold == 0.2
+
+    def test_default_drop_rate(self):
+        assert MergeStrategyConfig().drop_rate == 0.5
+
+    def test_default_dare_seed_none(self):
+        assert MergeStrategyConfig().dare_seed is None
+
+    def test_default_linear_weight_none(self):
+        assert MergeStrategyConfig().linear_weight is None
+
+    def test_dispatch_keys(self):
+        assert MERGE_STRATEGIES == ("qiao_mahdavi", "linear", "ties", "dare")
+
+
+class TestLinearStrategy:
+    """linear: per-key (1-w)*acc + w*new; fixed weight + asymmetric clone."""
+
+    def test_fixed_weight_half_is_mean(self):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        cfg = MergeStrategyConfig(strategy="linear", linear_weight=0.5)
+        out = merge_strategy_linear(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        # (1-0.5)*acc + 0.5*new == elementwise mean for BOTH A and B.
+        assert torch.allclose(
+            out["model.layers.0.self_attn.q_proj.lora_A.default.weight"],
+            torch.tensor([[3.0, 4.0], [5.0, 6.0]]),
+        )
+        assert torch.allclose(
+            out["model.layers.0.self_attn.q_proj.lora_B.default.weight"],
+            torch.full((2, 2), 2.0),
+        )
+
+    def test_fixed_weight_zero_keeps_accumulator(self):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        cfg = MergeStrategyConfig(strategy="linear", linear_weight=0.0)
+        out = merge_strategy_linear(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert torch.allclose(
+            out["model.layers.0.self_attn.q_proj.lora_B.default.weight"],
+            torch.ones(2, 2),
+        )
+
+    def test_time_aware_weight_when_linear_weight_none(self):
+        # run_index=4, sqrt schedule -> w = 1/sqrt(4) = 0.5.
+        acc = _tiny_lora([[1.0, 1.0], [1.0, 1.0]], [[0.0, 0.0], [0.0, 0.0]])
+        new = _tiny_lora([[1.0, 1.0], [1.0, 1.0]], [[4.0, 4.0], [4.0, 4.0]])
+        cfg = MergeStrategyConfig(strategy="linear", linear_weight=None)
+        out = merge_strategy_linear(
+            acc, new, run_index=4, config=cfg, slao_config=SLAOConfig()
+        )
+        # B = 0 + 0.5*(4-0) = 2.0
+        assert torch.allclose(
+            out["model.layers.0.self_attn.q_proj.lora_B.default.weight"],
+            torch.full((2, 2), 2.0),
+        )
+
+    def test_asymmetric_key_cloned_through(self):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        acc["model.layers.9.only_in_acc.lora_B.default.weight"] = torch.tensor(
+            [[7.0]]
+        )
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        new["model.layers.9.only_in_new.lora_B.default.weight"] = torch.tensor(
+            [[9.0]]
+        )
+        cfg = MergeStrategyConfig(strategy="linear", linear_weight=0.5)
+        out = merge_strategy_linear(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert torch.allclose(
+            out["model.layers.9.only_in_acc.lora_B.default.weight"],
+            torch.tensor([[7.0]]),
+        )
+        assert torch.allclose(
+            out["model.layers.9.only_in_new.lora_B.default.weight"],
+            torch.tensor([[9.0]]),
+        )
+
+
+class TestTiesStrategy:
+    """ties: trim low-mag, elect sign, disjoint-merge agreeing contributors."""
+
+    def test_low_mag_entry_trimmed_to_zero(self):
+        # idx1 + idx3 tiny on BOTH sides -> trimmed both -> elected sign 0 -> 0.
+        acc = {"m.lora_B.default.weight": torch.tensor([[10.0, 0.01, 8.0, 0.02]])}
+        new = {"m.lora_B.default.weight": torch.tensor([[9.0, 0.01, 7.0, 0.02]])}
+        cfg = MergeStrategyConfig(strategy="ties", trim_threshold=0.5)
+        out = merge_strategy_ties(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert torch.allclose(
+            out["m.lora_B.default.weight"], torch.tensor([[9.5, 0.0, 7.5, 0.0]])
+        )
+
+    def test_sign_conflict_minority_dropped(self):
+        # idx0: acc=+5 new=-1 -> gamma=sign(4)=+ -> minority(-1) dropped, mean({5})=5.
+        acc = {"m.lora_B.default.weight": torch.tensor([[5.0, 5.0]])}
+        new = {"m.lora_B.default.weight": torch.tensor([[-1.0, 5.0]])}
+        cfg = MergeStrategyConfig(strategy="ties", trim_threshold=0.0)
+        out = merge_strategy_ties(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert torch.allclose(
+            out["m.lora_B.default.weight"], torch.tensor([[5.0, 5.0]])
+        )
+
+    def test_all_zero_after_trim_position_is_zero(self):
+        # A position trimmed on BOTH sides collapses to 0 (count==0 guard).
+        acc = {"m.lora_B.default.weight": torch.tensor([[10.0, 0.001]])}
+        new = {"m.lora_B.default.weight": torch.tensor([[9.0, 0.001]])}
+        cfg = MergeStrategyConfig(strategy="ties", trim_threshold=0.5)
+        out = merge_strategy_ties(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert out["m.lora_B.default.weight"][0, 1].item() == 0.0
+
+    def test_asymmetric_key_cloned_through(self):
+        acc = {"m.lora_B.default.weight": torch.tensor([[5.0, 5.0]])}
+        acc["extra.lora_A.default.weight"] = torch.tensor([[1.0]])
+        new = {"m.lora_B.default.weight": torch.tensor([[5.0, 5.0]])}
+        cfg = MergeStrategyConfig(strategy="ties", trim_threshold=0.2)
+        out = merge_strategy_ties(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        assert "extra.lora_A.default.weight" in out
+
+
+class TestDareStrategy:
+    """dare: Bernoulli drop on the increment via a LOCAL generator."""
+
+    def test_fixed_seed_exact_mask_and_rescale(self):
+        acc = {"m.lora_B.default.weight": torch.zeros(1, 6)}
+        new = {"m.lora_B.default.weight": torch.tensor([[1.0, 2, 3, 4, 5, 6]])}
+        cfg = MergeStrategyConfig(strategy="dare", drop_rate=0.5, dare_seed=1234)
+        out = merge_strategy_dare(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        # Replicate the LOCAL-generator draw exactly.
+        gen = torch.Generator()
+        gen.manual_seed(1234)
+        rand = torch.rand((1, 6), generator=gen)
+        keep = (rand < 0.5).float()
+        delta = new["m.lora_B.default.weight"] - acc["m.lora_B.default.weight"]
+        expected = acc["m.lora_B.default.weight"] + (keep * delta) / 0.5
+        assert torch.allclose(out["m.lora_B.default.weight"], expected)
+
+    def test_drop_rate_zero_is_replace_on_increment(self):
+        acc = {"m.lora_B.default.weight": torch.tensor([[2.0, 2.0]])}
+        new = {"m.lora_B.default.weight": torch.tensor([[5.0, 7.0]])}
+        cfg = MergeStrategyConfig(strategy="dare", drop_rate=0.0)
+        out = merge_strategy_dare(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        # acc + delta == new.
+        assert torch.allclose(
+            out["m.lora_B.default.weight"], new["m.lora_B.default.weight"]
+        )
+
+    def test_global_rng_state_unchanged(self):
+        """The DARE draw MUST NOT touch the global torch RNG (training
+        reproducibility depends on it)."""
+        acc = {"m.lora_B.default.weight": torch.zeros(1, 8)}
+        new = {"m.lora_B.default.weight": torch.ones(1, 8)}
+        cfg = MergeStrategyConfig(strategy="dare", drop_rate=0.5, dare_seed=42)
+        before = torch.get_rng_state()
+        merge_strategy_dare(
+            acc, new, run_index=2, config=cfg, slao_config=SLAOConfig()
+        )
+        after = torch.get_rng_state()
+        assert torch.equal(before, after), (
+            "DARE merge perturbed the GLOBAL torch RNG — it must use a LOCAL "
+            "torch.Generator only."
+        )
+
+    def test_none_seed_is_run_deterministic(self):
+        """dare_seed=None derives from run_index deterministically."""
+        acc = {"m.lora_B.default.weight": torch.zeros(1, 8)}
+        new = {"m.lora_B.default.weight": torch.ones(1, 8)}
+        cfg = MergeStrategyConfig(strategy="dare", drop_rate=0.5, dare_seed=None)
+        out1 = merge_strategy_dare(
+            acc, new, run_index=3, config=cfg, slao_config=SLAOConfig()
+        )
+        out2 = merge_strategy_dare(
+            acc, new, run_index=3, config=cfg, slao_config=SLAOConfig()
+        )
+        assert torch.allclose(
+            out1["m.lora_B.default.weight"], out2["m.lora_B.default.weight"]
+        )
+
+
+class TestStrategyDispatchValidation:
+    """Unknown strategy / out-of-range thresholds raise InvalidSettingError."""
+
+    def test_unknown_strategy_raises_at_merger_init(self):
+        with pytest.raises(InvalidSettingError) as exc:
+            SLAOMerger(strategy_config=MergeStrategyConfig(strategy="bogus"))
+        assert exc.value.code == "CONFIG_INVALID_SETTING"
+
+    def test_trim_threshold_out_of_range_raises(self):
+        with pytest.raises(InvalidSettingError) as exc:
+            SLAOMerger(strategy_config=MergeStrategyConfig(trim_threshold=1.0))
+        assert exc.value.code == "CONFIG_INVALID_SETTING"
+
+    def test_trim_threshold_negative_raises(self):
+        with pytest.raises(InvalidSettingError):
+            SLAOMerger(strategy_config=MergeStrategyConfig(trim_threshold=-0.1))
+
+    def test_drop_rate_one_rejected(self):
+        # drop_rate=1.0 drops everything + divide-by-zero — must be rejected.
+        with pytest.raises(InvalidSettingError) as exc:
+            SLAOMerger(strategy_config=MergeStrategyConfig(drop_rate=1.0))
+        assert exc.value.code == "CONFIG_INVALID_SETTING"
+
+    def test_drop_rate_zero_allowed(self):
+        # 0.0 degenerates to replace-on-increment (allowed).
+        SLAOMerger(strategy_config=MergeStrategyConfig(drop_rate=0.0))
+
+    def test_merge_lora_weights_unknown_method_raises(self):
+        base = {"m.lora_B.default.weight": torch.ones(2, 2)}
+        new = {"m.lora_B.default.weight": torch.ones(2, 2)}
+        with pytest.raises(InvalidSettingError):
+            merge_lora_weights(base, new, method="nonsense")
+
+    def test_merge_lora_weights_accepts_four_strategy_names(self):
+        base = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        for method in ("qiao_mahdavi", "linear", "ties", "dare"):
+            out = merge_lora_weights(base, new, run_index=2, method=method)
+            assert isinstance(out, dict) and out
+
+
+class TestFiniteCheckAllStrategies:
+    """A non-finite value in the MERGED OUTPUT must raise SLAO_MERGE_DIVERGED,
+    for every strategy.
+
+    We inject ``inf`` rather than ``nan`` because TIES's trim step
+    (``abs(x) >= thresh``) evaluates ``nan >= thresh`` as False and thus
+    *launders* a NaN input into a trimmed 0 — a correct, by-design behavior, not
+    a divergence. ``inf`` survives the trim (``abs(inf) >= thresh`` is True) so
+    it propagates to the output for all four strategies, exercising the shared
+    finite-check uniformly.
+    """
+
+    @pytest.mark.parametrize("strategy", ["qiao_mahdavi", "linear", "ties", "dare"])
+    def test_nonfinite_in_output_raises_diverged(self, strategy):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        merger = SLAOMerger(
+            strategy_config=MergeStrategyConfig(strategy=strategy)
+        )
+        merger.initialize(acc)
+        # Inject a non-finite value into the new adapter's B matrix.
+        bad = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[float("inf"), 3.0], [3.0, 3.0]])
+        with pytest.raises(BackpropagateError) as exc:
+            merger.merge(bad, run_index=2)
+        assert exc.value.code == "SLAO_MERGE_DIVERGED"
+
+    def test_ties_launders_nan_input_to_zero(self):
+        """Documented behavior: TIES trims a NaN input to 0 (not a divergence)."""
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        merger = SLAOMerger(strategy_config=MergeStrategyConfig(strategy="ties"))
+        merger.initialize(acc)
+        bad = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[float("nan"), 3.0], [3.0, 3.0]])
+        # No raise — the NaN entry is trimmed away.
+        result = merger.merge(bad, run_index=2)
+        assert result.strategy == "ties"
+
+
+class TestQiaoMahdaviRegressionLock:
+    """The qiao_mahdavi strategy MUST be byte-identical to the canonical
+    in-place SLAOMerger.merge (the existing default behavior)."""
+
+    def _pair(self):
+        acc = _tiny_lora(
+            [[0.5, -1.0], [2.0, 0.25]], [[0.1, 0.2], [0.3, 0.4]]
+        )
+        new = _tiny_lora(
+            [[1.5, -2.0], [0.5, 1.25]], [[0.9, 0.8], [0.7, 0.6]]
+        )
+        return acc, new
+
+    def test_pure_function_matches_direct_merge(self):
+        """merge_strategy_qiao_mahdavi(acc, new) == in-place merge output."""
+        acc, new = self._pair()
+
+        # Path 1: the standalone pure function.
+        pure = merge_strategy_qiao_mahdavi(
+            {k: v.clone() for k, v in acc.items()},
+            {k: v.clone() for k, v in new.items()},
+            run_index=2,
+            config=MergeStrategyConfig(),
+            slao_config=SLAOConfig(),
+        )
+
+        # Path 2: the canonical in-place merger (default config).
+        merger = SLAOMerger()
+        merger.initialize({k: v.clone() for k, v in acc.items()})
+        merger.merge({k: v.clone() for k, v in new.items()}, run_index=2)
+        direct = merger.get_merged_lora()
+
+        assert pure.keys() == direct.keys()
+        for key in pure:
+            assert torch.equal(pure[key], direct[key]), f"mismatch at {key}"
+
+    def test_default_merger_output_byte_identical_to_baseline(self):
+        """A default-config SLAOMerger.merge produces the exact pre-T2.2
+        merged tensors. Golden values computed from the SLAO math by hand:
+
+        run_index=2 -> scale = 1/sqrt(2) = 0.70710678.
+        A is hard-replaced (= new A); B_merge = B_acc + scale*(B_new - B_acc).
+        """
+        acc, new = self._pair()
+        merger = SLAOMerger()  # default qiao_mahdavi
+        merger.initialize({k: v.clone() for k, v in acc.items()})
+        merger.merge({k: v.clone() for k, v in new.items()}, run_index=2)
+        out = merger.get_merged_lora()
+
+        scale = 1.0 / math.sqrt(2)
+        a_key = "model.layers.0.self_attn.q_proj.lora_A.default.weight"
+        b_key = "model.layers.0.self_attn.q_proj.lora_B.default.weight"
+        # A == new A (hard replace).
+        assert torch.allclose(out[a_key], new[a_key])
+        # B == EMA blend.
+        expected_b = acc[b_key] + scale * (new[b_key] - acc[b_key])
+        assert torch.allclose(out[b_key], expected_b)
+
+    def test_merge_result_strategy_field_records_qiao(self):
+        acc, new = self._pair()
+        merger = SLAOMerger()
+        merger.initialize(acc)
+        result = merger.merge(new, run_index=2)
+        assert result.strategy == "qiao_mahdavi"
+        assert result.branched is False
+
+
+# =============================================================================
+# v1.5 T2.2: DRIFT GATE (merge-vs-branch)
+# =============================================================================
+
+class TestDriftGate:
+    """drift_gate: orthogonal vs parallel B-tensors -> branch vs merge."""
+
+    def test_parallel_b_tensors_merge(self):
+        # Identical direction -> similarity 1.0 >= threshold -> merge.
+        acc = _tiny_lora([[1.0, 0.0]], [[1.0, 2.0], [3.0, 4.0]])
+        new = _tiny_lora([[0.0, 1.0]], [[2.0, 4.0], [6.0, 8.0]])  # 2x acc B
+        decision = drift_gate(acc, new, threshold=0.5, enabled=True)
+        assert decision.action == "merge"
+        assert decision.similarity > 0.99
+
+    def test_orthogonal_b_tensors_branch(self):
+        # Orthogonal B vectors -> similarity ~0 < threshold -> branch.
+        acc = _tiny_lora([[1.0, 0.0]], [[1.0, 0.0], [0.0, 0.0]])
+        new = _tiny_lora([[0.0, 1.0]], [[0.0, 0.0], [0.0, 1.0]])
+        decision = drift_gate(acc, new, threshold=0.5, enabled=True)
+        assert decision.action == "branch"
+        assert abs(decision.similarity) < 0.5
+
+    def test_disabled_always_merges(self):
+        acc = _tiny_lora([[1.0, 0.0]], [[1.0, 0.0], [0.0, 0.0]])
+        new = _tiny_lora([[0.0, 1.0]], [[0.0, 0.0], [0.0, 1.0]])
+        # Orthogonal (would branch if enabled) but gate disabled -> merge.
+        decision = drift_gate(acc, new, threshold=0.5, enabled=False)
+        assert decision.action == "merge"
+        # Similarity is still reported for observability.
+        assert decision.similarity is not None
+
+    def test_empty_accumulator_seed_merges(self):
+        new = _tiny_lora([[0.0, 1.0]], [[0.0, 0.0], [0.0, 1.0]])
+        decision = drift_gate(None, new, threshold=0.9, enabled=True)
+        assert decision.action == "merge"
+        assert decision.similarity is None
+        decision_empty = drift_gate({}, new, threshold=0.9, enabled=True)
+        assert decision_empty.action == "merge"
+
+    def test_returns_drift_decision_with_threshold(self):
+        acc = _tiny_lora([[1.0, 0.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[1.0, 0.0]], [[1.0, 1.0], [1.0, 1.0]])
+        decision = drift_gate(acc, new, threshold=0.3, enabled=True)
+        assert isinstance(decision, DriftDecision)
+        assert decision.threshold == 0.3
+
+
+# =============================================================================
+# v1.5 T2.2: SLAOMerger strategy routing + schema bump
+# =============================================================================
+
+class TestSLAOMergerStrategyRouting:
+    """The merger routes non-default strategies through apply_merge_strategy
+    while keeping the qiao_mahdavi path in place."""
+
+    def test_ties_strategy_via_merger(self):
+        acc = {"m.lora_B.default.weight": torch.tensor([[5.0, 5.0]])}
+        new = {"m.lora_B.default.weight": torch.tensor([[-1.0, 5.0]])}
+        merger = SLAOMerger(
+            strategy_config=MergeStrategyConfig(strategy="ties", trim_threshold=0.0)
+        )
+        merger.initialize({k: v.clone() for k, v in acc.items()})
+        result = merger.merge({k: v.clone() for k, v in new.items()}, run_index=2)
+        assert result.strategy == "ties"
+        out = merger.get_merged_lora()
+        assert torch.allclose(
+            out["m.lora_B.default.weight"], torch.tensor([[5.0, 5.0]])
+        )
+
+    def test_apply_merge_strategy_dispatch_smoke(self):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        for strategy in MERGE_STRATEGIES:
+            out = apply_merge_strategy(
+                acc, new, run_index=2,
+                config=MergeStrategyConfig(strategy=strategy),
+                slao_config=SLAOConfig(),
+            )
+            assert isinstance(out, dict) and out
+
+    def test_current_slao_version_is_1_1(self):
+        assert SLAOMerger.CURRENT_SLAO_VERSION == "1.1"
+
+    def test_save_load_roundtrips_strategy_config(self, tmp_path):
+        acc = _tiny_lora([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])
+        new = _tiny_lora([[5.0, 6.0], [7.0, 8.0]], [[3.0, 3.0], [3.0, 3.0]])
+        merger = SLAOMerger(
+            strategy_config=MergeStrategyConfig(
+                strategy="dare", drop_rate=0.3, dare_seed=7
+            )
+        )
+        merger.initialize(acc)
+        merger.merge(new, run_index=2)
+        save_dir = str(tmp_path / "slao_ckpt")
+        merger.save(save_dir)
+
+        # Read merge_history.json directly to confirm the schema bump.
+        import json
+        with open(Path(save_dir) / "merge_history.json") as fh:
+            data = json.load(fh)
+        assert data["version"] == "1.1"
+        assert data["strategy_config"]["strategy"] == "dare"
+        assert data["strategy_config"]["drop_rate"] == 0.3
+        assert data["strategy_config"]["dare_seed"] == 7
+        assert data["history"][-1]["strategy"] == "dare"
+
+        # A fresh merger restores the strategy on load.
+        restored = SLAOMerger()
+        restored.load(save_dir)
+        assert restored.strategy_config.strategy == "dare"
+        assert restored.strategy_config.drop_rate == 0.3
+        assert restored.strategy_config.dare_seed == 7

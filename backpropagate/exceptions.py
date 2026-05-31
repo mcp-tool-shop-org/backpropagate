@@ -462,6 +462,33 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         ),
         "retryable": "no",
     },
+    # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): the experimental FP8 compute
+    # path hard-fails. Raised by trainer.py:_apply_fp8_to_base (search for
+    # ``RUNTIME_FP8_UNSUPPORTED``) on the ONE non-degradable axis — the
+    # ``import torchao.float8`` step: the gate ladder already promised FP8
+    # (find_spec(torchao) succeeded) but the import then fails, which means a
+    # half-installed / ABI-mismatched torchao that can't be silently downgraded
+    # to bf16 without breaking the contract the gate made. Every OTHER FP8
+    # failure axis (no CUDA, sm<9, conversion error, first-GEMM error) degrades
+    # to bf16 with a WARN and never reaches here. The fp8+mode='full',
+    # fp8+method='orpo', and fp8+explicit-4bit combinations are rejected
+    # earlier as CONFIG_INVALID_SETTING (a different, pre-load gate).
+    "RUNTIME_FP8_UNSUPPORTED": {
+        "description": (
+            "The experimental FP8 compute path was enabled but FP8 conversion "
+            "/ the first float8 GEMM failed at runtime (e.g. a broken torchao "
+            "import, a model dim not divisible by 16, or a torch/torchao kernel "
+            "mismatch on this GPU)."
+        ),
+        "default_hint": (
+            "Re-run without fp8=True to train in bf16 (correct, no FP8 "
+            "speedup). FP8 needs base-layer inner dims divisible by 16 and "
+            "torchao installed (pip install 'backpropagate[fp8]'); torch>=2.11 "
+            "gives the compiled torchao kernels (2.10 uses the slower "
+            "_scaled_mm fallback)."
+        ),
+        "retryable": "no",
+    },
     "RUNTIME_GPU_TEMPERATURE_CRITICAL": {
         "description": "GPU temperature exceeded the safety threshold.",
         "default_hint": "Wait for the GPU to cool; improve case airflow; lower --batch-size.",

@@ -57,6 +57,8 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--mode` | `lora` | **v1.4** — one of `lora` / `full`. `lora` (the default) trains a low-rank adapter; `full` updates every weight of the base model. `full` is supported only for models up to 3B parameters on consumer 16GB cards — picking `--mode=full` with a >3B model exits `2` with `[RUNTIME_FULL_FT_MODEL_TOO_LARGE]` naming `--mode=lora` + the three sub-3B presets (Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B) as the recovery options. See [full fine-tuning →](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math and the Biderman 2024 / Thinking Machines 2025 citations. |
 | `--method` | `sft` | **v1.5** — one of `sft` / `orpo`. `sft` (the default) is supervised fine-tuning. `orpo` is reference-free preference tuning (Hong, Lee & Thorne 2024) — needs a `{chosen, rejected}` (or `{prompt, chosen, rejected}`) dataset, runs single-stage with no reference model, and so stays in the same VRAM envelope as SFT. ORPO supports `--mode lora` only in v1.5. |
 | `--orpo-beta` | `0.1` | **v1.5** — ORPO odds-ratio weight (the `lambda` / `beta` in TRL's `ORPOConfig`). Keep > 0. Ignored unless `--method orpo`. |
+| `--fp8` | off | **v1.5 (experimental)** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao. Base weights in float8 (~1.4× throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge still works. `--mode lora` + `--method sft` only in v1.5; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Sets `BACKPROPAGATE_TRAINING__FP8`. |
+| `--use-rslora` | off | **v1.5** — rank-stabilized LoRA scaling (`alpha/sqrt(r)` instead of `alpha/r`). Zero inference cost, still mergeable; the benefit grows with rank (relevant at the rank-256 default). Sets `BACKPROPAGATE_LORA__USE_RSLORA`. |
 
 The CLI default aligns with `config.py`'s `ModelConfig.name` as of v1.3 (F-018). Pass `--model unsloth/Qwen2.5-7B-Instruct-bnb-4bit` to opt into the pre-quantized variant, but only with the `[unsloth]` extra installed.
 
@@ -83,6 +85,15 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--init-lora-weights` | `default` | Same as `backprop train`. |
 | `--optim` | auto | Same as `backprop train`. |
 | `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 3B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
+| `--merge-strategy` | `qiao_mahdavi` | **v1.5** — per-tensor LoRA merge rule. `qiao_mahdavi` (default) = the v1.4 SLAO merge (behavior-preserving). `linear` = plain weighted average. `ties` = trim + elect-sign + disjoint-merge (uses `--ties-trim`). `dare` = Bernoulli-drop + rescale (uses `--dare-drop-rate`). All stay mergeable with zero inference cost. Applies only with `--merge-mode slao`. |
+| `--ties-trim` | `0.2` | **v1.5** — TIES trim quantile in `[0, 1]` (fraction of lowest-magnitude delta params zeroed before the sign election; `0.2` = bottom 20%). Only used with `--merge-strategy ties`. |
+| `--dare-drop-rate` | `0.5` | **v1.5** — DARE Bernoulli drop probability in `[0, 1)` (fraction of delta params randomly dropped; survivors rescaled by `1/(1-p)`). Only used with `--merge-strategy dare`. |
+| `--dare-seed` | unset | **v1.5** — seed for DARE's local RNG (deterministic drop mask). Default derives from the run. Only used with `--merge-strategy dare`. |
+| `--drift-gate` | off | **v1.5** — enable the drift gate: skip a merge whose LoRA-B cosine similarity to the running accumulator falls below `--drift-threshold`, keeping the run as a sibling branch instead of corrupting the merge. |
+| `--drift-threshold` | `0.0` | **v1.5** — cosine-similarity floor for the drift gate (range `[-1, 1]`). `similarity < threshold ⇒ branch`. Only consulted when `--drift-gate` is set. |
+| `--eval-gate` | off | **v1.5** — enable the eval gate: after each candidate merge, evaluate held-out loss and reject (restore the pre-merge accumulator) if the merge regressed loss past `--eval-max-regression`. Reuses the v1.5 eval seam. |
+| `--eval-max-regression` | `0.0` | **v1.5** — tolerated held-out-loss increase for the eval gate (`0.0` = zero-tolerance). A merge whose after-loss exceeds before-loss by more than this is rejected (`RUNTIME_EVAL_GATE_REGRESSED`). Only consulted when `--eval-gate` is set. |
+| `--eval-heldout` | unset | **v1.5** — held-out JSONL set for the eval gate. Default reuses the run's reserved last-10% holdout. Only consulted when `--eval-gate` is set. |
 
 ## `backprop diff-runs` (v1.3, experimental)
 
@@ -148,11 +159,13 @@ backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --oll
 | Flag | Default | Description |
 |------|---------|-------------|
 | `model_path` (positional) | **required** | Path to the trained LoRA adapter directory. |
-| `--format`, `-f` | `lora` | One of `lora` / `merged` / `gguf`. |
+| `--format`, `-f` | `lora` | One of `lora` / `merged` / `gguf` / `ollama-adapter`. **v1.5** `ollama-adapter` registers the LoRA adapter with Ollama UNMERGED on top of `--base-model` (a `FROM`+`ADAPTER` Modelfile + `ollama create`) — no model load, no merge, no quantization. Lighter than the merged-GGUF path and the building block for the adapter shelf (swap adapters on one base by tag). Requires `--base-model`. |
 | `--quantization`, `-q` | `q4_k_m` | One of `f16` / `q8_0` / `q5_k_m` / `q4_k_m` / `q4_0` / `q2_k`. |
 | `--output`, `-o` | unset | Output directory (defaults to `<model_path>/<format>`). |
 | `--ollama` | off | After GGUF export, register with Ollama. |
 | `--ollama-name` | unset | Name to use when registering with Ollama. |
+| `--base-model` | unset | **v1.5** — base model for `--format ollama-adapter` (an Ollama model name like `llama3.2` or a base-GGUF path). **Required** with `ollama-adapter`; missing it errors with `INPUT_VALIDATION_FAILED` (exit 1). MUST match the adapter's origin base. Ignored by other formats. |
+| `--adapter-tag` | unset | **v1.5** — adapter tag for the derived `<base>:<tag>` Ollama model name (`--format ollama-adapter`). Default: a sanitised adapter-dir basename. Lets you shelf sibling adapters on one base (`llama3.2:taskA` / `llama3.2:taskB`). Ignored by other formats. |
 | `--hub-token` | unset | HuggingFace Hub token for `--push` flow. Visible to `ps aux` + shell history — prefer `--hub-token-file` or `HF_TOKEN` env var on shared hosts. |
 | `--hub-token-file` | unset | Path to a file containing the HF Hub token (mode-0600 recommended). Mutually exclusive with `--hub-token`. Mirrors v1.3 `--auth-file` pattern for keeping credentials off argv. |
 
@@ -169,7 +182,22 @@ backprop ollama list
 
 # Unregister a model (mirrors `ollama rm`)
 backprop ollama rm my-finetune
+
+# List the adapter shelf for a base (v1.5) — the <base>:<tag> variants
+# produced by `backprop export --format ollama-adapter`
+backprop ollama shelf llama3.2
 ```
+
+| Verb | Positional / Flag | Description |
+|------|-------------------|-------------|
+| `backprop ollama register` | `path` (positional), `--name`, `--modelfile` | Register an already-exported GGUF (or a directory containing one) with the local daemon. |
+| `backprop ollama list` | — | List currently-registered models (mirrors `ollama list`). |
+| `backprop ollama rm` | `name` (positional) | Unregister a model (mirrors `ollama rm`). |
+| `backprop ollama shelf` | `base_model` (positional) | **v1.5** — list the adapter variants registered against a base model: every Ollama `<base>:<tag>` model (produced by `backprop export --format ollama-adapter`) that shares the given base. The bare base itself is excluded; the shelf is the adapter VARIANTS you hot-swap by tag. Best-effort over `ollama list`. |
+
+### Adapter shelf (v1.5)
+
+The "adapter shelf" is the set of Ollama models that share one base and differ only by adapter tag — `llama3.2:taskA`, `llama3.2:taskB`, … — each produced by `backprop export --format ollama-adapter --base-model llama3.2 --adapter-tag taskA`. Because the adapter is applied UNMERGED (a `FROM`+`ADAPTER` Modelfile), the base weights are loaded once and only the small rank-`r` adapter differs per tag, so `ollama run llama3.2:taskA` / `ollama run llama3.2:taskB` swap behaviour without re-quantizing a full model each time. `backprop ollama shelf <base>` lists what's currently on a base's shelf.
 
 ### Architectural deviation note
 

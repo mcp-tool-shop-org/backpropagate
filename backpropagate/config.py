@@ -358,6 +358,17 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # PEFT accepts {"default", "pissa", "loftq"} (we map "default" -> True
         # at the call site in trainer.py to honor the PEFT API).
         init_lora_weights: str = "default"
+        # v1.5 T2.3 (rsLoRA, finding 19 — Kalajdzievski 2023, arXiv:2312.03732).
+        # Rank-Stabilized LoRA: scale the adapter by alpha/sqrt(r) instead of the
+        # standard alpha/r. Standard alpha/r over-throttles gradients at high
+        # rank, so the rank-256 default may under-train the adapter; rsLoRA's
+        # benefit GROWS with rank, at ZERO inference cost (it is a pure scaling
+        # choice — the merged weights are identical-shaped, so the GGUF -> Ollama
+        # export path is unaffected). Default OFF for backward-compat; flip to
+        # True via this field, ``BACKPROPAGATE_LORA__USE_RSLORA``, or
+        # ``Trainer(use_rslora=True)``. Threaded into PEFT's ``LoraConfig
+        # (use_rslora=...)`` at the adapter-build call site in trainer.py.
+        use_rslora: bool = False
 
     class TrainingConfig(BaseSettings):
         """Training hyperparameters."""
@@ -425,6 +436,20 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # setting). Ignored unless ``method == "orpo"``. Keep > 0 — a
         # non-positive weight degenerates ORPO back to plain SFT.
         orpo_beta: float = 0.1
+        # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao's
+        # float8 (Blackwell 5th-gen tensor cores; Hong-/Dettmers-class memory
+        # win — ~1.4x throughput, up to 60% less model memory, and the adapter
+        # still merges). Experimental in v1.5: default OFF so existing runs are
+        # byte-identical. When True, the trainer converts the BASE projection
+        # linears to Float8Linear AFTER the LoRA adapter is attached (the
+        # adapter's rank-r sub-linears + lm_head + embeddings are excluded), and
+        # degrades gracefully to bf16 (one WARN, no raise) on a non-CUDA /
+        # pre-Hopper card or when torchao is absent. No validator: a bool cannot
+        # be malformed (unlike ``method``, whose {sft, orpo} set needs guarding).
+        # mode='full' + fp8 and method='orpo' + fp8 are rejected by the Trainer
+        # constructor gate ladder, NOT here (they are cross-field combinations
+        # the per-field config layer doesn't see).
+        fp8: bool = False
 
         @model_validator(mode="after")
         def _reject_invalid_method(self) -> "TrainingConfig":
@@ -815,6 +840,10 @@ else:
         random_state: int = 42
         use_dora: bool = False
         init_lora_weights: str = "default"
+        # v1.5 T2.3 (rsLoRA): parity with the BaseSettings branch above —
+        # byte-identical default so a pydantic-settings-less install scales the
+        # adapter the same way. alpha/sqrt(r) vs alpha/r; zero inference cost.
+        use_rslora: bool = False
 
     @dataclass
     class TrainingConfig:  # type: ignore[no-redef]
@@ -841,6 +870,11 @@ else:
         # to keep behavior byte-identical across the two installs.
         method: str = "sft"
         orpo_beta: float = 0.1
+        # v1.5 T2.1 (FP8 compute path): parity with the pydantic branch above —
+        # byte-identical default so a pydantic-settings-less install doesn't
+        # silently change FP8 behavior. No validation needed (a bool can't be
+        # malformed); the Trainer gate ladder enforces the cross-field rules.
+        fp8: bool = False
 
         def __post_init__(self) -> None:
             # DATA-A-007 (parity with the pydantic branch above): reject the

@@ -1511,6 +1511,110 @@ class TestLoRAAdapterApplied:
             mock_get_peft.assert_called_once()
 
 
+class TestUseRsloraWiring:
+    """v1.5 T2.3 (rsLoRA, finding 19): ``use_rslora`` threads to the adapter.
+
+    rsLoRA = alpha/sqrt(r) scaling. The canonical wiring point is PEFT's
+    ``LoraConfig(use_rslora=...)`` (transformers loader) / Unsloth's
+    ``get_peft_model(use_rslora=...)`` (unsloth loader). The kwarg is forwarded
+    only when True so the legacy LoraConfig shape is byte-identical for callers
+    who never set it.
+    """
+
+    def test_use_rslora_resolves_from_kwarg(self):
+        """Trainer(use_rslora=True) sets self.use_rslora True."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(use_rslora=True, use_unsloth=False)
+        assert trainer.use_rslora is True
+
+    def test_use_rslora_none_falls_back_to_settings(self):
+        """Trainer(use_rslora=None) reads settings.lora.use_rslora."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(use_rslora=None, use_unsloth=False)
+        assert trainer.use_rslora == settings.lora.use_rslora
+
+    def test_use_rslora_reaches_loraconfig_transformers(self):
+        """use_rslora=True is passed into peft.LoraConfig on the transformers path."""
+        from backpropagate.trainer import Trainer
+
+        mock_model = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.pad_token = None
+        mock_tokenizer.eos_token = "<eos>"
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model), \
+             patch("transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer), \
+             patch("transformers.BitsAndBytesConfig"), \
+             patch("peft.prepare_model_for_kbit_training", return_value=mock_model), \
+             patch("peft.get_peft_model", return_value=MagicMock()), \
+             patch("peft.LoraConfig") as mock_lora_config:
+
+            trainer = Trainer(use_rslora=True, use_unsloth=False)
+            trainer._load_with_transformers()
+
+            mock_lora_config.assert_called_once()
+            kwargs = mock_lora_config.call_args.kwargs
+            assert kwargs.get("use_rslora") is True, (
+                "use_rslora=True must reach peft.LoraConfig (alpha/sqrt(r) "
+                f"scaling); got kwargs={kwargs!r}."
+            )
+
+    def test_use_rslora_absent_from_loraconfig_when_false(self):
+        """use_rslora=False does NOT add the kwarg (legacy shape preserved)."""
+        from backpropagate.trainer import Trainer
+
+        mock_model = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.pad_token = None
+        mock_tokenizer.eos_token = "<eos>"
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model), \
+             patch("transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer), \
+             patch("transformers.BitsAndBytesConfig"), \
+             patch("peft.prepare_model_for_kbit_training", return_value=mock_model), \
+             patch("peft.get_peft_model", return_value=MagicMock()), \
+             patch("peft.LoraConfig") as mock_lora_config:
+
+            trainer = Trainer(use_rslora=False, use_unsloth=False)
+            trainer._load_with_transformers()
+
+            mock_lora_config.assert_called_once()
+            assert "use_rslora" not in mock_lora_config.call_args.kwargs
+
+    def test_use_rslora_reaches_get_peft_model_unsloth(self):
+        """use_rslora=True is passed into Unsloth's get_peft_model on the unsloth path."""
+        from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer
+
+        mock_fast_lm = MagicMock()
+        mock_model = MagicMock()
+        mock_tokenizer = MagicMock()
+        mock_fast_lm.from_pretrained.return_value = (mock_model, mock_tokenizer)
+        mock_fast_lm.get_peft_model.return_value = mock_model
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch.dict(feature_flags.FEATURES, {"unsloth": True}), \
+             patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}):
+
+            trainer = Trainer(use_rslora=True, use_unsloth=True)
+            with patch("unsloth.FastLanguageModel", mock_fast_lm):
+                trainer._load_with_unsloth()
+
+            mock_fast_lm.get_peft_model.assert_called_once()
+            kwargs = mock_fast_lm.get_peft_model.call_args.kwargs
+            assert kwargs.get("use_rslora") is True, (
+                "use_rslora=True must reach Unsloth's get_peft_model; got "
+                f"kwargs={kwargs!r}."
+            )
+
+
 class TestLoRARankConfiguration:
     """Tests for custom r, alpha LoRA values."""
 

@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +62,17 @@ __all__ = [
     "compute_task_similarity",
     "adaptive_scale",
     "get_layer_scale",
+    # v1.5 T2.2: pluggable merge strategy framework
+    "MergeStrategyConfig",
+    "apply_merge_strategy",
+    "merge_strategy_qiao_mahdavi",
+    "merge_strategy_linear",
+    "merge_strategy_ties",
+    "merge_strategy_dare",
+    "MERGE_STRATEGIES",
+    # v1.5 T2.2: drift gate
+    "DriftDecision",
+    "drift_gate",
 ]
 
 @dataclass
@@ -97,6 +109,51 @@ class SLAOConfig:
 
 
 @dataclass
+class MergeStrategyConfig:
+    """v1.5 T2.2: configuration for the pluggable merge-strategy framework.
+
+    Selects WHICH per-tensor merge rule the SLAO accumulator uses when folding
+    a freshly-trained LoRA in. ``strategy="qiao_mahdavi"`` (the default)
+    routes to the existing :meth:`SLAOMerger.merge` behavior BYTE-IDENTICALLY,
+    so a default-config run is unchanged. The other three (``linear``,
+    ``ties``, ``dare``) implement well-known model-merging algorithms adapted to
+    operate directly on the raw LoRA ``lora_A`` / ``lora_B`` factor tensors.
+
+    Deliberate approximation (load-bearing): every strategy operates
+    **per-tensor on the raw lora_A/lora_B tensors**, NOT on a reconstructed
+    ``B @ A`` task-vector. This is cheap (no rank-r matmul per layer) and
+    factorization-preserving (the merged adapter stays a valid LoRA pair). It
+    is an approximation of the task-vector formulation in the source papers
+    (Yadav 2023 TIES, Yu 2023 DARE) — the trim / sign-elect / drop operations
+    are applied to the factor tensors rather than to the full ΔW = BA matrix.
+    Documented here so a future contributor doesn't "fix" it into a slower,
+    rank-reconstructing variant by accident.
+
+    Fields:
+        strategy: One of ``MERGE_STRATEGIES`` keys (validated at
+            :meth:`SLAOMerger.__init__`).
+        trim_threshold: TIES trim quantile in ``[0.0, 1.0)`` — drop entries
+            below this magnitude quantile per tensor (default 0.2 → bottom 20%).
+        drop_rate: DARE Bernoulli drop probability in ``[0.0, 1.0)`` — survivors
+            are rescaled by ``1/(1-drop_rate)`` (default 0.5). ``1.0`` is
+            rejected (would drop everything + divide-by-zero); ``0.0`` degenerates
+            to replace-on-increment.
+        dare_seed: Seed for the LOCAL ``torch.Generator`` DARE uses. When
+            ``None``, derived deterministically from the run index so the global
+            RNG (and thus training reproducibility) is NEVER touched.
+        linear_weight: Optional fixed blend weight for ``linear``. When ``None``
+            (default), ``linear`` uses the same time-aware λ(i)=1/√i schedule as
+            ``qiao_mahdavi``; when set, that fixed weight is used for every run.
+    """
+
+    strategy: str = "qiao_mahdavi"
+    trim_threshold: float = 0.2
+    drop_rate: float = 0.5
+    dare_seed: int | None = None
+    linear_weight: float | None = None
+
+
+@dataclass
 class MergeResult:
     """Result of a SLAO merge operation."""
 
@@ -120,6 +177,19 @@ class MergeResult:
     # A non-zero value on run >= 2 is operator-actionable: inspect the
     # upstream run's target_modules + peft version for drift.
     new_keys_added: int = 0
+
+    # v1.5 T2.2: which merge strategy produced this result ("qiao_mahdavi" by
+    # default). Recorded so merge_history.json carries the per-run strategy.
+    strategy: str = "qiao_mahdavi"
+
+    # v1.5 T2.2: True when the drift gate decided to BRANCH this run instead of
+    # merging it (the accumulator was NOT advanced; the run is kept as a
+    # sibling on disk). On a branch, the a/b counts are 0.
+    branched: bool = False
+
+    # v1.5 T2.2: the drift-gate cosine similarity (over .lora_B.) for this run,
+    # or None when not computed (gate disabled AND not branched, or seed run).
+    task_similarity: float | None = None
 
 
 # =============================================================================
@@ -484,6 +554,469 @@ def estimate_total_layers(lora_state: dict[str, torch.Tensor]) -> int:
 
 
 # =============================================================================
+# v1.5 T2.2: PLUGGABLE MERGE-STRATEGY FRAMEWORK
+# =============================================================================
+#
+# Each strategy is a PURE function over LoRA state dicts: it reads
+# ``accumulator`` + ``new_lora`` (both ``{key: tensor}`` keyed by the
+# ``.lora_A.`` / ``.lora_B.`` substrings ``_get_lora_state_dict`` produces) and
+# returns a NEW merged dict WITHOUT mutating either input. They operate
+# per-tensor on the raw factor tensors (see ``MergeStrategyConfig`` for the
+# deliberate-approximation note). The shared finite-check (SLAO_MERGE_DIVERGED)
+# + merge-history recording in ``SLAOMerger.merge`` wrap ALL four strategies;
+# the strategy functions themselves do no validation / logging.
+
+
+def _clone_through_other_keys(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    result: dict[str, Any],
+) -> None:
+    """Fold keys present on only ONE side (or non-tensors) into ``result``.
+
+    Mirrors the asymmetric-key handling of the SLAO merge + the
+    ``merge_lora_weights`` "average" branch: a key that appears in only the
+    accumulator or only the new adapter (e.g. an upstream ``target_modules``
+    change, or a DoRA magnitude vector one side lacks) is cloned through rather
+    than silently dropped. Tensors common to both sides are assumed already
+    handled by the caller and are skipped here.
+    """
+    import torch
+
+    for key, value in accumulator.items():
+        if key in result:
+            continue
+        if key not in new_lora:
+            result[key] = (
+                value.clone() if isinstance(value, torch.Tensor) else value
+            )
+    for key, value in new_lora.items():
+        if key in result:
+            continue
+        if key not in accumulator:
+            result[key] = (
+                value.clone() if isinstance(value, torch.Tensor) else value
+            )
+
+
+def merge_strategy_qiao_mahdavi(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    *,
+    run_index: int,
+    config: MergeStrategyConfig,  # noqa: ARG001 — uniform dispatch signature
+    slao_config: SLAOConfig,
+) -> dict[str, torch.Tensor]:
+    """DEFAULT strategy — the existing SLAO asymmetric merge, unchanged.
+
+    Implements Qiao & Mahdavi 2025 ("Merge before Forget", arXiv:2512.23017):
+    A matrices are HARD-REPLACED (``A_merge = A_ft``), B matrices are
+    EMA-merged with the time-aware λ(i) (``B_merge += λ·(B_ft − B_merge)``),
+    DoRA magnitude vectors are hard-replaced (mirrors the A asymmetry), and any
+    other tensor uses the same EMA blend. This is a STANDALONE pure-function
+    re-expression of the per-key body of :meth:`SLAOMerger.merge`; the merger's
+    own ``merge`` method keeps its in-place loop as the canonical path and a
+    regression test asserts the two produce byte-identical output.
+
+    The λ schedule (and adaptive / layer scaling) is read from ``slao_config``
+    so this strategy honors the operator's existing SLAOConfig exactly.
+    """
+    import torch
+
+    base_scale = time_aware_scale(
+        run_index,
+        scaling_type=slao_config.scaling_type,
+        min_scale=slao_config.min_scale,
+    )
+    if slao_config.use_adaptive_scaling:
+        similarity = compute_task_similarity(accumulator, new_lora)
+        scale = adaptive_scale(
+            base_scale, similarity, scale_range=slao_config.adaptive_scale_range
+        )
+        scale = max(min(scale, 1.0), slao_config.min_scale)
+    else:
+        scale = base_scale
+
+    total_layers = None
+    if slao_config.use_layer_scaling:
+        total_layers = estimate_total_layers(new_lora)
+
+    result: dict[str, Any] = {}
+    for key, new_value in new_lora.items():
+        if not isinstance(new_value, torch.Tensor):
+            continue
+        if key not in accumulator:
+            result[key] = new_value.clone()
+            continue
+
+        merged_value = accumulator[key]
+        if (
+            isinstance(merged_value, torch.Tensor)
+            and merged_value.device != new_value.device
+        ):
+            merged_value = merged_value.to(new_value.device)
+
+        if slao_config.use_layer_scaling and total_layers:
+            layer_scale = get_layer_scale(
+                key,
+                total_layers,
+                early_scale=slao_config.layer_scale_early,
+                middle_scale=slao_config.layer_scale_middle,
+                late_scale=slao_config.layer_scale_late,
+            )
+            effective_scale = max(
+                min(scale * layer_scale, 1.0), slao_config.min_scale
+            )
+        else:
+            effective_scale = scale
+
+        if ".lora_A." in key or "lora_magnitude_vector" in key:
+            result[key] = merge_A_matrices(new_value)
+        elif ".lora_B." in key:
+            result[key] = merge_B_matrices(merged_value, new_value, effective_scale)
+        else:
+            result[key] = merge_B_matrices(merged_value, new_value, effective_scale)
+
+    # Keys present only in the accumulator survive unchanged.
+    for key, value in accumulator.items():
+        if key not in result:
+            result[key] = value
+    return result
+
+
+def merge_strategy_linear(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    *,
+    run_index: int,
+    config: MergeStrategyConfig,
+    slao_config: SLAOConfig,
+) -> dict[str, torch.Tensor]:
+    """Symmetric linear interpolation per key: ``merged = (1-w)·acc + w·new``.
+
+    The weight ``w`` is the same time-aware λ(i)=1/√i (clamped to
+    ``[min_scale, 1.0]``) as ``qiao_mahdavi`` by default, OR the fixed
+    ``config.linear_weight`` when set. Unlike SLAO, BOTH ``lora_A`` and
+    ``lora_B`` are blended (no hard-replace asymmetry) — this is the K-Merge
+    "linear merge is a strong baseline" path (arXiv:2510.13537). Asymmetric
+    keys (present on only one side) are cloned through, reusing the same
+    clone-through logic as the ``merge_lora_weights`` average branch.
+
+    ``w = (1-w)·acc + w·new`` is the standard convex blend; equivalently
+    ``acc + w·(new − acc)`` — identical to the SLAO B-matrix EMA, applied
+    uniformly to every tensor.
+    """
+    import torch
+
+    if config.linear_weight is not None:
+        w = float(config.linear_weight)
+    else:
+        w = time_aware_scale(
+            run_index,
+            scaling_type=slao_config.scaling_type,
+            min_scale=slao_config.min_scale,
+        )
+
+    result: dict[str, Any] = {}
+    for key, new_value in new_lora.items():
+        if not isinstance(new_value, torch.Tensor):
+            continue
+        acc_value = accumulator.get(key)
+        if isinstance(acc_value, torch.Tensor):
+            av = acc_value
+            if av.device != new_value.device:
+                av = av.to(new_value.device)
+            result[key] = av + w * (new_value - av)
+    _clone_through_other_keys(accumulator, new_lora, result)
+    return result
+
+
+def merge_strategy_ties(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    *,
+    run_index: int,  # noqa: ARG001 — uniform dispatch signature (TIES is time-independent)
+    config: MergeStrategyConfig,
+    slao_config: SLAOConfig,  # noqa: ARG001 — uniform dispatch signature
+) -> dict[str, torch.Tensor]:
+    """TIES merge (Yadav et al. 2023, arXiv:2306.01708), per factor tensor.
+
+    For each tensor present on both sides, treating the accumulator and the new
+    adapter as the two task vectors τ_acc / τ_new:
+
+    1. **TRIM** — zero entries whose magnitude is below the
+       ``config.trim_threshold`` quantile (default 0.2 → drop the bottom 20%
+       smallest-magnitude entries), independently per tensor.
+    2. **ELECT SIGN** — the elected sign γ = sign(τ_acc_trimmed +
+       τ_new_trimmed) elementwise (the aggregate-sign rule from the paper).
+    3. **DISJOINT MERGE** — average only the contributors whose sign agrees
+       with γ; where no contributor agrees (count == 0) the result is 0.
+
+    Asymmetric keys are cloned through. The threshold range is validated at
+    :meth:`SLAOMerger.__init__`.
+    """
+    import torch
+
+    q = float(config.trim_threshold)
+
+    def _trim(t: torch.Tensor) -> torch.Tensor:
+        """Zero the bottom-``q`` magnitude quantile of ``t`` (q in [0,1))."""
+        if q <= 0.0:
+            return t
+        flat = t.detach().abs().reshape(-1).float()
+        if flat.numel() == 0:
+            return t
+        # Magnitude threshold at the q-quantile; entries strictly below it die.
+        thresh = torch.quantile(flat, q)
+        mask = t.detach().abs() >= thresh
+        return t * mask.to(t.dtype)
+
+    result: dict[str, Any] = {}
+    for key, new_value in new_lora.items():
+        if not isinstance(new_value, torch.Tensor):
+            continue
+        acc_value = accumulator.get(key)
+        if not isinstance(acc_value, torch.Tensor):
+            continue
+        av = acc_value
+        if av.device != new_value.device:
+            av = av.to(new_value.device)
+
+        t_acc = _trim(av)
+        t_new = _trim(new_value)
+
+        # ELECT SIGN: aggregate sign of the trimmed stack.
+        gamma = torch.sign(t_acc + t_new)
+
+        # DISJOINT MERGE: sum contributors whose sign matches gamma, divide by
+        # the count of such contributors (0 → 0 via the guard below).
+        agree_acc = (torch.sign(t_acc) == gamma) & (gamma != 0)
+        agree_new = (torch.sign(t_new) == gamma) & (gamma != 0)
+        contrib_sum = t_acc * agree_acc.to(t_acc.dtype) + t_new * agree_new.to(
+            t_new.dtype
+        )
+        count = agree_acc.to(t_acc.dtype) + agree_new.to(t_new.dtype)
+        merged = torch.where(
+            count > 0,
+            contrib_sum / count.clamp(min=1.0),
+            torch.zeros_like(contrib_sum),
+        )
+        result[key] = merged
+    _clone_through_other_keys(accumulator, new_lora, result)
+    return result
+
+
+def merge_strategy_dare(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    *,
+    run_index: int,
+    config: MergeStrategyConfig,
+    slao_config: SLAOConfig,  # noqa: ARG001 — uniform dispatch signature
+) -> dict[str, torch.Tensor]:
+    """DARE merge (Yu et al. 2023, arXiv:2311.03099), per factor tensor.
+
+    Operates on the increment δ = new − acc for each common tensor:
+
+    1. Draw a Bernoulli mask with drop probability ``config.drop_rate`` (default
+       0.5) — survivors keep δ, dropped entries discard it.
+    2. Rescale survivors by ``1/(1-drop_rate)`` to preserve the expected
+       increment magnitude.
+    3. ``merged = acc + (mask ⊙ δ)/(1-drop_rate)``.
+
+    Reproducibility (load-bearing): the Bernoulli draw uses a LOCAL
+    ``torch.Generator`` seeded from ``config.dare_seed`` (or, when ``None``, a
+    deterministic value derived from ``run_index``). The GLOBAL torch RNG is
+    NEVER touched, so DARE-merging does not perturb training reproducibility.
+    ``drop_rate == 0.0`` degenerates to replace-on-increment (mask all-ones,
+    rescale 1.0 → ``merged = acc + δ = new``); ``drop_rate == 1.0`` is rejected
+    at :meth:`SLAOMerger.__init__` (drops everything + divide-by-zero).
+    """
+    import torch
+
+    drop_rate = float(config.drop_rate)
+    keep_prob = 1.0 - drop_rate
+
+    # LOCAL generator — never disturb the global RNG (training determinism).
+    if config.dare_seed is not None:
+        seed = int(config.dare_seed)
+    else:
+        # Deterministic, run-dependent seed so each run's draw differs but the
+        # whole session is reproducible given a fixed run schedule.
+        seed = 0x5A0D_0000 ^ int(run_index)
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+
+    result: dict[str, Any] = {}
+    for key, new_value in new_lora.items():
+        if not isinstance(new_value, torch.Tensor):
+            continue
+        acc_value = accumulator.get(key)
+        if not isinstance(acc_value, torch.Tensor):
+            continue
+        av = acc_value
+        if av.device != new_value.device:
+            av = av.to(new_value.device)
+
+        delta = new_value - av
+        if drop_rate <= 0.0:
+            # Replace-on-increment: keep the full increment.
+            result[key] = av + delta
+            continue
+        # Bernoulli keep-mask via the LOCAL generator. rand on CPU then move to
+        # the tensor's device keeps the draw generator-deterministic regardless
+        # of device (CUDA generators are a separate RNG stream).
+        rand = torch.rand(delta.shape, generator=gen)
+        keep_mask = (rand < keep_prob).to(delta.dtype)
+        if keep_mask.device != delta.device:
+            keep_mask = keep_mask.to(delta.device)
+        result[key] = av + (keep_mask * delta) / keep_prob
+    _clone_through_other_keys(accumulator, new_lora, result)
+    return result
+
+
+# Dispatch table: strategy name -> pure merge function. Public so callers (and
+# tests) can enumerate the supported names; ``merge_lora_weights`` and
+# ``SLAOMerger.__init__`` validate against its keys.
+_MERGE_DISPATCH: dict[str, Callable[..., dict[str, torch.Tensor]]] = {
+    "qiao_mahdavi": merge_strategy_qiao_mahdavi,
+    "linear": merge_strategy_linear,
+    "ties": merge_strategy_ties,
+    "dare": merge_strategy_dare,
+}
+
+# Stable, sorted tuple of the selectable strategy names (for error messages +
+# CLI choices). ``qiao_mahdavi`` is the default.
+MERGE_STRATEGIES: tuple[str, ...] = tuple(_MERGE_DISPATCH.keys())
+
+
+def apply_merge_strategy(
+    accumulator: dict[str, torch.Tensor],
+    new_lora: dict[str, torch.Tensor],
+    *,
+    run_index: int,
+    config: MergeStrategyConfig,
+    slao_config: SLAOConfig | None = None,
+) -> dict[str, torch.Tensor]:
+    """Route to the configured merge strategy and return the merged state dict.
+
+    Pure dispatch wrapper: looks ``config.strategy`` up in ``_MERGE_DISPATCH``
+    and calls it with the uniform ``(accumulator, new_lora, run_index, config,
+    slao_config)`` signature. Validation of ``config.strategy`` /
+    ``trim_threshold`` / ``drop_rate`` is the caller's responsibility (done once
+    at :meth:`SLAOMerger.__init__`); this function assumes a valid config and
+    raises :class:`KeyError` only on a programming error (an unknown strategy
+    that bypassed validation).
+
+    ``slao_config`` supplies the λ schedule + adaptive/layer scaling the
+    ``qiao_mahdavi`` and ``linear`` strategies read; defaults to a fresh
+    :class:`SLAOConfig` when omitted (the strategies that ignore it — ties /
+    dare — are unaffected).
+    """
+    fn = _MERGE_DISPATCH[config.strategy]
+    return fn(
+        accumulator,
+        new_lora,
+        run_index=run_index,
+        config=config,
+        slao_config=slao_config or SLAOConfig(),
+    )
+
+
+# =============================================================================
+# v1.5 T2.2: DRIFT GATE (merge-vs-branch)
+# =============================================================================
+
+
+@dataclass
+class DriftDecision:
+    """The merge-vs-branch verdict from :func:`drift_gate`.
+
+    ``action`` is ``"merge"`` (fold the new adapter into the accumulator) or
+    ``"branch"`` (keep the run as a sibling, don't advance the accumulator).
+    ``similarity`` is the cosine similarity over ``.lora_B.`` tensors (or
+    ``None`` when no comparison was possible — empty/seed accumulator).
+    """
+
+    action: str  # "merge" | "branch"
+    similarity: float | None
+    threshold: float
+    reason: str
+
+
+def drift_gate(
+    accumulator: dict[str, torch.Tensor] | None,
+    new_lora: dict[str, torch.Tensor],
+    *,
+    threshold: float,
+    enabled: bool,
+) -> DriftDecision:
+    """Decide whether to MERGE a new adapter or BRANCH it as a sibling.
+
+    K-Merge style (arXiv:2510.13537): a similarity threshold decides
+    merge-vs-new-slot. We reuse :func:`compute_task_similarity` (cosine over the
+    ``.lora_B.`` tensors). Semantics:
+
+    - ``enabled=False`` → always MERGE (the gate is advisory; it still reports
+      the measured similarity so operators can tune ``threshold`` from logs).
+    - empty / ``None`` accumulator (run 1, the seed) → MERGE (nothing to drift
+      from; the first run always seeds the accumulator).
+    - similarity ``< threshold`` → BRANCH (the new task diverged too far; folding
+      it would corrupt the accumulated direction).
+    - similarity ``>= threshold`` → MERGE.
+
+    Args:
+        accumulator: The running merged LoRA state (``None``/empty on run 1).
+        new_lora: The freshly-trained LoRA state for this run.
+        threshold: Cosine-similarity floor for merging (``[-1, 1]``).
+        enabled: When ``False`` the decision is always MERGE (advisory mode).
+
+    Returns:
+        :class:`DriftDecision`.
+    """
+    if not accumulator:
+        return DriftDecision(
+            action="merge",
+            similarity=None,
+            threshold=threshold,
+            reason="seed run (empty accumulator) — always merge",
+        )
+
+    similarity = compute_task_similarity(accumulator, new_lora)
+
+    if not enabled:
+        return DriftDecision(
+            action="merge",
+            similarity=similarity,
+            threshold=threshold,
+            reason=(
+                f"drift gate advisory (disabled); similarity={similarity:.4f} "
+                f"vs threshold={threshold:.4f} — merging regardless"
+            ),
+        )
+
+    if similarity < threshold:
+        return DriftDecision(
+            action="branch",
+            similarity=similarity,
+            threshold=threshold,
+            reason=(
+                f"similarity={similarity:.4f} < threshold={threshold:.4f}: "
+                f"task drifted too far — branching (kept as sibling)"
+            ),
+        )
+    return DriftDecision(
+        action="merge",
+        similarity=similarity,
+        threshold=threshold,
+        reason=(
+            f"similarity={similarity:.4f} >= threshold={threshold:.4f}: "
+            f"merging"
+        ),
+    )
+
+
+# =============================================================================
 # SLAO MERGER CLASS
 # =============================================================================
 
@@ -517,21 +1050,77 @@ class SLAOMerger:
     # into the file) and load() (compared against the disk value). Previously
     # save() embedded a "1.0" literal and load() defined a local
     # _CURRENT_SLAO_SCHEMA = "1.0" — two copies that could silently drift.
-    CURRENT_SLAO_VERSION = "1.0"
+    #
+    # v1.5 T2.2: bumped "1.0" -> "1.1" — merge_history.json now also persists
+    # the merge-strategy config (strategy / trim_threshold / drop_rate /
+    # dare_seed / linear_weight) and each history entry gains
+    # strategy / branched / task_similarity. load() reads them with
+    # backward-compatible defaults so a v1.0 checkpoint still resumes.
+    CURRENT_SLAO_VERSION = "1.1"
 
-    def __init__(self, config: SLAOConfig | None = None):
+    def __init__(
+        self,
+        config: SLAOConfig | None = None,
+        strategy_config: MergeStrategyConfig | None = None,
+    ):
         """
         Initialize the SLAO merger.
 
         Args:
             config: Optional SLAOConfig, uses defaults if not provided
+            strategy_config: v1.5 T2.2 — optional MergeStrategyConfig selecting
+                the per-tensor merge rule. Defaults to ``strategy="qiao_mahdavi"``
+                (the existing SLAO behavior, byte-identical). Validated here:
+                an unknown ``strategy`` or an out-of-range ``trim_threshold`` /
+                ``drop_rate`` raises :class:`InvalidSettingError`
+                (code=CONFIG_INVALID_SETTING).
         """
         self.config = config or SLAOConfig()
+        self.strategy_config = strategy_config or MergeStrategyConfig()
+
+        # v1.5 T2.2: validate the strategy config once, at construction, so a
+        # bad value fails loud BEFORE any run rather than mid-merge.
+        if self.strategy_config.strategy not in _MERGE_DISPATCH:
+            raise InvalidSettingError(
+                "merge_strategy",
+                self.strategy_config.strategy,
+                f"one of {MERGE_STRATEGIES}",
+                suggestion=(
+                    "Selectable merge strategies: 'qiao_mahdavi' (default; "
+                    "implements Qiao & Mahdavi 2025), 'linear', 'ties', 'dare'."
+                ),
+            )
+        if not (0.0 <= self.strategy_config.trim_threshold < 1.0):
+            raise InvalidSettingError(
+                "ties_trim_threshold",
+                self.strategy_config.trim_threshold,
+                "a float in [0.0, 1.0)",
+                suggestion=(
+                    "trim_threshold is a magnitude quantile; 0.2 drops the "
+                    "bottom 20% of entries. Use a value in [0.0, 1.0)."
+                ),
+            )
+        if not (0.0 <= self.strategy_config.drop_rate < 1.0):
+            raise InvalidSettingError(
+                "dare_drop_rate",
+                self.strategy_config.drop_rate,
+                "a float in [0.0, 1.0)",
+                suggestion=(
+                    "drop_rate is the DARE Bernoulli drop probability. "
+                    "drop_rate=1.0 is rejected (drops everything + "
+                    "divide-by-zero); use a value in [0.0, 1.0). 0.0 "
+                    "degenerates to replace-on-increment."
+                ),
+            )
+
         self._merged_state: dict[str, Any] | None = None
         self._run_index: int = 0
         self._merge_history: list[MergeResult] = []
 
-        logger.info(f"SLAOMerger initialized with config: scaling={self.config.scaling_type}")
+        logger.info(
+            f"SLAOMerger initialized with config: scaling={self.config.scaling_type}, "
+            f"merge_strategy={self.strategy_config.strategy}"
+        )
 
     def initialize(self, lora_state_dict: dict[str, torch.Tensor]) -> None:
         """
@@ -774,8 +1363,70 @@ class SLAOMerger:
         # mortem signal lives next to the merge counters.
         new_keys_added = 0
 
-        # Merge each parameter
-        for key, new_value in new_lora_state.items():
+        # v1.5 T2.2: pluggable merge strategy dispatch.
+        #
+        # The DEFAULT ("qiao_mahdavi") path is the ORIGINAL in-place per-key
+        # merge loop below, kept byte-for-byte unchanged so a default-config
+        # run is bit-identical to pre-T2.2 (a regression test asserts this
+        # against ``merge_strategy_qiao_mahdavi`` and against a pinned golden).
+        # The other three strategies (linear / ties / dare) are PURE functions
+        # that produce a fresh merged dict; we compute it, swap it into the
+        # accumulator, derive the a/b/new-key counts for the MergeResult, and
+        # then fall through to the SAME full-scan finite-check + history
+        # recording that wraps the default path.
+        if self.strategy_config.strategy != "qiao_mahdavi":
+            merged = apply_merge_strategy(
+                self._merged_state,
+                new_lora_state,
+                run_index=self._run_index,
+                config=self.strategy_config,
+                slao_config=self.config,
+            )
+            # Derive counts + new-key drift from the produced dict so the
+            # MergeResult surface matches the qiao_mahdavi path.
+            for key, new_value in new_lora_state.items():
+                if not isinstance(new_value, torch.Tensor):
+                    continue
+                if key not in self._merged_state:
+                    if self._run_index >= 2:
+                        new_keys_added += 1
+                        logger.warning(
+                            "SLAO merge (%s): new LoRA key appeared at run=%d "
+                            "(key=%r, shape=%s) — cloning in without merging.",
+                            self.strategy_config.strategy,
+                            self._run_index,
+                            key,
+                            tuple(new_value.shape),
+                        )
+                    total_params += new_value.numel()
+                    continue
+                if ".lora_A." in key:
+                    a_count += 1
+                elif ".lora_B." in key:
+                    b_count += 1
+                total_params += new_value.numel()
+            # Swap in the strategy's output as the new accumulator.
+            self._merged_state = merged
+            # Full-scan finite check on the merged result (same invariant as
+            # the default path's in-loop probe).
+            for key, value in self._merged_state.items():
+                if not isinstance(value, torch.Tensor):
+                    continue
+                try:
+                    if not torch.isfinite(value).all().item():
+                        first_bad_key = key
+                        if ".lora_A." in key:
+                            first_bad_kind = "lora_A"
+                        elif ".lora_B." in key:
+                            first_bad_kind = "lora_B"
+                        else:
+                            first_bad_kind = "other"
+                        break
+                except RuntimeError as probe_err:
+                    logger.debug(f"finite-probe failed for {key}: {probe_err}")
+        else:
+          # Merge each parameter
+          for key, new_value in new_lora_state.items():
             if not isinstance(new_value, torch.Tensor):
                 continue
 
@@ -978,6 +1629,8 @@ class SLAOMerger:
             # post-mortem analysis of merge_history.json can spot the
             # signal next to the per-run merge counters.
             new_keys_added=new_keys_added,
+            # v1.5 T2.2: record which strategy produced this result.
+            strategy=self.strategy_config.strategy,
         )
 
         if self.config.save_merge_history:
@@ -987,7 +1640,8 @@ class SLAOMerger:
         # line so the post-mortem signal is visible in tail-the-log
         # workflows without parsing merge_history.json.
         logger.info(
-            f"SLAO merge complete: run={self._run_index}, scale={scale:.4f}, "
+            f"SLAO merge complete: run={self._run_index}, "
+            f"strategy={self.strategy_config.strategy}, scale={scale:.4f}, "
             f"A={a_count}, B={b_count}, time={merge_time:.3f}s"
             + (f", new_keys={new_keys_added}" if new_keys_added > 0 else "")
         )
@@ -1099,6 +1753,17 @@ class SLAOMerger:
                     "layer_scale_middle": self.config.layer_scale_middle,
                     "layer_scale_late": self.config.layer_scale_late,
                 },
+                # v1.5 T2.2: persist the merge-strategy config so a resumed
+                # session re-uses the SAME strategy + thresholds (landed in
+                # schema "1.1"; pre-1.1 checkpoints lack this block and load()
+                # falls back to the qiao_mahdavi defaults with a WARN).
+                "strategy_config": {
+                    "strategy": self.strategy_config.strategy,
+                    "trim_threshold": self.strategy_config.trim_threshold,
+                    "drop_rate": self.strategy_config.drop_rate,
+                    "dare_seed": self.strategy_config.dare_seed,
+                    "linear_weight": self.strategy_config.linear_weight,
+                },
                 "history": [
                     {
                         "run_index": r.run_index,
@@ -1111,6 +1776,10 @@ class SLAOMerger:
                         "a_norm_after": r.a_norm_after,
                         "b_norm_before": r.b_norm_before,
                         "b_norm_after": r.b_norm_after,
+                        # v1.5 T2.2: per-run strategy + drift-gate fields.
+                        "strategy": r.strategy,
+                        "branched": r.branched,
+                        "task_similarity": r.task_similarity,
                     }
                     for r in self._merge_history
                 ]
@@ -1298,6 +1967,39 @@ class SLAOMerger:
                 self.config.layer_scale_late = _restore_or_warn(
                     "layer_scale_late", self.config.layer_scale_late
                 )
+
+                # v1.5 T2.2: restore the merge-strategy config (schema "1.1").
+                # Pre-1.1 checkpoints lack the block entirely; in that case we
+                # keep the current (default qiao_mahdavi) strategy_config and
+                # emit a single WARN so a resumed pre-1.1 session that was
+                # actually run with a non-default strategy is visible. Within
+                # the block, each missing field falls back to the live value.
+                strat = history_data.get("strategy_config")
+                if isinstance(strat, dict):
+                    self.strategy_config.strategy = strat.get(
+                        "strategy", self.strategy_config.strategy
+                    )
+                    self.strategy_config.trim_threshold = strat.get(
+                        "trim_threshold", self.strategy_config.trim_threshold
+                    )
+                    self.strategy_config.drop_rate = strat.get(
+                        "drop_rate", self.strategy_config.drop_rate
+                    )
+                    self.strategy_config.dare_seed = strat.get(
+                        "dare_seed", self.strategy_config.dare_seed
+                    )
+                    self.strategy_config.linear_weight = strat.get(
+                        "linear_weight", self.strategy_config.linear_weight
+                    )
+                elif disk_version != self.CURRENT_SLAO_VERSION:
+                    logger.warning(
+                        "Resuming from a pre-1.1 SLAO checkpoint that does not "
+                        "carry a merge-strategy config; defaulting to "
+                        "strategy=%r. If the prior session used a non-default "
+                        "merge_strategy, pass it explicitly on the resumed "
+                        "session to preserve prior merge math.",
+                        self.strategy_config.strategy,
+                    )
             except json.JSONDecodeError as e:
                 # Stage C humanization: name what's intact (LoRA weights)
                 # and what isn't (the merge-history metadata). The merger
@@ -1354,14 +2056,19 @@ def merge_lora_weights(
         base_lora: Base LoRA state dict (already merged)
         new_lora: New LoRA state dict to merge in
         run_index: Current run index for time-aware scaling
-        method: Merge method ("slao", "average", "replace")
+        method: Merge method. Accepts the four selectable v1.5 strategy names
+            (``"qiao_mahdavi"``, ``"linear"``, ``"ties"``, ``"dare"``) plus the
+            two legacy aliases ``"slao"`` (→ ``qiao_mahdavi``) and
+            ``"average"`` (→ ``linear``), and the special ``"replace"`` (use
+            the new adapter wholesale).
 
     Returns:
         Merged LoRA state dict
     """
     import torch
 
-    if method == "slao":
+    # v1.5 T2.2: legacy aliases map onto the canonical strategy names.
+    if method in ("slao", "qiao_mahdavi"):
         merger = SLAOMerger()
         merger.initialize(base_lora)
         merger.merge(new_lora, run_index=run_index)
@@ -1369,7 +2076,19 @@ def merge_lora_weights(
         assert merged is not None  # guaranteed after initialize()
         return merged
 
-    elif method == "average":
+    if method in ("ties", "dare"):
+        # Route the selectable per-tensor strategies through the SLAO merger so
+        # the same finite-check + history surface wraps them.
+        merger = SLAOMerger(
+            strategy_config=MergeStrategyConfig(strategy=method)
+        )
+        merger.initialize(base_lora)
+        merger.merge(new_lora, run_index=run_index)
+        merged = merger.get_merged_lora()
+        assert merged is not None
+        return merged
+
+    if method in ("average", "linear"):
         # Simple averaging (no time-aware scaling).
         #
         # CONTINUAL-A-008: average keys present in BOTH dicts, but don't
@@ -1399,14 +2118,26 @@ def merge_lora_weights(
                 )
         return result
 
-    elif method == "replace":
+    if method == "replace":
         # Just use the new one
         return {k: v.clone() if isinstance(v, torch.Tensor) else v
                 for k, v in new_lora.items()}
 
-    else:
-        valid_methods = ("slao", "average", "replace")
-        raise InvalidSettingError(
-            "method", method, f"one of {valid_methods}",
-            suggestion="Use 'slao' for best continual learning results"
-        )
+    # v1.5 T2.2 CLAIM HYGIENE: the suggestion previously read "Use 'slao' for
+    # best continual learning results" — a superlative we cannot substantiate
+    # (Qiao & Mahdavi 2025 is fresh + single-group; finding 30). Reframed to a
+    # neutral enumeration of the selectable strategies, keeping the
+    # "implements Qiao & Mahdavi 2025" framing for the default without any
+    # "best" / "state-of-the-art" claim.
+    valid_methods = (
+        "qiao_mahdavi", "linear", "ties", "dare",  # canonical
+        "slao", "average", "replace",              # legacy aliases
+    )
+    raise InvalidSettingError(
+        "method", method, f"one of {valid_methods}",
+        suggestion=(
+            "Selectable merge strategies: 'qiao_mahdavi' (default; implements "
+            "Qiao & Mahdavi 2025), 'linear', 'ties', 'dare'. Legacy aliases: "
+            "'slao' (= qiao_mahdavi), 'average' (= linear), 'replace'."
+        ),
+    )

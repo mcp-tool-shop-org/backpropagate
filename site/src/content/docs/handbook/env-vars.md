@@ -100,6 +100,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_LORA__LORA_DROPOUT` | `0.05` | LoRA dropout rate. |
 | `BACKPROPAGATE_LORA__USE_GRADIENT_CHECKPOINTING` | `unsloth` | `unsloth` / `true` / `false`. |
 | `BACKPROPAGATE_LORA__RANDOM_STATE` | `42` | RNG seed for LoRA init reproducibility. |
+| `BACKPROPAGATE_LORA__USE_RSLORA` | `false` | **v1.5** — rank-stabilized LoRA scaling (`alpha/sqrt(r)` instead of `alpha/r`). Zero inference cost, still mergeable; the benefit grows with rank (relevant at the rank-256 default). Equivalent to `--use-rslora` on the CLI. |
 
 ## Training
 
@@ -124,6 +125,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_TRAINING__OVERWRITE_OUTPUT_DIR` | `true` | Whether to overwrite an existing output dir. |
 | `BACKPROPAGATE_TRAINING__METHOD` | `sft` | **v1.5** — training objective. `sft` (default) = supervised fine-tuning. `orpo` = reference-free preference tuning (needs a `{chosen, rejected}` dataset; single-stage, no reference model). Any other value is rejected with `CONFIG_INVALID_SETTING`. |
 | `BACKPROPAGATE_TRAINING__ORPO_BETA` | `0.1` | **v1.5** — ORPO odds-ratio weight (lambda). Keep > 0. Ignored unless `METHOD=orpo`. |
+| `BACKPROPAGATE_TRAINING__FP8` | `false` | **v1.5 (experimental)** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao. Base weights in float8 (~1.4x throughput, ~60% less base memory); the LoRA adapter stays bf16 and the result is still mergeable. `mode='lora'` + `method='sft'` only in v1.5; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Equivalent to `--fp8` on the CLI. |
 
 ## Data
 

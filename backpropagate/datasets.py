@@ -399,13 +399,14 @@ class TraceFilterStats:
             )
         # Echo the documented token-estimate caveat (see _count_tokens_approx):
         # the default trace-token counter is a ~4 chars/token approximation and
-        # over-counts CJK ~4x, so min/max_trace_tokens cutoffs are looser/stricter
-        # than intended on non-ASCII reasoning traces. Pass ``token_counter=
-        # tokenizer.encode`` for an exact count.
+        # UNDER-counts CJK by ~4-8x (CJK is ~1+ token/char), so on non-ASCII
+        # reasoning traces min_trace_tokens floors are far looser than intended
+        # and short CJK traces can be wrongly dropped as too-short. Pass
+        # ``token_counter=tokenizer.encode`` for an exact count.
         lines.append(
             "  (note: trace token counts use a ~4 chars/token approximation "
-            "and over-count CJK ~4x; pass token_counter=tokenizer.encode for an "
-            "exact count.)"
+            "and under-count CJK by ~4-8x; for CJK-heavy data pass "
+            "token_counter=tokenizer.encode for an exact count.)"
         )
         return "\n".join(lines)
 
@@ -645,6 +646,84 @@ class FormatConverter:
         return "\n".join(parts)
 
     @staticmethod
+    def _messages_to_chatml_parts(
+        messages: list, default_role: str
+    ) -> list[str]:
+        """Render a list of ``{"role"/"from", "content"/"value"}`` dicts to
+        ChatML turn strings.
+
+        Tolerates both the OpenAI message shape (``role``/``content``) and the
+        ShareGPT shape (``from``/``value``) so a preference ``prompt``/``chosen``
+        value authored in either convention renders correctly. ``role`` is
+        normalized through the ShareGPT role map (human→user, gpt→assistant);
+        an unmapped role falls back to ``default_role``. Function calls are
+        rendered the same way the OpenAI converter handles them.
+        """
+        parts: list[str] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                # A bare string in a message-list is treated as the default role.
+                parts.append(
+                    f"<|im_start|>{default_role}\n{msg}<|im_end|>"
+                )
+                continue
+            role_raw = str(msg.get("role", msg.get("from", "")) or "").lower()
+            role = FormatConverter.ROLE_MAP_SHAREGPT.get(
+                role_raw, role_raw or default_role
+            )
+            content = msg.get("content", msg.get("value", "")) or ""
+            if msg.get("function_call"):
+                call_repr = _render_function_call(msg["function_call"])
+                content = f"{content}\n{call_repr}" if content else call_repr
+            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+        return parts
+
+    @staticmethod
+    def preference_to_chatml(sample: dict) -> str:
+        """Render a preference-pair row to ChatML for SFT (v1.5 / Phase 8).
+
+        A ``{prompt, chosen, rejected}`` row trained under ``method="sft"``
+        legitimately means *train on prompt→chosen*: the SFT objective learns to
+        reproduce the preferred completion. So this renderer emits the optional
+        ``prompt`` as the user turn(s) and ``chosen`` as the assistant turn(s)
+        and **deliberately DROPS ``rejected``** — the rejected response is only
+        meaningful to the reference-free preference objective (``method="orpo"``,
+        which routes through :meth:`DatasetLoader.to_preference_dataset` and never
+        reaches here).
+
+        Both ``prompt`` and ``chosen`` may be either a plain string OR a
+        message-list (``[{"role"/"from", "content"/"value"}, ...]`` — the
+        multi-turn / ShareGPT-or-OpenAI shape); each shape renders to the
+        appropriate ChatML turns. When ``prompt`` is absent (the implicit-prompt
+        case) only the ``chosen`` turns are emitted — the prompt is assumed to
+        live inside the ``chosen`` conversation already.
+        """
+        parts: list[str] = []
+
+        prompt = sample.get("prompt")
+        if isinstance(prompt, str):
+            if prompt.strip():
+                parts.append(f"<|im_start|>user\n{prompt}<|im_end|>")
+        elif isinstance(prompt, list):
+            parts.extend(
+                FormatConverter._messages_to_chatml_parts(
+                    prompt, default_role="user"
+                )
+            )
+
+        chosen = sample.get("chosen", "")
+        if isinstance(chosen, list):
+            parts.extend(
+                FormatConverter._messages_to_chatml_parts(
+                    chosen, default_role="assistant"
+                )
+            )
+        else:
+            parts.append(f"<|im_start|>assistant\n{chosen}<|im_end|>")
+
+        return "\n".join(parts)
+
+    @staticmethod
     def raw_to_chatml(text: str, default_role: str = "user") -> str:
         """Convert raw text to ChatML."""
         # Simple conversion - treat as single user message
@@ -672,6 +751,17 @@ class FormatConverter:
             if not isinstance(sample, dict):
                 raise ValueError(f"OpenAI format requires dict, got {type(sample)}")
             return cls.openai_to_chatml(sample)
+
+        if format_type == DatasetFormat.PREFERENCE:
+            # SFT-on-preference renders prompt→chosen (rejected dropped); see
+            # preference_to_chatml. Without this branch a preference file under
+            # method='sft' raised "Cannot convert format: PREFERENCE" per row and
+            # convert_to_chatml silently dropped EVERY row -> 0-row training set.
+            if not isinstance(sample, dict):
+                raise ValueError(
+                    f"Preference format requires dict, got {type(sample)}"
+                )
+            return cls.preference_to_chatml(sample)
 
         if format_type == DatasetFormat.RAW_TEXT:
             text = sample if isinstance(sample, str) else sample.get("text", "")
@@ -1240,16 +1330,19 @@ def validate_dataset(
 def _count_tokens_approx(text: str) -> int:
     """Approximate token count (4 chars ≈ 1 token).
 
-    Stage C amend BACKEND-B-024: the 4-chars-per-token heuristic is
-    calibrated for ASCII English. CJK datasets are roughly 1 char per
-    token (so this heuristic over-counts by ~4x — the dataset will appear
-    longer than it really is and ``min_tokens`` floors will be MUCH
-    stricter than intended). Code datasets are closer to 2-3 chars per
+    Stage C amend BACKEND-B-024 (direction corrected Phase 8): the
+    4-chars-per-token heuristic is calibrated for ASCII English. CJK text is
+    roughly 1+ real token PER CHARACTER, so ``len(text)//4`` yields ~4-8x
+    FEWER tokens than the tokenizer actually emits — this heuristic
+    **UNDER-counts CJK by ~4-8x** (a CJK corpus looks far SHORTER than it
+    really is, so ``min_tokens`` / ``min_trace_tokens`` floors are far LOOSER
+    than intended and short CJK rows that a real tokenizer would keep get
+    wrongly dropped as too-short). Code datasets are closer to 2-3 chars per
     token. Operators filtering by ``min_tokens`` / ``max_tokens`` on a
-    non-ASCII-English corpus should re-derive the cutoffs against their
-    real tokenizer; v1.4 will accept an optional ``token_counter``
-    callable to plug in ``tokenizer.encode`` directly. Until then, this
-    function is a fast-path approximation only.
+    non-ASCII-English (especially CJK-heavy) corpus should pass a real
+    ``token_counter=tokenizer.encode`` (supported by the trace-length filter)
+    or re-derive the cutoffs against their tokenizer. The math here is left
+    as-is on purpose — this is a fast-path approximation only.
     """
     return len(text) // 4
 
@@ -1339,19 +1432,22 @@ def filter_by_quality(
 
     # DATA-A-005: the default min_tokens=50 combined with the coarse
     # 4-chars-per-token heuristic (_count_tokens_approx) can silently drop
-    # an entire corpus of legitimately short or non-ASCII (e.g. CJK, where
-    # the heuristic over-counts ~4x) chats. A run that filters to zero — or
-    # near-zero — is almost always a mis-calibrated threshold, not a genuinely
-    # empty dataset. Surface it loudly with the actionable cause + knob so the
-    # operator doesn't discover the empty training set the hard way.
+    # an entire corpus of legitimately short or non-ASCII chats. For CJK the
+    # heuristic UNDER-counts by ~4-8x (CJK is ~1+ token/char), so CJK rows look
+    # far shorter than they really are and get wrongly dropped as too-short
+    # against min_tokens. A run that filters to zero — or near-zero — is almost
+    # always a mis-calibrated threshold, not a genuinely empty dataset. Surface
+    # it loudly with the actionable cause + knob so the operator doesn't
+    # discover the empty training set the hard way.
     if stats.total_before > 0 and stats.total_after == 0:
         logger.warning(
             "filter_by_quality removed ALL %d samples (0 retained). The "
             "most common cause is min_tokens=%s being too high for short or "
-            "non-ASCII (e.g. CJK) content — the token estimate is ~4 chars/"
-            "token and over-counts CJK ~4x. Lower min_tokens / raise "
-            "max_tokens, or re-derive the cutoffs against your real "
-            "tokenizer. Breakdown: too_short=%d too_long=%d few_turns=%d "
+            "non-ASCII content — the token estimate is ~4 chars/token and "
+            "UNDER-counts CJK by ~4-8x, so CJK rows look shorter than they are "
+            "and trip the too-short cutoff. Lower min_tokens, or for CJK-heavy "
+            "data pass a real tokenizer / re-derive the cutoffs. Breakdown: "
+            "too_short=%d too_long=%d few_turns=%d "
             "many_turns=%d no_assistant=%d empty=%d custom=%d.",
             stats.total_before,
             min_tokens,
@@ -1369,7 +1465,8 @@ def filter_by_quality(
         logger.warning(
             "filter_by_quality retained only %d/%d samples (%.1f%%). If this "
             "is unexpected, check min_tokens=%s against your content length / "
-            "tokenizer (the 4-chars/token estimate over-counts CJK ~4x).",
+            "tokenizer (the 4-chars/token estimate under-counts CJK by ~4-8x, "
+            "so CJK rows can be wrongly dropped as too-short).",
             stats.total_after,
             stats.total_before,
             100.0 * stats.total_after / stats.total_before,
@@ -1438,9 +1535,11 @@ def filter_by_trace_length(
             filter only constrains rows that *do* reason).
         token_counter: Optional ``str -> int`` token counter (e.g.
             ``tokenizer.encode``). When ``None``, :func:`_count_tokens_approx`
-            is used — a ~4 chars/token heuristic that **over-counts CJK ~4x**,
-            so re-derive the cutoffs against your real tokenizer (or pass it
-            here) for non-ASCII-English reasoning data.
+            is used — a ~4 chars/token heuristic that **under-counts CJK by
+            ~4-8x** (CJK is ~1+ token/char), so CJK traces look shorter than
+            they are and can be wrongly dropped as too-short against
+            ``min_trace_tokens``; for CJK-heavy reasoning data pass a real
+            tokenizer here (or re-derive the cutoffs against your tokenizer).
 
     Returns:
         ``(filtered_samples, TraceFilterStats)``.
@@ -1531,9 +1630,11 @@ def filter_by_trace_length(
             "filter_by_trace_length removed ALL %d samples (0 retained). The "
             "most common causes are min_trace_tokens=%s being too high for "
             "short traces, max_trace_tokens=%s too low, or require_think=True "
-            "on a dataset whose rows have no <think> span. The default token "
-            "estimate is ~4 chars/token and over-counts CJK ~4x — pass "
-            "token_counter=tokenizer.encode or re-derive the cutoffs. "
+            "on a dataset whose rows have no <think> span. If your traces are "
+            "CJK-heavy and you did NOT pass token_counter, the default ~4 "
+            "chars/token estimate UNDER-counts CJK by ~4-8x — your traces look "
+            "shorter than they are and trip trace_too_short; pass "
+            "token_counter=tokenizer.encode (or re-derive the cutoffs). "
             "Breakdown: trace_too_short=%d trace_too_long=%d no_think=%d "
             "unbalanced_think=%d.",
             stats.total_before,

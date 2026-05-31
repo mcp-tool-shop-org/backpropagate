@@ -1771,6 +1771,114 @@ class TestStageCDiskSpaceGuard:
         )
 
 
+class TestFP8MergedBf16Cast:
+    """FP8 finding: an FP8-trained model merges to an f32 checkpoint (torchao
+    Float8Linear upcasts its weight to f32). At 4 B/param that doubles the
+    on-disk size the disk pre-flight budgeted (2 B/param), so the merged/GGUF
+    export paths down-cast the merge to bf16 BEFORE save_pretrained. These
+    tests pin that contract with tiny stub models — no real FP8 run needed.
+    """
+
+    def _f32_stub_model(self):
+        """A stub model whose params report torch.float32 and whose ``.to()``
+        records the requested dtype (mimicking the post-merge FP8 model)."""
+        import torch
+
+        class _F32Stub:
+            def __init__(self):
+                self._dtype = torch.float32
+                self.to_calls: list = []
+                self.save_pretrained = MagicMock()
+
+            def parameters(self):
+                # One real f32 tensor so _model_has_float32_params sees f32.
+                return [torch.zeros(2, 2, dtype=self._dtype)]
+
+            def to(self, dtype):
+                self.to_calls.append(dtype)
+                self._dtype = dtype
+                return self  # Module.to mutates in place and returns self
+
+        return _F32Stub()
+
+    def test_helper_casts_f32_model_to_bf16(self):
+        """``_cast_merged_model_to_bf16`` invokes ``.to(torch.bfloat16)`` on a
+        model carrying f32 params and the result reports bf16 afterward."""
+        import torch
+
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        stub = self._f32_stub_model()
+        result = _cast_merged_model_to_bf16(stub)
+        assert torch.bfloat16 in stub.to_calls, (
+            "FP8 finding: an f32 merged model must be cast via .to(bfloat16)."
+        )
+        # The returned model's params now report bf16.
+        assert all(p.dtype == torch.bfloat16 for p in result.parameters())
+
+    def test_helper_noop_on_bf16_model(self):
+        """A model already in bf16 (the normal LoRA merge) must NOT be cast —
+        no spurious .to() call, returned unchanged."""
+        import torch
+
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        class _Bf16Stub:
+            def __init__(self):
+                self.to_calls: list = []
+
+            def parameters(self):
+                return [torch.zeros(2, 2, dtype=torch.bfloat16)]
+
+            def to(self, dtype):
+                self.to_calls.append(dtype)
+                return self
+
+        stub = _Bf16Stub()
+        result = _cast_merged_model_to_bf16(stub)
+        assert stub.to_calls == [], (
+            "FP8 finding: a bf16 merge must not be re-cast (no .to() call)."
+        )
+        assert result is stub
+
+    def test_helper_noop_on_stub_without_dtypes(self):
+        """A non-torch / mock model (no real dtypes) is returned unchanged and
+        never raises — the cast is best-effort."""
+        from backpropagate.export import _cast_merged_model_to_bf16
+
+        class _NoParams:
+            pass
+
+        sentinel = _NoParams()
+        assert _cast_merged_model_to_bf16(sentinel) is sentinel
+
+    def test_export_merged_casts_f32_merge_to_bf16(self, temp_dir, mock_tokenizer):
+        """End-to-end: export_merged of a PEFT model whose merge yields an
+        f32 model down-casts to bf16 before save_pretrained, so the saved
+        checkpoint matches the disk-guard's 2 B/param budget."""
+        import torch
+
+        from backpropagate.export import export_merged
+
+        merged_f32 = self._f32_stub_model()
+        mock_peft = MagicMock()
+        mock_peft.merge_and_unload.return_value = merged_f32
+
+        with patch("backpropagate.export._is_peft_model", return_value=True):
+            export_merged(
+                model=mock_peft,
+                tokenizer=mock_tokenizer,
+                output_dir=temp_dir / "merged_fp8",
+                emit_model_card=False,
+            )
+
+        assert torch.bfloat16 in merged_f32.to_calls, (
+            "FP8 finding: export_merged must down-cast an f32 merge to bf16 "
+            "before saving."
+        )
+        merged_f32.save_pretrained.assert_called_once()
+
+
 class TestStageCListOllamaWarns:
     """DATA-B-005: list_ollama_models WARNs (naming the cause) on a
     missing CLI / daemon-down / timeout instead of silently returning []."""

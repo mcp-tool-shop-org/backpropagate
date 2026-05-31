@@ -3276,3 +3276,98 @@ class TestPreferenceFormat:
         assert exc_info.value.code == "INPUT_DATASET_FORMAT_UNSUPPORTED"
         # The detected (SFT) format is surfaced for the operator.
         assert exc_info.value.detected_format == DatasetFormat.ALPACA.value
+
+    # ---- PREFERENCE -> ChatML (SFT-on-preference; Phase 8 fix) ----------
+    # Before the fix, FormatConverter.to_chatml had NO PREFERENCE branch, so a
+    # preference row under method='sft' raised "Cannot convert format:
+    # PREFERENCE" and convert_to_chatml dropped EVERY row -> a silent 0-row
+    # training set. The fix renders prompt->chosen (rejected dropped).
+
+    def test_preference_to_chatml_renders_prompt_and_chosen(self):
+        """A {prompt, chosen, rejected} row renders prompt->user, chosen->assistant."""
+        sample = {"prompt": "What is 2+2?", "chosen": "It is 4.", "rejected": "It is 5."}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nWhat is 2+2?<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nIt is 4.<|im_end|>" in chatml
+
+    def test_preference_to_chatml_drops_rejected(self):
+        """The 'rejected' completion is NOT rendered under SFT (correct semantics)."""
+        sample = {"prompt": "q", "chosen": "good answer", "rejected": "BAD_ANSWER_XYZ"}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "BAD_ANSWER_XYZ" not in chatml
+        assert "good answer" in chatml
+
+    def test_preference_to_chatml_implicit_prompt_renders_chosen_only(self):
+        """With no prompt key, only the chosen turns are emitted (no empty user)."""
+        sample = {"chosen": "standalone chosen", "rejected": "no"}
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>assistant\nstandalone chosen<|im_end|>" in chatml
+        # No empty user turn injected when there's no prompt.
+        assert "<|im_start|>user\n<|im_end|>" not in chatml
+        assert chatml.count("<|im_start|>") == 1
+
+    def test_preference_to_chatml_message_list_chosen_multi_turn(self):
+        """A message-list prompt+chosen (multi-turn) renders each turn to ChatML."""
+        sample = {
+            "prompt": [{"role": "user", "content": "Hi"}],
+            "chosen": [
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": "thanks"},
+                {"role": "assistant", "content": "you're welcome"},
+            ],
+            "rejected": [{"role": "assistant", "content": "go away"}],
+        }
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nHi<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nHello!<|im_end|>" in chatml
+        assert "<|im_start|>user\nthanks<|im_end|>" in chatml
+        assert "<|im_start|>assistant\nyou're welcome<|im_end|>" in chatml
+        # rejected dropped.
+        assert "go away" not in chatml
+
+    def test_preference_to_chatml_sharegpt_shape_message_list(self):
+        """A ShareGPT-shaped (from/value) message-list chosen renders too."""
+        sample = {
+            "prompt": [{"from": "human", "value": "ping"}],
+            "chosen": [{"from": "gpt", "value": "pong"}],
+            "rejected": [{"from": "gpt", "value": "nope"}],
+        }
+        chatml = FormatConverter.to_chatml(sample, DatasetFormat.PREFERENCE)
+        assert "<|im_start|>user\nping<|im_end|>" in chatml
+        assert "<|im_start|>assistant\npong<|im_end|>" in chatml
+        assert "nope" not in chatml
+
+    def test_preference_to_chatml_non_dict_raises(self):
+        """A non-dict sample under PREFERENCE raises a clear ValueError."""
+        with pytest.raises(ValueError, match="Preference format requires dict"):
+            FormatConverter.to_chatml("not a dict", DatasetFormat.PREFERENCE)
+
+    def test_convert_to_chatml_preference_not_zero_rows(self):
+        """convert_to_chatml on preference rows keeps ALL rows (regression for the
+        0-row bug): auto per-sample detection routes them through the PREFERENCE
+        branch instead of dropping them."""
+        samples = [
+            {"prompt": "p1", "chosen": "c1", "rejected": "r1"},
+            {"prompt": "p2", "chosen": "c2", "rejected": "r2"},
+        ]
+        rows = convert_to_chatml(samples)  # no explicit format -> per-sample detect
+        assert len(rows) == 2
+        assert all("text" in r and r["text"] for r in rows)
+        assert "c1" in rows[0]["text"] and "r1" not in rows[0]["text"]
+
+    def test_loader_to_hf_dataset_preference_under_sft_not_empty(self):
+        """DatasetLoader.to_hf_dataset (the SFT path) yields real rows for a
+        preference file — the end-to-end repro of the silent 0-row finding."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"prompt": "q1", "chosen": "a1", "rejected": "x1"},
+            {"prompt": "q2", "chosen": "a2", "rejected": "x2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_hf_dataset()
+        assert len(ds) == 2
+        # SFT collapses to a single text column carrying chosen, not rejected.
+        assert "text" in ds.column_names
+        assert "a1" in ds[0]["text"]
+        assert "x1" not in ds[0]["text"]

@@ -6586,7 +6586,7 @@ Tips:
         default=False,
         help=(
             "EXPERIMENTAL: FP8 compute path on Blackwell/Hopper (sm_90+) via "
-            "torchao — base weights in float8 (~1.4x throughput, ~60% less base "
+            "torchao — base weights in float8 (~1.4x throughput, ~60%% less base "
             "memory), LoRA adapter stays bf16, result still mergeable. "
             "mode='lora' + method='sft' only in v1.5; falls back to bf16 with a "
             "warning if unsupported. Needs pip install 'backpropagate[fp8]'."
@@ -6826,7 +6826,7 @@ Tips:
         metavar="INT",
         help=(
             "Seed for DARE's LOCAL RNG (deterministic drop mask). Default "
-            "unset → derived from the run. Only used with --merge-strategy dare."
+            "unset -> derived from the run. Only used with --merge-strategy dare."
         ),
     )
     multi_parser.add_argument(
@@ -6847,7 +6847,7 @@ Tips:
         metavar="FLOAT",
         help=(
             "Cosine-similarity floor for the drift gate (range [-1, 1]; "
-            "default 0.0). similarity < threshold ⇒ branch (don't merge). "
+            "default 0.0). similarity < threshold => branch (don't merge). "
             "Only consulted when --drift-gate is set."
         ),
     )
@@ -6879,7 +6879,7 @@ Tips:
         default=None,
         metavar="PATH",
         help=(
-            "Held-out JSONL set for the eval gate. Default unset → reuse the "
+            "Held-out JSONL set for the eval gate. Default unset -> reuse the "
             "run's reserved last-10%% holdout. Only consulted when --eval-gate "
             "is set."
         ),
@@ -7912,7 +7912,7 @@ Examples:
   # Contamination check against a held-out split
   backprop data report my_data.jsonl --against heldout.jsonl
 
-  # CI gate: fail if >10% near-duplicates or any contamination
+  # CI gate: fail if >10%% near-duplicates or any contamination
   backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.0
         """,
     )

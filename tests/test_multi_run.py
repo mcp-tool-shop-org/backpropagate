@@ -4564,6 +4564,45 @@ class TestEvalGateWiring:
         # The rejected merge is not recorded in the merger history.
         assert all(r.run_index != 2 for r in trainer._slao_merger.merge_history)
 
+    def test_after_eval_exception_restores_snapshot(self, tmp_path):
+        """An exception in the AFTER-eval window rolls the accumulator back.
+
+        ``evaluate_run`` legitimately raises — RUNTIME_EVAL_FAILED on a
+        model-load/generation crash, INPUT_EVAL_HELDOUT_UNRESOLVED when the
+        held-out set can't be resolved. By the time the after-eval runs, the
+        candidate merge has already mutated ``_merged_state`` + advanced
+        ``_run_index`` + appended a history entry, so the eval gate must
+        restore the pre-merge snapshot byte-for-byte and let the exception
+        propagate — never leak the un-gated candidate merge.
+        """
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        before_hist_len = len(trainer._slao_merger.merge_history)
+        new = _t22_lora(b_scale=5.0)
+
+        # before-eval succeeds (loss 1.0); the after-eval call raises mid-gate.
+        boom = RuntimeError("eval crashed (simulates RUNTIME_EVAL_FAILED)")
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=[_mk_eval(1.0), boom],
+        ):
+            with pytest.raises(RuntimeError, match="eval crashed"):
+                trainer._gated_merge(new, run_idx=2, full_dataset=None)
+
+        # The exception propagated, but the merger is byte-for-byte the
+        # pre-merge snapshot: accumulator unchanged, _run_index NOT advanced,
+        # and the candidate merge left no entry in the merge history.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+        assert len(trainer._slao_merger.merge_history) == before_hist_len
+        assert all(r.run_index != 2 for r in trainer._slao_merger.merge_history)
+
     def test_improvement_accepts_advances_and_caches(self, tmp_path):
         trainer = _GatedMergeHarness.build(
             tmp_path, eval_gate=True, eval_max_regression=0.0

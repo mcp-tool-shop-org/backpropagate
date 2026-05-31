@@ -3051,55 +3051,90 @@ class MultiRunTrainer:
         """v1.5 T2.2 eval-gate core (Design A) — snapshot → merge → eval → decide.
 
         Split out of :meth:`_gated_merge` so the drift-only path stays simple.
-        See :meth:`_gated_merge` for the contract. On REJECT the pre-merge
-        accumulator snapshot + ``_run_index`` are restored byte-for-byte.
+        See :meth:`_gated_merge` for the contract. On any non-accept outcome —
+        an eval-gate REJECT *or* an exception raised mid-gate (a diverged merge,
+        or an after-eval crash) — the pre-merge accumulator snapshot +
+        ``_run_index`` + ``_merge_history`` are restored byte-for-byte; an
+        exception is then re-raised so the caller sees the original error.
         """
         import copy
 
         assert self._slao_merger is not None
 
-        # Snapshot the pre-merge accumulator + run_index so a REJECT restores
-        # the exact prior state (deepcopy: torch tensors are cloned).
+        # Snapshot the pre-merge accumulator + run_index + history length so a
+        # REJECT — or a mid-gate exception — restores the exact prior state
+        # (deepcopy: torch tensors are cloned).
         before_state = copy.deepcopy(self._slao_merger.get_merged_lora())
         before_run_index = self._slao_merger.run_index
+        before_history_len = len(self._slao_merger._merge_history)
+
+        def _restore_pre_merge() -> None:
+            """Roll the merger back to the pre-candidate-merge snapshot.
+
+            Shared by the REJECT branch and the exception guard below.
+            ``merge()`` advances ``_run_index`` + mutates ``_merged_state`` in
+            place and appends to ``_merge_history`` LAST, so a plain assignment
+            restores the accumulator and a length-truncation drops the
+            candidate entry. Truncation (vs ``.pop()``) is correct even when
+            ``merge()`` itself raised before appending — it removes nothing in
+            that case, rather than clobbering a prior legitimate entry.
+            """
+            # mypy resets attribute-narrowing inside a closure, so the
+            # enclosing-scope assert above does not carry in here. Re-narrow:
+            # _restore_pre_merge is only ever called synchronously within
+            # _eval_gated_merge, where _slao_merger is guaranteed non-None and
+            # never reassigned, so this never fires at runtime.
+            assert self._slao_merger is not None
+            self._slao_merger._merged_state = before_state
+            self._slao_merger._run_index = before_run_index
+            del self._slao_merger._merge_history[before_history_len:]
 
         # before-eval: reuse the cached after-eval from the previous accepted
         # run when available (1 eval/run steady-state); else evaluate now.
+        # This runs BEFORE any mutation, so a raise here needs no rollback.
         before_eval = self._eval_cache
         if before_eval is None:
             before_eval = self._evaluate_accumulator(
                 before_state, run_idx, full_dataset, phase="before"
             )
 
-        # Candidate merge IN PLACE (advances run_index + mutates _merged_state).
-        candidate = self._slao_merger.merge(
-            lora_state, run_index=run_idx, run_id=self._run_id
-        )
-        candidate.task_similarity = drift_similarity
+        # The candidate merge mutates the accumulator IN PLACE, and both the
+        # merge (SLAO_MERGE_DIVERGED) and the after-eval (evaluate_run ->
+        # RUNTIME_EVAL_FAILED on a model-load/generation crash, or
+        # INPUT_EVAL_HELDOUT_UNRESOLVED when the held-out set can't resolve)
+        # can raise. Guard the whole mutate → eval → decide window so ANY
+        # exception restores the pre-merge accumulator + run_index + history
+        # byte-for-byte before propagating — the eval gate's invariant is that
+        # every non-accept outcome preserves the prior state exactly.
+        try:
+            # Candidate merge IN PLACE (advances run_index + mutates _merged_state).
+            candidate = self._slao_merger.merge(
+                lora_state, run_index=run_idx, run_id=self._run_id
+            )
+            candidate.task_similarity = drift_similarity
 
-        after_eval = self._evaluate_accumulator(
-            self._slao_merger.get_merged_lora(), run_idx, full_dataset,
-            phase="after",
-        )
+            after_eval = self._evaluate_accumulator(
+                self._slao_merger.get_merged_lora(), run_idx, full_dataset,
+                phase="after",
+            )
 
-        gate = eval_gate(
-            before_eval,
-            after_eval,
-            max_regression=self.config.eval_max_regression,
-        )
+            gate = eval_gate(
+                before_eval,
+                after_eval,
+                max_regression=self.config.eval_max_regression,
+            )
+        except Exception:
+            # Mid-gate failure: restore the snapshot and re-raise unchanged.
+            # The caller sees the original error; the merger is left exactly as
+            # it was before the candidate merge (no un-gated merge leaks through).
+            _restore_pre_merge()
+            raise
 
         if not gate.accept:
             # REJECT: restore the snapshot + run_index; keep the run as a
             # sibling. The code is a LOG (it exists in the catalog), not a
             # raise — multi-run's contract is "record + continue."
-            self._slao_merger._merged_state = before_state
-            self._slao_merger._run_index = before_run_index
-            # Drop the candidate from the merger's history (merge() appended it).
-            if (
-                self._slao_merger.config.save_merge_history
-                and self._slao_merger._merge_history
-            ):
-                self._slao_merger._merge_history.pop()
+            _restore_pre_merge()
             logger.warning(
                 "event=eval_gate_rejected code=RUNTIME_EVAL_GATE_REGRESSED "
                 "run_id=%s run_index=%d regression=%s "

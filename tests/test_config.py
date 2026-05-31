@@ -479,6 +479,51 @@ class TestTrainingConfig:
             TrainingConfig()
         assert exc_info.value.code == "CONFIG_INVALID_SETTING"
 
+    def test_training_config_accepts_positive_orpo_beta(self):
+        """v1.5 T1.2: a positive orpo_beta constructs (the default 0.1 and a
+        custom value both round-trip)."""
+        from backpropagate.config import TrainingConfig
+
+        assert TrainingConfig(orpo_beta=0.1).orpo_beta == pytest.approx(0.1)
+        assert TrainingConfig(orpo_beta=0.5).orpo_beta == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("bad_beta", [0.0, -1.0, -0.05])
+    def test_training_config_rejects_nonpositive_orpo_beta(self, bad_beta):
+        """v1.5 T1.2: orpo_beta <= 0 raises InvalidSettingError.
+
+        The field comment promises "Keep > 0 — a non-positive weight
+        degenerates ORPO back to plain SFT," but nothing enforced it.
+        ``orpo_beta=0`` silently zeroes the odds-ratio term (SFT wearing an
+        ORPO label) and a negative beta trains toward the REJECTED
+        completion. Both are silent correctness bugs; the validator surfaces
+        a structured CONFIG_INVALID_SETTING up front instead.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(orpo_beta=bad_beta)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "orpo_beta"
+
+    def test_training_config_rejects_nonpositive_orpo_beta_via_env(self, monkeypatch):
+        """v1.5 T1.2: a non-positive orpo_beta via env var raises the SAME
+        structured error.
+
+        The field is a plain ``float`` so the ``_reject_invalid_orpo_beta``
+        after-validator (not pydantic's type machinery) is the gate; a bad
+        ``BACKPROPAGATE_TRAINING__ORPO_BETA`` therefore surfaces the same
+        ``InvalidSettingError`` / ``CONFIG_INVALID_SETTING`` as a bad kwarg.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__ORPO_BETA", "0")
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig()
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "orpo_beta"
+
 
 class TestOrpoDataclassFallback:
     """v1.5 T1.2: the dataclass-fallback TrainingConfig must match the pydantic
@@ -560,6 +605,31 @@ class TestOrpoDataclassFallback:
         # The fallback raises the same exception class from backpropagate.exceptions.
         if exc_cls is not None:
             assert exc_cls is InvalidSettingError
+
+    def test_dataclass_accepts_positive_orpo_beta(self):
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        assert cfg_cls(orpo_beta=0.1).orpo_beta == pytest.approx(0.1)
+
+    @pytest.mark.parametrize("bad_beta", [0.0, -1.0])
+    def test_dataclass_rejects_nonpositive_orpo_beta(self, bad_beta):
+        """The dataclass fallback's __post_init__ must reject orpo_beta <= 0
+        with the same structured CONFIG_INVALID_SETTING the pydantic
+        _reject_invalid_orpo_beta validator raises — byte-for-byte parity so a
+        pydantic-settings-less install can't silently run SFT under an ORPO
+        label (beta=0) or train toward the rejected completion (beta<0)."""
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            cfg_cls(orpo_beta=bad_beta)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "orpo_beta"
 
 
 class TestDataConfig:

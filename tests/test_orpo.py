@@ -188,6 +188,38 @@ class TestTrainerMethodResolution:
 
         assert trainer.orpo_beta == pytest.approx(0.3)
 
+    @pytest.mark.parametrize("bad_beta", [0.0, -1.0, -0.001])
+    def test_method_orpo_nonpositive_beta_raises(self, bad_beta):
+        """Re-audit #6 (trainer half): a DIRECT Trainer(method='orpo',
+        orpo_beta<=0) raises InvalidSettingError (CONFIG_INVALID_SETTING).
+
+        config.py validates the SETTINGS path; the direct kwarg bypasses it and
+        would flow unclamped into ORPOConfig(beta=...) — beta=0 degenerates ORPO
+        to SFT, negative trains toward the REJECTED response. The constructor
+        re-validates (defense in depth, mirroring the method= guard).
+        """
+        from backpropagate.exceptions import InvalidSettingError
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            with pytest.raises(InvalidSettingError) as exc_info:
+                Trainer(method="orpo", orpo_beta=bad_beta)
+
+        err = exc_info.value
+        assert err.setting_name == "orpo_beta"
+        assert err.value == pytest.approx(bad_beta)
+        assert err.code == "CONFIG_INVALID_SETTING"
+
+    def test_nonpositive_beta_harmless_for_sft(self):
+        """beta is inert for SFT, so a stray orpo_beta<=0 must NOT block a
+        method='sft' run (the guard is gated on method=='orpo')."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            # No raise — SFT never builds an ORPOConfig.
+            trainer = Trainer(method="sft", orpo_beta=0.0)
+        assert trainer.method == "sft"
+
     def test_method_invalid_raises_invalid_setting(self):
         """Trainer(method='dpo') raises InvalidSettingError (CONFIG_INVALID_SETTING).
 
@@ -667,7 +699,7 @@ class TestLoadDatasetORPO:
         assert len(out) == 2
 
     def test_sft_method_on_preference_data_warns(self, temp_dir, caplog):
-        """method='sft' on a preference JSONL emits a 'did you mean orpo?' WARN."""
+        """method='sft' on a preference JSONL WARNs and points at --method orpo."""
         import logging
 
         trainer = _orpo_trainer_ready(temp_dir)

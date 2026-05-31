@@ -1861,6 +1861,27 @@ class Trainer:
         self.orpo_beta = (
             orpo_beta if orpo_beta is not None else settings.training.orpo_beta
         )
+        # Re-audit #6 (trainer half): config.py validation only covers the
+        # SETTINGS path; a DIRECT ``Trainer(orpo_beta=-1.0)`` / ``=0.0`` sets
+        # ``self.orpo_beta`` here and would flow UNCLAMPED into
+        # ``ORPOConfig(beta=...)`` — beta=0 degenerates ORPO to plain SFT (the
+        # odds-ratio term vanishes) and a negative beta trains TOWARD the
+        # rejected response. Defend the direct kwarg with the same
+        # CONFIG_INVALID_SETTING the settings validator raises. Only fires for
+        # method='orpo' (beta is inert for SFT, so a stray value there is
+        # harmless and must not block a non-ORPO run).
+        if self.method == "orpo" and self.orpo_beta <= 0:
+            raise InvalidSettingError(
+                "orpo_beta",
+                self.orpo_beta,
+                "a positive number",
+                suggestion=(
+                    "ORPO's odds-ratio weight beta must be > 0 (TRL/Hong 2024 "
+                    "default 0.1). beta=0 collapses ORPO to plain SFT and a "
+                    "negative beta trains toward the REJECTED response. Pass a "
+                    "small positive value, e.g. orpo_beta=0.1."
+                ),
+            )
 
         # v1.5 T2.1 (FP8) / T2.3 (rsLoRA): resolve the two new feature knobs,
         # kwarg-authoritative with the settings layer as fallback (same
@@ -1880,6 +1901,24 @@ class Trainer:
             if reasoning_trace is not None
             else settings.data.reasoning_trace
         )
+        # Re-audit #7: reasoning-trace SFT is an SFT-ONLY recipe. The trace
+        # filter in _load_dataset is gated on method=="sft", so on ORPO (or any
+        # non-sft objective) reasoning_trace does NOTHING useful — yet leaving
+        # it truthy would still fire the max_seq_length 2048->8192 bump (a real
+        # memory change) and stamp ``reasoning_trace: True`` into run-history
+        # (a lie). Neutralize it here: emit ONE WARN, force it False so the
+        # bump is skipped AND hyperparameters record it honestly as inert.
+        if self.reasoning_trace and self.method != "sft":
+            logger.warning(
+                "reasoning-trace SFT does not apply to method='%s'; ignoring "
+                "reasoning_trace (it is an SFT-only recipe — the <think> "
+                "trace-length filter runs only on the SFT data path). "
+                "max_seq_length is left unchanged and run-history records "
+                "reasoning_trace=False. Use method='sft' to train on reasoning "
+                "traces.",
+                self.method,
+            )
+            self.reasoning_trace = False
         self.min_trace_tokens = settings.data.min_trace_tokens
         self.max_trace_tokens = settings.data.max_trace_tokens
         # v1.5 T3.2: max_seq_length auto-bump. Reasoning traces (R1/QwQ CoT)
@@ -1887,6 +1926,8 @@ class Trainer:
         # the operator left max_seq_length at the shipped default (kwarg None
         # AND settings still at 2048). An explicit max_seq_length — passed as a
         # kwarg OR set via BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH — always wins.
+        # (Gated by self.reasoning_trace, which the non-sft guard above already
+        # forced False, so an ORPO run never bumps max_seq.)
         if (
             self.reasoning_trace
             and max_seq_length is None
@@ -2035,9 +2076,13 @@ class Trainer:
             # (3) FP8 vs 4-bit. They are alternatives: FP8 keeps the base in
             # float8, 4-bit keeps it in nf4 — you cannot do both. If the
             # operator EXPLICITLY requested 4-bit (load_in_4bit=True), refuse
-            # the stack. If 4-bit is only the historical default, flip it off
-            # for this FP8 run with an INFO log (same "default vs explicit"
-            # detection the mode='full' LR block uses).
+            # the stack. This is a MISCONFIG and fires regardless of hardware
+            # (an explicit fp8+4bit request can never be honored). The DEFAULT
+            # 4-bit flip is deliberately NOT done here — see (4)/(5) below: it
+            # is deferred until we know FP8 is actually EFFECTIVE, so an
+            # unsupported host that degrades to bf16 KEEPS the operator's
+            # default 4-bit (the historical OOM-safe path) instead of silently
+            # loading an unquantized ~2x-larger bf16 base.
             if self._load_in_4bit_explicit and self._load_in_4bit:
                 raise InvalidSettingError(
                     setting_name="fp8+load_in_4bit",
@@ -2049,27 +2094,30 @@ class Trainer:
                         "drop fp8=True."
                     ),
                 )
-            if self._load_in_4bit and not self._load_in_4bit_explicit:
-                # 4-bit was only the default; FP8 supersedes it.
-                self._load_in_4bit = False
-                logger.info(
-                    "fp8=True: disabling the default 4-bit base quantization "
-                    "(FP8 keeps the base in float8 — the two are alternatives). "
-                    "Pass load_in_4bit=True to force 4-bit, which conflicts "
-                    "with fp8 and will raise."
-                )
             # (4) ENVIRONMENT axis: is FP8 actually runnable here? CPU /
             # pre-Hopper / torchao-absent → degrade to bf16 with ONE WARN, no
             # raise. The capability + library probe is centralized in
             # ``_fp8_supported`` so load_model() and the tests share one truth.
             supported, reason = self._fp8_supported()
             if not supported:
+                # DEGRADE. FP8 is NOT effective, so the default 4-bit is left
+                # exactly as the operator had it: ON (the OOM-safe default) or
+                # whatever they passed. Critically we do NOT strip the default
+                # 4-bit here — doing so would load an unquantized bf16 base
+                # (~2x the nf4 footprint) on a card that only fit via 4-bit.
+                # The WARN must NOT claim "FP8 keeps the base in float8" (FP8
+                # was disabled); it states the bf16 degrade and that 4-bit (if
+                # any) is unchanged.
+                still_4bit = self._load_in_4bit
                 logger.warning(
                     "fp8=True requested but unavailable on this host: %s. "
                     "Falling back to bf16 (training proceeds, just without the "
                     "FP8 speed/memory win). This is an environment degrade, not "
-                    "an error.",
+                    "an error. Your base quantization is UNCHANGED: "
+                    "load_in_4bit=%s (FP8 was NOT enabled, so it cannot have "
+                    "replaced 4-bit).",
                     reason,
+                    still_4bit,
                 )
                 self._fp8_effective = False
             else:
@@ -2086,6 +2134,22 @@ class Trainer:
                     "embeddings stay in bf16. Report anomalies (loss spikes, "
                     "export mismatches) so the path can graduate to stable."
                 )
+                # v1.5 T2.1 (FP8): FP8 vs default 4-bit. Now that FP8 is
+                # EFFECTIVE (supported host + library), the default 4-bit is
+                # superseded — FP8 keeps the base in float8, the two are
+                # alternatives. Flip it off with an INFO log (the explicit
+                # fp8+4bit case already raised above). This is deliberately
+                # INSIDE the effective branch: on a degrade the operator's
+                # default 4-bit is preserved so the base still loads quantized
+                # (no surprise unquantized-bf16 OOM — re-audit finding #5).
+                if self._load_in_4bit and not self._load_in_4bit_explicit:
+                    self._load_in_4bit = False
+                    logger.info(
+                        "fp8=True: disabling the default 4-bit base quantization "
+                        "(FP8 keeps the base in float8 — the two are "
+                        "alternatives). Pass load_in_4bit=True to force 4-bit, "
+                        "which conflicts with fp8 and will raise."
+                    )
                 # v1.5 T2.1 (FP8): packing is INCOMPATIBLE with FP8 and must be
                 # off. TRL's ``packing=True`` enables padding-free training,
                 # which flattens a batch into ONE variable-length sequence; the
@@ -4427,12 +4491,20 @@ class Trainer:
         try:
             # Materialize the dataset into the mlx_lm.lora data-dir layout
             # (train.jsonl + optional valid.jsonl, one chat record per line).
+            # v1.5 T3.2 / re-audit #10: thread reasoning_trace + its bounds so
+            # the <think> trace-length filter runs on THIS rail too (the CUDA
+            # rail filters in _load_dataset, which the MLX path skips). When
+            # self.reasoning_trace is False (the common path, and always under
+            # ORPO after the #7 neutralization) this is a no-op.
             prepare_mlx_data_dir(
                 dataset,
                 data_dir,
                 seed=settings.training.seed,
                 max_samples=max_samples,
                 shuffle=settings.data.shuffle,
+                reasoning_trace=self.reasoning_trace,
+                min_trace_tokens=self.min_trace_tokens,
+                max_trace_tokens=self.max_trace_tokens,
             )
 
             backend = MLXBackend(
@@ -4451,11 +4523,21 @@ class Trainer:
             result = backend.run()
 
             duration = time.time() - start_time
-            final_loss = result.final_loss if result.final_loss is not None else 0.0
+            # Re-audit LOW: a successful run whose loss could NOT be parsed from
+            # mlx_lm.lora stdout must NOT be coerced to 0.0 — 0.0 reads as a
+            # *perfect* run and silently corrupts run-history / model-card
+            # provenance. The raw value (``None`` when unparseable) is the
+            # honest signal: it flows verbatim to record_run_completed (which
+            # takes ``float | None``). The ``TrainingRun.final_loss`` field is
+            # typed ``float``, so use ``nan`` as the in-object sentinel for
+            # "ran, loss unknown" — nan is never mistaken for a real (let alone
+            # perfect) loss, and ``final_loss_parsed`` below records the truth.
+            parsed_loss = result.final_loss  # None when stdout parse missed
+            run_final_loss = parsed_loss if parsed_loss is not None else float("nan")
             run = TrainingRun(
                 run_id=run_id,
                 steps=result.iters,
-                final_loss=final_loss,
+                final_loss=run_final_loss,
                 loss_history=[],
                 duration_seconds=duration,
                 samples_seen=max_samples,
@@ -4466,7 +4548,7 @@ class Trainer:
                     # Preserve the honest "could not parse a loss" signal — the
                     # CUDA path always has a numeric final_loss; the MLX rail's
                     # best-effort stdout parse may not, so record the raw flag.
-                    "final_loss_parsed": result.final_loss is not None,
+                    "final_loss_parsed": parsed_loss is not None,
                     "val_loss": result.val_loss,
                 },
             )
@@ -4484,8 +4566,11 @@ class Trainer:
                         f"on_complete callback raised error: {cb_error}"
                     )
 
+            loss_str = (
+                f"{parsed_loss:.4f}" if parsed_loss is not None else "unparsed"
+            )
             logger.info(
-                f"Training complete (mlx): final_loss={final_loss:.4f}, "
+                f"Training complete (mlx): final_loss={loss_str}, "
                 f"time={duration:.1f}s"
             )
             status = "ok"
@@ -4493,7 +4578,9 @@ class Trainer:
             try:
                 run_history.record_run_completed(
                     run_id=run_id,
-                    final_loss=final_loss,
+                    # Honest provenance: the raw parsed value (None when the
+                    # stdout loss parse missed), NOT a 0.0 that reads as perfect.
+                    final_loss=parsed_loss,
                     loss_history=[],
                     steps=run.steps,
                     duration_seconds=duration,
@@ -4561,9 +4648,11 @@ class Trainer:
           ``column_names`` and raise ``DatasetFormatError`` otherwise.
 
         Symmetrically, when ``method == "sft"`` and a DatasetLoader detects a
-        PREFERENCE-shaped file, a WARN is emitted ("did you mean
-        --method orpo?") — the SFT collapse still proceeds (the loader knows
-        how to render preference rows for SFT), but the operator is told.
+        PREFERENCE-shaped file, a WARN is emitted — SFT training proceeds on
+        the ``chosen`` response (the loader knows how to render preference
+        rows for SFT: each row becomes prompt -> chosen, dropping
+        ``rejected``), and the operator is told they can pass ``--method
+        orpo`` to also learn from the ``rejected`` response.
 
         Raises:
             DatasetNotFoundError: If dataset file doesn't exist
@@ -4595,9 +4684,11 @@ class Trainer:
                 logger.warning(
                     "Dataset looks like preference pairs (detected format "
                     "'preference': rows carry {chosen, rejected}), but "
-                    "method='sft'. The SFT path will collapse these to a "
-                    "single text column. Did you mean --method orpo "
-                    "(reference-free ORPO preference training)?"
+                    "method='sft'. Training SFT on the 'chosen' response "
+                    "(each row renders as prompt -> chosen, dropping "
+                    "'rejected'). Pass --method orpo to also learn from the "
+                    "'rejected' response (reference-free ORPO preference "
+                    "training)."
                 )
 
         def _require_preference_columns(hf_ds: Any, source: str) -> None:

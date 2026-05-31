@@ -453,6 +453,67 @@ def test_heldout_resplit_used_when_no_path(tmp_path):
 
 
 # =============================================================================
+# Held-out resolution on a PREFERENCE/ORPO dataset (Phase 8 fix)
+# =============================================================================
+# Before the FormatConverter PREFERENCE branch landed, a held-out file in
+# preference format ({prompt, chosen, rejected}) flattened to 0 texts via
+# to_chatml() and evaluate_run raised INPUT_EVAL_HELDOUT_UNRESOLVED blaming the
+# wrong cause ("not a readable on-disk file"). The converter fix renders chosen,
+# so held-out loss is now computable against prompt->chosen.
+
+def test_heldout_texts_from_preference_file_resolves(tmp_path):
+    """_heldout_texts_from_path on a preference jsonl yields real ChatML texts
+    (the chosen response), not zero — the eval half of the converter fix."""
+    heldout = tmp_path / "pref_heldout.jsonl"
+    heldout.write_text(
+        '{"prompt": "What is 2+2?", "chosen": "It is four.", "rejected": "It is five."}\n'
+        '{"prompt": "Capital of France?", "chosen": "Paris.", "rejected": "London."}\n',
+        encoding="utf-8",
+    )
+    texts = ev._heldout_texts_from_path(str(heldout))
+    assert len(texts) == 2
+    # chosen is rendered; rejected is NOT part of the held-out text.
+    joined = "\n".join(texts)
+    assert "It is four." in joined
+    assert "Paris." in joined
+    assert "It is five." not in joined
+    assert "London." not in joined
+
+
+def test_evaluate_run_on_preference_heldout_computes_loss(tmp_path):
+    """End-to-end: evaluate_run with a preference-format --heldout computes a
+    held-out loss (no INPUT_EVAL_HELDOUT_UNRESOLVED). Regression for the MEDIUM
+    eval finding — preference held-out files used to flatten to 0 texts."""
+    heldout = tmp_path / "pref_heldout.jsonl"
+    heldout.write_text(
+        '{"prompt": "q1", "chosen": "answer one here", "rejected": "bad one"}\n'
+        '{"prompt": "q2", "chosen": "answer two here", "rejected": "bad two"}\n',
+        encoding="utf-8",
+    )
+
+    model = _make_model(loss_value=0.5)
+    tokenizer = _make_tokenizer()
+    history = MagicMock()
+    history.get_run.return_value = _run_entry()
+    history.record_run_completed.return_value = {}
+
+    with patch.dict(sys.modules, {"torch": _FakeTorch()}), \
+         patch.object(ev, "_load_model_and_tokenizer", return_value=(model, tokenizer)), \
+         patch("backpropagate.checkpoints.RunHistoryManager", return_value=history):
+        result = evaluate_run(
+            "abc123def456",
+            output_dir=str(tmp_path),
+            heldout=str(heldout),
+            n=1,
+            seed=0,
+        )
+
+    # Loss computed over the 2 preference rows (constant 0.5 mock) -> 0.5,
+    # NOT None and NOT a raised UserInputError.
+    assert result.held_out_loss == pytest.approx(0.5)
+
+
+# =============================================================================
 # Prompt resolution
 # =============================================================================
 

@@ -538,6 +538,47 @@ if PYDANTIC_SETTINGS_AVAILABLE:
             return self
 
         @model_validator(mode="after")
+        def _reject_invalid_orpo_beta(self) -> "TrainingConfig":
+            """Reject a non-positive ``orpo_beta`` at construction.
+
+            v1.5 T1.2: ``orpo_beta`` is the odds-ratio weight on ORPO's
+            relative-ratio loss term. The field comment already warns "Keep
+            > 0 — a non-positive weight degenerates ORPO back to plain SFT,"
+            but nothing enforced it: ``orpo_beta=0.0`` silently zeroes the
+            odds-ratio term (the run is SFT wearing an ORPO label) and a
+            NEGATIVE beta trains TOWARD the rejected completion — both are
+            silent correctness bugs that surface only as a mysteriously bad
+            model. We gate it here, mirroring ``_reject_invalid_method``, so a
+            bad value supplied as a kwarg (``TrainingConfig(orpo_beta=0)``) or
+            via env var (``BACKPROPAGATE_TRAINING__ORPO_BETA=0``) raises a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``)
+            with an actionable hint up front. The constraint is enforced
+            unconditionally (not only when ``method == 'orpo'``) so the error
+            is deterministic regardless of field-evaluation order; a stray
+            non-positive ``orpo_beta`` left under ``method='sft'`` is still a
+            misconfiguration worth surfacing. A non-``ValueError`` exception
+            raised from a pydantic ``after`` validator propagates as-is (NOT
+            re-wrapped in ``ValidationError``), so the structured code/hint
+            survive.
+            """
+            if self.orpo_beta <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "orpo_beta",
+                    self.orpo_beta,
+                    "a positive number",
+                    suggestion=(
+                        "Set orpo_beta to a value > 0 (the ORPO paper's "
+                        "headline setting is 0.1). A value of 0 zeroes the "
+                        "odds-ratio term — the run silently degenerates to "
+                        "plain SFT — and a negative value trains toward the "
+                        "REJECTED completion."
+                    ),
+                )
+            return self
+
+        @model_validator(mode="after")
         def _reject_bf16_and_fp16(self) -> "TrainingConfig":
             """Reject bf16=True AND fp16=True at construction time.
 
@@ -989,6 +1030,26 @@ else:
                         "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
                         "are not implemented in v1.5 — use TRL / LLaMA-Factory "
                         "for those."
+                    ),
+                )
+            # v1.5 T1.2 (ORPO): reject a non-positive orpo_beta here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_orpo_beta
+            # validator raises. A 0 weight silently degenerates ORPO to SFT;
+            # a negative weight trains toward the rejected completion.
+            if self.orpo_beta <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "orpo_beta",
+                    self.orpo_beta,
+                    "a positive number",
+                    suggestion=(
+                        "Set orpo_beta to a value > 0 (the ORPO paper's "
+                        "headline setting is 0.1). A value of 0 zeroes the "
+                        "odds-ratio term — the run silently degenerates to "
+                        "plain SFT — and a negative value trains toward the "
+                        "REJECTED completion."
                     ),
                 )
             # v1.5 T3.1 (MLX): reject an invalid backend here too so the

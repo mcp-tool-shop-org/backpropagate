@@ -547,6 +547,215 @@ class TestReproduceBlockHyperparameters:
             )
 
 
+# =============================================================================
+# HIGH #4 — reproduce command + metadata honest for v1.5 training knobs
+# =============================================================================
+# Re-audit finding: a v1.5 run (ORPO / FP8 / rsLoRA / reasoning-trace / MLX)
+# emitted a reproduce command from the FIXED SFT-shaped flag set, IGNORING the
+# v1.5 knobs the trainer records in run-history `hyperparameters` (threaded in
+# as `extra_hyperparameters`). Re-running an ORPO run's printed command trained
+# plain SFT — a DIFFERENT model. The fix makes the printed `backprop train ...`
+# emit each v1.5 knob present, plus an "orpo" tag + a "Method" property row for
+# ORPO. SFT runs must stay byte-identical (no spurious flags/tag/row).
+class TestReproduceBlockV15Knobs:
+    """HIGH #4 regression: reproduce command + metadata honor v1.5 knobs."""
+
+    def _orpo_card(self, *, orpo_beta=0.1, **extra):
+        from backpropagate.model_card import generate_model_card
+
+        hp = {
+            "batch_size": 2,
+            "learning_rate": 2e-4,
+            "max_seq_length": 2048,
+            "method": "orpo",
+            "orpo_beta": orpo_beta,
+            "use_unsloth": True,
+        }
+        hp.update(extra)
+        return generate_model_card(
+            run_id="high4-orpo",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+            dataset_path="/data/pairs.jsonl",
+            steps=100,
+            session_kind="single_run",
+            extra_hyperparameters=hp,
+        )
+
+    def test_orpo_run_emits_method_flag(self):
+        """An ORPO run's reproduce command contains ``--method orpo`` so
+        re-running it actually trains ORPO (not silently SFT)."""
+        card = self._orpo_card()
+        block = _extract_reproduce_block(card)
+        assert "--method orpo" in block, (
+            f"HIGH #4: ORPO run must emit --method orpo. Block: {block!r}"
+        )
+
+    def test_orpo_run_default_beta_omits_beta_flag(self):
+        """orpo_beta at the default 0.1 needs no ``--orpo-beta`` flag (the CLI
+        default already matches), so the command stays clean."""
+        card = self._orpo_card(orpo_beta=0.1)
+        block = _extract_reproduce_block(card)
+        assert "--orpo-beta" not in block, (
+            f"HIGH #4: default orpo_beta should not emit --orpo-beta. "
+            f"Block: {block!r}"
+        )
+
+    def test_orpo_run_nondefault_beta_emits_beta_flag(self):
+        """A non-default orpo_beta MUST be pinned via ``--orpo-beta`` so the
+        odds-ratio weight reproduces exactly."""
+        card = self._orpo_card(orpo_beta=0.25)
+        block = _extract_reproduce_block(card)
+        assert "--method orpo" in block
+        assert "--orpo-beta 0.25" in block, (
+            f"HIGH #4: non-default orpo_beta=0.25 must emit --orpo-beta 0.25. "
+            f"Block: {block!r}"
+        )
+
+    def test_orpo_run_adds_orpo_tag_and_method_row(self):
+        """An ORPO run's card carries an ``orpo`` tag in the frontmatter and a
+        ``Method`` property row — both absent pre-fix."""
+        card = self._orpo_card(orpo_beta=0.2)
+        # Frontmatter tag.
+        frontmatter = card.split("---", 2)[1]
+        assert "- orpo" in frontmatter, (
+            f"HIGH #4: ORPO run must carry an 'orpo' tag. "
+            f"Frontmatter: {frontmatter!r}"
+        )
+        # Method property row (value carries the beta).
+        assert "| Method |" in card and "`orpo`" in card, (
+            "HIGH #4: ORPO run must have a Method property row."
+        )
+        assert "beta=0.2000" in card, (
+            "HIGH #4: Method row should record the orpo_beta value."
+        )
+
+    def test_fp8_run_emits_fp8_flag(self):
+        """An FP8 run's reproduce command contains ``--fp8``. The key is the
+        EFFECTIVE fp8 state the trainer recorded, so a True here means FP8
+        actually ran (not a request that degraded to bf16)."""
+        from backpropagate.model_card import generate_model_card
+
+        card = generate_model_card(
+            base_model="m",
+            steps=10,
+            session_kind="single_run",
+            extra_hyperparameters={"fp8": True, "use_unsloth": True},
+        )
+        block = _extract_reproduce_block(card)
+        assert "--fp8" in block, (
+            f"HIGH #4: FP8 run must emit --fp8. Block: {block!r}"
+        )
+
+    def test_rslora_run_emits_use_rslora_flag(self):
+        from backpropagate.model_card import generate_model_card
+
+        card = generate_model_card(
+            base_model="m",
+            steps=10,
+            session_kind="single_run",
+            extra_hyperparameters={"use_rslora": True},
+        )
+        block = _extract_reproduce_block(card)
+        assert "--use-rslora" in block, (
+            f"HIGH #4: rsLoRA run must emit --use-rslora. Block: {block!r}"
+        )
+
+    def test_reasoning_trace_run_emits_flag(self):
+        from backpropagate.model_card import generate_model_card
+
+        card = generate_model_card(
+            base_model="m",
+            steps=10,
+            session_kind="single_run",
+            extra_hyperparameters={"reasoning_trace": True},
+        )
+        block = _extract_reproduce_block(card)
+        assert "--reasoning-trace" in block, (
+            f"HIGH #4: reasoning-trace run must emit --reasoning-trace. "
+            f"Block: {block!r}"
+        )
+
+    def test_mlx_backend_run_emits_backend_flag(self):
+        """An MLX-rail run (the trainer stamps backend='mlx') emits
+        ``--backend mlx`` so the command targets the right rail."""
+        from backpropagate.model_card import generate_model_card
+
+        card = generate_model_card(
+            base_model="m",
+            steps=10,
+            session_kind="single_run",
+            extra_hyperparameters={"backend": "mlx"},
+        )
+        block = _extract_reproduce_block(card)
+        assert "--backend mlx" in block, (
+            f"HIGH #4: MLX run must emit --backend mlx. Block: {block!r}"
+        )
+
+    def test_auto_and_cuda_backend_emit_no_flag(self):
+        """'auto' (default) and 'cuda' need no ``--backend`` flag — auto
+        resolves to cuda on NVIDIA, so a flag would be noise."""
+        from backpropagate.model_card import generate_model_card
+
+        for backend_value in ("auto", "cuda"):
+            card = generate_model_card(
+                base_model="m",
+                steps=10,
+                session_kind="single_run",
+                extra_hyperparameters={"backend": backend_value},
+            )
+            block = _extract_reproduce_block(card)
+            assert "--backend" not in block, (
+                f"HIGH #4: backend={backend_value!r} must NOT emit --backend. "
+                f"Block: {block!r}"
+            )
+
+    def test_sft_run_card_is_unchanged(self):
+        """The control case: a plain SFT run (method='sft', all v1.5 knobs
+        off / absent) emits NONE of the v1.5 flags, NO 'orpo' tag, and NO
+        Method row. This pins that the fix doesn't regress the common path.
+        """
+        from backpropagate.model_card import generate_model_card
+
+        card = generate_model_card(
+            run_id="high4-sft",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+            dataset_path="/data/sft.jsonl",
+            steps=100,
+            session_kind="single_run",
+            extra_hyperparameters={
+                "batch_size": 2,
+                "learning_rate": 2e-4,
+                "max_seq_length": 2048,
+                "method": "sft",
+                "orpo_beta": 0.1,
+                "fp8": False,
+                "use_rslora": False,
+                "reasoning_trace": False,
+                "use_unsloth": True,
+            },
+        )
+        block = _extract_reproduce_block(card)
+        for spurious in (
+            "--method",
+            "--orpo-beta",
+            "--fp8",
+            "--use-rslora",
+            "--reasoning-trace",
+            "--backend",
+        ):
+            assert spurious not in block, (
+                f"HIGH #4 regression: SFT run leaked {spurious!r}. "
+                f"Block: {block!r}"
+            )
+        # No orpo tag, no Method row.
+        assert "- orpo" not in card.split("---", 2)[1], (
+            "HIGH #4 regression: SFT run carries an 'orpo' tag."
+        )
+        assert "| Method |" not in card, (
+            "HIGH #4 regression: SFT run has a spurious Method row."
+        )
+
+
 def _extract_reproduce_block(card: str) -> str:
     """Helper: pull the ```bash ... ``` Reproduce code-fence out of a
     rendered model card so assertions don't accidentally match values

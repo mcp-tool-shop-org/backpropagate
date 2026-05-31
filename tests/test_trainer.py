@@ -1778,6 +1778,63 @@ class TestReasoningTraceWiring:
 
         mock_filter.assert_not_called()
 
+    def test_reasoning_trace_on_orpo_is_honest_noop(self, caplog):
+        """Re-audit #7: reasoning_trace under method='orpo' is neutralized.
+
+        The trace filter is SFT-only, so reasoning_trace on ORPO does nothing
+        useful. The constructor must therefore: (a) emit ONE WARN, (b) SKIP the
+        max_seq_length 2048->8192 bump (a real memory change that would
+        otherwise fire), and (c) flip self.reasoning_trace to False so
+        run-history records it honestly as inert rather than claiming True.
+        """
+        import logging
+
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        # Pin the bump-heuristic precondition so the skip is meaningful.
+        assert settings.model.max_seq_length == 2048
+
+        with caplog.at_level(logging.WARNING, logger="backpropagate.trainer"):
+            with patch("torch.cuda.is_available", return_value=False):
+                # ORPO requires mode='lora' (the default).
+                trainer = Trainer(
+                    reasoning_trace=True, method="orpo", use_unsloth=False
+                )
+        # (c) recorded honestly as inert.
+        assert trainer.reasoning_trace is False
+        # (b) the max_seq bump was skipped — left at the shipped default.
+        assert trainer.max_seq_length == 2048, (
+            "reasoning_trace must NOT bump max_seq_length under method='orpo' "
+            f"(it is inert there); got {trainer.max_seq_length}."
+        )
+        # (a) exactly one WARN naming the ignore.
+        ignore_warns = [
+            r.message
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and "reasoning-trace SFT does not apply" in r.message
+        ]
+        assert len(ignore_warns) == 1, (
+            f"expected exactly one reasoning-trace ignore WARN; got "
+            f"{ignore_warns}"
+        )
+        assert "method='orpo'" in ignore_warns[0]
+
+    def test_reasoning_trace_hyperparameters_false_under_orpo(self):
+        """Re-audit #7: the run-history hyperparameters dict must record
+        reasoning_trace=False for an ORPO run (not the requested True), since
+        the recipe is inert on the ORPO path."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(
+                reasoning_trace=True, method="orpo", use_unsloth=False
+            )
+        # self.reasoning_trace is what the hyperparameters dict stamps; it must
+        # be the honest False, not the inert request.
+        assert trainer.reasoning_trace is False
+
     def test_load_dataset_skips_trace_filter_when_off(self):
         """reasoning_trace off (default SFT) must NOT route through the filter."""
         from datasets import Dataset

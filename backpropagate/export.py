@@ -890,6 +890,84 @@ def _estimate_param_count(model: Any) -> int | None:
     return total or None
 
 
+def _model_has_float32_params(model: Any) -> bool:
+    """Best-effort: does ``model`` carry any float32 parameter?
+
+    FP8 finding: torchao's ``Float8Linear`` keeps its master weight in f32,
+    so after ``merge_and_unload()`` the merged checkpoint is f32 (4 B/param)
+    rather than the bf16 (2 B/param) a normal LoRA merge produces. Detecting
+    f32 lets the merged/GGUF export paths down-cast to bf16 before saving so
+    the on-disk size matches the disk-guard's 2-B/param budget.
+
+    Returns ``False`` (never raises) when torch is absent or the model
+    doesn't expose ``parameters()`` with dtypes — a stub / mock model simply
+    skips the cast.
+    """
+    try:
+        params = model.parameters()
+    except Exception:  # noqa: BLE001 — non-torch / mock model
+        return False
+    try:
+        import torch  # local import: export.py must import cheaply for --help
+    except Exception:  # noqa: BLE001 — torch missing in a docs-only install
+        return False
+    try:
+        for p in params:
+            if getattr(p, "dtype", None) == torch.float32:
+                return True
+    except Exception:  # noqa: BLE001 — degenerate iterator / mock
+        return False
+    return False
+
+
+def _cast_merged_model_to_bf16(model: Any) -> Any:
+    """Down-cast a merged model to bf16 before ``save_pretrained``.
+
+    FP8 finding (DATA-B-004 late-failure guard): a model trained with the FP8
+    compute path merges to an **f32** checkpoint (torchao ``Float8Linear``
+    upcasts its weight to f32). At 4 B/param that is DOUBLE the bf16 a normal
+    LoRA merge produces, so the merged checkpoint ALONE consumes the whole
+    ``params × 2 × multiplier`` disk budget — the GGUF pre-flight then PASSES
+    and conversion dies mid-way out of disk (exactly the late failure
+    DATA-B-004 exists to prevent). Casting the merge to bf16 here both
+    restores the 2-B/param assumption AND halves the on-disk footprint. The
+    merge math is already done, so the cast is numerically fine for the
+    downstream GGUF conversion (the float8-base run's ~9% relative delta is
+    expected and unrelated to this cast).
+
+    Only casts when (a) torch is importable AND (b) the model actually carries
+    f32 params (i.e. the FP8 case) AND (c) the model exposes ``.to()``. A
+    normal bf16 merge, a stub/mock model, or a torch-less install is returned
+    unchanged. Cast failures degrade to the original model (logged at WARN)
+    so a save is never blocked by a best-effort optimization.
+    """
+    if not _model_has_float32_params(model):
+        return model
+    to_method = getattr(model, "to", None)
+    if not callable(to_method):
+        return model
+    try:
+        import torch
+
+        cast = to_method(torch.bfloat16)
+        # ``Module.to`` mutates in place and returns self; honor a returned
+        # model if the impl returns a new object.
+        result = cast if cast is not None else model
+        logger.info(
+            "Down-cast merged model to bf16 before save (FP8 merge produces "
+            "an f32 checkpoint at 4 B/param; bf16 halves on-disk size and "
+            "matches the disk-space pre-flight's 2 B/param budget)."
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — best-effort; never block the save
+        logger.warning(
+            "Could not down-cast merged model to bf16 (%s); saving as-is. The "
+            "GGUF disk pre-flight may under-budget an f32 checkpoint.",
+            exc,
+        )
+        return model
+
+
 def _check_export_disk_space(
     dest: Path,
     model: Any,
@@ -1177,6 +1255,12 @@ def export_merged(
     except Exception as e:
         raise MergeExportError(f"Failed to merge LoRA adapters: {e}") from e
 
+    # FP8 finding: an FP8-trained model merges to an f32 checkpoint (torchao
+    # Float8Linear upcasts its weight). At 4 B/param that doubles the on-disk
+    # size the disk-space pre-flight budgeted (2 B/param), so down-cast to
+    # bf16 before saving. No-op for a normal bf16 merge / stub model.
+    merged_model = _cast_merged_model_to_bf16(merged_model)
+
     try:
         # Save model and tokenizer
         merged_model.save_pretrained(output_path)
@@ -1454,6 +1538,13 @@ def export_gguf(
             merged_model = model.merge_and_unload()
         else:
             merged_model = model
+
+        # FP8 finding: an FP8-trained model merges to an f32 checkpoint at
+        # 4 B/param — double the bf16 the disk pre-flight (which ran above
+        # with multiplier=2.0 on a 2-B/param assumption) budgeted. Down-cast
+        # to bf16 before saving so the scratch merge + quantized GGUF fit the
+        # budgeted headroom instead of dying mid-conversion out of disk.
+        merged_model = _cast_merged_model_to_bf16(merged_model)
 
         # Save in HF format
         merged_model.save_pretrained(merged_path)

@@ -189,13 +189,15 @@ class DataQualityReport:
             for upper, count in self.token_histogram:
                 label = "inf" if upper < 0 else f"<={upper}"
                 lines.append(f"  {label:>8}: {count}")
-            # Surface the documented CJK over-count caveat from
+            # Surface the documented CJK under-count caveat from
             # datasets._count_tokens_approx so operators don't mis-read the
-            # histogram on a non-ASCII corpus.
+            # histogram on a non-ASCII corpus (CJK is ~1+ token/char, so the
+            # ~4 chars/token estimate UNDER-counts it — the histogram skews
+            # SHORT on CJK).
             lines.append(
                 "  (note: token counts are a ~4 chars/token approximation and "
-                "over-count CJK by ~4x; re-derive against your real tokenizer "
-                "for non-ASCII-English data.)"
+                "under-count CJK by ~4-8x; re-derive against your real "
+                "tokenizer for non-ASCII-English data.)"
             )
 
         # Reasoning-trace block (v1.5 T3.2): only shown when the dataset
@@ -538,7 +540,8 @@ def trace_length_histogram(
         ``(-1, count)`` overflow bucket for traces longer than the last bin. The
         counts sum to the number of rows that carry at least one ``<think>``
         span (NOT to the total row count). Token counts share the
-        ``_count_tokens_approx`` ~4 chars/token caveat (over-counts CJK ~4x).
+        ``_count_tokens_approx`` ~4 chars/token caveat (under-counts CJK by
+        ~4-8x, so the trace histogram skews short on CJK reasoning data).
     """
     sorted_bins = tuple(sorted(bins))
     counts = [0] * (len(sorted_bins) + 1)  # +1 for the overflow ("inf") bucket

@@ -264,6 +264,32 @@ class TestTraceFilterMath:
         out, stats = filter_by_trace_length(rows)
         assert stats.total_after == 1
 
+    def test_approx_counter_undercounts_cjk_direction(self):
+        """The default approx counter UNDER-counts CJK (Phase 8 direction fix).
+
+        A 20-char CJK trace is ~20+ real tokens (CJK is ~1+ token/char), so a
+        real tokenizer keeps it against min_trace_tokens=12. But the default
+        ``len//4`` approximation sees only 20//4 == 5 tokens and WRONGLY drops
+        it as trace_too_short. This is the concrete consequence of under-counting
+        (the old docstrings claimed the opposite "over-count" direction).
+        """
+        cjk_trace = "我" * 20  # 20 CJK chars; real tokens >= ~20
+        row = _chatml_row(f"<think>{cjk_trace}</think>答案")
+
+        # Real tokenizer-like counter (~1 token/char) -> 20 tokens -> KEPT.
+        _kept, real_stats = filter_by_trace_length(
+            [row], min_trace_tokens=12, token_counter=len
+        )
+        assert real_stats.total_after == 1
+
+        # Default approx counter (len//4 == 5 tokens) UNDER-counts -> dropped
+        # as too-short even though the real trace clears the floor.
+        _dropped, approx_stats = filter_by_trace_length(
+            [row], min_trace_tokens=12
+        )
+        assert approx_stats.total_after == 0
+        assert approx_stats.removed_trace_too_short == 1
+
 
 class TestTraceFilterStatsShape:
     def test_retention_rate_zero_on_empty(self):

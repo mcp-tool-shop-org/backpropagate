@@ -334,6 +334,40 @@ class TestFp8GracefulFallback:
         assert any("unavailable on this host" in r.message for r in warns)
         assert any("bf16" in r.message for r in warns)
 
+    def test_degrade_preserves_default_4bit_no_oom(self, caplog):
+        """Re-audit #5: an unsupported host that degrades FP8 to bf16 must KEEP
+        the operator's default 4-bit ON — flipping it off here would load an
+        unquantized ~2x bf16 base and OOM a card that only fit via nf4.
+
+        Also asserts the degrade WARN is HONEST: it must NOT claim "FP8 keeps
+        the base in float8" (FP8 was disabled), and it must report the
+        unchanged load_in_4bit state.
+        """
+        from backpropagate.trainer import Trainer
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.trainer"):
+            with patch("torch.cuda.is_available", return_value=False):
+                trainer = Trainer(fp8=True, use_unsloth=False)
+        # The OOM-safety contract: default 4-bit survives the degrade.
+        assert trainer._fp8_effective is False
+        assert trainer._load_in_4bit is True
+        assert trainer._load_in_4bit_explicit is False
+        # The degrade WARN must NOT have falsely flipped 4-bit off via the
+        # old "disabling the default 4-bit" INFO path.
+        assert not any(
+            "disabling the default 4-bit" in rec.message for rec in caplog.records
+        )
+        # And the WARN must be honest about the unchanged 4-bit state and must
+        # NOT claim FP8 is keeping the base in float8.
+        degrade_warns = [
+            r.message
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and "unavailable on this host" in r.message
+        ]
+        assert degrade_warns, "expected one degrade WARN"
+        assert any("load_in_4bit=True" in m for m in degrade_warns)
+        assert all("FP8 keeps the base in float8" not in m for m in degrade_warns)
+
     def test_pre_sm90_degrades(self):
         """Ada (sm_89) → _fp8_effective False, no raise."""
         from backpropagate.trainer import Trainer

@@ -407,6 +407,82 @@ class TestPrepareDataDir:
         recs = self._read_jsonl(out / "train.jsonl")
         assert len(recs) == 5
 
+    # -- re-audit #10: trace-length filtering on the MLX rail -----------------
+
+    def test_reasoning_trace_filter_drops_non_think_rows(self, tmp_path):
+        """reasoning_trace=True runs the <think> trace-length filter on this
+        rail: a row WITH a sufficiently-long <think> span is kept; a no-think
+        row (require_think) is dropped — making the trace knobs LIVE on MLX."""
+        samples = [
+            {"messages": [
+                {"role": "user", "content": "solve 2+2"},
+                # ~12-word think span; approx counter (~4 chars/token) puts it
+                # comfortably above the default min_trace_tokens floor of 8.
+                {"role": "assistant", "content":
+                    "<think>add the two numbers carefully one step at a "
+                    "time to be sure</think>4"},
+            ]},
+            {"messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},  # no <think> → dropped
+            ]},
+        ]
+        out = prepare_mlx_data_dir(
+            samples, tmp_path / "d", reasoning_trace=True, shuffle=False
+        )
+        recs = self._read_jsonl(out / "train.jsonl")
+        # Only the reasoning row survives.
+        assert len(recs) == 1
+        joined = "".join(m["content"] for m in recs[0]["messages"])
+        assert "<think>" in joined
+
+    def test_reasoning_trace_off_keeps_all_rows(self, tmp_path):
+        """Without reasoning_trace the filter is a no-op (byte-identical to the
+        pre-#10 behavior): a no-think row is NOT dropped."""
+        samples = [
+            {"messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ]},
+        ]
+        out = prepare_mlx_data_dir(samples, tmp_path / "d")  # reasoning_trace default False
+        recs = self._read_jsonl(out / "train.jsonl")
+        assert len(recs) == 1
+
+    def test_reasoning_trace_max_bound_drops_overlong(self, tmp_path):
+        """max_trace_tokens is a LIVE knob on this rail: an over-long trace is
+        dropped, leaving 0 records → structured DatasetFormatError (no write)."""
+        from backpropagate.exceptions import DatasetFormatError
+
+        samples = [
+            {"messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content":
+                    "<think>" + ("word " * 200) + "</think>answer"},
+            ]},
+        ]
+        with pytest.raises(DatasetFormatError) as ei:
+            prepare_mlx_data_dir(
+                samples, tmp_path / "d", reasoning_trace=True, max_trace_tokens=8
+            )
+        assert ei.value.code == "INPUT_DATASET_FORMAT_UNSUPPORTED"
+        # Nothing was written.
+        assert not (tmp_path / "d" / "train.jsonl").exists()
+
+    def test_zero_records_raises_before_write(self, tmp_path):
+        """re-audit LOW: a dataset that yields 0 parseable chat turns raises a
+        structured DatasetFormatError BEFORE writing a 0-byte train.jsonl (which
+        would surface later as an opaque mlx_lm.lora subprocess error)."""
+        from backpropagate.exceptions import DatasetFormatError
+
+        # Empty-string raw-text rows produce no ChatML turn → 0 records.
+        samples = [{"text": ""}, {"text": ""}]
+        with pytest.raises(DatasetFormatError) as ei:
+            prepare_mlx_data_dir(samples, tmp_path / "d")
+        assert ei.value.code == "INPUT_DATASET_FORMAT_UNSUPPORTED"
+        assert "0 usable records" in str(ei.value)
+        assert not (tmp_path / "d" / "train.jsonl").exists()
+
 
 # ---------------------------------------------------------------------------
 # The subprocess seam — run() / fuse()
@@ -501,6 +577,66 @@ class TestRunSeam:
         assert argv[0] == "mlx_lm.fuse"
         assert "--export-gguf" in argv
         assert "--gguf-path" in argv
+
+
+# ---------------------------------------------------------------------------
+# re-audit LOW: _train_with_mlx must NOT coerce an unparsed loss to 0.0
+# ---------------------------------------------------------------------------
+
+class TestMLXTrainLossHonesty:
+    def test_unparsed_loss_is_not_zero(self, tmp_path):
+        """A successful MLX run whose stdout loss could not be parsed
+        (``MLXRunResult.final_loss is None``) must NOT be recorded as 0.0 (which
+        reads as a perfect run). The TrainingRun carries nan (the typed-float
+        sentinel), and metadata['final_loss_parsed'] is False."""
+        import math
+
+        from backpropagate.trainer import Trainer, TrainingRun
+
+        with _Apple():
+            t = Trainer(backend="mlx", model="mlx-community/x", output_dir=str(tmp_path))
+            unparsed = MLXRunResult(
+                adapter_path=str(tmp_path / "mlx_adapter"),
+                final_loss=None,  # the parse-miss case
+                iters=5,
+                raw_stdout="(no recognizable loss line)",
+                val_loss=None,
+            )
+            with mock.patch(
+                "backpropagate.mlx_backend.prepare_mlx_data_dir",
+                return_value=tmp_path / "mlx_data",
+            ), mock.patch.object(MLXBackend, "run", return_value=unparsed):
+                run = t._train_with_mlx(
+                    "data.jsonl", steps=5, samples=None, callback=None
+                )
+
+        assert isinstance(run, TrainingRun)
+        # NOT 0.0 — nan is the honest "ran, loss unknown" sentinel.
+        assert math.isnan(run.final_loss)
+        assert run.metadata["final_loss_parsed"] is False
+
+    def test_parsed_loss_is_preserved(self, tmp_path):
+        """The happy path is unchanged: a parsed numeric loss flows verbatim."""
+        from backpropagate.trainer import Trainer
+
+        with _Apple():
+            t = Trainer(backend="mlx", model="mlx-community/x", output_dir=str(tmp_path))
+            parsed = MLXRunResult(
+                adapter_path=str(tmp_path / "mlx_adapter"),
+                final_loss=1.234,
+                iters=5,
+                raw_stdout="Iter 5: Train loss 1.234",
+                val_loss=None,
+            )
+            with mock.patch(
+                "backpropagate.mlx_backend.prepare_mlx_data_dir",
+                return_value=tmp_path / "mlx_data",
+            ), mock.patch.object(MLXBackend, "run", return_value=parsed):
+                run = t._train_with_mlx(
+                    "data.jsonl", steps=5, samples=None, callback=None
+                )
+        assert run.final_loss == pytest.approx(1.234)
+        assert run.metadata["final_loss_parsed"] is True
 
 
 # ---------------------------------------------------------------------------

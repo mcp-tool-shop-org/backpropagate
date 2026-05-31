@@ -166,6 +166,9 @@ def prepare_mlx_data_dir(
     seed: int = 42,
     max_samples: int = 0,
     shuffle: bool = True,
+    reasoning_trace: bool = False,
+    min_trace_tokens: int = 8,
+    max_trace_tokens: int = 8192,
 ) -> Path:
     """Materialize ``dataset`` into the mlx_lm.lora data-directory layout.
 
@@ -192,10 +195,37 @@ def prepare_mlx_data_dir(
             (mirrors ``_load_dataset``'s shuffle-then-select ordering).
         shuffle: Whether to shuffle before the cap + split (default True,
             matching ``settings.data.shuffle``).
+        reasoning_trace: v1.5 T3.2 / re-audit #10. When True, run CORE's
+            :func:`datasets.filter_by_trace_length` over the converted ChatML
+            rows BEFORE they become mlx ``messages`` records — dropping rows
+            whose summed ``<think>`` span is empty / out of
+            ``[min_trace_tokens, max_trace_tokens]`` / unbalanced. This makes
+            the trace knobs LIVE on the MLX rail (without it, reasoning_trace on
+            MLX was a no-op that left empty / over-long / unbalanced traces in).
+            Token counting here uses CORE's APPROX counter
+            (``_count_tokens_approx``, ~4 chars/token) — the MLX path loads its
+            model inside the ``mlx_lm.lora`` subprocess, so there is NO
+            in-process tokenizer to count exactly with. CAVEAT: the approx
+            counter **under-counts CJK by ~4-8x** (CJK is ~1+ token/char), so
+            CJK traces look shorter than they are and can be wrongly dropped as
+            too-short against ``min_trace_tokens``; for CJK-heavy reasoning data
+            re-derive the bounds against your tokenizer. (The doubled-``<think>``
+            chat-template advisory the CUDA rail runs is tokenizer/template
+            dependent and therefore CANNOT run here — it stays CUDA-only.)
+        min_trace_tokens: Low cutoff for the trace filter (approx tokens).
+        max_trace_tokens: High cutoff for the trace filter (approx tokens).
 
     Returns:
         The ``out_dir`` :class:`~pathlib.Path` (the directory passed to
         ``mlx_lm.lora --data``).
+
+    Raises:
+        DatasetFormatError: when conversion yields ZERO usable records (every
+            row produced no parseable chat turn, or — with ``reasoning_trace`` —
+            the trace filter dropped every row). Raised BEFORE any file write so
+            the operator gets a structured ``INPUT_DATASET_FORMAT_UNSUPPORTED``
+            naming the format-mismatch cause, instead of a 0-byte ``train.jsonl``
+            and a later opaque ``mlx_lm.lora`` subprocess failure (re-audit LOW).
 
     Pure file IO — fully testable without mlx installed.
     """
@@ -204,9 +234,45 @@ def prepare_mlx_data_dir(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Universal conversion → list[{"text": "<chatml>"}], then round-trip each
-    # ChatML string into the mlx chat message-list.
+    # Universal conversion → list[{"text": "<chatml>"}].
     chatml_rows = DatasetLoader(dataset).to_chatml()
+
+    # v1.5 T3.2 / re-audit #10: trace-length filtering on the MLX rail. Run it
+    # on the ChatML ``{"text": ...}`` rows (CORE's filter operates on exactly
+    # that shape) BEFORE the round-trip into mlx ``messages`` records, so empty
+    # / over-long / unbalanced <think> traces are dropped here too — not just on
+    # the CUDA path. Uses the approx token counter (no in-process tokenizer on
+    # this rail; see the docstring CJK caveat).
+    if reasoning_trace:
+        from .datasets import filter_by_trace_length
+
+        text_rows = [
+            {"text": (row.get("text", "") if isinstance(row, dict) else str(row))}
+            for row in chatml_rows
+        ]
+        kept, stats = filter_by_trace_length(
+            text_rows,
+            min_trace_tokens=min_trace_tokens,
+            max_trace_tokens=max_trace_tokens,
+            require_think=True,
+            token_counter=None,  # approx (~4 chars/token); CJK under-counts
+        )
+        logger.info("prepare_mlx_data_dir (reasoning_trace): %s", stats.summary())
+        if not kept:
+            # Mirror the CUDA rail's loud-on-total-wipeout discipline, but on the
+            # MLX rail there is no model loaded yet, so an empty set MUST fail
+            # loud BEFORE writing (a 0-byte train.jsonl would surface as an
+            # opaque mlx_lm.lora error). Hand off to the shared 0-record raise
+            # below by re-pointing chatml_rows at the (empty) kept set.
+            logger.warning(
+                "prepare_mlx_data_dir: trace-length filtering removed every "
+                "row (min=%s, max=%s think tokens, require_think=True). Relax "
+                "the trace bounds or confirm the targets carry <think> spans.",
+                min_trace_tokens,
+                max_trace_tokens,
+            )
+        chatml_rows = kept
+
     records: list[dict[str, list[dict[str, str]]]] = []
     for row in chatml_rows:
         text = row.get("text", "") if isinstance(row, dict) else str(row)
@@ -220,6 +286,33 @@ def prepare_mlx_data_dir(
             )
             continue
         records.append({"messages": messages})
+
+    # Re-audit LOW: refuse to write a 0-record (0-byte train.jsonl) dataset.
+    # Zero records means either every row failed ChatML conversion (a format
+    # mismatch) or — with reasoning_trace — the trace filter wiped the set.
+    # Fail loud HERE with a structured cause instead of letting mlx_lm.lora
+    # choke on an empty data dir with an opaque subprocess error.
+    if not records:
+        from .exceptions import DatasetFormatError
+
+        cause = (
+            "every row was dropped by the reasoning-trace filter "
+            f"(min={min_trace_tokens}, max={max_trace_tokens} think tokens, "
+            "require_think=True) — relax the trace bounds or confirm the "
+            "targets carry <think> spans"
+            if reasoning_trace
+            else "no row produced a parseable ChatML chat turn — the source "
+            "format may not be a recognized chat/instruction dataset"
+        )
+        raise DatasetFormatError(
+            "prepare_mlx_data_dir produced 0 usable records, so there is "
+            f"nothing to train on ({cause}). Refusing to write an empty "
+            "train.jsonl that mlx_lm.lora would later fail on opaquely.",
+            detected_format=None,
+            supported_formats=[
+                "ShareGPT", "Alpaca", "OpenAI chat", "ChatML", "raw text",
+            ],
+        )
 
     # Shuffle (seeded) then cap — same ordering as _load_dataset's
     # shuffle-then-select so a samples cap is a random subset, not a head slice.

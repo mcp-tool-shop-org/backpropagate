@@ -28,6 +28,7 @@ test_trainer.py / test_wave6b_features.py.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -461,6 +462,16 @@ class TestTrainORPODispatch:
             "must be skipped."
         )
 
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason=(
+            "Patches os.name='nt' then calls train(), which instantiates Paths — "
+            "forcing WindowsPath on a POSIX runner raises NotImplementedError. For "
+            "ORPO the pre-tokenize gate short-circuits on method!='sft' BEFORE the "
+            "os.name check, so this behavior is OS-independent; the windows-latest "
+            "matrix runner (os.name=='nt' natively) covers it."
+        ),
+    )
     def test_orpo_skips_windows_pre_tokenize(self, temp_dir):
         """On Windows, method='orpo' must NOT pre-tokenize (no text column)."""
         trainer = _orpo_trainer_ready(temp_dir)

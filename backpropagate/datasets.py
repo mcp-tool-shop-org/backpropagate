@@ -180,6 +180,13 @@ __all__ = [
     # Filtering
     "FilterStats",
     "filter_by_quality",
+    # Reasoning-trace SFT (v1.5 T3.2)
+    "TraceFilterStats",
+    "filter_by_trace_length",
+    "_extract_think_spans",
+    "_THINK_SPAN_RE",
+    "warn_on_doubled_think",
+    "dataset_has_leading_think",
     # Deduplication
     "deduplicate_exact",
     "deduplicate_minhash",
@@ -340,6 +347,66 @@ class FilterStats:
             lines.append(f"  - No assistant: {self.removed_no_assistant}")
         if self.removed_custom > 0:
             lines.append(f"  - Custom filter: {self.removed_custom}")
+        return "\n".join(lines)
+
+
+@dataclass
+class TraceFilterStats:
+    """Statistics from reasoning-trace-length filtering (v1.5 T3.2).
+
+    Mirrors the shape of :class:`FilterStats`: ``total_before`` / ``total_after``
+    plus a per-reason breakdown, a ``total_removed`` / ``retention_rate`` pair,
+    and a ``summary()`` renderer. Produced by :func:`filter_by_trace_length`,
+    which drops rows whose ``<think>...</think>`` reasoning span is too short,
+    too long, malformed (unbalanced tags), or absent.
+    """
+
+    total_before: int
+    total_after: int
+    removed_trace_too_short: int = 0
+    removed_trace_too_long: int = 0
+    removed_no_think: int = 0
+    removed_unbalanced_think: int = 0
+
+    @property
+    def total_removed(self) -> int:
+        return self.total_before - self.total_after
+
+    @property
+    def retention_rate(self) -> float:
+        if self.total_before == 0:
+            return 0.0
+        return self.total_after / self.total_before
+
+    def summary(self) -> str:
+        """Get human-readable summary."""
+        lines = [
+            "Reasoning-Trace Filter Results",
+            "=" * 40,
+            f"Before: {self.total_before}",
+            f"After:  {self.total_after} ({100 * self.retention_rate:.1f}% retained)",
+            f"Removed: {self.total_removed}",
+        ]
+        if self.removed_trace_too_short > 0:
+            lines.append(f"  - Trace too short: {self.removed_trace_too_short}")
+        if self.removed_trace_too_long > 0:
+            lines.append(f"  - Trace too long: {self.removed_trace_too_long}")
+        if self.removed_no_think > 0:
+            lines.append(f"  - No <think> span: {self.removed_no_think}")
+        if self.removed_unbalanced_think > 0:
+            lines.append(
+                f"  - Unbalanced <think> tags: {self.removed_unbalanced_think}"
+            )
+        # Echo the documented token-estimate caveat (see _count_tokens_approx):
+        # the default trace-token counter is a ~4 chars/token approximation and
+        # over-counts CJK ~4x, so min/max_trace_tokens cutoffs are looser/stricter
+        # than intended on non-ASCII reasoning traces. Pass ``token_counter=
+        # tokenizer.encode`` for an exact count.
+        lines.append(
+            "  (note: trace token counts use a ~4 chars/token approximation "
+            "and over-count CJK ~4x; pass token_counter=tokenizer.encode for an "
+            "exact count.)"
+        )
         return "\n".join(lines)
 
 
@@ -1310,6 +1377,231 @@ def filter_by_quality(
         )
 
     return filtered, stats
+
+
+# =============================================================================
+# REASONING-TRACE FILTERING (v1.5 T3.2)
+# =============================================================================
+# Reasoning-trace SFT (R1-style distillation) is pure SFT on chat data whose
+# assistant turns carry a ``<think>...</think>`` chain-of-thought before the
+# final answer (V1_5_BRIEF §2 finding 24). These blocks are PLAIN TEXT — there
+# are no special tokens involved and the tokenizer vocabulary is untouched. The
+# converters already pass assistant content verbatim, so ``<think>`` spans
+# survive ChatML conversion intact (locked by tests/test_reasoning.py); the job
+# here is the trace-length filter that keeps the reasoning band in a usable
+# range, plus the doubled-tag advisory below.
+
+# Inner body of every <think>...</think> span. DOTALL so a multi-line trace is
+# captured whole; IGNORECASE so <Think>/<THINK> variants are matched too.
+_THINK_SPAN_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_think_spans(text: str) -> list[str]:
+    """Inner bodies of all ``<think>...</think>`` spans in ``text``.
+
+    Returns a (possibly empty) list of the substrings BETWEEN each ``<think>``
+    and its matching ``</think>``. Matching is case-insensitive and spans
+    newlines (the regex is ``DOTALL``). Unclosed / unbalanced tags yield no
+    match for the dangling tag — balance is checked separately by
+    :func:`filter_by_trace_length` via a raw tag count.
+    """
+    return _THINK_SPAN_RE.findall(text)
+
+
+def filter_by_trace_length(
+    samples: list[dict],
+    min_trace_tokens: int = 8,
+    max_trace_tokens: int = 8192,
+    require_think: bool = True,
+    token_counter: Callable[[str], int] | None = None,
+) -> tuple[list[dict], TraceFilterStats]:
+    """Filter ChatML rows by the length of their ``<think>`` reasoning trace.
+
+    Reasoning-trace SFT (v1.5 T3.2) trains on assistant turns that emit a
+    ``<think>...</think>`` chain-of-thought before the final answer. This filter
+    keeps the *total reasoning band* (summed token count over ALL ``<think>``
+    spans in a row) within ``[min_trace_tokens, max_trace_tokens]`` and, when
+    ``require_think`` is set, drops rows with no trace at all. Rows whose
+    ``<think>`` / ``</think>`` tags don't balance are dropped as malformed.
+
+    Args:
+        samples: ChatML rows — dicts with a ``"text"`` key (the shape produced
+            by :func:`convert_to_chatml`). Non-dict / missing-text rows are
+            coerced to empty text (which has no trace).
+        min_trace_tokens: Drop a row whose summed think-span token count is
+            BELOW this (counts toward ``removed_trace_too_short``). An empty
+            ``<think></think>`` therefore fails here.
+        max_trace_tokens: Drop a row whose summed think-span token count is
+            ABOVE this (counts toward ``removed_trace_too_long``).
+        require_think: When True, a row with no ``<think>`` span at all is
+            dropped (``removed_no_think``); when False such rows are KEPT (the
+            filter only constrains rows that *do* reason).
+        token_counter: Optional ``str -> int`` token counter (e.g.
+            ``tokenizer.encode``). When ``None``, :func:`_count_tokens_approx`
+            is used — a ~4 chars/token heuristic that **over-counts CJK ~4x**,
+            so re-derive the cutoffs against your real tokenizer (or pass it
+            here) for non-ASCII-English reasoning data.
+
+    Returns:
+        ``(filtered_samples, TraceFilterStats)``.
+
+    Raises:
+        InvalidSettingError: if ``min_trace_tokens`` / ``max_trace_tokens`` are
+            negative or inverted (``min > max``) — ``CONFIG_INVALID_SETTING``.
+    """
+    # Fail loud on nonsensical bounds (mirrors PerplexityFilter's inverted-bounds
+    # guard): a negative floor or an inverted [min, max] band silently removes
+    # everything or nothing, which the operator only discovers via an empty (or
+    # unfiltered) result. Name the bad value + the fix.
+    if min_trace_tokens < 0:
+        raise InvalidSettingError(
+            "min_trace_tokens",
+            min_trace_tokens,
+            "a non-negative token count",
+            suggestion="min_trace_tokens is the LOW cutoff; it cannot be negative.",
+        )
+    if max_trace_tokens < 0:
+        raise InvalidSettingError(
+            "max_trace_tokens",
+            max_trace_tokens,
+            "a non-negative token count",
+            suggestion="max_trace_tokens is the HIGH cutoff; it cannot be negative.",
+        )
+    if min_trace_tokens > max_trace_tokens:
+        raise InvalidSettingError(
+            "min_trace_tokens",
+            min_trace_tokens,
+            f"value <= max_trace_tokens (got "
+            f"min_trace_tokens={min_trace_tokens}, "
+            f"max_trace_tokens={max_trace_tokens})",
+            suggestion=(
+                "Swap the two arguments — min_trace_tokens is the LOW cutoff "
+                "(drop traces shorter than this) and max_trace_tokens is the "
+                "HIGH cutoff (drop traces longer than this)."
+            ),
+        )
+
+    counter = token_counter if token_counter is not None else _count_tokens_approx
+
+    stats = TraceFilterStats(total_before=len(samples), total_after=0)
+    filtered: list[dict] = []
+
+    for sample in samples:
+        text = sample.get("text", "") if isinstance(sample, dict) else str(sample)
+
+        # Balance check first: an unclosed <think> (or stray </think>) is a
+        # malformed trace regardless of any extractable body. Use a raw tag
+        # count (case-insensitive) so it can't be fooled by the non-greedy
+        # span regex silently ignoring a dangling opener.
+        open_count = len(re.findall(r"<think>", text, re.IGNORECASE))
+        close_count = len(re.findall(r"</think>", text, re.IGNORECASE))
+        if open_count != close_count:
+            stats.removed_unbalanced_think += 1
+            continue
+
+        spans = _extract_think_spans(text)
+        if not spans:
+            # No reasoning trace. Drop only when traces are required; otherwise
+            # keep (the filter constrains reasoning rows, not non-reasoning ones).
+            if require_think:
+                stats.removed_no_think += 1
+                continue
+            filtered.append(sample)
+            continue
+
+        trace_tokens = sum(counter(span) for span in spans)
+        if trace_tokens < min_trace_tokens:
+            stats.removed_trace_too_short += 1
+            continue
+        if trace_tokens > max_trace_tokens:
+            stats.removed_trace_too_long += 1
+            continue
+
+        filtered.append(sample)
+
+    stats.total_after = len(filtered)
+
+    # Same loud-on-total-wipeout discipline as filter_by_quality: a run that
+    # removes EVERY row is almost always a mis-set knob (min_trace_tokens too
+    # high, max too low, or require_think=True on a non-reasoning corpus), not a
+    # genuinely empty dataset. Name the cause + the knobs so the empty training
+    # set isn't discovered the hard way.
+    if stats.total_before > 0 and stats.total_after == 0:
+        logger.warning(
+            "filter_by_trace_length removed ALL %d samples (0 retained). The "
+            "most common causes are min_trace_tokens=%s being too high for "
+            "short traces, max_trace_tokens=%s too low, or require_think=True "
+            "on a dataset whose rows have no <think> span. The default token "
+            "estimate is ~4 chars/token and over-counts CJK ~4x — pass "
+            "token_counter=tokenizer.encode or re-derive the cutoffs. "
+            "Breakdown: trace_too_short=%d trace_too_long=%d no_think=%d "
+            "unbalanced_think=%d.",
+            stats.total_before,
+            min_trace_tokens,
+            max_trace_tokens,
+            stats.removed_trace_too_short,
+            stats.removed_trace_too_long,
+            stats.removed_no_think,
+            stats.removed_unbalanced_think,
+        )
+
+    return filtered, stats
+
+
+def dataset_has_leading_think(samples: list[dict]) -> bool:
+    """True if ANY assistant turn body opens with a ``<think>`` tag.
+
+    A cheap, pure predicate for the doubled-``<think>`` template wrinkle: some
+    chat templates inject a ``<think>`` opener of their own at generation time.
+    If the training data ALSO opens its assistant turns with ``<think>``, the
+    rendered sequence carries a doubled tag. This predicate lets a caller that
+    owns the tokenizer (the Trainer / WIRE) combine "the data leads with
+    ``<think>``" with its own "the template injects ``<think>``" probe and warn.
+
+    Operates on ChatML rows (``[{"text": ...}]``): an assistant turn "opens
+    with ``<think>``" when its body, left-stripped, starts with ``<think>``
+    (case-insensitive). See also :func:`warn_on_doubled_think` for the ready-made
+    advisory once the template behaviour is known.
+    """
+    for sample in samples:
+        text = sample.get("text", "") if isinstance(sample, dict) else str(sample)
+        for role, body in _CHATML_TURN_RE.findall(text):
+            if role == "assistant" and body.lstrip().lower().startswith("<think>"):
+                return True
+    return False
+
+
+def warn_on_doubled_think(
+    samples: list[dict], template_injects_think: bool
+) -> None:
+    """Advisory WARN for the doubled-``<think>`` chat-template wrinkle (v1.5 T3.2).
+
+    Reasoning-trace SFT keeps ``<think>`` blocks as PLAIN TEXT inside assistant
+    turns. Some newer chat templates ALSO inject a ``<think>`` opener after the
+    generation prompt. When both are true, the rendered training sequence carries
+    a *doubled* ``<think>`` — a silent data-quality bug that biases the model
+    toward emitting two openers.
+
+    This helper is **advisory only**: it never mutates ``samples``. It emits a
+    single WARN when the data leads with ``<think>`` (per
+    :func:`dataset_has_leading_think`) AND the caller reports that the model's
+    chat template injects its own ``<think>``. The Trainer (which owns the
+    tokenizer, and therefore the template render) supplies
+    ``template_injects_think``; this lives in :mod:`datasets` because it operates
+    on converted samples.
+    """
+    if not template_injects_think:
+        return
+    if dataset_has_leading_think(samples):
+        logger.warning(
+            "Doubled-<think> risk: assistant turns in this dataset already open "
+            "with a <think> tag AND the model's chat template injects its own "
+            "<think> opener. The rendered training sequence will carry two "
+            "<think> tags per turn, which biases the model toward emitting "
+            "doubled openers. Either strip the leading <think> from your data or "
+            "use a chat template that does not inject one. (This is advisory — "
+            "no rows were modified.)"
+        )
 
 
 # =============================================================================
@@ -2820,6 +3112,54 @@ class DatasetLoader:
         logger.info(f"Perplexity filter: {stats.total_samples} -> {stats.retained_count} samples")
 
         new_loader = DatasetLoader(filtered, DatasetFormat.CHATML, validate=False)
+        return new_loader, stats
+
+    def filter_by_trace_length(
+        self,
+        *,
+        min_trace_tokens: int = 8,
+        max_trace_tokens: int = 8192,
+        require_think: bool = True,
+        token_counter: Callable[[str], int] | None = None,
+    ) -> tuple["DatasetLoader", TraceFilterStats]:
+        """Return a new loader keeping only rows with a usable ``<think>`` trace.
+
+        Reasoning-trace SFT helper (v1.5 T3.2). Converts to ChatML first, then
+        applies :func:`filter_by_trace_length` so the kept rows have a summed
+        ``<think>`` reasoning band within ``[min_trace_tokens, max_trace_tokens]``
+        (and, when ``require_think`` is set, a trace at all). See that function
+        for the per-reason semantics and the CJK token-estimate caveat.
+
+        Args:
+            min_trace_tokens: Drop rows whose summed think-span tokens fall below.
+            max_trace_tokens: Drop rows whose summed think-span tokens exceed.
+            require_think: Drop rows with no ``<think>`` span when True.
+            token_counter: Optional exact ``str -> int`` counter (e.g.
+                ``tokenizer.encode``); defaults to the ~4 chars/token estimate.
+
+        Returns:
+            ``(new DatasetLoader with the kept rows, TraceFilterStats)``.
+        """
+        chatml_samples = self.to_chatml()
+
+        filtered, stats = filter_by_trace_length(
+            chatml_samples,
+            min_trace_tokens=min_trace_tokens,
+            max_trace_tokens=max_trace_tokens,
+            require_think=require_think,
+            token_counter=token_counter,
+        )
+
+        logger.info(
+            f"Trace-length filter: {stats.total_before} -> "
+            f"{stats.total_after} samples"
+        )
+
+        new_loader = DatasetLoader(
+            cast(list[dict[Any, Any] | str], filtered),
+            DatasetFormat.CHATML,
+            validate=False,
+        )
         return new_loader, stats
 
     @classmethod

@@ -937,6 +937,125 @@ class TestTrainFp8RsLoraFlags:
         assert init_kwargs.get("use_rslora") is False
 
 
+class TestTrainReasoningTraceFlag:
+    """v1.5 T3.2: ``backprop train --reasoning-trace`` parse + thread contract.
+
+    Pins BOTH ends of the wave6b introspection-filter wiring: the flag binds
+    onto ``args.reasoning_trace`` at parse time, and ``cmd_train`` forwards a
+    ``reasoning_trace`` kwarg (named to match ``Trainer.__init__``) so the
+    introspection filter passes it through to the constructor.
+    """
+
+    def test_reasoning_trace_flag_parses(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--reasoning-trace"]
+        )
+        assert args.reasoning_trace is True
+
+    def test_reasoning_trace_default_false(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.reasoning_trace is False
+
+    def test_reasoning_trace_threads_into_trainer_kwargs(self, tmp_path):
+        """``--reasoning-trace`` reaches the Trainer constructor kwargs.
+
+        Same catch-all-MagicMock pattern as the fp8/rsLoRA threading test: a
+        MagicMock Trainer advertises ``(*args, **kwargs)`` so cmd_train's
+        introspection filter forwards every wave6b_candidate_kwargs key
+        unfiltered. Pins that ``reasoning_trace`` lands in the threaded dict.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.33, duration_seconds=1.0, run_id="r-think"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=True,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("reasoning_trace") is True, (
+            f"--reasoning-trace must thread into the Trainer kwargs; got "
+            f"reasoning_trace={init_kwargs.get('reasoning_trace')!r}"
+        )
+
+    def test_reasoning_trace_default_threads_false(self, tmp_path):
+        """Default invocation forwards reasoning_trace=False."""
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-nothink"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            fp8=False,
+            use_rslora=False,
+            reasoning_trace=False,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("reasoning_trace") is False
+
+
 # =============================================================================
 # v1.5 T2.2 (Wave 6b GLUE): multi-run merge framework flags
 # =============================================================================

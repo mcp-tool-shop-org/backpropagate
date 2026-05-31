@@ -546,6 +546,27 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # via ``--no-packing`` (CLI) or
         # ``BACKPROPAGATE_DATA__PACKING=false`` (env).
         packing: bool = True
+        # v1.5 T3.2 (reasoning-trace SFT / R1 distillation, finding 24).
+        # When True the trainer keeps the ``<think>`` chain-of-thought in the
+        # training target (the converters already preserve it — no special
+        # tokens, no embedding resize, so the merge→GGUF→Ollama export stays
+        # intact), applies trace-length filtering (drops empty / over-long
+        # traces via datasets.filter_by_trace_length), and bumps the DEFAULT
+        # max_seq_length to 8192 if the operator left it at the shipped 2048
+        # (longer CoT needs the room; an explicit max_seq_length always wins).
+        # Default False ⇒ byte-identical v1.4 SFT. SFT only — ignored under
+        # method='orpo'. Env: ``BACKPROPAGATE_DATA__REASONING_TRACE``.
+        reasoning_trace: bool = False
+        # Minimum think-span token count to keep a sample (reasoning_trace
+        # only). Samples whose ``<think>`` content tokenizes below this are
+        # dropped as empty/degenerate traces. Env:
+        # ``BACKPROPAGATE_DATA__MIN_TRACE_TOKENS``.
+        min_trace_tokens: int = 8
+        # Maximum think-span token count to keep a sample (reasoning_trace
+        # only). Samples whose ``<think>`` content tokenizes above this are
+        # dropped as over-long traces. Env:
+        # ``BACKPROPAGATE_DATA__MAX_TRACE_TOKENS``.
+        max_trace_tokens: int = 8192
 
     class UIConfig(BaseSettings):
         """Reflex (Radix UI) web interface configuration.
@@ -927,6 +948,12 @@ else:
         # v1.3 BACKEND-4: packing default flipped True (see BaseSettings
         # branch docstring above for rationale).
         packing: bool = True
+        # v1.5 T3.2 reasoning-trace SFT — see BaseSettings branch docstring
+        # above for the full rationale (keep <think>, trace-length filter,
+        # default max_seq_length bump; default False = byte-identical v1.4 SFT).
+        reasoning_trace: bool = False
+        min_trace_tokens: int = 8
+        max_trace_tokens: int = 8192
 
     @dataclass
     class UIConfig:  # type: ignore[no-redef]

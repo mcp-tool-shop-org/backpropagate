@@ -1646,6 +1646,18 @@ class Trainer:
         # log). load_in_4bit=True is an EXPLICIT request and FP8 + it raises;
         # load_in_4bit=False forces an unquantized base load.
         load_in_4bit: bool | None = None,
+        # v1.5 T3.2 (reasoning-trace SFT / R1 distillation, finding 24): keep
+        # the ``<think>`` chain-of-thought in the SFT target, drop empty /
+        # over-long traces (datasets.filter_by_trace_length), and raise the
+        # DEFAULT max_seq_length to 8192 when the operator left it at the
+        # shipped 2048. ``<think>`` is treated as PLAIN TEXT — no special
+        # tokens, no embedding resize — so the merge→GGUF→Ollama export stays
+        # intact. SFT only (ignored under method='orpo'). None ⇒
+        # ``settings.data.reasoning_trace`` (default False ⇒ byte-identical
+        # v1.4 SFT). Named EXACTLY ``reasoning_trace`` so the CLI's wave6b
+        # introspection filter threads ``--reasoning-trace`` through (GLUE owns
+        # the flag).
+        reasoning_trace: bool | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -1844,6 +1856,33 @@ class Trainer:
         self.use_rslora = (
             use_rslora if use_rslora is not None else settings.lora.use_rslora
         )
+        # v1.5 T3.2 (reasoning-trace SFT): resolve the recipe flag + its
+        # trace-length bounds (kwarg-authoritative, settings as fallback —
+        # same ``is not None`` discipline). When on, _load_dataset filters the
+        # materialized SFT dataset by ``<think>`` token length and the
+        # max_seq_length auto-bump below widens the default window for CoT.
+        self.reasoning_trace = (
+            reasoning_trace
+            if reasoning_trace is not None
+            else settings.data.reasoning_trace
+        )
+        self.min_trace_tokens = settings.data.min_trace_tokens
+        self.max_trace_tokens = settings.data.max_trace_tokens
+        # v1.5 T3.2: max_seq_length auto-bump. Reasoning traces (R1/QwQ CoT)
+        # routinely exceed the shipped 2048 default; raise it to 8192 ONLY when
+        # the operator left max_seq_length at the shipped default (kwarg None
+        # AND settings still at 2048). An explicit max_seq_length — passed as a
+        # kwarg OR set via BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH — always wins.
+        if (
+            self.reasoning_trace
+            and max_seq_length is None
+            and settings.model.max_seq_length == 2048
+        ):
+            logger.info(
+                "reasoning_trace on: raised max_seq_length 2048->8192 for "
+                "longer CoT; pass max_seq_length to override"
+            )
+            self.max_seq_length = 8192
         # v1.5 T2.1: remember whether the operator EXPLICITLY asked for 4-bit
         # (vs relying on the historical default-on behavior). The gate ladder
         # below refuses ``fp8 + explicit-4bit``; when 4-bit is only the default
@@ -3594,6 +3633,11 @@ class Trainer:
             # produced this adapter — alpha/r vs alpha/sqrt(r)).
             "fp8": self._fp8_effective,
             "use_rslora": self.use_rslora,
+            # v1.5 T3.2: persist whether this run kept <think> CoT in the SFT
+            # target + applied trace-length filtering (reasoning-trace recipe
+            # provenance — distinguishes an R1-distillation run from plain SFT
+            # in the run-history audit table).
+            "reasoning_trace": self.reasoning_trace,
         }
         # F-014: auditable per-run record of the chat markers actually used by
         # train_on_responses_only. Absent when the mode is disabled.
@@ -4372,8 +4416,150 @@ class Trainer:
                 ds = ds.shuffle(seed=settings.training.seed)
             ds = ds.select(range(max_samples))
 
+        # v1.5 T3.2 (reasoning-trace SFT): drop empty / over-long <think>
+        # traces from the materialized SFT dataset. Gated on method == "sft" —
+        # reasoning-ORPO is out of scope (the ORPO path returns raw preference
+        # pairs, not a single collapsed text column, so trace filtering would
+        # not apply). load_model() runs before _load_dataset, so the tokenizer
+        # is available for an exact (non-approximate) token count.
+        if self.reasoning_trace and method == "sft":
+            ds = self._filter_reasoning_traces(ds)
+
         logger.info(f"Loaded {len(ds)} samples")
         return ds
+
+    def _filter_reasoning_traces(self, ds: Any) -> Any:
+        """Drop empty / over-long ``<think>`` traces from an SFT dataset.
+
+        v1.5 T3.2. Routes the materialized HF dataset's text rows through
+        :func:`datasets.filter_by_trace_length` (CORE's PINNED contract), which
+        keeps only rows whose ``<think>`` span tokenizes within
+        ``[self.min_trace_tokens, self.max_trace_tokens]`` and (by default)
+        carries a ``<think>`` span at all. ``<think>`` stays PLAIN TEXT — this
+        function never touches the tokenizer's vocabulary (no
+        ``add_special_tokens`` / ``resize_token_embeddings``); it only *counts*
+        tokens via ``self._tokenizer.encode`` so the merge→GGUF→Ollama export
+        pipeline is unaffected.
+
+        Also runs CORE's empty-``<think>`` advisory: if the model's chat
+        template itself injects an empty ``<think></think>`` (some R1/QwQ
+        templates do), a dataset whose targets ALSO open with ``<think>`` would
+        double the marker. The template is rendered once (the same
+        ``apply_chat_template`` probe :func:`_detect_chat_markers` uses) to
+        detect that, and the advisory warns when the combination would double.
+
+        Best-effort: a missing tokenizer or a malformed row never aborts the
+        run — the dataset is returned unfiltered with a WARN. The filter's own
+        :meth:`TraceFilterStats.summary` is logged at INFO (mirrors the
+        ``filter_by_quality`` INFO pattern).
+        """
+        from .datasets import (
+            _extract_think_spans,
+            filter_by_trace_length,
+            warn_on_doubled_think,
+        )
+
+        text_column = settings.data.text_column
+        column_names = list(getattr(ds, "column_names", []) or [])
+        if text_column not in column_names:
+            logger.warning(
+                f"reasoning_trace: dataset has no '{text_column}' column "
+                f"(columns: {column_names}); skipping trace-length filtering. "
+                "Reasoning-trace SFT expects a single collapsed text column "
+                "containing the <think>...</think> target."
+            )
+            return ds
+
+        tokenizer = getattr(self, "_tokenizer", None)
+        if tokenizer is None:
+            logger.warning(
+                "reasoning_trace: tokenizer not loaded; skipping trace-length "
+                "filtering (run load_model() before _load_dataset)."
+            )
+            return ds
+
+        def _token_counter(text: str) -> int:
+            # Plain length of the encoded ids — NO vocabulary mutation. Falls
+            # back to a whitespace count if the tokenizer rejects the text so a
+            # single odd row cannot abort the whole run.
+            try:
+                return len(tokenizer.encode(text))
+            except Exception:  # nosec B110 — best-effort token count; whitespace fallback
+                return len(text.split())
+
+        # Empty-<think> advisory: render the chat template once (same probe as
+        # _detect_chat_markers) to learn whether the template itself opens an
+        # empty <think>. CORE's warn_on_doubled_think compares that against the
+        # dataset targets and warns on the doubling case.
+        template_injects_think = False
+        try:
+            rendered = tokenizer.apply_chat_template(
+                [
+                    {"role": "user", "content": _CHAT_MARKER_PROBE_USER},
+                    {"role": "assistant", "content": _CHAT_MARKER_PROBE_ASST},
+                ],
+                tokenize=False,
+            )
+            if isinstance(rendered, str):
+                template_injects_think = bool(_extract_think_spans(rendered))
+        except Exception as exc:
+            logger.debug(
+                f"reasoning_trace: chat-template <think> probe failed ({exc!r})"
+            )
+
+        # Materialize the text rows as dicts for CORE's filter. CORE's
+        # filter_by_trace_length + warn_on_doubled_think read the literal
+        # ``"text"`` key (the convert_to_chatml shape), so build the probe
+        # dicts under ``"text"`` regardless of the configured text_column, then
+        # rebuild the HF dataset under the ORIGINAL column name below so
+        # downstream packing / pre-tokenization (which read
+        # settings.data.text_column) are unaffected when text_column != "text".
+        texts = [str(row) for row in ds[text_column]]
+        samples = [{"text": t} for t in texts]
+
+        # Advisory only — never mutates samples, never raises on the happy
+        # path; guard anyway so a future CORE change can't abort a run.
+        try:
+            warn_on_doubled_think(
+                samples, template_injects_think=template_injects_think
+            )
+        except Exception as exc:  # pragma: no cover - advisory is non-fatal
+            logger.debug(f"reasoning_trace: doubled-<think> advisory skipped ({exc!r})")
+
+        try:
+            kept, stats = filter_by_trace_length(
+                samples,
+                min_trace_tokens=self.min_trace_tokens,
+                max_trace_tokens=self.max_trace_tokens,
+                require_think=True,
+                token_counter=_token_counter,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"reasoning_trace: trace-length filtering failed ({exc!r}); "
+                "proceeding with the unfiltered dataset."
+            )
+            return ds
+
+        logger.info(f"reasoning_trace: {stats.summary()}")
+
+        if not kept:
+            logger.warning(
+                "reasoning_trace: trace-length filtering removed every sample "
+                f"(min={self.min_trace_tokens}, max={self.max_trace_tokens} "
+                "think tokens, require_think=True). Returning the unfiltered "
+                "dataset so the run does not start on an empty set — relax the "
+                "trace bounds or check that the targets carry <think> spans."
+            )
+            return ds
+
+        from datasets import Dataset
+
+        # Rebuild under the original column name (kept rows carry the "text"
+        # key CORE filtered on). When text_column == "text" this is a straight
+        # passthrough; otherwise remap so the column matches the rest of the
+        # pipeline.
+        return Dataset.from_list([{text_column: row["text"]} for row in kept])
 
     def _pre_tokenize(self, dataset: Any) -> Any:
         """Pre-tokenize dataset for Windows safety."""

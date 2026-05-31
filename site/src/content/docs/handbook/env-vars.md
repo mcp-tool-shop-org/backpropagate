@@ -139,6 +139,9 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_DATA__PRE_TOKENIZE` | `true` | Pre-tokenize before training (Windows-safe). |
 | `BACKPROPAGATE_DATA__SHUFFLE` | `true` | Shuffle the dataset. |
 | `BACKPROPAGATE_DATA__PACKING` | `true` | Combine short sequences via TRL sample packing. v1.3 default flipped from `false` to `true` per BACKEND-4 — 1.7-3× wall-clock throughput on SFT runs. Set to `false` to opt out (boundary-token leakage with exotic chat templates is the documented edge case). |
+| `BACKPROPAGATE_DATA__REASONING_TRACE` | `false` | **v1.5 T3.2** — reasoning-trace SFT (R1/QwQ distillation). When `true` the trainer keeps the `<think>` chain-of-thought in the SFT target, applies trace-length filtering (drops empty / over-long traces), and raises the default `max_seq_length` to `8192` if it was left at the shipped `2048`. `<think>` is plain text — no special tokens, no embedding resize — so the merge→GGUF→Ollama export is unaffected. SFT only (ignored under `method='orpo'`). Default `false` = byte-identical v1.4 SFT. Equivalent to `--reasoning-trace` on the CLI. |
+| `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` | `8` | Minimum `<think>` token count to keep a sample under `reasoning_trace`. Samples whose reasoning span tokenizes below this are dropped as empty / degenerate traces. |
+| `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS` | `8192` | Maximum `<think>` token count to keep a sample under `reasoning_trace`. Samples whose reasoning span tokenizes above this are dropped as over-long traces. |
 
 ## Windows
 

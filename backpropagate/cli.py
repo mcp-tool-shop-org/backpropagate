@@ -704,6 +704,13 @@ def cmd_train(args: argparse.Namespace) -> int:
             # routes to LoraConfig(use_rslora=...).
             "fp8": getattr(args, "fp8", False),
             "use_rslora": getattr(args, "use_rslora", False),
+            # v1.5 T3.2 (reasoning-trace SFT): Trainer.__init__ accepts
+            # ``reasoning_trace`` (named to match) so the introspection filter
+            # below threads it through. When on, the trainer keeps <think> CoT
+            # in the SFT target, applies trace-length filtering, and bumps the
+            # default max_seq_length to 8192. Default False = byte-identical
+            # v1.4 SFT; dropped silently on a pre-T3.2 Trainer build.
+            "reasoning_trace": bool(getattr(args, "reasoning_trace", False)),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -6585,6 +6592,22 @@ Tips:
             "Use rank-stabilized LoRA scaling (alpha/sqrt(r) instead of "
             "alpha/r). Zero inference cost, mergeable; benefit grows with rank "
             "(relevant at the rank-256 default)."
+        ),
+    )
+    # v1.5 T3.2 (reasoning-trace SFT, Wave 6b GLUE): threads into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ accepts ``reasoning_trace`` (named EXACTLY so the filter
+    # passes it through); default False is forwarded only when the kwarg exists,
+    # so a pre-T3.2 Trainer build sees the flag AVAILABLE but inert. Binds onto
+    # args at parse time regardless.
+    train_parser.add_argument(
+        "--reasoning-trace",
+        action="store_true",
+        default=False,
+        help=(
+            "Reasoning-trace SFT (R1/QwQ distillation): keeps <think> CoT in "
+            "the target, drops empty/over-long traces, raises default "
+            "max_seq_length to 8192. SFT only."
         ),
     )
     train_parser.add_argument(

@@ -33,6 +33,46 @@ backprop train \
 
 Your JSONL can be ShareGPT, Alpaca, OpenAI-chat, or ChatML — the auto-detector picks the right template (see [Training → Dataset formats](/backpropagate/handbook/training/#dataset-formats)). v1.2.0 fixed the tokenizer-aware `train_on_responses_only` masker so Llama 3 chat templates mask correctly (the v1.1.x bug silently trained on user prompts as well). If you were getting bad fine-tunes on Llama 3, re-run on v1.2.0+ — see [migrations → behavioural fixes](/backpropagate/handbook/migrations/#behavioural-fixes).
 
+## Reasoning-trace SFT (R1 distillation)
+
+**New in v1.5 (T3.2).** Distill a reasoning model the easy way: pure SFT on traces that interleave a `<think>...</think>` chain-of-thought with the final answer (the half of [DeepSeek-R1](https://arxiv.org/abs/2501.12948) distillation that needs no RL). Your dataset rows carry the thinking block *inside* the assistant turn:
+
+```json
+{"messages": [
+  {"role": "user", "content": "What is 17 * 24?"},
+  {"role": "assistant", "content": "<think>17 * 24 = 17 * 20 + 17 * 4 = 340 + 68 = 408.</think>408"}
+]}
+```
+
+Turn on the recipe with one flag (Python):
+
+```python
+from backpropagate import Trainer
+
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", reasoning_trace=True)
+trainer.train("reasoning_traces.jsonl", steps=200)
+trainer.save("./output/qwen-reasoner")
+```
+
+CLI equivalent:
+
+```bash
+backprop train \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --data reasoning_traces.jsonl \
+  --steps 200 \
+  --reasoning-trace \
+  --output ./output/qwen-reasoner
+```
+
+What `--reasoning-trace` does:
+
+- **Keeps `<think>` in the training target.** The chat-template converters already preserve `<think>` blocks verbatim — nothing is stripped. Crucially, **`<think>` stays plain text**: Backpropagate does **not** add special tokens or resize the embedding matrix for it. That keeps the merge → GGUF → Ollama export path intact — a reasoning fine-tune ships to `ollama run` exactly like any other (see [Export to Ollama](#export-a-trained-adapter-to-ollama-one-command)).
+- **Trace-length filtering.** Rows whose summed `<think>` token count falls outside `[8, 8192]` tokens are dropped — empty / degenerate traces and runaway ones both hurt distillation. Tune the band with `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` / `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS` (the tokenizer's own `encode` does the counting, so the cutoffs are exact for your model). Rows with no `<think>` span at all are dropped too.
+- **Raises the default `max_seq_length` to 8192.** Reasoning traces routinely exceed the shipped 2048-token window; the bump only fires when you left `max_seq_length` at the default. An explicit value — kwarg `max_seq_length=...` or `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` — always wins.
+
+The recipe is **SFT only** — it is ignored under `--method orpo`. If your model's chat template injects its own empty `<think>` opener AND your data already opens with `<think>`, you'll get a one-line advisory warning about the doubled tag (strip the leading `<think>` from your data, or use a template that doesn't inject one).
+
 ## Export a trained adapter to Ollama (one command)
 
 The fastest path from a trained LoRA to `ollama run`:

@@ -52,13 +52,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .datasets import (
     _CHATML_TURN_RE,
     DatasetFormat,
     _count_tokens_approx,
+    _extract_think_spans,
     _get_ngrams,
     convert_to_chatml,
     detect_format,
@@ -72,6 +73,7 @@ __all__ = [
     "analyze_dataset",
     "find_duplicate_clusters",
     "token_length_histogram",
+    "trace_length_histogram",
     "contamination_overlap",
 ]
 
@@ -137,6 +139,15 @@ class DataQualityReport:
     contamination: ContaminationResult | None
     verdict: str
     failed_thresholds: list[str]
+    # Reasoning-trace fields (v1.5 T3.2) — APPENDED after the existing contract
+    # (never reordered). ``think_rows`` is the count of rows carrying at least
+    # one ``<think>`` span; ``think_pct`` is that fraction of total rows;
+    # ``trace_histogram`` buckets those rows by summed think-span token length
+    # (see :func:`trace_length_histogram`). On a non-reasoning dataset these are
+    # ``0`` / ``0.0`` / an all-zero histogram and the summary stays silent.
+    think_rows: int = 0
+    think_pct: float = 0.0
+    trace_histogram: list[tuple[int, int]] = field(default_factory=list)
 
     def summary(self) -> str:
         """Multi-line human-readable summary."""
@@ -187,6 +198,24 @@ class DataQualityReport:
                 "for non-ASCII-English data.)"
             )
 
+        # Reasoning-trace block (v1.5 T3.2): only shown when the dataset
+        # actually carries <think> traces, so non-reasoning datasets (e.g. a
+        # plain contamination check) stay quiet.
+        if self.think_rows > 0:
+            lines.extend(
+                [
+                    "",
+                    "Reasoning traces:",
+                    f"  Rows with <think>: {self.think_rows} "
+                    f"({100 * self.think_pct:.1f}%)",
+                ]
+            )
+            if self.trace_histogram:
+                lines.append("  Trace-length histogram (think-span tokens):")
+                for upper, count in self.trace_histogram:
+                    label = "inf" if upper < 0 else f"<={upper}"
+                    lines.append(f"    {label:>8}: {count}")
+
         if self.contamination is not None:
             lines.extend(
                 [
@@ -214,6 +243,11 @@ class DataQualityReport:
         # the payload round-trips through json.dumps/loads unchanged.
         data["token_histogram"] = [
             [upper, count] for upper, count in self.token_histogram
+        ]
+        # Same tuple->list normalisation for the appended reasoning-trace
+        # histogram so the whole payload round-trips through json.dumps/loads.
+        data["trace_histogram"] = [
+            [upper, count] for upper, count in self.trace_histogram
         ]
         return data
 
@@ -479,6 +513,61 @@ def token_length_histogram(
     return histogram
 
 
+def trace_length_histogram(
+    samples: list[dict],
+    *,
+    bins: tuple[int, ...] = (8, 32, 128, 512, 2048, 8192),
+) -> list[tuple[int, int]]:
+    """Bucket samples by the token length of their ``<think>`` reasoning trace.
+
+    Reasoning-trace SFT companion to :func:`token_length_histogram` (v1.5 T3.2).
+    Each sample is converted to ChatML (per-sample auto-detect, reusing
+    ``datasets.convert_to_chatml``); the token counts of ALL its ``<think>``
+    spans (``datasets._extract_think_spans``) are summed with
+    ``datasets._count_tokens_approx``. **Rows with NO ``<think>`` span are
+    skipped entirely** — they are not reasoning rows and a 0-length bucket would
+    swamp the histogram on a mixed corpus. Unconvertible rows are also skipped.
+
+    Args:
+        samples: List of samples in any supported format.
+        bins: Ascending bucket upper bounds (token counts). A trailing
+            "infinity" bucket is always appended with an upper bound of ``-1``.
+
+    Returns:
+        ``[(upper_bound, count), ...]`` with one entry per bin plus a final
+        ``(-1, count)`` overflow bucket for traces longer than the last bin. The
+        counts sum to the number of rows that carry at least one ``<think>``
+        span (NOT to the total row count). Token counts share the
+        ``_count_tokens_approx`` ~4 chars/token caveat (over-counts CJK ~4x).
+    """
+    sorted_bins = tuple(sorted(bins))
+    counts = [0] * (len(sorted_bins) + 1)  # +1 for the overflow ("inf") bucket
+
+    for s in samples:
+        chatml = _to_chatml_text(s)
+        if chatml is None:
+            continue
+        spans = _extract_think_spans(chatml)
+        if not spans:
+            # Not a reasoning row — excluded from the trace histogram.
+            continue
+        tokens = sum(_count_tokens_approx(span) for span in spans)
+        placed = False
+        for i, upper in enumerate(sorted_bins):
+            if tokens <= upper:
+                counts[i] += 1
+                placed = True
+                break
+        if not placed:
+            counts[-1] += 1
+
+    histogram: list[tuple[int, int]] = [
+        (upper, counts[i]) for i, upper in enumerate(sorted_bins)
+    ]
+    histogram.append((-1, counts[-1]))  # -1 upper bound == "inf"
+    return histogram
+
+
 def contamination_overlap(
     train_samples: list[dict],
     test_samples: list[dict],
@@ -688,6 +777,7 @@ def analyze_dataset(
     # --- per-row quality flags over the converted ChatML -------------------
     empty_turn_rows = 0
     no_assistant_rows = 0
+    think_rows = 0
     token_lengths: list[int] = []
     for chatml in chatml_texts:
         if chatml is None:
@@ -696,7 +786,16 @@ def analyze_dataset(
             empty_turn_rows += 1
         if not _has_assistant(chatml):
             no_assistant_rows += 1
+        # Reasoning-trace tally (v1.5 T3.2): a row "has a trace" when it carries
+        # at least one <think>...</think> span in its converted ChatML.
+        if _extract_think_spans(chatml):
+            think_rows += 1
         token_lengths.append(_count_tokens_approx(chatml))
+
+    # think_pct is over TOTAL rows (matching the histogram's row universe and
+    # the summary's "(X%)" reading); 0.0 on an empty dataset.
+    think_pct = think_rows / total_rows if total_rows else 0.0
+    trace_histogram = trace_length_histogram(samples)
 
     # --- length outliers ---------------------------------------------------
     outlier_rows = _count_length_outliers(token_lengths, sigma=outlier_sigma)
@@ -794,6 +893,9 @@ def analyze_dataset(
         contamination=contamination,
         verdict=verdict,
         failed_thresholds=failed_thresholds,
+        think_rows=think_rows,
+        think_pct=think_pct,
+        trace_histogram=trace_histogram,
     )
 
 

@@ -24,6 +24,7 @@ from backpropagate.dataset_report import (
     contamination_overlap,
     find_duplicate_clusters,
     token_length_histogram,
+    trace_length_histogram,
 )
 
 # =============================================================================
@@ -408,6 +409,11 @@ class TestSerialization:
         encoded = json.dumps(payload)
         decoded = json.loads(encoded)
         assert decoded["verdict"] in ("PASS", "WARN", "FAIL")
+        # v1.5 T3.2: the appended reasoning-trace keys must be present and
+        # JSON-safe (histogram tuples normalised to lists).
+        assert decoded["think_rows"] == 0
+        assert decoded["think_pct"] == 0.0
+        assert all(isinstance(b, list) for b in decoded["trace_histogram"])
 
     def test_to_dict_histogram_is_lists(self):
         report = analyze_dataset(_clean_dataset(4))
@@ -488,3 +494,102 @@ class TestEdgeCases:
         assert report.total_rows == 1
         assert report.parseable_rows == 1
         assert report.duplicate_clusters == 0
+
+
+# =============================================================================
+# REASONING-TRACE REPORT FIELDS (v1.5 T3.2)
+# =============================================================================
+
+
+def _think_alpaca(instruction: str, reasoning: str, answer: str) -> dict:
+    """An Alpaca row whose output carries a <think> reasoning trace."""
+    return _alpaca(instruction, f"<think>{reasoning}</think>{answer}")
+
+
+class TestReasoningTraceFields:
+    """think_rows / think_pct / trace_histogram on the report."""
+
+    def _mixed_set(self) -> list[dict]:
+        # 4 rows: 2 carry a <think> trace, 2 are plain.
+        return [
+            _think_alpaca("q1", "a" * 40, "The answer is one."),
+            _think_alpaca("q2", "b" * 40, "The answer is two."),
+            _alpaca("q3", "A plain answer with enough body text here."),
+            _alpaca("q4", "Another plain answer with body text here."),
+        ]
+
+    def test_think_rows_counted(self):
+        report = analyze_dataset(self._mixed_set())
+        assert report.think_rows == 2
+
+    def test_think_pct_is_half(self):
+        report = analyze_dataset(self._mixed_set())
+        assert report.think_pct == pytest.approx(0.5)
+
+    def test_trace_histogram_sums_to_think_rows(self):
+        report = analyze_dataset(self._mixed_set())
+        total = sum(count for _upper, count in report.trace_histogram)
+        assert total == report.think_rows == 2
+
+    def test_trace_histogram_last_bucket_is_inf(self):
+        report = analyze_dataset(self._mixed_set())
+        assert report.trace_histogram[-1][0] == -1
+
+    def test_non_reasoning_dataset_zero(self):
+        # A plain (contamination-style) dataset stays at zero — and quiet.
+        report = analyze_dataset(_clean_dataset(6))
+        assert report.think_rows == 0
+        assert report.think_pct == 0.0
+        assert all(count == 0 for _u, count in report.trace_histogram)
+
+    def test_summary_shows_block_only_when_traces_present(self):
+        with_traces = analyze_dataset(self._mixed_set()).summary()
+        without = analyze_dataset(_clean_dataset(6)).summary()
+        assert "Reasoning traces:" in with_traces
+        assert "Reasoning traces:" not in without
+
+    def test_to_dict_roundtrips_new_keys(self):
+        report = analyze_dataset(self._mixed_set())
+        payload = report.to_dict()
+        decoded = json.loads(json.dumps(payload))
+        assert decoded["think_rows"] == 2
+        assert decoded["think_pct"] == pytest.approx(0.5)
+        # trace_histogram tuples must be normalised to lists for JSON.
+        assert all(isinstance(b, list) for b in decoded["trace_histogram"])
+        assert sum(b[1] for b in decoded["trace_histogram"]) == 2
+
+    def test_empty_dataset_trace_fields_safe(self):
+        report = analyze_dataset([])
+        assert report.think_rows == 0
+        assert report.think_pct == 0.0
+
+
+class TestTraceLengthHistogram:
+    """The standalone trace_length_histogram primitive."""
+
+    def test_skips_non_reasoning_rows(self):
+        samples = [
+            _think_alpaca("q", "a" * 40, "ans"),
+            _alpaca("q2", "plain body with no reasoning here"),
+        ]
+        hist = trace_length_histogram(samples)
+        # Only the 1 reasoning row is counted.
+        assert sum(count for _u, count in hist) == 1
+
+    def test_custom_bins(self):
+        hist = trace_length_histogram(
+            [_think_alpaca("q", "a" * 40, "ans")], bins=(4, 16)
+        )
+        assert len(hist) == 3  # 2 explicit + 1 overflow
+        assert hist[-1][0] == -1
+
+    def test_empty_samples(self):
+        hist = trace_length_histogram([])
+        assert sum(count for _u, count in hist) == 0
+
+    def test_long_trace_lands_in_inf_bucket(self):
+        # A ~200k-char trace (≈50k tokens) overflows the default last bin (8192).
+        hist = trace_length_histogram(
+            [_think_alpaca("q", "x" * 200_000, "ans")]
+        )
+        assert hist[-1][1] == 1

@@ -166,6 +166,10 @@ backprop train --data preferences.jsonl --method orpo --steps 100
 
 The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. In v1.5 ORPO is `mode="lora"` only. SimPO and KTO are planned follow-ons; for online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
 
+### Reasoning-trace SFT (R1 distillation)
+
+New in v1.5: distill a reasoning model the easy way. Pass `--reasoning-trace` (CLI) or `Trainer(..., reasoning_trace=True)` (Python) and feed it traces that keep a `<think>...</think>` chain-of-thought inside the assistant turn — the pure-SFT half of [DeepSeek-R1](https://arxiv.org/abs/2501.12948) distillation, no RL required. Backpropagate keeps `<think>` in the training target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to 8192 for the longer CoT. Critically, `<think>` stays **plain text** — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama like any other fine-tune. SFT only. See the [reasoning-trace recipe](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/#reasoning-trace-sft-r1-distillation) for the dataset shape and the tunable token band.
+
 For more end-to-end workflows (fine-tune-and-push-to-HF-Hub, resume after OOM, multi-run SLAO across a long campaign, etc.) see the [handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
 ### Web UI (optional)

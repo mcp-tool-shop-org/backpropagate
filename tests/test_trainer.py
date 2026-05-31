@@ -1615,6 +1615,207 @@ class TestUseRsloraWiring:
             )
 
 
+class TestReasoningTraceWiring:
+    """v1.5 T3.2 (reasoning-trace SFT / R1 distillation, finding 24).
+
+    ``reasoning_trace`` keeps the ``<think>`` CoT in the SFT target, applies
+    trace-length filtering (CORE's :func:`datasets.filter_by_trace_length`),
+    and bumps the DEFAULT ``max_seq_length`` to 8192 for the longer reasoning.
+    DECISION (firm): ``<think>`` is PLAIN TEXT — the trainer never adds special
+    tokens nor resizes the embedding matrix, so the merge→GGUF→Ollama export
+    stays intact. Default ``False`` is byte-identical v1.4 SFT.
+    """
+
+    def test_reasoning_trace_resolves_from_kwarg(self):
+        """Trainer(reasoning_trace=True) sets self.reasoning_trace True + bounds."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=True, use_unsloth=False)
+        assert trainer.reasoning_trace is True
+        # Bounds resolve from the settings layer (no kwargs for them).
+        assert trainer.min_trace_tokens == settings.data.min_trace_tokens
+        assert trainer.max_trace_tokens == settings.data.max_trace_tokens
+
+    def test_reasoning_trace_none_falls_back_to_settings(self):
+        """Trainer(reasoning_trace=None) reads settings.data.reasoning_trace."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=None, use_unsloth=False)
+        assert trainer.reasoning_trace == settings.data.reasoning_trace
+
+    def test_reasoning_trace_default_is_false(self):
+        """Default Trainer() leaves reasoning_trace off (byte-identical v1.4)."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(use_unsloth=False)
+        assert trainer.reasoning_trace is False
+
+    def test_max_seq_length_bumps_to_8192_when_unset(self):
+        """reasoning_trace + default max_seq_length (2048) auto-bumps to 8192."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        # Guard: the heuristic keys off the shipped 2048 default. If that
+        # default ever changes, this test (and the bump heuristic) must be
+        # revisited — pin it so the drift is loud.
+        assert settings.model.max_seq_length == 2048, (
+            "reasoning_trace max_seq bump heuristic assumes the shipped "
+            f"default is 2048; got {settings.model.max_seq_length}."
+        )
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=True, use_unsloth=False)
+        assert trainer.max_seq_length == 8192, (
+            "reasoning_trace on + no explicit max_seq_length must raise the "
+            f"window to 8192 for longer CoT; got {trainer.max_seq_length}."
+        )
+
+    def test_explicit_max_seq_length_wins_over_bump(self):
+        """An explicit max_seq_length=2048 is NOT bumped (operator intent wins)."""
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(
+                reasoning_trace=True, max_seq_length=2048, use_unsloth=False
+            )
+        assert trainer.max_seq_length == 2048, (
+            "An explicitly-passed max_seq_length must override the "
+            f"reasoning_trace bump; got {trainer.max_seq_length}."
+        )
+
+    def test_no_max_seq_bump_when_reasoning_trace_off(self):
+        """reasoning_trace off leaves the default max_seq_length untouched."""
+        from backpropagate.config import settings
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=False, use_unsloth=False)
+        assert trainer.max_seq_length == settings.model.max_seq_length
+
+    def test_no_vocab_resize_on_reasoning_trace(self):
+        """<think> is PLAIN TEXT — the filter must never mutate the vocabulary.
+
+        Guards the firm decision: NO add_special_tokens / resize_token_embeddings
+        anywhere on the reasoning-trace path (it would break merge→GGUF→Ollama).
+        """
+        from datasets import Dataset
+
+        from backpropagate.trainer import Trainer
+
+        mock_tokenizer = MagicMock()
+        # encode returns a token list; the counter takes len() of it.
+        mock_tokenizer.encode.side_effect = lambda text: list(range(len(text.split())))
+        mock_tokenizer.apply_chat_template.return_value = "<|im_start|>assistant\nhi"
+
+        ds = Dataset.from_list(
+            [{"text": "<think>" + ("reason " * 20) + "</think>answer"}]
+        )
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=True, use_unsloth=False)
+            trainer._tokenizer = mock_tokenizer
+            trainer._filter_reasoning_traces(ds)
+
+        mock_tokenizer.resize_token_embeddings.assert_not_called()
+        mock_tokenizer.add_special_tokens.assert_not_called()
+
+    def test_load_dataset_applies_trace_filter_when_sft(self):
+        """reasoning_trace + method='sft' routes rows through CORE's filter."""
+        from datasets import Dataset
+
+        from backpropagate.datasets import TraceFilterStats
+        from backpropagate.trainer import Trainer
+
+        rows = [{"text": "<think>aaaa</think>ok"}, {"text": "<think>bbbb</think>ok2"}]
+        ds = Dataset.from_list(rows)
+        kept = [{"text": "<think>aaaa</think>ok"}]
+        stats = TraceFilterStats(total_before=2, total_after=1)
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=True, use_unsloth=False)
+            trainer._tokenizer = MagicMock()
+            trainer._tokenizer.encode.side_effect = lambda t: list(range(len(t)))
+            trainer._tokenizer.apply_chat_template.return_value = "assistant: x"
+
+            with patch(
+                "backpropagate.datasets.filter_by_trace_length",
+                return_value=(kept, stats),
+            ) as mock_filter:
+                result = trainer._load_dataset(ds, method="sft")
+
+        mock_filter.assert_called_once()
+        # The kept rows are rebuilt into a fresh Dataset under the text column.
+        assert len(result) == 1
+
+    def test_load_dataset_skips_trace_filter_for_orpo(self):
+        """reasoning_trace is gated to SFT — method='orpo' must NOT filter."""
+        from datasets import Dataset
+
+        from backpropagate.trainer import Trainer
+
+        # ORPO needs chosen/rejected columns; build a minimal preference ds so
+        # the ORPO column guard in _load_dataset passes and we reach the gate.
+        ds = Dataset.from_list(
+            [{"chosen": "<think>x</think>good", "rejected": "bad"}]
+        )
+
+        with patch("torch.cuda.is_available", return_value=False):
+            # ORPO requires mode='lora' (default); reasoning_trace on to prove
+            # the SFT gate — NOT the method — is what suppresses the filter.
+            trainer = Trainer(
+                reasoning_trace=True, method="orpo", use_unsloth=False
+            )
+            trainer._tokenizer = MagicMock()
+
+            with patch(
+                "backpropagate.datasets.filter_by_trace_length"
+            ) as mock_filter:
+                trainer._load_dataset(ds, method="orpo")
+
+        mock_filter.assert_not_called()
+
+    def test_load_dataset_skips_trace_filter_when_off(self):
+        """reasoning_trace off (default SFT) must NOT route through the filter."""
+        from datasets import Dataset
+
+        from backpropagate.trainer import Trainer
+
+        ds = Dataset.from_list([{"text": "<think>x</think>ok"}])
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(reasoning_trace=False, use_unsloth=False)
+            trainer._tokenizer = MagicMock()
+
+            with patch(
+                "backpropagate.datasets.filter_by_trace_length"
+            ) as mock_filter:
+                trainer._load_dataset(ds, method="sft")
+
+        mock_filter.assert_not_called()
+
+    def test_hyperparameters_records_reasoning_trace(self):
+        """The persisted hyperparameters dict carries reasoning_trace.
+
+        Asserts on the same dict construction the run-history record uses —
+        built inline in train(), so we assert the value the trainer would
+        persist via its resolved attribute (the dict literal reads
+        self.reasoning_trace at line ~3577, next to fp8 / use_rslora).
+        """
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer_on = Trainer(reasoning_trace=True, use_unsloth=False)
+            trainer_off = Trainer(reasoning_trace=False, use_unsloth=False)
+
+        # The hyperparameters dict persists self.reasoning_trace verbatim.
+        assert trainer_on.reasoning_trace is True
+        assert trainer_off.reasoning_trace is False
+
+
 class TestLoRARankConfiguration:
     """Tests for custom r, alpha LoRA values."""
 

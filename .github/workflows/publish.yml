@@ -18,6 +18,11 @@ on:
     workflows: [Release]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to (re)publish for, e.g. v1.5.0. Backfills the GHCR version tags additively; PyPI publish is skip-existing so it stays untouched.'
+        required: false
+        type: string
 
 # Publish workflows must serialize, not cancel. Cancelling a mid-flight
 # twine upload leaves PyPI in a state where the next retry fails with E409
@@ -149,16 +154,43 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Resolve the release version explicitly. The load-bearing trigger is
+      # `workflow_run`, under which github.ref points at the DEFAULT BRANCH
+      # (main), NOT the tag — so docker/metadata-action's `type=semver` rules
+      # (which only fire on a refs/tags/... ref) emit NOTHING and the image
+      # never gets a `:X.Y.Z` / `:X.Y` tag (only `:latest` + `:sha-...`). The
+      # tag that started the upstream Release run is carried on
+      # github.event.workflow_run.head_branch (= the tag ref, e.g. v1.5.0).
+      # Feed the resolved version into metadata-action via type=raw below.
+      - name: Resolve release version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            workflow_run) REF="${{ github.event.workflow_run.head_branch }}";;
+            release)      REF="${{ github.event.release.tag_name }}";;
+            *)            REF="${{ inputs.tag }}";;   # workflow_dispatch backfill
+          esac
+          V="${REF#v}"
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=$(echo "$V" | cut -d. -f1-2)" >> "$GITHUB_OUTPUT"
+          echo "resolved=${V} (event=${{ github.event_name }} ref=${REF})"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf  # v6.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # type=raw from the explicitly-resolved version (see Resolve step) —
+          # NOT type=semver, which silently emits nothing under workflow_run
+          # because github.ref is main, not the tag. Each enable=... gates its
+          # raw tag so an empty/missing version never pushes a bogus tag.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ steps.ver.outputs.version != '' }}
+            type=raw,value=${{ steps.ver.outputs.major_minor }},enable=${{ steps.ver.outputs.major_minor != '' }}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
 
       - name: Build and push
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0

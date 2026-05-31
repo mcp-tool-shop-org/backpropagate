@@ -618,7 +618,13 @@ def convert_to_chatml(
     results = []
     dropped = 0
     for i, sample in enumerate(samples):
-        fmt = detect_format(sample) if per_sample_detect else source_format
+        # Structured so mypy narrows source_format to a concrete DatasetFormat
+        # in the pinned-format branch (per_sample_detect ⇒ source_format is
+        # None/UNKNOWN, so the else here is always a real format).
+        if source_format is not None and not per_sample_detect:
+            fmt = source_format
+        else:
+            fmt = detect_format(sample)
         try:
             chatml = FormatConverter.to_chatml(sample, fmt)
             _warn_on_empty_turns(chatml, i)
@@ -971,7 +977,10 @@ def validate_dataset(
     valid_count = 0
 
     for i, sample in enumerate(samples):
-        row_format = detect_format(sample) if per_sample_detect else format_type
+        if format_type is not None and not per_sample_detect:
+            row_format = format_type
+        else:
+            row_format = detect_format(sample)
         errors = validate_sample(sample, i, row_format)
 
         if errors:
@@ -2937,7 +2946,9 @@ def get_dataset_stats(
     # summary but let convert_to_chatml detect per-sample so a mixed file's later
     # rows are not converted with the wrong format (DATA-A-001 sibling).
     auto_detected = format_type is None
-    if auto_detected:
+    # Narrow on the value (not the bool alias) so mypy knows format_type is a
+    # concrete DatasetFormat below (the `format_detected` summary field).
+    if format_type is None:
         format_type = detect_format(samples)
 
     # Convert to ChatML for consistent analysis

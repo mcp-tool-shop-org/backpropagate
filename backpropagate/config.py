@@ -339,7 +339,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         overwrite_output_dir: bool = True
 
         @model_validator(mode="after")
-        def _reject_bf16_and_fp16(self) -> "Settings.TrainingConfig":
+        def _reject_bf16_and_fp16(self) -> "TrainingConfig":
             """Reject bf16=True AND fp16=True at construction time.
 
             DATA-A-007: transformers' ``TrainingArguments`` raises

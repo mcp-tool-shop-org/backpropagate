@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -183,8 +184,8 @@ def redact_secrets(text: str) -> str:
 
 
 def _redact_event_processor(
-    _logger: Any, _method_name: str, event_dict: dict
-) -> dict:
+    _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """structlog processor: redact secrets in the rendered event + string values.
 
     CLI-A-002: runs LATE in the processor chain (after merge_contextvars,
@@ -219,7 +220,10 @@ class _SecretRedactingFilter(logging.Filter):
             record.msg = redact_secrets(rendered)
             record.args = None
         except Exception:  # noqa: BLE001 — redaction must never drop a log line
-            pass
+            # Keep the original record rather than drop a log line on a scrub
+            # failure. Explicit return (not a bare ``pass``) so this is not a
+            # try/except/pass (bandit B110).
+            return True
         return True
 
 
@@ -252,6 +256,7 @@ def _configure_structlog(
         structlog.processors.TimeStamper(fmt="iso"),  # ISO timestamp
     ]
 
+    processors: list[Processor]
     if json_logs:
         # Production: JSON output
         processors = shared_processors + [

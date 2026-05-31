@@ -163,11 +163,22 @@ def _default_backend_to_cuda(request, monkeypatch):
     """
     if "mlx" in request.node.nodeid:
         return
-    for _target in (
-        "backpropagate.mlx_backend.detect_apple_silicon",
+    # Force 'auto' -> 'cuda' at the Trainer's exact resolution site: __init__
+    # calls resolve_backend(self.backend) (trainer.py ~2206). Patching that
+    # binding is the most direct lever — it does NOT depend on
+    # detect_apple_silicon propagating through resolve_backend. Also neutralize
+    # the detect bindings the forced-'mlx'-on-non-Apple guard (~2214) consults.
+    def _resolve_cuda(requested):
+        return "cuda" if requested in (None, "auto") else requested
+
+    monkeypatch.setattr(
+        "backpropagate.trainer.resolve_backend", _resolve_cuda, raising=False
+    )
+    for _t in (
         "backpropagate.trainer.detect_apple_silicon",
+        "backpropagate.mlx_backend.detect_apple_silicon",
     ):
-        monkeypatch.setattr(_target, lambda: False, raising=False)
+        monkeypatch.setattr(_t, lambda: False, raising=False)
 
 
 @pytest.fixture

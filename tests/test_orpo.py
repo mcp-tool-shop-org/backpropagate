@@ -128,6 +128,9 @@ def _orpo_trainer_ready(temp_dir, **kwargs):
     """Construct a CPU Trainer(method='orpo') with a fake loaded model."""
     from backpropagate.trainer import Trainer
 
+    # CUDA/SFT ORPO path — pin backend so 'auto' never routes to the MLX rail on
+    # an Apple-Silicon CI runner (macos-arm64, where mlx_lm is importable).
+    kwargs.setdefault("backend", "cuda")
     with patch("torch.cuda.is_available", return_value=False):
         trainer = Trainer(
             method="orpo",

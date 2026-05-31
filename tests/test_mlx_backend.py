@@ -149,7 +149,11 @@ class TestTrainerBackendSelection:
     def test_auto_non_apple_resolves_cuda(self):
         from backpropagate.trainer import Trainer
 
-        with mock.patch("torch.cuda.is_available", return_value=False):
+        # Simulate a non-Apple host explicitly — don't depend on the CI runner's
+        # OS (macos-latest is now arm64, where 'auto' would resolve to mlx).
+        with mock.patch(
+            "backpropagate.mlx_backend.detect_apple_silicon", return_value=False
+        ), mock.patch("torch.cuda.is_available", return_value=False):
             t = Trainer(backend="auto", model="x")
         assert t._effective_backend == "cuda"
 

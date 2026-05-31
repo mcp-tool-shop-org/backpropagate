@@ -4,14 +4,15 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.4.x   | :white_check_mark: (in preparation; ships from main once v1.4.0 tags) |
-| 1.3.x   | :white_check_mark: (current; v1.3.0 shipped 2026-05-24) |
-| 1.2.x   | :white_check_mark: (security-fix-only until v1.4.0; operators should plan migration to v1.3) |
+| 1.5.x   | :white_check_mark: (current; v1.5.0 shipped 2026-05-31) |
+| 1.4.x   | :white_check_mark: (security-fix-only until v1.6.0; operators should plan migration to v1.5) |
+| 1.3.x   | :x: (EOL with v1.5.0) |
+| 1.2.x   | :x: (EOL with v1.4.0) |
 | 1.1.x   | :x: (EOL with v1.2.0 — see GHSA-f65r-h4g3-3h9h below for the auth-bypass advisory affecting 1.1.0 / 1.1.1) |
 | 1.0.x   | :x: (EOL with v1.1.0) |
 | < 1.0   | :x:                |
 
-Once v1.4.0 ships, 1.3.x moves to security-fix-only support for one minor cycle (until v1.5.0); operators should plan migration to v1.4 within that window. The current minor + one back is always supported; older minors get security-only patches for one cycle, then EOL.
+Now that v1.5.0 has shipped, 1.4.x moves to security-fix-only support for one minor cycle (until v1.6.0); operators should plan migration to v1.5 within that window. The current minor + one back is always supported; older minors get security-only patches for one cycle, then EOL.
 
 ## Published Security Advisories
 

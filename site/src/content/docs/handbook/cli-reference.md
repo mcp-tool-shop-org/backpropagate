@@ -305,6 +305,69 @@ backprop validate my_data.jsonl --format sharegpt --max-errors 50
 
 Exit codes: `0` on clean validation, `1` on input problem (missing file / unreadable / bad encoding), `65` (`EX_DATAERR`) on detected validation errors.
 
+## `backprop data report` (v1.5)
+
+Dataset-quality report — duplicate clusters, length/format outliers, optional train/test contamination against a held-out split, format-validity, and a token-length distribution. Reads the JSONL file directly (no HuggingFace download, no torch), so it is safe to run as a pre-flight in CI. The advisory report becomes a **gate** when you pass any `--fail-*` flag (or `--strict`).
+
+`data` is the second nested subparser in the otherwise-flat CLI (after `ollama`); the dataset-quality surface is grouped under a noun so future verbs (`data dedupe`, `data split`) extend the same group rather than sprinkling flat verbs at the root. `backprop validate` stays flat (it pre-dates this grouping); the new quality *report* lives under `data report` as the first of a family.
+
+```bash
+# Advisory report (human summary)
+backprop data report my_data.jsonl
+
+# Contamination check against a held-out split
+backprop data report my_data.jsonl --against heldout.jsonl
+
+# CI gate: fail if >10% near-duplicates or any contamination
+backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.0 --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `dataset` (positional) | **required** | Path to the JSONL dataset to analyze. |
+| `--format` | `auto` | Format hint: `auto` / `sharegpt` / `alpaca` / `openai` / `raw`. `auto` detects from the first row. |
+| `--against` | unset | Path to a held-out JSONL split to check the main dataset for train/test contamination against. |
+| `--max-samples` | unset (all) | Maximum samples to analyze. Caps reads on huge files. |
+| `--dup-threshold` | `0.9` | Similarity threshold in `[0, 1]` above which two samples count as near-duplicates. Validated by `_unit_float`. |
+| `--fail-on-dups` | unset | Gate: fail (exit `65`) if the near-duplicate **rate** exceeds this fraction in `[0, 1]` (e.g. `0.1` for 10%). Omit to stay advisory. |
+| `--fail-on-contamination` | unset | Gate: fail (exit `65`) if the contamination rate against `--against` exceeds this fraction in `[0, 1]`. Omit to stay advisory. |
+| `--max-outlier-rate` | unset | Gate: fail (exit `65`) if the length/format-outlier rate exceeds this fraction in `[0, 1]`. Omit to stay advisory. |
+| `--strict` | off | Promote a WARN verdict to FAIL (exit `65`). For strict CI gates. |
+| `--json` | off | Emit the report as JSON (`schema_version` + the `DataQualityReport` fields, including `verdict` and `failed_thresholds`) instead of the human summary. |
+
+Exit codes: `0` advisory run or all gates passed / clean; `1` on bad input (dataset missing / is a directory / not UTF-8 / unreadable, or `--against` was passed but its file is missing); `65` (`EX_DATAERR`) when a `--fail-*` / `--strict` gate trips **or** the dataset has zero parseable rows. A tripped gate stamps `INPUT_DATASET_REPORT_THRESHOLD` into the structured log so the failure is greppable.
+
+## `backprop eval` (v1.5)
+
+Lightweight post-train eval harness — held-out loss + perplexity + N sample generations against a fixed prompt set, with an optional before/after diff (`--vs`) and an **eval-gate** (`--gate-against`) that backstops continual-merge / SLAO campaigns. Flat top-level subcommand, modeled on `diff-runs`. Imports the (torch-heavy) eval engine lazily, after the cheap run-resolution checks, so a typo'd run_id fails fast without loading a model.
+
+```bash
+# Evaluate one run
+backprop eval <run_id> --output ./output
+
+# Before/after diff between two runs
+backprop eval <run_id> --vs <baseline_run_id>
+
+# Gate: reject if <run_id> regressed the held-out metric vs the baseline
+backprop eval <run_id> --gate-against <baseline_run_id> --max-regression 0.0
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `run_id` (positional) | **required** | The run_id to evaluate (or any unambiguous prefix). |
+| `--vs` | unset | Second run_id to evaluate and diff against (before/after comparison). If both `--vs` and `--gate-against` are passed, `--gate-against` wins. |
+| `--gate-against` | unset | Baseline run_id to gate against. Evaluates both runs and runs the eval-gate; exits `65` if the evaluated run regressed beyond `--max-regression`. |
+| `--output`, `-o` | `./output` | Output directory containing `run_history.json`. |
+| `--heldout` | unset | Path to a held-out JSONL split for the held-out-loss metric. Default: the harness re-splits the run's recorded dataset (with a loud WARN that overlap is possible). |
+| `--prompts` | unset | Path to a fixed prompt set (one prompt per line, or JSONL `{"prompt": ...}`). Default: the harness's built-in prompt set. |
+| `--num-samples`, `-n` | `5` | Number of sample generations to produce. |
+| `--max-new-tokens` | `128` | Max new tokens per sample generation. |
+| `--max-regression` | `0.0` | Maximum tolerated regression for `--gate-against` (`0.0` = any regression rejects). Raise to allow a small regression. |
+| `--seed` | `0` | Random seed for the re-split + generation determinism. |
+| `--json` | off | Emit the eval outcome (single / diff / gate) as JSON under a `schema_version` field for CI consumers. |
+
+Exit codes: `0` the eval ran (and, with `--gate-against`, the gate ACCEPTED); `1` run-not-found (eval target / `--vs` / `--gate-against`) or `--heldout` / `--prompts` could not be resolved / read; `65` (`EX_DATAERR`) when `--gate-against` tripped — the run regressed beyond `--max-regression` (stamps `RUNTIME_EVAL_GATE_REGRESSED`). An eval that crashes inside the engine surfaces via the catch-all: `RUNTIME_EVAL_FAILED` → `2`, CUDA OOM → `137`, Hub failure → `69`.
+
 ## `backprop estimate-vram` (v1.3)
 
 Print a small table of recommended batch sizes given the currently-visible GPU VRAM (or an override) and a model name. The math mirrors `Trainer._detect_batch_size`'s tier heuristic — the same one that fires automatically when `--batch-size auto` is used.

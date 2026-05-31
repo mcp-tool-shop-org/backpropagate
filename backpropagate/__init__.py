@@ -202,6 +202,15 @@ from .config import (
 # and emits the DeprecationWarning, per the v1.4 rename cycle.
 TRAINING_PRESETS = MULTI_RUN_PRESETS
 
+# Dataset-quality report (v1.5 T1.1 — the moat). Pure-stdlib + numpy-light
+# analysis surface; does NOT pull torch, so re-exporting these names keeps
+# the eval-path re-export below cheap. Powers `backprop data report <jsonl>`.
+from .dataset_report import (
+    ContaminationResult,
+    DataQualityReport,
+    analyze_dataset,
+)
+
 # Datasets
 from .datasets import (
     # Curriculum learning (Phase 3.3)
@@ -236,6 +245,19 @@ from .datasets import (
     order_by_difficulty,
     preview_samples,
     validate_dataset,
+)
+
+# Lightweight eval harness (v1.5 T1.1 — the moat). eval.py keeps torch LAZY
+# (imported inside evaluate_run, not at module top), so re-exporting these
+# public names is cheap — ``import backpropagate`` stays torch-free. Powers
+# `backprop eval <run_id>`.
+from .eval import (
+    EvalDiff,
+    EvalGateDecision,
+    EvalResult,
+    diff_evals,
+    eval_gate,
+    evaluate_run,
 )
 
 # Export
@@ -599,5 +621,18 @@ __all__ = [
     "order_by_difficulty",
     "get_curriculum_chunks",
     "analyze_curriculum",
+
+    # Dataset-quality report (v1.5 T1.1)
+    "analyze_dataset",
+    "DataQualityReport",
+    "ContaminationResult",
+
+    # Eval harness (v1.5 T1.1)
+    "evaluate_run",
+    "diff_evals",
+    "eval_gate",
+    "EvalResult",
+    "EvalGateDecision",
+    "EvalDiff",
 
 ]

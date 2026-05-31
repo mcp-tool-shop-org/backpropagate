@@ -176,6 +176,63 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Convert to one of the supported formats (JSONL, ShareGPT, Alpaca, OpenAI).",
         "retryable": "no",
     },
+    # v1.5 T1.1 (dataset-quality report): a `backprop data report` gate flag
+    # (--fail-on-dups / --fail-on-contamination / --max-outlier-rate / --strict)
+    # tripped. Returned as exit 65 (EX_DATAERR) directly by cmd_data_report,
+    # not raised — the code is stamped into the structured log line that
+    # accompanies the non-zero return so the catalog scanner counts it as
+    # emitted and operators can grep the failing gate.
+    "INPUT_DATASET_REPORT_THRESHOLD": {
+        "description": (
+            "A `backprop data report` quality gate was breached — a "
+            "--fail-on-dups / --fail-on-contamination / --max-outlier-rate "
+            "threshold was exceeded, or --strict promoted a WARN verdict to "
+            "FAIL. The dataset is parseable but did not meet the gate you set."
+        ),
+        "default_hint": (
+            "Inspect the report's failed_thresholds list (re-run without "
+            "--json for the human summary). Either clean the dataset "
+            "(dedupe / trim outliers / remove contamination against the "
+            "--against set) or relax the threshold you passed. Drop the "
+            "--fail-* flags entirely to run the report in advisory mode "
+            "(exit 0)."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): `backprop eval <run_id>` could not resolve the
+    # run_id in the on-disk run history under the configured --output dir.
+    # Returned as exit 1 by cmd_eval (user error), with the code stamped into
+    # the structured log line.
+    "INPUT_EVAL_RUN_NOT_FOUND": {
+        "description": (
+            "`backprop eval <run_id>` (or --vs / --gate-against) named a "
+            "run_id that is not present in the on-disk run history under the "
+            "configured --output directory."
+        ),
+        "default_hint": (
+            "Run `backprop runs --output <dir>` to list available run_ids. "
+            "If the run was trained under a different output directory, "
+            "re-run with `--output <that-dir>`. Partial-prefix matches are "
+            "accepted as long as the prefix is unambiguous."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): a held-out dataset / prompt set passed via
+    # --heldout / --prompts could not be located or read. Returned as exit 1
+    # by cmd_eval (user error), code stamped into the structured log line.
+    "INPUT_EVAL_HELDOUT_UNRESOLVED": {
+        "description": (
+            "`backprop eval` could not resolve the held-out evaluation set — "
+            "the --heldout path is missing/unreadable, or the --prompts file "
+            "could not be opened."
+        ),
+        "default_hint": (
+            "Pass a readable path to --heldout (a JSONL held-out split) or "
+            "--prompts (a newline- or JSONL-delimited prompt file). Check the "
+            "path resolves from the current working directory and is UTF-8."
+        ),
+        "retryable": "no",
+    },
     # Configuration
     "CONFIG_INVALID": {
         "description": "Configuration object is invalid or malformed.",
@@ -191,6 +248,48 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "RUNTIME_TRAINING_FAILED": {
         "description": "Training crashed for an internal reason (model bug, library mismatch, etc.).",
         "default_hint": "Run with --verbose for the full traceback; check transformers / unsloth versions.",
+        "retryable": "sometimes",
+    },
+    # v1.5 T1.1 (eval harness): `backprop eval --gate-against <baseline>` found
+    # the after-run regressed the held-out metric beyond --max-regression.
+    # Returned as exit 65 (EX_DATAERR) directly by cmd_eval — NOT raised — so
+    # the code is stamped into the structured log line that accompanies the
+    # non-zero return (the catalog scanner counts the code= literal there).
+    # This is the eval-gate that backstops SLAO merges (V1_5_BRIEF T2.2).
+    "RUNTIME_EVAL_GATE_REGRESSED": {
+        "description": (
+            "`backprop eval --gate-against <baseline_run_id>` determined the "
+            "evaluated run regressed the held-out metric beyond the allowed "
+            "--max-regression. The eval-gate rejected the run (this is the "
+            "gate that protects continual-merge / SLAO campaigns)."
+        ),
+        "default_hint": (
+            "The after-run is worse than the baseline by more than "
+            "--max-regression. Inspect the eval diff (re-run with --vs "
+            "<baseline> for the side-by-side). Either keep the baseline "
+            "(reject this run/merge), raise --max-regression if a small "
+            "regression is acceptable, or retrain with a higher learning "
+            "rate / more steps / cleaner data."
+        ),
+        "retryable": "no",
+    },
+    # v1.5 T1.1 (eval harness): the evaluation itself failed to run — model
+    # load, held-out forward pass, or generation crashed. Surfaced via the
+    # cli.py catch-all exit-code mapper (model/OOM/Hub buckets) the same way
+    # training failures are.
+    "RUNTIME_EVAL_FAILED": {
+        "description": (
+            "`backprop eval` failed to complete the evaluation — the model "
+            "could not be loaded, the held-out forward pass crashed, or "
+            "sample generation raised. Distinct from a clean regression "
+            "(RUNTIME_EVAL_GATE_REGRESSED); here the eval did not finish."
+        ),
+        "default_hint": (
+            "Re-run with --verbose (or BACKPROPAGATE_DEBUG=1) for the full "
+            "traceback. Confirm the run's checkpoint loads via `backprop "
+            "show-run <run_id>` and that the model fits in VRAM at eval time "
+            "(lower -n / --max-new-tokens if you OOM during generation)."
+        ),
         "retryable": "sometimes",
     },
     "RUNTIME_UI_AUTH_NOT_ENFORCED": {

@@ -472,6 +472,8 @@ class TestRootHelpEpilog:
             "train", "multi-run", "resume", "replay",
             "info", "config", "list-runs", "runs", "show-run", "diff-runs",
             "export-runs", "validate", "estimate-vram",
+            # v1.5 T1.1 additions (data-quality moat + eval harness)
+            "data report", "eval",
             "export", "push",
             "ollama register", "ollama list", "ollama rm",
             "ui",

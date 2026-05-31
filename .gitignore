@@ -130,3 +130,4 @@ site/.astro/
 site/node_modules/
 site/dist/
 .polyglot-cache.json
+.web/

@@ -86,6 +86,7 @@ __all__ = [
     "ModelLoadError",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
+    "MLXUnavailableError",
     "TrainingAbortedError",
     "CheckpointError",
     # Export
@@ -411,6 +412,29 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "DEP_GPU_NOT_AVAILABLE": {
         "description": "No CUDA-capable GPU detected.",
         "default_hint": "Install CUDA-enabled PyTorch; verify `torch.cuda.is_available()` returns True.",
+        "retryable": "no",
+    },
+    # v1.5 T3.1 (MLX / Apple-Silicon backend): the MLX rail's ONE un-runnable
+    # axis. Raised by mlx_backend.MLXBackend.run() when the resolved backend is
+    # 'mlx' but the ``mlx_lm`` toolchain is not importable on this host —
+    # ``mlx-lm`` is Apple-Silicon-ONLY (macOS + arm64), so on a Windows / CUDA
+    # rig the [mlx] extra cannot install and this fires. Distinct from
+    # DEP_GPU_NOT_AVAILABLE (that is the CUDA rail's "no GPU" code); this is the
+    # MLX rail's "no mlx-lm" code. The forced-``backend='mlx'``-on-non-Apple
+    # MISCONFIG is caught EARLIER as CONFIG_INVALID_SETTING by the Trainer
+    # constructor guard; this code is the deeper backstop for the actual
+    # subprocess-launch attempt (e.g. a corrupted mlx-lm install on a real Mac).
+    "DEP_MLX_UNAVAILABLE": {
+        "description": (
+            "The MLX (Apple-Silicon) training backend was selected but the "
+            "`mlx_lm` toolchain is not available on this host. mlx-lm is "
+            "macOS + arm64 ONLY."
+        ),
+        "default_hint": (
+            "Run on an Apple-Silicon Mac (macOS + arm64) and install the "
+            "extra: pip install 'backpropagate[mlx]'. On a non-Apple host use "
+            "backend='auto' (routes to CUDA) — backend='mlx' cannot run here."
+        ),
         "retryable": "no",
     },
     # Wave 6a RUNTIME_GPU_OOM Option A activated 2026-05-25: the raise site
@@ -1049,6 +1073,44 @@ class FullFinetuneModelTooLargeError(TrainingError):
             details=details,
             suggestion=suggestion,
             code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
+            retryable=False,
+        )
+
+
+class MLXUnavailableError(TrainingError):
+    """v1.5 T3.1: raised when the MLX backend is selected but ``mlx_lm`` is absent.
+
+    ``mlx-lm`` is Apple-Silicon-ONLY (macOS + arm64). The Trainer constructor
+    already refuses a FORCED ``backend='mlx'`` on a non-Apple host with a
+    ``CONFIG_INVALID_SETTING`` (a misconfiguration the operator can fix). This
+    class is the deeper backstop raised by
+    :meth:`backpropagate.mlx_backend.MLXBackend.run` at the actual
+    subprocess-launch attempt — it fires when the resolved backend is 'mlx' and
+    ``feature_flags.check_feature("mlx")`` is False (e.g. a corrupted mlx-lm
+    install on a real Mac, or a code path that reached ``run()`` without the
+    constructor guard). Carries ``code='DEP_MLX_UNAVAILABLE'`` so the cli.py
+    exit-code mapper + handbook/error-codes.md surface it uniformly, and is a
+    ``TrainingError`` subclass so callers catching ``TrainingError`` see it.
+    """
+
+    def __init__(self, reason: str | None = None, suggestion: str | None = None):
+        self.reason = reason
+        message = (
+            "MLX backend unavailable: the mlx_lm toolchain is not importable "
+            "on this host (mlx-lm is macOS + arm64 ONLY)."
+        )
+        if reason:
+            message = f"{message} {reason}"
+        super().__init__(
+            message,
+            details={"reason": reason} if reason else None,
+            suggestion=suggestion
+            or (
+                "Run on an Apple-Silicon Mac and install the extra: "
+                "pip install 'backpropagate[mlx]'. On a non-Apple host use "
+                "backend='auto' (routes to CUDA)."
+            ),
+            code="DEP_MLX_UNAVAILABLE",
             retryable=False,
         )
 

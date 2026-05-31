@@ -27,6 +27,7 @@ Installation commands for each feature:
     pip install backpropagate[logging]     # + structlog (structured JSON logs)
     pip install backpropagate[security]    # + PyJWT + cryptography (auth helpers)
     pip install backpropagate[fp8]         # + torchao FP8 compute path (Blackwell sm_90+; experimental)
+    pip install backpropagate[mlx]         # + MLX/Apple-Silicon training backend (macOS + arm64 ONLY)
     pip install backpropagate[standard]    # unsloth + ui (recommended)
     pip install backpropagate[production]  # unsloth + ui + validation + logging + security
     pip install backpropagate[full]        # Everything
@@ -79,6 +80,17 @@ FEATURES: dict[str, bool] = {
     # _fp8_supported() adds the CUDA-available + sm>=9 capability gate on top of
     # this library-presence flag.
     "fp8": False,
+    # v1.5 T3.1 (MLX / Apple-Silicon backend): the `mlx_lm` toolchain
+    # (mlx_lm.lora / mlx_lm.fuse), which is Apple-Silicon-ONLY (macOS + arm64).
+    # Detected via find_spec("mlx_lm") only — NEVER imported here (mlx-lm pulls
+    # in the mlx array framework, which probes Metal on import and is absent on
+    # every non-Apple host). The [mlx] pyproject extra installs mlx-lm; the
+    # trainer's detect_apple_silicon() adds the platform.system()=='Darwin' +
+    # machine()=='arm64' capability gate on top of this library-presence flag.
+    # On a non-Apple host this flag is always False (find_spec misses), so
+    # backend='auto' routes to CUDA and a FORCED backend='mlx' raises
+    # CONFIG_INVALID_SETTING at Trainer construction.
+    "mlx": False,
     # F-005: per-tracker availability so the trainer's report_to resolver can
     # decide whether to wire wandb / tensorboard / mlflow into SFTConfig.
     # ``monitoring`` is the [monitoring] extra (covers wandb + psutil); the
@@ -150,6 +162,15 @@ INSTALL_HINTS: dict[str, str] = {
         "logs ONE warning and trains in bf16 — correct, just without the FP8 "
         "speed/memory win."
     ),
+    "mlx": (
+        "pip install 'backpropagate[mlx]' — installs the mlx-lm toolchain for "
+        "the Apple-Silicon training backend (LoRA via mlx_lm.lora, "
+        "merge/GGUF via mlx_lm.fuse). macOS + arm64 ONLY — mlx-lm cannot "
+        "install on Windows / Linux / Intel Macs. "
+        "On a non-Apple host: backend='auto' routes to CUDA (no MLX needed) "
+        "and backend='mlx' raises CONFIG_INVALID_SETTING at Trainer "
+        "construction (it is an unrunnable request on this hardware)."
+    ),
     # F-005 per-tracker hints.
     "wandb": (
         "pip install 'backpropagate[monitoring]' — bundles wandb + psutil. "
@@ -178,6 +199,7 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
     "flash_attention": "Flash Attention 2 for faster attention",
     "triton": "Triton kernels for optimized operations",
     "fp8": "FP8 compute path via torchao (Blackwell sm_90+; experimental)",
+    "mlx": "MLX/Apple-Silicon training backend (macOS + arm64 ONLY; mlx_lm.lora/fuse)",
     # F-005 per-tracker descriptions.
     "wandb": "Weights & Biases experiment tracking",
     "tensorboard": "TensorBoard local experiment logs",
@@ -346,6 +368,19 @@ def _detect_features() -> None:
         logger.debug("Feature 'fp8' available: torchao installed")
     else:
         logger.debug("Feature 'fp8' unavailable: torchao not installed")
+
+    # v1.5 T3.1: MLX / Apple-Silicon backend. find_spec ONLY — importing
+    # mlx_lm pulls in the mlx array framework, which probes Metal on import and
+    # is absent on every non-Apple host (the import would raise). On a Windows /
+    # Linux / Intel-Mac rig find_spec misses and this stays False, so
+    # backend='auto' routes to CUDA. The trainer's detect_apple_silicon() layers
+    # the platform.system()=='Darwin' + machine()=='arm64' check on top before
+    # the MLX rail is ever chosen.
+    if _has_module("mlx_lm"):
+        FEATURES["mlx"] = True
+        logger.debug("Feature 'mlx' available: mlx_lm installed")
+    else:
+        logger.debug("Feature 'mlx' unavailable: mlx_lm not installed")
 
     # F-005: per-tracker detection — each one toggles a different report_to
     # branch in the trainer's auto-resolver. Detect via find_spec only so we

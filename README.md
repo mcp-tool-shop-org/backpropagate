@@ -92,7 +92,7 @@ If your use case is below, you'll have a better time with a different library �
 - **Full-parameter fine-tuning of 7B+ models** — Backpropagate uses LoRA / QLoRA, which trains a small adapter rather than updating every weight. For models 7B and larger, full fine-tuning needs 24GB+ of GPU memory and doesn't fit on a 16GB consumer card. For models 3B and smaller, full fine-tuning IS feasible on 16GB and ships in v1.4 as `mode="full"` (pass `Trainer(..., mode="full")` or `--mode=full` on the CLI; a hard gate raises `RUNTIME_FULL_FT_MODEL_TOO_LARGE` for models > 3B and names LoRA + the sub-3B presets as recoveries). The bigger picture: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at 67% of the compute — so for the work most operators actually want, you don't lose anything by sticking with LoRA. `mode="full"` exists for the cases where you've measured a quality gap and decided to spend the extra compute. If you genuinely need full fine-tuning of a 7B+ model, use HuggingFace `transformers.Trainer` directly on a 24GB+ card.
 - **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO ships in v1.5; SimPO/KTO are planned). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
 - **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.
-- **macOS training** — Apple Silicon doesn't have CUDA, so training has to run on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama.
+- **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path has to run on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. **New in v1.5:** an experimental MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--experimental-v15). It is LoRA-SFT-only and built-but-not-yet-dogfood-verified on real silicon, so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you still want the CUDA rail.
 - **Anything outside the tested model families** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Other models often work but aren't pinned in CI.
 
 If you need any of those things, reach for one of the libraries listed above. They're better at them.
@@ -169,6 +169,26 @@ The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper th
 ### Reasoning-trace SFT (R1 distillation)
 
 New in v1.5: distill a reasoning model the easy way. Pass `--reasoning-trace` (CLI) or `Trainer(..., reasoning_trace=True)` (Python) and feed it traces that keep a `<think>...</think>` chain-of-thought inside the assistant turn — the pure-SFT half of [DeepSeek-R1](https://arxiv.org/abs/2501.12948) distillation, no RL required. Backpropagate keeps `<think>` in the training target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to 8192 for the longer CoT. Critically, `<think>` stays **plain text** — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama like any other fine-tune. SFT only. See the [reasoning-trace recipe](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/#reasoning-trace-sft-r1-distillation) for the dataset shape and the tunable token band.
+
+### Apple Silicon (MLX) — experimental, v1.5
+
+New in v1.5: **one API, two rails.** CUDA stays the canonical, verified backend; MLX is a second rail that trains on an M-series Mac via Apple's [`mlx_lm.lora`](https://github.com/ml-explore/mlx-lm) toolchain (unified memory, no CUDA). The same 3-line shape picks the rail by hardware — `backend='auto'` (the default) routes to CUDA on NVIDIA and to MLX on Apple Silicon, so existing CUDA rigs are byte-identical:
+
+```python
+from backpropagate import Trainer
+
+# On an M-series Mac with `pip install 'backpropagate[mlx]'`:
+trainer = Trainer("mlx-community/Qwen2.5-0.5B-Instruct-4bit", backend="mlx")
+trainer.train("examples/quickstart.jsonl", steps=100)
+```
+
+```bash
+backprop train --data my_data.jsonl --backend mlx --steps 100
+```
+
+In v1.5 the MLX rail is **LoRA SFT only** — no ORPO, no FP8, no `mode='full'`, no multi-run on MLX yet (each is rejected with `CONFIG_INVALID_SETTING`; use `backend='cuda'`/`'auto'` on an NVIDIA box for those). The resulting adapter is plain safetensors and exports to Ollama through the same path as the CUDA rail.
+
+> ⚠️ **Honest status:** the MLX rail ships in v1.5 **built + unit-tested (mocked)** but **NOT yet dogfood-verified on real Apple Silicon** — `mlx-lm` is Apple-only and could not be run on the NVIDIA rig this was authored on. Treat it as experimental (same framing as the FP8 path), and please [report anomalies](#reporting-bugs) once it runs on an M-series Mac. Forcing `--backend mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; a missing `mlx_lm` toolchain on a Mac raises `DEP_MLX_UNAVAILABLE`.
 
 For more end-to-end workflows (fine-tune-and-push-to-HF-Hub, resume after OOM, multi-run SLAO across a long campaign, etc.) see the [handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
@@ -288,7 +308,7 @@ Backpropagate handles the runtime quirks of training on different platforms, but
 - **Wrong CUDA wheel.** PyTorch is published one binary per CUDA version. If you pick the wrong one, you silently get CPU-only PyTorch and training is impossibly slow. Use the wheel picker at <https://pytorch.org/get-started/locally/> for your driver. Run `nvidia-smi` to see your driver / CUDA version.
 - **Windows + GGUF export.** The `[export]` extra builds `llama-cpp-python` from source, which needs Visual Studio Build Tools (C++ component) and CMake.
 
-**macOS:** GPU training is not supported (no CUDA). You can run the trained adapter on a Mac via Ollama, but `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`. Use a CUDA Linux or Windows machine for the training itself.
+**macOS:** the CUDA rail is not supported (no CUDA) — a CUDA-routed `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`, and you can run the trained adapter on a Mac via Ollama. **New in v1.5:** an experimental MLX rail (`--backend mlx`, `pip install 'backpropagate[mlx]'`) trains a LoRA adapter natively on Apple Silicon via `mlx_lm.lora` — LoRA SFT only, and built + unit-tested but not yet dogfood-verified on real silicon (see [Apple Silicon (MLX)](#apple-silicon-mlx--experimental-v15)). For the CUDA path, or for ORPO / full fine-tune / FP8 / multi-run, use a CUDA Linux or Windows machine.
 
 See the [troubleshooting handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) for the long-form install fix-it guide, and the dedicated [CUDA troubleshooting page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/) for driver / VRAM / xformers / bf16-vs-fp16 issues.
 

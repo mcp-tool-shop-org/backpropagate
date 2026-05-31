@@ -150,9 +150,24 @@ Every training run prints `run_started run_id=<uuid>` in the structured log enve
 - **xformers.** Auto-disabled by Backpropagate for RTX 40/50 series (no action needed).
 - **llama-cpp-python.** Needs Visual Studio Build Tools + CMake to build from source. See the GGUF section above.
 
+## "MLX backend unavailable" / `DEP_MLX_UNAVAILABLE` / can't force `--backend mlx`
+
+**Symptom:** `backprop train --backend mlx ...` (or `Trainer(backend="mlx")`) fails — either `CONFIG_INVALID_SETTING` at startup, or `DEP_MLX_UNAVAILABLE` at the training step.
+
+**Why:** The MLX rail (v1.5 T3.1, experimental) drives Apple's `mlx_lm.lora` toolchain, which is **Apple-Silicon-ONLY** (macOS + arm64). On a Windows / Linux / Intel-Mac host the `[mlx]` extra cannot install, so a forced `--backend mlx` is unrunnable: the `Trainer` constructor refuses it with `CONFIG_INVALID_SETTING`. If the resolved rail is `mlx` but `mlx_lm` is missing (e.g. a corrupted install on a real Mac), `MLXBackend.run()` raises `DEP_MLX_UNAVAILABLE`.
+
+**Honesty note:** the MLX rail ships in v1.5 as built + unit-tested (mocked) — it has **not** yet been dogfood-verified on real Apple Silicon. Treat it as experimental and report anomalies.
+
+**Fix:**
+
+- On a non-Apple host, use the default `--backend auto` (routes to CUDA) or `--backend cuda`. MLX cannot run there — this is expected.
+- On an Apple-Silicon Mac, install the extra: `pip install 'backpropagate[mlx]'`. MLX is **LoRA SFT only** in v1.5 — `--method orpo`, `--mode full`, `--fp8`, and `multi-run` are rejected on the MLX rail with `CONFIG_INVALID_SETTING`.
+
 ## macOS
 
-GPU training is not supported on macOS (no CUDA). You can install Backpropagate to run *inference* against an already-exported GGUF model via Ollama, but `trainer.train()` will raise `DEP_GPU_NOT_AVAILABLE`. For training, use a CUDA-capable machine.
+**Training on Apple Silicon (experimental, v1.5):** an MLX rail (`--backend mlx`, `pip install 'backpropagate[mlx]'`) drives Apple's `mlx_lm.lora` toolchain so M-series Macs can train a LoRA adapter locally — see the section above and the [README MLX note](https://github.com/mcp-tool-shop-org/backpropagate#apple-silicon-mlx--experimental-v15). It is **built + unit-tested (mocked), pending dogfood verification on real Apple Silicon** as of v1.5; LoRA SFT only.
+
+**On the CUDA rail (`--backend cuda` / `auto` on a non-Apple host):** GPU training is not supported on macOS (no CUDA). You can still install Backpropagate to run *inference* against an already-exported GGUF model via Ollama, but a CUDA-routed `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`. For the CUDA path, use a CUDA-capable Linux or Windows machine.
 
 ## See also
 

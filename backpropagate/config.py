@@ -450,6 +450,57 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # constructor gate ladder, NOT here (they are cross-field combinations
         # the per-field config layer doesn't see).
         fp8: bool = False
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): the compute-backend selector.
+        # "auto" (the default) resolves to "mlx" on an Apple-Silicon Mac with the
+        # [mlx] extra installed, else "cuda" — so existing CUDA rigs are
+        # byte-identical. "cuda" forces the canonical CUDA rail. "mlx" forces the
+        # Apple-Silicon rail (mlx_lm.lora under the hood); on a non-Apple host
+        # the Trainer constructor rejects a forced "mlx" with a structured
+        # CONFIG_INVALID_SETTING (it is an unrunnable request on that hardware).
+        #
+        # NB: deliberately typed ``str`` (not ``Literal["auto","cuda","mlx"]``)
+        # so the {auto, cuda, mlx} constraint is enforced by the
+        # ``_reject_invalid_backend`` after-validator below, which raises a
+        # structured ``InvalidSettingError`` (CONFIG_INVALID_SETTING) — mirroring
+        # ``_reject_invalid_method``. A ``Literal`` field would make pydantic's
+        # own type-check the gate, raising a generic ``ValidationError`` BEFORE
+        # the after-validator runs, so the contract's structured code/hint would
+        # never surface. Env: ``BACKPROPAGATE_TRAINING__BACKEND``.
+        backend: str = "auto"
+
+        @model_validator(mode="after")
+        def _reject_invalid_backend(self) -> "TrainingConfig":
+            """Reject a ``backend`` outside {"auto", "cuda", "mlx"} at construction.
+
+            v1.5 T3.1: ``backend`` is the compute-rail selector and the field is
+            typed ``str`` (not ``Literal``) precisely so this validator — not
+            pydantic's type machinery — decides the valid set, raising a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``) for a
+            bad value supplied either as a kwarg
+            (``TrainingConfig(backend="rocm")``) or via env var
+            (``BACKPROPAGATE_TRAINING__BACKEND=rocm``). Mirrors
+            ``_reject_invalid_method``. This validator only gates the VALUE; the
+            cross-field "backend='mlx' but this is not Apple Silicon" check lives
+            in the Trainer constructor (the config layer can't see the host).
+            A non-``ValueError`` raised from a pydantic ``after`` validator
+            propagates as-is (NOT re-wrapped in ``ValidationError``), so the
+            structured code/hint survive.
+            """
+            if self.backend not in ("auto", "cuda", "mlx"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "backend",
+                    self.backend,
+                    "one of {'auto', 'cuda', 'mlx'}",
+                    suggestion=(
+                        "Set backend='auto' (the default — routes to MLX on an "
+                        "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                        "backend='cuda' to force the CUDA rail, or backend='mlx' "
+                        "to force the Apple-Silicon rail (macOS + arm64 only)."
+                    ),
+                )
+            return self
 
         @model_validator(mode="after")
         def _reject_invalid_method(self) -> "TrainingConfig":
@@ -896,6 +947,11 @@ else:
         # silently change FP8 behavior. No validation needed (a bool can't be
         # malformed); the Trainer gate ladder enforces the cross-field rules.
         fp8: bool = False
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): parity with the pydantic
+        # branch above. The dataclass fallback can't express a Literal at the
+        # type level, so the {auto, cuda, mlx} constraint is enforced in
+        # __post_init__ below to keep behavior byte-identical across installs.
+        backend: str = "auto"
 
         def __post_init__(self) -> None:
             # DATA-A-007 (parity with the pydantic branch above): reject the
@@ -933,6 +989,24 @@ else:
                         "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
                         "are not implemented in v1.5 — use TRL / LLaMA-Factory "
                         "for those."
+                    ),
+                )
+            # v1.5 T3.1 (MLX): reject an invalid backend here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_backend
+            # validator raises.
+            if self.backend not in ("auto", "cuda", "mlx"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "backend",
+                    self.backend,
+                    "one of {'auto', 'cuda', 'mlx'}",
+                    suggestion=(
+                        "Set backend='auto' (the default — routes to MLX on an "
+                        "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                        "backend='cuda' to force the CUDA rail, or backend='mlx' "
+                        "to force the Apple-Silicon rail (macOS + arm64 only)."
                     ),
                 )
 

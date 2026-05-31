@@ -62,6 +62,7 @@ from .exceptions import (
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
 from .logging_config import bind_run_context, unbind_run_context
+from .mlx_backend import detect_apple_silicon, resolve_backend
 
 logger = logging.getLogger(__name__)
 
@@ -1658,6 +1659,19 @@ class Trainer:
         # introspection filter threads ``--reasoning-trace`` through (GLUE owns
         # the flag).
         reasoning_trace: bool | None = None,
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): the compute-rail selector.
+        # None ⇒ ``settings.training.backend`` (default "auto"). "auto" resolves
+        # to "mlx" on an Apple-Silicon Mac with the [mlx] extra, else "cuda"
+        # (so existing CUDA rigs are byte-identical). "cuda" forces the canonical
+        # CUDA rail; "mlx" forces the Apple-Silicon rail. A FORCED "mlx" on a
+        # non-Apple host raises InvalidSettingError (CONFIG_INVALID_SETTING) from
+        # the guard below — it is an unrunnable request on that hardware. When
+        # the effective backend is "mlx", train() short-circuits to
+        # _train_with_mlx (which drives mlx_lm.lora via a subprocess seam) and
+        # NEVER calls load_model(); orpo / fp8 / mode='full' are rejected for the
+        # MLX rail (out of scope for v1.5). Named EXACTLY ``backend`` so the CLI
+        # introspection filter threads ``--backend`` through (GLUE owns the flag).
+        backend: str | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -2095,6 +2109,95 @@ class Trainer:
                         f"{self.max_seq_length}."
                     )
                 self.packing = False
+
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): backend resolution + gates.
+        # Placed AFTER the FP8 ladder (and after mode/method resolve) so the
+        # MLX unsupported-feature gates can see the resolved self.mode /
+        # self.method / self.fp8. Kwarg-authoritative with the settings layer as
+        # fallback (same ``is not None`` discipline as the fields above).
+        self.backend = backend if backend is not None else settings.training.backend
+        # Defense-in-depth value check (config.py validates the settings path; a
+        # DIRECT Trainer(backend="rocm") bypasses it). Mirrors the method gate.
+        if self.backend not in {"auto", "cuda", "mlx"}:
+            raise InvalidSettingError(
+                setting_name="backend",
+                value=self.backend,
+                expected="one of {'auto', 'cuda', 'mlx'}",
+                suggestion=(
+                    "Pass backend='auto' (the default — routes to MLX on an "
+                    "Apple-Silicon Mac with the [mlx] extra, else CUDA), "
+                    "backend='cuda' to force the CUDA rail, or backend='mlx' to "
+                    "force the Apple-Silicon rail (macOS + arm64 only)."
+                ),
+            )
+        # Resolve "auto" → concrete rail. resolve_backend("auto") consults
+        # detect_apple_silicon(); "cuda"/"mlx" pass through unchanged.
+        self._effective_backend = resolve_backend(self.backend)
+
+        # Forced-mlx-on-non-Apple guard: a FORCED backend='mlx' on a host that
+        # is not Apple Silicon (macOS + arm64 + the [mlx] extra) is unrunnable —
+        # mlx-lm cannot exist here. Refuse it with a structured
+        # CONFIG_INVALID_SETTING so the operator gets an actionable error before
+        # any work. (backend='auto' never reaches here as "mlx" on a non-Apple
+        # host — resolve_backend routed it to "cuda".)
+        if self.backend == "mlx" and not detect_apple_silicon():
+            raise InvalidSettingError(
+                setting_name="backend",
+                value="mlx",
+                expected="Apple Silicon (macOS+arm64) with the [mlx] extra",
+                suggestion=(
+                    "Use backend='auto' (routes to CUDA here) or run on an "
+                    "M-series Mac with pip install 'backpropagate[mlx]'."
+                ),
+            )
+
+        # MLX unsupported-feature gates — only when the EFFECTIVE backend is the
+        # MLX rail. These features are out of scope for the MLX backend in v1.5
+        # (mlx_lm.lora is LoRA-SFT-only here). Co-located with the FP8 ladder so
+        # all the cross-field training-shape refusals live together.
+        if self._effective_backend == "mlx":
+            if self.method == "orpo":
+                raise InvalidSettingError(
+                    setting_name="backend+method",
+                    value={"backend": "mlx", "method": "orpo"},
+                    expected="ORPO is not supported on the MLX backend in v1.5",
+                    suggestion=(
+                        "ORPO (reference-free preference tuning) runs on the "
+                        "CUDA rail only in v1.5. Use method='sft' with "
+                        "backend='mlx', or method='orpo' with a CUDA GPU."
+                    ),
+                )
+            if self.fp8:
+                raise InvalidSettingError(
+                    setting_name="backend+fp8",
+                    value={"backend": "mlx", "fp8": True},
+                    expected="FP8 is a CUDA/Blackwell path; not supported on MLX",
+                    suggestion=(
+                        "FP8 (torchao float8) is a CUDA/Blackwell-only compute "
+                        "path. Drop fp8=True on the MLX backend — Apple Silicon "
+                        "uses its own unified-memory precision."
+                    ),
+                )
+            if self.mode == "full":
+                raise InvalidSettingError(
+                    setting_name="backend+mode",
+                    value={"backend": "mlx", "mode": "full"},
+                    expected="mode='full' is not supported on the MLX backend in v1.5",
+                    suggestion=(
+                        "Full fine-tuning on the MLX rail is out of scope for "
+                        "v1.5. Use mode='lora' (the default) with backend='mlx'."
+                    ),
+                )
+            # use_rslora / use_dora are PEFT-specific knobs with no mlx_lm.lora
+            # equivalent — WARN-and-ignore (do NOT raise) so an operator who set
+            # them on a CUDA-tuned config can still run on MLX.
+            if getattr(self, "use_rslora", False) or getattr(self, "use_dora", False):
+                logger.warning(
+                    "backend='mlx': use_rslora / use_dora are PEFT-specific and "
+                    "have no mlx_lm.lora equivalent — ignored for this MLX run. "
+                    "mlx_lm applies its own LoRA scaling (the alpha/r -> scale "
+                    "mapping) on the last num_layers blocks."
+                )
 
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
@@ -3363,6 +3466,19 @@ class Trainer:
                     suggestion="Use samples=1000 or higher"
                 )
 
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): route the WHOLE run to the
+        # MLX rail when the effective backend is "mlx". This MUST happen BEFORE
+        # ``if not self._is_loaded: self.load_model()`` — the CUDA load_model()
+        # path probes torch.cuda and would raise GPUNotAvailableError on a Mac,
+        # which is exactly the boundary this rail retires (V1_5_BRIEF finding
+        # 21). _train_with_mlx drives mlx_lm.lora via a subprocess seam and does
+        # NOT load a model into this process. The constructor already gated out
+        # orpo / fp8 / mode='full' for the MLX rail, so this path is SFT-LoRA.
+        if self._effective_backend == "mlx":
+            return self._train_with_mlx(
+                dataset, steps=steps, samples=samples, callback=callback
+            )
+
         # Load model if not loaded
         if not self._is_loaded:
             self.load_model()
@@ -4217,6 +4333,199 @@ class Trainer:
             # binding so the thread doesn't carry our run_id into the next
             # caller. We deliberately do this in `finally` so the log line
             # fires on both happy and error paths.
+            logger.info(f"run_ended run_id={run_id} status={status}")
+            unbind_run_context("run_id", "session_kind")
+
+    def _train_with_mlx(
+        self,
+        dataset: str | Any,
+        *,
+        steps: int | None,
+        samples: int | None,
+        callback: TrainingCallback | None,
+    ) -> TrainingRun:
+        """v1.5 T3.1: train on the MLX (Apple-Silicon) rail via ``mlx_lm.lora``.
+
+        Structurally parallel to the CUDA ``train()`` bookkeeping so export /
+        run-history / model-card stay uniform across rails: it mints + binds a
+        run_id, records run-start/-completion in the on-disk run history (tagged
+        ``backend="mlx"`` in the hyperparameters), wraps the
+        :class:`~backpropagate.mlx_backend.MLXRunResult` into a
+        :class:`TrainingRun`, appends it to ``self._training_runs``, sets
+        ``self._has_trained = True``, and fires the ``on_complete`` callback.
+
+        It does NOT call :meth:`load_model` — the MLX toolchain loads the model
+        itself inside the ``mlx_lm.lora`` subprocess (unified memory; no CUDA
+        probe), which is the whole point of retiring the "no macOS training"
+        boundary. ``mlx_lm.lora`` performs its own dataset materialization from
+        the prepared data dir, so there is no in-process ``_load_dataset`` /
+        ``_pre_tokenize`` step on this rail.
+        """
+        import time
+
+        from .mlx_backend import MLXBackend, prepare_mlx_data_dir
+
+        # Mint + bind the run_id exactly like the CUDA path (single_run kind).
+        run_id = uuid.uuid4().hex
+        legacy_run_label = f"run_{len(self._training_runs) + 1}"
+        bind_run_context(run_id=run_id, session_kind="single_run")
+        start_time = time.time()
+        status = "error"  # success path overwrites to "ok"
+
+        # iters = steps (per-invocation) or the configured max_steps default.
+        iters = steps or settings.training.max_steps
+        max_samples = samples or settings.data.max_samples
+
+        # The MLX adapter dir lives under output_dir/mlx_adapter; it is plain
+        # safetensors and feeds the existing export_ollama_adapter path.
+        adapter_dir = self.output_dir / "mlx_adapter"
+        data_dir = self.output_dir / "mlx_data"
+
+        run_history = RunHistoryManager(str(self.output_dir))
+        dataset_info = dataset if isinstance(dataset, str) else type(dataset).__name__
+        hyperparameters: dict[str, Any] = {
+            "lora_r": self.lora_r,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "gradient_accumulation": self.gradient_accumulation,
+            "max_seq_length": self.max_seq_length,
+            "max_steps": iters,
+            "max_samples": max_samples,
+            "use_unsloth": False,  # never on the MLX rail
+            "seed": settings.training.seed,
+            "method": self.method,
+            "orpo_beta": self.orpo_beta,
+            "fp8": False,  # gated out for the MLX rail
+            "use_rslora": self.use_rslora,
+            "reasoning_trace": self.reasoning_trace,
+            # v1.5 T3.1: tag the rail so a run-history audit can tell an MLX run
+            # from a CUDA run without re-reading the config.
+            "backend": "mlx",
+        }
+        try:
+            run_history.record_run_started(
+                run_id=run_id,
+                model_name=self.model_name,
+                dataset_info=dataset_info,
+                hyperparameters=hyperparameters,
+                session_kind="single_run",
+                checkpoint_path=str(adapter_dir),
+                dataset_hash=_compute_dataset_hash(dataset),
+            )
+        except Exception as hist_err:
+            logger.warning(
+                f"RunHistoryManager.record_run_started failed: {hist_err}"
+            )
+
+        logger.info(
+            f"run_started run_id={run_id} legacy_label={legacy_run_label} "
+            f"backend=mlx iters={iters}"
+        )
+
+        try:
+            # Materialize the dataset into the mlx_lm.lora data-dir layout
+            # (train.jsonl + optional valid.jsonl, one chat record per line).
+            prepare_mlx_data_dir(
+                dataset,
+                data_dir,
+                seed=settings.training.seed,
+                max_samples=max_samples,
+                shuffle=settings.data.shuffle,
+            )
+
+            backend = MLXBackend(
+                model=self.model_name,
+                dataset_dir=data_dir,
+                adapter_path=adapter_dir,
+                lora_r=self.lora_r,
+                lora_alpha=self.lora_alpha,
+                lora_dropout=self.lora_dropout,
+                learning_rate=self.learning_rate,
+                iters=iters,
+                batch_size=self.batch_size,
+                max_seq_length=self.max_seq_length,
+                seed=settings.training.seed,
+            )
+            result = backend.run()
+
+            duration = time.time() - start_time
+            final_loss = result.final_loss if result.final_loss is not None else 0.0
+            run = TrainingRun(
+                run_id=run_id,
+                steps=result.iters,
+                final_loss=final_loss,
+                loss_history=[],
+                duration_seconds=duration,
+                samples_seen=max_samples,
+                output_path=result.adapter_path,
+                metadata={
+                    "legacy_run_label": legacy_run_label,
+                    "backend": "mlx",
+                    # Preserve the honest "could not parse a loss" signal — the
+                    # CUDA path always has a numeric final_loss; the MLX rail's
+                    # best-effort stdout parse may not, so record the raw flag.
+                    "final_loss_parsed": result.final_loss is not None,
+                    "val_loss": result.val_loss,
+                },
+            )
+
+            self._training_runs.append(run)
+            # Mirror the CUDA path: flip the save()-tripwire flag now that a
+            # real mlx_lm.lora run completed and produced a TrainingRun.
+            self._has_trained = True
+
+            if callback and callback.on_complete:
+                try:
+                    callback.on_complete(run)
+                except Exception as cb_error:
+                    logger.warning(
+                        f"on_complete callback raised error: {cb_error}"
+                    )
+
+            logger.info(
+                f"Training complete (mlx): final_loss={final_loss:.4f}, "
+                f"time={duration:.1f}s"
+            )
+            status = "ok"
+
+            try:
+                run_history.record_run_completed(
+                    run_id=run_id,
+                    final_loss=final_loss,
+                    loss_history=[],
+                    steps=run.steps,
+                    duration_seconds=duration,
+                    checkpoint_path=run.output_path,
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_completed failed: {hist_err}"
+                )
+
+            return run
+        except Exception as exc:
+            # Record the failure in run history (best-effort) and fire on_error,
+            # then re-raise — structurally parallel to the CUDA path. MLX
+            # failures arrive as structured TrainingError / MLXUnavailableError
+            # from MLXBackend.run(), or DatasetError from prepare_mlx_data_dir.
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"RunHistoryManager.record_run_failed failed: {hist_err}"
+                )
+            if callback and callback.on_error:
+                try:
+                    callback.on_error(exc)
+                except Exception as cb_error:
+                    logger.warning(f"on_error callback raised error: {cb_error}")
+            raise
+        finally:
             logger.info(f"run_ended run_id={run_id} status={status}")
             unbind_run_context("run_id", "session_kind")
 
@@ -5081,6 +5390,26 @@ class Trainer:
             >>> print(f"Final loss: {result.final_loss}")
         """
         from .multi_run import MergeMode, MultiRunConfig, MultiRunTrainer
+
+        # v1.5 T3.1 (MLX / Apple-Silicon backend): SLAO multi-run is
+        # PEFT-tensor-specific (it loads, merges, and re-applies LoRA A/B
+        # tensors via peft + the merge framework) and has no mlx_lm equivalent —
+        # the MLX rail produces an mlx safetensors adapter through a subprocess,
+        # not in-process PEFT tensors. Refuse the combination with a structured
+        # CONFIG_INVALID_SETTING before the CUDA GPU probe below (which would
+        # itself raise on a Mac). Single-run MLX (Trainer.train) IS supported.
+        if self._effective_backend == "mlx":
+            raise InvalidSettingError(
+                setting_name="backend",
+                value="mlx",
+                expected="multi_run() is CUDA-only in v1.5",
+                suggestion=(
+                    "SLAO multi-run LoRA merging is PEFT-tensor-specific and "
+                    "out of scope for the MLX backend in v1.5. Use the "
+                    "single-run path (Trainer.train) with backend='mlx', or run "
+                    "multi_run() on a CUDA GPU (backend='cuda'/'auto')."
+                ),
+            )
 
         # Pre-flight GPU check
         if not check_gpu_safe():

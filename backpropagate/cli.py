@@ -711,6 +711,14 @@ def cmd_train(args: argparse.Namespace) -> int:
             # default max_seq_length to 8192. Default False = byte-identical
             # v1.4 SFT; dropped silently on a pre-T3.2 Trainer build.
             "reasoning_trace": bool(getattr(args, "reasoning_trace", False)),
+            # v1.5 T3.1 (MLX / Apple-Silicon backend): Trainer.__init__ accepts
+            # ``backend`` (named to match) so the introspection filter below
+            # threads it through. "auto" routes to MLX on an Apple-Silicon Mac
+            # with the [mlx] extra, else CUDA (byte-identical on CUDA rigs);
+            # "cuda"/"mlx" force a rail. Forcing "mlx" on a non-Apple host
+            # raises CONFIG_INVALID_SETTING from the Trainer guard. Dropped
+            # silently on a pre-T3.1 Trainer build.
+            "backend": getattr(args, "backend", "auto"),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -6608,6 +6616,26 @@ Tips:
             "Reasoning-trace SFT (R1/QwQ distillation): keeps <think> CoT in "
             "the target, drops empty/over-long traces, raises default "
             "max_seq_length to 8192. SFT only."
+        ),
+    )
+    # v1.5 T3.1 (MLX / Apple-Silicon backend, Wave 6b GLUE): threads into the
+    # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
+    # Trainer.__init__ accepts ``backend`` (named EXACTLY so the filter passes
+    # it through). Default "auto" is forwarded only when the kwarg exists, so a
+    # pre-T3.1 Trainer build sees the flag AVAILABLE but inert. Binds onto args
+    # at parse time regardless. The {auto, cuda, mlx} set is enforced by argparse
+    # ``choices`` here; the cross-field "mlx forced on non-Apple" gate lives in
+    # the Trainer constructor (CONFIG_INVALID_SETTING), which the config layer
+    # can't see.
+    train_parser.add_argument(
+        "--backend",
+        choices=["auto", "cuda", "mlx"],
+        default="auto",
+        help=(
+            "Training backend. 'auto' (default) uses CUDA on NVIDIA, MLX on "
+            "Apple Silicon (needs the [mlx] extra). 'cuda'/'mlx' force a "
+            "backend. MLX = LoRA SFT only, Apple-Silicon only; forcing 'mlx' "
+            "on non-Apple errors cleanly."
         ),
     )
     train_parser.add_argument(

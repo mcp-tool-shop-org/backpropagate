@@ -47,10 +47,16 @@ def BpErrorCallout(
         When non-empty, renders behind a folded ``<details>`` element so the
         callout stays compact by default.
     """
-    children: list[rx.Component] = []
-
-    if code:
-        children.append(
+    # FRONTEND-A-004 (v1.4 Wave 2): the runs / models / run-detail pages bind a
+    # state ``message`` (e.g. ``RunsState.error``), so every optional field is
+    # rendered with ``rx.cond`` rather than a Python ``if`` — ``if message:`` on
+    # a Reflex ``Var`` raises VarTypeError at compile. ``rx.cond(field != "")``
+    # handles literals and Vars alike; an empty field collapses to
+    # ``rx.fragment()`` (no DOM), preserving the design-digest §4d reading
+    # order: code · title · message · hint · action.
+    children: list[rx.Component] = [
+        rx.cond(
+            code != "",
             rx.text(
                 code,
                 size="1",
@@ -62,36 +68,38 @@ def BpErrorCallout(
                     "font_size": "11px",
                     "margin_bottom": "2px",
                 },
-            )
-        )
-
-    if title:
-        children.append(
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            title != "",
             rx.text(
                 title,
                 size="2",
                 weight="medium",
                 style={"color": "var(--bp-text)", "font_size": "13px"},
-            )
-        )
-
-    if message:
-        children.append(
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            message != "",
             rx.text(
                 message,
                 size="2",
                 style={"color": "var(--bp-text)", "font_size": "12px"},
-            )
-        )
-
-    if hint:
-        children.append(
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            hint != "",
             rx.text(
                 hint,
                 size="2",
                 style={"color": "var(--bp-text-2)", "font_size": "12px"},
-            )
-        )
+            ),
+            rx.fragment(),
+        ),
+    ]
 
     if apply_action is not None:
         children.append(
@@ -105,39 +113,47 @@ def BpErrorCallout(
             )
         )
 
-    if stack_trace:
-        # FRONTEND-A-004: native Reflex primitives instead of ``rx.html``.
-        # Using ``rx.el.details`` + ``rx.el.summary`` + ``rx.el.pre`` preserves
-        # the native ``<details>`` disclosure semantics while routing the
-        # trace text through Reflex's normal escape pipeline. The previous
-        # ``rx.html`` chrome required hand-rolled HTML escaping; this removes
-        # the raw-HTML surface and the precedent that came with it.
+    # ``stack_trace`` defaults to ``None`` (identity check — Var-safe); when a
+    # value is present (str or Var) render the folded disclosure reactively so
+    # a state-bound trace can't trip a Python truthiness check.
+    if stack_trace is not None:
         children.append(
-            rx.el.details(
-                rx.el.summary(
-                    "Stack trace",
-                    style={
-                        "cursor": "pointer",
-                        "color": "var(--bp-muted)",
-                        "font_size": "11px",
-                        "font_family": "var(--bp-mono)",
-                    },
+            rx.cond(
+                stack_trace != "",
+                # FRONTEND-A-004: native Reflex primitives instead of
+                # ``rx.html``. Using ``rx.el.details`` + ``rx.el.summary`` +
+                # ``rx.el.pre`` preserves the native ``<details>`` disclosure
+                # semantics while routing the trace text through Reflex's
+                # normal escape pipeline. The previous ``rx.html`` chrome
+                # required hand-rolled HTML escaping; this removes the
+                # raw-HTML surface and the precedent that came with it.
+                rx.el.details(
+                    rx.el.summary(
+                        "Stack trace",
+                        style={
+                            "cursor": "pointer",
+                            "color": "var(--bp-muted)",
+                            "font_size": "11px",
+                            "font_family": "var(--bp-mono)",
+                        },
+                    ),
+                    rx.el.pre(
+                        stack_trace,
+                        style={
+                            "margin": "6px 0 0",
+                            "padding": "8px",
+                            "background": "var(--bp-surface-2)",
+                            "border_radius": "4px",
+                            "font_family": "var(--bp-mono)",
+                            "font_size": "11px",
+                            "color": "var(--bp-text-2)",
+                            "overflow_x": "auto",
+                            "white_space": "pre-wrap",
+                        },
+                    ),
+                    style={"margin_top": "8px"},
                 ),
-                rx.el.pre(
-                    stack_trace,
-                    style={
-                        "margin": "6px 0 0",
-                        "padding": "8px",
-                        "background": "var(--bp-surface-2)",
-                        "border_radius": "4px",
-                        "font_family": "var(--bp-mono)",
-                        "font_size": "11px",
-                        "color": "var(--bp-text-2)",
-                        "overflow_x": "auto",
-                        "white_space": "pre-wrap",
-                    },
-                ),
-                style={"margin_top": "8px"},
+                rx.fragment(),
             )
         )
 

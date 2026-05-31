@@ -74,8 +74,16 @@ def BpRecoveryBanner(
                     size="2",
                     style={"color": "var(--bp-text)", "display": "inline"},
                 ),
+                # ``body`` may be a Reflex ``Var`` (e.g.
+                # ``TrainState.latest_recovery_ok_msg``), so render it directly.
+                # The old ``" " + body if body else ""`` branched on the Var's
+                # truthiness in Python → VarTypeError at compile. Lead↔body
+                # spacing is carried by the parent flex ``gap="1"`` below (no
+                # manual leading space needed), and the sole caller
+                # (``train._recovery_banners``) already guards each banner on
+                # ``... != ""`` so ``body`` is non-empty whenever this renders.
                 rx.text(
-                    " " + body if body else "",
+                    body,
                     size="2",
                     style={"color": "var(--bp-text-2)", "display": "inline"},
                 ),

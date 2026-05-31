@@ -348,7 +348,15 @@ except PackageNotFoundError:
 # behavior is "default once per location" which gives operators a single
 # heads-up without spamming long-running notebooks). Industry convention
 # per PEP 562 examples and numpy / pandas precedent.
-_REMOVED_IN_VERSION = "v1.4"
+#
+# CLI-A-005 (v1.4 Wave A2): the BRIDGE-B-015 note said the shim would
+# "become a hard AttributeError in v1.4", but at v1.4.0 the shim still
+# raises ImportError (the transition was deferred — the back-compat
+# contract callers wrap as ``except ImportError`` was kept one more cycle).
+# Bumped to the next planned removal (v1.5) so the warning text no longer
+# names a version that already shipped. The actual swap to AttributeError
+# happens in __getattr__ at the v1.5 cut, not here.
+_REMOVED_IN_VERSION = "v1.5"
 
 _DEPRECATED_UI_ATTRS = {
     "launch": (
@@ -377,11 +385,12 @@ def __getattr__(name: str) -> Any:
 
     BRIDGE-B-015 (Stage C): when a user touches a removed Gradio-era
     attribute we (1) emit a DeprecationWarning naming the future removal
-    version (currently ``v1.4``) so callers wrapping the access in
-    ``try: ... except ImportError: pass`` still see the heads-up in stderr,
-    then (2) raise ``ImportError`` with the migration hint so the existing
-    contract is preserved. In v1.4 the ImportError can be swapped for a
-    plain AttributeError to match the rest of ``__getattr__``'s contract.
+    version (currently ``v1.5`` — see CLI-A-005) so callers wrapping the
+    access in ``try: ... except ImportError: pass`` still see the heads-up
+    in stderr, then (2) raise ``ImportError`` with the migration hint so the
+    existing contract is preserved. At the v1.5 cut the ImportError can be
+    swapped for a plain AttributeError to match the rest of
+    ``__getattr__``'s contract.
     """
     if name in _DEPRECATED_UI_ATTRS:
         import warnings as _warnings

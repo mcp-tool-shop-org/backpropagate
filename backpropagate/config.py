@@ -47,6 +47,69 @@ def _safe_pkg_version() -> str:
     except PackageNotFoundError:
         return "0.0.0+unknown"
 
+
+# =============================================================================
+# DATA-B-009 — DEPRECATED ENV-VAR SCAN
+# =============================================================================
+# Settings uses ``extra="ignore"`` so an unknown ``BACKPROPAGATE_*`` env var
+# is silently dropped. That is the right default for forward-compat, but it
+# means a RENAMED knob (the operator set the old name they remember) is
+# applied to NOTHING with zero feedback — the run quietly uses the default.
+# We keep a small map of names that were renamed across releases and emit a
+# one-time WARN naming the replacement when the old name is still set in the
+# environment. New renames append here; the map is intentionally tiny.
+#
+# Keys are FULL env-var names (the BACKPROPAGATE_ prefix included). Values are
+# the current name to use instead (or ``None`` when the knob was removed
+# outright with no replacement).
+_DEPRECATED_ENV_VARS: dict[str, str | None] = {
+    # BRIDGE-B-004 (v1.4): the env-var model was renamed
+    # MultiRunConfig -> MultiRunSettings. Its env prefix was historically
+    # written both ways in the wild; the canonical prefix is now
+    # BACKPROPAGATE_MULTIRUN__ (no underscore between MULTI and RUN).
+    "BACKPROPAGATE_MULTI_RUN__NUM_RUNS": "BACKPROPAGATE_MULTIRUN__NUM_RUNS",
+    "BACKPROPAGATE_MULTI_RUN__STEPS_PER_RUN": "BACKPROPAGATE_MULTIRUN__STEPS_PER_RUN",
+    "BACKPROPAGATE_MULTI_RUN__SAMPLES_PER_RUN": "BACKPROPAGATE_MULTIRUN__SAMPLES_PER_RUN",
+}
+
+
+def _warn_deprecated_env_vars() -> list[str]:
+    """Scan ``os.environ`` for known-deprecated BACKPROPAGATE_* names.
+
+    Emits one WARN per deprecated name found that names the replacement (or
+    says the knob was removed). Returns the list of deprecated names that
+    were present, so callers / tests can assert on the scan result without
+    parsing logs. Pure read of the environment — never mutates it.
+    """
+    found: list[str] = []
+    for old_name, new_name in _DEPRECATED_ENV_VARS.items():
+        if old_name in os.environ:
+            found.append(old_name)
+            try:
+                from .logging_config import get_logger as _get_logger
+
+                _logger = _get_logger(__name__)
+            except Exception:  # noqa: BLE001 — logging must never block config
+                import logging as _logging
+
+                _logger = _logging.getLogger(__name__)
+            if new_name:
+                _logger.warning(
+                    "Deprecated environment variable %s is set but no longer "
+                    "read; rename it to %s. The current value is being "
+                    "ignored and the default applies.",
+                    old_name,
+                    new_name,
+                )
+            else:
+                _logger.warning(
+                    "Environment variable %s is set but has been removed and "
+                    "is no longer read; remove it from your environment.",
+                    old_name,
+                )
+    return found
+
+
 __all__ = [
     "Settings",
     "settings",
@@ -99,7 +162,7 @@ __all__ = [
 ]
 
 try:
-    from pydantic import Field
+    from pydantic import Field, model_validator
     from pydantic_settings import BaseSettings, SettingsConfigDict
     PYDANTIC_SETTINGS_AVAILABLE = True
 except ImportError:
@@ -337,6 +400,37 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         output_dir: str = "./output"
         # Overwrite output directory
         overwrite_output_dir: bool = True
+
+        @model_validator(mode="after")
+        def _reject_bf16_and_fp16(self) -> "TrainingConfig":
+            """Reject bf16=True AND fp16=True at construction time.
+
+            DATA-A-007: transformers' ``TrainingArguments`` raises
+            ``ValueError("At most one of fp16 and bf16 can be True ...")``
+            deep inside the trainer setup — long after the run has spun up
+            the model + dataset. Catching the contradiction here keeps the
+            "pydantic validates the config early" promise: the operator gets
+            a structured ``CONFIG_INVALID_SETTING`` with an actionable hint
+            at construction instead of an opaque framework crash mid-run.
+            A non-``ValueError`` exception raised from a pydantic ``after``
+            validator propagates as-is (it is NOT re-wrapped in
+            ``ValidationError``), so the structured code/hint survive.
+            """
+            if self.bf16 and self.fp16:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "bf16/fp16",
+                    {"bf16": self.bf16, "fp16": self.fp16},
+                    "at most one of bf16 / fp16 enabled",
+                    suggestion=(
+                        "Set exactly one of bf16 / fp16 (or neither for "
+                        "fp32). Use bf16 on Ampere+ / Blackwell GPUs and "
+                        "fp16 on older cards; they are mutually exclusive "
+                        "mixed-precision modes."
+                    ),
+                )
+            return self
 
     class DataConfig(BaseSettings):
         """Dataset configuration."""
@@ -682,6 +776,25 @@ else:
         output_dir: str = "./output"
         overwrite_output_dir: bool = True
 
+        def __post_init__(self) -> None:
+            # DATA-A-007 (parity with the pydantic branch above): reject the
+            # bf16+fp16 contradiction here too so a pydantic-settings-less
+            # install validates identically and doesn't silently defer the
+            # crash to transformers mid-run.
+            if self.bf16 and self.fp16:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "bf16/fp16",
+                    {"bf16": self.bf16, "fp16": self.fp16},
+                    "at most one of bf16 / fp16 enabled",
+                    suggestion=(
+                        "Set exactly one of bf16 / fp16 (or neither for "
+                        "fp32). They are mutually exclusive mixed-precision "
+                        "modes."
+                    ),
+                )
+
     @dataclass
     class DataConfig:  # type: ignore[no-redef]
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
@@ -797,6 +910,10 @@ def get_settings() -> Settings:
     Uses @lru_cache to avoid re-reading environment/.env on every call.
     Call get_settings.cache_clear() to reload settings.
     """
+    # DATA-B-009: warn once (per cache lifetime) about deprecated env-var
+    # names still set in the environment that ``extra="ignore"`` would
+    # otherwise drop silently.
+    _warn_deprecated_env_vars()
     return Settings()
 
 
@@ -1340,15 +1457,32 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
     # A custom base_lr scales these proportionally (e.g. base_lr=4e-4 gives small=1e-3).
     scale = base_lr / 2e-4
 
+    # DATA-A-008: the medium branch must apply ``scale`` like the other two
+    # branches. ``2e-4 * scale`` is numerically identical to the prior bare
+    # ``base_lr`` (since ``scale == base_lr / 2e-4``), but writing it
+    # explicitly keeps all three anchors (5e-4 / 2e-4 / 1e-4) visibly on the
+    # same ``* scale`` footing — a future edit to one anchor can no longer
+    # silently desync the medium tier from small/large.
+    small_lr = 5e-4 * scale
+    medium_lr = 2e-4 * scale
+    large_lr = 1e-4 * scale
+    # The recommended ladder is strictly monotone (smaller corpora tolerate a
+    # higher LR). This holds for any positive base_lr; assert it so a sign /
+    # anchor regression is caught at the source instead of mid-training.
+    assert small_lr > medium_lr > large_lr, (
+        "get_recommended_lr ladder must satisfy small > medium > large "
+        f"(got {small_lr} / {medium_lr} / {large_lr})"
+    )
+
     if dataset_size < 1000:
         # Small dataset: higher LR, more aggressive learning
-        return 5e-4 * scale
+        return small_lr
     elif dataset_size < 10000:
         # Medium dataset: standard LoRA LR
-        return base_lr
+        return medium_lr
     else:
         # Large dataset: lower LR for stability
-        return 1e-4 * scale
+        return large_lr
 
 
 def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:

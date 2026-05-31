@@ -61,6 +61,22 @@ _TARGET_MODULES_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_,\s]*$")
 # W&B run name: same shape that wandb itself accepts.
 _WANDB_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
+# CLIUI-B-001 (Stage C UI honesty floor): the Train / Multi-run / Export Start
+# buttons do NOT drive training from the browser yet — the live background-task
+# hookup is CLIUI-B-002, deferred to the feature pass. Rather than fake a
+# loading spinner that implies a run is underway (the pre-fix stub behaviour,
+# which the README's "train from the UI" claim made actively misleading), the
+# Start handlers surface one of these notices pointing the operator at the
+# shell command that DOES work today. The ``{cmd}`` is the relevant subcommand
+# so each surface names its own CLI path.
+_CLI_NOTICE_TEMPLATE = (
+    "Starting a run from the web UI ships in a future release — "
+    "run `{cmd}` from the shell for now."
+)
+_CLI_NOTICE_TRAIN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop train")
+_CLI_NOTICE_MULTI_RUN = _CLI_NOTICE_TEMPLATE.format(cmd="backprop multi-run")
+_CLI_NOTICE_EXPORT = _CLI_NOTICE_TEMPLATE.format(cmd="backprop export")
+
 
 # ---------------------------------------------------------------------------
 # Path validation helper — FRONTEND-A-002 fix
@@ -98,6 +114,86 @@ def _validate_ui_path(value: str) -> tuple[str, str]:
         return str(resolved), ""
     except Exception as exc:  # noqa: BLE001 — surface as operator-facing string
         return "", f"Invalid path: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Run-id validation helper — UI-A-003 fix (Wave A1 HIGH)
+# ---------------------------------------------------------------------------
+#
+# Run IDs originate from two user-controlled surfaces: the dynamic route
+# param ``rid`` (``/runs/[rid]``) and the ``diff_other_run_id`` text input.
+# Both flow into ``subprocess`` argv for the diff-runs / replay shell-outs.
+# An option-shaped value (e.g. ``--to=/etc/passwd`` or ``-o``) is parsed by
+# the downstream argparse-based CLI as a FLAG, not a positional run id —
+# letting a remote operator (under the documented ``--share + --auth`` flow)
+# smuggle arbitrary flags into the spawned process.
+#
+# Real run IDs are UUID-hex / wandb-style slugs: ``[A-Za-z0-9_-]``. We pin a
+# strict allowlist (1-64 chars, no leading ``-``) at the trust boundary so a
+# malformed value is rejected with a clean error before it can reach argv.
+# The leading char is constrained to ``[A-Za-z0-9_]`` (NOT ``-``) so the
+# value can never be parsed as a CLI flag even before the ``--`` separator.
+# (The ``--`` end-of-options separator inserted in each shell-out is the
+# defense-in-depth second layer; this regex is the first.)
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_run_id(value: str) -> tuple[str, str]:
+    """Validate a user-supplied run id against the strict allowlist.
+
+    Returns a ``(cleaned_value, error_message)`` tuple mirroring
+    ``_validate_ui_path``: on success the error is empty; on failure the
+    value is empty and the error carries a short operator-facing message.
+    Empty input is a pass-through (no error, no value).
+
+    The allowlist (``^[A-Za-z0-9_-]{1,64}$``) rejects any leading ``-`` (so
+    the value can never be parsed as a CLI flag), path separators, dots
+    (no ``..`` traversal), whitespace, and shell metacharacters.
+    """
+    if not value or not value.strip():
+        return "", ""
+    candidate = value.strip()
+    if not _RUN_ID_RE.match(candidate):
+        return "", (
+            "Invalid run id — expected 1-64 chars of letters, digits, "
+            "'_' or '-' (no leading '-', no path separators)."
+        )
+    return candidate, ""
+
+
+# ---------------------------------------------------------------------------
+# Action-string redaction — V2-a fix (Wave A2 verifier gap)
+# ---------------------------------------------------------------------------
+#
+# RunDetailState's in-process action handlers (delete_run / export_run /
+# replay, rewired in Wave A1 from broken subprocess shell-outs) build
+# operator-facing strings that embed RAW absolute paths — the sandbox
+# ``history_dir`` / ``out_path`` (both under ``~/.backpropagate/ui-outputs``,
+# which contains the OS home dir + username) and the bare ``{exc}`` repr of an
+# OSError (``[Errno 2] ... '/home/<user>/...'``). Those strings are assigned to
+# ``action_error`` / ``action_result``, which are PUBLIC (client-serialized)
+# Reflex vars — under the documented ``--share + --auth`` flow they ship to the
+# remote browser, leaking the operator's home dir + username (the exact FB-011
+# class ``sanitize_error_for_user`` exists to prevent). Route every
+# path-bearing action string through this helper before assignment so the home
+# prefix is replaced with ``<redacted-path>``.
+def _redact_action(text: str) -> str:
+    """Redact absolute filesystem paths from an operator-facing action string.
+
+    Thin wrapper over ``ui_security._redact_paths`` (the same redactor
+    ``sanitize_error_for_user`` uses) so the in-process action handlers can
+    scrub ``history_dir`` / ``out_path`` / raw ``OSError`` reprs out of the
+    client-serialized ``action_error`` / ``action_result`` vars. Falls back to
+    returning the text unchanged if the import fails (the redactor module is
+    framework-agnostic and always importable, but be defensive — a redaction
+    failure must never crash the handler).
+    """
+    try:
+        from .ui_security import _redact_paths
+
+        return _redact_paths(text)
+    except Exception:  # noqa: BLE001 — redaction is best-effort, never fatal
+        return text
 
 
 def _coerce_int(value: object) -> int | None:
@@ -338,6 +434,13 @@ class TrainState(rx.State):
     vram_used_gb: float = 0.0
     vram_total_gb: float = 0.0
 
+    # CLIUI-B-001 (Stage C UI honesty floor): operator-facing notice surfaced
+    # when the Start button is clicked. UI-driven training is not wired yet
+    # (the real background-task hookup is CLIUI-B-002, deferred to the feature
+    # pass), so instead of faking a loading spinner the handler points the
+    # operator at the shell command that DOES work today. Empty until clicked.
+    cli_notice: str = ""
+
     # Event log — each entry is a dict with keys: t (timestamp str),
     # level (one of info/ok/warn/err/tx/hf), msg (str).
     events: list[dict] = []
@@ -516,20 +619,30 @@ class TrainState(rx.State):
 
     @rx.event
     def start_training(self) -> None:
-        """Stub handler for "Start training" button.
+        """Handle the "Start training" button — honesty floor (CLIUI-B-001).
 
-        Transitions to ``loading`` and APPENDS a placeholder event so the
-        skeleton's side rail visibly responds to the click without erasing
-        prior log lines (FRONTEND-B-LOW-EVENTS-APPEND, Stage C humanization
-        - the previous shape ``self.events = [...]`` overwrote any prior
-        events, which was confusing during repeated stop/start cycles).
-        Phase 3 will replace this with a real ``Trainer.train(...)`` call
-        dispatched to a background task.
+        UI-driven training is NOT wired yet: the real background-task hookup
+        (a single ``Trainer.train(...)`` dispatched via ``@rx.event(
+        background=True)``) is CLIUI-B-002, deferred to the feature pass.
+
+        Pre-fix this stub flipped ``run_state`` to ``loading`` and appended a
+        ``[stub] … clicked`` event — presenting a permanent spinner and the
+        illusion of a live run that never started. Because the README
+        advertises UI training, that fake loading state was an actively
+        misleading surface (the Stage B UI honesty-floor finding). The handler
+        now stays at ``idle`` (no spinner) and surfaces ``cli_notice`` — an
+        operator-facing message pointing at the ``backprop train`` shell
+        command that works today. The breadcrumb is appended (not assigned) so
+        repeated clicks don't erase prior log lines.
         """
-        self.run_state = "loading"
+        self.cli_notice = _CLI_NOTICE_TRAIN
         self.events = [
             *self.events,
-            {"t": "00:00:00", "level": "info", "msg": "[stub] training start clicked"},
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI training not wired yet — use `backprop train`.",
+            },
         ]
 
     @rx.event
@@ -585,6 +698,8 @@ class MultiRunState(rx.State):
     run_state: RunState = "idle"
     current_run_index: int = 0
     runs: list[dict] = []  # per-run summary (loss, step, status)
+    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
+    cli_notice: str = ""
     events: list[dict] = []
 
     # ---- Setters (shared logic with TrainState via _apply_* helpers) -------
@@ -683,10 +798,23 @@ class MultiRunState(rx.State):
 
     @rx.event
     def start_multi_run(self) -> None:
-        """Stub handler for "Start multi-run" button."""
-        self.run_state = "loading"
+        """Handle the "Start multi-run" button — honesty floor (CLIUI-B-001).
+
+        Mirrors ``TrainState.start_training``: no fake loading spinner (the
+        real SLAO-sweep hookup is deferred to the feature pass), an
+        operator-facing ``cli_notice`` pointing at ``backprop multi-run``.
+        CLIUI-B-009: the breadcrumb is now APPENDED (not assigned) so the shape
+        matches ``start_training`` — the pre-fix ``self.events = [...]`` form
+        overwrote any prior log lines.
+        """
+        self.cli_notice = _CLI_NOTICE_MULTI_RUN
         self.events = [
-            {"t": "00:00:00", "level": "info", "msg": "[stub] multi-run start clicked"}
+            *self.events,
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI multi-run not wired yet — use `backprop multi-run`.",
+            },
         ]
 
 
@@ -713,7 +841,19 @@ class ExportState(rx.State):
     hub_private: bool = True
     hub_branch: str = "main"
     hub_branch_error: str = ""
-    hub_token: str = ""  # treated as secret — never logged, validated by length
+    # UI-A-001 (Wave A1 CRITICAL): the raw HF token is held in a BACKEND-only
+    # var (``_``-prefix → Reflex never serializes it into the client WS state
+    # bundle). Pre-fix ``hub_token`` was a public (base_vars) var bound
+    # two-way to a type=password input, so the live write-scoped credential
+    # round-tripped to the browser on every keystroke; the password mask was
+    # visual only. The input is now write-only: the setter populates the
+    # backend var but the field does NOT bind ``value=`` back (drop the
+    # controlled-input round-trip). ``hub_token_set`` is a public BOOL mirror
+    # so the form can show a "token set" affordance without echoing the
+    # secret. ``hub_token_error`` stays public — it's an operator-facing
+    # validation string, never the credential.
+    _hub_token: str = ""  # nosec B105 — backend-only secret store, not a credential literal
+    hub_token_set: bool = False
     hub_token_error: str = ""
     hub_status: str = ""  # "" / "pushing" / "done" / "error"
     hub_message: str = ""  # operator-facing status / error message
@@ -779,14 +919,31 @@ class ExportState(rx.State):
     # Live state.
     export_state: RunState = "idle"
     output_path: str = ""
+    # CLIUI-B-001 (Stage C UI honesty floor): see TrainState.cli_notice.
+    cli_notice: str = ""
     events: list[dict] = []
 
     @rx.event
     def start_export(self) -> None:
-        """Stub handler for "Export" button."""
-        self.export_state = "loading"
+        """Handle the "Export" button — honesty floor (CLIUI-B-001).
+
+        Mirrors ``TrainState.start_training``: no fake loading spinner (the
+        real export hookup is deferred to the feature pass), an operator-facing
+        ``cli_notice`` pointing at ``backprop export``. CLIUI-B-009: the
+        breadcrumb is APPENDED (not assigned) to match ``start_training``.
+
+        NOTE: this is the LOCAL export-to-disk path. The HuggingFace Hub push
+        (``push_to_hub`` below) is a SEPARATE, fully-wired handler and is NOT
+        affected by this honesty floor.
+        """
+        self.cli_notice = _CLI_NOTICE_EXPORT
         self.events = [
-            {"t": "00:00:00", "level": "info", "msg": "[stub] export start clicked"}
+            *self.events,
+            {
+                "t": "00:00:00",
+                "level": "info",
+                "msg": "UI export not wired yet — use `backprop export`.",
+            },
         ]
 
     # ---- HuggingFace Hub push setters + handler (FRONTEND-11) --------------
@@ -875,16 +1032,21 @@ class ExportState(rx.State):
 
     @rx.event
     def set_hub_token(self, value: str) -> None:
-        """Set the HF API token.
+        """Set the HF API token (UI-A-001: write-only into a backend var).
 
-        Tokens are write-once on the form (the input is type=password). The
-        value lives only in this state — never logged, never serialized to
-        run history, never echoed in error messages. ``hub_token`` clears
-        after a successful push to limit exposure.
+        The input is write-only — the form does NOT bind ``value=`` back to
+        this field, so the raw secret never round-trips to the client. The
+        value lives ONLY in the backend var ``self._hub_token`` (never in
+        base_vars / the WS bundle), is never logged, never serialized to run
+        history, never echoed in error messages. ``_hub_token`` clears after
+        a successful push to limit exposure. ``hub_token_set`` is a public
+        bool mirror so the form can render a "token set" affordance without
+        exposing the credential.
         """
         cleaned = (value or "").strip()
         if not cleaned:
-            self.hub_token = ""  # nosec B105 — form-field clear, not a credential literal
+            self._hub_token = ""  # nosec B105 — backend-var clear, not a credential literal
+            self.hub_token_set = False
             self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
             return
         # HF tokens are ``hf_<40 base62 chars>``; we don't pin the exact
@@ -893,8 +1055,10 @@ class ExportState(rx.State):
         # 30-100 char range so we catch "I pasted my username by accident".
         if len(cleaned) < 20 or len(cleaned) > 200:
             self.hub_token_error = "Token doesn't look like an HF token (20-200 chars expected)"  # nosec B105 — operator-facing validation message, not a credential
+            self.hub_token_set = False
             return
-        self.hub_token = cleaned
+        self._hub_token = cleaned  # nosec B105 — backend-only secret store
+        self.hub_token_set = True
         self.hub_token_error = ""  # nosec B105 — error-message clear, not a credential literal
 
     @rx.event
@@ -926,7 +1090,7 @@ class ExportState(rx.State):
         # FRONTEND-F-004: mutual-exclusion + at-least-one check on the two
         # token surfaces. Mirrors the CLI's `--token` vs `--token-file`
         # contract in cmd_push (cli.py ~3411).
-        inline_token_set = bool(self.hub_token) and not self.hub_token_error
+        inline_token_set = bool(self._hub_token) and not self.hub_token_error
         token_file_set = (
             bool(self.hub_token_file_path) and not self.hub_token_file_path_error
         )
@@ -974,7 +1138,7 @@ class ExportState(rx.State):
                     flag_name="--token-file (UI)",
                 )
             else:
-                resolved_token = self.hub_token
+                resolved_token = self._hub_token
 
             _push(
                 local_path=self.source_model_path,
@@ -989,8 +1153,9 @@ class ExportState(rx.State):
                 f"Pushed to https://huggingface.co/{self.hub_repo_id} "
                 f"on branch {self.hub_branch or 'main'}."
             )
-            # Clear token after successful push.
-            self.hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            # Clear token after successful push (UI-A-001: backend var).
+            self._hub_token = ""  # nosec B105 — token wipe after push, not a credential literal
+            self.hub_token_set = False
             # FRONTEND-F-004: the token-file PATH itself is not a credential
             # — it's a reference to a file the operator manages outside
             # the UI session. Leaving it in state is intentional so a
@@ -1011,9 +1176,14 @@ class ExportState(rx.State):
             except Exception:  # noqa: BLE001
                 # Last-resort fallback — preserve the operator-facing
                 # message but trim to 200 chars so we don't spill a giant
-                # traceback into the WS bundle.
+                # traceback into the WS bundle. V2-a (sibling): redact absolute
+                # paths from the raw exception repr — ``hub_message`` is a
+                # public (client-serialized) var, so an HF exception embedding
+                # the operator's home dir would otherwise ship to the browser.
                 self.hub_status = "error"
-                self.hub_message = f"Push failed: {type(exc).__name__}: {str(exc)[:200]}"
+                self.hub_message = _redact_action(
+                    f"Push failed: {type(exc).__name__}: {str(exc)[:200]}"
+                )
 
     @rx.event
     def clear_hub_status(self) -> None:
@@ -1025,20 +1195,37 @@ class ExportState(rx.State):
 class DatasetState(rx.State):
     """Dataset surface state: upload, format detect, preview, dedup config."""
 
-    uploaded_path: str = ""
+    # UI-A-002 (Wave A2): the full upload path embeds the operator's home dir
+    # + username and was previously a PUBLIC (client-serialized) Reflex var —
+    # so the home prefix shipped in the WS bundle on every state delta even
+    # though FRONTEND-B-013 only RENDERED the basename. The full path is now
+    # held in a backend-only ('_'-prefixed) var that Reflex never serializes;
+    # the client sees only the basename via the ``uploaded_basename`` computed
+    # var. The full path stays available server-side for the Trainer hookup.
+    _uploaded_path: str = ""
     upload_error: str = ""
     upload_count: int = 0  # per-session cap
     detected_format: str = ""
     preview_records: list[dict] = []
 
-    # FRONTEND-B-013: backend-computed basename so the UI never has to
-    # split the full path on the client. The full path (with home prefix)
-    # is kept for the Trainer hookup; only the basename is rendered.
+    # FRONTEND-B-013 / UI-A-002: backend-computed basename so the UI never has
+    # to split the full path on the client AND the full path (with home
+    # prefix) never enters the serialized state bundle. Only the basename is
+    # rendered.
     @rx.var
     def uploaded_basename(self) -> str:
-        if not self.uploaded_path:
+        if not self._uploaded_path:
             return ""
-        return Path(self.uploaded_path).name
+        return Path(self._uploaded_path).name
+
+    @rx.var
+    def has_upload(self) -> bool:
+        """Client-safe truthiness for the 'Uploaded: …' chrome.
+
+        The template can't test the backend-only ``_uploaded_path`` (it isn't
+        serialized), so expose a boolean computed var for the ``rx.cond``.
+        """
+        return bool(self._uploaded_path)
 
     # Format hint — operator can override the auto-detect when it guesses wrong.
     format_hint: DatasetFormatHint = "auto"
@@ -1249,7 +1436,9 @@ class DatasetState(rx.State):
 
             target = upload_dir / safe_name
             target.write_bytes(data)
-            self.uploaded_path = str(target)
+            # UI-A-002: store the full path in the backend-only var; the
+            # client receives only the basename via ``uploaded_basename``.
+            self._uploaded_path = str(target)
             self.upload_count += 1
 
             # FRONTEND-F-005 (v1.4 Wave 6b features): compute dataset stats
@@ -1349,7 +1538,7 @@ class DatasetState(rx.State):
     @rx.event
     def detect_format_stub(self) -> None:
         """Stub handler — placeholder for the upload->detect flow."""
-        if self.uploaded_path:
+        if self._uploaded_path:
             self.detected_format = "alpaca"
 
 
@@ -1402,7 +1591,37 @@ class RunsState(rx.State):
             # Resolve the history directory. Use the override if set, otherwise
             # fall back to the UI's own output dir (the default training sink).
             if self.output_dir_override.strip():
+                # UI-A-005 (Wave A2): ``output_dir_override`` is a PUBLIC
+                # (client-serialized) Reflex var. ``set_output_dir_override``
+                # validates via ``_validate_ui_path`` — but a malicious WS
+                # client can write the public var directly, bypassing the
+                # setter. Re-validate the forbidden-base guard HERE, at the
+                # read sink, so a value pointing at a system / credential dir
+                # (``/etc``, ``~/.ssh``, ``C:\\Windows`` …) is refused even if
+                # it never passed through the setter. This mirrors the env-var
+                # guard ``get_ui_output_dir()`` applies to its override.
                 history_dir = _Path(self.output_dir_override).expanduser()
+                try:
+                    from .ui_security import _is_forbidden_output_base
+
+                    if _is_forbidden_output_base(history_dir):
+                        self.runs = []
+                        self.error = _redact_action(
+                            "Refusing to read run history from a system or "
+                            f"credential directory: {history_dir.resolve()}. "
+                            "Point the override at a non-system directory."
+                        )
+                        return
+                except Exception:  # noqa: BLE001 — guard import/resolve must
+                    # fail closed: if we can't validate, refuse the override
+                    # and fall back to the sandbox default rather than reading
+                    # an unvalidated operator-supplied path.
+                    try:
+                        from .ui_security import get_ui_output_dir
+
+                        history_dir = get_ui_output_dir()
+                    except Exception:
+                        history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
             else:
                 try:
                     from .ui_security import get_ui_output_dir
@@ -1414,7 +1633,9 @@ class RunsState(rx.State):
 
             if not history_dir.exists():
                 self.runs = []
-                self.error = (
+                # UI-A-002 (sibling): ``error`` is a public RunsState var;
+                # history_dir embeds the home dir + username. Redact.
+                self.error = _redact_action(
                     f"No run history at {history_dir}. Train a model from the "
                     "UI or CLI; runs will appear here automatically."
                 )
@@ -1423,7 +1644,7 @@ class RunsState(rx.State):
             try:
                 from .checkpoints import RunHistoryManager
             except ImportError as exc:
-                self.error = f"checkpoints module unavailable: {exc}"
+                self.error = _redact_action(f"checkpoints module unavailable: {exc}")
                 self.runs = []
                 return
 
@@ -1692,7 +1913,12 @@ class RunDetailState(rx.State):
     completed_at: str = "-"
     duration: str = "-"
     final_loss: str = "-"
-    checkpoint_path: str = "-"
+    # UI-A-002 (Wave A2): the checkpoint path embeds the operator's home dir +
+    # username. Held in a backend-only var; the client sees only the redacted
+    # form via the ``checkpoint_path_display`` computed var (home prefix
+    # replaced with ``<redacted-path>`` so the operator still sees the
+    # run-relative tail but not their username).
+    _checkpoint_path: str = "-"
 
     # Hyperparameter table — list of {key, value} dicts so Reflex's foreach
     # can render them as table rows without on-template f-strings.
@@ -1718,8 +1944,22 @@ class RunDetailState(rx.State):
     checkpoints: list[dict] = []
 
     # Log tail — last 200 lines of training.log when present (trimmed for
-    # WS bundle size).
+    # WS bundle size). UI-A-002: each line is run through ``_redact_paths``
+    # before assignment in ``load_run`` so absolute paths a training log may
+    # contain (the checkpoint dir, the HF cache, tempdirs) don't ship the
+    # operator's home dir + username to the client.
     log_lines: list[str] = []
+
+    # UI-A-002 (Wave A2): client-facing, redacted form of the checkpoint
+    # path. The full path lives in the backend-only ``_checkpoint_path``;
+    # this computed var replaces the home prefix with ``<redacted-path>`` so
+    # the operator still sees the run-relative tail without leaking their
+    # username into the WS bundle / screenshots.
+    @rx.var
+    def checkpoint_path_display(self) -> str:
+        if not self._checkpoint_path or self._checkpoint_path == "-":
+            return "-"
+        return _redact_action(self._checkpoint_path)
 
     # Action panel — last shell-out result (for the operator-facing toast).
     action_result: str = ""
@@ -1746,10 +1986,23 @@ class RunDetailState(rx.State):
 
     @rx.event
     def set_diff_other_run_id(self, value: str) -> None:
-        """Update the comparison-run-id text input (FRONTEND-A-001)."""
+        """Update the comparison-run-id text input (FRONTEND-A-001).
+
+        UI-A-003 (Wave A1 HIGH): validate at the trust boundary. The value
+        flows into ``subprocess`` argv (``diff_against``); an option-shaped
+        run id (``--to=…``) would be parsed as a CLI flag downstream. Reject
+        anything outside the strict ``[A-Za-z0-9_-]{1,64}`` allowlist and
+        surface a clean error instead of storing it.
+        """
         # Strip whitespace so a copy-pasted run id with trailing whitespace
         # doesn't trip RunHistoryManager's exact-id lookup downstream.
-        self.diff_other_run_id = (value or "").strip()
+        cleaned, err = _validate_run_id(value)
+        self.diff_other_run_id = cleaned
+        if err:
+            self.action_error = err
+        elif self.action_error.startswith("Invalid run id"):
+            # Clear a stale run-id validation error once the field is valid.
+            self.action_error = ""
 
     @rx.event
     def diff_with_input(self) -> None:
@@ -1793,8 +2046,6 @@ class RunDetailState(rx.State):
             route_run_id = str(self.router.page.params.get("rid", "") or "")
         except Exception:  # noqa: BLE001 — defensive
             pass  # nosec B110 — defensive route-param read; missing param falls back to ""
-        if route_run_id:
-            self.current_run_id = route_run_id
 
         self.loading = True
         self.error = ""
@@ -1802,8 +2053,24 @@ class RunDetailState(rx.State):
         # FRONTEND-B-001 (v1.4 Wave 3.5): clear the post-delete chrome
         # when (re)loading any run — navigating from a just-deleted run's
         # URL to a different run id must not carry the "Run deleted."
-        # surface forward.
+        # surface forward. This reset happens BEFORE the UI-A-003 route-param
+        # validation early-return so a malformed URL still clears the chrome.
         self.was_deleted = False
+
+        # UI-A-003 (Wave A1 HIGH): validate the route param at the trust
+        # boundary before it reaches ``current_run_id`` (and thence the
+        # diff/replay subprocess argv). An option-shaped ``rid`` (``--to=…``)
+        # would be parsed as a CLI flag downstream. Reject it with a clean
+        # error rather than assigning the malicious value.
+        if route_run_id:
+            cleaned_rid, rid_err = _validate_run_id(route_run_id)
+            if rid_err:
+                self.error = rid_err
+                self.not_found = True
+                self.loading = False
+                return
+            self.current_run_id = cleaned_rid
+
         try:
             try:
                 from .ui_security import get_ui_output_dir
@@ -1812,26 +2079,33 @@ class RunDetailState(rx.State):
                 history_dir = _Path.home() / ".backpropagate" / "ui-outputs"
 
             if not history_dir.exists():
-                self.error = f"No run history at {history_dir}."
+                # V2-a (sibling): ``error`` is a public RunDetailState var;
+                # history_dir embeds the home dir + username. Redact.
+                self.error = _redact_action(f"No run history at {history_dir}.")
                 return
 
             try:
                 from .checkpoints import RunHistoryManager
             except ImportError as exc:
-                self.error = f"checkpoints module unavailable: {exc}"
+                self.error = _redact_action(f"checkpoints module unavailable: {exc}")
                 return
 
             manager = RunHistoryManager(str(history_dir))
             entry = manager.get_run(self.current_run_id) if self.current_run_id else None
             if entry is None:
                 self.not_found = True
-                self.error = f"Run '{self.current_run_id}' not found in {history_dir}."
+                self.error = _redact_action(
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
                 return
 
             # Populate header fields.
             self.status = str(entry.get("status") or "-")
             self.model = str(entry.get("model_name") or "-")
-            self.dataset = str(entry.get("dataset_info") or "-")
+            # Re-audit MEDIUM: dataset_info is often an absolute path (trainer
+            # records the raw --data arg); redact home-dir/username before it
+            # reaches this public, client-serialized var (sibling of UI-A-002).
+            self.dataset = _redact_action(str(entry.get("dataset_info") or "-"))
             self.started_at = str(entry.get("started_at") or entry.get("timestamp") or "-")
             self.completed_at = str(entry.get("completed_at") or "-")
             duration = entry.get("duration_seconds")
@@ -1850,7 +2124,9 @@ class RunDetailState(rx.State):
                     self.final_loss = f"{float(final_loss):.4f}"
                 except (TypeError, ValueError):
                     self.final_loss = "-"
-            self.checkpoint_path = str(entry.get("checkpoint_path") or "-")
+            # UI-A-002: full path into the backend-only var; the client reads
+            # the redacted ``checkpoint_path_display`` computed var.
+            self._checkpoint_path = str(entry.get("checkpoint_path") or "-")
 
             # Hyperparameter table — flatten the entry dict into {key, value}
             # rows, skipping the fields surfaced as headers above so the
@@ -1922,7 +2198,14 @@ class RunDetailState(rx.State):
                     try:
                         with open(log_path, encoding="utf-8", errors="replace") as f:
                             tail = f.readlines()[-200:]
-                            self.log_lines = [line.rstrip("\n") for line in tail]
+                            # UI-A-002: a training log routinely embeds absolute
+                            # paths (checkpoint dir, HF cache, tempdirs) that
+                            # carry the operator's home dir + username. Redact
+                            # each line before it enters the client-serialized
+                            # ``log_lines`` var.
+                            self.log_lines = [
+                                _redact_action(line.rstrip("\n")) for line in tail
+                            ]
                     except OSError:
                         pass
         finally:
@@ -1960,10 +2243,22 @@ class RunDetailState(rx.State):
         # as in flight so the action panel renders an inline spinner. Cleared
         # in the finally so a thrown exception still leaves the UI in a
         # consistent state.
+        # UI-A-003 (Wave A1 HIGH): validate both run IDs at the boundary even
+        # though set_diff_other_run_id / load_run already guard their inputs —
+        # belt-and-suspenders so a future caller that sets current_run_id /
+        # other_run_id by another path can't smuggle an option-shaped id into
+        # argv. Reject rather than shelling out.
+        _, err_cur = _validate_run_id(self.current_run_id)
+        _, err_other = _validate_run_id(other_run_id)
+        if err_cur or err_other:
+            self.action_error = err_cur or err_other
+            return
         self.action_in_flight = "diff-runs"
         try:
+            # ``--`` ends option parsing so the run IDs are always treated as
+            # positionals by the downstream argparse CLI, never as flags.
             result = subprocess.run(
-                [cmd, "diff-runs", self.current_run_id, other_run_id],
+                [cmd, "diff-runs", "--", self.current_run_id, other_run_id],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -1976,80 +2271,153 @@ class RunDetailState(rx.State):
                 self.action_error = (result.stderr or result.stdout)[:1000]
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"diff-runs failed: {exc}"
+            # V2-a (sibling): the OSError / TimeoutExpired repr can embed the
+            # resolved ``backprop`` binary path (an absolute path under the
+            # operator's environment); redact before surfacing to the client.
+            self.action_error = _redact_action(f"diff-runs failed: {exc}")
         finally:
             self.action_in_flight = ""
 
     @rx.event
     def replay(self) -> None:
-        """Shell out to ``backprop replay <self.current_run_id>``.
+        """Validate that the current run is replayable IN-PROCESS.
 
-        Bridge owns the subcommand. Replay re-runs with the same hyperparams
-        as the original; the operator confirms before the heavy work starts.
+        Pre-fix this shelled out to ``backprop replay --dry-run -- <id>`` —
+        but the ``replay`` subcommand has NO ``--dry-run`` flag (it accepts
+        only ``run_id`` / ``--output`` / ``--override`` / ``--json``), so
+        argparse rejected the token (``unrecognized arguments: --dry-run``)
+        and the Replay button always failed. This is the same phantom-CLI-
+        surface bug class as UI-A-004 (delete_run / export_run) — the sibling
+        fix the UI-A-003 separator test flagged as out-of-scope at the time —
+        and the remedy matches UI-A-004: do the check IN-PROCESS via
+        ``RunHistoryManager``. No subprocess, no PATH dependency (the
+        ``backprop`` binary need not be on the Reflex server's PATH), no
+        phantom flag.
+
+        The button is a *preflight*, not the heavy replay: it confirms the
+        run exists and carries the one hard precondition ``cmd_replay``
+        enforces before launching training — a recorded ``dataset_info``
+        (cli.py ``cmd_replay`` returns EXIT_USER_ERROR when it is ``None``) —
+        then directs the operator to run ``backprop replay <id>`` from the
+        shell to start the actual (heavy) job.
         """
-        import shutil
-        import subprocess
-
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        # UI-A-003: validate even though the id no longer reaches argv — a
+        # malformed id should surface a clean error rather than a confusing
+        # "not found" deeper in the lookup.
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "replay"
         try:
-            result = subprocess.run(
-                [cmd, "replay", self.current_run_id, "--dry-run"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
-                self.action_result = (
-                    "Dry-run OK. To actually replay: "
-                    f"`backprop replay {self.current_run_id}` from the shell.\n\n"
-                    + result.stdout[:3000]
-                )
-                self.action_error = ""
-            else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                # V2-a: history_dir embeds the home dir + username; redact
+                # before assigning to the client-serialized action_error.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"replay --dry-run failed: {exc}"
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            entry = manager.get_run(self.current_run_id)
+            if entry is None:
+                self.action_error = _redact_action(
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
+                self.action_result = ""
+                return
+            # Mirror cmd_replay's one hard precondition (cli.py cmd_replay):
+            # a run with no recorded dataset_info cannot be replayed
+            # automatically, so a dry-run reporting "OK" here would promise a
+            # replay the real command rejects. Surface the same verdict.
+            if entry.get("dataset_info") is None:
+                self.action_error = (
+                    f"Run '{self.current_run_id}' has no dataset_info "
+                    "recorded — cannot replay automatically. Re-run manually "
+                    "with `backprop train --data <dataset>` matching the "
+                    "original configuration."
+                )
+                self.action_result = ""
+                return
+            model = entry.get("model_name") or "(default model)"
+            session_kind = entry.get("session_kind") or "single_run"
+            self.action_result = (
+                f"Dry-run OK — run {self.current_run_id} is replayable "
+                f"(session={session_kind}, model={model}, "
+                f"dataset={entry.get('dataset_info')}). To actually replay: "
+                f"`backprop replay {self.current_run_id}` from the shell."
+            )
+            self.action_error = ""
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            # V2-a: a raw OSError repr embeds absolute paths (the home dir +
+            # username); redact before surfacing to the client-serialized var.
+            self.action_error = _redact_action(
+                f"replay check failed: {type(exc).__name__}: {exc}"
+            )
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 
+    def _resolve_history_dir(self):
+        """Resolve the sandboxed run-history directory.
+
+        Mirrors ``load_run``'s resolution: prefer the UI sandbox
+        (``get_ui_output_dir()``), fall back to the legacy default. Kept as
+        one helper so the in-process action handlers (UI-A-004) and
+        ``load_run`` stay in lockstep.
+        """
+        from pathlib import Path as _Path
+
+        try:
+            from .ui_security import get_ui_output_dir
+
+            return get_ui_output_dir()
+        except Exception:  # noqa: BLE001 — defensive; fall back to legacy default
+            return _Path.home() / ".backpropagate" / "ui-outputs"
+
     @rx.event
     def delete_run(self) -> None:
-        """Shell out to ``backprop delete-run <self.current_run_id>``.
+        """Delete the current run's history entry IN-PROCESS (UI-A-004).
+
+        Pre-fix this shelled out to ``backprop delete-run <id> --yes`` — a
+        subcommand that DOES NOT EXIST (argparse rejected it → the Delete
+        button always failed). We use ``RunHistoryManager.delete_run``
+        directly, exactly as ``load_run`` reads via ``get_run``. No
+        subprocess, no PATH dependency, no phantom CLI surface.
 
         Operator confirmation is the responsibility of the UI button (a
         confirm-dialog wrap); this handler unconditionally executes.
         """
-        import shutil
-        import subprocess
-
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        # UI-A-003: the id flows nowhere dangerous now (in-process), but
+        # validate anyway so a malformed id surfaces a clean error rather
+        # than a confusing "not found".
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "delete-run"
         try:
-            result = subprocess.run(
-                [cmd, "delete-run", self.current_run_id, "--yes"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode == 0:
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                # V2-a: redact the home-dir-bearing history_dir before it
+                # reaches the client-serialized action_error.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
+                self.action_result = ""
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            deleted = manager.delete_run(self.current_run_id)
+            if deleted:
                 self.action_result = f"Run {self.current_run_id} deleted."
                 self.action_error = ""
                 # FRONTEND-B-001 (v1.4 Wave 3.5): a successful delete must
@@ -2062,44 +2430,87 @@ class RunDetailState(rx.State):
                 # ``not_found`` so the deletion confirmation wins.
                 self.was_deleted = True
             else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_error = _redact_action(
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"delete-run failed: {exc}"
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            # V2-a: redact absolute paths from the raw exception repr.
+            self.action_error = _redact_action(
+                f"delete failed: {type(exc).__name__}: {exc}"
+            )
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 
     @rx.event
     def export_run(self) -> None:
-        """Shell out to ``backprop export-runs --run-id <id> --format jsonl``."""
-        import shutil
-        import subprocess
+        """Export the current run as a single-record JSONL IN-PROCESS (UI-A-004).
+
+        Pre-fix this shelled out to ``backprop export-runs --run-id <id>`` —
+        but ``export-runs`` has NO ``--run-id`` flag (only ``--output/-o``,
+        ``--format``, ``--to``, ``--status``), so argparse rejected it and
+        the Export button always failed. We read the single run via
+        ``RunHistoryManager.get_run`` and write one JSONL record to a
+        SANDBOXED path under ``get_ui_output_dir()`` — no phantom flag, no
+        filesystem-wide write surface.
+        """
+        import json
+        from datetime import datetime, timezone
 
         if not self.current_run_id:
             self.action_error = "No run loaded."
             return
-        cmd = shutil.which("backprop") or shutil.which("backpropagate")
-        if not cmd:
-            self.action_error = "`backprop` CLI not found on PATH."
+        _, rid_err = _validate_run_id(self.current_run_id)
+        if rid_err:
+            self.action_error = rid_err
             return
         # FRONTEND-B-014-EXTENDED (Stage C humanization): see diff_against.
         self.action_in_flight = "export-runs"
         try:
-            result = subprocess.run(
-                [cmd, "export-runs", "--run-id", self.current_run_id, "--format", "jsonl"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-            if result.returncode == 0:
-                self.action_result = result.stdout[:3000]
-                self.action_error = ""
-            else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+            history_dir = self._resolve_history_dir()
+            if not history_dir.exists():
+                # V2-a: redact the home-dir-bearing history_dir.
+                self.action_error = _redact_action(f"No run history at {history_dir}.")
                 self.action_result = ""
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            self.action_error = f"export-runs failed: {exc}"
+                return
+            from .checkpoints import RunHistoryManager
+
+            manager = RunHistoryManager(str(history_dir))
+            entry = manager.get_run(self.current_run_id)
+            if entry is None:
+                self.action_error = _redact_action(
+                    f"Run '{self.current_run_id}' not found in {history_dir}."
+                )
+                self.action_result = ""
+                return
+
+            # Write inside a sandboxed ``exports/`` subdir of the UI output
+            # dir. The filename is derived from the (already-validated, so
+            # filesystem-safe ``[A-Za-z0-9_-]``) run id plus a UTC stamp so
+            # repeat exports don't clobber. No user-controlled path segment
+            # escapes the sandbox.
+            exports_dir = history_dir / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            out_path = exports_dir / f"run-{self.current_run_id}-{stamp}.jsonl"
+            with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps(entry, default=str))
+                fh.write("\n")
+            # V2-a: out_path is the sandbox absolute path (home dir +
+            # username); redact before surfacing the success string to the
+            # client. The basename is preserved so the operator can still
+            # locate the file inside their UI output dir.
+            self.action_result = _redact_action(
+                f"Exported run {self.current_run_id} to {out_path}."
+            )
+            self.action_error = ""
+        except Exception as exc:  # noqa: BLE001 — operator-facing string
+            # V2-a: redact absolute paths from the raw exception repr.
+            self.action_error = _redact_action(
+                f"export failed: {type(exc).__name__}: {exc}"
+            )
+            self.action_result = ""
         finally:
             self.action_in_flight = ""
 
@@ -2130,10 +2541,27 @@ class ModelsState(rx.State):
 
     models: list[dict] = []
     total_size_mb: str = "0"
-    cache_dir: str = ""
+    # UI-A-002 (Wave A2): the HF cache dir is ``~/.cache/huggingface/hub`` —
+    # it embeds the operator's home dir + username. Held in a backend-only
+    # var; the client reads the redacted ``cache_dir_display`` computed var.
+    _cache_dir: str = ""
     loading: bool = False
     error: str = ""
     last_loaded_at: str = ""
+    # CLIUI-B-005 (Stage C): per-row in-flight flag for the delete affordance.
+    # Holds the ``dir_name`` currently being deleted (empty when idle). Drives
+    # the row's ``disabled=`` binding AND gates re-entry inside delete_model so
+    # a double-click can't fire a second rmtree that finds the dir already gone
+    # and surfaces a spurious "not found" error. Mirrors
+    # RunDetailState.action_in_flight.
+    deleting_dir: str = ""
+
+    @rx.var
+    def cache_dir_display(self) -> str:
+        """Client-facing, redacted form of the HF cache directory (UI-A-002)."""
+        if not self._cache_dir:
+            return ""
+        return _redact_action(self._cache_dir)
 
     @rx.event
     def load_models(self) -> None:
@@ -2153,11 +2581,14 @@ class ModelsState(rx.State):
         self.error = ""
         try:
             cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
-            self.cache_dir = str(cache_dir)
+            # UI-A-002: full path into the backend-only var; the client reads
+            # the redacted ``cache_dir_display`` computed var.
+            self._cache_dir = str(cache_dir)
             if not cache_dir.exists():
                 self.models = []
                 self.total_size_mb = "0"
-                self.error = (
+                # UI-A-002: ``error`` is a public var; redact the cache path.
+                self.error = _redact_action(
                     f"No HF cache at {cache_dir}. Models download on first "
                     "use via `transformers.AutoModel.from_pretrained(...)`."
                 )
@@ -2198,7 +2629,8 @@ class ModelsState(rx.State):
                         ),
                     })
             except OSError as exc:
-                self.error = f"Cannot walk HF cache: {exc}"
+                # UI-A-002: the OSError repr embeds the cache path.
+                self.error = _redact_action(f"Cannot walk HF cache: {exc}")
                 self.models = []
                 self.total_size_mb = "0"
                 return
@@ -2221,6 +2653,32 @@ class ModelsState(rx.State):
         FRONTEND-F-007 safety: the path is validated to live under
         ``~/.cache/huggingface/hub/`` so a malicious operator-controlled
         ``dir_name`` can't escape the cache via ``..`` traversal.
+
+        CLIUI-B-005 (Stage C) re-entrancy guard: the delete affordance had no
+        in-flight disable, so a double-click re-entered this handler; the
+        second invocation found the directory already gone and surfaced a
+        spurious "Model directory not found" error. The handler now records the
+        in-flight ``dir_name`` in ``self.deleting_dir`` and SHORT-CIRCUITS a
+        re-entrant click for the same target (a no-op, not an error). The flag
+        is cleared via try/finally so a thrown ``OSError`` can't latch the
+        button disabled forever. The page also binds ``disabled`` to this flag,
+        but the handler-level guard makes the behaviour correct even if a
+        rapid double-fire slips past the UI debounce.
+
+        UI-A-006 (Wave A2) hardening:
+          - Use ``Path.is_relative_to`` for the confinement check instead of
+            ``str.startswith``. A string-prefix test treats a SIBLING dir
+            whose name shares the cache prefix (e.g. ``…/hub-evil``) as
+            "inside" the cache; the path-component check does not.
+          - Refuse the delete if ``target`` (the UNRESOLVED path) is a
+            symlink. Pre-fix the handler resolved the symlink and then
+            ``rmtree``'d the resolved target — a ``models--*`` symlink in the
+            cache pointing at, say, ``~/important`` would pass the
+            resolved-prefix check (target resolves outside, but the OLD
+            ``startswith`` compared against the resolved cache root) OR, worse,
+            delete the link's target outside the cache. Refusing symlinks
+            outright removes the foot-gun; real HF cache entries are plain
+            directories.
         """
         import shutil
         from pathlib import Path as _Path
@@ -2229,20 +2687,48 @@ class ModelsState(rx.State):
         if not dir_name or not dir_name.startswith("models--") or "/" in dir_name or "\\" in dir_name or ".." in dir_name:
             self.error = f"Invalid model directory name: {dir_name!r}"
             return
+        # CLIUI-B-005: short-circuit a re-entrant double-click for the same
+        # target. The first click is still in flight (its reload hasn't yet
+        # refreshed the row away), so a second fire would rmtree an
+        # already-deleted dir and surface a confusing "not found". Treat it as
+        # a silent no-op — the in-flight delete will finish and reload.
+        if self.deleting_dir == dir_name:
+            return
         target = cache_dir / dir_name
+        self.deleting_dir = dir_name
         try:
+            # UI-A-006: refuse symlinks BEFORE resolving so a malicious
+            # ``models--*`` symlink can't redirect the rmtree outside the
+            # cache. Check the unresolved path.
+            if target.is_symlink():
+                self.error = _redact_action(
+                    f"Refusing to delete a symlinked cache entry: {target}"
+                )
+                return
             target_resolved = target.resolve()
             cache_resolved = cache_dir.resolve()
-            if not str(target_resolved).startswith(str(cache_resolved)):
-                self.error = f"Refusing to delete outside HF cache: {target_resolved}"
+            # UI-A-006: path-component confinement (is_relative_to), not a
+            # string-prefix test. ``is_relative_to`` returns False for a
+            # sibling dir that merely shares the prefix string.
+            if not target_resolved.is_relative_to(cache_resolved):
+                self.error = _redact_action(
+                    f"Refusing to delete outside HF cache: {target_resolved}"
+                )
                 return
             if not target_resolved.exists():
-                self.error = f"Model directory not found: {target}"
+                self.error = _redact_action(f"Model directory not found: {target}")
                 return
+            # Operate on the confined, resolved path. ``rmtree`` does not
+            # follow a top-level symlink (and we refused one above anyway).
             shutil.rmtree(target_resolved)
         except OSError as exc:
-            self.error = f"Failed to delete {dir_name}: {exc}"
+            self.error = _redact_action(f"Failed to delete {dir_name}: {exc}")
             return
+        finally:
+            # CLIUI-B-005: clear the in-flight flag on EVERY exit path
+            # (success, validation refusal, or thrown OSError) so the row's
+            # delete button re-enables.
+            self.deleting_dir = ""
         # Reload to reflect the deletion.
         self.load_models()
 

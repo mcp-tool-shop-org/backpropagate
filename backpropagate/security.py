@@ -293,6 +293,16 @@ def safe_torch_load(
     Raises:
         FileNotFoundError: If path doesn't exist
         RuntimeError: If loading fails
+
+    Warns:
+        SecurityWarning: If called with ``weights_only=False``. The function
+            still honors the request (so an operator who genuinely needs
+            full unpickling — e.g. a trusted legacy checkpoint with custom
+            classes — is not blocked), but the warning ensures the "safe"
+            name in ``safe_torch_load`` cannot be silently subverted into an
+            arbitrary-code-execution sink. CLI-A-006: prefer the sanctioned
+            ``weights_only=True`` direct-``torch.load`` pattern over flipping
+            this flag.
     """
     import torch
 
@@ -300,6 +310,27 @@ def safe_torch_load(
 
     if not path.exists():
         raise FileNotFoundError(f"Weights file not found: {path}")
+
+    # CLI-A-006: the whole point of this wrapper is the weights_only=True
+    # safety floor. If a caller flips it off, the "safe_" prefix is a lie —
+    # the load becomes a full pickle deserialization (RCE surface). We don't
+    # hard-refuse (a trusted legacy checkpoint may legitimately need it), but
+    # we make the downgrade loud + auditable so it can't pass review unseen.
+    if not weights_only:
+        warnings.warn(
+            "safe_torch_load(weights_only=False) defeats the weights_only "
+            "safety floor and exposes arbitrary-code-execution via malicious "
+            "pickle payloads. Only do this for fully trusted files; prefer "
+            "weights_only=True (the default).",
+            SecurityWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "Security: safe_torch_load called with weights_only=False for %s "
+            "— pickle deserialization is unrestricted. Ensure the file is "
+            "trusted.",
+            path,
+        )
 
     # Stage C amend BACKEND-B-013: run the security check BEFORE branching
     # on file suffix. Pre-fix, .safetensors paths returned without ever

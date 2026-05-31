@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backpropagate.exceptions import BackpropagateError
 from backpropagate.gpu_safety import GPUCondition, GPUStatus
 from backpropagate.multi_run import (
     MergeMode,
@@ -1114,6 +1115,96 @@ class TestMultiRunTrainerCheckpointLoading:
         # Verify state_dict was retrieved for manual update
         mock_model.state_dict.assert_called_once()
 
+    def test_load_lora_state_dict_fallback_zero_matches_raises(self):
+        """CORE-B-001: manual fallback raises when ZERO keys match.
+
+        On PEFT-version skew / key-namespace divergence, none of the
+        accumulator's keys line up with the live model. Pre-fix the
+        ``if name in model_state`` guard silently skipped every key — the
+        SLAO accumulator was discarded while logs reported success. The
+        write side must now fail loud like the read-side invariant check.
+        """
+        import torch
+
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict  # Force the manual fallback
+
+        # Live model uses a DIFFERENT key namespace than the accumulator.
+        mock_model.state_dict.return_value = {
+            "base_model.foo.weight": torch.tensor([0.0]),
+            "base_model.bar.weight": torch.tensor([0.0]),
+        }
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        # Accumulator keys that match NOTHING in the model above.
+        orphan_state = {
+            "lora_A.weight": torch.tensor([1.0]),
+            "lora_B.weight": torch.tensor([2.0]),
+        }
+
+        with pytest.raises(BackpropagateError) as exc_info:
+            trainer._load_lora_state_dict(orphan_state)
+
+        assert exc_info.value.code == "PEFT_API_INCOMPATIBLE"
+        assert exc_info.value.details["matched_keys"] == 0
+        assert exc_info.value.details["accumulator_keys"] == 2
+
+    def test_load_lora_state_dict_fallback_partial_match_ok(self):
+        """CORE-B-001: a partial match (>=1 key) is NOT treated as failure.
+
+        Guard against over-eager raising: as long as at least one key
+        applied, the merge is considered to have landed (matches the
+        prior best-effort copy semantics — we only fail on total mismatch).
+        """
+        import torch
+
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict
+
+        mock_model.state_dict.return_value = {
+            "lora_A.weight": torch.tensor([0.0]),
+            "base_model.other.weight": torch.tensor([0.0]),
+        }
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        # One key matches (lora_A.weight), one does not (lora_B.weight).
+        partial_state = {
+            "lora_A.weight": torch.tensor([1.0]),
+            "lora_B.weight": torch.tensor([2.0]),
+        }
+
+        # Must not raise.
+        trainer._load_lora_state_dict(partial_state)
+
+    def test_load_lora_state_dict_empty_state_does_not_raise(self):
+        """CORE-B-001: an empty accumulator is a no-op, not a failure.
+
+        ``matched == 0`` only raises when there WAS something to load
+        (``state_dict`` truthy). An empty dict legitimately applies
+        nothing and must not be misclassified as a key mismatch.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+
+        mock_model = MagicMock()
+        del mock_model.load_adapter_state_dict
+        mock_model.state_dict.return_value = {}
+
+        mock_trainer = MagicMock()
+        mock_trainer._model = mock_model
+        trainer._trainer = mock_trainer
+
+        trainer._load_lora_state_dict({})  # must not raise
+
     def test_prepare_for_next_run_slao_mode(self):
         """_prepare_for_next_run should load SLAO weights in SLAO mode."""
         trainer = MultiRunTrainer(
@@ -1414,6 +1505,37 @@ class TestEarlyStoppingDetailed:
         # Improvement of 0.08 (above threshold)
         trainer._check_early_stopping(0.4, run_idx=3)
         assert trainer._early_stop_counter == 0
+
+    def test_check_early_stopping_compares_against_best_not_previous(self):
+        """CONTINUAL-A-009: the baseline is the BEST-EVER val_loss, not the
+        immediately-preceding run.
+
+        Loss curve: 0.5 (best) → 0.9 (worse) → 0.7. The 0.7 run IMPROVES on
+        the previous run (0.9) but does NOT beat the running best (0.5), so it
+        must count as 'no improvement' and keep incrementing the counter.
+        A vs-previous implementation would have RESET the counter on the
+        0.9 → 0.7 down-tick. This pins the semantics the docstring describes.
+        """
+        trainer = MultiRunTrainer(model="test-model")
+        trainer.config.early_stopping = True
+        trainer.config.early_stopping_patience = 5  # high so we don't trip it
+        trainer.config.early_stopping_threshold = 0.0
+
+        trainer._check_early_stopping(0.5, run_idx=1)  # best = 0.5
+        assert trainer._best_val_loss == 0.5
+
+        trainer._check_early_stopping(0.9, run_idx=2)  # worse than best
+        assert trainer._early_stop_counter == 1
+
+        # Improves vs previous (0.9 → 0.7) but still > best (0.5).
+        trainer._check_early_stopping(0.7, run_idx=3)
+        assert trainer._early_stop_counter == 2, (
+            "0.7 improved vs the previous run (0.9) but not vs the best "
+            "(0.5); under best-ever semantics the counter must keep climbing "
+            "(got reset → vs-previous regression)"
+        )
+        # Best is unchanged because nothing beat 0.5.
+        assert trainer._best_val_loss == 0.5
 
 
 class TestMultiRunValidation:
@@ -1818,6 +1940,132 @@ class TestReplayStrategyAlgorithm:
 
 
 # =============================================================================
+# CONTINUAL-A-004: replay-mode fresh-window stride leaves no gap
+#
+# Pre-fix the fresh-window start strode by the FULL samples_per_run while a
+# replay-enabled run only consumed new_samples_count (= samples_per_run -
+# replay_count), so each run left a `replay_count`-wide gap of samples that
+# were NEVER trained as fresh data — and replay only resamples PRIOR fresh
+# windows, so the gap samples were never seen at all. The fix strides by the
+# cumulative consumed width, making fresh windows contiguous and gap-free.
+# =============================================================================
+
+class TestReplayStrideNoGap:
+    """End-to-end tests that no training sample is silently skipped when
+    experience replay is enabled."""
+
+    @staticmethod
+    def _indices_from(chunk) -> set[int]:
+        return {int(v.split("_")[1]) for v in chunk["text"]}
+
+    def _trainer(self, **overrides):
+        defaults = {
+            "num_runs": 4,
+            "samples_per_run": 100,
+            "replay_fraction": 0.3,
+            "replay_strategy": "recent",
+            "shuffle_data": False,
+        }
+        defaults.update(overrides)
+        return MultiRunTrainer(model="test-model", config=MultiRunConfig(**defaults))
+
+    def test_fresh_windows_are_contiguous_with_replay(self):
+        """The FRESH portion of each run's chunk must tile the dataset with no
+        gap. samples_per_run=100, replay_fraction=0.3 → replay_count=30,
+        new_width=70: run1 fresh=[0,100) (no replay), run2 fresh=[100,170),
+        run3 fresh=[170,240), run4 fresh=[240,310). Pre-fix run2 was [100,170)
+        but run3 strode to [200,270), leaving [170,200) never trained fresh.
+        """
+        from datasets import Dataset
+
+        trainer = self._trainer()
+        train_pool = 500  # validation OFF → full dataset is the pool
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(train_pool)]})
+
+        # Inspect the FRESH window directly via the helper the chunker uses.
+        run1 = set(trainer._fresh_window_indices(1, train_pool))
+        run2 = set(trainer._fresh_window_indices(2, train_pool))
+        run3 = set(trainer._fresh_window_indices(3, train_pool))
+        run4 = set(trainer._fresh_window_indices(4, train_pool))
+
+        assert run1 == set(range(0, 100))
+        assert run2 == set(range(100, 170)), (
+            f"run2 fresh window should be contiguous after run1: got "
+            f"{sorted(run2)[:3]}..{sorted(run2)[-3:]}"
+        )
+        assert run3 == set(range(170, 240)), (
+            f"run3 must start where run2 ended (170), not stride to 200: got "
+            f"{sorted(run3)[:3]}.."
+        )
+        assert run4 == set(range(240, 310))
+
+        # The load-bearing assertion: the union is gap-free over its span.
+        union = run1 | run2 | run3 | run4
+        expected = set(range(0, 310))
+        assert union == expected, (
+            f"fresh windows left a gap: missing {sorted(expected - union)[:10]}"
+        )
+
+        # And the dataset chunk for each run contains exactly that fresh set
+        # (plus replay samples for runs >= 2).
+        for run_idx, fresh in [(1, run1), (2, run2), (3, run3), (4, run4)]:
+            chunk = trainer._get_data_chunk(dataset, run_idx)
+            chunk_indices = self._indices_from(chunk)
+            # The fresh samples must all be present in the chunk (chunk also
+            # contains replay samples for runs >= 2).
+            assert fresh <= chunk_indices, (
+                f"run {run_idx}: chunk is missing fresh-window indices "
+                f"{sorted(fresh - chunk_indices)[:5]}"
+            )
+
+    def test_no_gap_reduces_to_full_stride_when_replay_disabled(self):
+        """With replay_fraction=0 the cumulative cursor must equal the old
+        full-stride layout byte-for-byte (regression guard for the reduction
+        claim in the fix)."""
+        trainer = self._trainer(replay_fraction=0.0)
+        train_pool = 500
+        for run_idx in range(1, 5):
+            start = trainer._fresh_window_start_unwrapped(run_idx)
+            assert start == (run_idx - 1) * 100, (
+                f"run {run_idx}: cumulative start {start} != full-stride "
+                f"{(run_idx - 1) * 100} when replay is disabled"
+            )
+            new_width, replay = trainer._fresh_window_counts(run_idx)
+            assert new_width == 100 and replay == 0
+
+    def test_fresh_window_counts_runs_2plus_share_width(self):
+        """All runs >= 2 consume the same fresh width for a fixed
+        replay_fraction (the closed-form cumulative start depends on it)."""
+        trainer = self._trainer(samples_per_run=100, replay_fraction=0.3)
+        # run 1 is all-fresh
+        assert trainer._fresh_window_counts(1) == (100, 0)
+        # runs >= 2: replay_count = int(100 * 0.3) = 30 → new_width = 70
+        for run_idx in (2, 3, 4, 5):
+            assert trainer._fresh_window_counts(run_idx) == (70, 30)
+
+    def test_replay_window_matches_chunker_fresh_window(self):
+        """'recent' replay for run k must resample from run (k-1)'s ACTUAL
+        fresh window — the same indices the chunker handed run k-1 as fresh
+        data. Pins the chunker/replay lockstep the A-004 fix establishes."""
+        from datasets import Dataset
+
+        trainer = self._trainer(replay_strategy="recent", samples_per_run=100,
+                                replay_fraction=0.3)
+        dataset = Dataset.from_dict({"text": [f"sample_{i}" for i in range(500)]})
+
+        # Run 2's fresh window is [100, 180). Run 3's 'recent' replay must
+        # draw only from there.
+        run2_fresh = set(trainer._fresh_window_indices(2, 500))
+        replay = trainer._get_replay_samples(dataset, run_idx=3, count=30)
+        assert replay is not None
+        replay_indices = self._indices_from(replay)
+        assert replay_indices <= run2_fresh, (
+            f"run-3 'recent' replay drew indices outside run-2's fresh window: "
+            f"{sorted(replay_indices - run2_fresh)[:5]}"
+        )
+
+
+# =============================================================================
 # LOSS TRACKING TESTS
 # =============================================================================
 
@@ -2041,6 +2289,76 @@ class TestCheckpointManagerIntegrationConfig:
         trainer = MultiRunTrainer(model="test-model", config=config)
 
         assert trainer._checkpoint_manager is None
+
+
+class TestRunHistoryCompletionRepair:
+    """CORE-B-003: a successful session must end up status='completed'
+    even when ``record_run_completed`` raises.
+
+    ``record_run_completed`` is the call that rolls the history entry from
+    'running' to 'completed'. If it throws (disk full, lock contention,
+    corrupt history), the prior behavior left the entry stranded as
+    'running' forever — `backprop list-runs` reported a finished session as
+    in-flight, and the liveness guard could even refuse to reuse the slot.
+    The fix forces an independent minimal ``update_run(status='completed')``
+    so the terminal state is recorded regardless.
+    """
+
+    def _drive_one_successful_run(self, trainer, tmp_path):
+        """Drive ``run()`` to its success tail with the heavy interior
+        mocked out — no real GPU, dataset, model load, or SFTTrainer."""
+        run_result = RunResult(
+            run_index=1,
+            steps=10,
+            samples=50,
+            final_loss=0.5,
+            checkpoint_path=str(tmp_path / "run_001"),
+        )
+
+        with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+             patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+             patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+             patch.object(trainer, "_execute_run", return_value=run_result):
+            return trainer.run("dummy_dataset")
+
+    def test_completion_recorded_when_record_run_completed_raises(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=False,
+            pause_on_overheat=False,
+            # SIMPLE skips the SLAO _verify_peft_api startup probe so the
+            # mocked load_model (no real PEFT model) doesn't trip it.
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        # Real history manager so we can inspect the persisted entry, but
+        # force record_run_completed to blow up on the success path.
+        with patch.object(
+            RunHistoryManager,
+            "record_run_completed",
+            side_effect=RuntimeError("simulated disk-full on completion write"),
+        ):
+            result = self._drive_one_successful_run(trainer, tmp_path)
+
+        assert result is not None
+        assert result.aborted is False
+
+        # The independent status flip must have landed: the entry is
+        # 'completed', not stranded as 'running'.
+        history = RunHistoryManager(str(tmp_path))
+        entry = history.get_run(trainer._run_id)
+        assert entry is not None, "run entry must be persisted"
+        assert entry.get("status") == "completed", (
+            "CORE-B-003: even though record_run_completed raised, the "
+            "session succeeded, so the entry must be flipped to "
+            f"'completed' (got {entry.get('status')!r})"
+        )
 
 
 class TestEarlyStoppingConfig:
@@ -2278,6 +2596,223 @@ class TestMultiRunResume:
         assert tmp_path.name in msg
         assert "backprop runs" in msg
         assert "--checkpoint-dir" in msg
+
+
+class TestResumeLivenessGuard:
+    """Regression tests for CONTINUAL-A-003.
+
+    Auto-resume must distinguish a CRASHED in-progress multi-run (safe to
+    adopt) from a LIVE one (adopting it makes two processes share one run_id
+    and corrupt the shared SLAO accumulator). Pre-fix, ``_maybe_resume``
+    adopted the most-recent ``status='running'`` entry within the 24h window
+    with no liveness check at all — so a live holder was happily stolen.
+
+    The fix stamps ``host`` + ``pid`` + ``heartbeat_at`` on the running entry
+    and refuses to auto-adopt an entry that is provably live (same-host live
+    PID OR fresh heartbeat). A genuinely-stale crashed run still resumes.
+    """
+
+    def _started_entry(self, tmp_path, run_id, **extra):
+        """Record a running multi-run entry, then patch in liveness fields."""
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id=run_id,
+            model_name="m",
+            session_kind="multi_run",
+        )
+        if extra:
+            history.update_run(run_id, **extra)
+        return history
+
+    def test_live_entry_via_fresh_heartbeat_not_adopted(self, tmp_path):
+        """An entry with a fresh heartbeat is a LIVE holder → auto-resume
+        must NOT adopt it (must start fresh / return None). FAILS pre-fix:
+        the pre-fix path returned the run_id regardless of liveness."""
+        import socket
+        from datetime import datetime
+
+        # Bogus host so the PID signal is skipped; rely on the fresh heartbeat.
+        self._started_entry(
+            tmp_path,
+            "liverun",
+            host="some-other-box-" + socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None, (
+            "auto-resume adopted a LIVE (fresh-heartbeat) holder — would "
+            "corrupt the shared SLAO accumulator"
+        )
+
+    def test_live_entry_via_same_host_live_pid_not_adopted(self, tmp_path):
+        """An entry stamped on THIS host with an alive PID (the test process
+        itself) is a live holder → not adopted. FAILS pre-fix."""
+        import os
+        import socket
+
+        # Use this process's own pid (definitely alive) + a STALE heartbeat,
+        # so adoption can only be blocked by the PID-liveness signal.
+        self._started_entry(
+            tmp_path,
+            "livepid",
+            host=socket.gethostname(),
+            pid=os.getpid(),
+            heartbeat_at="2000-01-01T00:00:00",  # ancient → heartbeat says dead
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) is None, (
+            "auto-resume adopted a holder whose PID is alive on this host"
+        )
+
+    def test_stale_crashed_entry_is_resumable(self, tmp_path):
+        """A crashed entry (ancient heartbeat + dead PID on a foreign host)
+        must STILL be auto-resumed — the liveness guard only blocks LIVE
+        holders, not genuinely-stale orphans."""
+        import socket
+
+        self._started_entry(
+            tmp_path,
+            "deadrun",
+            host="long-gone-box-" + socket.gethostname(),
+            pid=999999,  # implausible/dead pid (and foreign host anyway)
+            heartbeat_at="2000-01-01T00:00:00",  # ancient → cold heartbeat
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "deadrun", (
+            "a genuinely-stale crashed run must remain resumable"
+        )
+
+    def test_legacy_entry_without_liveness_fields_is_resumable(self, tmp_path):
+        """Pre-A-003 entries carry no host/pid/heartbeat. They must remain
+        resumable (the 24h in_progress_runs window is their guard) so the fix
+        is a no-op for existing crashed-run recovery."""
+        self._started_entry(tmp_path, "legacyrun")  # no liveness fields
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "legacyrun"
+
+    def test_live_holder_skipped_but_stale_sibling_adopted(self, tmp_path):
+        """With BOTH a live holder and an older crashed run present, auto-
+        resume skips the live one and adopts the crashed one. This is the
+        core two-session scenario: a second launcher must not steal the live
+        run_id but should still recover a real orphan."""
+        import socket
+        from datetime import datetime, timedelta
+
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        # Older crashed run.
+        history.record_run_started(
+            run_id="crashed", model_name="m", session_kind="multi_run"
+        )
+        # A RECENT crash: started_at within the 24h in_progress window (so it
+        # survives the staleness filter and is offered as a resume candidate),
+        # but on a host we cannot PID-probe and with a stale heartbeat — so the
+        # liveness guard recognizes it as crashed (not live) and adopts it.
+        _crash_ts = (datetime.now() - timedelta(hours=2)).isoformat()
+        history.update_run(
+            "crashed",
+            started_at=_crash_ts,
+            host="gone-" + socket.gethostname(),
+            pid=999999,
+            heartbeat_at=_crash_ts,
+        )
+        # Newer LIVE holder (fresh heartbeat).
+        history.record_run_started(
+            run_id="alive", model_name="m", session_kind="multi_run"
+        )
+        history.update_run(
+            "alive",
+            started_at=datetime.now().isoformat(),
+            host="other-" + socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        resolved = trainer._maybe_resume(_Path(str(tmp_path)))
+        assert resolved == "crashed", (
+            f"expected to skip live holder and adopt crashed orphan, "
+            f"got {resolved!r}"
+        )
+
+    def test_explicit_resume_from_bypasses_liveness_guard(self, tmp_path):
+        """An EXPLICIT resume_from=<run_id> is an operator override and must
+        still resolve even if the entry looks live — the guard only governs
+        the auto-detect (default) path."""
+        import socket
+        from datetime import datetime
+
+        self._started_entry(
+            tmp_path,
+            "forcedrun",
+            host=socket.gethostname(),
+            pid=2,
+            heartbeat_at=datetime.now().isoformat(),
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(
+            model="m", config=config, resume_from="forcedrun"
+        )
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "forcedrun"
+
+    def test_stamp_liveness_writes_host_pid_heartbeat(self, tmp_path):
+        """_stamp_liveness must persist host + pid + heartbeat_at onto the
+        running entry so a concurrent launcher can read them."""
+        import os
+        import socket
+
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="stampme", model_name="m", session_kind="multi_run"
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        trainer._run_history = history
+        trainer._run_id = "stampme"
+        trainer._stamp_liveness()
+
+        entry = history.get_run("stampme")
+        assert entry is not None
+        assert entry.get("host") == socket.gethostname()
+        assert entry.get("pid") == os.getpid()
+        assert entry.get("heartbeat_at"), "heartbeat_at must be set"
+
+    def test_stamp_liveness_makes_entry_self_live(self, tmp_path):
+        """End-to-end: after a session stamps its own liveness, a SECOND
+        trainer's auto-resume refuses to adopt that run_id (the corruption
+        scenario the fix prevents). FAILS pre-fix."""
+        from backpropagate.checkpoints import RunHistoryManager
+
+        history = RunHistoryManager(str(tmp_path))
+        history.record_run_started(
+            run_id="session-a", model_name="m", session_kind="multi_run"
+        )
+        # Session A stamps its liveness (this process is the "live" holder).
+        trainer_a = MultiRunTrainer(
+            model="m", config=MultiRunConfig(checkpoint_dir=str(tmp_path))
+        )
+        trainer_a._run_history = history
+        trainer_a._run_id = "session-a"
+        trainer_a._stamp_liveness()
+
+        # Session B (fresh trainer) tries to auto-detect — must NOT adopt A.
+        trainer_b = MultiRunTrainer(
+            model="m", config=MultiRunConfig(checkpoint_dir=str(tmp_path))
+        )
+        assert trainer_b._maybe_resume(_Path(str(tmp_path))) is None, (
+            "second launcher adopted the first session's LIVE run_id"
+        )
 
 
 class TestRestoreSessionState:
@@ -2529,6 +3064,110 @@ class TestPauseOnOverheatWiring:
             "pause_on_overheat=False MUST keep the event clear even on "
             "CRITICAL; the operator chose hard-fail-on-overheat semantics."
         )
+
+
+class TestGpuPauseDeadMonitorShortCircuit:
+    """CORE-B-002: the GPU-cooldown pause loop must fail fast when the
+    monitor thread is dead.
+
+    The pause event is ONLY cleared by ``_on_gpu_status``, which runs on
+    the GPU monitor thread. If that thread has died (an unhandled error,
+    a crashed nvidia-smi), the event can never clear — the loop would
+    otherwise block until ``max_pause_seconds`` (default 30 min), or
+    forever if the ceiling is disabled. The fix detects the dead monitor
+    and raises a structured error immediately.
+    """
+
+    def test_pause_loop_raises_when_monitor_thread_dead(self, tmp_path):
+        from backpropagate.gpu_safety import GPUMonitor
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=True,
+            pause_on_overheat=True,
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        # Install a GPU monitor that was NEVER started (so ._thread is None
+        # -> treated as dead) and ARM the pause event, mimicking the state
+        # right after a CRITICAL reading whose monitor then died before it
+        # could clear the event.
+        def _install_dead_monitor():
+            dead = GPUMonitor()
+            assert dead._thread is None  # never started == dead
+            trainer._gpu_monitor = dead
+            trainer._gpu_pause_event.set()
+
+        with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+             patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+             patch.object(trainer, "_start_gpu_monitor", side_effect=_install_dead_monitor), \
+             patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+             patch.object(trainer, "_execute_run") as mock_exec:
+            with pytest.raises(BackpropagateError) as exc_info:
+                trainer.run("dummy_dataset")
+
+        # The run must never have started training — we failed fast in the
+        # pause loop, before _execute_run.
+        mock_exec.assert_not_called()
+        assert exc_info.value.code == "RUNTIME_GPU_TEMPERATURE_CRITICAL"
+        assert exc_info.value.details["monitor_thread_alive"] is False
+
+    def test_pause_loop_proceeds_when_monitor_clears_event(self, tmp_path):
+        """Guard: a LIVE monitor that clears the event lets the loop proceed.
+
+        Ensures the dead-monitor short-circuit doesn't false-positive on a
+        healthy monitor — the loop must exit normally once the event clears.
+        """
+        from backpropagate.gpu_safety import GPUMonitor
+
+        config = MultiRunConfig(
+            num_runs=1,
+            steps_per_run=10,
+            samples_per_run=50,
+            checkpoint_dir=str(tmp_path),
+            enable_gpu_monitoring=True,
+            pause_on_overheat=True,
+            merge_mode=MergeMode.SIMPLE,
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+
+        run_result = RunResult(
+            run_index=1, steps=10, samples=50, final_loss=0.5,
+            checkpoint_path=str(tmp_path / "run_001"),
+        )
+
+        def _install_live_monitor():
+            live = GPUMonitor()
+            # Start a real (but harmless) monitor thread so is_alive() is True.
+            with patch("backpropagate.gpu_safety.get_gpu_status") as mock_status:
+                mock_status.return_value = GPUStatus(
+                    available=True, device_name="Test GPU", temperature_c=60.0,
+                    vram_total_gb=16.0, vram_used_gb=8.0, vram_percent=50.0,
+                    condition=GPUCondition.SAFE, condition_reason="ok",
+                )
+                live.start()
+            trainer._gpu_monitor = live
+            # Arm then immediately clear: the loop sees the event set on the
+            # first check, then cleared, with a live thread throughout.
+            trainer._gpu_pause_event.set()
+            trainer._gpu_pause_event.clear()
+
+        try:
+            with patch("backpropagate.trainer.Trainer.load_model", return_value=None), \
+                 patch.object(trainer, "_preflight_gpu_check", return_value=True), \
+                 patch.object(trainer, "_start_gpu_monitor", side_effect=_install_live_monitor), \
+                 patch.object(trainer, "_load_full_dataset", return_value=list(range(100))), \
+                 patch.object(trainer, "_execute_run", return_value=run_result):
+                result = trainer.run("dummy_dataset")
+            assert result is not None
+            assert result.aborted is False
+        finally:
+            if trainer._gpu_monitor is not None:
+                trainer._gpu_monitor.stop()
 
 
 # =============================================================================
@@ -3112,3 +3751,562 @@ class TestWave6bComputeValidationLossTryFinally:
             "_compute_validation_loss no longer calls model.train() "
             "anywhere; the finally restore is gone."
         )
+
+
+class TestContinualA007RegisterBeforeSlaoSave:
+    """CONTINUAL-A-007: the manifest ``register()`` must run BEFORE the SLAO
+    accumulator dir is saved.
+
+    Resume-candidate lookup keys off the manifest; the on-disk ``slao/`` dir
+    is only consulted on resume IF the manifest already points at that run.
+    Pre-fix the order was save-LoRA → save-SLAO → register, so a register()
+    failure left an orphan ``slao/`` dir with NO manifest entry → a later
+    resume latched onto an EARLIER run_index and silently re-did / diverged.
+    """
+
+    def test_register_precedes_slao_save_in_source(self):
+        """Source-order guard: ``_checkpoint_manager.register(`` must appear
+        BEFORE ``_slao_merger.save(`` inside _execute_run's save block."""
+        import inspect
+
+        from backpropagate.multi_run import MultiRunTrainer
+
+        source = inspect.getsource(MultiRunTrainer._execute_run)
+        register_pos = source.find("_checkpoint_manager.register(")
+        slao_save_pos = source.find("_slao_merger.save(")
+        assert register_pos != -1, "register() call not found in _execute_run"
+        assert slao_save_pos != -1, "_slao_merger.save() call not found in _execute_run"
+        assert register_pos < slao_save_pos, (
+            "CONTINUAL-A-007 regression: _slao_merger.save() now precedes "
+            "_checkpoint_manager.register(). A register() failure would then "
+            "leave an orphan slao/ dir with no manifest entry, and a later "
+            "resume would latch onto an earlier run_index. Register the "
+            "manifest entry first so a partial save stays coherent."
+        )
+
+
+class TestContinualA010ValLossBackfillReloadsUnderLock:
+    """CONTINUAL-A-010: the validation-loss backfill must reload the manifest
+    INSIDE the lock before patch+save (mirroring the Wave A1 register pattern),
+    so a concurrent sibling process's entries aren't clobbered by a stale
+    in-memory snapshot.
+    """
+
+    def _build_trainer(self, checkpoint_dir):
+        config = MultiRunConfig(
+            num_runs=2,
+            samples_per_run=10,
+            validate_every_run=True,
+            checkpoint_dir=str(checkpoint_dir),
+            merge_mode=MergeMode.SIMPLE,  # no SLAO merger needed for this path
+        )
+        trainer = MultiRunTrainer(model="test-model", config=config)
+        return trainer
+
+    def test_backfill_preserves_concurrent_sibling_entry(self, tmp_path):
+        """End-to-end: backfilling run 1's val_loss must NOT drop a run-2
+        entry that a sibling process appended to the manifest after this
+        manager loaded its snapshot.
+        """
+        from backpropagate.multi_run import CheckpointManager, CheckpointPolicy
+
+        ckpt_dir = tmp_path / "mr"
+        ckpt_dir.mkdir()
+
+        trainer = self._build_trainer(ckpt_dir)
+        policy = CheckpointPolicy(auto_prune=False)  # keep everything for the assertion
+        trainer._checkpoint_manager = CheckpointManager(
+            checkpoint_dir=str(ckpt_dir), policy=policy
+        )
+        trainer._run_id = "rid-a010"
+
+        # This manager registers run 1 (val_loss still None).
+        run1_path = str(ckpt_dir / "run_001" / "lora")
+        (ckpt_dir / "run_001" / "lora").mkdir(parents=True)
+        trainer._checkpoint_manager.register(
+            run_index=1, checkpoint_path=run1_path, training_loss=1.0,
+            run_id="rid-a010",
+        )
+
+        # A SIBLING process (separate manager, same dir) appends run 2 to the
+        # on-disk manifest. trainer._checkpoint_manager's in-memory snapshot
+        # does NOT know about run 2.
+        sibling = CheckpointManager(checkpoint_dir=str(ckpt_dir), policy=policy)
+        run2_path = str(ckpt_dir / "run_002" / "lora")
+        (ckpt_dir / "run_002" / "lora").mkdir(parents=True)
+        sibling.register(
+            run_index=2, checkpoint_path=run2_path, training_loss=0.5,
+            run_id="rid-a010",
+        )
+
+        # Drive the backfill path: stub _execute_run to return a successful
+        # run-1 result, stub validation loss. _execute_run_with_validation
+        # then patches run 1's val_loss in the manifest.
+        run1_result = RunResult(
+            run_index=1, steps=10, samples=10, final_loss=1.0, failed=False,
+            run_id="rid-a010",
+        )
+        with patch.object(trainer, "_execute_run", return_value=run1_result), \
+                patch.object(trainer, "_compute_validation_loss", return_value=0.42):
+            trainer._execute_run_with_validation(
+                run_idx=1, full_dataset=MagicMock(), checkpoint_dir=ckpt_dir
+            )
+
+        # Re-read the manifest from disk via a fresh manager.
+        verifier = CheckpointManager(checkpoint_dir=str(ckpt_dir), policy=policy)
+        by_run = {cp.run_index: cp for cp in verifier.list_checkpoints()}
+
+        # The sibling's run-2 entry must survive (no lost update) ...
+        assert 2 in by_run, (
+            "CONTINUAL-A-010 regression: the val-loss backfill clobbered the "
+            "sibling process's run-2 manifest entry — it patched + saved a "
+            "stale in-memory snapshot instead of reloading under the lock."
+        )
+        # ... and run 1 must now carry the backfilled validation loss.
+        assert 1 in by_run
+        assert by_run[1].validation_loss == pytest.approx(0.42), (
+            f"run-1 val_loss was not backfilled (got "
+            f"{by_run[1].validation_loss!r}); the patch must apply to the "
+            f"freshly-reloaded entry."
+        )
+
+    def test_backfill_reloads_manifest_under_lock_in_source(self):
+        """Source guard: the backfill block must reload the manifest inside
+        the lock (``_load_manifest`` under ``_locked_manifest_write``) — the
+        Wave A1 register() pattern — not patch a stale snapshot outside it."""
+        import inspect
+
+        from backpropagate.multi_run import MultiRunTrainer
+
+        source = inspect.getsource(MultiRunTrainer._execute_run_with_validation)
+        assert "_locked_manifest_write(\"validation_loss_update\")" in source or \
+               "_locked_manifest_write('validation_loss_update')" in source, (
+            "CONTINUAL-A-010: the validation-loss-update must run under "
+            "_locked_manifest_write."
+        )
+        # The reload-under-lock is the load-bearing part of the fix.
+        lock_pos = source.find("validation_loss_update")
+        reload_pos = source.find("_load_manifest", lock_pos)
+        save_pos = source.find("_save_manifest", lock_pos)
+        assert reload_pos != -1 and save_pos != -1, (
+            "CONTINUAL-A-010 regression: the backfill no longer reloads "
+            "(_load_manifest) and/or saves (_save_manifest) the manifest "
+            "inside the validation_loss_update lock."
+        )
+        assert reload_pos < save_pos, (
+            "CONTINUAL-A-010 regression: _load_manifest must precede "
+            "_save_manifest inside the lock so the patch applies to fresh "
+            "on-disk state (mirrors the register() reload-under-lock pattern)."
+        )
+
+
+# =============================================================================
+# DoRA × SLAO MULTI-RUN INTEGRATION (CONTINUAL-A-006)
+# =============================================================================
+#
+# Wave A2 fixed CONTINUAL-A-006: slao.py merge() now hard-REPLACES DoRA
+# `lora_magnitude_vector` keys (treats them as fresh, mirroring the A-matrix
+# asymmetry) instead of EMA-blending them. The unit coverage for that lives in
+# tests/test_slao.py::TestDoRAMagnitudeMerge — but that class hand-builds a
+# state dict whose magnitude key is the literal string
+# "...lora_magnitude_vector...". It proves the *merger* replaces a key it's
+# already told is a magnitude vector; it cannot catch the upstream failure mode
+# where PEFT renames the tensor so its key no longer contains the
+# `lora_magnitude_vector` substring slao.py keys on. If that drift happens, the
+# magnitude silently falls through to the generic EMA branch and the merged
+# adapter goes internally inconsistent (a magnitude describing a stale,
+# pre-replace direction).
+#
+# The tests below close that gap by driving a *real* PEFT DoRA adapter
+# (`get_peft_model(..., use_dora=True)`) through MultiRunTrainer's own
+# extract→merge seam — `_get_lora_state_dict()` → `SLAOMerger.merge()` — exactly
+# as multi_run.py:2056-2061 does inside `_execute_run`. The key NAMES come from
+# the installed PEFT, so the canary test fails the moment PEFT renames the
+# magnitude key. Real structure (keys, shapes, extraction path, save/load resume
+# transport); controlled values (deterministic constants stand in for "a run
+# trained", since the SFT loop is irrelevant to the merge-consistency invariant).
+#
+# Verified against the pinned floor's installed build (peft 0.19.1; pyproject
+# requires peft>=0.7.0). In 0.19.1 `PeftModel.get_adapter_state_dict` is absent,
+# so `_get_lora_state_dict()` uses its manual `named_parameters()` fallback,
+# which yields keys like
+# `base_model.model.q_proj.lora_magnitude_vector.default.weight`. The assertions
+# are key-format-agnostic (they iterate whatever keys the live PEFT emits), so a
+# future PEFT that restores `get_adapter_state_dict` — whose magnitude key is
+# `...lora_magnitude_vector` with no `.default.weight` infix — exercises the same
+# contract without edits.
+
+
+def _build_tiny_dora_peft_model():
+    """Build a *real* PEFT DoRA-wrapped two-Linear module for integration tests.
+
+    Using a real ``get_peft_model(..., use_dora=True)`` (rather than a
+    hand-built dict like TestDoRAMagnitudeMerge) is the whole point: the LoRA
+    key names — including the ``lora_magnitude_vector`` substring slao.py:844
+    matches on — come straight from the installed PEFT, so the canary test
+    fails if PEFT ever renames that tensor.
+    """
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("peft")
+    from peft import LoraConfig, get_peft_model
+
+    class _TwoLinear(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.q_proj = torch.nn.Linear(16, 16, bias=False)
+            self.v_proj = torch.nn.Linear(16, 16, bias=False)
+
+        def forward(self, x):  # pragma: no cover - never called; we never train
+            return self.v_proj(self.q_proj(x))
+
+    cfg = LoraConfig(
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        target_modules=["q_proj", "v_proj"],
+        use_dora=True,
+    )
+    return get_peft_model(_TwoLinear(), cfg)
+
+
+def _fill_lora_params(peft_model, *, a: float, b: float, m: float) -> None:
+    """Overwrite every LoRA A / B / magnitude parameter with a constant fill.
+
+    Stands in for "a training run happened" while keeping the merge math
+    deterministic. The branch precedence (A → magnitude → B) mirrors
+    slao.py::SLAOMerger.merge so a tensor is classified here the same way the
+    merger classifies it.
+    """
+    import torch
+
+    with torch.no_grad():
+        for name, p in peft_model.named_parameters():
+            if ".lora_A." in name:
+                p.data = torch.full_like(p.data, float(a))
+            elif "lora_magnitude_vector" in name:
+                p.data = torch.full_like(p.data, float(m))
+            elif ".lora_B." in name:
+                p.data = torch.full_like(p.data, float(b))
+
+
+class TestDoRASlaoMultiRunIntegration:
+    """End-to-end: a real PEFT DoRA adapter through MultiRunTrainer + SLAO.
+
+    See the module-level comment block above for why this complements (rather
+    than duplicates) tests/test_slao.py::TestDoRAMagnitudeMerge.
+    """
+
+    @staticmethod
+    def _make_trainer_with_real_dora(model):
+        """MultiRunTrainer(use_dora=True, merge_mode=SLAO, mode='lora') wired to
+        a real PEFT DoRA model, with its SLAO merger built exactly as
+        MultiRunTrainer.run() builds it (multi_run.py:1150-1156)."""
+        import types
+
+        from backpropagate.slao import SLAOConfig, SLAOMerger
+
+        config = MultiRunConfig(
+            num_runs=2,
+            merge_mode=MergeMode.SLAO,
+            use_dora=True,
+            mode="lora",
+            enable_gpu_monitoring=False,
+            save_every_run=False,
+        )
+        mrt = MultiRunTrainer(model="tiny-dora-test", config=config)
+        # run() constructs the merger inline; replicate that construction so the
+        # adaptive/layer-scaling intent threads through identically.
+        mrt._slao_merger = SLAOMerger(
+            SLAOConfig(
+                scaling_type="sqrt",
+                use_orthogonal_init=True,
+                use_adaptive_scaling=config.adaptive_scaling,
+                use_layer_scaling=config.layer_scaling,
+            )
+        )
+        # `_get_lora_state_dict` only touches `self._trainer._model`; a real
+        # PEFT model (NOT a MagicMock — a mock would make hasattr(model,
+        # 'get_adapter_state_dict') spuriously True) drives the genuine
+        # extraction path.
+        mrt._trainer = types.SimpleNamespace(_model=model)
+        return mrt
+
+    def test_real_dora_adapter_exposes_magnitude_vector_key(self):
+        """Drift canary: the trainer's own extraction of a real DoRA adapter
+        MUST yield a key carrying the ``lora_magnitude_vector`` substring
+        slao.py keys on — plus A/B keys — and that magnitude key must NOT also
+        match the ``.lora_A.`` / ``.lora_B.`` substrings (else it would route to
+        the wrong merge branch)."""
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("peft")
+
+        model = _build_tiny_dora_peft_model()
+        mrt = self._make_trainer_with_real_dora(model)
+
+        # Construction contract the task names explicitly.
+        assert mrt.config.use_dora is True
+        assert mrt.config.merge_mode == MergeMode.SLAO
+        assert mrt.config.mode == "lora"
+
+        state = mrt._get_lora_state_dict()
+        mag_keys = [k for k in state if "lora_magnitude_vector" in k]
+        a_keys = [k for k in state if ".lora_A." in k]
+        b_keys = [k for k in state if ".lora_B." in k]
+
+        assert mag_keys, (
+            "real PEFT DoRA produced NO key containing 'lora_magnitude_vector'. "
+            "If PEFT renamed the magnitude tensor, slao.py:844's substring match "
+            "silently breaks and DoRA magnitudes get EMA-blended again "
+            "(CONTINUAL-A-006 regression). Keys seen: " + repr(sorted(state))
+        )
+        assert a_keys, "no .lora_A. keys extracted from the real DoRA adapter"
+        assert b_keys, "no .lora_B. keys extracted from the real DoRA adapter"
+        # Branch-precedence guard: a magnitude key matching .lora_A./.lora_B.
+        # would be mis-routed by slao.py's elif chain.
+        for mk in mag_keys:
+            assert ".lora_A." not in mk and ".lora_B." not in mk, (
+                f"magnitude key {mk!r} also matches an A/B substring — it would "
+                "route to the wrong slao.py merge branch"
+            )
+        # Sanity: the tensors really are present and finite.
+        for k in mag_keys + a_keys + b_keys:
+            assert torch.isfinite(state[k]).all()
+
+    def test_two_run_merge_keeps_magnitude_and_a_fresh_b_blended(self):
+        """≥2 runs through the real seam: after merging run 2, the magnitude
+        AND the A direction both equal their fresh (run-2) values, while B is a
+        time-aware EMA blend — i.e. the merged accumulator is internally
+        consistent (magnitude describes the *current* direction, not a stale
+        one)."""
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("peft")
+        from backpropagate.slao import time_aware_scale
+
+        model = _build_tiny_dora_peft_model()
+        mrt = self._make_trainer_with_real_dora(model)
+
+        # Run 1: deterministic adapter; extract + merge (initializes accumulator).
+        _fill_lora_params(model, a=1.0, b=1.0, m=1.0)
+        s1 = mrt._get_lora_state_dict()
+        mrt._slao_merger.merge(s1, run_index=1, run_id="test-dora")
+
+        # Run 2: "trained" to new values; extract + merge.
+        _fill_lora_params(model, a=5.0, b=5.0, m=9.0)
+        s2 = mrt._get_lora_state_dict()
+        result = mrt._slao_merger.merge(s2, run_index=2, run_id="test-dora")
+
+        merged = mrt._slao_merger.get_merged_lora()
+        scale = time_aware_scale(2, "sqrt")  # 1/sqrt(2) ≈ 0.7071
+
+        # Nothing dropped: every run-2 key survived into the accumulator.
+        assert set(s2).issubset(set(merged))
+
+        mag_keys = [k for k in merged if "lora_magnitude_vector" in k]
+        a_keys = [k for k in merged if ".lora_A." in k]
+        b_keys = [k for k in merged if ".lora_B." in k]
+        assert mag_keys and a_keys and b_keys
+
+        # A: hard-replaced (existing SLAO asymmetry) → equals run-2 value.
+        for k in a_keys:
+            assert torch.allclose(merged[k], s2[k]), f"A direction not replaced at {k}"
+
+        # Magnitude: hard-replaced (CONTINUAL-A-006) → equals run-2 value, and is
+        # provably NOT the EMA blend the pre-fix 'other' branch produced.
+        for k in mag_keys:
+            assert torch.allclose(merged[k], s2[k]), (
+                f"DoRA magnitude at {k} was not hard-replaced — CONTINUAL-A-006 "
+                "regression: it fell through to the EMA branch."
+            )
+            blended = s1[k] + scale * (s2[k] - s1[k])  # ≈ 6.66 for 1→9
+            assert not torch.allclose(merged[k], blended), (
+                f"magnitude at {k} equals the EMA blend (~{(1 + scale * 8):.2f}) "
+                "— it was merged, not replaced"
+            )
+
+        # B: time-aware EMA merge → distinct from BOTH run-1 and run-2.
+        for k in b_keys:
+            expected = s1[k] + scale * (s2[k] - s1[k])
+            assert torch.allclose(merged[k], expected), f"B not EMA-merged at {k}"
+            assert not torch.allclose(merged[k], s1[k])
+            assert not torch.allclose(merged[k], s2[k])
+
+        # MergeResult counters match the real adapter geometry (magnitude keys
+        # are NOT counted as A — they take their own branch).
+        assert result.a_matrices_merged == len(a_keys)
+        assert result.b_matrices_merged == len(b_keys)
+        assert result.new_keys_added == 0  # stable geometry across runs
+
+    def test_resume_after_save_load_replaces_magnitude_no_device_mismatch(
+        self, tmp_path
+    ):
+        """Resume path: persist the accumulator, rehydrate it (torch.load lands
+        it on CPU — the exact thing _restore_session_state does via
+        SLAOMerger.load, multi_run.py:957), then merge a third run.
+
+        On a CUDA rig the live adapter sits on GPU while the resumed accumulator
+        is on CPU — the device split CONTINUAL-A-005 aligns; the merge must not
+        raise a device-mismatch RuntimeError, and the magnitude must still be
+        hard-replaced after the round-trip. On CPU-only CI the same load→merge
+        resume path runs without the device flip.
+        """
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("peft")
+        from backpropagate.slao import SLAOMerger
+
+        model = _build_tiny_dora_peft_model()
+        mrt = self._make_trainer_with_real_dora(model)
+
+        _fill_lora_params(model, a=1.0, b=1.0, m=1.0)
+        mrt._slao_merger.merge(
+            mrt._get_lora_state_dict(), run_index=1, run_id="r"
+        )
+        _fill_lora_params(model, a=5.0, b=5.0, m=9.0)
+        mrt._slao_merger.merge(
+            mrt._get_lora_state_dict(), run_index=2, run_id="r"
+        )
+
+        # Persist + rehydrate exactly as the resume path's transport does.
+        slao_dir = tmp_path / "run_002" / "slao"
+        mrt._slao_merger.save(str(slao_dir), run_id="r")
+        resumed = SLAOMerger()
+        resumed.load(str(slao_dir))
+        assert resumed.run_index == 2
+        rehydrated = resumed.get_merged_lora()
+        assert rehydrated is not None
+        for v in rehydrated.values():  # torch.load → CPU regardless of origin
+            assert v.device.type == "cpu"
+
+        # Run 3 on the live model. On CUDA, the live adapter is on GPU while the
+        # resumed accumulator is on CPU — the pre-A-005 device-mismatch trigger.
+        _fill_lora_params(model, a=2.0, b=2.0, m=7.0)
+        s3 = mrt._get_lora_state_dict()
+        on_cuda = torch.cuda.is_available()
+        if on_cuda:
+            s3 = {k: v.cuda() for k, v in s3.items()}
+
+        # Must NOT raise: CONTINUAL-A-005 aligns the accumulator onto the new
+        # value's device before the B-matrix arithmetic.
+        resumed.merge(s3, run_index=3, run_id="r")
+        merged = resumed.get_merged_lora()
+
+        # Magnitude still hard-replaced after a save/load/resume cycle.
+        mag_keys = [k for k in merged if "lora_magnitude_vector" in k]
+        assert mag_keys
+        for k in mag_keys:
+            assert torch.allclose(merged[k].cpu(), s3[k].cpu()), (
+                f"magnitude at {k} not hard-replaced after resume"
+            )
+
+        if on_cuda:
+            # Post-A-005: every accumulator tensor realigned onto the live
+            # device (no silent CPU/GPU split left behind).
+            for k, v in merged.items():
+                assert v.device.type == "cuda", (
+                    f"{k} stayed on {v.device} after a CUDA merge — "
+                    "CONTINUAL-A-005 device alignment regressed"
+                )
+
+
+# Distinctive substring of the construction-time INFO line (CONTINUAL-A-006).
+_DORA_SLAO_LOG_MARKER = "DoRA magnitude vectors (lora_magnitude_vector)"
+
+
+@pytest.mark.serial
+class TestDoRASlaoConstructionLog:
+    """CONTINUAL-A-006: MultiRunTrainer emits an INFO at construction
+    documenting that DoRA magnitude vectors are hard-replaced (treated as
+    fresh) under SLAO — not EMA-merged like LoRA B. INFO (not WARN) because the
+    combo is correct + recommended: the line is a discoverability aid, not a
+    risk signal. It fires only when DoRA is *effectively* active (explicit
+    ``config.use_dora``, or inherited from ``settings.lora.use_dora``) AND
+    ``merge_mode=SLAO``.
+
+    These construct MultiRunTrainer only (no model load), so they're fast and
+    need no GPU. Log capture mirrors the repo's established pattern
+    (caplog.at_level(..., logger="backpropagate.<module>") — see
+    tests/test_checkpoints.py / tests/test_datasets.py).
+    """
+
+    @staticmethod
+    def _fires(caplog) -> bool:
+        return any(_DORA_SLAO_LOG_MARKER in r.getMessage() for r in caplog.records)
+
+    def test_logs_when_use_dora_true_and_slao(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=True),
+            )
+        assert self._fires(caplog), (
+            "DoRA + SLAO construction INFO did not fire. Records: "
+            + repr([r.getMessage() for r in caplog.records])
+        )
+        # Deliberate level choice: INFO, never WARNING (correct config, not a risk).
+        rec = next(
+            r for r in caplog.records if _DORA_SLAO_LOG_MARKER in r.getMessage()
+        )
+        assert rec.levelno == logging.INFO, (
+            f"DoRA+SLAO contract line should be INFO (a discoverability aid), "
+            f"got {rec.levelname} — a WARN on a correct/recommended combo would "
+            "breed warning-fatigue."
+        )
+
+    def test_silent_when_use_dora_false(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=False),
+            )
+        assert not self._fires(caplog)
+
+    def test_silent_when_merge_mode_simple(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SIMPLE, use_dora=True),
+            )
+        assert not self._fires(caplog), (
+            "magnitude-replace contract is SLAO-specific; SIMPLE mode never "
+            "merges, so the line must not fire"
+        )
+
+    def test_logs_when_use_dora_inherited_from_settings(self, caplog, monkeypatch):
+        """``use_dora=None`` inherits ``settings.lora.use_dora``; when that's
+        True under SLAO, DoRA is genuinely active and the contract still
+        applies — so the INFO must fire on the inherited path too."""
+        import logging
+
+        import backpropagate.multi_run as _mr
+
+        # Patch the EXACT settings.lora object multi_run.py reads (its own
+        # ``from .config import settings`` binding), NOT a freshly-imported
+        # alias — robust to a prior test reassigning the config singleton, so
+        # the inherited-path assertion holds in full-suite collection order.
+        monkeypatch.setattr(_mr.settings.lora, "use_dora", True)
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=None),
+            )
+        assert self._fires(caplog)
+
+    def test_silent_when_use_dora_none_and_settings_false(self, caplog, monkeypatch):
+        """Default path: ``use_dora=None`` + ``settings.lora.use_dora`` False
+        (the shipped default) → DoRA inactive → no line."""
+        import logging
+
+        import backpropagate.multi_run as _mr
+
+        monkeypatch.setattr(_mr.settings.lora, "use_dora", False)
+        with caplog.at_level(logging.INFO, logger="backpropagate.multi_run"):
+            MultiRunTrainer(
+                model="m",
+                config=MultiRunConfig(merge_mode=MergeMode.SLAO, use_dora=None),
+            )
+        assert not self._fires(caplog)

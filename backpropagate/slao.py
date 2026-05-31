@@ -205,7 +205,13 @@ def time_aware_scale(
                     f"{run_index}. Return a finite float in [min_scale, 1.0]."
                 ),
             )
-        return max(scale, min_scale)
+        # CONTINUAL-A-001: clamp BOTH ends. The docstring promises a value
+        # in [min_scale, 1.0]; a callable returning >1.0 would otherwise
+        # flow into merge_B_matrices as an EMA weight >1.0 and extrapolate
+        # PAST the new adapter (B_merged + s*(B_new - B_merged) with s>1
+        # lands beyond B_new), destroying the anti-catastrophic-forgetting
+        # invariant. Lower clamp prevents vanishing updates.
+        return max(min(scale, 1.0), min_scale)
 
     valid_scaling_types = ("sqrt", "linear", "log", "constant")
     if scaling_type not in valid_scaling_types:
@@ -228,7 +234,11 @@ def time_aware_scale(
         # No decay (simple averaging)
         scale = 1.0
 
-    return max(scale, min_scale)
+    # CONTINUAL-A-001: clamp BOTH ends so the docstring's "[min_scale, 1.0]"
+    # contract holds on every path. The "log" schedule at run_index=1 is
+    # 1/log(2) ≈ 1.443 — without the upper clamp it would leak a >1.0 EMA
+    # weight into merge_B_matrices and over-extrapolate past the new adapter.
+    return max(min(scale, 1.0), min_scale)
 
 
 def orthogonal_init_A(A_prev: torch.Tensor) -> torch.Tensor:
@@ -502,6 +512,13 @@ class SLAOMerger:
         final_lora = merger.get_merged_lora()
     """
 
+    # Stage C amend CORE-B-006: single source of truth for the on-disk
+    # merge_history.json schema version, referenced by both save() (written
+    # into the file) and load() (compared against the disk value). Previously
+    # save() embedded a "1.0" literal and load() defined a local
+    # _CURRENT_SLAO_SCHEMA = "1.0" — two copies that could silently drift.
+    CURRENT_SLAO_VERSION = "1.0"
+
     def __init__(self, config: SLAOConfig | None = None):
         """
         Initialize the SLAO merger.
@@ -684,6 +701,16 @@ class SLAOMerger:
                 similarity,
                 scale_range=self.config.adaptive_scale_range,
             )
+            # CONTINUAL-A-002: adaptive_scale multiplies base_scale by up to
+            # adaptive_scale_range[1] (default 1.5), so e.g. run-2 base
+            # 0.707 * 1.5 = 1.06 — a B-matrix EMA weight >1.0 that
+            # extrapolates PAST the new adapter and destroys the
+            # anti-catastrophic-forgetting invariant. Clamp before the value
+            # reaches merge_B_matrices (and before it's recorded as the
+            # operator-visible scale_factor). base_scale is already in
+            # [min_scale, 1.0] (time_aware_scale clamps it), so the
+            # non-adaptive path needs no extra clamp.
+            scale = max(min(scale, 1.0), self.config.min_scale)
             logger.debug(f"Adaptive scaling: similarity={similarity:.4f}, scale={scale:.4f}")
         else:
             scale = base_scale
@@ -779,6 +806,21 @@ class SLAOMerger:
 
             merged_value = self._merged_state[key]
 
+            # CONTINUAL-A-005: normalize the accumulator tensor onto the new
+            # value's device before any arithmetic. On a RESUMED session the
+            # accumulator is rehydrated by ``load()`` via ``torch.load`` onto
+            # whatever device it was serialized from (CPU for a CPU-saved
+            # checkpoint), while ``new_value`` comes from the LIVE model that
+            # may sit on CUDA. ``merge_B_matrices`` (B_merged + s*(B_new -
+            # B_merged)) would then raise a device-mismatch RuntimeError on
+            # the FIRST resumed merge. A no-op when devices already match
+            # (the steady-state fresh-session path), so the happy path is
+            # byte-identical; we also write the normalized tensor back so the
+            # hard-replace A-branch and subsequent runs stay device-coherent.
+            if isinstance(merged_value, torch.Tensor) and merged_value.device != new_value.device:
+                merged_value = merged_value.to(new_value.device)
+                self._merged_state[key] = merged_value
+
             # Phase 4.2: Get layer-specific scale if enabled
             if self.config.use_layer_scaling and total_layers:
                 layer_scale = get_layer_scale(
@@ -789,6 +831,15 @@ class SLAOMerger:
                     late_scale=self.config.layer_scale_late,
                 )
                 effective_scale = scale * layer_scale
+                # CONTINUAL-A-002: clamp the COMBINED weight too. ``scale``
+                # is already clamped above, but ``layer_scale`` is operator-
+                # configurable (layer_scale_early/middle/late) and a value
+                # >1.0 would re-introduce an EMA weight >1.0 that
+                # extrapolates past the new adapter. Clamp at the last hop
+                # before merge_B_matrices.
+                effective_scale = max(
+                    min(effective_scale, 1.0), self.config.min_scale
+                )
             else:
                 effective_scale = scale
 
@@ -797,6 +848,20 @@ class SLAOMerger:
                 self._merged_state[key] = merge_A_matrices(new_value)
                 a_count += 1
                 kind = "lora_A"
+            elif "lora_magnitude_vector" in key:
+                # CONTINUAL-A-006: DoRA magnitude vector. DoRA decomposes the
+                # weight as W = m · (W0 + BA)/||W0 + BA||, where the magnitude
+                # ``m`` (PEFT key ``...lora_magnitude_vector...``) is retrained
+                # every run and is tightly coupled to the *current* direction.
+                # The direction's A matrix is HARD-REPLACED above (asymmetric
+                # SLAO policy), so EMA-blending ``m`` independently — the
+                # generic "other" branch's old behavior — would leave the
+                # magnitude describing a stale direction and produce an
+                # internally inconsistent adapter. Treat ``m`` as fresh
+                # (replace), mirroring the A-matrix asymmetry, so the
+                # magnitude/direction pair stays coherent across merges.
+                self._merged_state[key] = merge_A_matrices(new_value)
+                kind = "lora_magnitude"
             elif ".lora_B." in key:
                 # B matrix: time-aware merge with layer-specific scale
                 self._merged_state[key] = merge_B_matrices(
@@ -1014,7 +1079,8 @@ class SLAOMerger:
             # could only detect this by diff-ing logs across sessions.
             # The ``version`` field anchors the schema for v1.4 migration.
             history_data = {
-                "version": "1.0",
+                # CORE-B-006: source from the class constant (see load()).
+                "version": self.CURRENT_SLAO_VERSION,
                 "created_at": datetime.now().isoformat(),
                 "run_index": self._run_index,
                 "run_id": run_id,
@@ -1113,12 +1179,40 @@ class SLAOMerger:
         try:
             # Security check for PyTorch version
             check_torch_security()
-            self._merged_state = torch.load(weights_path, weights_only=True)
+            loaded_state = torch.load(weights_path, weights_only=True)
         except Exception as e:
             raise SLAOCheckpointError(
                 "load", str(weights_path),
                 f"Failed to load weights: {e}"
             ) from e
+
+        # Stage C amend CORE-B-007: structural validation. ``torch.load`` of a
+        # corrupt/truncated/wrong-kind file can return a non-dict (e.g. a bare
+        # tensor, a list, or an empty dict) without raising. The merger then
+        # carries garbage as its accumulator and every subsequent merge feeds
+        # the corruption forward — silently. Assert the contract the rest of
+        # SLAOMerger relies on (a dict mapping str -> torch.Tensor with at
+        # least one tensor) and fail loud here, at the load seam, where the
+        # operator can still recover from a prior checkpoint.
+        if not isinstance(loaded_state, dict):
+            raise SLAOCheckpointError(
+                "load", str(weights_path),
+                f"merged_lora.pt did not deserialize to a state dict "
+                f"(got {type(loaded_state).__name__}); the file is corrupt "
+                f"or was not written by SLAOMerger.save(). Re-run from an "
+                f"earlier boundary checkpoint."
+            )
+        tensor_count = sum(
+            1 for v in loaded_state.values() if isinstance(v, torch.Tensor)
+        )
+        if tensor_count == 0:
+            raise SLAOCheckpointError(
+                "load", str(weights_path),
+                f"merged_lora.pt deserialized to a {len(loaded_state)}-entry "
+                f"dict but contains zero tensors; the accumulator is empty or "
+                f"corrupt. Re-run from an earlier boundary checkpoint."
+            )
+        self._merged_state = loaded_state
 
         # Load history
         history_path = load_dir / "merge_history.json"
@@ -1134,12 +1228,13 @@ class SLAOMerger:
                 # a schema mismatch. v1.4 will add a real migrator; v1.3
                 # just fails-loud-but-keeps-going.
                 disk_version = str(history_data.get("version") or "0.0")
-                _CURRENT_SLAO_SCHEMA = "1.0"
-                if disk_version != _CURRENT_SLAO_SCHEMA:
+                # CORE-B-006: compare against the class constant that save()
+                # also writes, so the two surfaces never drift.
+                if disk_version != self.CURRENT_SLAO_VERSION:
                     logger.warning(
                         f"SLAO merge_history.json on disk has "
                         f"version={disk_version!r} but this build expects "
-                        f"{_CURRENT_SLAO_SCHEMA!r}. Missing fields will fall "
+                        f"{self.CURRENT_SLAO_VERSION!r}. Missing fields will fall "
                         f"back to runtime defaults — pass them explicitly on "
                         f"the resumed session to silence this warning and "
                         f"preserve prior merge math."
@@ -1275,13 +1370,33 @@ def merge_lora_weights(
         return merged
 
     elif method == "average":
-        # Simple averaging (no time-aware scaling)
+        # Simple averaging (no time-aware scaling).
+        #
+        # CONTINUAL-A-008: average keys present in BOTH dicts, but don't
+        # silently drop keys that appear in only one side. Pre-fix the loop
+        # iterated ``base_lora`` alone, so a key present only in ``new_lora``
+        # (e.g. a layer that the upstream run added via a target_modules
+        # change, or a DoRA magnitude vector the base lacked) vanished from
+        # the merged result — an asymmetric, silent data loss. We now keep
+        # every key from either side: averaged where both carry a tensor,
+        # passed through (cloned) where only one side does. This mirrors the
+        # SLAO path, which clones new-only keys into the accumulator.
         result = {}
-        for key in base_lora:
-            if isinstance(base_lora[key], torch.Tensor) and key in new_lora:
-                result[key] = (base_lora[key] + new_lora[key]) / 2
+        for key, base_value in base_lora.items():
+            new_value = new_lora.get(key)
+            if isinstance(base_value, torch.Tensor) and isinstance(new_value, torch.Tensor):
+                result[key] = (base_value + new_value) / 2
             else:
-                result[key] = base_lora[key]
+                # Base-only key, or a non-tensor on either side: keep base.
+                result[key] = base_value
+        # Fold in keys present ONLY in new_lora so they aren't dropped.
+        for key, new_value in new_lora.items():
+            if key not in result:
+                result[key] = (
+                    new_value.clone()
+                    if isinstance(new_value, torch.Tensor)
+                    else new_value
+                )
         return result
 
     elif method == "replace":

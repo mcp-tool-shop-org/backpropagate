@@ -19,6 +19,7 @@ import pytest
 # Import torch conditionally for environments without GPU
 torch = pytest.importorskip("torch")
 
+from backpropagate.exceptions import SLAOCheckpointError
 from backpropagate.slao import (
     MergeResult,
     SLAOConfig,
@@ -160,10 +161,11 @@ class TestTimeAwareScale:
 
     def test_scale_log_type(self):
         """Log scaling should be 1/log(i+1)."""
-        # Run 1: 1/log(2) ≈ 1.443
+        # Run 1: raw 1/log(2) ≈ 1.443 is CLAMPED to 1.0 (CONTINUAL-A-001 — an
+        # EMA weight > 1.0 over-extrapolates past the new adapter and breaks
+        # the anti-catastrophic-forgetting invariant the merger exists to hold).
         scale_1 = time_aware_scale(1, scaling_type="log")
-        expected_1 = 1.0 / math.log(2)
-        assert abs(scale_1 - expected_1) < 1e-6, f"Log scale at run 1 must be {expected_1}"
+        assert abs(scale_1 - 1.0) < 1e-6, "Log scale at run 1 must be clamped to 1.0"
 
         # Run 2: 1/log(3) ≈ 0.910
         scale_2 = time_aware_scale(2, scaling_type="log")
@@ -450,6 +452,68 @@ class TestSLAOMerger:
         assert merger.config.scaling_type == "linear"
         assert merger.config.min_scale == 0.2
         assert merger.config.use_orthogonal_init is False
+
+    def test_load_rejects_non_dict_state(self, tmp_path):
+        """CORE-B-007: load() must reject a merged_lora.pt that does not
+        deserialize to a dict.
+
+        ``torch.load`` of a corrupt / wrong-kind file can return a bare
+        tensor (or list) without raising. Pre-fix the merger silently
+        carried that garbage as its accumulator and fed it forward through
+        every subsequent merge. Now load() fails loud at the seam.
+        """
+        save_dir = tmp_path / "merger"
+        save_dir.mkdir()
+        # A bare tensor, not a state dict.
+        torch.save(torch.randn(4, 4), save_dir / "merged_lora.pt")
+
+        merger = SLAOMerger()
+        with pytest.raises(SLAOCheckpointError) as exc_info:
+            merger.load(str(save_dir))
+        assert "state dict" in str(exc_info.value).lower()
+
+    def test_load_rejects_zero_tensor_dict(self, tmp_path):
+        """CORE-B-007: load() must reject a dict that contains no tensors.
+
+        An empty/tensorless dict is structurally a "state dict" but carries
+        nothing to merge — treating it as a valid accumulator silently
+        zeroes out catastrophic-forgetting protection. Fail loud instead.
+        """
+        save_dir = tmp_path / "merger"
+        save_dir.mkdir()
+        # A dict with only non-tensor values.
+        torch.save({"meta": "not a tensor", "count": 3}, save_dir / "merged_lora.pt")
+
+        merger = SLAOMerger()
+        with pytest.raises(SLAOCheckpointError) as exc_info:
+            merger.load(str(save_dir))
+        assert "zero tensors" in str(exc_info.value).lower()
+
+    def test_load_accepts_valid_state_dict(self, sample_lora_state, tmp_path):
+        """CORE-B-007 guard: a normal save/load round-trip still succeeds —
+        the structural validation must not reject legitimate accumulators."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        save_dir = tmp_path / "merger"
+        merger.save(str(save_dir))
+
+        loaded = SLAOMerger()
+        loaded.load(str(save_dir))  # must not raise
+        assert loaded._merged_state is not None
+
+    def test_save_writes_version_from_constant(self, sample_lora_state, tmp_path):
+        """CORE-B-006: merge_history.json carries the version sourced from
+        the single ``CURRENT_SLAO_VERSION`` constant (not a duplicated
+        literal that could drift from the load-side check)."""
+        import json
+
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        save_dir = tmp_path / "merger"
+        merger.save(str(save_dir))
+
+        history = json.loads((save_dir / "merge_history.json").read_text())
+        assert history["version"] == SLAOMerger.CURRENT_SLAO_VERSION
 
 
 class TestMergeLoraWeights:
@@ -919,3 +983,359 @@ class TestPhase4Integration:
         assert result.scale_factor > 0, "Scale factor should be positive"
         assert result.a_matrices_merged > 0, "Should merge A matrices"
         assert result.b_matrices_merged > 0, "Should merge B matrices"
+
+
+class TestScaleUpperClamp:
+    """Regression tests for CONTINUAL-A-001 + CONTINUAL-A-002.
+
+    The B-matrix EMA weight passed into ``merge_B_matrices`` must ALWAYS be
+    within ``[min_scale, 1.0]``. A weight >1.0 over-extrapolates *past* the
+    new adapter (B_merged + s*(B_new - B_merged) with s>1 lands beyond
+    B_new), destroying the anti-catastrophic-forgetting invariant: instead
+    of moving the accumulator toward the freshly-trained adapter, it shoots
+    past it, amplifying the new task's delta and discarding more of the
+    prior knowledge than even a full replacement would.
+
+    Two leaks fed an out-of-range weight into the merge:
+      * A-001 — ``time_aware_scale``'s callable / string branches returned
+        ``max(scale, min_scale)`` with no upper clamp, so a custom schedule
+        returning >1.0 flowed straight through.
+      * A-002 — ``adaptive_scale`` multiplies the base scale by up to
+        ``adaptive_scale_range[1]`` (default 1.5), so e.g. run-2 base
+        0.707 * 1.5 = 1.06; ``merge()`` used this UNCLAMPED both as the
+        B-merge weight and as ``effective_scale = scale * layer_scale``.
+    """
+
+    # --- A-001: time_aware_scale upper clamp -------------------------------
+
+    def test_callable_schedule_clamped_above_1(self):
+        """A custom callable returning >1.0 must clamp to 1.0 (docstring
+        contract: 'clamped to [min_scale, 1.0]')."""
+        # Schedule returns a constant 5.0 regardless of run index.
+        scale = time_aware_scale(3, scaling_type=lambda i: 5.0)
+        assert scale == 1.0, (
+            f"callable schedule returning 5.0 must clamp to 1.0, got {scale}"
+        )
+
+    def test_callable_schedule_clamped_below_min(self):
+        """A custom callable returning <min_scale must clamp up to min_scale
+        (the existing lower-clamp must survive the upper-clamp fix)."""
+        scale = time_aware_scale(3, scaling_type=lambda i: 0.0, min_scale=0.2)
+        assert scale == 0.2, (
+            f"callable schedule returning 0.0 must clamp to min_scale 0.2, got {scale}"
+        )
+
+    def test_callable_schedule_passthrough_in_range(self):
+        """An in-range callable value is returned unchanged."""
+        scale = time_aware_scale(3, scaling_type=lambda i: 0.6)
+        assert abs(scale - 0.6) < 1e-9, f"in-range value must pass through, got {scale}"
+
+    def test_all_string_schedules_within_unit_interval(self):
+        """No built-in string schedule may exceed 1.0 for any run index
+        (log at run 1 = 1/log(2) ≈ 1.443 would violate this without the
+        upper clamp — the canonical A-001 string-branch leak)."""
+        for stype in ("sqrt", "linear", "log", "constant"):
+            for i in range(1, 50):
+                scale = time_aware_scale(i, scaling_type=stype)
+                assert 0.1 <= scale <= 1.0, (
+                    f"{stype} scale at run {i} = {scale} escaped [min_scale, 1.0]"
+                )
+
+    def test_log_schedule_run_1_clamped(self):
+        """Pin the specific log-at-run-1 case: raw 1/log(2) ≈ 1.443 must
+        clamp to exactly 1.0."""
+        scale = time_aware_scale(1, scaling_type="log")
+        assert scale == 1.0, (
+            f"log scale at run 1 (raw ~1.443) must clamp to 1.0, got {scale}"
+        )
+
+    # --- A-002: adaptive_scale reaches the B-merge clamped -----------------
+
+    def _capture_merge_scales(self, merger, new_lora, run_index):
+        """Run a merge while intercepting every ``scale`` value handed to
+        ``merge_B_matrices``. Returns the list of captured scales."""
+        captured: list[float] = []
+        import backpropagate.slao as slao_mod
+
+        real_merge_B = slao_mod.merge_B_matrices
+
+        def _spy(B_merged, B_new, scale):
+            captured.append(float(scale))
+            return real_merge_B(B_merged, B_new, scale)
+
+        from unittest.mock import patch
+
+        with patch.object(slao_mod, "merge_B_matrices", _spy):
+            merger.merge(new_lora, run_index=run_index)
+        return captured
+
+    def test_adaptive_scale_reaching_b_merge_is_clamped(self):
+        """With adaptive scaling and a near-identical adapter (similarity≈1),
+        the base scale gets multiplied by ~1.5 → would-be >1.0. Every value
+        reaching merge_B_matrices must be clamped into [min_scale, 1.0]."""
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        # Near-identical → cosine similarity ≈ 1 → multiplier ≈ 1.5.
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+
+        captured = self._capture_merge_scales(merger, new_lora, run_index=2)
+
+        assert captured, "merge_B_matrices was never called"
+        for s in captured:
+            assert 0.1 <= s <= 1.0, (
+                f"scale {s} handed to merge_B_matrices escaped [min_scale, 1.0]"
+            )
+
+    def test_adaptive_with_layer_scaling_clamped(self):
+        """effective_scale = scale * layer_scale must also be clamped — the
+        ~791 site. Layer scaling can only shrink (factors <=0.7) but the
+        clamp on the combined value is the invariant under test; with
+        adaptive pushing >1.0 first, the product before clamping could still
+        land >1.0 for early layers if the implementation clamped in the
+        wrong order. Assert the value that reaches the merge stays in range."""
+        config = SLAOConfig(
+            use_adaptive_scaling=True,
+            use_layer_scaling=True,
+            layer_scale_late=1.0,  # late layers keep the full (clamped) scale
+            min_scale=0.1,
+        )
+        merger = SLAOMerger(config)
+        base = {}
+        for i in range(4):
+            base[f"model.layers.{i}.lora_A.weight"] = torch.ones(8, 16)
+            base[f"model.layers.{i}.lora_B.weight"] = torch.ones(32, 8)
+        merger.initialize(base)
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+
+        captured = self._capture_merge_scales(merger, new_lora, run_index=2)
+
+        assert captured, "merge_B_matrices was never called"
+        for s in captured:
+            assert 0.1 <= s <= 1.0, (
+                f"effective_scale {s} reaching merge_B_matrices escaped "
+                f"[min_scale, 1.0]"
+            )
+
+    def test_merge_does_not_extrapolate_past_b_new(self):
+        """The load-bearing invariant: a would-be >1.0 scale must NOT push
+        the merged B past B_new.
+
+        Setup forces a >1.0 raw scale: B_merged=ones, B_new=ones*2 are
+        parallel non-zero vectors → cosine similarity 1.0 → adaptive
+        multiplier 1.5 → raw scale 0.707*1.5 = 1.06. The EMA update is
+        merged = B_merged + s*(B_new - B_merged) = 1 + s*(2-1) = 1 + s.
+          * Pre-fix (s=1.06): merged ≈ 2.06  → PAST B_new=2 (over-extrapolated).
+          * Post-fix (s clamped to 1.0): merged = 2.0 → lands AT B_new, never past.
+        """
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        # B_new parallel to B_merged but larger → similarity 1.0, B_new=2.
+        new_lora = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8) * 2.0,
+        }
+
+        result = merger.merge(new_lora, run_index=2)
+        merged_b = merger.get_merged_lora()["model.layers.0.lora_B.weight"]
+
+        # B_new is all-2.0. With the clamp, s <= 1.0 so merged_b <= 2.0
+        # everywhere. Pre-fix s≈1.06 would land merged_b ≈ 2.06 > 2.0
+        # (extrapolation past the new adapter).
+        assert torch.all(merged_b <= 2.0 + 1e-6), (
+            f"merged B extrapolated past B_new=2.0 (max={merged_b.max().item()}); "
+            f"scale_factor={result.scale_factor}"
+        )
+
+    def test_reported_scale_factor_clamped(self):
+        """MergeResult.scale_factor (the value also used as the B-merge
+        weight when layer scaling is off) must itself be clamped — it's the
+        operator-visible record of what the merge actually applied."""
+        config = SLAOConfig(use_adaptive_scaling=True, min_scale=0.1)
+        merger = SLAOMerger(config)
+        base = {
+            "model.layers.0.lora_A.weight": torch.ones(8, 16),
+            "model.layers.0.lora_B.weight": torch.ones(32, 8),
+        }
+        merger.initialize(base)
+        new_lora = {k: v.clone() * 1.0001 for k, v in base.items()}
+        result = merger.merge(new_lora, run_index=2)
+        assert 0.1 <= result.scale_factor <= 1.0, (
+            f"reported scale_factor {result.scale_factor} escaped [min_scale, 1.0]"
+        )
+
+
+class TestMergeDeviceNormalization:
+    """CONTINUAL-A-005: the accumulator tensor must be aligned to the new
+    value's device before any merge arithmetic.
+
+    On a RESUMED session ``load()`` rehydrates the accumulator via
+    ``torch.load`` onto whatever device it was serialized from (CPU for a
+    CPU-saved checkpoint), while the incoming ``new_lora_state`` comes from
+    the live model (possibly CUDA). Without normalization the first resumed
+    ``merge_B_matrices`` (B_merged + s*(B_new - B_merged)) raises a
+    device-mismatch RuntimeError. These tests pin the alignment + the
+    no-op-on-match guarantee; on a CPU-only box they exercise the same code
+    path (the ``.device != .device`` branch is simply not taken).
+    """
+
+    @pytest.fixture
+    def sample_lora_state(self):
+        return {
+            "model.layers.0.lora_A.weight": torch.randn(8, 16),
+            "model.layers.0.lora_B.weight": torch.randn(32, 8),
+        }
+
+    def test_save_load_merge_roundtrip_no_device_error(self, sample_lora_state):
+        """The resume shape: initialize → save → load into a fresh merger →
+        merge a live adapter. Must not raise, and merged tensors must land on
+        the incoming adapter's device."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "slao"
+            merger.save(str(save_path))
+
+            resumed = SLAOMerger()
+            resumed.load(str(save_path))
+
+            new_lora = {k: torch.randn_like(v) for k, v in sample_lora_state.items()}
+            # Must not raise a device-mismatch RuntimeError.
+            resumed.merge(new_lora, run_index=2)
+
+            merged = resumed.get_merged_lora()
+            for key, new_value in new_lora.items():
+                assert merged[key].device == new_value.device, (
+                    f"{key}: merged tensor on {merged[key].device}, "
+                    f"new value on {new_value.device} — accumulator was not "
+                    f"aligned to the new value's device"
+                )
+
+    def test_merge_aligns_accumulator_to_new_value_device(self, sample_lora_state):
+        """Directly exercise the alignment: after a merge, every accumulator
+        tensor shares the device of the corresponding new tensor."""
+        merger = SLAOMerger()
+        merger.initialize(sample_lora_state)
+        new_lora = {k: torch.randn_like(v) for k, v in sample_lora_state.items()}
+        merger.merge(new_lora, run_index=2)
+        merged = merger.get_merged_lora()
+        for key, new_value in new_lora.items():
+            assert merged[key].device == new_value.device
+
+
+class TestDoRAMagnitudeMerge:
+    """CONTINUAL-A-006: DoRA magnitude vectors are hard-REPLACED (treated as
+    fresh), not EMA-blended.
+
+    DoRA decomposes W = m · (W0 + BA)/||W0 + BA||. The magnitude ``m`` (PEFT
+    key ``...lora_magnitude_vector...``) is retrained every run and is coupled
+    to the *current* direction. SLAO hard-replaces the direction's A matrix,
+    so EMA-blending ``m`` independently (the old generic 'other' branch) would
+    leave the magnitude describing a stale direction → an internally
+    inconsistent adapter. Treating ``m`` as fresh keeps the pair coherent.
+    """
+
+    def _state(self, a_val, b_val, m_val):
+        return {
+            "model.layers.0.lora_A.weight": torch.full((8, 16), float(a_val)),
+            "model.layers.0.lora_B.weight": torch.full((32, 8), float(b_val)),
+            "model.layers.0.lora_magnitude_vector.weight": torch.full(
+                (32,), float(m_val)
+            ),
+        }
+
+    def test_magnitude_vector_is_replaced_not_blended(self):
+        """A run-2 magnitude vector must equal the NEW value exactly (replace),
+        not a midpoint between old and new (which an EMA blend would give)."""
+        merger = SLAOMerger()
+        base = self._state(a_val=1.0, b_val=1.0, m_val=1.0)
+        merger.initialize(base)
+
+        new_lora = self._state(a_val=5.0, b_val=5.0, m_val=9.0)
+        merger.merge(new_lora, run_index=2)
+
+        merged = merger.get_merged_lora()
+        mag = merged["model.layers.0.lora_magnitude_vector.weight"]
+        # Replaced: equals the new magnitude (9.0). An EMA blend with the
+        # run-2 sqrt scale (~0.707) would yield 1 + 0.707*(9-1) ≈ 6.66.
+        assert torch.allclose(mag, torch.full((32,), 9.0)), (
+            f"magnitude vector was blended, not replaced: got {mag.flatten()[0].item()} "
+            f"(expected 9.0; an EMA blend would land ~6.66)"
+        )
+
+    def test_magnitude_vector_matches_replaced_A_direction(self):
+        """Consistency: after merge, the magnitude AND the A matrix both equal
+        their fresh (run-2) values — the coupled pair stays in lockstep."""
+        merger = SLAOMerger()
+        merger.initialize(self._state(1.0, 1.0, 1.0))
+        new_lora = self._state(a_val=5.0, b_val=5.0, m_val=9.0)
+        merger.merge(new_lora, run_index=2)
+        merged = merger.get_merged_lora()
+        # A is hard-replaced (existing SLAO contract) ...
+        assert torch.allclose(
+            merged["model.layers.0.lora_A.weight"], torch.full((8, 16), 5.0)
+        )
+        # ... and so is the magnitude (the A-006 fix).
+        assert torch.allclose(
+            merged["model.layers.0.lora_magnitude_vector.weight"],
+            torch.full((32,), 9.0),
+        )
+
+
+class TestMergeLoraWeightsAverageKeyUnion:
+    """CONTINUAL-A-008: ``merge_lora_weights(method='average')`` must not drop
+    keys present in only one of the two state dicts."""
+
+    def test_new_only_key_is_preserved(self):
+        """A key present only in ``new_lora`` survives into the result."""
+        base = {"layer.lora_A.weight": torch.randn(8, 16)}
+        new = {
+            "layer.lora_A.weight": torch.randn(8, 16),
+            "layer.lora_B.weight": torch.randn(32, 8),  # new-only key
+        }
+        result = merge_lora_weights(base, new, method="average")
+        assert "layer.lora_B.weight" in result, (
+            "average method dropped a key present only in new_lora"
+        )
+        # The new-only key passes through as a clone of the new tensor.
+        assert torch.allclose(result["layer.lora_B.weight"], new["layer.lora_B.weight"])
+
+    def test_base_only_key_is_preserved(self):
+        """A key present only in ``base_lora`` survives (pre-fix behavior kept)."""
+        base = {
+            "layer.lora_A.weight": torch.randn(8, 16),
+            "layer.lora_B.weight": torch.randn(32, 8),  # base-only key
+        }
+        new = {"layer.lora_A.weight": torch.randn(8, 16)}
+        result = merge_lora_weights(base, new, method="average")
+        assert "layer.lora_B.weight" in result
+        assert torch.allclose(result["layer.lora_B.weight"], base["layer.lora_B.weight"])
+
+    def test_common_keys_still_averaged(self):
+        """Keys in both dicts are still the elementwise mean (no regression)."""
+        base = {"layer.lora_A.weight": torch.ones(8, 16)}
+        new = {"layer.lora_A.weight": torch.ones(8, 16) * 3.0}
+        result = merge_lora_weights(base, new, method="average")
+        assert torch.allclose(result["layer.lora_A.weight"], torch.full((8, 16), 2.0))
+
+    def test_new_only_clone_is_independent(self):
+        """The preserved new-only key must be a clone (mutating the source
+        must not bleed into the merged result)."""
+        base = {"layer.lora_A.weight": torch.randn(8, 16)}
+        new_b = torch.ones(32, 8)
+        new = {"layer.lora_A.weight": torch.randn(8, 16), "layer.lora_B.weight": new_b}
+        result = merge_lora_weights(base, new, method="average")
+        new_b[0, 0] = 999.0
+        assert result["layer.lora_B.weight"][0, 0] != 999.0, (
+            "new-only key was stored by reference, not cloned"
+        )

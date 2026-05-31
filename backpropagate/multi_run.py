@@ -37,11 +37,13 @@ Usage:
 import gc
 import logging
 import os
+import socket
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -100,6 +102,79 @@ __all__ = [
     "SpeedrunConfig",
     "SpeedrunResult",
 ]
+
+
+# =============================================================================
+# CONTINUAL-A-003: auto-resume liveness guard
+# =============================================================================
+#
+# Pre-fix, ``_maybe_resume`` auto-adopted the most-recent ``status='running'``
+# multi-run entry within the 24h staleness window (in_progress_runs) with NO
+# way to tell a CRASHED in-progress session from a LIVE one. Two operators (or
+# two processes) pointing at the same ``checkpoint_dir`` would both latch onto
+# the same run_id and corrupt the shared SLAO accumulator — both sessions write
+# the same ``run_NNN/slao`` checkpoint dirs and the SLAO merge_history diverges
+# silently.
+#
+# The fix records ``host`` + ``pid`` + a refreshed ``heartbeat_at`` on the
+# running entry (at session start and after every saved run) and teaches
+# ``_maybe_resume`` to SKIP an entry that is provably live:
+#   * same host AND the recorded PID is alive on this machine (deterministic
+#     for the common single-box double-launch), OR
+#   * heartbeat is fresh within ``_LIVENESS_HEARTBEAT_FRESH_SECONDS`` (the
+#     cross-host / PID-reuse fallback).
+# The 24h ``in_progress_runs`` window remains the fallback for genuinely-stale
+# crashed runs whose heartbeat has long gone cold.
+
+# A live multi-run refreshes its heartbeat at session start and after every
+# saved run. A run can legitimately take a long time, so the freshness window
+# must comfortably exceed a single run's wall-clock while staying far below the
+# 24h crashed-orphan floor. 30 minutes is a generous middle ground: a holder
+# whose heartbeat is younger than this is treated as live (skip auto-resume);
+# older than this falls through to the normal stale-window logic so a genuinely
+# crashed run mid-long-step is still recoverable.
+_LIVENESS_HEARTBEAT_FRESH_SECONDS: float = 30 * 60  # 30 minutes
+
+
+def _current_host() -> str:
+    """Best-effort stable host identifier for the liveness guard."""
+    try:
+        return socket.gethostname()
+    except Exception:  # pragma: no cover — gethostname is effectively infallible
+        return "unknown-host"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with ``pid`` is currently alive on THIS host.
+
+    Cross-platform: POSIX uses ``os.kill(pid, 0)`` (signal 0 probes existence
+    without delivering a signal); Windows lacks reliable signal-0 semantics so
+    we fall back to ``os.kill`` and treat its specific errnos the same way
+    Python's signal layer does. On any ambiguity we return True (fail-safe:
+    "assume live" means we DON'T steal a possibly-live run_id — the worse
+    failure mode here is corrupting a live session, so we bias toward caution).
+    """
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        # POSIX: no such process — definitively dead.
+        return False
+    except PermissionError:
+        # Process exists but is owned by another user — definitively alive.
+        return True
+    except OSError as exc:
+        # Windows raises OSError with errno EINVAL for a dead PID and
+        # ESRCH-equivalents vary; be conservative and treat "invalid" as dead,
+        # everything else as alive.
+        import errno
+
+        if getattr(exc, "winerror", None) == 87:  # ERROR_INVALID_PARAMETER
+            return False
+        # ESRCH = no such process; any other errno → assume alive (cautious).
+        return exc.errno != errno.ESRCH
+    return True
 
 
 def _build_abort_callback(trainer: "MultiRunTrainer") -> Any:
@@ -294,8 +369,11 @@ class MultiRunConfig:
 
     # Phase 4.3: Early stopping per run
     early_stopping: bool = False
-    early_stopping_patience: int = 2  # Stop if val loss increases for N consecutive runs
-    early_stopping_threshold: float = 0.0  # Min improvement required (0.0 = any increase is bad)
+    # CONTINUAL-A-009: patience is counted against the BEST val_loss seen so
+    # far, not the previous run. Stop after this many consecutive runs with
+    # no improvement over the running best (see _check_early_stopping).
+    early_stopping_patience: int = 2  # Stop after N runs with no improvement over best
+    early_stopping_threshold: float = 0.0  # Min improvement over best required (0.0 = must strictly beat best)
 
     # Phase 5.3: Checkpoint management
     checkpoint_keep_best_n: int = 3  # Keep N best checkpoints by validation loss
@@ -657,6 +735,35 @@ class MultiRunTrainer:
         )
         logger.info(f"Merge mode: {self.config.merge_mode.value}, oom_recovery={self.oom_recovery}")
 
+        # CONTINUAL-A-006 (v1.4): surface the DoRA + SLAO magnitude contract at
+        # construction so it's discoverable for anyone debugging "why does my
+        # merged magnitude reflect only the latest run?". When DoRA is active
+        # AND we merge via SLAO, the DoRA magnitude vector
+        # (``...lora_magnitude_vector...``) is HARD-REPLACED on every merge —
+        # treated as fresh, mirroring the asymmetric A-matrix policy — NOT
+        # EMA-merged like the LoRA B matrix. This is correct: the magnitude is
+        # tightly coupled to the hard-replaced A-direction, and blending it
+        # would leave it describing a stale direction (see SLAOMerger.merge()).
+        # Logged at INFO (not WARN) on purpose — nothing is wrong with this
+        # config; it's a documented contract, not a risk, and a WARN on a
+        # correct + recommended combo would only breed warning-fatigue. The
+        # effective DoRA value resolves the same way the inner Trainer resolves
+        # it: explicit ``config.use_dora`` wins, else fall back to
+        # ``settings.lora.use_dora`` (the env-var-driven layer).
+        _effective_use_dora = (
+            self.config.use_dora
+            if self.config.use_dora is not None
+            else settings.lora.use_dora
+        )
+        if self.config.merge_mode == MergeMode.SLAO and _effective_use_dora:
+            logger.info(
+                "DoRA + SLAO: DoRA magnitude vectors (lora_magnitude_vector) "
+                "are hard-replaced (treated as fresh) on every merge — not "
+                "EMA-merged like LoRA B matrices — so they stay coherent with "
+                "the hard-replaced A-direction. Merged magnitudes therefore "
+                "reflect the latest run only, by design (CONTINUAL-A-006)."
+            )
+
     def _maybe_resume(self, checkpoint_dir: Path) -> str | None:
         """F-002: resolve the resume hint into a concrete run_id (or None).
 
@@ -728,18 +835,128 @@ class MultiRunTrainer:
         in_progress = [r for r in in_progress if r.get("session_kind") == "multi_run"]
         if not in_progress:
             return None
-        # Pick the most recent.
-        in_progress.sort(
+
+        # CONTINUAL-A-003: liveness guard. An entry left ``status='running'``
+        # could be EITHER a crashed session (safe to adopt) OR a live holder
+        # (adopting it would make two sessions share one run_id and corrupt
+        # the SLAO accumulator). Filter out provably-live holders before
+        # picking a resume candidate. A genuinely-stale crashed run (heartbeat
+        # cold, PID dead) survives the filter and is still resumable.
+        resumable: list[dict[str, Any]] = []
+        for entry in in_progress:
+            if self._entry_is_live(entry):
+                logger.info(
+                    "Skipping auto-resume of run_id=%r: it appears to be a "
+                    "LIVE multi-run holder (host=%r pid=%r heartbeat=%r). "
+                    "Starting a fresh session instead so two processes don't "
+                    "share one run_id and corrupt the SLAO accumulator. Pass "
+                    "resume_from=%r explicitly to force-adopt it if you know "
+                    "the holder is dead.",
+                    entry.get("run_id"),
+                    entry.get("host"),
+                    entry.get("pid"),
+                    entry.get("heartbeat_at"),
+                    entry.get("run_id"),
+                )
+                continue
+            resumable.append(entry)
+
+        if not resumable:
+            # Every in-progress entry is a live holder — start fresh.
+            return None
+
+        # Pick the most recent resumable (crashed) entry.
+        resumable.sort(
             key=lambda r: str(r.get("started_at") or r.get("timestamp") or ""),
             reverse=True,
         )
-        candidate = in_progress[0]
+        candidate = resumable[0]
         run_id = str(candidate.get("run_id"))
         logger.info(
             f"Auto-detected in-progress multi-run {run_id} — resuming. "
             "Pass resume_from='off' to start fresh."
         )
         return run_id
+
+    @staticmethod
+    def _entry_is_live(entry: dict[str, Any]) -> bool:
+        """CONTINUAL-A-003: decide whether a ``status='running'`` history
+        entry belongs to a process that is still alive (so auto-resume must
+        NOT adopt it).
+
+        Two independent signals, OR'd together — either one proving liveness
+        is enough to refuse adoption (bias toward NOT stealing a live run_id):
+
+        1. **Same-host PID liveness** — if the entry was stamped on THIS host
+           and the recorded PID is alive, it's a live holder. Deterministic
+           for the common single-box double-launch.
+        2. **Fresh heartbeat** — if ``heartbeat_at`` is younger than
+           :data:`_LIVENESS_HEARTBEAT_FRESH_SECONDS`, treat it as live. Covers
+           the cross-host case (where we can't check the remote PID) and the
+           PID-reuse edge (a different live process happens to reuse the PID).
+
+        Returns False for legacy entries that carry neither ``pid`` nor
+        ``heartbeat_at`` (pre-A-003 records) so existing crashed-run resume
+        behavior is preserved — the 24h ``in_progress_runs`` window remains
+        the guard for those.
+        """
+        # Signal 1: same-host PID liveness.
+        host = entry.get("host")
+        pid = entry.get("pid")
+        if host is not None and host == _current_host() and isinstance(pid, int):
+            if _pid_alive(pid):
+                return True
+            # PID dead on this host → not live via this signal; fall through
+            # to the heartbeat check (cheap, and guards against PID-reuse).
+
+        # Signal 2: fresh heartbeat (host-agnostic).
+        hb = entry.get("heartbeat_at")
+        if hb:
+            try:
+                parsed = datetime.fromisoformat(str(hb))
+            except (ValueError, TypeError):
+                return False
+            age = (datetime.now() - parsed).total_seconds()
+            if 0 <= age <= _LIVENESS_HEARTBEAT_FRESH_SECONDS:
+                return True
+
+        return False
+
+    def _stamp_liveness(self) -> None:
+        """CONTINUAL-A-003: record host + pid + a refreshed heartbeat on this
+        session's running history entry.
+
+        Called at session start (right after the entry is marked ``running``)
+        and again after every saved run so a long multi-hour session keeps a
+        warm heartbeat. Best-effort: history persistence is never allowed to
+        gate training, so any failure is logged at DEBUG and swallowed.
+
+        Stage C amend CORE-B-010 (doc note): the heartbeat is only refreshed
+        at run boundaries, not on a timer. A single run whose wall-clock
+        exceeds :data:`_LIVENESS_HEARTBEAT_FRESH_SECONDS` (30 min) — a very
+        large dataset chunk, a slow disk, or this ``update_run`` itself
+        blocking on cross-process lock contention from a sibling session —
+        can let the heartbeat go cold mid-run. The freshness window is sized
+        (30 min) to comfortably exceed a normal run; if your per-run
+        wall-clock approaches it, raise the window rather than relying on
+        more frequent stamping. The only consequence of a falsely-cold
+        heartbeat is that a *concurrent* launch on the same ``checkpoint_dir``
+        might (after the 24h stale floor also elapses) treat this still-live
+        session as crashed — the same-host PID-liveness signal (Signal 1 in
+        :meth:`_entry_is_live`) remains the primary guard for the common
+        single-box case and is unaffected by heartbeat age.
+        """
+        if self._run_history is None or self._run_id is None:
+            return
+        try:
+            self._run_history.update_run(
+                self._run_id,
+                host=_current_host(),
+                pid=os.getpid(),
+                heartbeat_at=datetime.now().isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001 — liveness stamp is best-effort
+            logger.debug(f"_stamp_liveness failed (non-fatal): {exc}")
 
     def _restore_session_state(
         self,
@@ -934,6 +1151,13 @@ class MultiRunTrainer:
                 f"RunHistoryManager.record_run_started failed: {hist_err}"
             )
         self._run_history = run_history
+
+        # CONTINUAL-A-003: stamp host + pid + heartbeat on the running entry
+        # so a CONCURRENT MultiRunTrainer pointed at the same checkpoint_dir
+        # can tell this live session apart from a crashed orphan and refuse
+        # to auto-adopt our run_id (which would corrupt the shared SLAO
+        # accumulator). Refreshed after every saved run in _execute_run.
+        self._stamp_liveness()
 
         # Phase 5.3: Initialize checkpoint manager
         checkpoint_policy = CheckpointPolicy(
@@ -1139,6 +1363,59 @@ class MultiRunTrainer:
                     pause_started = time.time()
                     pause_ceiling = float(getattr(self.config, "max_pause_seconds", 0.0) or 0.0)
                     while self._gpu_pause_event.is_set() and not self._should_abort:
+                        # Stage C amend CORE-B-002: the pause event is ONLY
+                        # cleared by ``_on_gpu_status``, which runs on the
+                        # GPU monitor thread. If that thread has died (an
+                        # unhandled exception, a crashed nvidia-smi the
+                        # monitor's own try/except couldn't survive), the
+                        # event can NEVER clear and this loop would otherwise
+                        # block until ``max_pause_seconds`` (default 30 min)
+                        # — or forever if the ceiling is disabled. Fail fast
+                        # the instant we detect the dead monitor so the
+                        # operator isn't wedged waiting on a thread that will
+                        # never resume them.
+                        mon = self._gpu_monitor
+                        mon_thread = getattr(mon, "_thread", None) if mon else None
+                        if mon is not None and (
+                            mon_thread is None or not mon_thread.is_alive()
+                        ):
+                            elapsed = time.time() - pause_started
+                            logger.error(
+                                f"GPU pause is active but the monitor thread "
+                                f"is dead (run_id={self._run_id}, next "
+                                f"run_index={run_idx}, elapsed={elapsed:.0f}s); "
+                                f"the cooldown event can never clear because "
+                                f"the thread that clears it has stopped. "
+                                f"Aborting instead of blocking on a resume "
+                                f"signal that will never arrive."
+                            )
+                            raise BackpropagateError(
+                                "GPU cooldown wait cannot complete: the GPU "
+                                "monitor thread has died, so the pause event "
+                                "will never be cleared. The run loop will not "
+                                "proceed against a GPU whose temperature the "
+                                "monitor can no longer confirm is safe.",
+                                code="RUNTIME_GPU_TEMPERATURE_CRITICAL",
+                                details={
+                                    "run_id": self._run_id,
+                                    "next_run_index": run_idx,
+                                    "elapsed_seconds": elapsed,
+                                    "monitor_thread_alive": False,
+                                },
+                                suggestion=(
+                                    "The background GPU monitor stopped "
+                                    "(check earlier logs for a 'GPU monitor "
+                                    "error' line). Verify GPU cooling with "
+                                    "nvidia-smi, then re-run. If the monitor "
+                                    "is crashing on a malformed environment, "
+                                    "disable it with "
+                                    "MultiRunConfig.enable_gpu_monitoring="
+                                    "False (you lose thermal auto-pause) or "
+                                    "fix the underlying nvidia-smi / pynvml "
+                                    "install."
+                                ),
+                                retryable=False,
+                            )
                         if pause_ceiling > 0.0 and (time.time() - pause_started) > pause_ceiling:
                             elapsed = time.time() - pause_started
                             logger.error(
@@ -1273,6 +1550,35 @@ class MultiRunTrainer:
             logger.warning(
                 f"RunHistoryManager.record_run_completed failed: {hist_err}"
             )
+            # Stage C amend CORE-B-003: record_run_completed is what flips
+            # status 'running' -> 'completed'. If it raised, the entry is
+            # stranded as 'running' forever — `backprop list-runs` shows a
+            # finished session as still-in-flight, and the liveness guard
+            # may even treat a fresh heartbeat as a live holder and refuse
+            # to reuse the slot. Force an independent minimal status flip so
+            # the terminal state is recorded even when the full metrics
+            # write failed. This is best-effort too; a second failure is
+            # logged but never raised (the training itself succeeded).
+            try:
+                if (
+                    self._run_history is not None
+                    and self._run_id is not None
+                    and self._run_history.update_run(
+                        self._run_id, status="completed"
+                    ) is not None
+                ):
+                    logger.info(
+                        f"run_status_repaired run_id={self._run_id} "
+                        f"status=completed (record_run_completed had failed; "
+                        f"forced an independent status flip so the session "
+                        f"isn't stranded as 'running')"
+                    )
+            except Exception as flip_err:
+                logger.warning(
+                    f"Independent status flip to 'completed' also failed for "
+                    f"run_id={self._run_id}: {flip_err}. The history entry "
+                    f"may remain 'running' despite a successful session."
+                )
         return result
 
     def abort(self, reason: str = "User requested abort") -> None:
@@ -1951,13 +2257,24 @@ class MultiRunTrainer:
                 )
                 logger.info(f"Checkpoint saved: {checkpoint_path}")
 
-                # Also save SLAO merger state (B-001: thread run_id through)
-                if self._slao_merger:
-                    self._slao_merger.save(
-                        str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"),
-                        run_id=self._run_id,
-                    )
-
+                # CONTINUAL-A-007: register the manifest entry BEFORE saving
+                # the SLAO accumulator dir. Resume-candidate lookup
+                # (find_latest_for_run_id) keys off the manifest; the on-disk
+                # ``slao/`` dir is only consulted on resume IF the manifest
+                # already points at this run. Pre-fix the order was
+                # save-LoRA → save-SLAO → register, so a register() failure
+                # left an orphan ``slao/`` dir on disk with NO manifest entry:
+                # a later resume would then latch onto an EARLIER run_index
+                # (whose manifest entry survived), silently re-doing this
+                # run's work / diverging from the orphaned accumulator.
+                # Registering first means a subsequent slao.save() failure
+                # leaves a coherent state — the manifest points at run N, the
+                # LoRA weights for run N are present, and the resume SLAO
+                # restore degrades gracefully (re-initializes the merger,
+                # see _restore_session_state). And a register() failure now
+                # happens BEFORE any slao dir for this run exists, so the
+                # orphan-dir-without-manifest-entry state cannot arise.
+                #
                 # Phase 5.3: Register with checkpoint manager for smart pruning
                 # (B-001: pass run_id so manifest can carry the correlation token)
                 if self._checkpoint_manager:
@@ -1971,6 +2288,15 @@ class MultiRunTrainer:
                         run_id=self._run_id,
                     )
                     # Note: auto_prune happens inside register() if enabled
+
+                # Also save SLAO merger state (B-001: thread run_id through).
+                # Done AFTER manifest registration (see CONTINUAL-A-007 above)
+                # so a failure here never produces a manifest-less orphan dir.
+                if self._slao_merger:
+                    self._slao_merger.save(
+                        str(checkpoint_dir / f"run_{run_idx:03d}" / "slao"),
+                        run_id=self._run_id,
+                    )
             except Exception as save_err:
                 # Stage C BACKEND-B-012 humanization: the prior log was a
                 # bare ERROR line. Operators watching `on_run_complete` saw
@@ -1999,6 +2325,12 @@ class MultiRunTrainer:
                     save_err,
                 )
                 checkpoint_path = None
+
+        # CONTINUAL-A-003: refresh the liveness heartbeat once per run so a
+        # long multi-hour session keeps a warm timestamp and a concurrent
+        # launcher continues to see this run_id as a LIVE holder (not a
+        # crashed orphan to auto-adopt).
+        self._stamp_liveness()
 
         duration = time.time() - run_start
 
@@ -2125,15 +2457,52 @@ class MultiRunTrainer:
             # lock as the in-class CheckpointManager mutators (register /
             # prune / protect). Concurrent multi-run sessions otherwise
             # race on this write.
+            #
+            # CONTINUAL-A-010: do the find + patch INSIDE the lock against a
+            # FRESH read of the manifest, mirroring the Wave A1
+            # CheckpointManager.register() pattern (re-read under lock before
+            # mutate+save). Pre-fix, this iterated the stale in-memory
+            # ``list_checkpoints()`` snapshot and mutated ``cp`` OUTSIDE the
+            # lock, taking the lock only for the bare ``_save_manifest()`` —
+            # a benign TOCTOU that could (a) clobber a sibling process's
+            # entries appended since this manager loaded its snapshot, and
+            # (b) patch a CheckpointInfo object that the reloaded list no
+            # longer contains. Reloading under the lock and patching the
+            # freshly-loaded entry closes both gaps. A degraded fallback
+            # (filelock unavailable / timeout → ``locked=False``) still
+            # patches the in-memory snapshot so single-process behavior is
+            # preserved.
             if self._checkpoint_manager:
-                for cp in self._checkpoint_manager.list_checkpoints():
-                    if cp.run_index == run_idx and cp.validation_loss is None:
-                        cp.validation_loss = val_loss
-                        with self._checkpoint_manager._locked_manifest_write(
-                            "validation_loss_update"
-                        ):
-                            self._checkpoint_manager._save_manifest()
-                        break
+                mgr = self._checkpoint_manager
+                with mgr._locked_manifest_write("validation_loss_update") as locked:
+                    if locked:
+                        # Refresh from disk so a concurrent writer's entries
+                        # are preserved through our save.
+                        mgr._load_manifest()
+                    patched = False
+                    for cp in mgr._checkpoints:
+                        if cp.run_index == run_idx and cp.validation_loss is None:
+                            cp.validation_loss = val_loss
+                            patched = True
+                            break
+                    if patched:
+                        mgr._save_manifest()
+                    else:
+                        # Stage C amend CORE-B-005: no manifest entry took
+                        # the validation loss. Benign when the run's
+                        # checkpoint was already pruned (best-N / size
+                        # policy) before validation finished, but it's a
+                        # silent drop of a computed metric — log at debug so
+                        # an operator chasing "why is best-checkpoint
+                        # selection ignoring run N's val loss" has a
+                        # breadcrumb.
+                        logger.debug(
+                            f"validation_loss={val_loss:.4f} for run_index="
+                            f"{run_idx} was not backfilled into any manifest "
+                            f"entry (checkpoint likely already pruned or "
+                            f"already carried a val loss); metric not "
+                            f"persisted to the manifest."
+                        )
 
         return run_result, val_loss
 
@@ -2171,6 +2540,70 @@ class MultiRunTrainer:
         """
         _, val_start = self._get_validation_holdout(total_samples)
         return val_start
+
+    def _fresh_window_counts(self, run_idx: int) -> tuple[int, int]:
+        """CONTINUAL-A-004: how many NEW vs REPLAY samples run ``run_idx`` draws.
+
+        Returns ``(new_samples_count, replay_count)``. Run 1 (and any run when
+        ``replay_fraction <= 0``) is all-fresh: ``(samples_per_run, 0)``.
+        Otherwise ``replay_count = int(samples_per_run * min(replay_fraction,
+        0.5))`` (the 50% cap matches the historical chunker) and
+        ``new_samples_count = samples_per_run - replay_count``.
+
+        Centralised so the chunker (fresh-window striding) and the replay
+        sampler (reconstructing a prior run's fresh window) agree on the
+        per-run fresh width — the precondition for gap-free, lockstep
+        striding.
+        """
+        chunk_size = self.config.samples_per_run
+        replay_fraction = min(self.config.replay_fraction, 0.5)  # Cap at 50%
+        if run_idx <= 1 or replay_fraction <= 0:
+            return chunk_size, 0
+        replay_count = int(chunk_size * replay_fraction)
+        return chunk_size - replay_count, replay_count
+
+    def _fresh_window_start_unwrapped(self, run_idx: int) -> int:
+        """CONTINUAL-A-004: cumulative (pre-wrap) start offset of run ``run_idx``'s
+        fresh window — the sum of the fresh widths consumed by all prior runs.
+
+        Run 1 consumes ``samples_per_run`` (no replay); each subsequent run
+        consumes ``new_samples_count`` (constant for a fixed
+        ``replay_fraction``). Expressed in closed form so it's O(1):
+
+            start(1)   = 0
+            start(k>=2) = samples_per_run + (k - 2) * new_width
+
+        where ``new_width`` is the runs-2+ fresh width. With replay disabled
+        ``new_width == samples_per_run`` and this collapses to
+        ``(run_idx - 1) * samples_per_run`` — identical to the pre-fix stride.
+        """
+        if run_idx <= 1:
+            return 0
+        samples_per_run = self.config.samples_per_run
+        new_width, _ = self._fresh_window_counts(2)  # runs >= 2 share a width
+        return samples_per_run + (run_idx - 2) * new_width
+
+    def _fresh_window_indices(self, run_idx: int, train_pool_size: int) -> list[int]:
+        """CONTINUAL-A-004: the train-pool indices forming run ``run_idx``'s
+        fresh window, wrapping INSIDE ``[0, train_pool_size)`` only (never into
+        the validation holdout).
+
+        Used by both ``_get_data_chunk`` (the run's own fresh samples) and
+        ``_get_replay_samples`` (reconstructing a prior run's fresh window to
+        resample from), so the two never disagree about which indices a run
+        saw as fresh data.
+        """
+        new_width, _ = self._fresh_window_counts(run_idx)
+        if new_width <= 0 or train_pool_size <= 0:
+            return []
+        start_idx = self._fresh_window_start_unwrapped(run_idx) % train_pool_size
+        end_idx = start_idx + new_width
+        if end_idx > train_pool_size:
+            return (
+                list(range(start_idx, train_pool_size))
+                + list(range(0, end_idx - train_pool_size))
+            )
+        return list(range(start_idx, end_idx))
 
     def _get_data_chunk(self, full_dataset: Any, run_idx: int) -> Any:
         """
@@ -2259,26 +2692,26 @@ class MultiRunTrainer:
             )
 
         # Calculate how many new vs replay samples
-        replay_fraction = min(self.config.replay_fraction, 0.5)  # Cap at 50%
-        if run_idx == 1 or replay_fraction <= 0:
-            # First run or no replay - just get new samples
-            new_samples_count = chunk_size
-            replay_count = 0
-        else:
-            replay_count = int(chunk_size * replay_fraction)
-            new_samples_count = chunk_size - replay_count
+        _new_samples_count, replay_count = self._fresh_window_counts(run_idx)
 
         # Get new samples for this run. We index into the TRAINING POOL only
         # (`[0, train_pool_size)`) and wrap inside it, so wrap-around can never
         # reach into the validation holdout `[train_pool_size, total_samples)`.
-        start_idx = ((run_idx - 1) * self.config.samples_per_run) % train_pool_size
-        end_idx = start_idx + new_samples_count
-
-        # Handle wrap-around for new samples (inside the train pool only).
-        if end_idx > train_pool_size:
-            new_indices = list(range(start_idx, train_pool_size)) + list(range(0, end_idx - train_pool_size))
-        else:
-            new_indices = list(range(start_idx, end_idx))
+        #
+        # CONTINUAL-A-004: the fresh-window start is a CUMULATIVE cursor over
+        # the widths actually consumed by prior runs (see
+        # _fresh_window_indices), NOT ``(run_idx-1) * samples_per_run``.
+        # Pre-fix, the stride was the full ``samples_per_run`` while a
+        # replay-enabled run only consumed ``new_samples_count`` (=
+        # samples_per_run - replay_count), so each run left a gap of
+        # ``replay_count`` samples between the end of its fresh window and the
+        # start of the next run's window — those samples were never trained as
+        # fresh data (and replay only resamples PRIOR windows, so the gap
+        # samples were never seen at all). Striding by the cumulative consumed
+        # width makes the fresh windows contiguous and gap-free. With
+        # replay_fraction=0 the cumulative width equals samples_per_run and
+        # this reduces to the original behavior byte-for-byte.
+        new_indices = self._fresh_window_indices(run_idx, train_pool_size)
 
         new_chunk = full_dataset.select(new_indices)
 
@@ -2322,37 +2755,47 @@ class MultiRunTrainer:
 
         total_samples = len(full_dataset)
         train_pool_size = self._get_train_pool_size(total_samples)
-        samples_per_run = self.config.samples_per_run
 
-        # Calculate indices from previous runs. All ranges are clamped to the
-        # training pool so we never pull validation samples into replay.
+        # Calculate indices from previous runs. All windows are reconstructed
+        # via the SAME helper the chunker uses (_fresh_window_indices), so
+        # replay resamples exactly the indices each prior run actually saw as
+        # fresh data — and never a gap index or a validation-holdout index.
+        #
+        # CONTINUAL-A-004: pre-fix these branches recomputed prior windows as
+        # ``((prev_run-1) * samples_per_run) % train_pool_size`` with width
+        # ``samples_per_run``. That assumed the full-stride layout the chunker
+        # no longer uses, so with replay enabled the reconstructed windows
+        # drifted out of sync with the real (cumulative, narrower) fresh
+        # windows. Sharing the helper keeps them in lockstep.
         if self.config.replay_strategy == "recent":
-            # Get samples from the most recent previous run
-            prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-            prev_end = min(prev_start + samples_per_run, train_pool_size)
-            available_indices = list(range(prev_start, prev_end))
+            # Get samples from the most recent previous run.
+            available_indices = self._fresh_window_indices(
+                run_idx - 1, train_pool_size
+            )
 
         elif self.config.replay_strategy == "random":
-            # Random samples from all previous runs
+            # Random samples from all previous runs.
             all_prev_indices: list[int] = []
             for prev_run in range(1, run_idx):
-                prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-                prev_end = min(prev_start + samples_per_run, train_pool_size)
-                all_prev_indices.extend(range(prev_start, prev_end))
+                all_prev_indices.extend(
+                    self._fresh_window_indices(prev_run, train_pool_size)
+                )
             available_indices = list(set(all_prev_indices))  # Remove duplicates
 
         elif self.config.replay_strategy == "all_previous":
             # Uniform sample from all data seen so far (within the train pool).
-            total_seen = min((run_idx - 1) * samples_per_run, train_pool_size)
-            available_indices = list(range(total_seen))
+            # "Seen so far" is the union of every prior run's fresh window;
+            # de-duplicated because wrap-around can revisit indices.
+            seen: set[int] = set()
+            for prev_run in range(1, run_idx):
+                seen.update(self._fresh_window_indices(prev_run, train_pool_size))
+            available_indices = sorted(seen)
 
         else:
-            # Default to recent
-            prev_run = run_idx - 1
-            prev_start = ((prev_run - 1) * samples_per_run) % train_pool_size
-            prev_end = min(prev_start + samples_per_run, train_pool_size)
-            available_indices = list(range(prev_start, prev_end))
+            # Default to recent.
+            available_indices = self._fresh_window_indices(
+                run_idx - 1, train_pool_size
+            )
 
         # Sample from available indices
         if len(available_indices) == 0:
@@ -2503,7 +2946,19 @@ class MultiRunTrainer:
             )
 
     def _load_lora_state_dict(self, state_dict: dict[str, Any]) -> None:
-        """Load LoRA state dict into model."""
+        """Load LoRA state dict into model.
+
+        Stage C amend CORE-B-001: the manual ``named_parameters`` fallback
+        (used when PEFT lacks ``load_adapter_state_dict``) silently no-op'd
+        on a total key mismatch — ``if name in model_state`` simply skipped
+        every key when PEFT-version skew or a key-naming divergence meant
+        ZERO of the accumulator's keys lined up with the live model. The
+        merge appeared to succeed (no exception, success logs) while the
+        SLAO accumulator was discarded — catastrophic-forgetting protection
+        died invisibly. The read-side invariant (``_verify_peft_api``) fails
+        loud; the write-side now matches it: we count matched keys and raise
+        ``PEFT_API_INCOMPATIBLE`` when the load applied nothing.
+        """
 
         model = self._trainer._model
 
@@ -2512,11 +2967,40 @@ class MultiRunTrainer:
             model.load_adapter_state_dict(state_dict)
             return
 
-        # Fallback: manual loading
+        # Fallback: manual loading. Count matches so a total key-namespace
+        # mismatch fails loud instead of silently discarding the merge.
         model_state = model.state_dict()
+        matched = 0
         for name, param in state_dict.items():
             if name in model_state:
                 model_state[name].copy_(param)
+                matched += 1
+
+        if state_dict and matched == 0:
+            raise BackpropagateError(
+                "SLAO merge load applied zero parameters: none of the "
+                f"{len(state_dict)} accumulator keys matched the live "
+                "model's state_dict. The merged LoRA was silently "
+                "discarded — catastrophic-forgetting protection would be "
+                "lost for every subsequent run.",
+                code="PEFT_API_INCOMPATIBLE",
+                details={
+                    "accumulator_keys": len(state_dict),
+                    "matched_keys": 0,
+                    "model_state_keys": len(model_state),
+                },
+                suggestion=(
+                    "The installed PEFT version exposes neither "
+                    "load_adapter_state_dict nor a parameter namespace that "
+                    "matches the extracted accumulator (key-shape / naming "
+                    "skew). Backpropagate requires peft>=0.7.0 "
+                    "(see pyproject.toml). Reinstall: pip install "
+                    "'peft>=0.7.0'. If you pinned a specific PEFT version, "
+                    "verify it still exposes load_adapter_state_dict OR "
+                    "uses '.lora_A.' / '.lora_B.' parameter names."
+                ),
+                retryable=False,
+            )
 
     def _load_full_dataset(self, dataset: DatasetLoader | str | Any) -> Any:
         """
@@ -2936,8 +3420,21 @@ class MultiRunTrainer:
         """
         Check if early stopping should be triggered.
 
-        Phase 4.3: Stop training if validation loss increases for
-        `early_stopping_patience` consecutive runs.
+        Phase 4.3: Stop training when the validation loss fails to improve
+        on the **best value seen so far** for ``early_stopping_patience``
+        consecutive runs.
+
+        CONTINUAL-A-009: the comparison baseline is the best-ever val_loss
+        (``self._best_val_loss``), NOT the immediately-preceding run's loss.
+        A run that beats the running best by more than
+        ``early_stopping_threshold`` resets the patience counter and becomes
+        the new best; any run that does not improve on the best increments
+        the counter. (An earlier revision of this docstring said "increases
+        for N consecutive runs vs the previous run," which did not match the
+        implementation — a saw-tooth curve oscillating above a low best
+        would correctly keep incrementing here, whereas a strict
+        vs-previous rule would reset on every down-tick. The best-ever
+        semantics are the intended, tested behavior.)
 
         Args:
             val_loss: Current validation loss

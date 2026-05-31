@@ -41,6 +41,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 | Code | Raised when | Fix |
 |------|-------------|-----|
 | `DEP_MODEL_LOAD_FAILED` | The model could not be loaded from HuggingFace Hub or local cache. Common causes: gated model without `HF_TOKEN`, network timeout, typo in model name, corrupted cache. | Verify the model name. For gated models (e.g. some Llama variants) run `huggingface-cli login` and re-try. Retryable — the trainer will back off on 5xx/429. |
+| `DEP_DATASET_ENGINE_MISSING` | An optional dependency needed to read a dataset file format (pandas for CSV; pandas + a pyarrow parquet engine for parquet) is not installed. | Install the missing extra: `pip install pandas pyarrow` (parquet) or `pip install pandas` (CSV). |
 | `DEP_GPU_NOT_AVAILABLE` | CUDA / a compatible GPU could not be detected. | Confirm `nvidia-smi` works. Reinstall PyTorch with the CUDA wheel that matches your driver (`pip install torch --index-url https://download.pytorch.org/whl/cu121` etc.). |
 | `DEP_OLLAMA_REGISTRATION_FAILED` | `register_with_ollama(...)` could not reach the Ollama daemon or the registration call returned an error. | Start the daemon: `ollama serve` (or install Ollama from <https://ollama.com>). Default endpoint is `localhost:11434`. Retryable. |
 

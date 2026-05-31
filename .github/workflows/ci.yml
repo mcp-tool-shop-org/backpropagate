@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  # site/** is intentionally NOT in these paths: the Python test matrix
+  # (incl. the macOS ~10x / Windows ~2x smoke cells) has no job that reads
+  # site/, so a docs-only commit firing the full matrix is pure CI-minute
+  # waste. pages-deploy.yml owns site/** for build+deploy, and doc-drift.yml
+  # owns the handbook drift check — both are paths-gated on site/** already.
   push:
     branches: [main]
     paths:
@@ -9,7 +14,6 @@ on:
       - 'pyproject.toml'
       - 'Dockerfile'
       - 'requirements*.txt'
-      - 'site/**'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -19,7 +23,6 @@ on:
       - 'pyproject.toml'
       - 'Dockerfile'
       - 'requirements*.txt'
-      - 'site/**'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -155,6 +158,57 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  # TESTSCI-A-009 (v1.4 Stage A) — exercise the pytest-xdist parallel path.
+  #
+  # The main `test` matrix above keeps BACKPROPAGATE_PYTEST_PARALLEL at the
+  # repo-var default ('0' unless an operator flips `vars.BACKPROPAGATE_
+  # PYTEST_PARALLEL`), so default CI runs serial. That left the xdist
+  # serial-scheduling machinery DORMANT: conftest.py's
+  # `pytest_collection_modifyitems` hook (which pins every @pytest.mark.serial
+  # test into a single xdist_group so global-state mutators don't race across
+  # workers) only does anything under `-n`, so a regression — e.g. a newly
+  # added global-state test that forgot the @serial marker, or a hook that
+  # stopped grouping — would ship green on a serial-only matrix.
+  #
+  # This dedicated cell forces the knob ON for ONE Linux/3.12 run so the
+  # parallel + serial-grouping path is covered on every CI invocation,
+  # independent of the matrix's repo-var default. It's a single Linux job
+  # (no win/mac fan-out, no matrix bloat) and runs the same fast selection
+  # as the matrix cells. If a serial-marker regression lands, this job goes
+  # red while the serial matrix stays green — pinpointing the parallel-only
+  # failure surface.
+  parallel-xdist:
+    name: pytest-xdist parallel path (Linux 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full]"
+
+      - name: Run tests under -n auto --dist worksteal
+        shell: bash
+        env:
+          # Forced ON for this job specifically (the matrix honors the repo
+          # var; this cell hard-codes the parallel contract so the xdist
+          # serial-grouping hook is always exercised).
+          BACKPROPAGATE_PYTEST_PARALLEL: "1"
+        run: |
+          set -euo pipefail
+          echo "::notice::pytest-xdist forced ON (BACKPROPAGATE_PYTEST_PARALLEL=1) — exercising serial-group scheduling"
+          pytest tests/ -v --tb=short -n auto --dist worksteal -m "not gpu and not slow and not integration"
 
   # CIDOCS-F-023 (v1.4 Wave 6a) — uv sync --frozen pilot.
   #
@@ -331,6 +385,56 @@ jobs:
       - name: Display advisory results
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
+
+      # CIDOCS-B-101 — triaged HIGH/MED advisories: decision-on-record, not a
+      # silent gap.
+      #
+      # The CRITICAL-only gate below is intentionally narrow (false-positive
+      # flood from the v1.1.x rollback). That left three real-but-unfixable
+      # advisories *silently* invisible — reported by the advisory step but
+      # called out nowhere as a conscious accept:
+      #
+      #   - GHSA-7wx4-6vff-v64p (diffusers, trust_remote_code bypass) — HIGH
+      #   - GHSA-98h9-4798-4q5v (diffusers, trust_remote_code bypass) — HIGH
+      #   - GHSA-69w3-r845-3855 (transformers.Trainer, arbitrary code exec) — MED
+      #
+      # Accepted because:
+      #   - diffusers (0.37.1 in uv.lock) is transitive via unsloth and is NOT
+      #     imported by any backpropagate/**/*.py — no reachable codepath into
+      #     the vulnerable remote-code-load functions. The fix (0.38.0) requires
+      #     safetensors>=0.8.0rc0 (a pre-release); per baseline-before-enforce
+      #     we don't enable pre-releases for a security bump. Closes when
+      #     safetensors 0.8.0 GA lands OR unsloth loosens its floor (see
+      #     CHANGELOG "Security" / SECURITY.md).
+      #   - transformers.Trainer ACE is held on the 5.0 major-version-compat
+      #     work the v1.5 dispatch scopes; the rc-only fix is excluded by the
+      #     same pre-release policy.
+      # review-by: 2026-08-31 (re-triage at the v1.5 dep-sweep — drop any ID
+      # whose upstream fix went GA). Adding an ID here REQUIRES a one-line
+      # rationale in the diff.
+      #
+      # Mechanism: pip-audit has no --ignore-unfixed, so a bare hard gate would
+      # re-flood on the documented transitive baseline (.trivyignore). Instead
+      # this step ACKs the three IDs (--ignore-vuln matches GHSA aliases) and
+      # emits a ::warning:: annotation listing whatever non-accepted advisories
+      # remain — so a NEW advisory shows up as a named CI annotation (reviewable)
+      # rather than being lost in the advisory markdown, while the documented
+      # transitive baseline doesn't turn the run red. CRITICAL still hard-fails
+      # in the next step. continue-on-error keeps this informational.
+      - name: pip-audit (triaged-accept ACK + surface any new advisory)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855"
+          # --ignore-vuln matches the primary id OR any alias, so the GHSA form
+          # suppresses the PYSEC/CVE-keyed diffusers + transformers entries.
+          pip-audit \
+            --vulnerability-service osv \
+            --ignore-vuln GHSA-7wx4-6vff-v64p \
+            --ignore-vuln GHSA-98h9-4798-4q5v \
+            --ignore-vuln GHSA-69w3-r845-3855 \
+          && echo "pip-audit (post-accept): no advisories outside the accepted set." \
+          || echo "::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)"
 
       # Gating step (v1.1.2): CRITICAL-only floor. Unfixed transitive
       # CVEs (huggingface-hub → requests → urllib3 etc.) at HIGH and

@@ -126,6 +126,25 @@ _LOGGING_SETUP_FAIL_REASON = ""
 
 
 # =============================================================================
+# SHARED ROOT-FLAG DEFAULTS (CLI-A-001, v1.4 Wave A1)
+# =============================================================================
+# The four root-level logging flags (--verbose / --log-level / --log-format /
+# --log-file) live on a parent parser and are inherited by every subparser via
+# parents=[_common] so they parse both before AND after the subcommand verb.
+# They use default=argparse.SUPPRESS to avoid the subparse clobbering a value
+# set before the subcommand (see the long note in create_parser). SUPPRESS
+# means an unseen flag leaves its dest absent, so main() backfills these real
+# defaults after parse_args — keeping the dozens of `if args.verbose:` reads in
+# the subcommand handlers working regardless of where the flag was placed.
+_COMMON_FLAG_DEFAULTS: dict[str, object] = {
+    "verbose": False,
+    "log_level": None,
+    "log_format": None,
+    "log_file": None,
+}
+
+
+# =============================================================================
 # SUBCOMMAND STABILITY TIERS (BRIDGE-B-017 Stage C)
 # =============================================================================
 # Centralized registry of subcommand stability so the CLI can print a
@@ -224,6 +243,59 @@ def _port_int(value: str) -> int:
             f"port must be in range 1..65535, got {n}"
         )
     return n
+
+
+# CLI-A-007 (v1.4 Wave A2): argparse type for the `backprop ui --host` bind
+# address. Pre-fix `--host` accepted ANY string with no `type=` validator, so
+# a fat-fingered `--host -0.0.0.0` (parsed as an option), a value with
+# embedded whitespace, or other malformed hostnames slipped past argparse and
+# only failed deep in the Reflex/react-router subprocess with an opaque error.
+# This mirrors `_port_int`'s fail-at-the-boundary discipline: reject leading
+# `-` (option-shaped, also the argparse footgun), whitespace, and anything
+# that isn't a plausible IPv4 / IPv6 / RFC-1123 hostname before the value
+# ever reaches the bind logic. NOTE: this is robustness/UX hardening, not a
+# security control — the load-bearing DNS-rebinding defense remains the
+# non-loopback-requires-`--auth` gate in cmd_ui.
+_HOSTNAME_LABEL = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
+
+
+def _host_str(value: str) -> str:
+    """argparse type for --host bind addresses (IPv4 / IPv6 / hostname)."""
+    if not isinstance(value, str) or not value:
+        raise argparse.ArgumentTypeError("--host requires a non-empty value")
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise argparse.ArgumentTypeError(
+            f"--host must not contain whitespace, got {value!r}"
+        )
+    if value.startswith("-"):
+        raise argparse.ArgumentTypeError(
+            f"--host must not start with '-' (looks like a flag), got {value!r}"
+        )
+
+    import ipaddress
+
+    # Accept any valid IP literal outright (covers 0.0.0.0, ::, LAN IPs, etc.).
+    # IPv6 may be bracketed in URL contexts; tolerate the bare form here.
+    candidate = value
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        ipaddress.ip_address(candidate)
+        return value
+    except ValueError:
+        pass
+
+    # Otherwise require a plausible RFC-1123 hostname (dot-separated labels,
+    # each 1..63 chars, alnum + hyphen, no leading/trailing hyphen). A
+    # trailing dot (FQDN root) is tolerated.
+    hostname = value[:-1] if value.endswith(".") else value
+    if len(hostname) > 253 or not hostname:
+        raise argparse.ArgumentTypeError(f"invalid hostname: {value!r}")
+    if all(_HOSTNAME_LABEL.match(label) for label in hostname.split(".")):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid --host value {value!r}: expected an IP address or hostname"
+    )
 
 
 def _positive_float(value: str) -> float:
@@ -325,22 +397,20 @@ def _auth_credential(value: str) -> str:
     return value
 
 
-# Patterns used to redact common secret-bearing tokens from non-verbose
-# error output. The previous catch-all (`(password|...)\s*[=:]\s*\S+`) had
-# two defects: (1) it matched plain prose like "the token: abc is wrong"
-# (false-positive — any sentence with a configuration-flavored word followed
-# by punctuation got mangled), and (2) the replacement template `\1=<REDACTED>`
-# hardcoded `=` regardless of whether the input used `:` or `=` (silently
-# rewriting the operator's input shape).
+# CLI-A-002: secret redaction now lives in ``backpropagate.logging_config``
+# as the single source of truth, so the CLI error paths AND the structured-log
+# / file pipeline scrub credentials through ONE definition (they can no longer
+# drift). The private module-local names are kept as aliases because
+# ``_print_error_redacted`` and the test suite reference them; the canonical
+# public names are ``logging_config.redact_secrets`` / ``SECRET_PATTERNS``.
 #
-# Current shape:
-# - High-signal prefixes (Bearer, sk-, hf_, AKIA) trigger redaction on their
-#   own — these have low false-positive rates by construction.
-# - The keyword-prefixed pattern now requires an `=` or `:` AND at least 8
-#   non-space characters of value (with at least one digit or special char)
-#   — high-entropy enough to filter out prose. The separator is captured
-#   in group 2 and re-emitted in the replacement so `token: foo` stays
-#   `token: <REDACTED>` (NOT `token=<REDACTED>`).
+# Pattern shape (defined in logging_config, summarized here):
+# - High-signal prefixes (Bearer, sk-, hf_, AKIA, ghp_/glpat-, JWT,
+#   url-embedded creds) trigger on their own — low false-positive by design.
+# - The keyword-prefixed pattern requires key=value / key:value with a
+#   high-entropy value (>=8 non-space chars incl. >=1 digit-or-special) so
+#   prose like "the token: abc is wrong" is left intact; the separator is
+#   preserved so `token: foo` → `token: <REDACTED>` (not `token=<REDACTED>`).
 #
 # Negative-test expectations (NOT to be redacted):
 #   "the token: abc is wrong"        → unchanged (value too short, prose-like)
@@ -348,76 +418,12 @@ def _auth_credential(value: str) -> str:
 #   "Authorization: Bearer xyz"      → "Authorization: Bearer <REDACTED>"
 #   "api_key=EXAMPLE-NOT-A-REAL-KEY"   → "api_key=<REDACTED>"
 #   "password=hunter2!@#secret_key"  → "password=<REDACTED>"
-_SECRET_PATTERNS = [
-    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
-    (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
-    (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
-    # BRIDGE-B-012 (Stage C): additional patterns the error-redaction layer
-    # should catch before pasting into a bug report.
-    #
-    # URL-embedded credentials (https://user:token@host/...): HfHubHTTPError
-    # occasionally surfaces request URLs in its message. Match the canonical
-    # `scheme://user:secret@host` form (NOT the user@host form, which is just
-    # an SSH-style address with no secret). The capture preserves the scheme
-    # and the host so the operator still sees what service was contacted.
-    (
-        re.compile(r"(https?://)[^/\s:@]+:[^/\s:@]+@([^/\s]+)"),
-        r"\1<REDACTED>@\2",
-    ),
-    # JWT tokens (3 base64url segments separated by `.`): RFC 7519 shape.
-    # The `eyJ` prefix is the base64 header of `{"`, present in essentially
-    # every real JWT, which keeps false-positive risk low against prose.
-    (
-        re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"),
-        "<JWT_REDACTED>",
-    ),
-    # GitHub Personal Access Tokens (ghp_*, ghs_*, gho_*, ghu_*, ghr_*):
-    # canonical prefix per GitHub's secret-scanning docs; the suffix length
-    # is 36+ base62 chars. Matches modern PATs (post-2021); the legacy
-    # 40-hex format isn't redacted here because it has high false-positive
-    # rate against generic 40-hex strings.
-    (
-        re.compile(r"\b(ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
-        r"\1_<REDACTED>",
-    ),
-    # GitLab PATs (glpat-...): canonical 20+ base62 / hyphen suffix per
-    # GitLab's tokens docs.
-    (
-        re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
-        "glpat-<REDACTED>",
-    ),
-    # Keyword-prefixed credentials: require key=value OR key:value shape with
-    # a high-entropy value (>=8 non-space chars including >=1 digit-or-special).
-    # The separator (group 2) is preserved in the replacement.
-    (
-        re.compile(
-            r"(password|passwd|pwd|secret|token|api[_-]?key)"
-            r"(\s*[=:]\s*)"
-            r'(?=[^\s]*[\d!@#$%^&*()+\-./?_=])'  # lookahead: at least one digit/special
-            r"[^\s]{8,}",
-            re.IGNORECASE,
-        ),
-        r"\1\2<REDACTED>",
-    ),
-]
-
-
-def _redact_secrets(text: str) -> str:
-    """
-    Best-effort redaction of common secret patterns in error output.
-
-    Designed to leave human-readable prose intact (e.g. "the token: abc is
-    wrong" is NOT redacted because "abc" is too short / has no digit) while
-    catching realistic credential leaks (e.g. "api_key=EXAMPLE-NOT-A-REAL-KEY"
-    is redacted to "api_key=<REDACTED>"). The separator character (``:`` vs
-    ``=``) is preserved in the output to avoid silently rewriting the
-    operator's input shape.
-    """
-    for pattern, replacement in _SECRET_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text
-
+from .logging_config import (  # noqa: E402
+    SECRET_PATTERNS as _SECRET_PATTERNS,  # noqa: F401 — re-export for tests/back-compat
+)
+from .logging_config import (
+    redact_secrets as _redact_secrets,
+)
 
 # =============================================================================
 # TERMINAL COLORS (ANSI)
@@ -1622,6 +1628,13 @@ def _detect_installed_versions() -> dict[str, str]:
         "peft",
         "unsloth",
         "torch",
+        # CLIUI-B-006 (Stage C proactive): reflex is a first-class shipped
+        # surface (the Web UI, `backprop ui`). Operators triaging a UI launch
+        # failure need its version in the support payload the same way they
+        # need transformers/peft for a training failure. ``gradio`` is the
+        # legacy pre-v1.1 UI stack — kept in the probe so a stale gradio left
+        # over from a v1.0.x install shows up (it should read "not installed").
+        "reflex",
         "gradio",
         "pydantic",
         "wandb",
@@ -1634,6 +1647,19 @@ def _detect_installed_versions() -> dict[str, str]:
             out[name] = "not installed"
         except Exception:  # nosec B110 — defensive: don't let info crash
             out[name] = "unknown"
+
+    # CLIUI-B-006: cloudflared is the --share tunnel binary — not a Python
+    # package, so importlib.metadata can't see it. Probe the PATH the same way
+    # ``_spawn_cloudflared_tunnel`` does (shutil.which) so the support payload
+    # reflects whether `backprop ui --share` can actually establish a tunnel.
+    try:
+        import shutil
+
+        cf_path = shutil.which("cloudflared")
+        out["cloudflared"] = "installed" if cf_path else "not installed"
+    except Exception:  # nosec B110 — defensive: PATH probe must not crash info
+        out["cloudflared"] = "unknown"
+
     return out
 
 
@@ -2026,6 +2052,12 @@ def cmd_info(args: argparse.Namespace) -> int:
     _print_kv("trl", versions.get("trl", "not installed"))
     _print_kv("peft", versions.get("peft", "not installed"))
     _print_kv("unsloth", versions.get("unsloth", "not installed"))
+    # CLIUI-B-006 (Stage C proactive): reflex (the Web UI) + cloudflared (the
+    # --share tunnel binary) are first-class shipped surfaces; surface their
+    # versions/presence here so `backprop info` is a complete support payload
+    # for UI launch failures, not just training failures.
+    _print_kv("reflex", versions.get("reflex", "not installed"))
+    _print_kv("cloudflared", versions.get("cloudflared", "not installed"))
 
     # System info
     print(f"\n{Colors.BOLD}System{Colors.RESET}")
@@ -2406,6 +2438,7 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     cloudflared's own view (edge selection, retry attempts, packet-loss
     warnings) without spamming normal INFO-level operation.
     """
+    import queue
     import shutil
     import threading
 
@@ -2503,18 +2536,86 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     deadline = _time.monotonic() + timeout_seconds
     tunnel_url: str | None = None
 
-    # Read line-by-line until we find the URL or the deadline elapses.
+    # CLIUI-B-008 (Stage C proactive): deadline-aware read. The previous loop
+    # called a bare blocking ``proc.stdout.readline()`` and only re-checked the
+    # deadline at the TOP of the loop — so a cloudflared that was alive but
+    # silent (no output at all: DNS wedged, captive portal swallowing the
+    # handshake) parked us inside readline() forever, never reaching the
+    # deadline check. The inline comment claimed a select()-based bounded read,
+    # but no select() was wired (and Windows pipes aren't selectable anyway).
+    #
+    # Fix: a single daemon reader thread does the blocking reads and pushes
+    # each line onto a queue; the main loop pulls with ``queue.get(timeout=
+    # remaining)`` so the deadline is authoritative regardless of whether
+    # cloudflared ever speaks. This thread is also the post-URL drain (it logs
+    # every line at DEBUG and keeps the OS pipe buffer from filling), so the
+    # separate ``_drain_pipe`` thread that used to start after URL parse is
+    # gone — one reader owns stdout for the tunnel's whole lifetime, which also
+    # removes the double-consume race the old tail ``proc.stdout.read()`` had
+    # against that drain thread.
     assert proc.stdout is not None  # nosec B101 — Popen(stdout=PIPE) guarantees this
-    while _time.monotonic() < deadline:
-        if proc.poll() is not None:
-            # cloudflared died before publishing a URL — surface the tail
-            # of its output to help the operator triage (invalid network,
-            # captive portal, etc.).
+    line_queue: queue.Queue[str | None] = queue.Queue()
+    # Once the URL is parsed, the main loop stops consuming the queue. Flip
+    # this event so the reader stops enqueuing (just logs + discards) — without
+    # it the queue would grow unbounded over a long-lived chatty tunnel.
+    url_parsed = threading.Event()
+
+    def _reader(pipe: Any, out_q: "queue.Queue[str | None]") -> None:
+        # BRIDGE-B-010 (Stage C): route every cloudflared output line to the
+        # structured logger at DEBUG (edge selection / reconnect / packet-loss
+        # warnings under BACKPROPAGATE_LOG_LEVEL=DEBUG; filtered out at INFO),
+        # then — until the URL is parsed — hand it to the main loop via the
+        # queue. After URL parse this thread becomes the pure drain (logs +
+        # discards) so the OS pipe buffer never fills. Sentinel ``None`` on EOF.
+        try:
+            for line in iter(pipe.readline, ""):
+                try:
+                    _cf_logger.debug("cloudflared_event", line=line.rstrip())
+                except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
+                    pass
+                if not url_parsed.is_set():
+                    out_q.put(line)
+        except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
+            pass
+        finally:
+            out_q.put(None)  # EOF sentinel so the consumer never blocks past it
+
+    reader_thread = threading.Thread(
+        target=_reader, args=(proc.stdout, line_queue), daemon=True, name="cloudflared-reader"
+    )
+    reader_thread.start()
+
+    # Pull lines with a bounded wait so the deadline is enforced even when
+    # cloudflared emits nothing. We poll the dead-process state on every wakeup
+    # (queue timeout) so a process that exits silently is caught promptly.
+    while True:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            line = line_queue.get(timeout=min(remaining, 0.5))
+        except queue.Empty:
+            # No line within this slice — re-check deadline + liveness, loop.
+            if proc.poll() is not None:
+                line = None  # fall through to the dead-process branch below
+            else:
+                continue
+        if line is None:
+            # EOF sentinel or detected exit: cloudflared died (or closed its
+            # pipe) before publishing a URL — surface the tail of its output to
+            # help the operator triage (invalid network, captive portal, etc.).
+            # Drain whatever the reader already queued for the tail buffer.
             _print_error("cloudflared exited before publishing a tunnel URL.")
-            try:
-                tail = proc.stdout.read() or ""
-            except Exception:  # noqa: BLE001 — best-effort drain
-                tail = ""
+            tail_lines: list[str] = []
+            while True:
+                try:
+                    pending = line_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if pending is None:
+                    break
+                tail_lines.append(pending)
+            tail = "".join(tail_lines)
             try:
                 _cf_logger.info(
                     "cloudflared_exited_pre_url",
@@ -2528,27 +2629,10 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
                 # Truncate to a reasonable size so we don't pipe MB of log.
                 _print_info(f"cloudflared output (tail):\n{tail[-800:]}")
             return None
-        # Read one line with a short timeout via select — readline()
-        # blocks indefinitely otherwise. POSIX uses select.select on the
-        # raw fd; Windows pipes aren't selectable so we fall back to a
-        # blocking readline() which is bounded by the deadline at the
-        # next iteration.
-        line = proc.stdout.readline()
-        if not line:
-            # EOF or transient empty read — re-check deadline + alive.
-            continue
-        # BRIDGE-B-010 (Stage C): route every cloudflared output line to
-        # the structured logger at DEBUG. Operators triaging "my tunnel
-        # keeps dropping" see edge selection / packet-loss warnings under
-        # BACKPROPAGATE_LOG_LEVEL=DEBUG; default INFO operation is
-        # unaffected (DEBUG events are filtered out).
-        try:
-            _cf_logger.debug("cloudflared_event", line=line.rstrip())
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass
         match = _CLOUDFLARED_URL_RE.search(line)
         if match:
             tunnel_url = match.group(0)
+            url_parsed.set()  # reader switches to drain-and-discard mode
             break
 
     if not tunnel_url:
@@ -2584,30 +2668,75 @@ def _spawn_cloudflared_tunnel(port: int) -> tuple[subprocess.Popen, str] | None:
     except Exception:  # noqa: BLE001  # nosec B110
         pass
 
-    # Drain remaining cloudflared output in a daemon thread so the
-    # subprocess doesn't deadlock on a full pipe buffer.
-    #
-    # BRIDGE-B-010 (Stage C): the post-URL drain now also routes each line
-    # to the structured logger at DEBUG so `BACKPROPAGATE_LOG_LEVEL=DEBUG`
-    # surfaces cloudflared's full lifecycle (edge selection changes,
-    # reconnect attempts, packet-loss warnings). At INFO the events are
-    # filtered out so normal operation isn't spammed.
-    def _drain_pipe(pipe: Any) -> None:
-        try:
-            for line in pipe:
-                try:
-                    _cf_logger.debug("cloudflared_event", line=line.rstrip())
-                except Exception:  # noqa: BLE001  # nosec B110 — observability best-effort
-                    pass
-        except (OSError, ValueError):  # pragma: no cover — pipe closed / process gone
-            pass
-
-    drain_thread = threading.Thread(
-        target=_drain_pipe, args=(proc.stdout,), daemon=True, name="cloudflared-drain"
-    )
-    drain_thread.start()
-
+    # CLIUI-B-008 (Stage C proactive): the post-URL drain is no longer a
+    # separate thread. The ``cloudflared-reader`` daemon started above already
+    # owns stdout for the tunnel's whole lifetime — it keeps reading + logging
+    # every subsequent line at DEBUG (edge selection changes, reconnect
+    # attempts, packet-loss warnings under BACKPROPAGATE_LOG_LEVEL=DEBUG;
+    # filtered out at INFO) and drains the OS pipe buffer so the subprocess
+    # never deadlocks on a full pipe. The main loop simply stopped consuming
+    # from its queue once it parsed the URL; the reader runs on. Spinning up a
+    # second consumer here would double-read the pipe.
     return proc, tunnel_url
+
+
+def _find_port_in_use(host: str, ports: list[int]) -> int | None:
+    """Return the first port in ``ports`` that cannot be bound on ``host``.
+
+    CLIUI-B-004 (Stage C proactive): port-in-use is the single most common
+    ``backprop ui`` launch failure (a previous Reflex run that didn't exit,
+    another dev server, etc.), and without a pre-flight it surfaces only as a
+    bare Reflex traceback + a non-zero exit code 30-60s into the launch — long
+    after the "Launching..." banner printed. We attempt a throwaway bind (then
+    immediately close) on each candidate port BEFORE handing control to the
+    Reflex subprocess so the operator gets a structured EADDRINUSE error naming
+    the port + the ``--port`` remedy instead of a stack trace.
+
+    We deliberately do NOT set ``SO_REUSEADDR`` — the goal is to detect a port
+    that is genuinely occupied right now, which is exactly what Reflex's own
+    bind will hit. A bind failure for any reason other than "address in use"
+    (e.g. a permission error on a privileged port, or a host the kernel won't
+    let us bind) is treated as "not our problem to pre-flight" and skipped, so
+    we never block a launch that might actually have succeeded.
+
+    Args:
+        host: The interface the Reflex subprocess will bind (frontend +
+            backend share the host; only the port differs).
+        ports: Candidate ports to probe — typically ``[port, port + 1]``
+            (Reflex serves the frontend on ``--port`` and the backend on
+            ``--port + 1``).
+
+    Returns:
+        The first occupied port, or ``None`` if all candidates are free.
+    """
+    import errno
+    import socket
+
+    # Reflex binds the frontend host to 0.0.0.0 regardless of --backend-host
+    # (see the cmd() comment block), but the backend honors the requested
+    # host. Probe on the requested host; fall back to 127.0.0.1 if the host
+    # string isn't bindable here (e.g. a LAN IP not assigned to this box) so a
+    # mis-probe never turns into a false EADDRINUSE.
+    probe_host = host or "127.0.0.1"
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind((probe_host, port))
+        except OSError as exc:
+            if exc.errno in (errno.EADDRINUSE, errno.EACCES):
+                # EADDRINUSE: the port is taken. EACCES on a privileged port
+                # (<1024) is also actionable — Reflex would fail the same way.
+                if exc.errno == errno.EADDRINUSE:
+                    return port
+                # EACCES is rarer (privileged port) — still flag it as "in use"
+                # from the operator's POV since Reflex can't bind it either.
+                return port
+            # EADDRNOTAVAIL (host not local), AF mismatch, etc. — out of scope
+            # for a port pre-flight; let Reflex try and surface its own error.
+            continue
+        finally:
+            sock.close()
+    return None
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
@@ -2896,6 +3025,33 @@ def cmd_ui(args: argparse.Namespace) -> int:
             "`python -m backpropagate.ui_app.app` manually."
         )
         return EXIT_RUNTIME_ERROR
+
+    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex serves the
+    # frontend on --port and the backend on --port+1; if EITHER is already
+    # bound, the subprocess dies 30-60s in with a bare traceback. Probe both
+    # here so the operator gets a structured EADDRINUSE error naming the port
+    # + the --port remedy BEFORE we spawn cloudflared or print "Launching...".
+    # Done after the auth/host gates so a misconfigured launch still fails on
+    # the auth axis first (the higher-severity contract), and before the
+    # cloudflared spawn so a busy port doesn't leak a public tunnel.
+    _preflight_host = getattr(args, "host", None) or "127.0.0.1"
+    _busy_port = _find_port_in_use(_preflight_host, [args.port, args.port + 1])
+    if _busy_port is not None:
+        _which = "frontend" if _busy_port == args.port else "backend (--port + 1)"
+        raise BackpropagateError(
+            f"Port {_busy_port} ({_which}) is already in use on "
+            f"{_preflight_host}; the Reflex UI needs both {args.port} and "
+            f"{args.port + 1} free.",
+            suggestion=(
+                f"Pick a free port with --port <N> (the backend uses N+1, so "
+                f"leave a gap), or stop whatever is holding {_busy_port} "
+                "(a previous `backprop ui` that didn't exit is the usual "
+                "culprit — check `lsof -i :%d` on POSIX or "
+                "`netstat -ano | findstr :%d` on Windows)."
+                % (_busy_port, _busy_port)
+            ),
+            code="RUNTIME_UI_PORT_IN_USE",
+        )
 
     # Set env vars that Reflex's state can pick up. ``BACKPROPAGATE_UI_AUTH``
     # is the agreed handoff for the Reflex side to enforce per-request auth
@@ -5339,10 +5495,82 @@ def create_parser() -> argparse.ArgumentParser:
     # read source. The new layout is workflow-grouped (not alphabetical)
     # because operators looking for "how do I export to Ollama" want to
     # see the ollama-triad and `export --ollama` flag form side-by-side.
+    # CLI-A-001 (v1.4 Wave A1): the root-level logging flags below
+    # (--verbose/-v, --log-level, --log-format, --log-file) used to be
+    # registered ONLY on the top-level parser, so `backprop train --verbose`
+    # (flag placed AFTER the subcommand) died with
+    # `error: unrecognized arguments: --verbose` (exit 2) — even though
+    # nearly every error handler advises "Run with --verbose for full
+    # traceback" and the --log-level help promises "for THIS invocation".
+    # Fix: collect them on a parent parser and pass `parents=[_common]` to
+    # the top-level parser AND every subparser, so both placements work
+    # (`backprop --verbose train` and `backprop train --verbose`).
+    #
+    # default=argparse.SUPPRESS is load-bearing: when a flag with a normal
+    # default sits on both the top-level parser and a subparser, the
+    # subparse re-applies the subparser's default and CLOBBERS the
+    # top-level value back to it (so `backprop --verbose train` would reset
+    # verbose to False). SUPPRESS makes an unseen flag leave its dest
+    # untouched, so whichever side actually saw the flag wins. main() then
+    # backfills the four dests to their real defaults (see the
+    # _COMMON_FLAG_DEFAULTS backfill there) so handlers can keep doing the
+    # bare `if args.verbose:` read without an AttributeError.
+    _common = argparse.ArgumentParser(add_help=False)
+    _common.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show verbose output including stack traces",
+    )
+    # BRIDGE-F-002 (v1.4 Wave 6b): root-level logging-config flags. Pre-fix the
+    # three structured-logging knobs (level / format / file) were env-var only
+    # via BACKPROPAGATE_LOG_LEVEL / BACKPROPAGATE_LOG_JSON / BACKPROPAGATE_LOG_FILE.
+    # Operators could not tweak per-invocation logging from the CLI surface;
+    # they had to export the env var first or wrap with `env` -- both surprising.
+    #
+    # Precedence (standard): CLI flag > env var > default. The wiring lives
+    # in ``main()`` — when a flag is set the corresponding env var is
+    # overwritten on os.environ for THIS process only. Env-var consumers
+    # (configure_logging _get_log_level / _should_use_json / _get_log_file)
+    # see the new value transparently.
+    _common.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=argparse.SUPPRESS,
+        help=(
+            "Override the structured-logging level for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_LEVEL=<level> but scoped to the "
+            "current process. CLI flag wins over env var when both are set. "
+            "Default: DEBUG when --verbose is passed, else INFO."
+        ),
+    )
+    _common.add_argument(
+        "--log-format",
+        choices=["console", "json"],
+        default=argparse.SUPPRESS,
+        help=(
+            "Override the structured-logging format for THIS invocation. "
+            "Equivalent to BACKPROPAGATE_LOG_JSON=true/false but scoped to the "
+            "current process. Default: console when stderr is a TTY, json "
+            "otherwise (auto-detect)."
+        ),
+    )
+    _common.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=argparse.SUPPRESS,
+        help=(
+            "Append structured logs to PATH (in addition to stderr). "
+            "Equivalent to BACKPROPAGATE_LOG_FILE=<path> but scoped to the "
+            "current process."
+        ),
+    )
+
     parser = argparse.ArgumentParser(
         prog="backprop",
         description="Backpropagate - Headless LLM Fine-Tuning",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[_common],
         epilog="""
 Subcommands (grouped by workflow):
 
@@ -5408,55 +5636,11 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
         version=f"%(prog)s {__version__}",
     )
 
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Show verbose output including stack traces",
-    )
-
-    # BRIDGE-F-002 (v1.4 Wave 6b): root-level logging-config flags. Pre-fix the
-    # three structured-logging knobs (level / format / file) were env-var only
-    # via BACKPROPAGATE_LOG_LEVEL / BACKPROPAGATE_LOG_JSON / BACKPROPAGATE_LOG_FILE.
-    # Operators could not tweak per-invocation logging from the CLI surface;
-    # they had to export the env var first or wrap with `env` -- both surprising.
-    #
-    # Precedence (standard): CLI flag > env var > default. The wiring lives
-    # in ``main()`` — when a flag is set the corresponding env var is
-    # overwritten on os.environ for THIS process only. Env-var consumers
-    # (configure_logging _get_log_level / _should_use_json / _get_log_file)
-    # see the new value transparently.
-    parser.add_argument(
-        "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default=None,
-        help=(
-            "Override the structured-logging level for THIS invocation. "
-            "Equivalent to BACKPROPAGATE_LOG_LEVEL=<level> but scoped to the "
-            "current process. CLI flag wins over env var when both are set. "
-            "Default: DEBUG when --verbose is passed, else INFO."
-        ),
-    )
-    parser.add_argument(
-        "--log-format",
-        choices=["console", "json"],
-        default=None,
-        help=(
-            "Override the structured-logging format for THIS invocation. "
-            "Equivalent to BACKPROPAGATE_LOG_JSON=true/false but scoped to the "
-            "current process. Default: console when stderr is a TTY, json "
-            "otherwise (auto-detect)."
-        ),
-    )
-    parser.add_argument(
-        "--log-file",
-        metavar="PATH",
-        default=None,
-        help=(
-            "Append structured logs to PATH (in addition to stderr). "
-            "Equivalent to BACKPROPAGATE_LOG_FILE=<path> but scoped to the "
-            "current process."
-        ),
-    )
+    # NOTE (CLI-A-001): --verbose / --log-level / --log-format / --log-file are
+    # now defined on the ``_common`` parent parser above and inherited here via
+    # ``parents=[_common]``; every subparser created below ALSO passes
+    # ``parents=[_common]`` so the flags are accepted both before and after the
+    # subcommand verb. Do not re-add them directly to ``parser``.
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -5470,6 +5654,7 @@ no subcommand handler claimed the failure with a 0/1/2/3 code):
     # have to read the per-flag --help for the recommended starting point.
     train_parser = subparsers.add_parser(
         "train",
+        parents=[_common],
         help="Train a model",
         description="Fine-tune an LLM on your dataset",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -5672,6 +5857,7 @@ Tips:
     # multi-run command
     multi_parser = subparsers.add_parser(
         "multi-run",
+        parents=[_common],
         help="Multi-run training with SLAO merging",
         description="Train with multiple short runs and LoRA merging",
     )
@@ -5812,6 +5998,7 @@ Tips:
     # through `--help` permutations.
     export_parser = subparsers.add_parser(
         "export",
+        parents=[_common],
         help="Export a trained model",
         description="Export model to LoRA, merged, or GGUF format",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -5947,6 +6134,7 @@ Quantization tradeoffs (fastest -> smallest):
     # info command
     info_parser = subparsers.add_parser(
         "info",
+        parents=[_common],
         help="Show system information",
         description=(
             "Display backpropagate version, Python, PyTorch + CUDA, GPU, "
@@ -6004,6 +6192,7 @@ Quantization tradeoffs (fastest -> smallest):
     # config command
     config_parser = subparsers.add_parser(
         "config",
+        parents=[_common],
         help="View or modify configuration",
         description="View or modify Backpropagate configuration",
     )
@@ -6027,6 +6216,7 @@ Quantization tradeoffs (fastest -> smallest):
     # resume command (F-002)
     resume_parser = subparsers.add_parser(
         "resume",
+        parents=[_common],
         help="Resume a crashed or interrupted training run",
         description=(
             "Re-run the train / multi-run command associated with a "
@@ -6057,6 +6247,7 @@ Quantization tradeoffs (fastest -> smallest):
     # push command (F-001)
     push_parser = subparsers.add_parser(
         "push",
+        parents=[_common],
         help="Push a local export to the Hugging Face Hub",
         description=(
             "Upload a directory produced by `backprop export` (or "
@@ -6158,6 +6349,7 @@ Quantization tradeoffs (fastest -> smallest):
     # list-runs command (F-003)
     list_runs_parser = subparsers.add_parser(
         "list-runs",
+        parents=[_common],
         help="List recorded training runs",
         description=(
             "List runs from the on-disk run_history.json (populated by every "
@@ -6194,6 +6386,7 @@ Quantization tradeoffs (fastest -> smallest):
     # on field additions / removals.
     runs_parser = subparsers.add_parser(
         "runs",
+        parents=[_common],
         help="Emit run history as a versioned JSON payload (UI data API)",
         description=(
             "Emit the run history under a schema_version contract suitable "
@@ -6235,6 +6428,7 @@ Quantization tradeoffs (fastest -> smallest):
     # show-run command (F-003)
     show_run_parser = subparsers.add_parser(
         "show-run",
+        parents=[_common],
         help="Show detail for a single training run",
         description=(
             "Print the full record for a single training run, including "
@@ -6264,6 +6458,7 @@ Quantization tradeoffs (fastest -> smallest):
     # diff-runs command (BRIDGE Wave 6b)
     diff_runs_parser = subparsers.add_parser(
         "diff-runs",
+        parents=[_common],
         help="Diff config + hyperparameters + final loss between two runs",
         description=(
             "Side-by-side comparison of two completed runs from the on-disk "
@@ -6306,6 +6501,7 @@ Quantization tradeoffs (fastest -> smallest):
     # replay command (BRIDGE Wave 6b)
     replay_parser = subparsers.add_parser(
         "replay",
+        parents=[_common],
         help="Re-run an existing run with the same config (fresh run_id)",
         description=(
             "Re-execute a recorded training run with the same model + "
@@ -6360,6 +6556,7 @@ Quantization tradeoffs (fastest -> smallest):
     # export-runs command (BRIDGE Wave 6b)
     export_runs_parser = subparsers.add_parser(
         "export-runs",
+        parents=[_common],
         help="Bulk export of run history (JSONL, one record per line)",
         description=(
             "Dump every run history entry as JSONL — one record per line, "
@@ -6413,6 +6610,7 @@ Quantization tradeoffs (fastest -> smallest):
     # auth-required gate (which v1.2 introduced) refuses that.
     ui_parser = subparsers.add_parser(
         "ui",
+        parents=[_common],
         help="Launch the Reflex web interface",
         description="Launch the Reflex (Radix UI) web interface for training, "
                     "export, and monitoring. Requires `pip install backpropagate[ui]`.",
@@ -6446,10 +6644,13 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     )
     ui_parser.add_argument(
         "--host",
+        type=_host_str,
         default=None,
         help=(
             "Interface to bind (default: 127.0.0.1). Non-loopback values "
-            "(e.g. 0.0.0.0, a LAN IP) require --auth — DNS-rebinding defense."
+            "(e.g. 0.0.0.0, a LAN IP) require --auth — DNS-rebinding defense. "
+            "Must be a valid IP address or hostname (no whitespace, no "
+            "leading '-')."
         ),
     )
     ui_parser.add_argument(
@@ -6500,6 +6701,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # validate command (BRIDGE-F-007 — wrap existing validate_dataset)
     validate_parser = subparsers.add_parser(
         "validate",
+        parents=[_common],
         help="Validate a dataset's format + content",
         description=(
             "Wrap backpropagate.datasets.validate_dataset to report row "
@@ -6547,6 +6749,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # estimate-vram command (BRIDGE-F-008 — wrap Trainer._detect_batch_size logic)
     estimate_vram_parser = subparsers.add_parser(
         "estimate-vram",
+        parents=[_common],
         help="Estimate VRAM requirements at different batch sizes",
         description=(
             "Print a small table of recommended batch sizes given the "
@@ -6627,6 +6830,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
     # etc. in a future cleanup).
     ollama_parser = subparsers.add_parser(
         "ollama",
+        parents=[_common],
         help="Manage Ollama models (register / list / rm)",
         description=(
             "Manage local Ollama daemon models. Mirrors upstream Ollama "
@@ -6661,6 +6865,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama register <path> [--name N] [--modelfile P]
     ollama_register_parser = ollama_subparsers.add_parser(
         "register",
+        parents=[_common],
         help="Register an existing GGUF with the local Ollama daemon",
         description=(
             "Register an already-exported GGUF file (produced by "
@@ -6700,6 +6905,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama list
     ollama_list_parser = ollama_subparsers.add_parser(
         "list",
+        parents=[_common],
         help="List models registered with Ollama",
         description=(
             "List every model the local Ollama daemon has registered. "
@@ -6711,6 +6917,7 @@ where you already have a GGUF and only need the Ollama-side wiring.
     # backprop ollama rm <name>
     ollama_rm_parser = ollama_subparsers.add_parser(
         "rm",
+        parents=[_common],
         help="Remove a model from Ollama",
         description=(
             "Remove a registered model from the local Ollama daemon. "
@@ -6808,6 +7015,19 @@ def main(argv: list[str] | None = None) -> int:
         # validator does I/O) should still exit 130 per the Ship Gate contract.
         print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
         return EXIT_INTERRUPTED
+
+    # CLI-A-001 (v1.4 Wave A1): backfill the four shared logging flags.
+    # They are declared with default=argparse.SUPPRESS on the ``_common``
+    # parent parser (see create_parser) so a flag placed AFTER the subcommand
+    # verb does not get clobbered back to a subparser default during the
+    # subparse. The flip side of SUPPRESS is that an *unseen* flag leaves its
+    # dest entirely absent from the namespace — which would break the dozens
+    # of subcommand handlers that read a bare ``args.verbose`` (AttributeError).
+    # Normalise here, once, so every downstream handler sees the four dests
+    # with their real defaults regardless of flag placement.
+    for _dest, _default in _COMMON_FLAG_DEFAULTS.items():
+        if not hasattr(args, _dest):
+            setattr(args, _dest, _default)
 
     # BRIDGE-B-002: configure structured logging before ANY subcommand runs.
     # ``--verbose`` bumps the level to DEBUG so structlog emits the full
@@ -6976,8 +7196,14 @@ def main(argv: list[str] | None = None) -> int:
     except BackpropagateError as e:
         # BRIDGE-F-006: map the structured exception's code to a sysexits
         # bucket before falling through to the legacy EXIT_RUNTIME_ERROR.
+        # CLI-A-003: this last-resort handler fires for exceptions raised
+        # BEFORE a subcommand's own try/except (per-handler redaction is
+        # bypassed on that path), so redact the message here too — a
+        # downstream library exception may quote a credential-bearing URL /
+        # header. BACKPROPAGATE_DEBUG still prints the full (un-redacted)
+        # traceback for the operator who opted in.
         code = getattr(e, "code", None) or "RUNTIME"
-        print(f"{code}: {e}", file=sys.stderr)
+        print(f"{code}: {_redact_secrets(str(e))}", file=sys.stderr)
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
 
@@ -6998,7 +7224,14 @@ def main(argv: list[str] | None = None) -> int:
         # crashes. The default Python behavior is exit code 1 + traceback.
         # BRIDGE-F-006 sysexits overlay: name the failure mode before
         # falling back to EXIT_RUNTIME_ERROR.
-        print(f"Unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        # CLI-A-003: redact the message — same rationale as the
+        # BackpropagateError handler above. The exception type name is safe
+        # (it never carries a secret); only str(e) can. BACKPROPAGATE_DEBUG
+        # still emits the full traceback for opted-in operators.
+        print(
+            f"Unexpected error: {type(e).__name__}: {_redact_secrets(str(e))}",
+            file=sys.stderr,
+        )
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
         else:

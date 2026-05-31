@@ -390,6 +390,22 @@ def _is_forbidden_output_base(path: Path) -> bool:
     ``%APPDATA%\\Microsoft\\Crypto``, etc.) are still enforced even
     inside the home, because those are the actual foot-guns we care
     about.
+
+    UI-A-007 (Wave A2) symlink hardening: the credential-dir denylist is
+    enforced against the *resolved* candidate, so a symlink whose target is a
+    credential dir is caught. But the "strictly inside home → allow" fast path
+    (below) returns before the system-tree loop runs — so a symlink placed
+    *under home* that points at a non-credential location outside home could
+    previously slip through by masking its true target behind ``.resolve()``.
+    We now reject the candidate if any path component STRICTLY BELOW the home
+    root (i.e. the user-controlled tail, not the home prefix itself) is a
+    symlink. A legitimate UI output dir under home never needs to traverse a
+    symlink; refusing one closes the "symlink under $HOME hides its target"
+    class without breaking setups where home itself (or a system mount like
+    macOS ``/var`` → ``/private/var``) is the symlink. Operators who
+    deliberately want a symlinked output dir should point the env var at the
+    link's target directly (the env-var-must-not-traverse-symlinks-below-home
+    constraint).
     """
     try:
         candidate = path.expanduser().resolve()
@@ -401,6 +417,42 @@ def _is_forbidden_output_base(path: Path) -> bool:
         home = Path.home().resolve()
     except (OSError, RuntimeError):
         home = None
+
+    # UI-A-007: reject a symlink in the user-controlled tail below home.
+    # Walk the PRE-resolved path's ancestry from the leaf up; if any element
+    # that lives strictly below the home root is a symlink, treat the base as
+    # forbidden. We use the un-resolved expansion so the symlink itself is
+    # observable (``.resolve()`` would have already collapsed it).
+    if home is not None:
+        try:
+            pre = path.expanduser()
+        except (OSError, RuntimeError):
+            pre = None
+        if pre is not None:
+            for ancestor in (pre, *pre.parents):
+                # Boundary check on the UNRESOLVED ancestor — resolving here
+                # would collapse a symlink to its (out-of-home) target and hide
+                # the very component we must catch. Stop once we climb to or
+                # above the home root (the home prefix and anything above it is
+                # out of the operator's per-output-dir control and may
+                # legitimately be a symlink, e.g. macOS /var -> /private/var).
+                try:
+                    below_home = ancestor.is_relative_to(home) and ancestor != home
+                except (ValueError, OSError):
+                    below_home = False
+                if not below_home:
+                    break
+                try:
+                    if ancestor.is_symlink():
+                        log_security_event(
+                            "ui_output_dir_symlink_below_home",
+                            requested=str(pre),
+                            symlink_component=str(ancestor),
+                        )
+                        return True
+                except OSError:
+                    # If we can't stat it, fail closed for this component.
+                    return True
 
     # Set of "credential" forbidden roots, computed identically here to the
     # main list so we can selectively enforce them inside the home directory.

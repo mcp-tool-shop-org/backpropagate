@@ -38,7 +38,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
-from .exceptions import DatasetNotFoundError, DatasetParseError, InvalidSettingError
+from .exceptions import (
+    BackpropagateError,
+    DatasetError,
+    DatasetNotFoundError,
+    DatasetParseError,
+    InvalidSettingError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +135,31 @@ def _retry_hf_call(
             f"err={type(exc).__name__}: {exc}"
         )
         raise
+
+
+def _dtype_kwarg(dtype: Any) -> dict[str, Any]:
+    """DATA-B-003: build the load-dtype kwarg for ``from_pretrained`` using
+    the name the installed transformers version expects.
+
+    transformers renamed ``torch_dtype`` → ``dtype`` and deprecated the old
+    name (it logs ``"torch_dtype is deprecated! Use dtype instead!"`` on
+    every model load on >= 4.56, and is slated for removal in 5.0+). We pick
+    the modern ``dtype`` key on >= 5.0 and fall back to ``torch_dtype`` on
+    older releases that predate the rename, so the same call site is quiet on
+    both. Detection failures degrade to the legacy key (always accepted —
+    just deprecated — on every version that still ships it).
+    """
+    try:
+        import transformers
+        from packaging import version
+
+        ver = version.parse(transformers.__version__.split("+")[0])
+        if ver >= version.parse("5.0.0"):
+            return {"dtype": dtype}
+    except Exception:  # noqa: BLE001 — never let version detection break load
+        pass  # nosec B110 — fall through to the legacy kwarg key below
+    return {"torch_dtype": dtype}
+
 
 __all__ = [
     # Core classes
@@ -427,6 +458,23 @@ def _detect_format_from_file(file_path: Path, sample_size: int = 5) -> DatasetFo
 # FORMAT CONVERTERS
 # =============================================================================
 
+def _render_function_call(function_call: Any) -> str:
+    """Render an OpenAI ``function_call`` as readable text for ChatML.
+
+    Prefers a structured ``name(arguments)`` rendering over a raw ``str(dict)``
+    so the converted training text reads like a tool invocation rather than a
+    Python dict repr (DATA-A-003).
+    """
+    if isinstance(function_call, dict):
+        name = function_call.get("name", "")
+        arguments = function_call.get("arguments", "")
+        if name:
+            if arguments:
+                return f"[Function call: {name}({arguments})]"
+            return f"[Function call: {name}]"
+    return f"[Function call: {function_call}]"
+
+
 class FormatConverter:
     """Convert between dataset formats."""
 
@@ -493,11 +541,16 @@ class FormatConverter:
 
         for msg in messages:
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = msg.get("content", "") or ""
 
-            # Handle function calls (OpenAI format)
-            if "function_call" in msg:
-                content = f"[Function call: {msg['function_call']}]"
+            # Handle function calls (OpenAI format). Preserve any natural-language
+            # content the assistant produced alongside the call rather than
+            # overwriting it (DATA-A-003): an assistant turn may carry both a
+            # reply and a function_call, and dropping the reply silently trains
+            # the model on a raw dict repr instead of the real answer.
+            if msg.get("function_call"):
+                call_repr = _render_function_call(msg["function_call"])
+                content = f"{content}\n{call_repr}" if content else call_repr
 
             parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
 
@@ -539,6 +592,29 @@ class FormatConverter:
         raise ValueError(f"Cannot convert format: {format_type}")
 
 
+# Matches a ChatML turn header and its body up to the next <|im_end|>.
+_CHATML_TURN_RE = re.compile(
+    r"<\|im_start\|>(\w+)\n(.*?)<\|im_end\|>", re.DOTALL
+)
+
+
+def _warn_on_empty_turns(chatml: str, row_index: int) -> None:
+    """Emit a WARN when a converted sample yields an empty user or assistant body.
+
+    Silent blank turns mean the model trains on empty prompts/answers — usually
+    the symptom of a per-row format mismatch (DATA-A-001). Surfacing it keeps the
+    content loss visible instead of training on blanks.
+    """
+    for role, body in _CHATML_TURN_RE.findall(chatml):
+        if role in ("user", "assistant") and not body.strip():
+            logger.warning(
+                "Converted sample %d produced an empty %s turn "
+                "(possible format mismatch — verify the source row's format)",
+                row_index,
+                role,
+            )
+
+
 def convert_to_chatml(
     samples: list[dict | str],
     source_format: DatasetFormat | None = None,
@@ -547,8 +623,12 @@ def convert_to_chatml(
     Convert a list of samples to ChatML format.
 
     Args:
-        samples: List of samples in any supported format
-        source_format: Optional format hint (auto-detected if not provided)
+        samples: List of samples in any supported format. When ``source_format``
+            is omitted, each sample's format is detected individually so a mixed
+            file (e.g. an Alpaca-first file with a stray ShareGPT row) does not
+            silently convert later rows to empty turns (DATA-A-001).
+        source_format: Optional format hint. If provided, it is applied to every
+            sample (auto-detected per-sample when not provided).
 
     Returns:
         List of dicts with "text" key containing ChatML
@@ -556,17 +636,44 @@ def convert_to_chatml(
     if not samples:
         return []
 
-    if source_format is None:
-        source_format = detect_format(samples[0])
+    # Per-sample detection when no explicit format is given: a single file may
+    # carry rows in different formats, and detecting once from samples[0] would
+    # convert every non-matching row to blank turns (silent content loss).
+    per_sample_detect = source_format is None or source_format == DatasetFormat.UNKNOWN
 
     results = []
-    for sample in samples:
+    dropped = 0
+    for i, sample in enumerate(samples):
+        # Structured so mypy narrows source_format to a concrete DatasetFormat
+        # in the pinned-format branch (per_sample_detect ⇒ source_format is
+        # None/UNKNOWN, so the else here is always a real format).
+        if source_format is not None and not per_sample_detect:
+            fmt = source_format
+        else:
+            fmt = detect_format(sample)
         try:
-            chatml = FormatConverter.to_chatml(sample, source_format)
+            chatml = FormatConverter.to_chatml(sample, fmt)
+            _warn_on_empty_turns(chatml, i)
             results.append({"text": chatml})
         except Exception as e:
-            logger.warning(f"Failed to convert sample: {e}")
+            # V2-b: DATA-A-001's fix left the convert-FAILS sub-case
+            # unprotected — a malformed / UNKNOWN-format row was dropped
+            # silently with no row index and no count. Thread the row index
+            # ``i`` (matching the empty-turn WARN's visibility) and emit a
+            # final dropped-count summary so wholesale content loss can't pass
+            # unnoticed.
+            dropped += 1
+            logger.warning("Failed to convert sample %d: %s", i, e)
             continue
+
+    if dropped:
+        logger.warning(
+            "convert_to_chatml dropped %d/%d sample(s) that failed to "
+            "convert (see the per-row warnings above for the offending "
+            "indices). The output has fewer rows than the input.",
+            dropped,
+            len(samples),
+        )
 
     return results
 
@@ -699,8 +806,17 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Missing 'output' field",
         ))
 
-    # Check for empty values
-    if sample.get("instruction", "").strip() == "":
+    # Check for empty values.
+    # DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
+    # pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
+    # the present-but-None value (the "" default only fires for ABSENT keys),
+    # so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
+    # has no attribute 'strip'`` and crashed validation of an otherwise-loadable
+    # dataset. Treat any non-string (None, NaN, numeric) as empty content.
+    def _is_blank(value: Any) -> bool:
+        return not isinstance(value, str) or value.strip() == ""
+
+    if _is_blank(sample.get("instruction")):
         errors.append(ValidationError(
             row_index=row_index,
             field="instruction",
@@ -708,7 +824,7 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Empty instruction",
         ))
 
-    if sample.get("output", "").strip() == "":
+    if _is_blank(sample.get("output")):
         errors.append(ValidationError(
             row_index=row_index,
             field="output",
@@ -879,15 +995,28 @@ def validate_dataset(
             format_detected=DatasetFormat.UNKNOWN,
         )
 
-    if format_type is None:
-        format_type = detect_format(samples[0])
+    # V1-c / DATA-A-001 (validator side): when no format is pinned, detect
+    # per-sample so a mixed file (e.g. an Alpaca-first file with a stray
+    # ShareGPT row) is validated against each row's ACTUAL format instead of
+    # the first row's. Validating every row against samples[0]'s format
+    # produced false "errors" for the minority-format rows and masked the
+    # real per-row problems. When a format IS pinned, apply it to every row
+    # exactly as before.
+    per_sample_detect = format_type is None
+    # ``format_detected`` preserves the prior return contract (the single
+    # detected format); for a mixed file it reports the first row's format.
+    reported_format = format_type if format_type is not None else detect_format(samples[0])
 
     all_errors = []
     all_warnings = []
     valid_count = 0
 
     for i, sample in enumerate(samples):
-        errors = validate_sample(sample, i, format_type)
+        if format_type is not None and not per_sample_detect:
+            row_format = format_type
+        else:
+            row_format = detect_format(sample)
+        errors = validate_sample(sample, i, row_format)
 
         if errors:
             # Separate errors from warnings based on severity
@@ -911,7 +1040,7 @@ def validate_dataset(
         valid_rows=valid_count,
         errors=all_errors,
         warnings=all_warnings,
-        format_detected=format_type,
+        format_detected=reported_format,
     )
 
 
@@ -1018,6 +1147,46 @@ def filter_by_quality(
         filtered.append(sample)
 
     stats.total_after = len(filtered)
+
+    # DATA-A-005: the default min_tokens=50 combined with the coarse
+    # 4-chars-per-token heuristic (_count_tokens_approx) can silently drop
+    # an entire corpus of legitimately short or non-ASCII (e.g. CJK, where
+    # the heuristic over-counts ~4x) chats. A run that filters to zero — or
+    # near-zero — is almost always a mis-calibrated threshold, not a genuinely
+    # empty dataset. Surface it loudly with the actionable cause + knob so the
+    # operator doesn't discover the empty training set the hard way.
+    if stats.total_before > 0 and stats.total_after == 0:
+        logger.warning(
+            "filter_by_quality removed ALL %d samples (0 retained). The "
+            "most common cause is min_tokens=%s being too high for short or "
+            "non-ASCII (e.g. CJK) content — the token estimate is ~4 chars/"
+            "token and over-counts CJK ~4x. Lower min_tokens / raise "
+            "max_tokens, or re-derive the cutoffs against your real "
+            "tokenizer. Breakdown: too_short=%d too_long=%d few_turns=%d "
+            "many_turns=%d no_assistant=%d empty=%d custom=%d.",
+            stats.total_before,
+            min_tokens,
+            stats.removed_too_short,
+            stats.removed_too_long,
+            stats.removed_few_turns,
+            stats.removed_many_turns,
+            stats.removed_no_assistant,
+            stats.removed_empty,
+            stats.removed_custom,
+        )
+    elif stats.total_before >= 20 and stats.total_after / stats.total_before < 0.05:
+        # Near-total wipe-out on a non-trivial input (kept < 5% of >= 20 rows).
+        # Same likely cause; warn but don't imply a hard failure.
+        logger.warning(
+            "filter_by_quality retained only %d/%d samples (%.1f%%). If this "
+            "is unexpected, check min_tokens=%s against your content length / "
+            "tokenizer (the 4-chars/token estimate over-counts CJK ~4x).",
+            stats.total_after,
+            stats.total_before,
+            100.0 * stats.total_after / stats.total_before,
+            min_tokens,
+        )
+
     return filtered, stats
 
 
@@ -1159,14 +1328,23 @@ def deduplicate_minhash(
 
     # Stage C amend BACKEND-B-007: phase 1 — build every MinHash up front.
     # No insert side effects in this pass so the per-sample minhash is
-    # purely a function of its text.
+    # purely a function of its text. DATA-A-006: track which rows have no
+    # grams (empty / whitespace-only content). An all-empty MinHash matches
+    # every other all-empty MinHash, so without this flag every blank row
+    # would collapse into one — we instead keep them verbatim.
     minhashes: list[Any] = []
+    empty_content: list[bool] = []
     for sample in samples:
         text = _get_text_content(sample, key)
+        grams = _get_ngrams(text, n=3)
         mh = MinHash(num_perm=num_perm)
-        for ngram in _get_ngrams(text, n=3):
+        for ngram in grams:
             mh.update(ngram.encode("utf-8"))
         minhashes.append(mh)
+        # Whitespace-only content is "empty" for dedup purposes too: a row
+        # of all spaces would otherwise hash to one space-gram and collapse
+        # with every other whitespace-only row.
+        empty_content.append(not text.strip())
 
     # Stage C amend BACKEND-B-007: phase 2 — single-pass canonical dedup.
     # For each sample in document order, ask LSH whether any
@@ -1176,6 +1354,12 @@ def deduplicate_minhash(
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
     kept_indices: list[int] = []
     for i, mh in enumerate(minhashes):
+        if empty_content[i]:
+            # DATA-A-006: empty-content rows have no comparable signature;
+            # never query/insert (which would fold them all together) — keep
+            # each one as-is and let downstream quality filters drop blanks.
+            kept_indices.append(i)
+            continue
         matches = lsh.query(mh)
         if matches:
             # Near-duplicate of an already-kept canonical — skip.
@@ -1203,9 +1387,33 @@ def deduplicate_minhash(
 
 
 def _get_ngrams(text: str, n: int = 3) -> list[str]:
-    """Generate character n-grams from text."""
+    """Generate character n-grams from text.
+
+    DATA-A-006: the prior ``range(max(1, len(text) - n + 1))`` form
+    degenerated badly on short / empty inputs:
+
+    * Empty text produced ``['']`` — a SINGLE empty-string gram. Every
+      empty / whitespace-only row therefore hashed identically, so MinHash
+      LSH collapsed all of them into one "duplicate" cluster (a force
+      multiplier with DATA-A-001's blank-conversion rows). We now return
+      ``[]`` for empty text; callers (``deduplicate_minhash``) treat a
+      no-gram row as having no comparable content and keep it as-is rather
+      than folding distinct empties together.
+    * Text shorter than ``n`` yielded one truncated gram via the
+      ``max(1, ...)`` floor. That is still distinct per input, so we keep
+      returning the whole short string as a single gram — but we do it
+      explicitly instead of relying on the ``max(1, ...)`` clamp, so the
+      intent (and the empty-text special case) is legible.
+    """
     text = text.lower()
-    return [text[i:i+n] for i in range(max(1, len(text) - n + 1))]
+    if not text:
+        # No content -> no grams. The dedup caller keeps these rows instead
+        # of collapsing every empty row into a single representative.
+        return []
+    if len(text) < n:
+        # Too short for a full n-gram: use the whole (distinct) string once.
+        return [text]
+    return [text[i:i + n] for i in range(len(text) - n + 1)]
 
 
 # =============================================================================
@@ -1338,11 +1546,14 @@ class PerplexityFilter:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # DATA-B-003: transformers renamed torch_dtype -> dtype (deprecated on
+        # 4.56+, removed on 5.x). Pick the kwarg the installed version wants.
+        _dtype = torch.float16 if self._device == "cuda" else torch.float32
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
-            torch_dtype=torch.float16 if self._device == "cuda" else torch.float32,
             _label=f"perplexity_model:{self.model_name}",
+            **_dtype_kwarg(_dtype),
         )
         self._model.to(self._device)
         self._model.eval()
@@ -1839,6 +2050,10 @@ class DatasetLoader:
         self.source = source
         self._samples: list[dict[Any, Any] | str] = []
         self._format: DatasetFormat = format_type or DatasetFormat.UNKNOWN
+        # Track whether the caller pinned a format. When they did NOT, conversion
+        # detects per-sample so a mixed file's later rows aren't converted with
+        # the first row's format (DATA-A-001 sibling).
+        self._format_explicit = format_type is not None
         self._validation: ValidationResult | None = None
         self._loaded = False
 
@@ -1884,6 +2099,15 @@ class DatasetLoader:
 
             self._loaded = True
 
+        except BackpropagateError:
+            # DATA-A-011: the per-format loaders already raise structured
+            # errors (e.g. DatasetParseError with INPUT_DATASET_PARSE_FAILED
+            # + a remediation hint). Re-wrapping those in a bare ValueError
+            # discarded the stable error code / suggestion that callers and
+            # the CLI rely on. Let any BackpropagateError subclass propagate
+            # unchanged; only genuinely unexpected (non-structured) failures
+            # fall through to the generic wrapper below.
+            raise
         except Exception as e:
             raise ValueError(f"Failed to load dataset: {e}") from e
 
@@ -1989,9 +2213,33 @@ class DatasetLoader:
         return samples
 
     def _load_json(self, path: Path) -> list[dict[Any, Any] | str]:
-        """Load JSON file."""
+        """Load JSON file.
+
+        DATA-B-001: the ``.jsonl`` path (``_load_jsonl``) gives a malformed
+        file the full structured ``DatasetParseError`` treatment; the
+        single-document ``.json`` path used a bare ``json.load`` whose
+        ``JSONDecodeError`` surfaced as an opaque traceback with no recovery
+        hint. Mirror the jsonl contract: catch the decode error, attach the
+        offending byte position via ``line_number``, and point the operator
+        at the common causes (trailing comma, BOM, wrong extension).
+        """
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise DatasetParseError(
+                    f"Failed to parse {path.name} as JSON: {e.msg}",
+                    path=str(path),
+                    line_number=e.lineno,
+                    suggestion=(
+                        "A .json file must be a single valid JSON document "
+                        "(object or array). Common causes: a trailing comma, "
+                        "an unescaped quote, a UTF-8 BOM, or a "
+                        "newline-delimited file saved with a .json extension "
+                        "(rename it .jsonl — DatasetLoader auto-detects the "
+                        "extension). See handbook/troubleshooting.md."
+                    ),
+                ) from e
             if isinstance(data, list):
                 return cast(list[dict[Any, Any] | str], data)
             return [data]
@@ -2005,27 +2253,102 @@ class DatasetLoader:
                 return [s.strip() for s in content.split("\n\n") if s.strip()]
             return [content]
 
+    def _records_from_df(self, df: Any, source_name: str) -> list[dict[Any, Any] | str]:
+        """DATA-B-002: convert a pandas DataFrame to records with NaN coerced
+        to ``None``.
+
+        Pandas represents an empty CSV/parquet cell as the float ``nan``.
+        ``df.to_dict("records")`` then leaves those ``nan`` floats in place,
+        so a downstream ``str(value)`` turns an empty cell into the literal
+        three-character training token ``'nan'``, and a numeric filter (e.g.
+        a min-length check that calls ``len``) raises ``TypeError`` on the
+        float. Replacing NaN with ``None`` before ``to_dict`` yields a clean
+        ``None`` the converters already skip. We also surface a single WARN
+        naming the affected columns + counts so a silently-sparse source is
+        visible (e.g. a header typo that produced an all-empty column).
+        """
+        try:
+            null_counts = df.isna().sum()
+            offenders = {
+                str(col): int(n) for col, n in null_counts.items() if n > 0
+            }
+        except Exception:  # noqa: BLE001 — diagnostics only; never block load
+            offenders = {}
+        if offenders:
+            logger.warning(
+                "%s: %d column(s) contain empty/NaN cells (%s); these become "
+                "None (skipped by the converters), not the literal string "
+                "'nan'. Verify your column headers if this is unexpected.",
+                source_name,
+                len(offenders),
+                ", ".join(f"{c}={n}" for c, n in sorted(offenders.items())),
+            )
+        # Coerce NaN -> None. The naive ``df.where(df.notna(), None)`` does
+        # NOT work on modern pandas (>= 2.x): with the StringDtype/object
+        # columns a read_csv produces, ``where`` re-introduces the float NaN
+        # and the cell survives as ``nan``. Casting to ``object`` first makes
+        # the substitution stick across both string and numeric columns.
+        clean = df.astype(object).where(df.notna(), None)
+        return cast(list[dict[Any, Any] | str], clean.to_dict("records"))
+
     def _load_parquet(self, path: Path) -> list[dict[Any, Any] | str]:
-        """Load Parquet file."""
+        """Load Parquet file.
+
+        DATA-B-006: parquet needs BOTH pandas and a parquet engine
+        (pyarrow). A missing engine doesn't fail at ``import pandas`` — it
+        fails inside ``read_parquet`` with an ``ImportError`` whose message
+        only the well-read recognize. Probe pyarrow explicitly and raise the
+        structured :class:`DatasetError` (with the missing-dep code) so the
+        operator gets a single actionable hint either way.
+        """
         try:
             import pandas as pd
-            df = pd.read_parquet(path)
-            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
-        except ImportError:
-            raise ImportError("pandas and pyarrow required for parquet: pip install pandas pyarrow")
+        except ImportError as e:
+            raise DatasetError(
+                "pandas and pyarrow are required to load parquet files.",
+                suggestion="Install them: pip install pandas pyarrow",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError as e:
+            raise DatasetError(
+                "A parquet engine (pyarrow) is required to load parquet files.",
+                suggestion="Install it: pip install pyarrow",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        df = pd.read_parquet(path)
+        return self._records_from_df(df, path.name)
 
     def _load_csv(self, path: Path) -> list[dict[Any, Any] | str]:
         """Load CSV file."""
         try:
             import pandas as pd
-            df = pd.read_csv(path)
-            return cast(list[dict[Any, Any] | str], df.to_dict("records"))
-        except ImportError:
-            raise ImportError("pandas required for CSV: pip install pandas")
+        except ImportError as e:
+            raise DatasetError(
+                "pandas is required to load CSV files.",
+                suggestion="Install it: pip install pandas",
+                code="DEP_DATASET_ENGINE_MISSING",
+                cause=e,
+            ) from e
+        df = pd.read_csv(path)
+        return self._records_from_df(df, path.name)
 
     def _validate(self) -> None:
-        """Run validation."""
-        self._validation = validate_dataset(self._samples, self._format)
+        """Run validation.
+
+        V1-c: this was the 5th (and last) ``self._format`` consumer left on
+        the raw-format path after Wave A1 migrated the other four to the
+        per-sample ``self._format if self._format_explicit else None``
+        pattern. When the caller did NOT pin a format, pass ``None`` so the
+        validator detects format per-sample instead of validating a mixed
+        file against a possibly-wrong cached ``self._format`` (the same
+        first-row assumption DATA-A-001 fixed for conversion).
+        """
+        fmt = self._format if self._format_explicit else None
+        self._validation = validate_dataset(self._samples, fmt)
 
     @property
     def detected_format(self) -> DatasetFormat:
@@ -2059,7 +2382,8 @@ class DatasetLoader:
 
     def to_chatml(self) -> list[dict[str, str]]:
         """Convert all samples to ChatML format."""
-        return convert_to_chatml(self._samples, self._format)
+        fmt = self._format if self._format_explicit else None
+        return convert_to_chatml(self._samples, fmt)
 
     def to_hf_dataset(self, split: str | None = None) -> Any:
         """
@@ -2097,13 +2421,23 @@ class DatasetLoader:
         samples = self._samples[:n]
 
         if as_chatml:
-            return [FormatConverter.to_chatml(s, self._format) for s in samples]
+            # Detect per-sample when the caller didn't pin a format so a mixed
+            # file previews each row in its own format (DATA-A-001 sibling).
+            return [
+                FormatConverter.to_chatml(
+                    s, self._format if self._format_explicit else detect_format(s)
+                )
+                for s in samples
+            ]
         else:
             return [json.dumps(s, indent=2) if isinstance(s, dict) else s for s in samples]
 
     def stats(self) -> DatasetStats:
         """Get dataset statistics."""
-        return get_dataset_stats(self._samples, self._format)
+        # Pass None when the format was auto-detected so get_dataset_stats detects
+        # per-sample for a mixed file (DATA-A-001 sibling).
+        fmt = self._format if self._format_explicit else None
+        return get_dataset_stats(self._samples, fmt)
 
     def shuffle(self, seed: int | None = None) -> "DatasetLoader":
         """Return a new loader with shuffled samples."""
@@ -2387,6 +2721,10 @@ class StreamingDatasetLoader:
         self.buffer_size = buffer_size
         self.split = split
         self._format = format_type or DatasetFormat.UNKNOWN
+        # When the caller did not pin a format, convert/filter detect per-sample
+        # so a mixed stream's rows aren't all coerced to the first row's format
+        # (DATA-A-001 sibling).
+        self._format_explicit = format_type is not None
         self._iterator = None
         self._is_hf_dataset = False
 
@@ -2422,17 +2760,18 @@ class StreamingDatasetLoader:
             _label=f"streaming_load_dataset:{self.source}",
         )
 
-        # Detect format from first sample
-        first_sample = None
+        # DATA-B-010: iterate the streaming dataset exactly ONCE. The prior
+        # two-loop shape (a first loop that `break`s after one sample, then a
+        # second `for sample in dataset`) re-entered ``__iter__`` on an
+        # IterableDataset — which restarts the stream — so row 0 was yielded
+        # twice ([0, 0, 1, 2, ...]). A single loop with a first-iteration
+        # flag detects the format off the first sample without replaying it.
+        first = True
         for sample in dataset:
-            first_sample = sample
-            if self._format == DatasetFormat.UNKNOWN:
-                self._format = detect_format(sample)
-            yield sample
-            break
-
-        # Yield rest of samples
-        for sample in dataset:
+            if first:
+                if self._format == DatasetFormat.UNKNOWN:
+                    self._format = detect_format(sample)
+                first = False
             yield sample
 
     def _stream_local_file(self) -> Iterator[dict[Any, Any] | str]:
@@ -2451,24 +2790,97 @@ class StreamingDatasetLoader:
             yield from self._stream_jsonl(path)
 
     def _stream_jsonl(self, path: Path) -> Iterator[dict[Any, Any] | str]:
-        """Stream JSONL file."""
+        """Stream JSONL file.
+
+        DATA-A-010: the prior body silently ``continue``d on every
+        ``JSONDecodeError`` with no count, no log, and no raise. A file that
+        was entirely malformed (wrong delimiter, a JSON array saved with a
+        ``.jsonl`` suffix, a corrupt export) streamed ZERO samples and the
+        operator got a silently-empty training run. We now mirror the
+        non-streaming ``_load_jsonl`` contract: log the first few failures
+        verbatim (capped so a corrupt 1M-line file can't flood stderr),
+        count the rest, emit a post-stream summary, and raise
+        ``DatasetParseError`` when every non-empty line failed.
+        """
+        _VERBOSE_WARN_CEILING = 20
+
+        total_lines = 0
+        skipped_lines = 0
+        yielded = 0
         with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
+            for line_num, raw in enumerate(f, 1):
+                line = raw.strip()
                 if not line:
                     continue
+                total_lines += 1
                 try:
                     sample = json.loads(line)
-                    if self._format == DatasetFormat.UNKNOWN:
-                        self._format = detect_format(sample)
-                    yield sample
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    skipped_lines += 1
+                    if skipped_lines <= _VERBOSE_WARN_CEILING:
+                        logger.warning(f"Invalid JSON on line {line_num}: {e}")
+                    elif skipped_lines == _VERBOSE_WARN_CEILING + 1:
+                        logger.warning(
+                            "JSONL stream: more than %d invalid lines in %s; "
+                            "suppressing per-line warnings — final count will "
+                            "be reported in the stream summary.",
+                            _VERBOSE_WARN_CEILING,
+                            path,
+                        )
                     continue
+                if self._format == DatasetFormat.UNKNOWN:
+                    self._format = detect_format(sample)
+                yielded += 1
+                yield sample
+
+        # Every non-empty line failed to decode -> the stream produced nothing
+        # usable. Raise rather than return an empty iterator silently.
+        if total_lines > 0 and yielded == 0:
+            raise DatasetParseError(
+                f"All {total_lines} non-empty line(s) in {path} failed to "
+                "parse as JSON; the stream produced zero samples.",
+                path=str(path),
+                suggestion=(
+                    "Verify the file is newline-delimited JSON (one JSON "
+                    "object per line). A JSON array saved with a .jsonl "
+                    "suffix is the most common cause — use a .json extension "
+                    "for array files."
+                ),
+            )
+        if skipped_lines:
+            pct = 100.0 * skipped_lines / total_lines if total_lines else 0.0
+            logger.warning(
+                "JSONL stream summary: skipped %d/%d non-empty line(s) "
+                "(%.1f%%) in %s due to JSON parse errors.",
+                skipped_lines,
+                total_lines,
+                pct,
+                path,
+            )
 
     def _stream_json(self, path: Path) -> Iterator[dict[Any, Any] | str]:
-        """Stream JSON array file."""
+        """Stream JSON array file.
+
+        DATA-B-001: mirror the structured ``DatasetParseError`` that
+        ``_stream_jsonl`` raises on a fully-malformed file. ``json.load`` on
+        a corrupt ``.json`` previously raised a bare ``JSONDecodeError`` mid
+        ``__iter__`` with no recovery hint.
+        """
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise DatasetParseError(
+                    f"Failed to parse {path} as JSON: {e.msg}",
+                    path=str(path),
+                    line_number=e.lineno,
+                    suggestion=(
+                        "A .json file must be a single valid JSON document "
+                        "(object or array). A newline-delimited file saved "
+                        "with a .json extension is the most common cause — "
+                        "rename it .jsonl so it streams line-by-line."
+                    ),
+                ) from e
             if isinstance(data, list):
                 for sample in data:
                     if self._format == DatasetFormat.UNKNOWN:
@@ -2555,7 +2967,8 @@ class StreamingDatasetLoader:
             List of ChatML formatted samples
         """
         samples = self.take(n) if n is not None else list(self)
-        return convert_to_chatml(samples, self._format)
+        fmt = self._format if self._format_explicit else None
+        return convert_to_chatml(samples, fmt)
 
     def filter(
         self,
@@ -2581,9 +2994,15 @@ class StreamingDatasetLoader:
             Filtered samples
         """
         for sample in self:
-            # Convert to ChatML for consistent filtering
-            chatml = FormatConverter.to_chatml(sample, self._format)
-            text = chatml if isinstance(chatml, str) else chatml
+            # Convert to ChatML for consistent filtering. Detect per-sample when
+            # the caller didn't pin a format so a mixed stream isn't coerced to
+            # the first row's format (DATA-A-001 sibling).
+            fmt = self._format if self._format_explicit else detect_format(sample)
+            # FormatConverter.to_chatml always returns a str (see its
+            # signature), so the prior ``chatml if isinstance(chatml, str)
+            # else chatml`` ternary (DATA-A-010) was a no-op — both branches
+            # returned ``chatml``. Assign directly.
+            text = FormatConverter.to_chatml(sample, fmt)
 
             # Check empty
             if not text.strip():
@@ -2611,7 +3030,7 @@ class StreamingDatasetLoader:
             if custom_filter is not None and isinstance(sample, dict) and not custom_filter(sample):
                 continue
 
-            yield {"text": chatml}
+            yield {"text": text}
 
     @property
     def detected_format(self) -> DatasetFormat:
@@ -2670,11 +3089,17 @@ def get_dataset_stats(
             unique_system_prompts=0,
         )
 
+    # When no format is given, detect once for the reported `format_detected`
+    # summary but let convert_to_chatml detect per-sample so a mixed file's later
+    # rows are not converted with the wrong format (DATA-A-001 sibling).
+    auto_detected = format_type is None
+    # Narrow on the value (not the bool alias) so mypy knows format_type is a
+    # concrete DatasetFormat below (the `format_detected` summary field).
     if format_type is None:
         format_type = detect_format(samples)
 
     # Convert to ChatML for consistent analysis
-    chatml_samples = convert_to_chatml(samples, format_type)
+    chatml_samples = convert_to_chatml(samples, None if auto_detected else format_type)
 
     # Approximate token counts (4 chars ≈ 1 token)
     token_counts = []
@@ -2816,6 +3241,12 @@ def get_curriculum_chunks(
             print(f"Chunk {i+1}: {len(chunk)} samples")
             trainer.train(chunk, steps=100)
     """
+    # Guard against a non-positive chunk count: num_chunks=0 (or negative) would
+    # raise a raw ZeroDivisionError below (DATA-A-002). Clamp to at least one
+    # chunk; the more-chunks-than-samples case is already handled by integer
+    # division producing trailing empty chunks.
+    num_chunks = max(1, num_chunks)
+
     # Order by difficulty
     ordered = order_by_difficulty(samples, key=key, ascending=True)
 
@@ -2874,6 +3305,23 @@ def analyze_curriculum(
     Returns:
         CurriculumStats with distribution info
     """
+    # Empty input: report empty stats rather than crashing on the division /
+    # min()/max()-on-empty paths below (DATA-A-002).
+    if not samples:
+        return CurriculumStats(
+            total_samples=0,
+            num_chunks=0,
+            chunk_sizes=[],
+            difficulty_ranges=[],
+        )
+
+    # Clamp to a sane chunk count: num_chunks=0 would raise ZeroDivisionError and
+    # num_chunks > len(samples) would leave empty chunks whose min()/max() blow up
+    # (DATA-A-002). Bounding to [1, len(samples)] guarantees every chunk is
+    # non-empty. The effective count is what we report in the returned stats so
+    # chunk_sizes / difficulty_ranges stay consistent (see CurriculumStats.summary).
+    effective_chunks = max(1, min(num_chunks, len(samples)))
+
     # Get scores
     scores = [compute_difficulty_score(s, key) for s in samples]
 
@@ -2881,13 +3329,13 @@ def analyze_curriculum(
     sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i])
 
     # Compute chunk stats
-    chunk_size = len(samples) // num_chunks
+    chunk_size = len(samples) // effective_chunks
     chunk_sizes = []
     difficulty_ranges = []
 
-    for i in range(num_chunks):
+    for i in range(effective_chunks):
         start = i * chunk_size
-        if i == num_chunks - 1:
+        if i == effective_chunks - 1:
             end = len(sorted_indices)
         else:
             end = start + chunk_size
@@ -2896,11 +3344,16 @@ def analyze_curriculum(
         chunk_scores = [scores[j] for j in chunk_indices]
 
         chunk_sizes.append(len(chunk_indices))
-        difficulty_ranges.append((min(chunk_scores), max(chunk_scores)))
+        # Defensive: an empty chunk yields a neutral (0.0, 0.0) range instead of
+        # crashing on min()/max() of an empty sequence.
+        if chunk_scores:
+            difficulty_ranges.append((min(chunk_scores), max(chunk_scores)))
+        else:
+            difficulty_ranges.append((0.0, 0.0))
 
     return CurriculumStats(
         total_samples=len(samples),
-        num_chunks=num_chunks,
+        num_chunks=effective_chunks,
         chunk_sizes=chunk_sizes,
         difficulty_ranges=difficulty_ranges,
     )

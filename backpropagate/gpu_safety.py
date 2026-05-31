@@ -49,6 +49,12 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# TRAINER-A-009: degrees Celsius below the card's hardware shutdown threshold
+# (NVML NVML_TEMPERATURE_THRESHOLD_SHUTDOWN) at which we escalate to EMERGENCY,
+# independent of the statically-configured temp_emergency. A card already this
+# close to its own protection cutoff is in danger regardless of our default.
+_HW_SHUTDOWN_MARGIN_C = 3.0
+
 # =============================================================================
 # PYNVML INIT-ONCE PATTERN (BR-009)
 # =============================================================================
@@ -377,6 +383,30 @@ def _evaluate_condition(status: GPUStatus, config: GPUSafetyConfig) -> tuple:
 
     # Check temperature (most critical)
     if status.temperature_c is not None:
+        # TRAINER-A-009: the card's OWN hardware shutdown threshold
+        # (status.temperature_max_c, from
+        # nvmlDeviceGetTemperatureThreshold(SHUTDOWN)) was queried in
+        # get_gpu_status but never consulted — a dead safety signal. A
+        # statically-configured temp_emergency (default 95C) can sit ABOVE a
+        # specific card's real shutdown point (some mobile / older GPUs shut
+        # down at 90-92C), so a card already in its hardware-protection zone
+        # would only register CRITICAL under the static thresholds. Factor the
+        # real threshold in as an additional EMERGENCY floor: if we are within
+        # HW_SHUTDOWN_MARGIN_C of (or past) the card's shutdown temp, that is
+        # an emergency regardless of the configured value. Skipped when the
+        # threshold is unknown (None), so software-only / mocked paths keep the
+        # pure static-threshold behavior.
+        if (
+            status.temperature_max_c is not None
+            and status.temperature_max_c > 0
+            and status.temperature_c >= status.temperature_max_c - _HW_SHUTDOWN_MARGIN_C
+        ):
+            return (
+                GPUCondition.EMERGENCY,
+                f"Temperature EMERGENCY: {status.temperature_c}C is within "
+                f"{_HW_SHUTDOWN_MARGIN_C}C of the card's hardware shutdown "
+                f"threshold ({status.temperature_max_c}C)",
+            )
         if status.temperature_c >= config.temp_emergency:
             return GPUCondition.EMERGENCY, f"Temperature EMERGENCY: {status.temperature_c}C >= {config.temp_emergency}C"
         if status.temperature_c >= config.temp_critical:
@@ -657,10 +687,35 @@ class GPUMonitor:
         return self._emergency_triggered
 
     def _monitor_loop(self) -> None:
-        """Main monitoring loop (runs in background thread)."""
+        """Main monitoring loop (runs in background thread).
+
+        Stage C amend CORE-B-008: a persistently-failing ``get_gpu_status``
+        (driver crash, nvidia-smi gone, sensor wedged) previously logged a
+        full ``GPU monitor error`` line on EVERY iteration — once per
+        ``check_interval`` for the whole session, flooding logs and burying
+        real signal. We now count consecutive failures: log the first at
+        error level, escalate ONCE at the threshold to make clear that
+        thermal safety is effectively disabled (no fresh readings ->
+        pause/emergency callbacks can never fire), then fall back to debug
+        for the steady-state spam. Any successful poll resets the counter and
+        logs a one-line recovery so the operator sees monitoring came back.
+        """
+        consecutive_failures = 0
+        # After this many back-to-back failures, escalate once: the monitor
+        # has produced no usable reading for ~threshold * check_interval and
+        # cannot enforce any thermal limit.
+        _FAILURE_ESCALATE_AT = 3
         while not self._stop_event.is_set():
             try:
                 status = get_gpu_status(self.device_index, self.config)
+
+                if consecutive_failures > 0:
+                    logger.warning(
+                        "GPU monitor recovered after %d consecutive failed "
+                        "poll(s); thermal safety re-armed.",
+                        consecutive_failures,
+                    )
+                    consecutive_failures = 0
 
                 # Store in history (deque with maxlen handles eviction)
                 self._status_history.append(status)
@@ -677,7 +732,28 @@ class GPUMonitor:
                     self._handle_condition(status)
 
             except Exception as e:
-                logger.error(f"GPU monitor error: {e}")
+                consecutive_failures += 1
+                if consecutive_failures == 1:
+                    logger.error(f"GPU monitor error: {e}")
+                elif consecutive_failures == _FAILURE_ESCALATE_AT:
+                    logger.error(
+                        "GPU monitor has failed %d consecutive polls "
+                        "(latest: %s). Thermal safety is effectively "
+                        "DISABLED — no fresh GPU readings means overheat "
+                        "auto-pause / emergency-abort cannot trigger. "
+                        "Verify the driver / nvidia-smi / pynvml install. "
+                        "Suppressing further per-poll error logs until a "
+                        "reading succeeds.",
+                        consecutive_failures,
+                        e,
+                    )
+                else:
+                    # Steady-state spam suppression: keep a debug breadcrumb
+                    # but stop flooding error logs every check_interval.
+                    logger.debug(
+                        f"GPU monitor still failing "
+                        f"(consecutive={consecutive_failures}): {e}"
+                    )
 
             # Wait for next check (interruptible)
             self._stop_event.wait(self.config.check_interval)

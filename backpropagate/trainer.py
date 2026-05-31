@@ -1854,6 +1854,26 @@ class Trainer:
     # alone.
 
     @staticmethod
+    def _is_bnb_8bit_optim(optim: str) -> bool:
+        """True when ``optim`` is a bitsandbytes 8-bit (CUDA-only) optimizer.
+
+        bitsandbytes registers its quantized optimizers under names that
+        either end in ``_8bit`` (``adamw_8bit``, ``adam_8bit``,
+        ``lion_8bit``, ``lamb_8bit``, ...) or carry the ``paged_`` prefix
+        (``paged_adamw_8bit``, ``paged_adamw_32bit``, ``paged_lion_32bit``,
+        ...). Every one of them allocates CUDA tensors in its optimizer
+        state and raises from ``bnb.functional.is_on_gpu`` if asked to
+        ``.step()`` on CPU. This predicate is the single source of truth
+        for "this optimizer cannot run without CUDA" so the CPU downgrade
+        in :meth:`_detect_optim_for_card` covers the whole family rather
+        than just the ``adamw_8bit`` default (TRAINER-A-001 / TRAINER-A-007).
+        """
+        if not optim:
+            return False
+        name = optim.lower()
+        return name.endswith("_8bit") or name.startswith("paged_")
+
+    @staticmethod
     def _detect_optim_for_card(configured_optim: str) -> str:
         """v1.3 BACKEND-5: resolve the optimizer for the current GPU.
 
@@ -1866,19 +1886,26 @@ class Trainer:
 
         Detection rules (in order):
 
-        1. If the operator passed anything other than the documented
-           default ``adamw_8bit``, honor their choice unchanged. The
-           explicit-override surface is the canonical knob for
-           operators who pinned a specific optimizer for an LR
+        1. If CUDA is unavailable (CPU-only runner / no GPU visible),
+           downgrade ANY bitsandbytes 8-bit optimizer
+           (``adamw_8bit`` / ``paged_adamw_8bit`` /
+           ``paged_adamw_32bit`` / any ``*_8bit`` / ``paged_*`` bnb
+           variant) → ``adamw_torch``. bitsandbytes 8-bit optimizers
+           are CUDA-only — calling ``.step()`` on CPU tensors raises
+           ``RuntimeError: All input tensors need to be on the same
+           GPU`` from ``bnb.functional.is_on_gpu``. ``adamw_torch`` is
+           the transformers-standard CPU-compatible AdamW. This rule
+           runs BEFORE the explicit-override short-circuit (TRAINER-A-001 /
+           TRAINER-A-007): a CPU runner physically cannot run a bnb
+           optimizer, so even an explicit operator pin (or the
+           ``mode='full'`` force to ``paged_adamw_8bit``) must be
+           downgraded — otherwise the run crashes at ``.step()``.
+        2. If the operator passed anything other than the documented
+           default ``adamw_8bit`` (and we have CUDA), honor their choice
+           unchanged. The explicit-override surface is the canonical
+           knob for operators who pinned a specific optimizer for an LR
            schedule / fairness constraint / token budget that depends
            on it.
-        2. If CUDA is unavailable (CPU-only runner / no GPU
-           visible), downgrade ``adamw_8bit`` → ``adamw_torch``.
-           bitsandbytes 8-bit optimizers are CUDA-only — calling
-           ``.step()`` on CPU tensors raises ``RuntimeError: All
-           input tensors need to be on the same GPU`` from
-           ``bnb.functional.is_on_gpu``. ``adamw_torch`` is the
-           transformers-standard CPU-compatible AdamW.
         3. If torch is missing or the CUDA capability query raises,
            leave the operator's config in place.
         4. If the card has < 24GB VRAM, upgrade ``adamw_8bit`` →
@@ -1889,9 +1916,41 @@ class Trainer:
         Returns the resolved optimizer string. Pure function; the
         caller threads it into SFTConfig.optim.
         """
-        # Rule 1: explicit operator override wins. The documented v1.3
-        # default in config.py is "adamw_8bit"; anything else is the
-        # operator's explicit pick.
+        # Rule 1: a CPU-only runner cannot run ANY bitsandbytes 8-bit
+        # optimizer — the downgrade must therefore run BEFORE the
+        # explicit-override short-circuit below. This catches the
+        # ``mode='full'`` force to ``paged_adamw_8bit`` (TRAINER-A-001)
+        # and any explicit operator pin of a bnb 8-bit variant
+        # (TRAINER-A-007), both of which previously slipped past the
+        # ``!= "adamw_8bit"`` short-circuit and crashed at ``.step()``
+        # with the bnb ``is_on_gpu`` RuntimeError. We only reach the
+        # torch import / CUDA query for bnb 8-bit optimizers; non-bnb
+        # optimizers (adamw_torch, sgd, adafactor, ...) skip straight to
+        # the explicit-override return and never pay the import cost.
+        if Trainer._is_bnb_8bit_optim(configured_optim):
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    logger.info(
+                        "_detect_optim_for_card: CUDA unavailable — "
+                        "downgrading optim %r -> adamw_torch "
+                        "(bitsandbytes 8-bit optimizers are CUDA-only).",
+                        configured_optim,
+                    )
+                    return "adamw_torch"
+            except Exception as exc:  # noqa: BLE001
+                # Defensive: if torch is missing / the CUDA probe raises,
+                # fall through to the legacy resolution path below rather
+                # than crashing the optimizer resolver.
+                logger.debug(
+                    f"_detect_optim_for_card: CUDA availability probe failed "
+                    f"({exc!r}); proceeding with legacy resolution for "
+                    f"optim={configured_optim!r}."
+                )
+
+        # Rule 2: explicit operator override wins (CUDA present). The
+        # documented v1.3 default in config.py is "adamw_8bit"; anything
+        # else is the operator's explicit pick.
         if configured_optim != "adamw_8bit":
             return configured_optim
         try:
@@ -2701,6 +2760,19 @@ class Trainer:
         logger.info(f"  Steps: {steps or settings.training.max_steps}")
         logger.info(f"  Samples: {len(train_dataset)}")
 
+        # TRAINER-A-006: snapshot the operator-configured batch / accum BEFORE
+        # the OOM-recovery loop. The loop halves self.batch_size (and doubles
+        # gradient_accumulation) in place on each OOM; pre-fix those mutations
+        # were permanent, so (a) a transient OOM silently shrank the Trainer's
+        # configured batch for every SUBSEQUENT train() call on the same
+        # instance, and (b) the run_history record (written from the original
+        # values at run-start) mis-described what actually trained. We restore
+        # the snapshot in the finally below (fixes the leak) and record the
+        # EFFECTIVE batch that completed into run_history + TrainingRun.metadata
+        # (fixes the record mismatch).
+        _orig_batch_size = self.batch_size
+        _orig_gradient_accumulation = self.gradient_accumulation
+
         try:
             # B-002: OOM-recovery loop. We re-instantiate the SFTTrainer on
             # each retry so it picks up the halved batch / doubled accum.
@@ -2884,6 +2956,18 @@ class Trainer:
                         exc,
                     )
 
+                    # TRAINER-A-003: drop the reference to the dead SFTTrainer
+                    # (and its bound model/optimizer graph that just OOM'd)
+                    # BEFORE gc.collect() + empty_cache(). Pre-fix the cache
+                    # reclaim fired while self._trainer still pinned the failed
+                    # trainer, so gc couldn't collect it and empty_cache()
+                    # couldn't return the VRAM it held — the halved-batch retry
+                    # then started against an un-reclaimed allocator (worse for
+                    # mode='full', where the optimizer state dominates VRAM).
+                    # The retry path at the top of this loop unconditionally
+                    # rebuilds self._trainer (oom_retries > 0 branch), so
+                    # clearing it here is safe.
+                    self._trainer = None
                     gc.collect()
                     try:
                         if _torch.cuda.is_available():
@@ -2981,15 +3065,57 @@ class Trainer:
             # Validate training result
             if not hasattr(result, 'training_loss'):
                 logger.warning("Training result missing 'training_loss' attribute - using 0.0")
-            final_loss = getattr(result, 'training_loss', 0.0)
 
-            # Extract loss history from logs
+            # Stage C amend CORE-B-009: coerce loss values to finite floats
+            # before persisting. HF's ``training_loss`` is normally a float,
+            # but a degenerate run can surface None (no logged steps) or a
+            # non-finite value (NaN/inf on divergence / fp16 overflow).
+            # Persisting NaN/inf into ``final_loss`` / ``loss_history``
+            # poisons downstream JSON (json.dump emits non-spec ``NaN``),
+            # best-checkpoint comparisons (NaN compares false against
+            # everything), and the run-history record. Coerce to a finite
+            # float, defaulting non-finite/non-numeric to 0.0 with a warn.
+            import math
+
+            def _finite_loss(value: Any, *, context: str) -> float:
+                try:
+                    f = float(value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Non-numeric %s (%r); recording 0.0 instead.",
+                        context,
+                        value,
+                    )
+                    return 0.0
+                if not math.isfinite(f):
+                    logger.warning(
+                        "Non-finite %s (%r); recording 0.0 instead "
+                        "(training may have diverged — check learning rate / "
+                        "fp16 overflow).",
+                        context,
+                        f,
+                    )
+                    return 0.0
+                return f
+
+            final_loss = _finite_loss(
+                getattr(result, 'training_loss', 0.0),
+                context="final training_loss",
+            )
+
+            # Extract loss history from logs. Drop non-finite / non-numeric
+            # entries rather than threading NaN through the persisted history.
             loss_history = []
             if hasattr(self._trainer, 'state') and self._trainer.state.log_history:
-                loss_history = [
-                    log.get('loss', 0) for log in self._trainer.state.log_history
-                    if 'loss' in log
-                ]
+                for log in self._trainer.state.log_history:
+                    if 'loss' not in log:
+                        continue
+                    try:
+                        f = float(log.get('loss', 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(f):
+                        loss_history.append(f)
 
             run = TrainingRun(
                 run_id=run_id,
@@ -3002,6 +3128,13 @@ class Trainer:
                 metadata={
                     "legacy_run_label": legacy_run_label,
                     "oom_retries": oom_retries,
+                    # TRAINER-A-006: the batch / accum that ACTUALLY trained
+                    # (post any OOM-recovery halving). When oom_retries == 0
+                    # these equal the configured values; when recovery fired
+                    # they reflect the survived-with settings, so the run
+                    # record is honest about what produced these weights.
+                    "effective_batch_size": self.batch_size,
+                    "effective_gradient_accumulation": self.gradient_accumulation,
                 },
             )
 
@@ -3039,6 +3172,28 @@ class Trainer:
                 logger.warning(
                     f"RunHistoryManager.record_run_completed failed: {hist_err}"
                 )
+
+            # TRAINER-A-006: if OOM recovery halved the batch mid-run, patch the
+            # persisted record with the effective hyperparameters that actually
+            # produced these weights. The run-start record (record_run_started)
+            # captured the CONFIGURED batch; without this patch run_history would
+            # claim the run trained at the requested batch when it didn't.
+            if oom_retries > 0 and (
+                self.batch_size != _orig_batch_size
+                or self.gradient_accumulation != _orig_gradient_accumulation
+            ):
+                try:
+                    run_history.update_run(
+                        run_id,
+                        effective_batch_size=self.batch_size,
+                        effective_gradient_accumulation=self.gradient_accumulation,
+                        oom_retries=oom_retries,
+                    )
+                except Exception as hist_err:
+                    logger.warning(
+                        f"RunHistoryManager.update_run (effective batch) "
+                        f"failed: {hist_err}"
+                    )
             return run
 
         except KeyboardInterrupt:
@@ -3159,6 +3314,17 @@ class Trainer:
                 ),
             ) from e
         finally:
+            # TRAINER-A-006: restore the operator-configured batch / accum that
+            # the OOM-recovery loop may have halved in place. Done in finally so
+            # it fires on every exit path (success, recovery-exhausted, or any
+            # other raise) — a transient OOM during ONE train() must not
+            # silently re-configure the Trainer for the NEXT train() on the same
+            # instance. The effective values that actually trained are already
+            # captured in TrainingRun.metadata + the run_history record above,
+            # so restoring here loses no information. No-op when recovery never
+            # mutated them.
+            self.batch_size = _orig_batch_size
+            self.gradient_accumulation = _orig_gradient_accumulation
             # B-001: emit run_ended with status and release the context-var
             # binding so the thread doesn't carry our run_id into the next
             # caller. We deliberately do this in `finally` so the log line
@@ -3330,12 +3496,20 @@ class Trainer:
         """
         Save the trained model atomically.
 
-        B-006: writes flow into ``<path>.partial`` first and ``shutil.move()``
-        promotes the directory to the final path on success. The partial
-        directory is cleaned up on any failure path so the operator never
-        sees a half-written PEFT directory (config.json present, weights
-        missing — which raises a cryptic 'state_dict missing keys' on the
-        next resume attempt).
+        B-006 + TRAINER-A-004: writes flow into ``<path>.partial`` first; the
+        partial directory is cleaned up on any failure path so the operator
+        never sees a half-written PEFT directory (config.json present, weights
+        missing — which raises a cryptic 'state_dict missing keys' on the next
+        resume attempt). Promotion is crash-safe even when overwriting an
+        existing checkpoint: the prior checkpoint is renamed aside to
+        ``<path>.backup`` (a fast same-directory rename) BEFORE the new one is
+        moved into place, and the backup is deleted only after the promote
+        succeeds. A crash at any point therefore leaves a recoverable
+        checkpoint — the new one at ``<path>``, or the prior one at
+        ``<path>.backup`` (auto-recovered on the next ``save``). This closes
+        the pre-fix window where ``rmtree(output); move(partial)`` could leave
+        NOTHING on disk if the process died mid-promote (a window widened on
+        cross-filesystem moves, where ``shutil.move`` degrades to copy+delete).
 
         BACKEND-F-007 (Wave 6a): on success the saved checkpoint is also
         registered with a :class:`CheckpointManager` rooted at
@@ -3424,6 +3598,11 @@ class Trainer:
 
         output_path = Path(path or self.output_dir / "lora")
         partial_path = output_path.with_name(output_path.name + ".partial")
+        # TRAINER-A-004: sibling holding the PRIOR checkpoint while the new one
+        # is promoted into place, so a crash mid-promote leaves a recoverable
+        # checkpoint (either the new one at output_path or the prior one here)
+        # rather than nothing.
+        backup_path = output_path.with_name(output_path.name + ".backup")
 
         # Ensure parent exists; the atomic promote at the end places the
         # leaf directory.
@@ -3443,6 +3622,24 @@ class Trainer:
         # Wipe any leftover .partial from a previous crash.
         if partial_path.exists():
             shutil.rmtree(partial_path, ignore_errors=True)
+        # TRAINER-A-004: a stale .backup means a PRIOR save crashed after it
+        # renamed the old checkpoint aside but before it could delete the
+        # backup. If output_path is missing, that backup is the only surviving
+        # copy — recover it rather than wiping it. Only wipe the backup when a
+        # live output_path already exists (the prior promote actually finished).
+        if backup_path.exists():
+            if not output_path.exists():
+                logger.warning(
+                    "Recovering checkpoint from a previous crashed save: "
+                    "promoting %s back to %s (the active checkpoint was missing).",
+                    backup_path, output_path,
+                )
+                try:
+                    shutil.move(str(backup_path), str(output_path))
+                except OSError as e:
+                    logger.warning(f"Failed to recover stale backup checkpoint: {e}")
+            else:
+                shutil.rmtree(backup_path, ignore_errors=True)
 
         try:
             partial_path.mkdir(parents=True, exist_ok=False)
@@ -3494,10 +3691,48 @@ class Trainer:
                 except OSError as e:
                     logger.warning(f"Failed to write run_id file: {e}")
 
-            # Atomic promote.
-            if output_path.exists():
-                shutil.rmtree(output_path)
-            shutil.move(str(partial_path), str(output_path))
+            # TRAINER-A-004: crash-safe promote that keeps a recoverable
+            # checkpoint through the entire window. Pre-fix the sequence was
+            # ``rmtree(output_path); move(partial -> output)`` — between those
+            # two statements (a window WIDENED on cross-filesystem moves, where
+            # ``shutil.move`` degrades to copy-then-delete) a crash left NO
+            # checkpoint at all: the prior one deleted, the new one half-copied.
+            # New sequence: rename the prior checkpoint ASIDE (fast same-dir
+            # rename), move the new one in, then delete the backup. A crash
+            # after the rename but before the move leaves the prior checkpoint
+            # at ``backup_path`` (recovered on the next save by the stale-backup
+            # handler above); a crash mid-move leaves the new (partial) at
+            # output_path AND the prior intact at backup_path.
+            had_prior = output_path.exists()
+            if had_prior:
+                # Clear any leftover backup target first (defensive — the
+                # stale-backup handler above already dealt with the common
+                # case, but a same-process double-save could re-create it).
+                if backup_path.exists():
+                    shutil.rmtree(backup_path, ignore_errors=True)
+                os.rename(str(output_path), str(backup_path))
+            try:
+                shutil.move(str(partial_path), str(output_path))
+            except Exception:
+                # Promote failed — restore the prior checkpoint so the operator
+                # is never left WORSE off than before the save attempt.
+                if had_prior and not output_path.exists() and backup_path.exists():
+                    try:
+                        os.rename(str(backup_path), str(output_path))
+                        logger.warning(
+                            "Promote failed; restored the prior checkpoint at %s.",
+                            output_path,
+                        )
+                    except OSError as restore_err:
+                        logger.error(
+                            "Promote failed AND prior-checkpoint restore failed: "
+                            "%s. The prior checkpoint is at %s.",
+                            restore_err, backup_path,
+                        )
+                raise
+            # Promote succeeded — the prior checkpoint is now safe to delete.
+            if had_prior and backup_path.exists():
+                shutil.rmtree(backup_path, ignore_errors=True)
         except CheckpointError:
             raise
         except Exception as e:

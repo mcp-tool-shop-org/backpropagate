@@ -212,6 +212,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         ),
         "retryable": "no",
     },
+    "RUNTIME_UI_PORT_IN_USE": {
+        "description": "The web UI port (or its companion backend port, port+1) is already in use, so the Reflex server cannot bind it.",
+        "default_hint": (
+            "Another process holds the port. Pick a free one with --port <N>, "
+            "or stop the process using it (`lsof -i :<port>` on macOS/Linux, "
+            "`netstat -ano | findstr <port>` on Windows). The UI needs the "
+            "chosen port AND port+1 (backend) free."
+        ),
+        "retryable": "no",
+    },
     "UI_OUTPUT_DIR_FORBIDDEN": {
         "description": "BACKPROPAGATE_UI__OUTPUT_DIR points at a forbidden base path (e.g., /etc, ~/.ssh).",
         "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
@@ -221,6 +231,11 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
         "default_hint": "Verify model name, HF token, and network access to huggingface.co.",
         "retryable": "yes",
+    },
+    "DEP_DATASET_ENGINE_MISSING": {
+        "description": "An optional dependency needed to read a dataset file format (pandas for CSV; pandas + a pyarrow parquet engine for parquet) is not installed.",
+        "default_hint": "Install the missing extra: `pip install pandas pyarrow` (parquet) or `pip install pandas` (CSV).",
+        "retryable": "no",
     },
     "RUNTIME_TRAINING_ABORTED": {
         "description": "Training stopped early (user interrupt, GPU fault, watchdog).",

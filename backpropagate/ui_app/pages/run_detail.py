@@ -13,9 +13,13 @@ Surfaces from V1_3_BRIEF:
 - Training metrics chart (loss — from ``training_metrics.jsonl`` for the run)
 - Checkpoint list (numbered checkpoint dirs with size + timestamp)
 - Logs viewer (read-only; tail of ``training.log`` for the run)
-- Action buttons: "Diff", "Replay", "Delete run", "Export this run" —
-  these shell out to the new bridge subcommands (``backprop diff-runs``,
-  ``backprop replay``, ``backprop delete-run``, ``backprop export-runs``)
+- Action buttons: "Diff", "Replay", "Delete run", "Export this run".
+  Diff / Replay shell out to the bridge subcommands (``backprop diff-runs``,
+  ``backprop replay``) with a ``--`` end-of-options separator and run-id
+  allowlist validation (UI-A-003). Delete / Export run IN-PROCESS via
+  ``RunHistoryManager`` (UI-A-004) — there is no ``delete-run`` subcommand
+  and ``export-runs`` has no ``--run-id`` flag, so the prior shell-outs
+  were broken; Export writes a single-run JSONL to a sandboxed path.
 
 Routing: ``/runs/[run_id]`` is a Reflex dynamic route; the parameter is
 exposed via ``self.router.page.params.get("run_id")`` inside the state's
@@ -95,7 +99,10 @@ def _metadata_header() -> rx.Component:
             rx.flex(_label("Final loss"), _value(RunDetailState.final_loss), direction="column"),
             rx.flex(
                 _label("Checkpoint path"),
-                _value(RunDetailState.checkpoint_path),
+                # UI-A-002: render the redacted form (home prefix stripped) so
+                # the operator's username never appears in the UI / screenshots
+                # and the full path never ships in the WS state bundle.
+                _value(RunDetailState.checkpoint_path_display),
                 direction="column",
                 style={"grid_column": "1 / span 2"},
             ),

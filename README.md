@@ -154,7 +154,7 @@ pipx install "backpropagate[ui]"
 backprop ui --port 7862
 ```
 
-A local web interface opens at `http://localhost:7862` where you can point at a dataset, pick a model, train, and export. The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+A local web interface opens at `http://localhost:7862` for browsing datasets, validating formats, and assembling a training config visually. Training itself runs via `backprop train` (UI-driven training is on the roadmap — the Start button currently surfaces that note). The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Multi-run training
 
@@ -224,7 +224,9 @@ The Reflex web interface is opt-in — install with `pipx install "backpropagate
 backprop ui --port 7862
 ```
 
-The UI runs locally on `http://localhost:7862`. To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
+The UI runs locally on `http://localhost:7862`. Today it covers the **browse / validate / configure** half of the workflow — point it at a dataset, check the auto-detected format and stats, pick a model, and assemble a run config. **Launching the run is done from the CLI** (`backprop train` / `backprop multi-run`); the in-UI Start button surfaces a note pointing there. UI-driven training is a planned follow-up — until then the UI is the on-ramp and the CLI is the trigger.
+
+To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
 
 ```bash
 backprop ui --share --auth alice:hunter2
@@ -252,7 +254,7 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
-Python 3.10 reaches upstream end-of-life in October 2026, and Backpropagate plans to drop 3.10 in v1.4. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
+Python 3.10 reaches upstream end-of-life in October 2026 and is scheduled for drop in v1.5. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
 
 Backpropagate handles the runtime quirks of training on different platforms, but it can't fix install-time problems. The two most common are:
 
@@ -325,7 +327,7 @@ A short index of the most common first-run failures. The full reverse index is a
 | `register_with_ollama` connection refused | `DEP_OLLAMA_REGISTRATION_FAILED` | Start the daemon: `ollama serve`. Install from <https://ollama.com>. Retryable. |
 | Disk full during checkpoint save | `STATE_CHECKPOINT_INVALID` | Atomic writes leave a `.partial` directory on crash — safe to delete. The previous good checkpoint is intact. |
 | Training paused on GPU overheat | `RUNTIME_GPU_TEMPERATURE_CRITICAL` | Automatic — Backpropagate pauses on the temperature threshold and resumes as the GPU cools. Improve airflow if it keeps happening. |
-| `backprop ui --share` rejected | `INPUT_AUTH_REQUIRED` | Pass `--auth user:password`, or use SSH port-forwarding instead (see [Web UI](#web-ui)). |
+| `backprop ui --share` rejected | `RUNTIME_UI_AUTH_NOT_ENFORCED` | Pass `--auth user:password`, or use SSH port-forwarding instead (see [Web UI](#web-ui)). |
 | GGUF export failed on first try | `RUNTIME_GGUF_EXPORT_FAILED` | `pip install backpropagate[export]`; on Windows you also need Visual C++ Build Tools + CMake. |
 
 ## Reporting bugs

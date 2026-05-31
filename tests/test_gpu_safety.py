@@ -211,6 +211,43 @@ class TestEvaluateCondition:
         assert condition == GPUCondition.CRITICAL
         assert "Temperature" in reason
 
+    def test_hardware_shutdown_threshold_escalates_to_emergency(
+        self, default_config
+    ):
+        """TRAINER-A-009: a temp within margin of the card's OWN hardware
+        shutdown threshold is EMERGENCY even when below the configured
+        temp_emergency (default 95C).
+
+        Models a card whose hardware shutdown is 90C: at 89C we are below the
+        static 95C emergency AND below the 95C critical, so pre-fix this would
+        have reported merely WARNING (>=82C) — but the card is 1C from its own
+        protection cutoff. The queried-but-ignored temperature_max_c must now
+        drive the decision.
+        """
+        status = GPUStatus(temperature_c=89.0, temperature_max_c=90.0)
+        condition, reason = _evaluate_condition(status, default_config)
+
+        assert condition == GPUCondition.EMERGENCY, (
+            f"TRAINER-A-009: temp 89C within margin of HW shutdown 90C must be "
+            f"EMERGENCY (was {condition}); the card's real shutdown threshold "
+            f"must drive the decision, not just the static temp_emergency."
+        )
+        assert "hardware shutdown" in reason
+
+    def test_hardware_shutdown_threshold_unknown_preserves_static_behavior(
+        self, default_config
+    ):
+        """TRAINER-A-009: when temperature_max_c is None (no NVML threshold
+        available / mocked path), the pure static-threshold behavior is
+        preserved — 89C is WARNING under the default config, not EMERGENCY."""
+        status = GPUStatus(temperature_c=89.0, temperature_max_c=None)
+        condition, _reason = _evaluate_condition(status, default_config)
+
+        assert condition == GPUCondition.WARNING, (
+            f"With no hardware threshold, 89C should fall through to the static "
+            f"WARNING band (>=82C, <95C critical); got {condition}."
+        )
+
 
 class TestGetGPUStatus:
     """Tests for the get_gpu_status function."""
@@ -779,6 +816,95 @@ class TestGPUSafetyEdgeCases:
                 time.sleep(0.3)
             finally:
                 monitor.stop()
+
+    def test_monitor_consecutive_failures_escalate_once(self, caplog):
+        """CORE-B-008: repeated get_gpu_status failures escalate ONCE then
+        stop flooding error logs.
+
+        Pre-fix the loop logged a full 'GPU monitor error' line on EVERY
+        iteration for the whole session. Now: first failure logs at error,
+        the threshold-th failure escalates once with a 'thermal safety
+        disabled' message, and subsequent failures drop to debug. We drive
+        the loop deterministically by setting the stop event from the mock
+        after a fixed number of failed polls (no thread, no timing race).
+        """
+        import logging
+
+        monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.0))
+
+        calls = {"n": 0}
+
+        def fail_then_stop(*args, **kwargs):
+            calls["n"] += 1
+            # Let the loop run 5 failing iterations, then stop it so the
+            # test is deterministic.
+            if calls["n"] >= 5:
+                monitor._stop_event.set()
+            raise RuntimeError(f"sensor failure #{calls['n']}")
+
+        with patch(
+            "backpropagate.gpu_safety.get_gpu_status",
+            side_effect=fail_then_stop,
+        ), caplog.at_level(logging.DEBUG, logger="backpropagate.gpu_safety"):
+            # Run the loop body synchronously in this thread.
+            monitor._monitor_loop()
+
+        # The escalation line must appear exactly once.
+        escalations = [
+            r for r in caplog.records
+            if "Thermal safety is effectively" in r.message
+            or "thermal safety is effectively" in r.message.lower()
+        ]
+        assert len(escalations) == 1, (
+            f"Expected exactly one 'thermal safety disabled' escalation, "
+            f"got {len(escalations)}"
+        )
+        # The escalation must be at ERROR level.
+        assert escalations[0].levelno == logging.ERROR
+
+        # Steady-state failures past the threshold must NOT keep logging at
+        # error — only the first failure + the one escalation are error-level
+        # "GPU monitor" lines; the rest fall to debug.
+        error_monitor_lines = [
+            r for r in caplog.records
+            if r.levelno == logging.ERROR and "GPU monitor" in r.message
+        ]
+        assert len(error_monitor_lines) == 2, (
+            f"Expected exactly 2 error-level monitor lines (first failure + "
+            f"escalation), got {len(error_monitor_lines)}: "
+            f"{[r.message for r in error_monitor_lines]}"
+        )
+
+    def test_monitor_recovers_after_failures_logs_once(self, caplog):
+        """CORE-B-008: a successful poll after failures resets the counter
+        and logs a single recovery line."""
+        import logging
+
+        monitor = GPUMonitor(config=GPUSafetyConfig(check_interval=0.0))
+
+        calls = {"n": 0}
+        safe_status = GPUStatus(available=True, condition=GPUCondition.SAFE)
+
+        def fail_twice_then_recover_then_stop(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError(f"transient #{calls['n']}")
+            # Third call succeeds; stop the loop right after.
+            monitor._stop_event.set()
+            return safe_status
+
+        with patch(
+            "backpropagate.gpu_safety.get_gpu_status",
+            side_effect=fail_twice_then_recover_then_stop,
+        ), caplog.at_level(logging.DEBUG, logger="backpropagate.gpu_safety"):
+            monitor._monitor_loop()
+
+        recoveries = [
+            r for r in caplog.records if "recovered after" in r.message
+        ]
+        assert len(recoveries) == 1, (
+            f"Expected exactly one recovery line, got {len(recoveries)}"
+        )
 
     def test_concurrent_monitors(self):
         """Should support multiple concurrent monitors."""

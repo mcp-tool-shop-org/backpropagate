@@ -437,7 +437,14 @@ def _resolve_hf_token(token: str | None) -> str | None:
     cache_token_path = Path.home() / ".cache" / "huggingface" / "token"
     if cache_token_path.exists():
         try:
-            cached = cache_token_path.read_text(encoding="utf-8").strip()
+            # DATA-B-007: cap the read. The HF token cache is a single short
+            # line (<100 chars); reading it unbounded means a corrupt or
+            # maliciously-large file at that path could pull megabytes into
+            # memory. Read at most 4 KiB and take the first line only — a
+            # legit token never spans lines, and a multi-line blob is a sign
+            # the file isn't actually a token cache.
+            raw = cache_token_path.read_text(encoding="utf-8")[:4096]
+            cached = raw.splitlines()[0].strip() if raw.strip() else ""
             if cached:
                 return cached
         except OSError:
@@ -851,6 +858,91 @@ def _get_dir_size_mb(path: Path) -> float:
     return total / (1024 * 1024)
 
 
+def _estimate_param_count(model: Any) -> int | None:
+    """DATA-B-004: best-effort total parameter count for a model.
+
+    Sums ``numel()`` over ``model.parameters()``. For a PEFT model the base
+    weights dominate, so this is a sound proxy for the merged-export size.
+    Returns ``None`` when the count can't be obtained (no ``parameters()``
+    method, an empty iterator, or any error) so the caller can skip the disk
+    guard rather than block a valid export on a bad estimate.
+    """
+    try:
+        params = model.parameters()
+    except Exception:  # noqa: BLE001 — non-torch / mock model: skip the guard
+        return None
+    try:
+        total = sum(int(p.numel()) for p in params)
+    except Exception:  # noqa: BLE001
+        return None
+    return total or None
+
+
+def _check_export_disk_space(
+    dest: Path,
+    model: Any,
+    *,
+    error_cls: type[ExportError],
+    multiplier: float = 2.0,
+    bytes_per_param: int = 2,
+    **error_kwargs: Any,
+) -> None:
+    """DATA-B-004: pre-flight free-space guard before a multi-GB export.
+
+    A merged fp16 checkpoint is ~``bytes_per_param`` (2 for fp16) × the
+    parameter count; a GGUF run additionally needs scratch for the temp
+    merge plus the quantized output, so we require ``multiplier`` × the fp16
+    size by default (~2×). Raises ``error_cls`` BEFORE the long merge when
+    free space on the output volume is short, with a "need ~XGB, have ~YGB"
+    message — far better than a half-written checkpoint and an opaque
+    ``OSError: [Errno 28] No space left on device`` 20 minutes in.
+
+    Degrades to a no-op (never blocks the export) when the parameter count
+    or the volume's free space can't be determined.
+    """
+    params = _estimate_param_count(model)
+    if not params:
+        return
+    required_bytes = int(params * bytes_per_param * multiplier)
+    try:
+        # disk_usage needs an existing path; ``dest`` is created by the
+        # caller before this guard runs.
+        usage = shutil.disk_usage(dest)
+        free_bytes = usage.free
+    except OSError as e:
+        # Can't stat the volume — log and let the export proceed; the write
+        # itself will surface a real ENOSPC if space is genuinely short.
+        logger.warning(
+            "Could not check free disk space at %s (%s); skipping the "
+            "pre-flight space guard.",
+            dest,
+            e,
+        )
+        return
+
+    if free_bytes < required_bytes:
+        gb = 1024 ** 3
+        raise error_cls(
+            (
+                f"Insufficient disk space for export: need ~{required_bytes / gb:.1f} GB "
+                f"(~{params / 1e9:.1f}B params × {bytes_per_param}B × {multiplier:g} headroom), "
+                f"but only ~{free_bytes / gb:.1f} GB free on {dest}."
+            ),
+            suggestion=(
+                "Free up space on the output volume, choose a different "
+                "--output on a larger drive, or export a smaller "
+                "quantization."
+            ),
+            **error_kwargs,
+        )
+    logger.debug(
+        "Disk-space pre-flight OK: need ~%.1f GB, have ~%.1f GB free at %s.",
+        required_bytes / (1024 ** 3),
+        free_bytes / (1024 ** 3),
+        dest,
+    )
+
+
 def _is_peft_model(model: Any) -> bool:
     """Check if model is a PeftModel."""
     try:
@@ -1058,6 +1150,15 @@ def export_merged(
             suggestion="Ensure you're exporting a model with LoRA adapters applied"
         )
 
+    # DATA-B-004: fail fast if the volume can't hold the merged fp16
+    # checkpoint (~params × 2B) with modest headroom for the in-flight merge.
+    _check_export_disk_space(
+        output_path,
+        model,
+        error_cls=MergeExportError,
+        multiplier=1.2,
+    )
+
     try:
         # Merge and unload adapter
         merged_model = model.merge_and_unload()
@@ -1177,6 +1278,41 @@ def export_gguf(
 
     model_name = model_name or "model"
 
+    # DATA-A-004: ``model_name`` is interpolated into the output GGUF filename
+    # (``output_path / f"{model_name}-{quant}.gguf"`` in the manual-conversion
+    # path below). The Ollama register/remove sinks already run model names
+    # through ``_validate_model_name``; this programmatic-API entry point did
+    # NOT, so a caller-supplied ``model_name`` like ``"../../etc/evil"`` or
+    # ``"sub/dir/x"`` would escape ``output_path`` (path traversal) or write
+    # into an unintended subtree. Reduce to the basename component — the same
+    # ``Path(...).name`` defense ``_validate_model_name`` uses (export.py:120)
+    # — so only a leaf filename can ever be produced. A value that is ALL
+    # path machinery (``"."`` / ``".."`` / ``"foo/"`` -> empty leaf) falls
+    # back to the safe default rather than yielding a degenerate filename.
+    safe_model_name = Path(model_name).name
+    if safe_model_name in ("", ".", ".."):
+        safe_model_name = "model"
+    if safe_model_name != model_name:
+        logger.warning(
+            "export_gguf: model_name %r contained path components; using "
+            "sanitized leaf %r for the output filename.",
+            model_name,
+            safe_model_name,
+        )
+    model_name = safe_model_name
+
+    # DATA-B-004: fail fast if the output volume can't hold the temp fp16
+    # merge + the quantized GGUF. ~2× the fp16 size covers the scratch merge
+    # plus the quant output. No-op when params/free-space can't be read.
+    _check_export_disk_space(
+        output_path,
+        model,
+        error_cls=GGUFExportError,
+        multiplier=2.0,
+        output_path=str(output_path),
+        quantization=quant_str,
+    )
+
     # Try Unsloth first (fastest)
     # B-006: write into a sibling .partial directory so a mid-conversion
     # disk-full / crash doesn't leave a half-written .gguf file at the
@@ -1195,7 +1331,16 @@ def export_gguf(
             ) from e
 
         try:
+            # DATA-B-008: echo to stdout for interactive CLI users AND log it,
+            # so a headless / log-only run (the trainer's primary mode) records
+            # that the long GGUF step started instead of going silent for
+            # several minutes.
             print("Exporting to GGUF format... this may take several minutes for large models.")
+            logger.info(
+                "Exporting to GGUF (quant=%s) via Unsloth; this may take "
+                "several minutes for large models.",
+                quant_str,
+            )
             # Unsloth handles everything (writes into the partial dir)
             model.save_pretrained_gguf(
                 str(unsloth_partial),
@@ -1491,12 +1636,13 @@ def create_modelfile(
         Path to the created Modelfile
 
     Raises:
-        ExportError: when ``gguf_path`` or ``system_prompt`` contains an
-            embedded NUL / newline / CR. The Modelfile format treats these
-            as statement separators, so silently accepting them would either
-            corrupt the FROM/SYSTEM directive (CR / LF inside a quoted
-            string) or open a SYSTEM-injection surface (extra PARAMETER /
-            SYSTEM lines past the parser). Code is
+        ExportError: when ``gguf_path`` or ``system_prompt`` contains any C0
+            control character (U+0000–U+001F) other than TAB — NUL, newline,
+            CR, form-feed, vertical-tab, etc. The Modelfile format treats
+            these as statement separators / line breaks, so silently
+            accepting them would either corrupt the FROM/SYSTEM directive
+            (CR / LF inside a quoted string) or open a SYSTEM-injection
+            surface (extra PARAMETER / SYSTEM lines past the parser). Code is
             ``INPUT_VALIDATION_FAILED``, matching ``_validate_model_name``.
     """
     gguf_path = Path(gguf_path).resolve()
@@ -1510,18 +1656,31 @@ def create_modelfile(
     # and the surviving fragments would parse as separate Ollama directives.
     # The error names the offending field so an operator can triage which
     # input was bad.
+    # Named C0 controls get a specific label in the error; the rest are
+    # reported generically by codepoint. DATA-A-009: the prior check only
+    # rejected NUL / newline / CR, but the WHOLE C0 control block (U+0000–
+    # U+001F) is unsafe in Modelfile body text — form-feed (\x0c) and
+    # vertical-tab (\x0b) are treated as line breaks by some parsers, and
+    # the other controls corrupt the SYSTEM / FROM directive. Only TAB
+    # (\x09) is legitimately allowed (it can appear inside a quoted SYSTEM
+    # prompt as ordinary whitespace).
+    _C0_NAMES = {"\x00": "NUL", "\n": "newline", "\r": "CR", "\x0c": "form-feed", "\x0b": "vertical-tab"}
+
     def _reject_modelfile_unsafe(value: str, *, field: str) -> None:
-        for ch, ch_name in (("\x00", "NUL"), ("\n", "newline"), ("\r", "CR")):
-            if ch in value:
+        for ch in value:
+            # Reject every C0 control (U+0000–U+001F) except TAB (U+0009).
+            if ord(ch) < 0x20 and ch != "\t":
+                ch_name = _C0_NAMES.get(ch, f"control char U+{ord(ch):04X}")
                 raise ExportError(
                     f"{field} contains a {ch_name} character; the Ollama "
-                    "Modelfile format treats it as a statement separator "
-                    "and the file would split into multiple directives.",
+                    "Modelfile format treats control characters as statement "
+                    "separators / line breaks and the file would split into "
+                    "multiple directives.",
                     suggestion=(
                         f"Strip the embedded {ch_name} from {field}. "
                         "If the value comes from a path with an unusual "
                         "filename, rename the file before exporting. If "
-                        "from --system-prompt, remove the line break."
+                        "from --system-prompt, remove the control character."
                     ),
                     code="INPUT_VALIDATION_FAILED",
                 )
@@ -1670,6 +1829,14 @@ def list_ollama_models() -> list[str]:
         List of model names
     """
     if not shutil.which("ollama"):
+        # DATA-B-005: name the cause instead of returning an empty list that
+        # looks identical to "the daemon is up and has no models". A caller
+        # that gets [] here would otherwise silently conclude no models exist.
+        logger.warning(
+            "list_ollama_models: the 'ollama' CLI is not on PATH; returning "
+            "an empty list. Install Ollama (https://ollama.com) and ensure "
+            "it is on PATH to list registered models."
+        )
         return []
 
     try:
@@ -1691,7 +1858,23 @@ def list_ollama_models() -> list[str]:
                 if parts:
                     models.append(parts[0])
         return models
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except subprocess.CalledProcessError as e:
+        # DATA-B-005: the daemon is unreachable / errored — surface it as a
+        # WARN naming the likely cause rather than an indistinguishable [].
+        stderr = (e.stderr or "").strip()
+        logger.warning(
+            "list_ollama_models: 'ollama list' failed (exit %s)%s; returning "
+            "an empty list. Is the daemon running? Start it with "
+            "'ollama serve'.",
+            e.returncode,
+            f": {stderr[:200]}" if stderr else "",
+        )
+        return []
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "list_ollama_models: 'ollama list' timed out after 30s; "
+            "returning an empty list. The daemon may be hung or starting up."
+        )
         return []
 
 

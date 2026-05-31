@@ -1098,3 +1098,41 @@ class TestExportsFromModule:
         assert ExportError is not None
         assert GPUError is not None
         assert SLAOError is not None
+
+
+# =============================================================================
+# STAGE C PROACTIVE AMEND — DATA-B-006 (catalog entry for dataset-engine dep)
+# =============================================================================
+
+
+class TestStageCDatasetEngineMissingCode:
+    """DATA-B-006: the new DEP_DATASET_ENGINE_MISSING code is in the catalog
+    so it gets a hint / retryable entry and doesn't trip the unknown-code
+    WARN at raise time."""
+
+    def test_code_in_catalog(self):
+        from backpropagate.exceptions import ERROR_CODES
+
+        assert "DEP_DATASET_ENGINE_MISSING" in ERROR_CODES
+        entry = ERROR_CODES["DEP_DATASET_ENGINE_MISSING"]
+        assert entry["description"]
+        assert entry["default_hint"]
+        assert entry["retryable"] in {"yes", "no", "sometimes"}
+
+    def test_dataset_error_with_code_does_not_warn_unknown(self, caplog):
+        import logging
+
+        from backpropagate.exceptions import DatasetError
+
+        with caplog.at_level(logging.WARNING):
+            err = DatasetError(
+                "pandas missing",
+                code="DEP_DATASET_ENGINE_MISSING",
+            )
+        # The unknown-code WARN must NOT fire for a catalogued code.
+        assert not any(
+            "not in the" in r.getMessage() and "ERROR_CODES" in r.getMessage()
+            for r in caplog.records
+        )
+        assert err.code == "DEP_DATASET_ENGINE_MISSING"
+        assert err.to_dict()["code"] == "DEP_DATASET_ENGINE_MISSING"

@@ -36,7 +36,9 @@ Environment Variables:
 
 import logging
 import os
+import re
 import sys
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -51,6 +53,8 @@ __all__ = [
     "run_context",
     "LogContext",
     "STRUCTLOG_AVAILABLE",
+    "redact_secrets",
+    "SECRET_PATTERNS",
 ]
 
 # Check if structlog is available
@@ -89,6 +93,141 @@ def _get_log_file() -> str | None:
 
 
 # =============================================================================
+# SECRET REDACTION (CLI-A-002)
+# =============================================================================
+#
+# Single source of truth for credential redaction, shared by:
+#   - the CLI error-output paths (``backpropagate.cli`` re-exports these), and
+#   - the structured-log / file pipeline below (a structlog processor for the
+#     structlog path + a stdlib ``logging.Filter`` for the fallback path).
+#
+# Pre-CLI-A-002 the patterns lived only in ``cli.py`` and the log pipeline
+# emitted events verbatim — a token bound into log context (or interpolated
+# into a log message) reached the JSON/file stream un-redacted. Moving the
+# patterns here lets both surfaces redact through ONE definition so they can
+# never drift apart.
+#
+# Pattern shape rationale (carried over from the original cli.py home):
+# - High-signal prefixes (Bearer, sk-, hf_, AKIA, ghp_/glpat-, JWT,
+#   url-embedded creds) trigger on their own — low false-positive by
+#   construction.
+# - The keyword-prefixed pattern requires ``key=value`` / ``key:value`` with
+#   a high-entropy value (>=8 non-space chars incl. >=1 digit-or-special) so
+#   prose like "the token: abc is wrong" is left intact. The separator is
+#   captured in group 2 and re-emitted so ``token: foo`` stays
+#   ``token: <REDACTED>`` (not ``token=<REDACTED>``).
+SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <REDACTED>"),
+    (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-<REDACTED>"),
+    (re.compile(r"hf_[A-Za-z0-9]{8,}"), "hf_<REDACTED>"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA<REDACTED>"),
+    # URL-embedded credentials (https://user:token@host/...). Match the
+    # canonical scheme://user:secret@host form (NOT the user@host SSH-style
+    # address, which carries no secret). The capture preserves scheme + host
+    # so the operator still sees which service was contacted.
+    (
+        re.compile(r"(https?://)[^/\s:@]+:[^/\s:@]+@([^/\s]+)"),
+        r"\1<REDACTED>@\2",
+    ),
+    # JWT tokens (3 base64url segments separated by `.`, RFC 7519). The
+    # `eyJ` prefix is the base64 of `{"`, present in essentially every real
+    # JWT, which keeps false-positive risk low against prose.
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"),
+        "<JWT_REDACTED>",
+    ),
+    # GitHub PATs (ghp_/ghs_/gho_/ghu_/ghr_): canonical prefix per GitHub's
+    # secret-scanning docs; 36+ base62 suffix (modern, post-2021). The legacy
+    # 40-hex format is intentionally NOT matched (high false-positive rate).
+    (
+        re.compile(r"\b(ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9]{36,}\b"),
+        r"\1_<REDACTED>",
+    ),
+    # GitLab PATs (glpat-...): 20+ base62 / hyphen suffix per GitLab docs.
+    (
+        re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
+        "glpat-<REDACTED>",
+    ),
+    # Keyword-prefixed credentials: key=value OR key:value with a
+    # high-entropy value (>=8 non-space chars incl. >=1 digit-or-special).
+    # The separator (group 2) is preserved in the replacement.
+    (
+        re.compile(
+            r"(password|passwd|pwd|secret|token|api[_-]?key)"
+            r"(\s*[=:]\s*)"
+            r'(?=[^\s]*[\d!@#$%^&*()+\-./?_=])'  # lookahead: at least one digit/special
+            r"[^\s]{8,}",
+            re.IGNORECASE,
+        ),
+        r"\1\2<REDACTED>",
+    ),
+]
+
+
+def redact_secrets(text: str) -> str:
+    """
+    Best-effort redaction of common secret patterns in arbitrary text.
+
+    Single source of truth shared by the CLI error paths and the log
+    pipeline (CLI-A-002). Designed to leave human-readable prose intact
+    (e.g. "the token: abc is wrong" is NOT redacted because "abc" is too
+    short / has no digit) while catching realistic credential leaks (e.g.
+    "api_key=EXAMPLE-NOT-A-REAL-KEY" → "api_key=<REDACTED>"). The separator
+    character (``:`` vs ``=``) is preserved to avoid silently rewriting the
+    input shape.
+    """
+    if not text:
+        return text
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _redact_event_processor(
+    _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
+    """structlog processor: redact secrets in the rendered event + string values.
+
+    CLI-A-002: runs LATE in the processor chain (after merge_contextvars,
+    so context-bound tokens are present) but BEFORE the final renderer
+    (JSONRenderer / ConsoleRenderer), so it scrubs both the primary
+    ``event`` message and any string-valued bound field (e.g. a ``token``
+    bound via ``logger.bind(token=...)`` or run-context) before the bytes
+    leave the process.
+    """
+    for key, value in list(event_dict.items()):
+        if isinstance(value, str):
+            event_dict[key] = redact_secrets(value)
+    return event_dict
+
+
+class _SecretRedactingFilter(logging.Filter):
+    """stdlib logging.Filter that redacts secrets in the rendered message.
+
+    CLI-A-002 fallback-path counterpart to :func:`_redact_event_processor`.
+    Attached to every handler on the structlog-less path so the file /
+    stream output is scrubbed regardless of which logging backend is live.
+    Mutates ``record.msg`` / ``record.args`` so the redaction survives
+    downstream formatting (``%`` interpolation included).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            # Render the final message (applies %-args) then redact, and
+            # neutralize args so the formatter doesn't re-interpolate the
+            # raw (un-redacted) values.
+            rendered = record.getMessage()
+            record.msg = redact_secrets(rendered)
+            record.args = None
+        except Exception:  # noqa: BLE001 — redaction must never drop a log line
+            # Keep the original record rather than drop a log line on a scrub
+            # failure. Explicit return (not a bare ``pass``) so this is not a
+            # try/except/pass (bandit B110).
+            return True
+        return True
+
+
+# =============================================================================
 # STRUCTLOG CONFIGURATION
 # =============================================================================
 
@@ -117,15 +256,21 @@ def _configure_structlog(
         structlog.processors.TimeStamper(fmt="iso"),  # ISO timestamp
     ]
 
+    processors: list[Processor]
     if json_logs:
         # Production: JSON output
         processors = shared_processors + [
             structlog.processors.dict_tracebacks,  # Structured tracebacks
+            # CLI-A-002: scrub credentials from event + string fields before
+            # the renderer serializes them to the (file/stdout) stream.
+            _redact_event_processor,
             structlog.processors.JSONRenderer(),  # JSON output
         ]
     else:
         # Development: Pretty console output
         processors = shared_processors + [
+            # CLI-A-002: scrub credentials before the console renderer.
+            _redact_event_processor,
             structlog.dev.ConsoleRenderer(
                 colors=True,
                 exception_formatter=structlog.dev.plain_traceback,
@@ -168,6 +313,14 @@ def _configure_structlog(
         level=getattr(logging, level, logging.INFO),
     )
 
+    # CLI-A-002: attach the redaction filter to the stdlib handlers that
+    # basicConfig just created so logs routed through the stdlib `logging`
+    # module directly (e.g. audit_log, third-party libraries) are scrubbed
+    # too — not only the structlog-rendered events.
+    _redact_filter = _SecretRedactingFilter()
+    for _h in logging.getLogger().handlers:
+        _h.addFilter(_redact_filter)
+
     # Add file handler if specified
     if log_file:
         file_handler = logging.FileHandler(log_file)
@@ -179,6 +332,7 @@ def _configure_structlog(
             file_handler.setFormatter(
                 logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             )
+        file_handler.addFilter(_redact_filter)
         logging.getLogger().addHandler(file_handler)
 
 
@@ -264,6 +418,10 @@ def _configure_standard_logging(
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
+
+    # CLI-A-002: redact credentials on the structlog-less fallback path too,
+    # so the file/stream output is scrubbed regardless of backend.
+    handler.addFilter(_SecretRedactingFilter())
 
     root.addHandler(handler)
 

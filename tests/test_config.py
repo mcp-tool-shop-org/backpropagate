@@ -294,6 +294,48 @@ class TestTrainingConfig:
         assert config.output_dir == "./output"
         assert config.overwrite_output_dir is True
 
+    def test_training_config_rejects_bf16_and_fp16(self):
+        """DATA-A-007: bf16=True AND fp16=True must raise at construction.
+
+        transformers rejects the contradiction deep inside SFTConfig
+        mid-run; the pydantic validator must surface a structured
+        InvalidSettingError (CONFIG_INVALID_SETTING) up front instead.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(bf16=True, fp16=True)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+
+    def test_training_config_allows_single_precision_flag(self):
+        """DATA-A-007 negative side: exactly-one / neither must construct."""
+        from backpropagate.config import TrainingConfig
+
+        # bf16 only (the default)
+        assert TrainingConfig(bf16=True, fp16=False).bf16 is True
+        # fp16 only (older cards)
+        assert TrainingConfig(bf16=False, fp16=True).fp16 is True
+        # neither (fp32)
+        neither = TrainingConfig(bf16=False, fp16=False)
+        assert neither.bf16 is False
+        assert neither.fp16 is False
+
+    def test_training_config_rejects_bf16_fp16_via_env(self, monkeypatch):
+        """DATA-A-007: the contradiction is caught even when set via env vars.
+
+        BaseSettings runs the after-validator on env-driven construction too,
+        so a misconfigured ``BACKPROPAGATE_TRAINING__{BF16,FP16}=true`` pair
+        fails fast rather than crashing transformers later in the run.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__BF16", "true")
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__FP16", "true")
+        with pytest.raises(InvalidSettingError):
+            TrainingConfig()
+
 
 class TestDataConfig:
     """Tests for DataConfig class."""
@@ -930,6 +972,27 @@ class TestLRScaling:
         lr = get_recommended_lr(5000, base_lr=3e-4)
         assert lr == 3e-4
 
+    def test_get_recommended_lr_medium_scales_with_base(self):
+        """DATA-A-008: the medium branch must honor the ``scale`` multiplier.
+
+        Pre-fix the medium tier returned bare ``base_lr`` while small/large
+        used ``* scale``. For the default base that is numerically identical,
+        but a custom base must scale the medium anchor (2e-4 * scale) exactly
+        like the others — and the small > medium > large ordering must hold.
+        """
+        from backpropagate.config import get_recommended_lr
+
+        for base in (2e-4, 3e-4, 5e-4, 1e-4):
+            scale = base / 2e-4
+            small = get_recommended_lr(500, base_lr=base)
+            medium = get_recommended_lr(5000, base_lr=base)
+            large = get_recommended_lr(50000, base_lr=base)
+            assert medium == pytest.approx(2e-4 * scale)
+            assert small == pytest.approx(5e-4 * scale)
+            assert large == pytest.approx(1e-4 * scale)
+            # Ladder is strictly monotone for any positive base.
+            assert small > medium > large
+
 
 class TestWarmupScaling:
     """Tests for warmup steps scaling helpers."""
@@ -1095,3 +1158,61 @@ class TestPresetExports:
         assert get_preset is not None
         assert get_recommended_lr is not None
         assert get_recommended_warmup is not None
+
+
+# =============================================================================
+# STAGE C PROACTIVE AMEND — DATA-B-009 (deprecated env-var scan)
+# =============================================================================
+
+
+class TestStageCDeprecatedEnvVarScan:
+    """DATA-B-009: a renamed BACKPROPAGATE_* env var that ``extra="ignore"``
+    would silently drop now produces a WARN naming the replacement."""
+
+    def test_deprecated_env_var_detected(self, monkeypatch):
+        from backpropagate import config
+
+        # Use a known-deprecated name from the map.
+        old = next(iter(config._DEPRECATED_ENV_VARS))
+        monkeypatch.setenv(old, "5")
+        found = config._warn_deprecated_env_vars()
+        assert old in found
+
+    def test_deprecated_env_var_warns_with_replacement(self, monkeypatch, capsys):
+        from backpropagate import config
+
+        old, new = next(iter(config._DEPRECATED_ENV_VARS.items()))
+        monkeypatch.setenv(old, "5")
+        config._warn_deprecated_env_vars()
+        # The project routes warnings through structlog, which renders to
+        # stdout/stderr; assert the deprecated + replacement names surface.
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert old in combined
+        if new:
+            assert new in combined
+
+    def test_clean_env_returns_empty(self, monkeypatch):
+        from backpropagate import config
+
+        for name in config._DEPRECATED_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+        assert config._warn_deprecated_env_vars() == []
+
+    def test_get_settings_runs_scan(self, monkeypatch):
+        from backpropagate import config
+
+        old = next(iter(config._DEPRECATED_ENV_VARS))
+        monkeypatch.setenv(old, "5")
+        config.get_settings.cache_clear()
+        called = {}
+        real = config._warn_deprecated_env_vars
+
+        def spy():
+            called["hit"] = True
+            return real()
+
+        monkeypatch.setattr(config, "_warn_deprecated_env_vars", spy)
+        config.get_settings()
+        assert called.get("hit") is True
+        config.get_settings.cache_clear()

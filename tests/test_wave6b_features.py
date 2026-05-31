@@ -216,9 +216,12 @@ class TestTrainerModeFullGate:
         from backpropagate import trainer as trainer_mod
 
         with patch.dict("sys.modules", {"trl": MagicMock(SFTConfig=_StubSFTConfig)}):
-            # No CUDA / torch — the resolver short-circuits at the
-            # "torch.cuda.is_available()" check inside _detect_optim_for_card.
-            with patch("torch.cuda.is_available", return_value=False):
+            # CUDA AVAILABLE — the mode='full' force to paged_adamw_8bit is
+            # honored. (TRAINER-A-001: the CPU-only downgrade in
+            # _detect_optim_for_card fires ONLY when CUDA is absent; the
+            # cuda=False -> adamw_torch downgrade is covered separately by
+            # test_trainer.py::test_helper_full_mode_downgrades_paged_optim_on_cpu_only_runner.)
+            with patch("torch.cuda.is_available", return_value=True):
                 trainer_mod._build_sft_config(
                     output_dir="./out",
                     per_device_train_batch_size=1,

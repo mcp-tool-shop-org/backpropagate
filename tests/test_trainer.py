@@ -1014,6 +1014,87 @@ class TestTrainerTrain:
                 trainer.train("dummy_dataset", steps=5)
                 assert len(trainer.runs) == 2
 
+    def test_train_coerces_non_finite_final_loss(self, temp_dir):
+        """CORE-B-009: a non-finite training_loss must be coerced to 0.0.
+
+        A diverged run (fp16 overflow, exploding LR) can surface NaN/inf as
+        ``training_loss``. Persisting that poisons JSON serialization
+        (json.dump emits non-spec ``NaN``) and best-checkpoint comparisons
+        (NaN compares false against everything). The recorded final_loss
+        must be a finite float.
+        """
+        import math
+
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+            mock_dataset = MagicMock()
+            mock_dataset.__len__ = MagicMock(return_value=10)
+
+            with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+                 patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+                 patch("trl.SFTTrainer") as mock_sft_trainer, \
+                 patch("trl.SFTConfig"):
+                mock_instance = MagicMock()
+                mock_instance.train.return_value = MagicMock(
+                    training_loss=float("nan")
+                )
+                mock_instance.state.log_history = [{"loss": 0.5}]
+                mock_sft_trainer.return_value = mock_instance
+
+                run = trainer.train("dummy_dataset", steps=10)
+
+                assert math.isfinite(run.final_loss), (
+                    f"final_loss must be finite, got {run.final_loss!r}"
+                )
+                assert run.final_loss == 0.0
+
+    def test_train_drops_non_finite_loss_history_entries(self, temp_dir):
+        """CORE-B-009: NaN/inf entries in log_history must be dropped, not
+        threaded through into the persisted loss_history."""
+        import math
+
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(output_dir=str(temp_dir))
+            trainer._model = MagicMock()
+            trainer._tokenizer = MagicMock()
+            trainer._is_loaded = True
+
+            mock_dataset = MagicMock()
+            mock_dataset.__len__ = MagicMock(return_value=10)
+
+            with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+                 patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+                 patch("trl.SFTTrainer") as mock_sft_trainer, \
+                 patch("trl.SFTConfig"):
+                mock_instance = MagicMock()
+                mock_instance.train.return_value = MagicMock(training_loss=0.3)
+                # Mix of finite, NaN, and inf entries.
+                mock_instance.state.log_history = [
+                    {"loss": 1.0},
+                    {"loss": float("nan")},
+                    {"loss": 0.5},
+                    {"loss": float("inf")},
+                    {"loss": 0.3},
+                ]
+                mock_sft_trainer.return_value = mock_instance
+
+                run = trainer.train("dummy_dataset", steps=10)
+
+                assert all(math.isfinite(x) for x in run.loss_history), (
+                    f"loss_history must contain only finite floats, got "
+                    f"{run.loss_history!r}"
+                )
+                # Only the three finite entries survive, in order.
+                assert run.loss_history == [1.0, 0.5, 0.3]
+
 
 class TestLoadModelFunction:
     """Tests for load_model() convenience function."""
@@ -1999,7 +2080,14 @@ class TestOOMAutoRecovery:
         return trainer
 
     def test_oom_halves_batch_and_doubles_accum(self, temp_dir):
-        """First OOM => batch_size halved, grad_accum doubled, retry succeeds."""
+        """First OOM => batch halved + accum doubled FOR THE RETRY; configured
+        knobs RESTORED after the run (TRAINER-A-006).
+
+        The effective batch that actually trained (2 / 2) is surfaced via
+        ``run.metadata``; the Trainer's *configured* batch_size / grad_accum
+        are restored to their originals (4 / 1) so a transient OOM during one
+        train() does not silently re-configure the instance for the next.
+        """
         trainer = self._setup_trainer(
             temp_dir, oom_recovery=True, initial_batch=4, initial_accum=1
         )
@@ -2019,17 +2107,29 @@ class TestOOMAutoRecovery:
             f"Expected 2 .train() invocations (initial + 1 retry), "
             f"got {script._train_calls}"
         )
-        # batch halved from 4 -> 2, accum doubled from 1 -> 2.
-        assert trainer.batch_size == 2, (
-            f"OOM recovery should have halved batch_size from 4 to 2; got "
-            f"{trainer.batch_size}"
-        )
-        assert trainer.gradient_accumulation == 2, (
-            f"OOM recovery should have doubled grad_accum from 1 to 2; got "
-            f"{trainer.gradient_accumulation}"
-        )
         # Training completed successfully on retry.
         assert run is not None
+        # TRAINER-A-006: the EFFECTIVE batch that actually trained (halved to
+        # 2, accum doubled to 2) is recorded in the run metadata.
+        assert run.metadata.get("effective_batch_size") == 2, (
+            f"effective_batch_size in run.metadata should be 2 (halved); got "
+            f"{run.metadata.get('effective_batch_size')!r}"
+        )
+        assert run.metadata.get("effective_gradient_accumulation") == 2, (
+            f"effective_gradient_accumulation should be 2 (doubled); got "
+            f"{run.metadata.get('effective_gradient_accumulation')!r}"
+        )
+        assert run.metadata.get("oom_retries") == 1
+        # TRAINER-A-006: the Trainer's CONFIGURED knobs are restored after the
+        # run — the in-place halving must not leak into the next train().
+        assert trainer.batch_size == 4, (
+            f"TRAINER-A-006: configured batch_size must be restored to 4 after "
+            f"OOM recovery (not left at the halved 2); got {trainer.batch_size}"
+        )
+        assert trainer.gradient_accumulation == 1, (
+            f"TRAINER-A-006: configured gradient_accumulation must be restored "
+            f"to 1 after OOM recovery; got {trainer.gradient_accumulation}"
+        )
 
     def test_oom_at_min_batch_aborts_with_runtime_gpu_oom(self, temp_dir):
         """N consecutive OOMs at batch_size=1 => TrainingError RUNTIME_OOM_RECOVERY_EXHAUSTED.
@@ -2137,6 +2237,97 @@ class TestOOMAutoRecovery:
             f"{trainer.gradient_accumulation}"
         )
 
+    def test_oom_recovery_does_not_leak_into_next_train(self, temp_dir):
+        """TRAINER-A-006 regression: a transient OOM recovered in train() #1
+        must NOT shrink the configured batch for train() #2 on the same Trainer.
+
+        Pre-fix the OOM loop mutated self.batch_size / self.gradient_accumulation
+        in place permanently, so a second train() on the same instance silently
+        ran at the halved batch (and the recorded hyperparameters lied about it).
+        """
+        trainer = self._setup_trainer(
+            temp_dir, oom_recovery=True, initial_batch=4, initial_accum=1
+        )
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        # First train(): one OOM then success -> recovery halves to batch=2.
+        script1 = _OOMScript(oom_count=1)
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script1.factory), \
+             patch("trl.SFTConfig"):
+            trainer.train("dummy_dataset", steps=10)
+
+        # Configured knobs restored after run #1.
+        assert trainer.batch_size == 4
+        assert trainer.gradient_accumulation == 1
+
+        # Second train(): NO OOM. It must run at the configured batch=4, which
+        # means the first SFTConfig built carries per_device_train_batch_size=4.
+        script2 = _OOMScript(oom_count=0)
+        captured_batches: list[int] = []
+        import backpropagate.trainer as _trainer_mod
+        _orig_build = _trainer_mod._build_sft_config
+
+        def _spy_build(*args, **kwargs):
+            captured_batches.append(kwargs.get("per_device_train_batch_size"))
+            return _orig_build(*args, **kwargs)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script2.factory), \
+             patch("trl.SFTConfig"), \
+             patch("backpropagate.trainer._build_sft_config", side_effect=_spy_build):
+            trainer.train("dummy_dataset", steps=10)
+
+        assert captured_batches, "expected _build_sft_config to be called on run #2"
+        assert captured_batches[0] == 4, (
+            f"TRAINER-A-006: run #2 should build SFTConfig with the configured "
+            f"batch=4, not the leaked halved batch from run #1's recovery; got "
+            f"{captured_batches[0]}"
+        )
+        assert trainer.batch_size == 4
+
+    def test_oom_recovery_drops_trainer_ref_before_empty_cache(self, temp_dir):
+        """TRAINER-A-003 regression: self._trainer is cleared BEFORE
+        torch.cuda.empty_cache() in the OOM-recovery path.
+
+        If the dead SFTTrainer is still referenced when empty_cache() fires,
+        the allocator can't return the VRAM it pins. We assert the reference
+        was None at the moment empty_cache() ran.
+        """
+        trainer = self._setup_trainer(
+            temp_dir, oom_recovery=True, initial_batch=4, initial_accum=1
+        )
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        script = _OOMScript(oom_count=1)  # one OOM then success
+        trainer_ref_at_empty_cache: list[object] = []
+
+        def _spy_empty_cache():
+            # Record what self._trainer is at the instant empty_cache fires.
+            trainer_ref_at_empty_cache.append(trainer._trainer)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"), \
+             patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.empty_cache", side_effect=_spy_empty_cache):
+            trainer.train("dummy_dataset", steps=10)
+
+        assert trainer_ref_at_empty_cache, (
+            "expected torch.cuda.empty_cache() to fire during OOM recovery"
+        )
+        assert trainer_ref_at_empty_cache[0] is None, (
+            "TRAINER-A-003: self._trainer must be dropped (set to None) BEFORE "
+            "empty_cache() so the dead trainer's VRAM is reclaimable; it was "
+            f"still {type(trainer_ref_at_empty_cache[0]).__name__!r} at the "
+            "empty_cache call."
+        )
+
 
 # =============================================================================
 # ATOMIC CHECKPOINT WRITES (B-006) — TESTS-A-005
@@ -2220,6 +2411,92 @@ class TestTrainerSaveAtomic:
         assert not partial_path.exists(), (
             f"Partial directory must be cleaned up on failure path; still "
             f"exists at {partial_path}"
+        )
+
+    def test_save_overwrite_failure_preserves_prior_checkpoint(self, temp_dir):
+        """TRAINER-A-004: if the promote fails while OVERWRITING an existing
+        checkpoint, the prior checkpoint must survive (recoverable).
+
+        Pre-fix the promote did ``rmtree(output); move(partial)`` — a failure
+        in ``move`` left NOTHING on disk because the prior checkpoint was
+        already deleted. Post-fix the prior checkpoint is renamed aside to
+        ``.backup`` first and restored on promote failure, so its content
+        survives the crash window.
+        """
+        import shutil as _shutil
+        from pathlib import Path
+
+        from backpropagate.exceptions import CheckpointError
+
+        trainer = self._make_trainer(temp_dir)
+        save_target = temp_dir / "lora"
+
+        # Seed a PRIOR checkpoint with recognizable content.
+        save_target.mkdir(parents=True)
+        (save_target / "adapter_model.safetensors").write_bytes(b"PRIOR-WEIGHTS")
+
+        # The new save writes valid partial content...
+        def write_marker(path, *args, **kwargs):
+            (Path(path) / "adapter_model.safetensors").write_bytes(b"NEW-WEIGHTS")
+            return None
+
+        trainer._model.save_pretrained.side_effect = write_marker
+        trainer._tokenizer.save_pretrained.side_effect = write_marker
+
+        # ...but the promote (shutil.move partial -> final) fails.
+        def boom_move(src, dst, *args, **kwargs):
+            raise OSError("[Errno 28] No space left on device")
+
+        with patch.object(_shutil, "move", side_effect=boom_move), \
+             pytest.raises(CheckpointError):
+            trainer.save(str(save_target))
+
+        # The prior checkpoint's content must still be recoverable — either
+        # restored to the live path, or parked at the .backup sibling.
+        backup_path = save_target.with_name(save_target.name + ".backup")
+        recovered_bytes = None
+        if (save_target / "adapter_model.safetensors").exists():
+            recovered_bytes = (save_target / "adapter_model.safetensors").read_bytes()
+        elif (backup_path / "adapter_model.safetensors").exists():
+            recovered_bytes = (backup_path / "adapter_model.safetensors").read_bytes()
+
+        assert recovered_bytes == b"PRIOR-WEIGHTS", (
+            "TRAINER-A-004: the prior checkpoint must survive a failed "
+            "overwrite-promote (found at output_path or <path>.backup); the "
+            f"pre-fix rmtree-then-move would have lost it. Got: {recovered_bytes!r}"
+        )
+
+    def test_save_recovers_stale_backup_when_active_missing(self, temp_dir):
+        """TRAINER-A-004: a leftover ``.backup`` from a crashed prior save is
+        promoted back when the active checkpoint is missing (not silently
+        wiped)."""
+        from pathlib import Path
+
+        trainer = self._make_trainer(temp_dir)
+        save_target = temp_dir / "lora"
+
+        # Simulate the crash aftermath: prior checkpoint stranded at .backup,
+        # nothing at the live path.
+        backup_path = save_target.with_name(save_target.name + ".backup")
+        backup_path.mkdir(parents=True)
+        (backup_path / "adapter_model.safetensors").write_bytes(b"STRANDED")
+
+        def write_marker(path, *args, **kwargs):
+            (Path(path) / "adapter_model.safetensors").write_bytes(b"FRESH")
+            return None
+
+        trainer._model.save_pretrained.side_effect = write_marker
+        trainer._tokenizer.save_pretrained.side_effect = write_marker
+
+        trainer.save(str(save_target))
+
+        # The fresh save wins, but the stranded backup was RECOVERED into the
+        # promote pipeline (so it became the prior checkpoint that the new save
+        # overwrote) — never silently discarded. End state: a valid live
+        # checkpoint, no stale .backup left behind.
+        assert (save_target / "adapter_model.safetensors").read_bytes() == b"FRESH"
+        assert not backup_path.exists(), (
+            "stale .backup must not survive a successful subsequent save"
         )
 
 
@@ -3060,6 +3337,82 @@ class TestBuildSftConfigHelper:
                 f"(bnb 8-bit optimizers are CUDA-only); got "
                 f"optim={kwargs['optim']!r}"
             )
+
+    def test_helper_full_mode_downgrades_paged_optim_on_cpu_only_runner(self):
+        """TRAINER-A-001: mode='full' on a CPU runner downgrades to adamw_torch.
+
+        mode='full' force-rewrites the configured optim to
+        ``paged_adamw_8bit`` (the consumer-tier memory ceiling) BEFORE the
+        card detector runs. Pre-fix, ``_detect_optim_for_card`` short-
+        circuited on any value != ``adamw_8bit`` and returned
+        ``paged_adamw_8bit`` unchanged — so a full-FT run on a CPU-only
+        runner kept the CUDA-only paged optimizer and crashed at
+        ``.step()`` with the bitsandbytes ``is_on_gpu`` RuntimeError (the
+        exact failure commit 3cb3943 was meant to prevent; CI's nightly
+        smoke is LoRA-only so it can't catch the mode='full' path). The
+        CPU downgrade must fire for ANY bnb 8-bit optimizer, including the
+        paged variant that mode='full' forces.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch("trl.SFTConfig") as mock_sft_config:
+            _build_sft_config(
+                output_dir="/tmp/out",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                max_steps=100,
+                learning_rate=2e-5,
+                warmup_steps=10,
+                max_seq_length=2048,
+                seed=42,
+                lr_scheduler_type="cosine",
+                logging_steps=10,
+                mode="full",
+            )
+            _, kwargs = mock_sft_config.call_args
+            assert kwargs["optim"] == "adamw_torch", (
+                f"TRAINER-A-001: mode='full' on a CPU runner must downgrade "
+                f"the force-selected paged_adamw_8bit -> adamw_torch "
+                f"(bnb 8-bit optimizers are CUDA-only); got "
+                f"optim={kwargs['optim']!r}"
+            )
+
+    def test_helper_downgrades_explicit_paged_optim_on_cpu_only_runner(self):
+        """TRAINER-A-007: explicit paged_adamw_8bit on CPU => adamw_torch.
+
+        Sibling of TRAINER-A-001. An operator who explicitly pins a bnb
+        8-bit optimizer (``paged_adamw_8bit`` / ``paged_adamw_32bit`` /
+        ``adamw_8bit``) on a CPU-only runner would, pre-fix, sail past the
+        ``_detect_optim_for_card`` override short-circuit and crash at
+        ``.step()`` with the bitsandbytes ``is_on_gpu`` RuntimeError. The
+        CPU-availability downgrade must override the explicit pin for the
+        whole bnb 8-bit family — CPU simply cannot run them.
+        """
+        from backpropagate.trainer import _build_sft_config
+
+        for pinned in ("paged_adamw_8bit", "paged_adamw_32bit", "adamw_8bit"):
+            with patch("torch.cuda.is_available", return_value=False), \
+                 patch("trl.SFTConfig") as mock_sft_config:
+                _build_sft_config(
+                    output_dir="/tmp/out",
+                    per_device_train_batch_size=2,
+                    gradient_accumulation_steps=4,
+                    max_steps=100,
+                    learning_rate=2e-4,
+                    warmup_steps=10,
+                    max_seq_length=2048,
+                    seed=42,
+                    lr_scheduler_type="cosine",
+                    logging_steps=10,
+                    optim=pinned,
+                )
+                _, kwargs = mock_sft_config.call_args
+                assert kwargs["optim"] == "adamw_torch", (
+                    f"TRAINER-A-007: explicit optim={pinned!r} on a CPU "
+                    f"runner must downgrade to adamw_torch (bnb 8-bit "
+                    f"optimizers are CUDA-only); got optim={kwargs['optim']!r}"
+                )
 
     def test_helper_forces_fp32_on_cpu_only_runner(self):
         """CPU runner (no CUDA) => bf16=False, fp16=False.

@@ -14,6 +14,28 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # uv.lock is the source of truth for the fully-resolved transitive tree
+  # (the `pip` block above only sees the direct deps in pyproject.toml). The
+  # triaged-but-unfixed advisories the CI dep-audit accepts (diffusers
+  # trust_remote_code GHSA-7wx4-6vff-v64p / GHSA-98h9-4798-4q5v, transformers
+  # Trainer ACE GHSA-69w3-r845-3855) all live in the lockfile's transitive
+  # closure; without this ecosystem they get no scheduled forcing function and
+  # only close when a maintainer happens to re-run `uv lock`. Monthly, grouped,
+  # limit 3 — same cadence/shape as the `pip` block. (CIDOCS-B-102)
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      uv-deps:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

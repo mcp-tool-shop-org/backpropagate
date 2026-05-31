@@ -61,11 +61,11 @@ Prefer Docker? `docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest` work
 There are several good libraries for fine-tuning LLMs. They're each great at different things:
 
 - **[Axolotl](https://github.com/OpenAccess-AI-Collective/axolotl)** — if you like YAML configs and want a community of recipes to copy from
-- **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** — if you want a web GUI and built-in support for DPO/PPO/RLHF
+- **[LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)** — if you want DPO/PPO/RLHF and a web GUI
 - **[Unsloth](https://github.com/unslothai/unsloth)** — if you need the fastest possible training and you're on a supported model family
 - **[torchtune](https://github.com/pytorch/torchtune)** — if you want Meta's first-party PyTorch-native recipes you can edit
 
-Backpropagate is the missing option: **a 3-line Python API for solo operators on a single consumer GPU who want to train an adapter and ship it.** No YAML, no GUI, no DPO/PPO, no multi-node. Just the loop everyone actually needs and the export step that gets in the way.
+Backpropagate is the missing option: **a 3-line Python API for solo operators on a single consumer GPU who want to train an adapter and ship it.** No YAML, no GUI, no online RL (PPO/GRPO), no multi-node. Just the loop everyone actually needs and the export step that gets in the way.
 
 If you tried one of the libraries above and bounced off the config-file ceremony, or hit a model-family gap, or wanted Windows-first defaults — Backpropagate is for you.
 
@@ -90,7 +90,7 @@ For models 3B and smaller, full fine-tuning (not just LoRA) is feasible on 16GB 
 If your use case is below, you'll have a better time with a different library — Backpropagate is not the right pick and trying to make it work would cost more than just reaching for the right tool. Reading this section before you start saves the install-and-bounce cycle:
 
 - **Full-parameter fine-tuning of 7B+ models** — Backpropagate uses LoRA / QLoRA, which trains a small adapter rather than updating every weight. For models 7B and larger, full fine-tuning needs 24GB+ of GPU memory and doesn't fit on a 16GB consumer card. For models 3B and smaller, full fine-tuning IS feasible on 16GB and ships in v1.4 as `mode="full"` (pass `Trainer(..., mode="full")` or `--mode=full` on the CLI; a hard gate raises `RUNTIME_FULL_FT_MODEL_TOO_LARGE` for models > 3B and names LoRA + the sub-3B presets as recoveries). The bigger picture: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at 67% of the compute — so for the work most operators actually want, you don't lose anything by sticking with LoRA. `mode="full"` exists for the cases where you've measured a quality gap and decided to spend the extra compute. If you genuinely need full fine-tuning of a 7B+ model, use HuggingFace `transformers.Trainer` directly on a 24GB+ card.
-- **DPO / PPO / GRPO / preference tuning** — Backpropagate does single-stage supervised fine-tuning only. For preference learning, use TRL directly or LLaMA-Factory.
+- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO ships in v1.5; SimPO/KTO are planned). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
 - **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.
 - **macOS training** — Apple Silicon doesn't have CUDA, so training has to run on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama.
 - **Anything outside the tested model families** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Other models often work but aren't pinned in CI.
@@ -142,6 +142,29 @@ This trains a Qwen 2.5 7B adapter on 5 short ShareGPT-format conversations, then
 ```
 
 Alpaca (`instruction` / `output`), OpenAI chat (`messages`), and raw text formats also work — Backpropagate auto-detects the format.
+
+### Preference tuning (ORPO)
+
+New in v1.5: train on preferences instead of plain demonstrations. ORPO is reference-free and single-stage — it folds the preference signal into the SFT step, so there's no separate reward or reference model and the 3-line shape is unchanged. Pass `--method orpo` (CLI) or `method="orpo"` (Python) and feed it a dataset of `{prompt, chosen, rejected}` (or just `{chosen, rejected}`) rows:
+
+```jsonl
+{"prompt": "What is Python?", "chosen": "A high-level programming language known for readability.", "rejected": "idk look it up"}
+{"prompt": "Explain recursion.", "chosen": "A function that calls itself with a smaller input until a base case.", "rejected": "when something repeats"}
+```
+
+```python
+from backpropagate import Trainer
+
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", method="orpo")
+trainer.train("preferences.jsonl", steps=100)
+trainer.export("gguf", quantization="q4_k_m")
+```
+
+```bash
+backprop train --data preferences.jsonl --method orpo --steps 100
+```
+
+The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. In v1.5 ORPO is `mode="lora"` only. SimPO and KTO are planned follow-ons; for online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
 
 For more end-to-end workflows (fine-tune-and-push-to-HF-Hub, resume after OOM, multi-run SLAO across a long campaign, etc.) see the [handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 

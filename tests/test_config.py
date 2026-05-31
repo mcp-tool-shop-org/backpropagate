@@ -336,6 +336,171 @@ class TestTrainingConfig:
         with pytest.raises(InvalidSettingError):
             TrainingConfig()
 
+    # -------------------------------------------------------------------------
+    # v1.5 T1.2 (ORPO) — method selector + orpo_beta
+    # -------------------------------------------------------------------------
+
+    def test_training_config_method_default_is_sft(self):
+        """v1.5 T1.2: method defaults to 'sft' (byte-identical v1.4 behavior)."""
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.method == "sft", (
+            f"TrainingConfig.method default = {config.method!r}; expected "
+            f"'sft' so the default training path is unchanged from v1.4."
+        )
+
+    def test_training_config_orpo_beta_default(self):
+        """v1.5 T1.2: orpo_beta defaults to 0.1 (the ORPO paper headline)."""
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.orpo_beta == 0.1, (
+            f"TrainingConfig.orpo_beta default = {config.orpo_beta}; "
+            f"expected 0.1."
+        )
+
+    def test_training_config_accepts_method_orpo(self):
+        """v1.5 T1.2: method='orpo' is accepted."""
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig(method="orpo")
+        assert config.method == "orpo"
+
+    def test_training_config_rejects_unknown_method(self):
+        """v1.5 T1.2: a method outside {'sft','orpo'} raises InvalidSettingError.
+
+        The selector must fail fast with a structured CONFIG_INVALID_SETTING
+        so an operator typing --method dpo (not implemented in v1.5) gets an
+        actionable code/hint up front rather than a deep dispatch crash.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(method="dpo")
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "method"
+
+    def test_training_config_method_orpo_via_env(self, monkeypatch):
+        """v1.5 T1.2: BACKPROPAGATE_TRAINING__METHOD=orpo round-trips.
+
+        Mirrors the existing bf16/fp16 env-override pattern — the pydantic
+        prefix wires the env var for free, so the value lands on the field.
+        """
+        from backpropagate.config import TrainingConfig
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__METHOD", "orpo")
+        config = TrainingConfig()
+        assert config.method == "orpo"
+
+    def test_training_config_orpo_beta_via_env(self, monkeypatch):
+        """v1.5 T1.2: BACKPROPAGATE_TRAINING__ORPO_BETA env override round-trips."""
+        from backpropagate.config import TrainingConfig
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__ORPO_BETA", "0.25")
+        config = TrainingConfig()
+        assert config.orpo_beta == pytest.approx(0.25)
+
+    def test_training_config_rejects_unknown_method_via_env(self, monkeypatch):
+        """v1.5 T1.2: a bad method via env var raises the SAME structured error.
+
+        The field is typed ``str`` so the ``_reject_invalid_method``
+        after-validator (not pydantic's type machinery) is the gate. A bad
+        ``BACKPROPAGATE_TRAINING__METHOD`` therefore surfaces the same
+        ``InvalidSettingError`` / ``CONFIG_INVALID_SETTING`` as a bad kwarg,
+        rather than a generic ``ValidationError``.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__METHOD", "ppo")
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig()
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+
+
+class TestOrpoDataclassFallback:
+    """v1.5 T1.2: the dataclass-fallback TrainingConfig must match the pydantic
+    branch's method/orpo_beta contract byte-for-byte.
+
+    pydantic-settings is installed in CI, so the fallback dataclass branch
+    isn't the one ``from backpropagate.config import TrainingConfig`` returns.
+    We exercise it directly by re-importing config with PYDANTIC_SETTINGS
+    forced off, the same shape the existing fallback-targeting tests use
+    (guarded so a future hard-dep on pydantic doesn't break the suite).
+    """
+
+    def _load_dataclass_config_module(self):
+        """Import a fresh config module with the dataclass fallback active.
+
+        Returns the reloaded module, or ``None`` (caller skips) if the
+        fallback can't be materialised in this environment.
+        """
+        import importlib
+        import sys
+
+        import backpropagate.config as cfg
+
+        # Force the fallback branch: patch the module's availability flag and
+        # re-exec the dataclass definitions in an isolated module namespace so
+        # we don't disturb the already-imported pydantic classes other tests
+        # rely on. We compile the source under a patched global.
+        source = Path(cfg.__file__).read_text(encoding="utf-8")
+        import types
+
+        fake = types.ModuleType("backpropagate._config_dataclass_probe")
+        fake.__dict__["__file__"] = cfg.__file__
+        # Pre-seed the availability flag to False so the `if
+        # PYDANTIC_SETTINGS_AVAILABLE:` branch is skipped and the dataclass
+        # fallback executes. The try/except import block re-sets it, so we
+        # instead stub the imports to force the except path.
+        fake.__dict__["__name__"] = "backpropagate.config"
+        sys.modules.setdefault("backpropagate", importlib.import_module("backpropagate"))
+        # Block pydantic_settings so the top-level try/except sets
+        # PYDANTIC_SETTINGS_AVAILABLE = False and the dataclass branch runs.
+        blocked = {"pydantic_settings": None}
+        with patch.dict(sys.modules, blocked):
+            try:
+                exec(compile(source, cfg.__file__, "exec"), fake.__dict__)
+            except Exception:
+                return None
+        if fake.__dict__.get("PYDANTIC_SETTINGS_AVAILABLE", True):
+            # Couldn't force the fallback; skip.
+            return None
+        return fake
+
+    def test_dataclass_method_default_and_orpo_beta(self):
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        config = cfg_cls()
+        assert config.method == "sft"
+        assert config.orpo_beta == 0.1
+
+    def test_dataclass_accepts_method_orpo(self):
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        assert cfg_cls(method="orpo").method == "orpo"
+
+    def test_dataclass_rejects_unknown_method(self):
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        exc_cls = mod.__dict__["InvalidSettingError"] if "InvalidSettingError" in mod.__dict__ else None
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            cfg_cls(method="dpo")
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        # The fallback raises the same exception class from backpropagate.exceptions.
+        if exc_cls is not None:
+            assert exc_cls is InvalidSettingError
+
 
 class TestDataConfig:
     """Tests for DataConfig class."""
@@ -992,6 +1157,58 @@ class TestLRScaling:
             assert large == pytest.approx(1e-4 * scale)
             # Ladder is strictly monotone for any positive base.
             assert small > medium > large
+
+    def test_get_recommended_lr_method_sft_unchanged(self):
+        """v1.5 T1.2: method='sft' returns the existing SFT ladder UNCHANGED.
+
+        Explicitly passing the default must be byte-identical to omitting it,
+        so the ORPO param can never silently shift the SFT recommendation.
+        """
+        from backpropagate.config import get_recommended_lr
+
+        for size in (500, 5000, 50000):
+            assert get_recommended_lr(size, method="sft") == get_recommended_lr(size)
+
+    def test_get_recommended_lr_method_orpo_ladder(self):
+        """v1.5 T1.2: method='orpo' returns the ORPO ladder (2e-5/1e-5/5e-6)."""
+        from backpropagate.config import get_recommended_lr
+
+        assert get_recommended_lr(500, method="orpo") == 2e-5  # small (<1K)
+        assert get_recommended_lr(5000, method="orpo") == 1e-5  # medium (1K-10K)
+        assert get_recommended_lr(50000, method="orpo") == 5e-6  # large (>10K)
+
+    def test_get_recommended_lr_orpo_ladder_monotone(self):
+        """v1.5 T1.2: the ORPO ladder is strictly monotone small > medium > large."""
+        from backpropagate.config import get_recommended_lr
+
+        small = get_recommended_lr(500, method="orpo")
+        medium = get_recommended_lr(5000, method="orpo")
+        large = get_recommended_lr(50000, method="orpo")
+        assert small > medium > large
+
+    def test_get_recommended_lr_orpo_below_sft(self):
+        """v1.5 T1.2: ORPO LRs sit an order of magnitude below the SFT ladder.
+
+        ORPO's odds-ratio loss is unstable at SFT LR magnitudes; pin that the
+        ladder is materially lower at every tier so a future edit can't
+        accidentally re-anchor ORPO onto the SFT values.
+        """
+        from backpropagate.config import get_recommended_lr
+
+        for size in (500, 5000, 50000):
+            assert get_recommended_lr(size, method="orpo") < get_recommended_lr(
+                size, method="sft"
+            )
+
+    def test_get_recommended_lr_orpo_ignores_base_lr(self):
+        """v1.5 T1.2: the ORPO ladder is fixed — base_lr does not scale it."""
+        from backpropagate.config import get_recommended_lr
+
+        # Same anchors regardless of base_lr (which only governs the SFT ladder).
+        for base in (1e-4, 2e-4, 5e-4):
+            assert get_recommended_lr(500, base_lr=base, method="orpo") == 2e-5
+            assert get_recommended_lr(5000, base_lr=base, method="orpo") == 1e-5
+            assert get_recommended_lr(50000, base_lr=base, method="orpo") == 5e-6
 
 
 class TestWarmupScaling:

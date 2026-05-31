@@ -207,6 +207,13 @@ class DatasetFormat(Enum):
     ALPACA = "alpaca"
     OPENAI = "openai"
     CHATML = "chatml"
+    # v1.5 T1.2 (ORPO): preference-pair data — a dict carrying BOTH a
+    # ``chosen`` and a ``rejected`` completion (each str OR a message-list),
+    # with an optional ``prompt``. This is the dataset contract reference-free
+    # preference tuning (ORPO/SimPO/KTO) trains against; the pairing is the
+    # discriminator regardless of the value shape, so detection runs BEFORE
+    # the sharegpt/openai/alpaca checks (see ``detect_format``).
+    PREFERENCE = "preference"
     RAW_TEXT = "raw_text"
     UNKNOWN = "unknown"
 
@@ -365,6 +372,20 @@ def detect_format(data: dict | list[dict | str] | str) -> DatasetFormat:
 
     if not isinstance(data, dict):
         return DatasetFormat.UNKNOWN
+
+    # Check for preference-pair format (v1.5 T1.2 / ORPO) FIRST.
+    # A row carrying BOTH "chosen" and "rejected" is preference data — the
+    # pair of keys is the discriminator regardless of whether the values are
+    # plain strings or message-lists ([{"role","content"}, ...]). This MUST
+    # run before the sharegpt/openai/alpaca checks: a preference row whose
+    # chosen/rejected are themselves OpenAI message-lists would otherwise be
+    # misread (and a sibling "messages"/"conversations"/"instruction" key
+    # alongside the pair must not steal it). An optional "prompt" is allowed
+    # but not required. We do NOT inspect value shapes here — _validate_preference
+    # / to_preference_dataset handle per-row content; detection only keys off
+    # the discriminating pair so the SFT-method guard can rely on it.
+    if "chosen" in data and "rejected" in data:
+        return DatasetFormat.PREFERENCE
 
     # Check for ShareGPT format
     if "conversations" in data:
@@ -786,6 +807,32 @@ def _validate_sharegpt(sample: dict, row_index: int) -> list[ValidationError]:
     return errors
 
 
+def _is_blank(value: Any) -> bool:
+    """Return True when a field value counts as empty content.
+
+    DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
+    pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
+    the present-but-None value (the "" default only fires for ABSENT keys),
+    so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
+    has no attribute 'strip'`` and crashed validation of an otherwise-loadable
+    dataset. Treat any non-string (None, NaN, numeric) as empty content.
+
+    v1.5 T1.2: a preference ``chosen``/``rejected`` value may legitimately be a
+    NON-EMPTY message-list ([{"role","content"}, ...]) rather than a string —
+    that is valid content, not blank. So a non-empty list/dict is NOT blank;
+    an empty list/dict IS. ``_validate_alpaca`` only ever passes str-or-None
+    fields, so its behavior is unchanged.
+    """
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, dict)):
+        # A populated message-list / structured completion is real content;
+        # an empty one is not.
+        return len(value) == 0
+    # None, NaN, numerics, anything else -> treat as empty content.
+    return True
+
+
 def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate an Alpaca formatted sample."""
     errors = []
@@ -806,16 +853,7 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             message="Missing 'output' field",
         ))
 
-    # Check for empty values.
-    # DATA-B-002: a CSV/parquet source with an empty cell yields a None (or,
-    # pre-coercion, a float NaN) for that field. ``sample.get(k, "")`` returns
-    # the present-but-None value (the "" default only fires for ABSENT keys),
-    # so a bare ``.strip()`` raised ``AttributeError: 'NoneType'/'float' object
-    # has no attribute 'strip'`` and crashed validation of an otherwise-loadable
-    # dataset. Treat any non-string (None, NaN, numeric) as empty content.
-    def _is_blank(value: Any) -> bool:
-        return not isinstance(value, str) or value.strip() == ""
-
+    # Check for empty values (see ``_is_blank`` for the NaN/None rationale).
     if _is_blank(sample.get("instruction")):
         errors.append(ValidationError(
             row_index=row_index,
@@ -830,6 +868,75 @@ def _validate_alpaca(sample: dict, row_index: int) -> list[ValidationError]:
             field="output",
             error_type="empty_content",
             message="Empty output",
+        ))
+
+    return errors
+
+
+def _validate_preference(sample: dict, row_index: int) -> list[ValidationError]:
+    """Validate a preference-pair sample (v1.5 T1.2 / ORPO).
+
+    Mirrors ``_validate_alpaca``: a valid preference row needs a non-blank
+    ``chosen`` AND a non-blank ``rejected`` (each a string OR a non-empty
+    message-list — ``_is_blank`` accepts both). A missing/blank field is an
+    error; a missing ``prompt`` is the *implicit-prompt* case (info, not an
+    error — many preference corpora embed the prompt inside the conversation).
+
+    There are deliberately NO ChatML balance checks here: the values are RAW
+    completions (string or message-list) that TRL's ORPO/SimPO/KTO trainers
+    render with the model's chat template at train time — this loader preserves
+    them verbatim (see ``DatasetLoader.to_preference_dataset``).
+    """
+    errors = []
+
+    if "chosen" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="chosen",
+            error_type="missing_field",
+            message="Missing 'chosen' field",
+        ))
+
+    if "rejected" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="rejected",
+            error_type="missing_field",
+            message="Missing 'rejected' field",
+        ))
+
+    # Empty-content checks reuse the shared _is_blank helper (handles
+    # None/NaN/empty-string AND empty message-list).
+    if _is_blank(sample.get("chosen")):
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="chosen",
+            error_type="empty_content",
+            message="Empty chosen",
+        ))
+
+    if _is_blank(sample.get("rejected")):
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="rejected",
+            error_type="empty_content",
+            message="Empty rejected",
+        ))
+
+    # A missing 'prompt' is NOT an error: implicit-prompt preference data
+    # (prompt embedded in the chosen/rejected conversations) is a first-class
+    # shape. Surface it as an info-level WARN row only when the key is wholly
+    # absent, so a curated {prompt, chosen, rejected} corpus stays silent.
+    if "prompt" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="prompt",
+            error_type="implicit_prompt",
+            message=(
+                "No 'prompt' field — treating as implicit-prompt preference "
+                "data (the prompt is assumed to live inside the chosen/rejected "
+                "conversations). This is informational, not an error."
+            ),
         ))
 
     return errors
@@ -936,6 +1043,16 @@ def validate_sample(
             )]
         return _validate_alpaca(sample, row_index)
 
+    if format_type == DatasetFormat.PREFERENCE:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"Preference format requires dict, got {type(sample).__name__}",
+            )]
+        return _validate_preference(sample, row_index)
+
     if format_type == DatasetFormat.OPENAI:
         if not isinstance(sample, dict):
             return [ValidationError(
@@ -1019,9 +1136,14 @@ def validate_dataset(
         errors = validate_sample(sample, i, row_format)
 
         if errors:
-            # Separate errors from warnings based on severity
+            # Separate errors from warnings based on severity. ``implicit_prompt``
+            # (v1.5 T1.2 preference data with no explicit prompt key) is
+            # informational, not a defect, so it joins the warning bucket
+            # alongside empty_content / invalid_role.
             for err in errors:
-                if err.error_type in ("empty_content", "invalid_role"):
+                if err.error_type in (
+                    "empty_content", "invalid_role", "implicit_prompt"
+                ):
                     all_warnings.append(err)
                 else:
                     all_errors.append(err)
@@ -2402,6 +2524,88 @@ class DatasetLoader:
 
         chatml_samples = self.to_chatml()
         dataset = Dataset.from_list(chatml_samples)
+
+        if split:
+            return {split: dataset}
+        return dataset
+
+    def to_preference_dataset(self, split: str | None = None) -> Any:
+        """Build a HuggingFace ``Dataset`` of preference pairs (v1.5 T1.2 / ORPO).
+
+        Unlike :meth:`to_hf_dataset`, this preserves the RAW preference columns
+        ``{chosen, rejected, [prompt]}`` and does NOT route through
+        :meth:`to_chatml` / collapse to a single ``{"text": ...}`` column —
+        collapsing would destroy the (chosen, rejected) pairing that
+        reference-free preference trainers (TRL ORPO/SimPO/KTO) require. Each
+        ``chosen`` / ``rejected`` value is left exactly as it appears in the
+        source (a string OR a message-list); TRL renders it with the model's
+        chat template at train time.
+
+        Only rows that carry BOTH ``chosen`` and ``rejected`` are kept. The
+        ``prompt`` column is included only when at least one kept row has a
+        ``prompt`` key (rows without one get ``None`` so the schema is uniform —
+        the implicit-prompt case).
+
+        Args:
+            split: Optional split name (e.g. "train"); when set, returns
+                ``{split: Dataset}`` to mirror :meth:`to_hf_dataset`.
+
+        Returns:
+            A ``datasets.Dataset`` whose ``column_names`` include ``chosen`` and
+            ``rejected`` (and ``prompt`` when present), or ``{split: Dataset}``.
+
+        Raises:
+            DatasetFormatError: when NO row carries both ``chosen`` and
+                ``rejected`` (code ``INPUT_DATASET_FORMAT_UNSUPPORTED``).
+        """
+        try:
+            from datasets import Dataset
+        except ImportError:
+            raise ImportError("datasets required: pip install datasets")
+
+        from .exceptions import DatasetFormatError
+
+        # Keep only genuine preference rows (dict carrying BOTH keys). We do
+        # this row-by-row rather than trusting the cached single ``_format`` so
+        # a mixed file contributes only its real pairs — the same per-row
+        # philosophy the SFT converters use.
+        pair_rows: list[dict[str, Any]] = []
+        any_prompt = False
+        for sample in self._samples:
+            if not isinstance(sample, dict):
+                continue
+            if "chosen" not in sample or "rejected" not in sample:
+                continue
+            row: dict[str, Any] = {
+                # Values preserved AS-IS (str or message-list) — TRL renders
+                # them later; we must not stringify or template here.
+                "chosen": sample["chosen"],
+                "rejected": sample["rejected"],
+            }
+            if "prompt" in sample:
+                row["prompt"] = sample["prompt"]
+                any_prompt = True
+            pair_rows.append(row)
+
+        if not pair_rows:
+            # No usable pair anywhere — this is the "operator pointed ORPO at an
+            # SFT dataset" case. Reuse DatasetFormatError (already mapped to
+            # INPUT_DATASET_FORMAT_UNSUPPORTED in the catalog — no new code).
+            raise DatasetFormatError(
+                "method='orpo' requires preference pairs, but no row had both "
+                "'chosen' and 'rejected' keys.",
+                detected_format=self._format.value,
+                supported_formats=["{prompt, chosen, rejected}", "{chosen, rejected}"],
+            )
+
+        # Normalize the prompt column across rows when ANY row had one, so HF's
+        # columnar schema is consistent (implicit-prompt rows get None). When NO
+        # row had a prompt, the column is omitted entirely.
+        if any_prompt:
+            for row in pair_rows:
+                row.setdefault("prompt", None)
+
+        dataset = Dataset.from_list(pair_rows)
 
         if split:
             return {split: dataset}

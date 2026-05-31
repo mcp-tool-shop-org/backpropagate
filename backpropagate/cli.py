@@ -689,6 +689,13 @@ def cmd_train(args: argparse.Namespace) -> int:
             # kwarg silently when the installed Trainer doesn't accept
             # it (pre-Wave-6b builds), so this flag is forward-compatible.
             "mode": getattr(args, "mode", "lora"),
+            # v1.5 T1.2 (ORPO): --method / --orpo-beta thread to
+            # Trainer(method=..., orpo_beta=...). Same introspection filter
+            # contract — these are dropped until the trainer wave adds the
+            # matching __init__ kwargs, so the CLI surface is live now and
+            # forward-compatible. Default 'sft' / 0.1 preserve v1.4 behavior.
+            "method": getattr(args, "method", "sft"),
+            "orpo_beta": getattr(args, "orpo_beta", 0.1),
         }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
@@ -6379,6 +6386,26 @@ Tips:
             "up to ~3B params on 16GB cards; the backend refuses full FT "
             "on larger models. (16GB study-swarm Wave 6b)"
         ),
+    )
+    # v1.5 T1.2 (ORPO): --method selector + --orpo-beta. Threaded into the
+    # wave6b_candidate_kwargs introspection-filter dict below; the filter
+    # drops them until the trainer wave adds the matching Trainer.__init__
+    # kwargs, so the flags are forward-compatible (parse + bind to args now,
+    # reach the backend once it lands). Default 'sft' preserves byte-identical
+    # v1.4 behavior.
+    train_parser.add_argument(
+        "--method",
+        choices=["sft", "orpo"],
+        default="sft",
+        help="Training objective. 'sft' (default) = supervised fine-tuning. 'orpo' = reference-free "
+             "preference tuning (needs a {chosen, rejected} dataset). Single-stage, no reference model "
+             "— same VRAM envelope as SFT. ORPO supports mode='lora' only in v1.5.",
+    )
+    train_parser.add_argument(
+        "--orpo-beta",
+        type=float,
+        default=0.1,
+        help="ORPO odds-ratio weight (lambda). Default 0.1. Ignored unless --method orpo.",
     )
     train_parser.add_argument(
         "--output", "-o",

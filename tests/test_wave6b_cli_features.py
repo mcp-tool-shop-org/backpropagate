@@ -662,3 +662,151 @@ class TestModeFlag:
         from backpropagate.cli import _REPLAY_ALLOWED_OVERRIDE_KEYS
 
         assert "mode" in _REPLAY_ALLOWED_OVERRIDE_KEYS
+
+
+# =============================================================================
+# v1.5 T1.2 (ORPO): --method / --orpo-beta flag wiring
+# =============================================================================
+
+
+class TestOrpoMethodFlag:
+    """v1.5 T1.2 (ORPO Wave 1): ``--method`` + ``--orpo-beta`` on ``train``.
+
+    The flags parse onto ``args`` and thread into the
+    ``wave6b_candidate_kwargs`` introspection-filter dict. We pin BOTH ends:
+    the parser surface, and that the keys reach the Trainer constructor when
+    the installed Trainer advertises a catch-all signature (a future trainer
+    wave adds the matching ``__init__`` kwargs; until then the filter drops
+    them for a concrete signature — that's the forward-compatible contract).
+    """
+
+    def test_train_method_default_is_sft(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.method == "sft"
+
+    def test_train_method_orpo(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl", "--method", "orpo"])
+        assert args.method == "orpo"
+
+    def test_train_orpo_beta_default(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.orpo_beta == 0.1
+
+    def test_train_orpo_beta_custom(self, cli_parser):
+        args = cli_parser.parse_args([
+            "train", "-d", "data.jsonl", "--orpo-beta", "0.2",
+        ])
+        assert args.orpo_beta == pytest.approx(0.2)
+
+    def test_train_method_rejects_unknown_choice(self, cli_parser):
+        """--method dpo (not implemented in v1.5) fails argparse choice check."""
+        with pytest.raises(SystemExit):
+            cli_parser.parse_args(["train", "-d", "data.jsonl", "--method", "dpo"])
+
+    def test_method_and_orpo_beta_thread_into_trainer_kwargs(self, tmp_path):
+        """``--method orpo`` + ``--orpo-beta 0.2`` reach the Trainer constructor.
+
+        Uses the same catch-all-MagicMock pattern as the replay tests: a
+        MagicMock Trainer advertises ``(*args, **kwargs)``, so cmd_train's
+        ``_trainer_sig_params`` filter sets the sentinel ``None`` and forwards
+        EVERY wave6b_candidate_kwargs key unfiltered. This pins that the two
+        new keys are present in the dict construction without asserting the
+        real Trainer.__init__ accepts them yet (the trainer wave adds those).
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        # train()/save() return numeric-fielded results so cmd_train's
+        # f"{result.final_loss:.4f}" / duration formatting doesn't blow up on
+        # a bare MagicMock (mirrors test_replay_dispatches_single_run).
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.42, duration_seconds=1.0, run_id="r-orpo"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="orpo",
+            orpo_beta=0.2,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("method") == "orpo", (
+            f"--method orpo must thread into the Trainer kwargs; got "
+            f"method={init_kwargs.get('method')!r}"
+        )
+        assert init_kwargs.get("orpo_beta") == pytest.approx(0.2), (
+            f"--orpo-beta 0.2 must thread into the Trainer kwargs; got "
+            f"orpo_beta={init_kwargs.get('orpo_beta')!r}"
+        )
+
+    def test_method_defaults_thread_into_trainer_kwargs(self, tmp_path):
+        """Default invocation forwards method='sft' + orpo_beta=0.1.
+
+        The forward-compatible default path must carry the SFT default so a
+        later trainer wave's dispatch sees 'sft' (byte-identical v1.4 behavior)
+        when the operator passes nothing.
+        """
+        from backpropagate.cli import EXIT_OK, cmd_train
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(
+            final_loss=0.5, duration_seconds=1.0, run_id="r-sft"
+        )
+        fake_trainer.save.return_value = str(tmp_path / "out")
+
+        args = Namespace(
+            model="test-model",
+            data="data.jsonl",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=256,
+            output=str(tmp_path),
+            no_unsloth=True,
+            use_dora=False,
+            no_packing=False,
+            init_lora_weights="default",
+            lora_preset="quality",
+            optim="auto",
+            mode="lora",
+            method="sft",
+            orpo_beta=0.1,
+            resume=None,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+        with patch(
+            "backpropagate.trainer.Trainer", return_value=fake_trainer
+        ) as mock_cls:
+            rc = cmd_train(args)
+
+        assert rc == EXIT_OK
+        init_kwargs = mock_cls.call_args.kwargs
+        assert init_kwargs.get("method") == "sft"
+        assert init_kwargs.get("orpo_beta") == pytest.approx(0.1)

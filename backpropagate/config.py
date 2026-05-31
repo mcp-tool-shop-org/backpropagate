@@ -400,6 +400,66 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         output_dir: str = "./output"
         # Overwrite output directory
         overwrite_output_dir: bool = True
+        # v1.5 T1.2 (ORPO): training objective selector. "sft" (default) =
+        # supervised fine-tuning — byte-identical to v1.4 behavior. "orpo" =
+        # reference-free monolithic preference optimization (Hong, Lee &
+        # Thorne 2024, arXiv:2403.07691): standard SFT NLL loss + a per-step
+        # odds-ratio penalty over (chosen, rejected) pairs, single stage, no
+        # reference model — so the VRAM envelope matches SFT. A later trainer
+        # wave dispatches on this; the default preserves the existing path.
+        #
+        # NB: deliberately typed ``str`` (not ``Literal["sft", "orpo"]``) so
+        # the {"sft", "orpo"} constraint is enforced by the
+        # ``_reject_invalid_method`` after-validator below, which raises a
+        # structured ``InvalidSettingError`` (CONFIG_INVALID_SETTING) —
+        # mirroring ``_reject_bf16_and_fp16``. A ``Literal`` field would make
+        # pydantic's own type-check the gate, raising a generic
+        # ``ValidationError`` BEFORE the after-validator runs, so the
+        # contract's structured code/hint (the shape the trainer wave +
+        # operators key on) would never surface. The valid set is documented
+        # in the validator + the ``--method`` CLI choices + env-vars.md.
+        method: str = "sft"
+        # v1.5 T1.2 (ORPO): the odds-ratio weight (the ORPO "lambda" /
+        # ``beta`` in TRL's ORPOConfig). Scales the relative-ratio loss term
+        # added on top of the NLL loss. Default 0.1 (the paper's headline
+        # setting). Ignored unless ``method == "orpo"``. Keep > 0 — a
+        # non-positive weight degenerates ORPO back to plain SFT.
+        orpo_beta: float = 0.1
+
+        @model_validator(mode="after")
+        def _reject_invalid_method(self) -> "TrainingConfig":
+            """Reject a ``method`` outside {"sft", "orpo"} at construction.
+
+            v1.5 T1.2: ``method`` is the ORPO/SFT objective selector and is the
+            authoritative validation gate for the field (the field is typed
+            ``str``, not ``Literal``, precisely so this validator — not
+            pydantic's type machinery — decides the valid set). It raises a
+            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``),
+            mirroring ``_reject_bf16_and_fp16``, so a bad value supplied either
+            as a kwarg (``TrainingConfig(method="dpo")``) or via env var
+            (``BACKPROPAGATE_TRAINING__METHOD=dpo``) surfaces the SAME
+            actionable code/hint the rest of the config-validation path emits.
+            A non-``ValueError`` exception raised from a pydantic ``after``
+            validator propagates as-is (it is NOT re-wrapped in
+            ``ValidationError``), so the structured code/hint survive.
+            """
+            if self.method not in ("sft", "orpo"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "method",
+                    self.method,
+                    "one of {'sft', 'orpo'}",
+                    suggestion=(
+                        "Set method='sft' for supervised fine-tuning (the "
+                        "default) or method='orpo' for reference-free "
+                        "preference tuning (needs a {chosen, rejected} "
+                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
+                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
+                        "for those."
+                    ),
+                )
+            return self
 
         @model_validator(mode="after")
         def _reject_bf16_and_fp16(self) -> "TrainingConfig":
@@ -775,6 +835,12 @@ else:
         seed: int = 42
         output_dir: str = "./output"
         overwrite_output_dir: bool = True
+        # v1.5 T1.2 (ORPO): parity with the pydantic branch above. The
+        # dataclass fallback can't express a Literal at the type level, so
+        # the {"sft", "orpo"} constraint is enforced in __post_init__ below
+        # to keep behavior byte-identical across the two installs.
+        method: str = "sft"
+        orpo_beta: float = 0.1
 
         def __post_init__(self) -> None:
             # DATA-A-007 (parity with the pydantic branch above): reject the
@@ -792,6 +858,26 @@ else:
                         "Set exactly one of bf16 / fp16 (or neither for "
                         "fp32). They are mutually exclusive mixed-precision "
                         "modes."
+                    ),
+                )
+            # v1.5 T1.2 (ORPO): reject an invalid method here too so the
+            # dataclass-fallback install gives the same structured
+            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_method
+            # validator raises.
+            if self.method not in ("sft", "orpo"):
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "method",
+                    self.method,
+                    "one of {'sft', 'orpo'}",
+                    suggestion=(
+                        "Set method='sft' for supervised fine-tuning (the "
+                        "default) or method='orpo' for reference-free "
+                        "preference tuning (needs a {chosen, rejected} "
+                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
+                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
+                        "for those."
                     ),
                 )
 
@@ -1428,7 +1514,9 @@ def get_preset(name: str) -> TrainingPreset:
     return MULTI_RUN_PRESETS[name]
 
 
-def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
+def get_recommended_lr(
+    dataset_size: int, base_lr: float = 2e-4, method: str = "sft"
+) -> float:
     """
     Get recommended learning rate based on dataset size (Phase 1.3).
 
@@ -1437,7 +1525,15 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
 
     Args:
         dataset_size: Number of training samples
-        base_lr: Base learning rate (default: 2e-4)
+        base_lr: Base learning rate (default: 2e-4). Ignored when
+            ``method == "orpo"`` (the ORPO ladder is anchored on its own
+            published settings, not scaled off the SFT base).
+        method: Training objective (v1.5 T1.2). ``"sft"`` (default) returns
+            the SFT ladder UNCHANGED from earlier releases. ``"orpo"``
+            returns the ORPO ladder (small=2e-5, medium=1e-5, large=5e-6) —
+            roughly an order of magnitude below the SFT LRs because ORPO's
+            odds-ratio loss is sensitive to large steps (Hong, Lee & Thorne
+            2024, arXiv:2403.07691, train Mistral-ORPO around 5e-6 / 8e-6).
 
     Returns:
         Recommended learning rate
@@ -1451,7 +1547,29 @@ def get_recommended_lr(dataset_size: int, base_lr: float = 2e-4) -> float:
         >>> lr = get_recommended_lr(500)  # Returns 5e-4
         >>> lr = get_recommended_lr(5000)  # Returns 2e-4
         >>> lr = get_recommended_lr(50000)  # Returns 1e-4
+        >>> lr = get_recommended_lr(500, method="orpo")  # Returns 2e-5
     """
+    if method == "orpo":
+        # v1.5 T1.2: ORPO ladder. Fixed anchors (not base_lr-scaled) — ORPO's
+        # odds-ratio penalty is unstable at the SFT LR magnitudes, so the
+        # published runs sit ~10x lower. Same monotone shape (small corpora
+        # tolerate a higher LR) as the SFT ladder.
+        small_lr = 2e-5
+        medium_lr = 1e-5
+        large_lr = 5e-6
+        # Keep the same strict-monotone invariant the SFT branch asserts so an
+        # anchor regression on the ORPO ladder is caught at the source too.
+        assert small_lr > medium_lr > large_lr, (
+            "get_recommended_lr ORPO ladder must satisfy small > medium > "
+            f"large (got {small_lr} / {medium_lr} / {large_lr})"
+        )
+        if dataset_size < 1000:
+            return small_lr
+        elif dataset_size < 10000:
+            return medium_lr
+        else:
+            return large_lr
+
     # Scale all ranges proportionally relative to base_lr.
     # The default base_lr (2e-4) maps to: small=5e-4, medium=2e-4, large=1e-4.
     # A custom base_lr scales these proportionally (e.g. base_lr=4e-4 gives small=1e-3).

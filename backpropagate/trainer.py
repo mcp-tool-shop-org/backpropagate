@@ -662,6 +662,19 @@ _FULL_FT_PARAM_CEILING_BILLIONS: float = 3.0
 # operator can override via Trainer(learning_rate=...).
 _FULL_FT_DEFAULT_LR_DIVISOR: float = 10.0
 
+# v1.5 T1.2 (ORPO): default learning rate for method='orpo'. ORPO's combined
+# SFT + odds-ratio preference loss is sensitive to LR — the reference-free
+# preference literature (Hong 2024 "ORPO: Monolithic Preference Optimization
+# without Reference Model", arXiv:2403.07691) and TRL's own ORPO example
+# scripts anchor on the 8e-6 / 5e-6 band, an order of magnitude below the
+# 2e-4 LoRA SFT default. We lower the default to 8e-6 so a bare
+# Trainer(method='orpo') lands in the documented-stable range without
+# operator intervention; explicit ``learning_rate=`` wins. Mirrors the
+# mode='full' divisor path but is a fixed anchor (ORPO's stable band does
+# not scale with the LoRA default). full+orpo is blocked, so the two
+# LR-default branches are mutually exclusive.
+_ORPO_DEFAULT_LR: float = 8e-6
+
 
 def _estimate_param_count_billions(model_id: str) -> float | None:
     """v1.4 BACKEND-F-008: estimate model parameter count for the mode='full' gate.
@@ -1250,6 +1263,125 @@ def _build_sft_config(
     return SFTConfig(**kwargs)
 
 
+# =============================================================================
+# SHARED ORPOCONFIG BUILDER (v1.5 T1.2 — ORPO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_sft_config` for the reference-free ORPO objective.
+# It REUSES the same two GPU-dependent detectors —
+# :meth:`Trainer._detect_optim_for_card` and
+# :meth:`Trainer._detect_optimal_dtype` — so card detection (consumer-card
+# paged-optim upgrade + Ada/Hopper/Blackwell bf16 selection + the Stage-A
+# CPU-runner downgrades) CANNOT diverge between the SFT and ORPO configs.
+# Because those detectors downgrade bnb-8bit → adamw_torch on CPU and force
+# fp32 on CPU, this config is CPU-constructible for free (the unit tests build
+# it under ``torch.cuda.is_available() == False``).
+#
+# Contract differences vs SFTConfig:
+#   * NO ``packing`` — ORPOConfig has no such field (it rejects unknown
+#     kwargs); preference rows are paired, not packed.
+#   * NO ``gradient_checkpointing`` forcing — ORPO is mode='lora'-only in v1.5
+#     (full+orpo is blocked at construction), so there is no full-FT
+#     activation-memory contract to enforce here; ORPOConfig's own default
+#     governs.
+#   * ``beta`` (the odds-ratio loss weight) and ``max_length`` (mapped from
+#     the operator's ``max_seq_length``) are ORPO-specific.
+#   * ``max_prompt_length`` / ``max_completion_length`` are optional ORPO
+#     truncation knobs — added only when not None so ORPOConfig's defaults
+#     govern otherwise.
+
+
+def _build_orpo_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    orpo_beta: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble an ``ORPOConfig`` with the v1.3 quality contracts applied.
+
+    Like :func:`_build_sft_config`, this resolves ``optim`` and ``bf16`` /
+    ``fp16`` via the SAME detectors so the ORPO config cannot drift from the
+    SFT config on card-specific decisions:
+
+    * ``optim`` — via :meth:`Trainer._detect_optim_for_card` (consumer-card
+      paged-optim upgrade; CPU → ``adamw_torch`` downgrade — the Stage-A
+      CPU-runner fix, inherited here so ORPO is CPU-constructible).
+    * ``bf16`` / ``fp16`` — via :meth:`Trainer._detect_optimal_dtype`
+      (Ampere+ → bf16; CPU → fp32 so ORPOConfig does not reject bf16=True
+      at construction).
+
+    Parameters mirror :func:`_build_sft_config` with three ORPO-specific
+    additions (``orpo_beta`` → ``beta``, plus the optional
+    ``max_prompt_length`` / ``max_completion_length`` truncation knobs).
+    ``max_seq_length`` maps to ORPOConfig's ``max_length``.
+
+    Returns:
+        A configured ``ORPOConfig`` instance.
+    """
+    from trl import ORPOConfig
+
+    # Reuse the exact detectors the SFT builder uses so the two configs
+    # converge on the same card-specific resolution (single source of truth).
+    # Note: ORPO is mode='lora'-only in v1.5, so there is no mode='full'
+    # adamw_8bit → paged short-circuit here — the consumer-card upgrade in
+    # _detect_optim_for_card still fires for the adamw_8bit default on
+    # <24GB cards, and the CPU downgrade fires when CUDA is absent.
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        # ORPO-specific: max_length is ORPOConfig's name for the combined
+        # prompt+completion sequence cap; beta is the odds-ratio loss weight.
+        "max_length": max_seq_length,
+        "beta": orpo_beta,
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # Deliberately DO NOT pass ``packing`` (ORPOConfig has no such field and
+    # rejects it) or force ``gradient_checkpointing`` (no full-FT contract for
+    # ORPO in v1.5; ORPOConfig's own default governs).
+    return ORPOConfig(**kwargs)
+
+
 def _apply_train_on_responses_only(
     sft_trainer: Any,
     tokenizer: Any,
@@ -1462,6 +1594,27 @@ class Trainer:
         # trainer that lifts the ceiling — the 3B gate is the documented
         # consumer-tier contract and not a soft-warning.
         mode: str = "lora",
+        # v1.5 T1.2 (ORPO Wave 2): training objective. ``"sft"`` (the default)
+        # is the supervised fine-tuning path — byte-identical pre-v1.5
+        # behavior for callers who do not pass this kwarg. ``"orpo"`` selects
+        # the reference-free ORPO objective (Hong 2024, arXiv:2403.07691):
+        # SFT + odds-ratio preference loss in one pass, NO separate reference
+        # model. ORPO requires a preference dataset (``{chosen, rejected}`` ±
+        # ``prompt``) and is supported with mode='lora' ONLY in v1.5 — a
+        # method='orpo' + mode='full' combination raises InvalidSettingError
+        # at construction. Defaults to None so the settings layer
+        # (``settings.training.method``) governs when the kwarg is omitted;
+        # config.py validates the value too, but a DIRECT Trainer(method=...)
+        # call is re-validated here (defense in depth). The CLI threads
+        # ``--method`` through this kwarg via the wave6b_candidate_kwargs
+        # introspection filter — naming the param here is what makes the CLI
+        # flag flow through.
+        method: str | None = None,
+        # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight (lambda in
+        # the paper; ``beta`` in ORPOConfig). Ignored unless method='orpo'.
+        # Defaults to None so ``settings.training.orpo_beta`` (default 0.1)
+        # governs when omitted.
+        orpo_beta: float | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -1624,6 +1777,50 @@ class Trainer:
             )
         self.mode = mode
 
+        # v1.5 T1.2 (ORPO Wave 2): training-objective resolution. Kwarg-
+        # authoritative (per-invocation ``method=`` wins), falling back to
+        # ``settings.training.method`` (the env-var path), default "sft".
+        # Validate the resolved value here even though config.py's pydantic
+        # ``_reject_invalid_method`` validator already guards the settings
+        # path — a DIRECT ``Trainer(method="dpo")`` call bypasses the settings
+        # layer entirely, so the constructor must re-validate (defense in
+        # depth). InvalidSettingError carries code CONFIG_INVALID_SETTING.
+        self.method = method if method is not None else settings.training.method
+        if self.method not in {"sft", "orpo"}:
+            raise InvalidSettingError(
+                setting_name="method",
+                value=self.method,
+                expected="one of {'sft', 'orpo'}",
+                suggestion=(
+                    "Pass method='sft' (the default) for supervised "
+                    "fine-tuning, OR method='orpo' for reference-free ORPO "
+                    "preference training (requires a {chosen, rejected} "
+                    "dataset and mode='lora')."
+                ),
+            )
+        # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight. Kwarg-
+        # authoritative, falling back to ``settings.training.orpo_beta``
+        # (default 0.1). Ignored unless method='orpo'.
+        self.orpo_beta = (
+            orpo_beta if orpo_beta is not None else settings.training.orpo_beta
+        )
+
+        # v1.5 T1.2 (ORPO Wave 2): ORPO + mode='full' guard. ORPO is supported
+        # with mode='lora' ONLY in v1.5 — the adapter is attached by
+        # load_model()'s get_peft_model before train(), and the ORPO+full
+        # combination (full-param weights + the odds-ratio objective +
+        # gradient-checkpointing memory ceiling) is out of scope for this
+        # release. Refuse the combination at construction so the operator
+        # sees an actionable error before any model load. (Fires after BOTH
+        # self.mode and self.method resolve.)
+        if self.method == "orpo" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "orpo", "mode": "full"},
+                expected="ORPO is supported with mode='lora' only in v1.5",
+                suggestion="Use mode='lora' (default) with method='orpo'.",
+            )
+
         # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate. Refuse
         # construction for models whose parameter count exceeds the 3B
         # ceiling. The probe is best-effort at construction time (preset
@@ -1663,6 +1860,33 @@ class Trainer:
                     f"applied; explicit override beats the full-FT default)."
                 )
 
+        # v1.5 T1.2 (ORPO Wave 2): ORPO LR default. Parallel to the mode='full'
+        # LR-lowering block above and keyed on the SAME ``learning_rate is
+        # None`` detection (operator relied on the settings default). ORPO's
+        # combined SFT + odds-ratio loss is stable around 8e-6 (Hong 2024 /
+        # TRL examples), ~25x below the 2e-4 LoRA SFT default, so a bare
+        # Trainer(method='orpo') would otherwise train at a divergent LR.
+        # Explicit ``learning_rate=`` wins. full+orpo is blocked above, so
+        # this branch and the mode='full' branch are mutually exclusive (an
+        # ``elif`` on self.mode != "full" would be equivalent — we gate on
+        # self.method directly for readability).
+        elif self.method == "orpo":
+            if learning_rate is None:
+                self.learning_rate = _ORPO_DEFAULT_LR
+                logger.info(
+                    f"method='orpo': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (ORPO's combined SFT + "
+                    f"odds-ratio loss is stable in the ~8e-6 band, well below "
+                    f"the LoRA SFT default). Pass learning_rate=<value> to "
+                    f"override."
+                )
+            else:
+                logger.info(
+                    f"method='orpo': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (no ORPO default "
+                    f"applied; explicit override wins)."
+                )
+
         # F-005: store the operator's report_to intent; the resolver is
         # invoked lazily at train()-time so feature detection picks up
         # late-installed trackers (e.g. tracker installed after import).
@@ -1694,6 +1918,10 @@ class Trainer:
         logger.info(f"Trainer initialized: {self.model_name}")
         logger.info(f"  LoRA: r={self.lora_r}, alpha={self.lora_alpha}")
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
+        # v1.5 T1.2 (ORPO Wave 2): surface the objective so a post-mortem grep
+        # can confirm which path ran without reading the config.
+        if self.method == "orpo":
+            logger.info(f"  Method: orpo (beta={self.orpo_beta})")
         logger.info(
             f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
             f"unsloth_fallback={self.unsloth_fallback}"
@@ -2418,6 +2646,138 @@ class Trainer:
             lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
 
+    def _build_trainer(
+        self,
+        training_args: Any,
+        train_dataset: Any,
+        callbacks: list[Any] | None,
+    ) -> Any:
+        """Construct the inner TRL trainer for the resolved objective.
+
+        v1.5 T1.2 (ORPO Wave 2): single construction site for BOTH the
+        first-attempt build AND the OOM-retry rebuild in :meth:`train`. Pre-
+        ORPO those two sites each inlined ``SFTTrainer(...)`` and drifted apart
+        once (BACKEND-A-003 — the retry path bypassed the shared SFTConfig
+        helper). Routing both through this one helper makes construction-drift
+        between the first attempt and the retry structurally impossible: when
+        the objective grows a third construction wrinkle, there is exactly one
+        place to change.
+
+        For ``method == "orpo"`` builds an ``ORPOTrainer`` (NO reference model —
+        ORPO is reference-free; NO ``peft_config`` — the LoRA adapter is
+        already attached by :meth:`load_model`'s ``get_peft_model`` before
+        train() runs, exactly as the SFT path relies on). Otherwise builds an
+        ``SFTTrainer`` identically to the pre-ORPO path. Imports are
+        method-conditional and local so the test mocks
+        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``) bind at
+        call time.
+
+        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on both
+        trainers.
+        """
+        if self.method == "orpo":
+            from trl import ORPOTrainer
+
+            # Cross-version shim (v1.5 T1.2): trl's ORPOTrainer (through 0.24)
+            # sets ``model.warnings_issued["estimate_tokens"] = True`` to mute a
+            # transformers FLOP-estimate warning. transformers 5.x REMOVED the
+            # ``warnings_issued`` attribute from ``PreTrainedModel``, so that
+            # write raises ``AttributeError`` inside the constructor — before a
+            # single step — on the project's own target stack (trl 0.24 +
+            # transformers 5.5, verified on LlamaForCausalLM under a PEFT
+            # wrapper). Provide an inert dict when the attribute is absent so
+            # ORPO works across the transformers 4.x/5.x boundary. Harmless on
+            # 4.x (the attribute is already present via ``PreTrainedModel.
+            # __init__`` and is left untouched); on 5.x it is an empty dict trl
+            # writes to and nothing reads. Scoped to the ORPO path — SFT is
+            # unaffected. Remove once trl's ORPOTrainer stops touching
+            # ``warnings_issued`` (it is slated to move to trl.experimental).
+            if not hasattr(self._model, "warnings_issued"):
+                self._model.warnings_issued = {}
+
+            return ORPOTrainer(
+                model=self._model,
+                processing_class=self._tokenizer,
+                train_dataset=train_dataset,
+                args=training_args,
+                callbacks=callbacks,
+            )
+        from trl import SFTTrainer
+
+        return SFTTrainer(
+            model=self._model,
+            processing_class=self._tokenizer,
+            train_dataset=train_dataset,
+            args=training_args,
+            callbacks=callbacks,
+        )
+
+    def _build_training_args(
+        self,
+        *,
+        steps: int | None,
+        report_to: Any,
+        run_name: str | None,
+    ) -> Any:
+        """Assemble the inner trainer's config for the resolved objective.
+
+        v1.5 T1.2 (ORPO Wave 2): single config-assembly site for BOTH the
+        first-attempt build AND the OOM-retry rebuild in :meth:`train`,
+        mirroring :meth:`_build_trainer`. The OOM-retry path reads
+        ``self.batch_size`` / ``self.gradient_accumulation`` AFTER the recovery
+        loop has halved/doubled them in place, so this reads those instance
+        attributes live (it is called fresh on each retry). Everything else is
+        a pure function of constructor-resolved state + the per-call
+        ``steps`` / ``report_to`` / ``run_name``.
+
+        For ``method == "orpo"`` delegates to :func:`_build_orpo_config`
+        (beta + max_length; NO packing / gradient checkpointing). Otherwise
+        delegates to :func:`_build_sft_config` exactly as the pre-ORPO path.
+        """
+        if self.method == "orpo":
+            return _build_orpo_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                orpo_beta=self.orpo_beta,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        return _build_sft_config(
+            output_dir=str(self.output_dir),
+            per_device_train_batch_size=self.batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation,
+            max_steps=steps or settings.training.max_steps,
+            learning_rate=self.learning_rate,
+            warmup_steps=settings.training.warmup_steps,
+            max_seq_length=self.max_seq_length,
+            seed=settings.training.seed,
+            lr_scheduler_type=settings.training.lr_scheduler_type,
+            logging_steps=settings.training.logging_steps,
+            save_steps=settings.training.save_steps,
+            weight_decay=settings.training.weight_decay,
+            report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
+            run_name=run_name,
+            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the constructor-
+            # resolved instance attributes (per-invocation kwarg OR settings
+            # fallback) through to the helper.
+            packing=self.packing,
+            optim=self.optim,
+            # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
+            # resolved training mode (``"lora"`` default | ``"full"``).
+            mode=self.mode,
+        )
+
     def train(
         self,
         dataset: str | Any = None,
@@ -2465,7 +2825,12 @@ class Trainer:
         """
         import time
 
-        from trl import SFTTrainer
+        # v1.5 T1.2 (ORPO Wave 2): the inner-trainer class (SFTTrainer or
+        # ORPOTrainer) is imported inside :meth:`_build_trainer` so the
+        # method-conditional import resolves at construction time (and so the
+        # two test mocks ``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``
+        # both bind correctly). No module-level ``from trl import SFTTrainer``
+        # here anymore — construction is centralized in _build_trainer.
 
         # Validate inputs
         if steps is not None:
@@ -2485,8 +2850,13 @@ class Trainer:
         if not self._is_loaded:
             self.load_model()
 
-        # Load dataset
-        train_dataset = self._load_dataset(dataset, samples)
+        # Load dataset.
+        # v1.5 T1.2 (ORPO Wave 2): thread the objective so the loader returns
+        # raw {chosen, rejected} preference rows for ORPO (via
+        # to_preference_dataset) instead of collapsing to a single text
+        # column, and so a mismatched dataset surfaces a structured
+        # DatasetFormatError before the trainer is built.
+        train_dataset = self._load_dataset(dataset, samples, method=self.method)
 
         # Pre-tokenize for Windows safety.
         #
@@ -2500,7 +2870,15 @@ class Trainer:
         # (run_id is minted below; this log fires before that point so we
         # don't thread it here — a follow-up log line at run_id mint time
         # carries the correlation token.)
-        if os.name == "nt" and settings.windows.pre_tokenize:
+        # v1.5 T1.2 (ORPO Wave 2): the Windows pre-tokenize path tokenizes a
+        # single ``text`` column ahead of training (see _pre_tokenize). ORPO
+        # rows have NO text column — they carry raw {chosen, rejected, prompt}
+        # and ORPOTrainer tokenizes its own paired rows with the chat template
+        # at train time. Pre-tokenizing them would either KeyError on the
+        # missing text column or destroy the pairing, so we gate this to
+        # method='sft' only. ORPO on Windows defers tokenization to ORPOTrainer
+        # (same as the non-Windows SFT path).
+        if self.method == "sft" and os.name == "nt" and settings.windows.pre_tokenize:
             logger.info(
                 "Pre-tokenization: applied (os.name=nt, windows.pre_tokenize=True) "
                 "for dataset of %d samples",
@@ -2509,8 +2887,9 @@ class Trainer:
             train_dataset = self._pre_tokenize(train_dataset)
         else:
             logger.info(
-                "Pre-tokenization: deferred to SFTTrainer "
-                "(os.name=%s, windows.pre_tokenize=%s) for dataset of %d samples",
+                "Pre-tokenization: deferred to inner trainer "
+                "(method=%s, os.name=%s, windows.pre_tokenize=%s) for dataset of %d samples",
+                self.method,
                 os.name,
                 settings.windows.pre_tokenize,
                 len(train_dataset),
@@ -2628,39 +3007,20 @@ class Trainer:
         run_id = run_id_for_resume or uuid.uuid4().hex
         run_name = f"backprop-{run_id[:12]}" if report_to != "none" else None
 
-        # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: SFTConfig assembly
-        # is delegated to the module-level :func:`_build_sft_config` helper so
-        # the same defaults reach the MultiRunTrainer call site. The helper
-        # owns the consumer-card paged-optim upgrade + Ada bf16/fp16 selection;
-        # operator overrides on ``settings.training.*`` are honored.
-        training_args = _build_sft_config(
-            output_dir=str(self.output_dir),
-            per_device_train_batch_size=self.batch_size,
-            gradient_accumulation_steps=self.gradient_accumulation,
-            max_steps=steps or settings.training.max_steps,
-            learning_rate=self.learning_rate,
-            warmup_steps=settings.training.warmup_steps,
-            max_seq_length=self.max_seq_length,
-            seed=settings.training.seed,
-            lr_scheduler_type=settings.training.lr_scheduler_type,
-            logging_steps=settings.training.logging_steps,
-            save_steps=settings.training.save_steps,
-            weight_decay=settings.training.weight_decay,
-            report_to=report_to,  # F-005: dynamic — see _resolve_report_to.
-            run_name=run_name,
-            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): thread the constructor-
-            # resolved instance attributes (per-invocation kwarg OR settings
-            # fallback) through to the helper. Pre-fix the helper read
-            # ``settings.data.packing`` / ``settings.training.optim`` directly,
-            # silently bypassing the per-invocation override path that the
-            # CLI introspection filter now passes through.
-            packing=self.packing,
-            optim=self.optim,
-            # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
-            # resolved training mode (``"lora"`` default | ``"full"``) into
-            # the helper so SFTConfig assembly picks up the per-mode
-            # gradient_checkpointing + paged-optim contract.
-            mode=self.mode,
+        # v1.3 BACKEND-5 / BACKEND-7 + Wave 6a BACKEND-A-003: training-args
+        # assembly is delegated to a module-level helper so the same defaults
+        # reach the OOM-retry rebuild (and, for SFT, the MultiRunTrainer call
+        # site). Both helpers own the consumer-card paged-optim upgrade + Ada
+        # bf16/fp16 selection + CPU downgrades; operator overrides on
+        # ``settings.training.*`` are honored.
+        #
+        # v1.5 T1.2 (ORPO Wave 2): pick the builder by objective. ORPO uses
+        # _build_orpo_config (beta + max_length; NO packing / gradient
+        # checkpointing); SFT uses _build_sft_config exactly as before. The
+        # config-build is also re-run identically in the OOM-retry block below
+        # — keep the two call shapes in lockstep.
+        training_args = self._build_training_args(
+            steps=steps, report_to=report_to, run_name=run_name
         )
 
         # F-003: build the HF-TrainerCallback bridge ONCE for this train()
@@ -2672,13 +3032,13 @@ class Trainer:
         )
         sft_callbacks = [_bridge_cb] if _bridge_cb is not None else None
 
-        # Create trainer (TRL 0.27+ uses processing_class instead of tokenizer)
-        self._trainer = SFTTrainer(
-            model=self._model,
-            processing_class=self._tokenizer,
-            train_dataset=train_dataset,
-            args=training_args,
-            callbacks=sft_callbacks,
+        # v1.5 T1.2 (ORPO Wave 2): construct via the shared _build_trainer
+        # helper (SFTTrainer or ORPOTrainer per self.method). This is the
+        # FIRST of two construction sites; the OOM-retry rebuild below calls
+        # the SAME helper so the first-attempt-vs-retry construction can never
+        # drift (kills the BACKEND-A-003 drift-bug class for ORPO too).
+        self._trainer = self._build_trainer(
+            training_args, train_dataset, sft_callbacks
         )
 
         # Apply train_on_responses_only if using Unsloth (Phase 1.1 optimization)
@@ -2690,17 +3050,26 @@ class Trainer:
         # the multi-run path silently skipped this step despite the docstring
         # claim — loss leaked back onto the user prompt for multi-run users).
         #
+        # v1.5 T1.2 (ORPO Wave 2): train_on_responses_only is MEANINGLESS for
+        # ORPO — it masks the user prompt in a single ``text`` column so loss
+        # is computed only on the assistant turn, but ORPO trains on PAIRED
+        # {chosen, rejected} rows (no single text column to mask). Gate it to
+        # method='sft' so the ORPO trainer is never passed to the Unsloth
+        # masker. resolved_response_markers stays None for ORPO.
+        #
         # F-014: track the resolved (instruction, response) marker pair so the
         # hyperparameters dict built further down can persist it into run
         # history (auditable post-mortem when a probe falls back to ChatML on
         # a non-ChatML tokenizer).
-        self._trainer, resolved_response_markers = _apply_train_on_responses_only(
-            self._trainer,
-            self._tokenizer,
-            enabled=self._train_on_responses,
-            use_unsloth=self.use_unsloth,
-            response_markers_override=self._response_markers_override,
-        )
+        resolved_response_markers: tuple[str, str] | None = None
+        if self.method == "sft":
+            self._trainer, resolved_response_markers = _apply_train_on_responses_only(
+                self._trainer,
+                self._tokenizer,
+                enabled=self._train_on_responses,
+                use_unsloth=self.use_unsloth,
+                response_markers_override=self._response_markers_override,
+            )
 
         # Train
         # B-001: ``run_id`` (the UUID4 correlation token) was minted above
@@ -2732,6 +3101,13 @@ class Trainer:
             "max_samples": samples or settings.data.max_samples,
             "use_unsloth": self.use_unsloth,
             "seed": settings.training.seed,
+            # v1.5 T1.2 (ORPO Wave 2): persist the training objective + the
+            # ORPO loss weight so a run-history audit can tell which run was
+            # ORPO vs SFT (and reproduce the beta) without re-reading the
+            # config. orpo_beta is recorded for every run (harmless for SFT;
+            # the audit field stays uniform across the run table).
+            "method": self.method,
+            "orpo_beta": self.orpo_beta,
         }
         # F-014: auditable per-run record of the chat markers actually used by
         # train_on_responses_only. Absent when the mode is disabled.
@@ -2782,43 +3158,29 @@ class Trainer:
 
             while True:
                 try:
-                    # Re-create SFTTrainer with current batch / accum on retry.
-                    # (The first iteration uses the trainer built above.)
+                    # Re-create the inner trainer with current batch / accum on
+                    # retry. (The first iteration uses the trainer built above.)
                     if oom_retries > 0:
-                        # Wave 6a BACKEND-A-003: re-build via the shared helper
-                        # so the OOM-retry path inherits the same paged/bf16
-                        # upgrades as the first attempt. The detectors are
-                        # pure functions of the configured value, so the
-                        # resolution is stable across retries.
-                        training_args = _build_sft_config(
-                            output_dir=str(self.output_dir),
-                            per_device_train_batch_size=self.batch_size,
-                            gradient_accumulation_steps=self.gradient_accumulation,
-                            max_steps=steps or settings.training.max_steps,
-                            learning_rate=self.learning_rate,
-                            warmup_steps=settings.training.warmup_steps,
-                            max_seq_length=self.max_seq_length,
-                            seed=settings.training.seed,
-                            lr_scheduler_type=settings.training.lr_scheduler_type,
-                            logging_steps=settings.training.logging_steps,
-                            save_steps=settings.training.save_steps,
-                            weight_decay=settings.training.weight_decay,
-                            report_to=report_to,  # F-005: same resolution on retry.
-                            run_name=run_name,
-                            # v1.4 BRIDGE-A-002 follow-up (Wave 6a): same
-                            # per-invocation threading as the first attempt
-                            # so the OOM-retry path inherits the operator's
-                            # ``packing`` / ``optim`` overrides instead of
-                            # silently reverting to the settings layer.
-                            packing=self.packing,
-                            optim=self.optim,
-                            # v1.4 BACKEND-F-008 (Wave 6b features): same
-                            # per-invocation threading on retry so the OOM
-                            # rebuild stays mode-coherent.
-                            mode=self.mode,
+                        # Wave 6a BACKEND-A-003 + v1.5 T1.2 (ORPO Wave 2):
+                        # re-build via the SAME shared helpers the first attempt
+                        # used (_build_training_args + _build_trainer) so the
+                        # OOM-retry path inherits the identical paged/bf16
+                        # upgrades AND the identical objective (SFT vs ORPO).
+                        # The detectors are pure functions of the configured
+                        # value, so the resolution is stable across retries;
+                        # _build_training_args reads self.batch_size /
+                        # self.gradient_accumulation live, picking up the
+                        # recovery loop's halved/doubled values. Routing the
+                        # rebuild through the same two helpers makes
+                        # first-attempt-vs-retry drift structurally impossible —
+                        # an ORPO retry rebuilds an ORPOTrainer, never an
+                        # SFTTrainer (the BACKEND-A-003 drift-bug class, now
+                        # also closed for ORPO).
+                        training_args = self._build_training_args(
+                            steps=steps, report_to=report_to, run_name=run_name
                         )
                         # F-003: rebuild the bridge for each OOM retry so the
-                        # adapter is bound to the fresh SFTTrainer instance.
+                        # adapter is bound to the fresh trainer instance.
                         # ``callback`` is captured from the enclosing train()
                         # call; if None, sft_callbacks stays None.
                         _bridge_cb_retry = (
@@ -2827,12 +3189,8 @@ class Trainer:
                         sft_callbacks_retry = (
                             [_bridge_cb_retry] if _bridge_cb_retry is not None else None
                         )
-                        self._trainer = SFTTrainer(
-                            model=self._model,
-                            processing_class=self._tokenizer,
-                            train_dataset=train_dataset,
-                            args=training_args,
-                            callbacks=sft_callbacks_retry,
+                        self._trainer = self._build_trainer(
+                            training_args, train_dataset, sft_callbacks_retry
                         )
 
                     # F-017: thread resume_from_checkpoint into the inner
@@ -3336,6 +3694,7 @@ class Trainer:
         self,
         dataset: str | Any,
         samples: int | None = None,
+        method: str = "sft",
     ) -> Any:
         """
         Load dataset from various sources.
@@ -3349,19 +3708,71 @@ class Trainer:
             - datasets.Dataset: used directly
             - DatasetLoader: calls .to_hf_dataset() directly
 
+        v1.5 T1.2 (ORPO Wave 2): when ``method == "orpo"`` the loader returns
+        RAW preference pairs (``{chosen, rejected, [prompt]}``) instead of the
+        collapsed single-text SFT shape:
+
+        * DatasetLoader paths (a ``DatasetLoader`` passed directly OR a local
+          file string) call :meth:`DatasetLoader.to_preference_dataset`, which
+          preserves the pair columns and raises ``DatasetFormatError``
+          (``INPUT_DATASET_FORMAT_UNSUPPORTED``) when no row carries both
+          ``chosen`` and ``rejected``.
+        * HF-name and in-memory ``Dataset`` paths cannot re-run format
+          detection, so they assert ``chosen`` and ``rejected`` are present in
+          ``column_names`` and raise ``DatasetFormatError`` otherwise.
+
+        Symmetrically, when ``method == "sft"`` and a DatasetLoader detects a
+        PREFERENCE-shaped file, a WARN is emitted ("did you mean
+        --method orpo?") — the SFT collapse still proceeds (the loader knows
+        how to render preference rows for SFT), but the operator is told.
+
         Raises:
             DatasetNotFoundError: If dataset file doesn't exist
             DatasetParseError: If dataset cannot be parsed
+            DatasetFormatError: method='orpo' on a dataset with no
+                chosen/rejected columns (code INPUT_DATASET_FORMAT_UNSUPPORTED)
             DatasetError: For other dataset-related errors
         """
         from datasets import Dataset, load_dataset
 
+        from .datasets import DatasetFormat
+        from .exceptions import DatasetFormatError
+
+        is_orpo = method == "orpo"
         max_samples = samples or settings.data.max_samples
 
         # File extensions that DatasetLoader handles
         _LOCAL_FILE_EXTENSIONS = (
             '.jsonl', '.json', '.csv', '.parquet', '.txt', '.md',
         )
+
+        # v1.5 T1.2 (ORPO Wave 2): the supported_formats list reused in every
+        # ORPO DatasetFormatError raised from the non-loader paths below.
+        _ORPO_SUPPORTED = ["{chosen, rejected}", "{prompt, chosen, rejected}"]
+
+        def _emit_sft_on_preference_warning(detected: DatasetFormat) -> None:
+            """WARN when an SFT run is pointed at a preference-shaped file."""
+            if not is_orpo and detected == DatasetFormat.PREFERENCE:
+                logger.warning(
+                    "Dataset looks like preference pairs (detected format "
+                    "'preference': rows carry {chosen, rejected}), but "
+                    "method='sft'. The SFT path will collapse these to a "
+                    "single text column. Did you mean --method orpo "
+                    "(reference-free ORPO preference training)?"
+                )
+
+        def _require_preference_columns(hf_ds: Any, source: str) -> None:
+            """Assert an HF/in-memory Dataset carries chosen+rejected for ORPO."""
+            cols = getattr(hf_ds, "column_names", []) or []
+            if "chosen" not in cols or "rejected" not in cols:
+                raise DatasetFormatError(
+                    f"method='orpo' requires preference pairs but the {source} "
+                    f"has no chosen/rejected columns (columns: {list(cols)}). "
+                    f"ORPO needs each row to carry both 'chosen' and "
+                    f"'rejected' (optionally 'prompt').",
+                    detected_format=None,
+                    supported_formats=_ORPO_SUPPORTED,
+                )
 
         try:
             if dataset is None:
@@ -3372,6 +3783,8 @@ class Trainer:
                     split=settings.data.dataset_split,
                     _label=f"load_dataset:{settings.data.dataset_name}",
                 )
+                if is_orpo:
+                    _require_preference_columns(ds, "default HuggingFace dataset")
             elif isinstance(dataset, DatasetLoader):
                 # DatasetLoader passed directly — use its validated output
                 validation = dataset.validation_result
@@ -3385,7 +3798,13 @@ class Trainer:
                     )
                     for err in validation.errors[:5]:
                         logger.warning(f"  {err}")
-                ds = dataset.to_hf_dataset()
+                if is_orpo:
+                    # Preserves raw chosen/rejected/[prompt]; raises
+                    # DatasetFormatError when no pair row exists.
+                    ds = dataset.to_preference_dataset()
+                else:
+                    _emit_sft_on_preference_warning(dataset.detected_format)
+                    ds = dataset.to_hf_dataset()
             elif isinstance(dataset, str):
                 if any(dataset.lower().endswith(ext) for ext in _LOCAL_FILE_EXTENSIONS):
                     # Local file — route through DatasetLoader for format detection,
@@ -3414,7 +3833,14 @@ class Trainer:
                         for err in validation.errors[:5]:
                             logger.warning(f"  {err}")
 
-                    ds = loader.to_hf_dataset()
+                    if is_orpo:
+                        # to_preference_dataset raises DatasetFormatError when
+                        # the file is an SFT file with no chosen/rejected rows
+                        # (the "operator pointed ORPO at an SFT dataset" case).
+                        ds = loader.to_preference_dataset()
+                    else:
+                        _emit_sft_on_preference_warning(loader.detected_format)
+                        ds = loader.to_hf_dataset()
                 else:
                     # No file extension — assume HuggingFace dataset name
                     # B-017: retry on transient HF Hub failures (5xx, 429, timeouts).
@@ -3430,21 +3856,31 @@ class Trainer:
                             f"Failed to load HuggingFace dataset '{dataset}': {e}",
                             suggestion="Check dataset name and network connection"
                         ) from e
+                    if is_orpo:
+                        _require_preference_columns(
+                            ds, f"HuggingFace dataset '{dataset}'"
+                        )
             elif isinstance(dataset, Dataset):
                 ds = dataset
+                if is_orpo:
+                    _require_preference_columns(ds, "in-memory Dataset")
             else:
                 raise DatasetError(
                     f"Unsupported dataset type: {type(dataset).__name__}",
                     suggestion="Use a file path (JSONL, CSV, Parquet), HuggingFace dataset name, Dataset object, or DatasetLoader"
                 )
         except (DatasetNotFoundError, DatasetParseError, DatasetError):
+            # DatasetFormatError is a DatasetError subclass — propagates here
+            # unchanged (the ORPO format guard must not be downgraded to a
+            # generic DatasetError by the catch-all below).
             raise
         except FileNotFoundError as e:
             raise DatasetNotFoundError(str(e)) from e
         except Exception as e:
             raise DatasetError(f"Failed to load dataset: {e}") from e
 
-        # Limit samples
+        # Limit samples. Method-agnostic: preference Datasets are ordinary
+        # datasets.Dataset objects, so shuffle/select apply identically.
         if max_samples > 0 and len(ds) > max_samples:
             if settings.data.shuffle:
                 ds = ds.shuffle(seed=settings.training.seed)

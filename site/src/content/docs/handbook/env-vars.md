@@ -122,6 +122,8 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_TRAINING__SEED` | `42` | RNG seed. |
 | `BACKPROPAGATE_TRAINING__OUTPUT_DIR` | `./output` | Where to write checkpoints and exports. |
 | `BACKPROPAGATE_TRAINING__OVERWRITE_OUTPUT_DIR` | `true` | Whether to overwrite an existing output dir. |
+| `BACKPROPAGATE_TRAINING__METHOD` | `sft` | **v1.5** — training objective. `sft` (default) = supervised fine-tuning. `orpo` = reference-free preference tuning (needs a `{chosen, rejected}` dataset; single-stage, no reference model). Any other value is rejected with `CONFIG_INVALID_SETTING`. |
+| `BACKPROPAGATE_TRAINING__ORPO_BETA` | `0.1` | **v1.5** — ORPO odds-ratio weight (lambda). Keep > 0. Ignored unless `METHOD=orpo`. |
 
 ## Data
 

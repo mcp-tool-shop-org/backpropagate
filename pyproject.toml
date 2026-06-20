@@ -57,11 +57,18 @@ classifiers = [
 #   - torch `<3`: same major-version risk class for the SFT/PEFT stack; holds the
 #     tested 2.x line (CI matrix + the RTX-5080 dev rig run 2.10.x) until a 3.x
 #     smoke cell exists.
+#   - trl `<0.28` (FC-01): trl self-flags that ORPOTrainer / ORPOConfig are
+#     migrating to `trl.experimental`. The top-level imports in trainer.py
+#     (`_build_orpo_config`, `_build_trainer`) break the moment that relocation
+#     lands, so cap below the next minors where it may surface. CI + the dev rig
+#     run trl 0.24.x, which this admits. The cap is a backstop only — the import
+#     guards in trainer.py re-raise the relocation as a structured TrainingError
+#     with a working-range remedy regardless of what resolves.
 dependencies = [
     "torch>=2.0.0,<3",
     "transformers>=4.36.0,<6",
     "datasets>=2.14.0",
-    "trl>=0.7.0",
+    "trl>=0.7.0,<0.28",
     "peft>=0.7.0",
     "accelerate>=0.25.0",
     "bitsandbytes>=0.41.0",

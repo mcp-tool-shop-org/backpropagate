@@ -2726,3 +2726,119 @@ class TestHelpSurfaceRenders:
             f"`backprop {subcommand} --help` exited with code "
             f"{exc_info.value.code!r}; expected 0 (clean help render)."
         )
+
+
+class TestStructuredErrorPrinting:
+    """OBS-001 / OBS-002: the subcommand error handlers surface the stable
+    error code AND the trainer run_id on the failure paths.
+
+    Pre-fix the per-subcommand handlers printed only ``e.message`` +
+    ``e.suggestion``; the stable ``code`` reached the terminal only via the
+    last-resort ``main()`` handler (which the subcommand handlers preempt), and
+    the trainer ``run_id`` reached the terminal only on the SUCCESS branch — so
+    a failed run could not be mapped to its on-disk checkpoint / run_history
+    entry without digging through JSON logs.
+    """
+
+    def test_print_structured_error_includes_code(self, capsys):
+        """OBS-002: a structured error's stable code prints in ``[CODE]`` form."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import TrainingError
+
+        exc = TrainingError("training blew up", code="RUNTIME_TRAINING_FAILED")
+        _print_structured_error(exc)
+
+        err = capsys.readouterr().err
+        assert "[RUNTIME_TRAINING_FAILED]" in err
+        assert "training blew up" in err
+
+    def test_print_structured_error_honours_prefix(self, capsys):
+        """The optional prefix is preserved after the code (handler labels)."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import ExportError
+
+        exc = ExportError("gguf convert failed", code="RUNTIME_GGUF_EXPORT_FAILED")
+        _print_structured_error(exc, prefix="Export error: ")
+
+        err = capsys.readouterr().err
+        assert "[RUNTIME_GGUF_EXPORT_FAILED]" in err
+        assert "Export error: gguf convert failed" in err
+
+    def test_print_structured_error_surfaces_run_id_from_details(self, capsys):
+        """OBS-001: a run_id carried in ``details`` is surfaced to the operator."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import TrainingError
+
+        exc = TrainingError(
+            "OOM recovery exhausted",
+            code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+            details={"run_id": "abc123def456"},
+        )
+        _print_structured_error(exc)
+
+        captured = capsys.readouterr()
+        # Code on stderr, run_id surfaced (it keys the on-disk checkpoint +
+        # run_history.json entry) so the operator can find their artifacts.
+        assert "[RUNTIME_OOM_RECOVERY_EXHAUSTED]" in captured.err
+        assert "abc123def456" in (captured.out + captured.err)
+
+    def test_print_structured_error_no_run_id_when_absent(self, capsys):
+        """No spurious 'Run id' line when details carry no run_id."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import UserInputError
+
+        exc = UserInputError("bad flag", code="INPUT_VALIDATION_FAILED")
+        _print_structured_error(exc)
+
+        captured = capsys.readouterr()
+        assert "Run id" not in (captured.out + captured.err)
+
+    def test_cmd_train_failure_prints_code_and_run_id(self, capsys):
+        """End-to-end: cmd_train surfaces the code + run_id on a structured
+        TrainingError raised during the run.
+
+        This is the real operator path OBS-001 + OBS-002 fix: a training
+        failure that stamps run_id into details now lets the operator both
+        cite the stable code and find the on-disk artifacts keyed by run_id —
+        without re-running under --verbose.
+        """
+        import argparse
+
+        from backpropagate.cli import cmd_train
+        from backpropagate.exceptions import TrainingError
+
+        def _boom(*_args, **_kwargs):
+            raise TrainingError(
+                "training aborted mid-run",
+                code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+                details={"run_id": "deadbeefcafe"},
+            )
+
+        args = argparse.Namespace(
+            data="data.jsonl",
+            model="test",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=16,
+            output="./output",
+            no_unsloth=True,
+            verbose=False,
+            cli_run_id="0123456789abcdef",
+        )
+
+        # Patch the Trainer constructor (imported inside cmd_train via
+        # `from .trainer import Trainer`) to raise the structured error.
+        with patch("backpropagate.trainer.Trainer", side_effect=_boom):
+            result = cmd_train(args)
+
+        from backpropagate.cli import EXIT_RUNTIME_ERROR
+
+        assert result == EXIT_RUNTIME_ERROR
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        # OBS-002: stable code is now visible without --verbose.
+        assert "[RUNTIME_OOM_RECOVERY_EXHAUSTED]" in captured.err
+        # OBS-001: trainer run_id (keys checkpoint + run_history) is surfaced.
+        assert "deadbeefcafe" in combined

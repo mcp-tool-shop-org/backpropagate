@@ -12,11 +12,12 @@ behavior is framework-agnostic.
 public names were renamed to framework-agnostic canonical names. The legacy
 names continue to resolve via module-level ``__getattr__`` and emit a
 ``DeprecationWarning`` pointing operators at the new symbol. The
-deprecation cycle is locked at three versions (advisor 2026-05-25 Q4):
+deprecation cycle (advisor 2026-05-25 Q4, removal version revised
+2026-06-20 to track the actual ship schedule):
 
-* **v1.4** — ``DeprecationWarning`` on legacy name access (this release).
-* **v1.5** — escalates to ``UserWarning`` for higher operator visibility.
-* **v1.6** — legacy names removed; access raises ``AttributeError``.
+* **v1.4 → present** — ``DeprecationWarning`` on legacy name access.
+* **future release (v1.7 or later)** — legacy names removed; access
+  raises ``AttributeError``.
 
 | Legacy (v1.0 Gradio era) | Canonical (v1.4+) |
 |---|---|
@@ -158,8 +159,9 @@ __all__ = [
     "validate_file_magic",
     # UI error helpers — canonical v1.4+ names (framework-agnostic).
     # Legacy Gradio-prefixed names continue to resolve via module-level
-    # __getattr__ + emit DeprecationWarning (v1.4) → UserWarning (v1.5) →
-    # AttributeError (v1.6). See module docstring for the rename table.
+    # __getattr__ + emit DeprecationWarning (v1.4 → present) → AttributeError
+    # (future release, v1.7 or later). See module docstring for the rename
+    # table.
     "raise_ui_error",
     "raise_ui_warning",
     "raise_ui_info",
@@ -1806,15 +1808,16 @@ class RequestContext:
         """DEPRECATED v1.4 alias for :meth:`from_request`.
 
         Emits ``DeprecationWarning`` and delegates to the canonical
-        ``from_request`` classmethod. Removed in v1.6 per the rename
-        cycle locked in advisor 2026-05-25 Q4.
+        ``from_request`` classmethod. The legacy name will be removed in a
+        future release (v1.7 or later) per the rename cycle (advisor
+        2026-05-25 Q4).
         """
         import warnings as _warnings
 
         _warnings.warn(
             "'RequestContext.from_gradio_request' is deprecated in v1.4; "
-            "use 'RequestContext.from_request' instead. v1.5 escalates to "
-            "UserWarning; v1.6 removes the legacy name.",
+            "use 'RequestContext.from_request' instead. The legacy name will "
+            "be removed in a future release (v1.7 or later).",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -3426,10 +3429,10 @@ _validate_auth_shape = validate_auth_shape
 # pointing operators at the new symbol so downstream consumers see an
 # audit-trail rather than silent grandfathering.
 #
-# Deprecation cycle (locked advisor 2026-05-25 Q4):
-#   v1.4 → DeprecationWarning (silent by default; visible under -W default)
-#   v1.5 → UserWarning (visible to every Python process; harder to ignore)
-#   v1.6 → AttributeError (legacy names removed entirely)
+# Deprecation cycle (advisor 2026-05-25 Q4; removal version revised
+# 2026-06-20 to track the actual ship schedule):
+#   v1.4 → present → DeprecationWarning (silent by default; -W default shows it)
+#   future release (v1.7 or later) → AttributeError (legacy names removed)
 #
 # ``DEFAULT_GRADIO_CSP`` + ``get_gradio_csp`` are NOT in this table — they
 # keep the existing in-place ``DeprecationWarning`` shape from Wave 2
@@ -3469,7 +3472,8 @@ def __getattr__(name: str) -> Any:
 
         _warnings.warn(
             f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
-            f"v1.5 escalates to UserWarning; v1.6 removes the legacy name.",
+            f"The legacy name will be removed in a future release "
+            f"(v1.7 or later).",
             DeprecationWarning,
             stacklevel=2,
         )

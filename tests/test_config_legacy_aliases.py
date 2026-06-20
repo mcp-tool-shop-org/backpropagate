@@ -24,11 +24,11 @@ The contract:
 4. Accessing an attribute that's NOT in the legacy table raises
    ``AttributeError`` per the PEP 562 ``__getattr__`` contract.
 
-The deprecation cycle is locked at advisor 2026-05-25 Q4:
+The deprecation cycle (advisor 2026-05-25 Q4; removal version revised
+2026-06-20 to track the actual ship schedule):
 
-* v1.4 — ``DeprecationWarning``
-* v1.5 — ``UserWarning``
-* v1.6 — ``AttributeError``
+* v1.4 → present — ``DeprecationWarning``
+* future release (v1.7 or later) — ``AttributeError``
 """
 
 from __future__ import annotations
@@ -38,11 +38,11 @@ import warnings
 
 import pytest
 
-# Regex pinning the three load-bearing phases of the deprecation cycle in
+# Regex pinning the two load-bearing phases of the deprecation cycle in
 # the warning message. Same shape as ``test_ui_security_legacy_aliases``
 # so future drift in either site fails consistently.
 _DEPRECATION_MESSAGE_REGEX = re.compile(
-    r"deprecated in v1\.4.*v1\.5 escalates.*v1\.6 removes",
+    r"deprecated in v1\.4.*removed in a future release",
     re.DOTALL,
 )
 
@@ -70,7 +70,7 @@ class TestConfigLegacyAliases:
             "Warning must name the canonical replacement"
         )
         assert _DEPRECATION_MESSAGE_REGEX.search(msg), (
-            f"Warning must pin the v1.4 → v1.5 → v1.6 cycle. Got: {msg!r}"
+            f"Warning must pin the v1.4 → future-release cycle. Got: {msg!r}"
         )
         # Identity-equal with the canonical: same dict object.
         assert legacy_table is config.MULTI_RUN_PRESETS, (

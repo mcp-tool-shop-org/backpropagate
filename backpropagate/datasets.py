@@ -28,6 +28,7 @@ Usage:
     dataset = loader.to_chatml()
 """
 
+import hashlib
 import json
 import logging
 import random
@@ -527,7 +528,17 @@ def _detect_format_from_file(file_path: Path, sample_size: int = 5) -> DatasetFo
                             return DatasetFormat.RAW_TEXT
 
     except Exception as e:
-        logger.warning(f"Error detecting format: {e}")
+        # DEH-05: name the file and the fallback so this WARN matches the
+        # richer downstream loader errors instead of an unattributed
+        # "Error detecting format". Sampling failures here are non-fatal —
+        # the loader retries with explicit format handling — but an operator
+        # scanning logs needs to know WHICH file and that detection gave up.
+        logger.warning(
+            "Error detecting format for %s: %s — falling back to UNKNOWN "
+            "format (the loader will attempt explicit format handling).",
+            file_path,
+            e,
+        )
         return DatasetFormat.UNKNOWN
 
     if not samples:
@@ -1730,12 +1741,21 @@ def deduplicate_exact(
     Returns:
         Tuple of (deduplicated_samples, num_removed)
     """
-    seen = set()
+    # DEH-02: identify duplicates by a stable content hash rather than the
+    # builtin ``hash()``. ``hash(str)`` is salted per-process by PYTHONHASHSEED,
+    # so the same dataset deduped in two processes could disagree on which row
+    # is "first"; and a 64-bit truncation could (astronomically rarely) collide
+    # two distinct texts and silently drop a real row. A SHA-1 of the UTF-8
+    # bytes is exact (collision-resistant for de-dup purposes) and identical
+    # across runs/processes. Not used for security — only equality keying.
+    seen: set[str] = set()
     unique = []
 
     for sample in samples:
         text = _get_text_content(sample, key)
-        text_hash = hash(text)
+        text_hash = hashlib.sha1(
+            text.encode("utf-8"), usedforsecurity=False
+        ).hexdigest()
 
         if text_hash not in seen:
             seen.add(text_hash)

@@ -4052,3 +4052,160 @@ class TestRuntimeGpuOomOptionA:
             "Non-OOM RuntimeError must NOT be wrapped as GPUMemoryError "
             "by Wave 6a Option A; only OOM-shaped errors are wrapped."
         )
+
+    def test_oom_recovery_false_stamps_run_id_in_details(self, temp_dir):
+        """OBS-003: the oom_recovery=False GPUMemoryError must carry run_id.
+
+        Pre-fix the raise passed only a suggestion, so details had no run_id
+        and the message degraded toward a bare "Insufficient GPU memory".
+        Mirror the recovery-EXHAUSTED sibling: stamp run_id (and, when CUDA is
+        present, a best-effort PER-PROCESS VRAM snapshot) into details.
+        """
+        from backpropagate.exceptions import GPUMemoryError
+
+        trainer = self._setup_trainer(temp_dir)
+        script = _OOMScript(oom_count=1)
+        mock_dataset = MagicMock()
+        mock_dataset.__len__ = MagicMock(return_value=10)
+
+        with patch.object(trainer, "_load_dataset", return_value=mock_dataset), \
+             patch.object(trainer, "_pre_tokenize", return_value=mock_dataset), \
+             patch("trl.SFTTrainer", side_effect=script.factory), \
+             patch("trl.SFTConfig"), \
+             pytest.raises(GPUMemoryError) as exc_info:
+            trainer.train("dummy_dataset", steps=10)
+
+        details = exc_info.value.details
+        assert "run_id" in details, (
+            "OBS-003: GPUMemoryError(oom_recovery=False) must stamp run_id "
+            f"into details for run correlation. details={details!r}"
+        )
+        assert details["run_id"], (
+            "OBS-003: run_id stamped into details must be non-empty."
+        )
+        # On this CPU rig get_gpu_status() reports no CUDA, so the per-process
+        # VRAM snapshot keys are absent — that is the best-effort contract.
+        # If a snapshot WAS attached it must be labelled per-process so the
+        # message never implies system-wide headroom.
+        if "vram_scope" in details:
+            assert details["vram_scope"] == "per_process"
+
+
+class TestOrpoTrlImportGuard:
+    """FC-01: the trl ORPO imports are guarded so a trl upgrade that relocates
+    ORPOTrainer / ORPOConfig (slated to move to ``trl.experimental``) raises a
+    structured TrainingError with a code + working-range remedy, NOT a bare
+    ImportError that dies with no code and no next step.
+    """
+
+    _ORPO_CFG_BASE = {
+        "output_dir": "./out",
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "max_steps": 10,
+        "learning_rate": 8e-6,
+        "warmup_steps": 2,
+        "max_seq_length": 1024,
+        "orpo_beta": 0.1,
+        "seed": 42,
+        "lr_scheduler_type": "cosine",
+        "logging_steps": 1,
+    }
+
+    @staticmethod
+    def _trl_without(*missing_attrs):
+        """A real ``trl`` module object missing the named symbols.
+
+        ``from trl import ORPOConfig`` against a module with no ORPOConfig
+        attribute raises ImportError — exactly the failure mode a future trl
+        relocation produces. (A MagicMock would auto-create the attribute and
+        the import would spuriously succeed, so we use a genuine ModuleType.)
+        """
+        import types
+
+        mod = types.ModuleType("trl")
+        # Provide unrelated symbols so the module looks real but lacks the
+        # ORPO ones under test.
+        mod.SFTTrainer = object  # type: ignore[attr-defined]
+        mod.SFTConfig = object  # type: ignore[attr-defined]
+        for attr in missing_attrs:
+            if hasattr(mod, attr):
+                delattr(mod, attr)
+        return mod
+
+    def test_orpo_config_import_failure_is_structured(self):
+        """_build_orpo_config: a missing ORPOConfig => TrainingError + remedy."""
+        from backpropagate import trainer as trainer_mod
+        from backpropagate.exceptions import TrainingError
+
+        fake_trl = self._trl_without("ORPOConfig")
+        with patch.dict("sys.modules", {"trl": fake_trl}), \
+             patch("torch.cuda.is_available", return_value=False), \
+             pytest.raises(TrainingError) as exc_info:
+            trainer_mod._build_orpo_config(**self._ORPO_CFG_BASE)
+
+        err = exc_info.value
+        assert err.code == "RUNTIME_TRAINING_FAILED", (
+            "FC-01: the guarded ORPOConfig import must re-raise with a "
+            f"catalog code, got code={err.code!r}."
+        )
+        assert err.suggestion and "trl>=0.7.0,<0.28" in err.suggestion, (
+            "FC-01: the remedy must name a working trl version range; got "
+            f"suggestion={err.suggestion!r}."
+        )
+        # The original ImportError is preserved for the traceback chain.
+        assert isinstance(err.__cause__, ImportError)
+
+    def test_orpo_trainer_import_failure_is_structured(self, temp_dir):
+        """_build_trainer: a missing ORPOTrainer => TrainingError + remedy."""
+        from backpropagate.exceptions import TrainingError
+        from backpropagate.trainer import Trainer
+
+        with patch("torch.cuda.is_available", return_value=False):
+            trainer = Trainer(
+                method="orpo",
+                output_dir=str(temp_dir),
+                use_unsloth=False,
+                backend="cuda",
+            )
+        trainer._model = MagicMock()
+        trainer._tokenizer = MagicMock()
+        trainer._is_loaded = True
+
+        fake_trl = self._trl_without("ORPOTrainer")
+        with patch.dict("sys.modules", {"trl": fake_trl}), \
+             pytest.raises(TrainingError) as exc_info:
+            trainer._build_trainer(
+                training_args=MagicMock(),
+                train_dataset=MagicMock(),
+                callbacks=None,
+            )
+
+        err = exc_info.value
+        assert err.code == "RUNTIME_TRAINING_FAILED", (
+            "FC-01: the guarded ORPOTrainer import must re-raise with a "
+            f"catalog code, got code={err.code!r}."
+        )
+        assert err.suggestion and "trl>=0.7.0,<0.28" in err.suggestion
+        assert isinstance(err.__cause__, ImportError)
+
+    def test_orpo_config_import_success_still_builds(self):
+        """FC-01 must be inert when trl resolves: the existing mocked-trl path
+        (the one all the other ORPO tests rely on) still builds a config.
+        """
+        from backpropagate import trainer as trainer_mod
+
+        captured = {}
+
+        class _Capture:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        with patch.dict("sys.modules", {"trl": MagicMock(ORPOConfig=_Capture)}), \
+             patch("torch.cuda.is_available", return_value=False):
+            trainer_mod._build_orpo_config(**self._ORPO_CFG_BASE)
+
+        assert captured, (
+            "FC-01 guard must not break the happy path — ORPOConfig should "
+            "still be constructed when trl exposes the symbol."
+        )

@@ -141,8 +141,8 @@ __all__ = [
     # ``--lora-preset``). Both formerly shared the keys ``"fast"`` +
     # ``"quality"`` with semantically different values. The legacy
     # ``TRAINING_PRESETS`` name continues to resolve via module-level
-    # ``__getattr__`` + ``DeprecationWarning`` (v1.4) → ``UserWarning``
-    # (v1.5) → ``AttributeError`` (v1.6).
+    # ``__getattr__`` + ``DeprecationWarning`` (v1.4 → present) →
+    # ``AttributeError`` (future release, v1.7 or later).
     "MULTI_RUN_PRESETS",
     "TRAINING_PRESETS",
     "MODEL_PRESETS",
@@ -1844,10 +1844,10 @@ def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:
 # with semantically different values — a Wave 5 audit finding flagged the
 # collision as an operator-trap class.
 #
-# Deprecation cycle (locked advisor 2026-05-25 Q4):
-#   v1.4 → DeprecationWarning (silent by default; visible under -W default)
-#   v1.5 → UserWarning (visible to every Python process)
-#   v1.6 → AttributeError (legacy name removed entirely)
+# Deprecation cycle (advisor 2026-05-25 Q4; removal version revised
+# 2026-06-20 to track the actual ship schedule):
+#   v1.4 → present → DeprecationWarning (silent by default; -W default shows it)
+#   future release (v1.7 or later) → AttributeError (legacy name removed)
 
 _LEGACY_CONFIG_ALIASES: dict[str, str] = {
     "TRAINING_PRESETS": "MULTI_RUN_PRESETS",
@@ -1872,7 +1872,8 @@ def __getattr__(name: str) -> Any:
 
         _warnings.warn(
             f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
-            f"v1.5 escalates to UserWarning; v1.6 removes the legacy name. "
+            f"The legacy name will be removed in a future release "
+            f"(v1.7 or later). "
             f"Note: this is the multi-run-loop preset table, NOT the "
             f"LoRA-shape preset 'LORA_PRESETS' (surfaced via --lora-preset).",
             DeprecationWarning,

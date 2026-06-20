@@ -1340,7 +1340,30 @@ def _build_orpo_config(
     Returns:
         A configured ``ORPOConfig`` instance.
     """
-    from trl import ORPOConfig
+    # FC-01: guard the trl ORPO import. ORPOTrainer/ORPOConfig are slated to
+    # relocate to ``trl.experimental`` (see the comment in ``_build_trainer``),
+    # and pyproject pins ``trl`` with no upper bound, so a routine trl upgrade
+    # would make this top-level import die with a bare ImportError (no code,
+    # no remedy). Mirror the FP8 import discipline (search
+    # ``RUNTIME_FP8_UNSUPPORTED``): catch the ImportError and re-raise as a
+    # structured TrainingError that names the working trl range. SFT is
+    # unaffected (it imports SFTConfig/SFTTrainer separately).
+    try:
+        from trl import ORPOConfig
+    except ImportError as exc:
+        raise TrainingError(
+            "Could not import 'ORPOConfig' from trl — the ORPO objective is "
+            f"unavailable in the installed trl ({type(exc).__name__}: {exc}). "
+            "trl's ORPO API is migrating to trl.experimental, so a newer trl "
+            "may have moved or removed the top-level ORPOConfig symbol.",
+            suggestion=(
+                "Pin a trl version that still exposes top-level ORPOConfig / "
+                "ORPOTrainer: pip install 'trl>=0.7.0,<0.28'. Or train with "
+                "method='sft' (the default), which does not need ORPO."
+            ),
+            code="RUNTIME_TRAINING_FAILED",
+            cause=exc,
+        ) from exc
 
     # Reuse the exact detectors the SFT builder uses so the two configs
     # converge on the same card-specific resolution (single source of truth).
@@ -2950,27 +2973,14 @@ class Trainer:
             param_count_billions=param_count_billions,
         )
 
-    def _cleanup_vram(self) -> None:
-        """
-        Release unused GPU memory.
-
-        Calls gc.collect() to free Python-side references, then
-        torch.cuda.empty_cache() to return unreferenced GPU memory to the
-        CUDA allocator. Safe to call even when no GPU is present.
-
-        Intended for use between multi_run iterations or after training
-        completes to reclaim VRAM before the next operation.
-        """
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.debug("VRAM cleanup: gc.collect() + torch.cuda.empty_cache()")
-            else:
-                logger.debug("VRAM cleanup: gc.collect() (no CUDA available)")
-        except ImportError:
-            logger.debug("VRAM cleanup: gc.collect() (torch not installed)")
+    # RSI-01: removed dead ``_cleanup_vram`` (gc.collect() + empty_cache()).
+    # It had ZERO call sites, and its premise was unsound: empty_cache() cannot
+    # free tensors still pinned by self._model / self._trainer, so the claimed
+    # between-run OOM benefit was illusory. The genuine reclaim path lives
+    # inline in the OOM-recovery branch of train() (which drops self._trainer
+    # BEFORE gc.collect() + empty_cache() so the failed graph is actually
+    # collectable). The success path intentionally keeps the model resident for
+    # re-training, so no cleanup hook belongs there.
 
     def load_model(self) -> None:
         """
@@ -3429,7 +3439,34 @@ class Trainer:
         trainers.
         """
         if self.method == "orpo":
-            from trl import ORPOTrainer
+            # FC-01: guard the trl ORPO import (see _build_orpo_config for the
+            # full rationale). ORPOTrainer is slated to move to
+            # trl.experimental and the trl pin has no upper bound, so a routine
+            # upgrade would otherwise kill every Trainer(method="orpo") run at
+            # construction with a bare ImportError. Catch it and re-raise the
+            # same structured TrainingError shape as the config builder so the
+            # operator gets a code + a working trl range. The narrow
+            # ``except ImportError`` keeps the existing patch("trl.ORPOTrainer")
+            # test path intact — when the symbol resolves (real or mocked) the
+            # import succeeds and this guard is inert.
+            try:
+                from trl import ORPOTrainer
+            except ImportError as exc:
+                raise TrainingError(
+                    "Could not import 'ORPOTrainer' from trl — the ORPO "
+                    "objective is unavailable in the installed trl "
+                    f"({type(exc).__name__}: {exc}). trl's ORPO API is "
+                    "migrating to trl.experimental, so a newer trl may have "
+                    "moved or removed the top-level ORPOTrainer symbol.",
+                    suggestion=(
+                        "Pin a trl version that still exposes top-level "
+                        "ORPOConfig / ORPOTrainer: pip install "
+                        "'trl>=0.7.0,<0.28'. Or train with method='sft' (the "
+                        "default), which does not need ORPO."
+                    ),
+                    code="RUNTIME_TRAINING_FAILED",
+                    cause=exc,
+                ) from exc
 
             # Cross-version shim (v1.5 T1.2): trl's ORPOTrainer (through 0.24)
             # sets ``model.warnings_issued["estimate_tokens"] = True`` to mute a
@@ -4096,7 +4133,35 @@ class Trainer:
                         # path that DID retry and ran out of options).
                         from .exceptions import GPUMemoryError as _GPUMemErr
 
-                        raise _GPUMemErr(
+                        # OBS-003: stamp run_id + a best-effort PER-PROCESS
+                        # VRAM snapshot onto the error so the oom_recovery=False
+                        # raise carries the same diagnostic weight as the
+                        # recovery-EXHAUSTED sibling, instead of degrading to a
+                        # bare "Insufficient GPU memory". CAVEAT: gpu_safety's
+                        # vram_* fields come from torch.cuda.memory_reserved()
+                        # and are PER-PROCESS — they do NOT reflect other
+                        # processes' allocations, so this is "what THIS process
+                        # had reserved," not system-wide headroom. Best-effort:
+                        # a snapshot failure must never mask the OOM.
+                        _available_gb: float | None = None
+                        _vram_detail: dict[str, Any] = {}
+                        try:
+                            from .gpu_safety import get_gpu_status as _gpu_status
+
+                            _snap = _gpu_status()
+                            if _snap.available:
+                                _available_gb = _snap.vram_free_gb
+                                _vram_detail = {
+                                    "vram_total_gb": _snap.vram_total_gb,
+                                    "vram_used_gb_this_process": _snap.vram_used_gb,
+                                    "vram_free_gb_this_process": _snap.vram_free_gb,
+                                    "vram_scope": "per_process",
+                                }
+                        except Exception:  # nosec B110 — diagnostic snapshot is best-effort
+                            pass
+
+                        _oom_err = _GPUMemErr(
+                            available_gb=_available_gb,
                             suggestion=(
                                 "OOM hit with oom_recovery=False — the trainer "
                                 "did not attempt batch_size halving. To survive "
@@ -4107,7 +4172,12 @@ class Trainer:
                                 "shorten max_seq_length, or apply 4-bit / 8-bit "
                                 "quantization."
                             ),
-                        ) from exc
+                        )
+                        _oom_err.details["run_id"] = run_id
+                        if adjacent_marker is not None:
+                            _oom_err.details["adjacent_marker"] = adjacent_marker
+                        _oom_err.details.update(_vram_detail)
+                        raise _oom_err from exc
                     if not is_oom:
                         raise
 

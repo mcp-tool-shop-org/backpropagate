@@ -868,6 +868,66 @@ class TestDeduplicateExact:
         assert len(unique) == 2
         assert num_removed == 1
 
+    def test_dedupe_exact_distinct_texts_all_kept(self):
+        """DEH-02: distinct texts must NOT be dropped as a hash collision.
+
+        The dedup now keys on a SHA-1 content hash rather than the builtin
+        ``hash()``, so two genuinely-distinct rows are always both kept
+        (the collision-dropped-a-real-row failure mode is removed).
+        """
+        from backpropagate.datasets import deduplicate_exact
+
+        samples = [
+            {"text": "alpha"},
+            {"text": "beta"},
+            {"text": "gamma"},
+            {"text": "alpha"},  # the only real duplicate
+        ]
+
+        unique, num_removed = deduplicate_exact(samples)
+
+        assert num_removed == 1
+        kept = [s["text"] for s in unique]
+        assert kept == ["alpha", "beta", "gamma"]
+
+    def test_dedupe_exact_reproducible_across_processes(self):
+        """DEH-02: dedup must be stable regardless of PYTHONHASHSEED.
+
+        The builtin ``hash(str)`` is salted per-process by PYTHONHASHSEED, so
+        the old implementation could (in principle) bucket differently across
+        processes. With a SHA-1 content hash the result is byte-identical no
+        matter the seed. We run the same dedup in two subprocesses with
+        different forced seeds and assert the kept order matches.
+        """
+        import subprocess
+        import sys
+
+        snippet = (
+            "from backpropagate.datasets import deduplicate_exact;"
+            "s=[{'text':t} for t in ['a','b','a','c','b','d']];"
+            "u,_=deduplicate_exact(s);"
+            "print('|'.join(x['text'] for x in u))"
+        )
+
+        def _run(seed: str) -> str:
+            env = dict(os.environ)
+            env["PYTHONHASHSEED"] = seed
+            out = subprocess.run(
+                [sys.executable, "-c", snippet],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            return out.stdout.strip()
+
+        result_seed_0 = _run("0")
+        result_seed_12345 = _run("12345")
+
+        # Both runs keep the same first-occurrence order, deterministically.
+        assert result_seed_0 == "a|b|c|d"
+        assert result_seed_0 == result_seed_12345
+
 
 class TestGetNgrams:
     """DATA-A-006: _get_ngrams must not degenerate on short / empty text."""

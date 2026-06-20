@@ -26,14 +26,14 @@ The contract:
 4. Accessing an attribute that's NOT in the legacy table raises
    ``AttributeError`` per the PEP 562 ``__getattr__`` contract.
 
-The deprecation cycle is locked at advisor 2026-05-25 Q4:
+The deprecation cycle (advisor 2026-05-25 Q4; removal version revised
+2026-06-20 to track the actual ship schedule):
 
-* v1.4 — ``DeprecationWarning``
-* v1.5 — ``UserWarning``
-* v1.6 — ``AttributeError``
+* v1.4 → present — ``DeprecationWarning``
+* future release (v1.7 or later) — ``AttributeError``
 
-The warning-message regex below pins each phase of that cycle so a future
-silent shortening of the message (e.g. dropping the v1.5/v1.6 phases)
+The warning-message regex below pins both phases of that cycle so a future
+silent shortening of the message (e.g. dropping the future-removal phase)
 fails the test rather than the audit catching it post-hoc.
 """
 
@@ -45,13 +45,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Regex that all legacy-alias DeprecationWarnings should match. Pins three
-# load-bearing substrings: the v1.4 deprecation phase, the v1.5 escalation
-# phase, and the v1.6 removal phase. If a future commit shortens the
-# message and drops any of these phases, this test fails — exactly the
-# "future changes are deliberate" property the brief asked for.
+# Regex that all legacy-alias DeprecationWarnings should match. Pins two
+# load-bearing substrings: the v1.4 deprecation phase and the future-release
+# removal phase. If a future commit shortens the message and drops either
+# phase, this test fails — exactly the "future changes are deliberate"
+# property the brief asked for.
 _DEPRECATION_MESSAGE_REGEX = re.compile(
-    r"deprecated in v1\.4.*v1\.5 escalates.*v1\.6 removes",
+    r"deprecated in v1\.4.*removed in a future release",
     re.DOTALL,
 )
 
@@ -81,7 +81,8 @@ class TestUiSecurityLegacyAliases:
             "Warning must name the canonical replacement"
         )
         assert _DEPRECATION_MESSAGE_REGEX.search(msg), (
-            f"Warning message must pin the v1.4 → v1.5 → v1.6 cycle. Got: {msg!r}"
+            f"Warning message must pin the v1.4 → future-release cycle. "
+            f"Got: {msg!r}"
         )
         # Identity-equal with the canonical: same callable, not a wrapper.
         assert handler is ui_security.safe_ui_handler, (

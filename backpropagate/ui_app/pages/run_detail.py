@@ -568,6 +568,10 @@ def _action_panel() -> rx.Component:
                     code="UI · RUN-DETAIL",
                     title="Action failed",
                     message=RunDetailState.action_error,
+                    # HUX-02: remedy slot wired to the dedicated suggestion
+                    # var so it renders on its own dimmed line (design-digest
+                    # §4d) rather than as a run-on. Empty today → fragment.
+                    hint=RunDetailState.action_error_suggestion,
                 ),
                 rx.button(
                     "Dismiss",

@@ -573,8 +573,11 @@ class TrainState(rx.State):
         Drives the Train page's "heads-up" recovery banner — e.g. GPU temp
         approaching threshold, dataset row skipped, batch auto-shrunk for
         VRAM. Distinct from ``err``: warn is a recovered-or-recoverable
-        condition; err is a hard failure (rendered via the structured
-        error callout instead).
+        condition; err is a hard failure. HUX-01: ``err``-level events are
+        NOT surfaced on the Train page today — UI training is an honest stub
+        (``start_training`` directs the operator to ``backprop train``), so no
+        ``BpErrorCallout`` is wired on this page yet. The structured callout
+        is consumed by the /runs, /models, and /run-detail pages.
         """
         for ev in reversed(self.events):
             if isinstance(ev, dict) and ev.get("level") == "warn":
@@ -1645,6 +1648,12 @@ class RunsState(rx.State):
     runs: list[dict] = []
     loading: bool = False
     error: str = ""
+    # HUX-02 (Stage C humanization): the operator-actionable remedy from
+    # ``sanitize_error_for_user`` is held SEPARATELY from ``error`` (not folded
+    # into it as a run-on "… Try: {suggestion}") so the /runs error callout can
+    # render it on its own dimmed line via the ``BpErrorCallout`` ``hint=``
+    # slot. Empty when there is no error or the error carries no suggestion.
+    error_suggestion: str = ""
     status_filter: str = ""  # "" / running / completed / failed
     output_dir_override: str = ""
     last_loaded_at: str = ""
@@ -1669,6 +1678,7 @@ class RunsState(rx.State):
 
         self.loading = True
         self.error = ""
+        self.error_suggestion = ""
         try:
             # Resolve the history directory. Use the override if set, otherwise
             # fall back to the UI's own output dir (the default training sink).
@@ -1751,9 +1761,12 @@ class RunsState(rx.State):
                 message, suggestion = sanitize_error_for_user(
                     exc, operation="loading run history"
                 )
-                self.error = (
-                    message + (f" Try: {suggestion}" if suggestion else "")
-                )
+                # HUX-02: keep the (message, suggestion) split — the remedy
+                # rides the separate ``error_suggestion`` var (rendered as a
+                # scannable dimmed ``hint=`` line in the callout) rather than
+                # being concatenated into ``error`` as a run-on sentence.
+                self.error = message
+                self.error_suggestion = suggestion or ""
                 self.runs = []
                 return
 
@@ -1850,6 +1863,7 @@ class RunsState(rx.State):
     def clear_error(self) -> None:
         """Dismiss the error banner."""
         self.error = ""
+        self.error_suggestion = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2052,6 +2066,16 @@ class RunDetailState(rx.State):
     # in-process via RunHistoryManager.
     action_result: str = ""
     action_error: str = ""
+    # HUX-02 (Stage C humanization): operator-actionable remedy for the most
+    # recent action failure, held separately from ``action_error`` so the
+    # run-detail callout can render it on its own dimmed ``hint=`` line instead
+    # of folding it into the message as a run-on. RunDetailState's action
+    # errors are currently all path-redacted informational strings (no
+    # ``sanitize_error_for_user`` suggestion split), so this stays empty today;
+    # the slot is wired backward-compatibly for a future suggestion-bearing
+    # action error and keeps the three error callouts (/runs, /models,
+    # /run-detail) on one scannable hierarchy.
+    action_error_suggestion: str = ""
     # FRONTEND-B-014-EXTENDED (v1.4 Wave 4 Stage C humanization): action-in-
     # flight state for the diff / replay / delete / export actions. The
     # handlers run synchronously and can block (the diff-runs subprocess up to
@@ -2608,6 +2632,7 @@ class RunDetailState(rx.State):
         """Dismiss the action result / error banner."""
         self.action_result = ""
         self.action_error = ""
+        self.action_error_suggestion = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2636,6 +2661,14 @@ class ModelsState(rx.State):
     _cache_dir: str = ""
     loading: bool = False
     error: str = ""
+    # HUX-02 (Stage C humanization): operator-actionable remedy, held
+    # separately from ``error`` so the /models callout can render it on its own
+    # dimmed ``hint=`` line. ModelsState errors are currently all path-redacted
+    # informational strings (no ``sanitize_error_for_user`` suggestion split),
+    # so this stays empty today — the slot is wired backward-compatibly so a
+    # future suggestion-bearing error surfaces in the same scannable hierarchy
+    # as /runs and /run-detail.
+    error_suggestion: str = ""
     last_loaded_at: str = ""
     # CLIUI-B-005 (Stage C): per-row in-flight flag for the delete affordance.
     # Holds the ``dir_name`` currently being deleted (empty when idle). Drives

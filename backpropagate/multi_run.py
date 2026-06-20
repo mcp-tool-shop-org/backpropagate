@@ -2183,6 +2183,26 @@ class MultiRunTrainer:
                     # `consecutive` times across the session).
                     run_failed = True
                     failure_reason = f"{type(exc).__name__}: {exc}"
+                    # DEH-01: this run failed on a sub-threshold batch=1 OOM
+                    # and the multi-run loop will proceed to the NEXT run
+                    # against the SAME in-memory model — load_model() runs once
+                    # at session start and is never re-invoked. That is not
+                    # corruption, but a post-mortem reader deserves the
+                    # breadcrumb: the next run inherits this run's (possibly
+                    # OOM-perturbed) allocator/optimizer state, not a fresh
+                    # reload. Log-only — no reload machinery here by design.
+                    logger.warning(
+                        "event=oom_sub_threshold_continue run_id=%s "
+                        "run_index=%d consecutive_at_min_batch=%d/%d. "
+                        "Marking this run failed and continuing to the next "
+                        "run WITHOUT reloading the model (the multi-run model "
+                        "is loaded once and kept resident); the next run "
+                        "reuses the current in-memory model + allocator state.",
+                        self._run_id,
+                        run_idx,
+                        self._oom_consecutive_at_min_batch,
+                        self._OOM_MAX_RETRIES_AT_MIN_BATCH,
+                    )
                     break
 
                 # Non-OOM exception (or OOM with oom_recovery=False).
@@ -3756,6 +3776,16 @@ class MultiRunTrainer:
             wait_for_safe_gpu(
                 max_wait_seconds=self.config.cooldown_seconds,
                 check_interval=5.0,
+            )
+        elif status.temperature_c is None:
+            # DEH-04: no temperature reading (pynvml absent / no CUDA), so the
+            # between-run cooldown gate cannot be evaluated and silently
+            # no-ops. Leave a breadcrumb — the background GPU monitor remains
+            # the real thermal safety net; this only signals the gate skipped.
+            logger.debug(
+                "Cooldown gate skipped: GPU temperature unavailable "
+                "(no pynvml reading / no CUDA). The background GPU monitor "
+                "is the active thermal safeguard between runs."
             )
 
     def _compute_validation_loss(self, full_dataset: Any, run_idx: int) -> float:

@@ -2699,3 +2699,119 @@ class TestRunDetailReplayInProcess:
 
         assert state.action_result == ""
         assert "invalid run id" in state.action_error.lower()
+
+
+# =============================================================================
+# HUX-02 (Stage C humanization): the operator-actionable remedy from
+# ``sanitize_error_for_user`` must be held SEPARATELY from ``error`` (on the
+# dedicated ``error_suggestion`` var) so the error callout can render it on its
+# own dimmed ``hint=`` line instead of folding it into the message as a run-on
+# "… Try: {suggestion}" sentence.
+# =============================================================================
+
+
+class TestRunsStateErrorSuggestionSplit:
+    """``RunsState.load_runs`` exposes the remedy on ``error_suggestion``, kept
+    out of the ``error`` message (HUX-02).
+    """
+
+    def test_suggestion_available_separately_not_run_on(self, monkeypatch, tmp_path):
+        """A BackpropagateError with a suggestion routes its remedy to the
+        dedicated ``error_suggestion`` var; ``error`` carries only the message
+        (no "Try:" run-on tail).
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.exceptions import BackpropagateError
+        from backpropagate.ui_state import RunsState
+
+        class _RaisingManager:
+            def __init__(self, _dir):
+                pass
+
+            def list_runs(self, status=None, limit=50):
+                raise BackpropagateError(
+                    "history index is corrupt",
+                    code="STATE_RUN_HISTORY_CORRUPT",
+                    suggestion="delete the index and reload",
+                )
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
+
+        state = RunsState()
+        state.output_dir_override = str(tmp_path)
+        state.load_runs()
+
+        # The remedy lives on its own var, scannable as a distinct hint line.
+        assert state.error_suggestion == "delete the index and reload"
+        # The message carries the error but NOT the folded-in remedy.
+        assert "history index is corrupt" in state.error
+        assert "Try:" not in state.error
+        assert "delete the index and reload" not in state.error
+        assert state.runs == []
+
+    def test_no_suggestion_leaves_hint_empty(self, monkeypatch, tmp_path):
+        """A non-BackpropagateError (generic, suggestion=None) leaves
+        ``error_suggestion`` empty so the callout hint collapses to a fragment
+        (backward-compatible).
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunsState
+
+        class _RaisingManager:
+            def __init__(self, _dir):
+                pass
+
+            def list_runs(self, status=None, limit=50):
+                raise RuntimeError("opaque internal failure")
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
+
+        state = RunsState()
+        state.output_dir_override = str(tmp_path)
+        state.load_runs()
+
+        assert state.error_suggestion == ""
+        assert state.error  # a generic, sanitized message is still surfaced
+        assert "Try:" not in state.error
+
+    def test_clear_error_resets_suggestion(self):
+        """``clear_error`` wipes both ``error`` and ``error_suggestion`` so a
+        dismissed banner leaves no stale hint behind.
+        """
+        from backpropagate.ui_state import RunsState
+
+        state = RunsState()
+        state.error = "something broke"
+        state.error_suggestion = "do the thing"
+        state.clear_error()
+
+        assert state.error == ""
+        assert state.error_suggestion == ""
+
+
+class TestErrorSuggestionSlotsBackwardCompatible:
+    """The /models and /run-detail callouts have a dedicated suggestion var so
+    a future suggestion-bearing error surfaces in the same scannable hierarchy;
+    both default empty today (HUX-02 backward compatibility).
+    """
+
+    def test_models_state_error_suggestion_defaults_empty(self):
+        from backpropagate.ui_state import ModelsState
+
+        assert ModelsState().error_suggestion == ""
+
+    def test_run_detail_action_error_suggestion_defaults_empty(self):
+        from backpropagate.ui_state import RunDetailState
+
+        assert RunDetailState().action_error_suggestion == ""
+
+    def test_clear_action_message_resets_suggestion(self):
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.action_error = "action broke"
+        state.action_error_suggestion = "retry it"
+        state.clear_action_message()
+
+        assert state.action_error == ""
+        assert state.action_error_suggestion == ""

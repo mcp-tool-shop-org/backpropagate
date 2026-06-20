@@ -544,6 +544,40 @@ def _print_error_redacted(exc: BaseException, prefix: str = "") -> None:
     _print_error(msg)
 
 
+def _print_structured_error(exc: "BackpropagateError", prefix: str = "") -> None:
+    """Print a structured ``BackpropagateError`` with its stable code + run_id.
+
+    Centralises the subcommand error-handler print shape so an operator sees,
+    on a single failing run, everything they need to act and to file a bug:
+
+    * OBS-002 — the stable, machine-readable ``code`` (e.g. ``RUNTIME_GPU_OOM``)
+      prefixed in ``[CODE]`` form. Previously the code only reached the
+      terminal via the last-resort ``main()`` handler, which the per-subcommand
+      handlers preempt — so an operator could not see / grep / cite the code
+      without re-running under ``--verbose``. The code is a non-secret, fixed
+      vocabulary string from ``exceptions.ERROR_CODES``; it is safe to print.
+    * OBS-001 — the trainer ``run_id`` when the exception carries one in
+      ``details`` (e.g. the OOM-exhausted path stamps ``run_id`` there). The
+      on-disk checkpoint + ``run_history.json`` are keyed by this id, so
+      surfacing it lets a failed run point the operator at its own artifacts.
+
+    Only the code and run_id are added — the message itself is emitted as-is
+    (callers that catch ``Exception`` use ``_print_error_redacted`` instead, so
+    secret-redaction stays on the unstructured path). ``suggestion`` is printed
+    by the caller after this, matching the existing handler layout.
+    """
+    code = getattr(exc, "code", None)
+    code_prefix = f"[{code}] " if code else ""
+    _print_error(f"{code_prefix}{prefix}{exc.message}")
+
+    # Surface the trainer run_id when the structured error carries one — it is
+    # the key under which the checkpoint + run_history entry live on disk.
+    details = getattr(exc, "details", None) or {}
+    run_id = details.get("run_id")
+    if run_id:
+        _print_info(f"Run id: {run_id}")
+
+
 def _print_warning(text: str) -> None:
     """Print warning message."""
     print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {text}")
@@ -815,7 +849,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_warning("Training interrupted by user")
         return EXIT_INTERRUPTED
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -824,7 +858,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except DatasetError as e:
         # DatasetError covers user-supplied dataset issues (missing file,
         # parse failure, validation) — user-actionable.
-        _print_error(f"Dataset error: {e.message}")
+        _print_structured_error(e, prefix="Dataset error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -833,7 +867,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except TrainingError as e:
         # TrainingError covers model load failures, training aborts, checkpoint
         # IO — runtime-level problems the user generally cannot pre-validate.
-        _print_error(f"Training error: {e.message}")
+        _print_structured_error(e, prefix="Training error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -847,7 +881,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except BackpropagateError as e:
         # Default for any other structured BackpropagateError subclass —
         # treat as runtime error unless it is explicitly user-actionable.
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1093,12 +1127,12 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_warning("Training interrupted by user")
         return EXIT_INTERRUPTED
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
     except DatasetError as e:
-        _print_error(f"Dataset error: {e.message}")
+        _print_structured_error(e, prefix="Dataset error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1115,7 +1149,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_error(f"Invalid argument: {e}")
         return EXIT_USER_ERROR
     except BackpropagateError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1744,13 +1778,13 @@ def cmd_export(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
     except ExportError as e:
         # ExportError covers GGUF / merge / Ollama failures — runtime-level.
-        _print_error(f"Export error: {e.message}")
+        _print_structured_error(e, prefix="Export error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1762,7 +1796,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_PARTIAL_SUCCESS
     except BackpropagateError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:

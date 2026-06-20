@@ -4186,8 +4186,15 @@ class TestOrpoTrlImportGuard:
             "FC-01: the guarded ORPOTrainer import must re-raise with a "
             f"catalog code, got code={err.code!r}."
         )
-        assert err.suggestion and "trl>=0.7.0,<0.28" in err.suggestion
-        assert isinstance(err.__cause__, ImportError)
+        # v1.6 C2: the preference-trainer import guard was unified across
+        # ORPO/SimPO/KTO with a top-level-then-experimental fallback. The
+        # suggested range is now the consistent 'trl>=0.18,<0.28' (the C6 dep
+        # floor that still admits CPO/KTO experimental + the <0.28 cap). A
+        # missing TOP-LEVEL symbol surfaces as AttributeError (getattr on the
+        # real module) which the guard now also catches — so __cause__ is an
+        # ImportError OR AttributeError.
+        assert err.suggestion and "trl>=0.18,<0.28" in err.suggestion
+        assert isinstance(err.__cause__, (ImportError, AttributeError))
 
     def test_orpo_config_import_success_still_builds(self):
         """FC-01 must be inert when trl resolves: the existing mocked-trl path

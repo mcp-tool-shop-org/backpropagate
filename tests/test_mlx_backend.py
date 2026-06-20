@@ -655,12 +655,25 @@ class TestNoMlxImport:
         Windows / CUDA host where mlx is absent. We pop any cached entry, fresh-
         import the module, and assert mlx_lm did not get pulled in.
         """
-        sys.modules.pop("backpropagate.mlx_backend", None)
-        sys.modules.pop("mlx_lm", None)
         import importlib
 
-        importlib.import_module("backpropagate.mlx_backend")
-        assert "mlx_lm" not in sys.modules
+        # Save the ORIGINAL module object: popping + re-importing leaves a NEW
+        # module object in sys.modules whose ``check_feature`` binding differs
+        # from the one this file's top-level ``MLXBackend`` (and every other
+        # mlx test's ``mock.patch("...mlx_backend.check_feature")``) resolves.
+        # Under pytest-xdist work-stealing this test can land before the other
+        # mlx tests on a worker, desyncing their mocks -> spurious
+        # MLXUnavailableError. Restore the original in a finally so module
+        # identity stays stable for the rest of the worker's tests.
+        original = sys.modules.get("backpropagate.mlx_backend")
+        sys.modules.pop("backpropagate.mlx_backend", None)
+        sys.modules.pop("mlx_lm", None)
+        try:
+            importlib.import_module("backpropagate.mlx_backend")
+            assert "mlx_lm" not in sys.modules
+        finally:
+            if original is not None:
+                sys.modules["backpropagate.mlx_backend"] = original
 
     def test_module_source_has_no_mlx_lm_import_statement(self):
         """Static guard: no ACTUAL ``import mlx_lm`` / ``from mlx_lm`` statement.

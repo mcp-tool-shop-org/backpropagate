@@ -683,6 +683,30 @@ _FULL_FT_DEFAULT_LR_DIVISOR: float = 10.0
 # LR-default branches are mutually exclusive.
 _ORPO_DEFAULT_LR: float = 8e-6
 
+# v1.6 C2 (SimPO): default learning rate for method='simpo'. SimPO (Meng et
+# al. 2024, "SimPO: Simple Preference Optimization with a Reference-Free
+# Reward", arXiv:2405.14734) is reference-free and length-normalized; its
+# reward is far more sensitive to step size than SFT — the paper and TRL's CPO
+# example scripts anchor SimPO around 1e-6, and LR >= 1e-5 degrades the model
+# to repetitive output. We lower the default to 1e-6 so a bare
+# Trainer(method='simpo') lands in the documented-stable band without operator
+# intervention; explicit ``learning_rate=`` wins. Mirrors _ORPO_DEFAULT_LR (a
+# fixed published anchor, NOT a divisor off the LoRA SFT default — SimPO's
+# stable band does not scale with the LoRA default). simpo+full is blocked at
+# construction, so this branch is mutually exclusive with the mode='full' LR
+# divisor. Matches config.get_recommended_lr(method='simpo') == 1e-6.
+_SIMPO_DEFAULT_LR: float = 1e-6
+
+# v1.6 C2 (KTO): default learning rate for method='kto'. KTO (Ethayarajh et
+# al. 2024, "Model Alignment as Prospect Theoretic Optimization",
+# arXiv:2402.01306) trains a prospect-theory loss on UNPAIRED binary feedback;
+# the published runs sit at 1e-6 and LR > 5e-6 destabilizes the KL estimate.
+# We anchor the default at 1e-6, mirroring _ORPO_DEFAULT_LR / _SIMPO_DEFAULT_LR
+# (fixed published anchor, not a divisor). kto+full is blocked at construction
+# (KTO is mode='lora'-only in v1.6), so this branch is mutually exclusive with
+# the mode='full' divisor. Matches config.get_recommended_lr(method='kto').
+_KTO_DEFAULT_LR: float = 1e-6
+
 
 def _estimate_param_count_billions(model_id: str) -> float | None:
     """v1.4 BACKEND-F-008: estimate model parameter count for the mode='full' gate.
@@ -1413,6 +1437,314 @@ def _build_orpo_config(
     return ORPOConfig(**kwargs)
 
 
+# =============================================================================
+# SHARED CPOCONFIG BUILDER — SimPO loss (v1.6 C2 — SimPO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_orpo_config` for the reference-free SimPO objective.
+# SimPO has NO dedicated TRL trainer — it is TRL's ``CPOTrainer`` / ``CPOConfig``
+# driven with ``loss_type="simpo"`` and ``cpo_alpha=0.0`` (Meng et al. 2024,
+# arXiv:2405.14734; TRL CPO docs). The two are NOT the same method:
+#   * ``loss_type="simpo"`` + ``cpo_alpha=0.0`` ⇒ pure SimPO (length-normalized,
+#     reference-free reward with a target margin gamma).
+#   * ``loss_type="simpo"`` + ``cpo_alpha>0`` ⇒ "CPO-SimPO", a DIFFERENT method
+#     (a SimPO reward with an added CPO/SFT regularizer). We FORCE ``cpo_alpha``
+#     to 0.0 here so ``method='simpo'`` always means *pure* SimPO; the config
+#     field is intentionally not operator-exposed in v1.6.
+#
+# Like the ORPO builder it reuses the SAME GPU-dependent detectors
+# (:meth:`Trainer._detect_optim_for_card` / :meth:`Trainer._detect_optimal_dtype`)
+# so the SimPO config cannot drift from the SFT/ORPO configs on card-specific
+# decisions, and it is CPU-constructible for free (the CPU detectors downgrade
+# bnb-8bit → adamw_torch and force fp32). SimPO consumes the SAME paired
+# ``{prompt, chosen, rejected}`` dataset as ORPO (to_preference_dataset) — there
+# is NO new data path.
+#
+# Contract differences vs ORPOConfig:
+#   * ``loss_type="simpo"`` + ``cpo_alpha=0.0`` (FORCED) select pure SimPO.
+#   * ``beta`` ← ``simpo_beta`` (default 2.0) and ``simpo_gamma`` (default 1.0,
+#     the target reward margin) are SimPO-specific. ORPO's ``beta`` and SimPO's
+#     ``beta`` are different quantities (odds-ratio weight vs reward scale), so
+#     they map from distinct config fields.
+#   * Same ``max_length`` mapping, optional truncation knobs, and "no packing /
+#     no gradient_checkpointing forcing" stance as ORPO (SimPO is mode='lora'
+#     only in v1.6).
+
+
+def _build_cpo_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    simpo_beta: float,
+    simpo_gamma: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble a ``CPOConfig`` for the SimPO objective (``loss_type='simpo'``).
+
+    Parameters mirror :func:`_build_orpo_config` with the SimPO-specific
+    ``simpo_beta`` (→ ``beta``) and ``simpo_gamma`` (→ ``simpo_gamma``, the
+    target reward margin). ``cpo_alpha`` is FORCED to 0.0 so this is pure
+    SimPO, never CPO-SimPO. ``max_seq_length`` maps to ``CPOConfig.max_length``.
+
+    Returns:
+        A configured ``CPOConfig`` instance with ``loss_type='simpo'``.
+    """
+    # FC-01 discipline (mirrors _build_orpo_config): guard the trl CPO import.
+    # In the project's target trl (0.24) the working path is the TOP-LEVEL
+    # ``from trl import CPOConfig`` (verified in the venv 2026-06-20; the
+    # ``trl.experimental.cpo`` submodule does NOT exist in 0.24). The trl pin
+    # has no upper bound, and a future trl may relocate CPO to
+    # ``trl.experimental`` (as it is doing for several preference trainers), so
+    # we try the top-level symbol first and FALL BACK to the experimental path,
+    # re-raising a structured TrainingError (reusing RUNTIME_TRAINING_FAILED —
+    # the same code the ORPO/FP8 guards use) only when BOTH miss.
+    try:
+        from trl import CPOConfig
+    except ImportError:
+        try:
+            from trl.experimental.cpo import CPOConfig  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise TrainingError(
+                "Could not import 'CPOConfig' from trl (tried top-level "
+                "'trl.CPOConfig' and 'trl.experimental.cpo.CPOConfig') — the "
+                "SimPO objective is unavailable in the installed trl "
+                f"({type(exc).__name__}: {exc}). SimPO is TRL's CPOTrainer with "
+                "loss_type='simpo'; a newer trl may have moved or removed the "
+                "CPOConfig symbol.",
+                suggestion=(
+                    "Pin a trl version that exposes CPOConfig / CPOTrainer "
+                    "(top-level or trl.experimental.cpo): pip install "
+                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
+                    "default), which does not need SimPO."
+                ),
+                code="RUNTIME_TRAINING_FAILED",
+                cause=exc,
+            ) from exc
+
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        "max_length": max_seq_length,
+        # SimPO selection: loss_type='simpo' + cpo_alpha=0.0 (FORCED — non-zero
+        # is CPO-SimPO, a different method). beta is the SimPO reward scale;
+        # simpo_gamma is the target reward margin.
+        "loss_type": "simpo",
+        "cpo_alpha": 0.0,
+        "beta": simpo_beta,
+        "simpo_gamma": simpo_gamma,
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # CPOTrainer enforces ``max_prompt_length < max_length`` at construction.
+    # CPOConfig's default ``max_prompt_length`` is 512, so a small operator
+    # ``max_seq_length`` (→ max_length) of, say, 128 would crash the trainer
+    # with "max_prompt_length (512) should be strictly less than max_length
+    # (128)" — a real footgun for anyone training SimPO with a short window.
+    # When the operator passed an explicit ``max_prompt_length`` we honor it
+    # as-is; otherwise we DERIVE a safe value (half of max_length, min 16) only
+    # when the 512 default would violate the invariant. This makes SimPO work
+    # at any max_seq_length out of the box. (Surfaced by the non-mocked SimPO
+    # smoke on the RTX 5090, 2026-06-20.)
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    elif max_seq_length <= 512:
+        derived = max(max_seq_length // 2, 16)
+        kwargs["max_prompt_length"] = derived
+        logger.debug(
+            "SimPO: max_seq_length=%d <= CPOConfig's default max_prompt_length "
+            "(512); derived max_prompt_length=%d (max_length // 2) to satisfy "
+            "CPOTrainer's max_prompt_length < max_length invariant.",
+            max_seq_length, derived,
+        )
+
+    return CPOConfig(**kwargs)
+
+
+# =============================================================================
+# SHARED KTOCONFIG BUILDER (v1.6 C2 — KTO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_orpo_config` for the KTO objective (Ethayarajh et al.
+# 2024, arXiv:2402.01306). KTO = TRL's ``KTOTrainer`` / ``KTOConfig``. KTO is
+# reference-BASED, but with a LoRA adapter the FROZEN base model IS the
+# reference (KTOTrainer disables the adapter to compute reference logprobs), so
+# we deliberately pass NO explicit ``ref_model`` (a second model would blow the
+# 16GB envelope). KTO is mode='lora'-only in v1.6 (kto+full is blocked at
+# construction, exactly where orpo+full is).
+#
+# KTO consumes the UNPAIRED ``{prompt, completion, label:bool}`` dataset
+# (DatasetLoader.to_kto_dataset) — a DIFFERENT data path from the paired
+# ORPO/SimPO one.
+#
+# Contract differences vs ORPOConfig:
+#   * ``beta`` ← ``kto_beta`` (default 0.1).
+#   * ``desirable_weight`` / ``undesirable_weight`` scale the two polarities of
+#     the prospect-theory loss. The config holds STARTING weights; the trainer
+#     AUTO-REBALANCES them from the dataset's label counts (see
+#     :meth:`Trainer._auto_balance_kto_weights`) so the effective ratio lands in
+#     [1:1, 4:3]. This builder receives the ALREADY-RESOLVED weights.
+#   * ``train_sampling_strategy="sequential"`` (FORCED) — KTO's KL estimate
+#     requires the sequential sampler; the default would corrupt the estimate.
+#   * Same "no packing / no gradient_checkpointing forcing" stance as ORPO.
+
+
+def _build_kto_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    kto_beta: float,
+    desirable_weight: float,
+    undesirable_weight: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble a ``KTOConfig`` with the v1.6 quality contracts applied.
+
+    Parameters mirror :func:`_build_orpo_config` with the KTO-specific
+    ``kto_beta`` (→ ``beta``) and the AUTO-RESOLVED ``desirable_weight`` /
+    ``undesirable_weight`` (the trainer computes these from the dataset's label
+    counts before calling this builder). ``train_sampling_strategy`` is forced
+    to ``"sequential"`` (required for the KL estimate). ``max_seq_length`` maps
+    to ``KTOConfig.max_length``.
+
+    Returns:
+        A configured ``KTOConfig`` instance.
+    """
+    # FC-01 discipline (mirrors _build_orpo_config / _build_cpo_config): guard
+    # the trl KTO import. In trl 0.24 the working path is the TOP-LEVEL
+    # ``from trl import KTOConfig`` (verified in the venv 2026-06-20; the
+    # ``trl.experimental.kto`` submodule does NOT exist in 0.24). Try top-level
+    # first, fall back to the experimental path, then re-raise a structured
+    # TrainingError (reusing RUNTIME_TRAINING_FAILED) if BOTH miss.
+    try:
+        from trl import KTOConfig
+    except ImportError:
+        try:
+            from trl.experimental.kto import KTOConfig  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise TrainingError(
+                "Could not import 'KTOConfig' from trl (tried top-level "
+                "'trl.KTOConfig' and 'trl.experimental.kto.KTOConfig') — the "
+                "KTO objective is unavailable in the installed trl "
+                f"({type(exc).__name__}: {exc}). A newer trl may have moved or "
+                "removed the KTOConfig symbol.",
+                suggestion=(
+                    "Pin a trl version that exposes KTOConfig / KTOTrainer "
+                    "(top-level or trl.experimental.kto): pip install "
+                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
+                    "default), which does not need KTO."
+                ),
+                code="RUNTIME_TRAINING_FAILED",
+                cause=exc,
+            ) from exc
+
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        "max_length": max_seq_length,
+        # KTO-specific: beta is the prospect-theory loss temperature; the two
+        # weights are the AUTO-REBALANCED polarity weights (resolved by the
+        # trainer from label counts). train_sampling_strategy MUST be
+        # "sequential" for KTO's in-batch KL estimate.
+        "beta": kto_beta,
+        "desirable_weight": desirable_weight,
+        "undesirable_weight": undesirable_weight,
+        "train_sampling_strategy": "sequential",
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # Same max_prompt_length guard as _build_cpo_config: KTOConfig's default
+    # max_prompt_length is 512, which on a small max_length over-truncates (or
+    # trips length invariants). Honor an explicit value; otherwise derive a
+    # safe half-of-max_length value when the 512 default would exceed the
+    # window. Keeps KTO consistent with SimPO at any max_seq_length.
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    elif max_seq_length <= 512:
+        derived = max(max_seq_length // 2, 16)
+        kwargs["max_prompt_length"] = derived
+        logger.debug(
+            "KTO: max_seq_length=%d <= KTOConfig's default max_prompt_length "
+            "(512); derived max_prompt_length=%d (max_length // 2).",
+            max_seq_length, derived,
+        )
+
+    return KTOConfig(**kwargs)
+
+
 def _apply_train_on_responses_only(
     sft_trainer: Any,
     tokenizer: Any,
@@ -1646,6 +1978,26 @@ class Trainer:
         # Defaults to None so ``settings.training.orpo_beta`` (default 0.1)
         # governs when omitted.
         orpo_beta: float | None = None,
+        # v1.6 C2 (SimPO Wave 2): SimPO reward scale (``beta`` in CPOConfig
+        # under loss_type='simpo') and the target reward margin
+        # (``simpo_gamma``). Ignored unless method='simpo'. Default None so
+        # ``settings.training.simpo_beta`` (2.0) / ``settings.training.
+        # simpo_gamma`` (1.0) govern when omitted. Named EXACTLY so the CLI's
+        # wave6b introspection filter threads ``--simpo-beta`` / ``--simpo-gamma``
+        # through (GLUE owns the flags).
+        simpo_beta: float | None = None,
+        simpo_gamma: float | None = None,
+        # v1.6 C2 (KTO Wave 2): KTO prospect-theory loss temperature
+        # (``kto_beta`` → KTOConfig.beta) and the STARTING desirable /
+        # undesirable polarity weights. The trainer AUTO-REBALANCES the weights
+        # from the dataset's label counts toward the [1:1, 4:3] band; these are
+        # the seed values. Ignored unless method='kto'. Default None so
+        # ``settings.training.kto_*`` govern when omitted. Named EXACTLY so the
+        # CLI threads ``--kto-beta`` / ``--kto-desirable-weight`` /
+        # ``--kto-undesirable-weight`` through.
+        kto_beta: float | None = None,
+        kto_desirable_weight: float | None = None,
+        kto_undesirable_weight: float | None = None,
         # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao float8
         # (Blackwell sm_90+). None ⇒ ``settings.training.fp8`` (default False)
         # governs. When True AND the card supports it (CUDA + sm>=9 + torchao
@@ -1873,16 +2225,23 @@ class Trainer:
         # layer entirely, so the constructor must re-validate (defense in
         # depth). InvalidSettingError carries code CONFIG_INVALID_SETTING.
         self.method = method if method is not None else settings.training.method
-        if self.method not in {"sft", "orpo"}:
+        # v1.6 C2: extended to the four shipped objectives. config.py's
+        # _ALLOWED_METHODS is the single source of truth on the SETTINGS path;
+        # a DIRECT Trainer(method=...) bypasses that layer, so re-validate here
+        # against the same set (defense in depth). simpo/kto consume preference
+        # / unpaired-binary data respectively (see _load_dataset).
+        if self.method not in {"sft", "orpo", "simpo", "kto"}:
             raise InvalidSettingError(
                 setting_name="method",
                 value=self.method,
-                expected="one of {'sft', 'orpo'}",
+                expected="one of {'sft', 'orpo', 'simpo', 'kto'}",
                 suggestion=(
                     "Pass method='sft' (the default) for supervised "
-                    "fine-tuning, OR method='orpo' for reference-free ORPO "
-                    "preference training (requires a {chosen, rejected} "
-                    "dataset and mode='lora')."
+                    "fine-tuning, method='orpo' or method='simpo' for "
+                    "reference-free preference training on {chosen, rejected} "
+                    "pairs, or method='kto' for prospect-theory training on "
+                    "unpaired {prompt, completion, label} feedback. All "
+                    "preference objectives require mode='lora'."
                 ),
             )
         # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight. Kwarg-
@@ -1912,6 +2271,116 @@ class Trainer:
                     "small positive value, e.g. orpo_beta=0.1."
                 ),
             )
+
+        # v1.6 C2 (SimPO): resolve the SimPO knobs, kwarg-authoritative with the
+        # settings layer as fallback (same ``is not None`` discipline as
+        # orpo_beta). Inert unless method='simpo'.
+        self.simpo_beta = (
+            simpo_beta if simpo_beta is not None else settings.training.simpo_beta
+        )
+        self.simpo_gamma = (
+            simpo_gamma if simpo_gamma is not None else settings.training.simpo_gamma
+        )
+        # Defend the DIRECT kwarg the same way config.py's
+        # _reject_invalid_simpo_gamma defends the settings path: a non-positive
+        # target margin degenerates the SimPO objective. Only fires for
+        # method='simpo' so a stray value under another method never blocks a
+        # run. (simpo_beta>0 is enforced by clamp/warn semantics — beta=0 is a
+        # valid edge for CPOConfig — but a non-positive gamma is always wrong.)
+        if self.method == "simpo" and self.simpo_gamma <= 0:
+            raise InvalidSettingError(
+                "simpo_gamma",
+                self.simpo_gamma,
+                "a positive number",
+                suggestion=(
+                    "SimPO's target reward margin gamma must be > 0 (the "
+                    "default is 1.0; Meng et al. 2024 anchor gamma at "
+                    "~beta*0.5). A non-positive gamma removes the margin and "
+                    "degenerates the objective."
+                ),
+            )
+        # WARN (do not fail) when gamma/beta > 1.0 — parity with config.py's
+        # _warn_high_simpo_gamma_ratio. A high ratio over-penalizes and tends
+        # to repetitive output. Only meaningful for method='simpo'.
+        if (
+            self.method == "simpo"
+            and self.simpo_beta > 0
+            and (self.simpo_gamma / self.simpo_beta) > 1.0
+        ):
+            logger.warning(
+                "simpo_gamma (%s) / simpo_beta (%s) = %.3f > 1.0 — the target "
+                "margin exceeds the reward scale, which over-penalizes and "
+                "tends toward repetitive output. Meng et al. 2024 anchor gamma "
+                "at ~beta*0.5; consider lowering simpo_gamma or raising "
+                "simpo_beta.",
+                self.simpo_gamma,
+                self.simpo_beta,
+                self.simpo_gamma / self.simpo_beta,
+            )
+
+        # v1.6 C2 (KTO): resolve the KTO knobs (kwarg-authoritative, settings
+        # fallback). The two weights are STARTING values — the trainer
+        # auto-rebalances them from the dataset label counts at train() time
+        # (see _auto_balance_kto_weights). Inert unless method='kto'.
+        self.kto_beta = (
+            kto_beta if kto_beta is not None else settings.training.kto_beta
+        )
+        self.kto_desirable_weight = (
+            kto_desirable_weight
+            if kto_desirable_weight is not None
+            else settings.training.kto_desirable_weight
+        )
+        self.kto_undesirable_weight = (
+            kto_undesirable_weight
+            if kto_undesirable_weight is not None
+            else settings.training.kto_undesirable_weight
+        )
+        # Defend the DIRECT kwargs (config.py validates the settings path):
+        # KTO's beta and both polarity weights must be > 0 — a zero/negative
+        # weight removes or inverts one side of the prospect-theory loss, and a
+        # non-positive beta breaks the loss temperature. Only fires for
+        # method='kto'.
+        if self.method == "kto":
+            for _name, _value in (
+                ("kto_beta", self.kto_beta),
+                ("kto_desirable_weight", self.kto_desirable_weight),
+                ("kto_undesirable_weight", self.kto_undesirable_weight),
+            ):
+                if _value <= 0:
+                    raise InvalidSettingError(
+                        _name,
+                        _value,
+                        "a positive number",
+                        suggestion=(
+                            f"KTO's {_name} must be > 0 (defaults: beta=0.1, "
+                            "weights=1.0). A zero/negative weight removes or "
+                            "inverts one polarity of the prospect-theory loss; "
+                            "a non-positive beta breaks the loss temperature. "
+                            "The trainer auto-rebalances the weights from your "
+                            "label counts toward [1:1, 4:3] — start positive."
+                        ),
+                    )
+            # KTOTrainer requires an ACTUAL per-device batch size > 1 when it
+            # computes the KL term (the default ``calculate_KL=True``): at batch
+            # size 1 the in-batch KL estimate degenerates to the implied reward
+            # and KTO "will not work properly" (trl raises a hard ValueError
+            # several frames deep, AFTER the model + dataset are loaded). Rather
+            # than let every batch_size=1 KTO run crash cryptically, bump the
+            # floor to 2 here with ONE WARN; the operator can offset the VRAM
+            # cost with gradient_accumulation. (self.batch_size is already
+            # resolved above; self.method == 'kto' here.) Found by the
+            # non-mocked KTO smoke on the RTX 5090, 2026-06-20.
+            if self.batch_size < 2:
+                logger.warning(
+                    "method='kto': per-device batch_size=%d is too small — "
+                    "KTO's in-batch KL estimate requires an ACTUAL batch size "
+                    "> 1 (at batch 1 the KL term collapses to the implied "
+                    "reward and TRL rejects the run). Bumping batch_size to 2. "
+                    "Raise gradient_accumulation to keep the same effective "
+                    "batch while holding VRAM down.",
+                    self.batch_size,
+                )
+                self.batch_size = 2
 
         # v1.5 T2.1 (FP8) / T2.3 (rsLoRA): resolve the two new feature knobs,
         # kwarg-authoritative with the settings layer as fallback (same
@@ -1998,6 +2467,38 @@ class Trainer:
                 suggestion="Use mode='lora' (default) with method='orpo'.",
             )
 
+        # v1.6 C2: SimPO + mode='full' guard. Identical contract to ORPO+full —
+        # SimPO is a reference-free preference objective supported with
+        # mode='lora' ONLY in v1.6 (the paired-data + adapter path). Refuse the
+        # combination at construction.
+        if self.method == "simpo" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "simpo", "mode": "full"},
+                expected="SimPO is supported with mode='lora' only in v1.6",
+                suggestion="Use mode='lora' (default) with method='simpo'.",
+            )
+
+        # v1.6 C2: KTO + mode='full' guard — placed EXACTLY where orpo+full is
+        # blocked. KTO is mode='lora'-ONLY in v1.6 for a load-bearing reason
+        # beyond the memory ceiling: KTO is reference-BASED, and the LoRA path
+        # gives the reference FOR FREE (KTOTrainer disables the adapter to score
+        # the frozen base). A full-FT KTO run has no adapter to disable, so it
+        # would require a SECOND loaded model as the reference — breaking the
+        # 16GB envelope. Refuse full+kto at construction.
+        if self.method == "kto" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "kto", "mode": "full"},
+                expected="KTO is supported with mode='lora' only in v1.6",
+                suggestion=(
+                    "Use mode='lora' (default) with method='kto'. KTO needs a "
+                    "reference model; the LoRA path provides it free (the "
+                    "frozen base via adapter-disable). Full FT would require a "
+                    "second loaded model and exceed the 16GB envelope."
+                ),
+            )
+
         # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate. Refuse
         # construction for models whose parameter count exceeds the 3B
         # ceiling. The probe is best-effort at construction time (preset
@@ -2064,6 +2565,71 @@ class Trainer:
                     f"applied; explicit override wins)."
                 )
 
+        # v1.6 C2 (SimPO): SimPO LR default + high-LR clamp/warn. SimPO's
+        # length-normalized reward degrades to repetitive output at LR >= 1e-5
+        # (Meng et al. 2024). When the operator set NO LR we apply the 1e-6
+        # anchor; when they set one >= 1e-5 we WARN and CLAMP to 1e-6 (a high
+        # SimPO LR is a known footgun, not an expressed preference for divergent
+        # output). full+simpo is blocked above, so this branch is exclusive with
+        # the mode='full' divisor.
+        elif self.method == "simpo":
+            if learning_rate is None:
+                self.learning_rate = _SIMPO_DEFAULT_LR
+                logger.info(
+                    f"method='simpo': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (SimPO is reference-free + "
+                    f"length-normalized; LR >= 1e-5 degrades to repetitive "
+                    f"output). Pass learning_rate=<value> to override."
+                )
+            elif self.learning_rate >= 1e-5:
+                logger.warning(
+                    "method='simpo': learning_rate=%.2e is at/above the 1e-5 "
+                    "instability threshold — SimPO degrades to repetitive "
+                    "output at high LR (Meng et al. 2024, arXiv:2405.14734). "
+                    "Clamping to the stable %.2e anchor. Pass an explicit LR "
+                    "below 1e-5 to override this clamp.",
+                    self.learning_rate,
+                    _SIMPO_DEFAULT_LR,
+                )
+                self.learning_rate = _SIMPO_DEFAULT_LR
+            else:
+                logger.info(
+                    f"method='simpo': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (below the 1e-5 "
+                    f"instability threshold)."
+                )
+
+        # v1.6 C2 (KTO): KTO LR default + high-LR clamp/warn. KTO's published
+        # runs sit at 1e-6 and LR > 5e-6 destabilizes the KL estimate
+        # (Ethayarajh et al. 2024). Same default/clamp discipline as SimPO with
+        # the KTO band (clamp threshold 5e-6). full+kto is blocked above.
+        elif self.method == "kto":
+            if learning_rate is None:
+                self.learning_rate = _KTO_DEFAULT_LR
+                logger.info(
+                    f"method='kto': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (KTO's published runs sit at "
+                    f"1e-6; LR > 5e-6 destabilizes the KL estimate). Pass "
+                    f"learning_rate=<value> to override."
+                )
+            elif self.learning_rate > 5e-6:
+                logger.warning(
+                    "method='kto': learning_rate=%.2e is above the 5e-6 "
+                    "stability ceiling — KTO's in-batch KL estimate "
+                    "destabilizes at high LR (Ethayarajh et al. 2024, "
+                    "arXiv:2402.01306). Clamping to the published %.2e anchor. "
+                    "Pass an explicit LR <= 5e-6 to override this clamp.",
+                    self.learning_rate,
+                    _KTO_DEFAULT_LR,
+                )
+                self.learning_rate = _KTO_DEFAULT_LR
+            else:
+                logger.info(
+                    f"method='kto': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (within the 5e-6 "
+                    f"stability ceiling)."
+                )
+
         # v1.5 T2.1 (FP8 compute path): the gate ladder. Two distinct failure
         # philosophies, in priority order:
         #   * MISCONFIGURATION (a combination that can never work) → raise an
@@ -2091,16 +2657,20 @@ class Trainer:
                         "FP8 + full FT not supported in v1.5; use mode='lora'."
                     ),
                 )
-            # (2) MISCONFIG: FP8 + ORPO. FP8 was dogfood-validated with
-            # method='sft' only in v1.5; the ORPO odds-ratio loss on FP8 base
-            # linears is unverified.
-            if self.method == "orpo":
+            # (2) MISCONFIG: FP8 + a preference objective. FP8 was
+            # dogfood-validated with method='sft' only; the ORPO/SimPO/KTO
+            # losses on FP8 base linears are unverified (v1.6 keeps the
+            # sft-only contract — the gate now covers all three non-sft
+            # objectives, not just ORPO).
+            if self.method != "sft":
                 raise InvalidSettingError(
                     setting_name="fp8+method",
-                    value={"fp8": True, "method": "orpo"},
-                    expected="FP8 is supported with method='sft' only in v1.5",
+                    value={"fp8": True, "method": self.method},
+                    expected="FP8 is supported with method='sft' only",
                     suggestion=(
-                        "FP8 validated with method='sft' only in v1.5."
+                        f"FP8 validated with method='sft' only; method="
+                        f"'{self.method}' on an FP8 base is unverified. Drop "
+                        f"fp8=True or use method='sft'."
                     ),
                 )
             # (3) FP8 vs 4-bit. They are alternatives: FP8 keeps the base in
@@ -2250,15 +2820,18 @@ class Trainer:
         # (mlx_lm.lora is LoRA-SFT-only here). Co-located with the FP8 ladder so
         # all the cross-field training-shape refusals live together.
         if self._effective_backend == "mlx":
-            if self.method == "orpo":
+            if self.method != "sft":
                 raise InvalidSettingError(
                     setting_name="backend+method",
-                    value={"backend": "mlx", "method": "orpo"},
-                    expected="ORPO is not supported on the MLX backend in v1.5",
+                    value={"backend": "mlx", "method": self.method},
+                    expected=(
+                        "preference objectives (orpo/simpo/kto) are not "
+                        "supported on the MLX backend in v1.6"
+                    ),
                     suggestion=(
-                        "ORPO (reference-free preference tuning) runs on the "
-                        "CUDA rail only in v1.5. Use method='sft' with "
-                        "backend='mlx', or method='orpo' with a CUDA GPU."
+                        f"ORPO/SimPO/KTO preference tuning runs on the CUDA "
+                        f"rail only. Use method='sft' with backend='mlx', or "
+                        f"method='{self.method}' with a CUDA GPU."
                     ),
                 )
             if self.fp8:
@@ -2326,8 +2899,21 @@ class Trainer:
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
         # v1.5 T1.2 (ORPO Wave 2): surface the objective so a post-mortem grep
         # can confirm which path ran without reading the config.
+        # v1.6 C2: SimPO/KTO surfaced with their load-bearing knobs.
         if self.method == "orpo":
             logger.info(f"  Method: orpo (beta={self.orpo_beta})")
+        elif self.method == "simpo":
+            logger.info(
+                f"  Method: simpo (beta={self.simpo_beta}, "
+                f"gamma={self.simpo_gamma}, cpo_alpha=0.0)"
+            )
+        elif self.method == "kto":
+            logger.info(
+                f"  Method: kto (beta={self.kto_beta}, "
+                f"desirable_weight={self.kto_desirable_weight}, "
+                f"undesirable_weight={self.kto_undesirable_weight}; weights "
+                f"auto-rebalanced from label counts at train time)"
+            )
         logger.info(
             f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
             f"unsloth_fallback={self.unsloth_fallback}"
@@ -3426,66 +4012,113 @@ class Trainer:
         the objective grows a third construction wrinkle, there is exactly one
         place to change.
 
-        For ``method == "orpo"`` builds an ``ORPOTrainer`` (NO reference model —
-        ORPO is reference-free; NO ``peft_config`` — the LoRA adapter is
-        already attached by :meth:`load_model`'s ``get_peft_model`` before
-        train() runs, exactly as the SFT path relies on). Otherwise builds an
-        ``SFTTrainer`` identically to the pre-ORPO path. Imports are
-        method-conditional and local so the test mocks
-        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``) bind at
-        call time.
+        For ``method == "orpo"`` builds an ``ORPOTrainer``; ``"simpo"`` a
+        ``CPOTrainer`` (SimPO is CPOTrainer with loss_type='simpo'); ``"kto"`` a
+        ``KTOTrainer``. All three are reference-free OR (KTO) reference-via-
+        frozen-base, so NONE passes an explicit reference model, and NONE passes
+        ``peft_config`` — the LoRA adapter is already attached by
+        :meth:`load_model`'s ``get_peft_model`` before train() runs, exactly as
+        the SFT path relies on. (For KTO the attached adapter is precisely what
+        gives the free reference: KTOTrainer disables it to score the frozen
+        base.) Otherwise builds an ``SFTTrainer`` identically to the pre-ORPO
+        path. Imports are method-conditional and local so the test mocks
+        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")`` /
+        ``patch("trl.CPOTrainer")`` / ``patch("trl.KTOTrainer")``) bind at call
+        time.
 
-        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on both
-        trainers.
+        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on all trainers.
         """
-        if self.method == "orpo":
-            # FC-01: guard the trl ORPO import (see _build_orpo_config for the
-            # full rationale). ORPOTrainer is slated to move to
-            # trl.experimental and the trl pin has no upper bound, so a routine
-            # upgrade would otherwise kill every Trainer(method="orpo") run at
-            # construction with a bare ImportError. Catch it and re-raise the
-            # same structured TrainingError shape as the config builder so the
-            # operator gets a code + a working trl range. The narrow
-            # ``except ImportError`` keeps the existing patch("trl.ORPOTrainer")
-            # test path intact — when the symbol resolves (real or mocked) the
-            # import succeeds and this guard is inert.
+        if self.method in ("orpo", "simpo", "kto"):
+            # FC-01: guard the trl preference-trainer import (see
+            # _build_orpo_config / _build_cpo_config / _build_kto_config for the
+            # full rationale). The trl pin has no upper bound, so a routine
+            # upgrade could relocate these symbols; catch a bare ImportError and
+            # re-raise the same structured TrainingError shape as the config
+            # builders (code RUNTIME_TRAINING_FAILED + a working trl range). The
+            # narrow ``except ImportError`` keeps the existing
+            # ``patch("trl.<X>Trainer")`` test path intact — when the symbol
+            # resolves (real or mocked) the import succeeds and this guard is
+            # inert. In trl 0.24 ALL of ORPOTrainer/CPOTrainer/KTOTrainer are
+            # top-level (verified in the venv 2026-06-20); we try top-level
+            # first and fall back to trl.experimental for the SimPO/KTO future.
+            #
+            # _trl_cls: the trainer class. _trl_name: the symbol name for the
+            # error message. _is_kto: KTO needs the no-ref_model handling below.
+            _trl_name = {
+                "orpo": "ORPOTrainer",
+                "simpo": "CPOTrainer",  # SimPO rides CPOTrainer + loss_type
+                "kto": "KTOTrainer",
+            }[self.method]
+            _experimental_mod = {
+                "orpo": None,  # ORPO has no experimental fallback path in 0.24
+                "simpo": "trl.experimental.cpo",
+                "kto": "trl.experimental.kto",
+            }[self.method]
             try:
-                from trl import ORPOTrainer
-            except ImportError as exc:
-                raise TrainingError(
-                    "Could not import 'ORPOTrainer' from trl — the ORPO "
-                    "objective is unavailable in the installed trl "
-                    f"({type(exc).__name__}: {exc}). trl's ORPO API is "
-                    "migrating to trl.experimental, so a newer trl may have "
-                    "moved or removed the top-level ORPOTrainer symbol.",
-                    suggestion=(
-                        "Pin a trl version that still exposes top-level "
-                        "ORPOConfig / ORPOTrainer: pip install "
-                        "'trl>=0.7.0,<0.28'. Or train with method='sft' (the "
-                        "default), which does not need ORPO."
-                    ),
-                    code="RUNTIME_TRAINING_FAILED",
-                    cause=exc,
-                ) from exc
+                import trl as _trl_top
 
-            # Cross-version shim (v1.5 T1.2): trl's ORPOTrainer (through 0.24)
-            # sets ``model.warnings_issued["estimate_tokens"] = True`` to mute a
-            # transformers FLOP-estimate warning. transformers 5.x REMOVED the
-            # ``warnings_issued`` attribute from ``PreTrainedModel``, so that
-            # write raises ``AttributeError`` inside the constructor — before a
-            # single step — on the project's own target stack (trl 0.24 +
-            # transformers 5.5, verified on LlamaForCausalLM under a PEFT
-            # wrapper). Provide an inert dict when the attribute is absent so
-            # ORPO works across the transformers 4.x/5.x boundary. Harmless on
-            # 4.x (the attribute is already present via ``PreTrainedModel.
-            # __init__`` and is left untouched); on 5.x it is an empty dict trl
-            # writes to and nothing reads. Scoped to the ORPO path — SFT is
-            # unaffected. Remove once trl's ORPOTrainer stops touching
-            # ``warnings_issued`` (it is slated to move to trl.experimental).
+                _trl_cls = getattr(_trl_top, _trl_name)
+            except (ImportError, AttributeError) as exc:
+                _trl_cls = None
+                if _experimental_mod is not None:
+                    try:
+                        _exp = __import__(
+                            _experimental_mod, fromlist=[_trl_name]
+                        )
+                        _trl_cls = getattr(_exp, _trl_name)
+                    except (ImportError, AttributeError):
+                        _trl_cls = None
+                if _trl_cls is None:
+                    _tried = f"top-level 'trl.{_trl_name}'" + (
+                        f" and '{_experimental_mod}.{_trl_name}'"
+                        if _experimental_mod
+                        else ""
+                    )
+                    raise TrainingError(
+                        f"Could not import '{_trl_name}' from trl (tried "
+                        f"{_tried}) — the {self.method.upper()} objective is "
+                        f"unavailable in the installed trl "
+                        f"({type(exc).__name__}: {exc}). trl's preference "
+                        "trainers are migrating to trl.experimental, so a newer "
+                        "trl may have moved or removed the symbol.",
+                        suggestion=(
+                            f"Pin a trl version that exposes {_trl_name}: pip "
+                            "install 'trl>=0.18,<0.28'. Or train with "
+                            "method='sft' (the default)."
+                        ),
+                        code="RUNTIME_TRAINING_FAILED",
+                        cause=exc,
+                    ) from exc
+
+            # Cross-version shim (v1.5 T1.2): trl's preference trainers (through
+            # 0.24) set ``model.warnings_issued["estimate_tokens"] = True`` to
+            # mute a transformers FLOP-estimate warning. transformers 5.x
+            # REMOVED ``warnings_issued`` from ``PreTrainedModel``, so that write
+            # raises ``AttributeError`` inside the constructor — before a single
+            # step. Provide an inert dict when the attribute is absent so the
+            # preference paths work across the transformers 4.x/5.x boundary.
+            # Harmless on 4.x (already present) and on a trainer that never
+            # touches it (an empty dict nothing reads). Applied to all three
+            # preference objectives — SFT is unaffected.
             if not hasattr(self._model, "warnings_issued"):
                 self._model.warnings_issued = {}
 
-            return ORPOTrainer(
+            if self.method == "kto":
+                # KTO is reference-BASED, but with the LoRA adapter already
+                # attached the frozen base IS the reference: KTOTrainer disables
+                # the adapter to score it. We therefore DELIBERATELY pass NO
+                # ref_model (its default is None) — passing one would load a
+                # SECOND full model and blow the 16GB envelope (design-lock C2).
+                return _trl_cls(
+                    model=self._model,
+                    processing_class=self._tokenizer,
+                    train_dataset=train_dataset,
+                    args=training_args,
+                    callbacks=callbacks,
+                )
+
+            # ORPO + SimPO (CPOTrainer): reference-free, no ref_model arg at all.
+            return _trl_cls(
                 model=self._model,
                 processing_class=self._tokenizer,
                 train_dataset=train_dataset,
@@ -3521,8 +4154,14 @@ class Trainer:
         ``steps`` / ``report_to`` / ``run_name``.
 
         For ``method == "orpo"`` delegates to :func:`_build_orpo_config`
-        (beta + max_length; NO packing / gradient checkpointing). Otherwise
-        delegates to :func:`_build_sft_config` exactly as the pre-ORPO path.
+        (beta + max_length; NO packing / gradient checkpointing). For
+        ``method == "simpo"`` delegates to :func:`_build_cpo_config`
+        (loss_type='simpo', cpo_alpha=0.0). For ``method == "kto"`` delegates
+        to :func:`_build_kto_config` (reading the AUTO-REBALANCED weights
+        resolved onto ``self`` by :meth:`_auto_balance_kto_weights` before the
+        first build, so both the first attempt AND the OOM retry use the same
+        resolved weights). Otherwise delegates to :func:`_build_sft_config`
+        exactly as the pre-ORPO path.
         """
         if self.method == "orpo":
             return _build_orpo_config(
@@ -3534,6 +4173,60 @@ class Trainer:
                 warmup_steps=settings.training.warmup_steps,
                 max_seq_length=self.max_seq_length,
                 orpo_beta=self.orpo_beta,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        if self.method == "simpo":
+            # v1.6 C2: SimPO = CPOConfig(loss_type='simpo', cpo_alpha=0.0).
+            # Reuses the paired dataset; same shape contract as ORPO.
+            return _build_cpo_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                simpo_beta=self.simpo_beta,
+                simpo_gamma=self.simpo_gamma,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        if self.method == "kto":
+            # v1.6 C2: KTO = KTOConfig with the AUTO-REBALANCED polarity
+            # weights. _auto_balance_kto_weights populated
+            # self._kto_resolved_* before this call (in train(), before the
+            # first build); fall back to the seed weights if it has not run yet
+            # (defensive — should not happen on the train() path).
+            return _build_kto_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                kto_beta=self.kto_beta,
+                desirable_weight=getattr(
+                    self, "_kto_resolved_desirable_weight",
+                    self.kto_desirable_weight,
+                ),
+                undesirable_weight=getattr(
+                    self, "_kto_resolved_undesirable_weight",
+                    self.kto_undesirable_weight,
+                ),
                 seed=settings.training.seed,
                 lr_scheduler_type=settings.training.lr_scheduler_type,
                 logging_steps=settings.training.logging_steps,
@@ -3611,6 +4304,140 @@ class Trainer:
             # packing elsewhere can't silently re-enable the ragged-sequence
             # shape FP8 can't handle.
             sft_config.packing = False
+
+    def _auto_balance_kto_weights(self, kto_dataset: Any) -> None:
+        """v1.6 C2 (KTO auto-weighting): rebalance KTO polarity weights from
+        the dataset's label counts toward the [1:1, 4:3] band.
+
+        KTO's prospect-theory loss weights desirable (label=True) vs
+        undesirable (label=False) examples by ``desirable_weight`` /
+        ``undesirable_weight``. TRL's own guidance (and Ethayarajh et al. 2024)
+        is to keep the EFFECTIVE ratio
+        ``(desirable_weight*#pos) : (undesirable_weight*#neg)`` inside roughly
+        ``[1:1, 4:3]`` — a dataset skewed heavily toward one label otherwise
+        lets that polarity dominate the gradient. Class-imbalance reweighting is
+        the standard fix.
+
+        Strategy (deterministic, audit-friendly):
+
+        * Count ``#pos`` / ``#neg`` from the ``label`` column.
+        * Start from the operator's seed weights (``self.kto_*_weight``).
+        * Compute the effective ratio. If it already lands in ``[1:1, 4:3]``,
+          keep the seed weights untouched (operator intent wins when valid).
+        * If it falls OUTSIDE the band, scale the UNDER-weighted side up so the
+          effective ratio lands at the nearest band edge (1.0 when pos-heavy,
+          4/3 when neg-heavy), preserving the other weight. We only ever scale
+          a weight UP from its seed (never below the operator's floor) and clamp
+          the result so a pathological 1000:1 split doesn't produce an absurd
+          weight.
+        * Emit ONE preflight INFO line with the counts + the before/after
+          effective ratio. If the OPERATOR explicitly set weights that leave the
+          ratio outside the band, emit a WARN first (their setting is honored as
+          the seed but the auto-rebalance still applies — the WARN tells them
+          why their numbers changed).
+
+        Resolves onto ``self._kto_resolved_desirable_weight`` /
+        ``self._kto_resolved_undesirable_weight`` (read by
+        :meth:`_build_training_args` and persisted into run-history). Degrades
+        gracefully — any failure to read labels leaves the seed weights in
+        place with a DEBUG note (never blocks a run).
+        """
+        # Seed weights (operator-supplied or settings defaults). These are the
+        # floor — auto-balance only scales UP from here.
+        seed_des = self.kto_desirable_weight
+        seed_undes = self.kto_undesirable_weight
+        self._kto_resolved_desirable_weight = seed_des
+        self._kto_resolved_undesirable_weight = seed_undes
+
+        # Count labels from the materialized dataset's ``label`` column.
+        try:
+            labels = list(kto_dataset["label"])
+        except Exception as exc:  # noqa: BLE001 - degrade, never block
+            logger.debug(
+                "KTO auto-weighting: could not read 'label' column (%r); "
+                "keeping seed weights desirable=%.3f undesirable=%.3f.",
+                exc, seed_des, seed_undes,
+            )
+            return
+
+        n_pos = sum(1 for v in labels if bool(v))
+        n_neg = len(labels) - n_pos
+
+        if n_pos == 0 or n_neg == 0:
+            # One-sided data: a ratio is undefined and KTO needs BOTH polarities
+            # to estimate the KL term. Warn loudly (this usually means the data
+            # was built wrong) but do not block — KTOTrainer will surface its
+            # own error if it truly can't proceed.
+            logger.warning(
+                "KTO auto-weighting: dataset has #desirable=%d, #undesirable=%d "
+                "— one polarity is EMPTY. KTO needs both desirable and "
+                "undesirable examples to estimate the reference KL; the run may "
+                "fail or train poorly. Keeping seed weights desirable=%.3f "
+                "undesirable=%.3f.",
+                n_pos, n_neg, seed_des, seed_undes,
+            )
+            return
+
+        # Effective ratio with the seed weights: (des_w*#pos) : (undes_w*#neg),
+        # normalized to "desirable units per undesirable unit".
+        eff_pos = seed_des * n_pos
+        eff_neg = seed_undes * n_neg
+        seed_ratio = eff_pos / eff_neg  # >1 ⇒ desirable side dominates
+
+        # Target band on the desirable:undesirable effective ratio. TRL/KTO
+        # guidance: keep it in [1:1, 4:3] = [1.0, 1.3333...].
+        BAND_LO, BAND_HI = 1.0, 4.0 / 3.0
+
+        res_des, res_undes = seed_des, seed_undes
+        # Clamp any scale-up so a pathological imbalance can't produce an absurd
+        # weight (cap the multiplier at 10x the seed).
+        _MAX_SCALE = 10.0
+
+        if seed_ratio < BAND_LO:
+            # Undesirable side dominates → scale the DESIRABLE weight UP so the
+            # effective ratio reaches the lower edge (1.0).
+            scale = min(BAND_LO / seed_ratio, _MAX_SCALE)
+            res_des = seed_des * scale
+        elif seed_ratio > BAND_HI:
+            # Desirable side dominates → scale the UNDESIRABLE weight UP so the
+            # effective ratio drops to the upper edge (4/3).
+            scale = min(seed_ratio / BAND_HI, _MAX_SCALE)
+            res_undes = seed_undes * scale
+        # else: already in band — keep seed weights.
+
+        self._kto_resolved_desirable_weight = res_des
+        self._kto_resolved_undesirable_weight = res_undes
+
+        final_ratio = (res_des * n_pos) / (res_undes * n_neg)
+        in_band = BAND_LO <= final_ratio <= BAND_HI + 1e-9
+
+        # If the OPERATOR explicitly set weights (not the defaults) and the seed
+        # ratio was out of band, tell them why their numbers changed.
+        operator_set_weights = (
+            seed_des != settings.training.kto_desirable_weight
+            or seed_undes != settings.training.kto_undesirable_weight
+        )
+        if operator_set_weights and not (BAND_LO <= seed_ratio <= BAND_HI + 1e-9):
+            logger.warning(
+                "KTO auto-weighting: your explicit weights (desirable=%.3f, "
+                "undesirable=%.3f) give an effective ratio of %.3f:1, OUTSIDE "
+                "the recommended [1:1, 4:3] band. Auto-rebalancing to "
+                "desirable=%.3f, undesirable=%.3f (effective %.3f:1). Pass "
+                "weights that land in-band to suppress this adjustment.",
+                seed_des, seed_undes, seed_ratio,
+                res_des, res_undes, final_ratio,
+            )
+
+        # The required preflight line: counts + before/after effective ratio.
+        logger.info(
+            "KTO auto-weighting preflight: #desirable=%d #undesirable=%d | "
+            "seed weights (d=%.3f, u=%.3f) effective ratio %.3f:1 -> resolved "
+            "weights (d=%.3f, u=%.3f) effective ratio %.3f:1 [%s]",
+            n_pos, n_neg,
+            seed_des, seed_undes, seed_ratio,
+            res_des, res_undes, final_ratio,
+            "in band [1:1, 4:3]" if in_band else "out of band (clamped)",
+        )
 
     def train(
         self,
@@ -3704,6 +4531,15 @@ class Trainer:
         # column, and so a mismatched dataset surfaces a structured
         # DatasetFormatError before the trainer is built.
         train_dataset = self._load_dataset(dataset, samples, method=self.method)
+
+        # v1.6 C2 (KTO auto-weighting): with the KTO dataset materialized, count
+        # its positive/negative labels and rebalance desirable/undesirable
+        # weights toward the [1:1, 4:3] band. Resolves onto self._kto_resolved_*
+        # so BOTH the first _build_training_args call below AND the OOM-retry
+        # rebuild read the same effective weights (no second resolution path).
+        # No-op for non-KTO methods.
+        if self.method == "kto":
+            self._auto_balance_kto_weights(train_dataset)
 
         # Pre-tokenize for Windows safety.
         #
@@ -3955,6 +4791,24 @@ class Trainer:
             # the audit field stays uniform across the run table).
             "method": self.method,
             "orpo_beta": self.orpo_beta,
+            # v1.6 C2: persist SimPO + KTO provenance for the audit table. The
+            # SimPO knobs (beta/gamma) and KTO knobs (beta + the EFFECTIVE
+            # auto-rebalanced weights) are recorded for every run so the table
+            # stays uniform; they are inert for the non-matching methods. For
+            # KTO we record the RESOLVED weights (what actually trained), not
+            # the seed weights — reproducing a KTO run needs the effective
+            # ratio. (Falls back to the seed weights if auto-balance hasn't run,
+            # which on the train() path it always has by this point.)
+            "simpo_beta": self.simpo_beta,
+            "simpo_gamma": self.simpo_gamma,
+            "kto_beta": self.kto_beta,
+            "kto_desirable_weight": getattr(
+                self, "_kto_resolved_desirable_weight", self.kto_desirable_weight
+            ),
+            "kto_undesirable_weight": getattr(
+                self, "_kto_resolved_undesirable_weight",
+                self.kto_undesirable_weight,
+            ),
             # v1.5 T2.1 (FP8): persist the EFFECTIVE FP8 state (not the
             # requested ``self.fp8``) so a run-history audit reflects what
             # actually ran — fp8=True that degraded to bf16 on an unsupported
@@ -4849,7 +5703,12 @@ class Trainer:
         from .datasets import DatasetFormat
         from .exceptions import DatasetFormatError
 
-        is_orpo = method == "orpo"
+        # v1.6 C2: SimPO consumes the SAME paired {prompt, chosen, rejected}
+        # data as ORPO (to_preference_dataset) — they share this path entirely.
+        # KTO consumes the UNPAIRED {prompt, completion, label} data
+        # (to_kto_dataset) — a distinct path.
+        is_preference = method in ("orpo", "simpo")
+        is_kto = method == "kto"
         max_samples = samples or settings.data.max_samples
 
         # File extensions that DatasetLoader handles
@@ -4858,33 +5717,52 @@ class Trainer:
         )
 
         # v1.5 T1.2 (ORPO Wave 2): the supported_formats list reused in every
-        # ORPO DatasetFormatError raised from the non-loader paths below.
+        # ORPO/SimPO DatasetFormatError raised from the non-loader paths below.
         _ORPO_SUPPORTED = ["{chosen, rejected}", "{prompt, chosen, rejected}"]
+        _KTO_SUPPORTED = ["{prompt, completion, label}", "{completion, label}"]
 
         def _emit_sft_on_preference_warning(detected: DatasetFormat) -> None:
             """WARN when an SFT run is pointed at a preference-shaped file."""
-            if not is_orpo and detected == DatasetFormat.PREFERENCE:
+            if method == "sft" and detected == DatasetFormat.PREFERENCE:
                 logger.warning(
                     "Dataset looks like preference pairs (detected format "
                     "'preference': rows carry {chosen, rejected}), but "
                     "method='sft'. Training SFT on the 'chosen' response "
                     "(each row renders as prompt -> chosen, dropping "
-                    "'rejected'). Pass --method orpo to also learn from the "
-                    "'rejected' response (reference-free ORPO preference "
-                    "training)."
+                    "'rejected'). Pass --method orpo (or --method simpo) to "
+                    "also learn from the 'rejected' response (reference-free "
+                    "preference training)."
                 )
 
         def _require_preference_columns(hf_ds: Any, source: str) -> None:
-            """Assert an HF/in-memory Dataset carries chosen+rejected for ORPO."""
+            """Assert an HF/in-memory Dataset carries chosen+rejected pairs.
+
+            Covers ORPO and SimPO (both consume paired preference data).
+            """
             cols = getattr(hf_ds, "column_names", []) or []
             if "chosen" not in cols or "rejected" not in cols:
                 raise DatasetFormatError(
-                    f"method='orpo' requires preference pairs but the {source} "
-                    f"has no chosen/rejected columns (columns: {list(cols)}). "
-                    f"ORPO needs each row to carry both 'chosen' and "
-                    f"'rejected' (optionally 'prompt').",
+                    f"method='{method}' requires preference pairs but the "
+                    f"{source} has no chosen/rejected columns (columns: "
+                    f"{list(cols)}). {method.upper()} needs each row to carry "
+                    f"both 'chosen' and 'rejected' (optionally 'prompt').",
                     detected_format=None,
                     supported_formats=_ORPO_SUPPORTED,
+                )
+
+        def _require_kto_columns(hf_ds: Any, source: str) -> None:
+            """Assert an HF/in-memory Dataset carries completion+label for KTO."""
+            cols = getattr(hf_ds, "column_names", []) or []
+            if "completion" not in cols or "label" not in cols:
+                raise DatasetFormatError(
+                    f"method='kto' requires unpaired binary feedback but the "
+                    f"{source} has no completion/label columns (columns: "
+                    f"{list(cols)}). KTO needs each row to carry 'completion' "
+                    f"and a boolean 'label' (optionally 'prompt'). A paired "
+                    f"{{chosen, rejected}} dataset is PREFERENCE data — use "
+                    f"method='orpo'/'simpo' instead.",
+                    detected_format=None,
+                    supported_formats=_KTO_SUPPORTED,
                 )
 
         try:
@@ -4896,8 +5774,10 @@ class Trainer:
                     split=settings.data.dataset_split,
                     _label=f"load_dataset:{settings.data.dataset_name}",
                 )
-                if is_orpo:
+                if is_preference:
                     _require_preference_columns(ds, "default HuggingFace dataset")
+                elif is_kto:
+                    _require_kto_columns(ds, "default HuggingFace dataset")
             elif isinstance(dataset, DatasetLoader):
                 # DatasetLoader passed directly — use its validated output
                 validation = dataset.validation_result
@@ -4911,10 +5791,15 @@ class Trainer:
                     )
                     for err in validation.errors[:5]:
                         logger.warning(f"  {err}")
-                if is_orpo:
+                if is_preference:
                     # Preserves raw chosen/rejected/[prompt]; raises
-                    # DatasetFormatError when no pair row exists.
+                    # DatasetFormatError when no pair row exists. ORPO + SimPO
+                    # share this paired path.
                     ds = dataset.to_preference_dataset()
+                elif is_kto:
+                    # Unpaired {prompt, completion, label}; raises
+                    # DatasetFormatError when no KTO row exists.
+                    ds = dataset.to_kto_dataset()
                 else:
                     _emit_sft_on_preference_warning(dataset.detected_format)
                     ds = dataset.to_hf_dataset()
@@ -4946,11 +5831,17 @@ class Trainer:
                         for err in validation.errors[:5]:
                             logger.warning(f"  {err}")
 
-                    if is_orpo:
+                    if is_preference:
                         # to_preference_dataset raises DatasetFormatError when
                         # the file is an SFT file with no chosen/rejected rows
-                        # (the "operator pointed ORPO at an SFT dataset" case).
+                        # (the "operator pointed ORPO/SimPO at an SFT dataset"
+                        # case). ORPO + SimPO share this paired path.
                         ds = loader.to_preference_dataset()
+                    elif is_kto:
+                        # to_kto_dataset raises DatasetFormatError when no row
+                        # carries {completion, label} (the "operator pointed KTO
+                        # at a paired/SFT dataset" case).
+                        ds = loader.to_kto_dataset()
                     else:
                         _emit_sft_on_preference_warning(loader.detected_format)
                         ds = loader.to_hf_dataset()
@@ -4969,14 +5860,20 @@ class Trainer:
                             f"Failed to load HuggingFace dataset '{dataset}': {e}",
                             suggestion="Check dataset name and network connection"
                         ) from e
-                    if is_orpo:
+                    if is_preference:
                         _require_preference_columns(
+                            ds, f"HuggingFace dataset '{dataset}'"
+                        )
+                    elif is_kto:
+                        _require_kto_columns(
                             ds, f"HuggingFace dataset '{dataset}'"
                         )
             elif isinstance(dataset, Dataset):
                 ds = dataset
-                if is_orpo:
+                if is_preference:
                     _require_preference_columns(ds, "in-memory Dataset")
+                elif is_kto:
+                    _require_kto_columns(ds, "in-memory Dataset")
             else:
                 raise DatasetError(
                     f"Unsupported dataset type: {type(dataset).__name__}",

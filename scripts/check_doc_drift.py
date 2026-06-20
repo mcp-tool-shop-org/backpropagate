@@ -1251,6 +1251,18 @@ def check_workflow_severity_drift() -> list[str]:
 
 
 def main() -> int:
+    # Windows-first: this script prints doc cells verbatim (drift findings echo
+    # the offending text). A non-cp1252 glyph in a doc — e.g. an arrow or a >=
+    # sign — would otherwise crash the gate with UnicodeEncodeError on a legacy
+    # console. Reconfigure to UTF-8 with errors="replace" so the gate reports
+    # rather than crashes (mirrors the cli._reconfigure_stdio_utf8 fix).
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            try:
+                _reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001  # nosec B110 — never fail the gate over stdio
+                pass
     all_findings: list[str] = []
     checks = (
         check_env_vars,

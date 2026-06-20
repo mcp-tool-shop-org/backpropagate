@@ -2723,16 +2723,16 @@ class Trainer:
             else:
                 # Provisionally effective — load_model()'s _apply_fp8_to_base
                 # may still flip this False if the actual conversion raises
-                # (try/except → bf16 fallback). The ONE experimental WARN fires
+                # (try/except → bf16 fallback). The ONE FP8-path WARN fires
                 # here so it is emitted exactly once per Trainer, at construction.
                 self._fp8_effective = True
                 logger.warning(
-                    "fp8=True: FP8 training is EXPERIMENTAL in v1.5 (torchao "
-                    "float8 path, validated on Blackwell sm_120). The base "
+                    "fp8=True: the FP8 compute path (torchao float8) is "
+                    "dogfood-verified on Blackwell (sm_120) as of v1.6. The base "
                     "projection linears will be converted to Float8Linear after "
                     "the LoRA adapter is attached; the adapter, lm_head, and "
                     "embeddings stay in bf16. Report anomalies (loss spikes, "
-                    "export mismatches) so the path can graduate to stable."
+                    "export mismatches) on other sm_90+ hardware (e.g. Hopper)."
                 )
                 # v1.5 T2.1 (FP8): FP8 vs default 4-bit. Now that FP8 is
                 # EFFECTIVE (supported host + library), the default 4-bit is

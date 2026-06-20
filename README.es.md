@@ -145,7 +145,7 @@ Esto entrena un adaptador Qwen 2.5 de 7B con 5 conversaciones cortas en formato 
 
 Los formatos Alpaca (`instruction` / `output`), OpenAI chat (`messages`) y texto sin formato también funcionan: Backpropagate detecta automáticamente el formato.
 
-### Ajuste de preferencias (ORPO)
+### Ajuste de preferencias (ORPO, SimPO, KTO)
 
 Novedad en la v1.5: entrene con preferencias en lugar de demostraciones simples. ORPO no requiere referencia y es de una sola etapa: integra la señal de preferencia en el paso de ajuste fino supervisado, por lo que no hay un modelo de recompensa o de referencia separado y la forma de 3 líneas se mantiene. Pase `--method orpo` (CLI) o `method="orpo"` (Python) y proporcione un conjunto de datos de filas `{prompt, chosen, rejected}` (o simplemente `{chosen, rejected}`):
 
@@ -166,7 +166,9 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-La tasa de aprendizaje predeterminada se reduce automáticamente a `8e-6` para ORPO (la pérdida es más pronunciada que en SFT simple); ajuste `--orpo-beta` (valor predeterminado `0.1`) para ponderar la penalización de la razón de probabilidades. En v1.5, ORPO solo tiene `mode="lora"`. SimPO y KTO están planeados como desarrollos posteriores; para RL en línea (PPO/GRPO), consulte [Qué NO es la retropropagación](#what-backpropagate-is-not-for).
+La tasa de aprendizaje predeterminada se reduce automáticamente a `8e-6` para ORPO (la pérdida es más pronunciada que en el SFT simple); ajuste `--orpo-beta` (valor predeterminado: `0.1`) para ponderar la penalización de la razón de probabilidades. ORPO solo funciona con `mode="lora"`.
+
+**Novedad en la versión 1.6: SimPO y KTO.** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734)) no requiere referencia, utiliza una recompensa normalizada por longitud y toma los mismos datos emparejados `{prompt, chosen, rejected}` que ORPO (`--simpo-beta`, `--simpo-gamma`). `--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306)) utiliza datos **no emparejados** `{prompt, completion, label}` — valoraciones positivas/negativas por ejemplo — para la gran clase de comentarios que no son pares A/B seleccionados; equilibra automáticamente los pesos deseables/indeseables de la pérdida a partir del recuento de etiquetas. Ambos solo funcionan con `mode="lora"` y se mantienen dentro del ámbito SFT de una sola GPU (sin un modelo de referencia separado). Consulte el [manual de ajuste de preferencias](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/) para saber cuál utilizar. Para RL en línea (PPO/GRPO), consulte [Qué NO es Backpropagate](#what-backpropagate-is-not-for).
 
 ### SFT de trazado de razonamiento (destilación R1)
 
@@ -190,7 +192,7 @@ backprop train --data my_data.jsonl --backend mlx --steps 100
 
 En v1.5, la vía MLX es **solo LoRA SFT**; no hay ORPO, no hay FP8, no hay `mode='full'`, no hay ejecución múltiple en MLX todavía (cada una se rechaza con `CONFIG_INVALID_SETTING`; use `backend='cuda'`/`'auto'` en un sistema NVIDIA para esas opciones). El adaptador resultante es un archivo safetensors simple y se exporta a Ollama a través de la misma ruta que la vía CUDA.
 
-> ⚠️ **Estado honesto:** la vía MLX se incluye en v1.5 **construida + probada con pruebas unitarias (simuladas)**, pero **todavía no se ha verificado en Apple Silicon real**; `mlx-lm` es exclusivo de Apple y no se pudo ejecutar en el sistema NVIDIA en el que se creó esto. Trátelo como experimental (el mismo enfoque que la vía FP8) y, por favor, [informe de las anomalías](#reporting-bugs) una vez que se ejecute en un Mac de la serie M. Forzar `--backend mlx` en un host que no sea de Apple genera un error con `CONFIG_INVALID_SETTING`; la falta del conjunto de herramientas `mlx_lm` en un Mac genera `DEP_MLX_UNAVAILABLE`.
+> ⚠️ **Estado actual:** la implementación MLX incluida en la versión 1.5 está **construida y probada unitariamente (simulada)**, pero **aún no se ha verificado con pruebas reales en hardware Apple Silicon**; `mlx-lm` solo funciona en dispositivos Apple y no se pudo ejecutar en el equipo NVIDIA donde se desarrolló este código. Trátelo como experimental, al igual que la ruta FP8 en la versión 1.5 (FP8 pasó a la fase de verificación con pruebas reales en Blackwell en la versión 1.6; MLX aún necesita esa fase en hardware real); por favor, [informe sobre cualquier anomalía](#reporting-bugs) una vez que se ejecute en un Mac de la serie M. Forzar `--backend mlx` en un host que no sea Apple genera el error `CONFIG_INVALID_SETTING`; la falta de las herramientas `mlx_lm` en un Mac genera el error `DEP_MLX_UNAVAILABLE`.
 
 Para obtener más flujos de trabajo de principio a fin (ajuste fino y carga en HF Hub, reanudación después de que se agota la memoria, SLAO de ejecución múltiple en una campaña larga, etc.), consulte la [página de recetas del manual](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
@@ -303,7 +305,7 @@ Las operaciones de escritura en el sistema de archivos desde la interfaz de usua
 
 **Requisitos:** Python 3.10+ · GPU CUDA (8 GB+ de VRAM) · PyTorch 2.0+
 
-Python 3.10 dejará de recibir soporte en octubre de 2026 y está programado para ser eliminado en la versión 1.5. Para nuevas instalaciones, prefiera Python 3.11 o 3.12; 3.11 es la versión más probada.
+Python 3.10 es compatible hasta al menos la versión 1.6; su soporte oficial finaliza en octubre de 2026 y está programado para ser eliminado en la primera versión posterior a esa fecha. Para nuevas instalaciones, prefiera Python 3.11 o 3.12; 3.11 es la versión más probada.
 
 Backpropagate gestiona las peculiaridades del tiempo de ejecución al entrenar en diferentes plataformas, pero no puede solucionar los problemas que surgen durante la instalación. Los dos más comunes son:
 

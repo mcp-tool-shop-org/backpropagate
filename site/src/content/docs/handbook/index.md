@@ -11,6 +11,7 @@ Welcome to the Backpropagate handbook. This is the complete operator guide — e
 
 - **[Getting Started](/backpropagate/handbook/getting-started/)** — Install and train your first model in under 5 minutes
 - **[Training](/backpropagate/handbook/training/)** — Basic training, multi-run SLAO, callbacks, dataset formats, and model presets
+- **[Preference tuning (ORPO / SimPO / KTO)](/backpropagate/handbook/preference-tuning/)** — v1.6 — when to use each method, paired vs unpaired data, the VRAM envelope, hyperparameters, and the cited papers
 - **[Full fine-tuning (`mode="full"`)](/backpropagate/handbook/full-fine-tuning/)** — v1.4 — when to use full FT, the 4B parameter ceiling, and the LoRA-vs-full quality math
 - **[Export](/backpropagate/handbook/export/)** — GGUF export, Ollama registration, quantization options, and custom Modelfiles
 - **[Recipes](/backpropagate/handbook/recipes/)** — Common operator workflows — paste-and-run snippets keyed by what you actually want to do
@@ -22,7 +23,7 @@ Welcome to the Backpropagate handbook. This is the complete operator guide — e
 - **[Troubleshooting (CUDA)](/backpropagate/handbook/troubleshooting-cuda/)** — Deep-dive on OOM, CUBLAS, NCCL, mixed-precision pitfalls, driver mismatch
 - **[Environment variables](/backpropagate/handbook/env-vars/)** — Every `BACKPROPAGATE_*` knob, grouped by family
 - **[CLI reference](/backpropagate/handbook/cli-reference/)** — Every `backprop` subcommand and flag
-- **[Migrations](/backpropagate/handbook/migrations/)** — Operator-facing upgrade paths between Backpropagate versions (v1.2.x → v1.3, v1.1.x → v1.2.0)
+- **[Migrations](/backpropagate/handbook/migrations/)** — Operator-facing upgrade paths between Backpropagate versions (v1.5 → v1.6, v1.3 → v1.4, and earlier hops)
 - **[Beginners Guide](/backpropagate/handbook/beginners/)** — New to LLM fine-tuning? Start here for a step-by-step walkthrough
 
 [Back to landing page](/backpropagate/)

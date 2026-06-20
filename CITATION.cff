@@ -13,8 +13,8 @@ url: "https://mcp-tool-shop-org.github.io/backpropagate/"
 # scripts/prep_release.sh (landed v1.4 Wave 6a, CIDOCS-F-025) bumps both
 # fields from pyproject.toml's [project].version + the current UTC date
 # and validates the references: list before the publish chain runs.
-version: 1.5.0
-date-released: 2026-05-31
+version: 1.6.0
+date-released: 2026-06-20
 license: MIT
 keywords:
   - llm

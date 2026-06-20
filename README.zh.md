@@ -145,7 +145,7 @@ trainer.export('gguf', quantization='q4_k_m')
 
 Alpaca（`instruction` / `output`）、OpenAI 聊天（`messages`）和原始文本格式也可以工作——Backpropagate 会自动检测格式。
 
-### 偏好调整（ORPO）
+### 偏好调整（ORPO、SimPO、KTO）
 
 v1.5 版本的新功能：使用偏好而不是纯演示进行训练。ORPO 是无参考且单阶段的——它将偏好信号折叠到 SFT 步骤中，因此没有单独的奖励或参考模型，并且 3 行的结构保持不变。通过 `--method orpo`（CLI）或 `method="orpo"`（Python）传递，并提供一个包含 `{prompt, chosen, rejected}`（或仅 `{chosen, rejected}`）行的数据集：
 
@@ -166,7 +166,9 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-默认的学习率会自动降低到 `8e-6`，用于 ORPO（损失函数比普通的 SFT 更陡峭）；调整 `--orpo-beta`（默认值为 `0.1`）以调整优势比惩罚的权重。在 v1.5 中，ORPO 仅为 `mode="lora"`。SimPO 和 KTO 计划作为后续功能推出；对于在线 RL（PPO/GRPO），请参阅 [反向传播并非](#what-backpropagate-is-not-for)。
+对于 ORPO，默认学习率会自动降低到 `8e-6`（损失函数比普通的 SFT 更陡峭）；通过调整 `--orpo-beta`（默认为 `0.1`）来设置赔率比惩罚的权重。ORPO 仅适用于 `mode="lora"`。
+
+**v1.6 版本的新功能 — SimPO 和 KTO。** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734)) 不需要参考数据，使用长度归一化的奖励，并采用与 ORPO 相同的配对 `{prompt, chosen, rejected}` 数据（`--simpo-beta`、`--simpo-gamma`）。`--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306)) 使用**未配对的** `{prompt, completion, label}` 数据——每个示例的“好评/差评”——用于处理大量非人工筛选的 A/B 对反馈；它会自动平衡来自标签计数的理想/不理想损失权重。两者都仅适用于 `mode="lora"`，并且仍然在单个 GPU 的 SFT 范围内（没有单独的参考模型）。请参阅[偏好调整手册](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/) 以了解应该使用哪一个。对于在线 RL（PPO/GRPO），请参见[Backpropagate 并非用于](#what-backpropagate-is-not-for)。
 
 ### 基于推理轨迹的 SFT（R1 蒸馏）
 
@@ -190,7 +192,7 @@ backprop train --data my_data.jsonl --backend mlx --steps 100
 
 在 v1.5 中，MLX 框架**仅支持 LoRA SFT**——不支持 ORPO、不支持 FP8、不支持 `mode='full'`，目前也不支持在 MLX 上进行多轮训练（每轮都会出现 `CONFIG_INVALID_SETTING` 错误；如果需要这些功能，请在 NVIDIA 机器上使用 `backend='cuda'`/`'auto'`）。生成的适配器是纯 safetensors 格式，并通过与 CUDA 框架相同的路径导出到 Ollama。
 
-> ⚠️ **诚实的状态：** MLX 框架在 v1.5 中以**已构建 + 单元测试（模拟）**的形式提供，但**尚未在真实的 Apple Silicon 上进行实际验证**——`mlx-lm` 仅适用于 Apple，并且无法在此处编写代码的 NVIDIA 机器上运行。将其视为实验性功能（与 FP8 路径具有相同的框架），并且请在它在 M 系列 Mac 上运行时[报告异常](#reporting-bugs)。在非 Apple 机器上强制使用 `--backend mlx` 会出现 `CONFIG_INVALID_SETTING` 错误；如果在 Mac 上缺少 `mlx_lm` 工具链，则会显示 `DEP_MLX_UNAVAILABLE`。
+> ⚠️ **当前状态：**v1.5 版本中包含的 MLX 框架已经过构建和单元测试（模拟），但**尚未在真实的 Apple Silicon 上进行实际验证**——`mlx-lm` 仅适用于 Apple 设备，无法在此处编写代码时运行在 NVIDIA 系统上。请将其视为实验性功能——与 v1.5 中 FP8 路径的初始状态相同（FP8 在 v1.6 中已升级到经过实际验证的状态；MLX 仍需要在真实的硬件上进行测试），并且请在它在一系列 M 型 Mac 上运行时[报告异常](#reporting-bugs)。如果在非 Apple 主机上强制使用 `--backend mlx`，则会出错并显示 `CONFIG_INVALID_SETTING`；如果 Mac 上缺少 `mlx_lm` 工具链，则会显示 `DEP_MLX_UNAVAILABLE`。
 
 有关更多端到端的流程（微调并推送到 HF Hub、在 OOM 之后恢复、在长时间的训练过程中进行多轮 SLAO 等），请参阅 [手册配方页面](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/)。
 
@@ -303,7 +305,7 @@ UI 中的文件系统写入操作被限制在一个目录中：
 
 **要求：** Python 3.10+ · CUDA GPU（8GB+ VRAM）· PyTorch 2.0+
 
-Python 3.10 将于 2026 年 10 月达到其生命周期终点，并且计划在 v1.5 中停止支持。对于新安装，建议使用 Python 3.11 或 3.12——3.11 是经过最多测试的最低版本。
+Python 3.10 至少支持到 v1.6 版本；它将在 2026 年 10 月达到上游生命周期结束，并且计划在之后发布的第一个版本中删除。对于新安装，建议使用 Python 3.11 或 3.12——3.11 是经过最多测试的版本。
 
 Backpropagate 处理不同平台上训练时出现的一些运行时问题，但它无法修复安装时出现的问题。最常见的问题有两个：
 

@@ -786,6 +786,14 @@ def cmd_train(args: argparse.Namespace) -> int:
             # kwarg silently when the installed Trainer doesn't accept
             # it (pre-Wave-6b builds), so this flag is forward-compatible.
             "mode": getattr(args, "mode", "lora"),
+            # v1.7: --full-ft-ceiling-billions / --full-ft-offload thread to
+            # Trainer(full_ft_ceiling_billions=..., full_ft_offload=...). The
+            # ceiling override lifts the card-aware full-FT param ceiling; offload
+            # enables the FSDP2 CPU-offload path (7B-class full-FT spilling
+            # params+optimizer to host RAM; Linux/WSL2). Same introspection
+            # filter → forward-compatible / dropped on pre-v1.7 builds.
+            "full_ft_ceiling_billions": getattr(args, "full_ft_ceiling_billions", None),
+            "full_ft_offload": bool(getattr(args, "full_ft_offload", False)),
             # v1.5 T1.2 (ORPO): --method / --orpo-beta thread to
             # Trainer(method=..., orpo_beta=...). Same introspection filter
             # contract — these are dropped until the trainer wave adds the
@@ -6427,11 +6435,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
 # duplication is intentional so the CLI surface doesn't need to construct
 # a Trainer (which would import torch + transformers).
 _VRAM_BATCH_SIZE_TIERS: list[tuple[float, int, str]] = [
-    (24.0, 4, "RTX 4090 / 3090 / A5000 — 7B fits with LoRA r=64"),
+    (48.0, 8, "A6000 / L40 / dual-5090 — large batch; 24-34B QLoRA comfortable"),
+    (32.0, 6, "RTX 5090 — 14B QLoRA comfortable; 32B QLoRA just fits (max_len 2048 + paged 8-bit AdamW); 7B-class full-FT via --full-ft-offload"),
+    (24.0, 4, "RTX 4090 / 3090 / A5000 — 7B LoRA r=64; up to ~14B QLoRA"),
     (16.0, 2, "RTX 5080 / 4070 Ti Super — 7B with LoRA r=16-32"),
     (12.0, 1, "RTX 4070 / 3060 12GB — 7B with LoRA r=8 + gradient checkpointing"),
     (0.0, 1, "Tight fit / fallback — batch=1 + LoRA r=8 + gradient ckpt"),
 ]
+
+# Nominal-vs-reported VRAM tolerance — mirrors trainer._VRAM_TIER_TOLERANCE_GB.
+# A "32 GB" 5090 reports total_memory of ~31.8 GiB; matching the displayed
+# nominal thresholds with this tolerance keeps a real card in its intended tier.
+_VRAM_TIER_TOLERANCE_GB: float = 1.5
 
 
 def cmd_estimate_vram(args: argparse.Namespace) -> int:
@@ -6481,7 +6496,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     # Pick the matching tier.
     selected_tier = _VRAM_BATCH_SIZE_TIERS[-1]
     for threshold, bs, note in _VRAM_BATCH_SIZE_TIERS:
-        if vram_gb >= threshold:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
             selected_tier = (threshold, bs, note)
             break
 
@@ -6494,7 +6509,8 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     mode = getattr(args, "mode", "lora")
     cli_lora_r = getattr(args, "lora_r", None)
     cli_batch_size = getattr(args, "batch_size", None)
-    if cli_batch_size is not None or mode == "full":
+    cli_offload = bool(getattr(args, "full_ft_offload", False))
+    if cli_batch_size is not None or mode == "full" or cli_offload:
         try:
             from .trainer import estimate_vram as _estimate_vram
             estimate = _estimate_vram(
@@ -6502,6 +6518,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                 mode=mode,
                 lora_r=cli_lora_r if cli_lora_r is not None else 16,
                 batch_size=cli_batch_size if cli_batch_size is not None else 1,
+                offload=cli_offload,
             )
             # Coerce the dataclass-shaped estimate into a dict for JSON /
             # human-readable rendering. Defensive: accept either a dict
@@ -6519,6 +6536,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                         "optimizer_state_gb",
                         "activations_gb",
                         "overhead_gb",
+                        "host_ram_gb",
                         "param_count_billions",
                         "mode",
                         "notes",
@@ -7217,9 +7235,35 @@ Tips:
         help=(
             "Training mode. 'lora' (default) = LoRA adapter training "
             "(rank, alpha, dropout govern). 'full' = full fine-tuning "
-            "(no adapter; trains all params). Full FT is allowed up to 4B "
-            "params; a genuine ~3B fits a 16GB card, the 3.8-4B class needs "
-            "24GB+. The backend refuses full FT on >4B models. (Wave 6b)"
+            "(no adapter; trains all params). The full-FT parameter ceiling "
+            "is card-aware (derived from detected VRAM: 16GB->4B, 24GB->5B, "
+            "32GB->6B pure-GPU). --full-ft-offload lifts it to 7B-class via "
+            "FSDP2 CPU-offload (Linux/WSL2). (Wave 6b / v1.7)"
+        ),
+    )
+    # v1.7: full-FT ceiling override + FSDP2 CPU-offload opt-in. Both thread
+    # through the wave6b_candidate_kwargs introspection filter to Trainer.
+    train_parser.add_argument(
+        "--full-ft-ceiling-billions",
+        type=_positive_float,
+        default=None,
+        metavar="B",
+        help=(
+            "Override the card-aware full fine-tuning parameter ceiling "
+            "(billions). Default: unset (derived from detected VRAM: "
+            "16GB->4B, 24GB->5B, 32GB->6B pure-GPU; --full-ft-offload lifts "
+            "it). mode='full' only."
+        ),
+    )
+    train_parser.add_argument(
+        "--full-ft-offload",
+        action="store_true",
+        help=(
+            "Enable the FSDP2 CPU-offload full fine-tuning path: spill params "
+            "+ optimizer state into host RAM so a 7B-class full FT fits a 32GB "
+            "card (+~64GB host RAM). Slower (PCIe/CPU-bandwidth-bound) and "
+            "requires a usable NCCL backend (Linux/WSL2 — NOT Windows-native; "
+            "raises DEP_FSDP_UNAVAILABLE otherwise). mode='full' only."
         ),
     )
     # v1.5 T1.2 (ORPO) + v1.6 C4 (SimPO/KTO): --method selector + the
@@ -7368,8 +7412,9 @@ Tips:
         help=(
             "Training backend. 'auto' (default) uses CUDA on NVIDIA, MLX on "
             "Apple Silicon (needs the [mlx] extra). 'cuda'/'mlx' force a "
-            "backend. MLX = LoRA SFT only, Apple-Silicon only; forcing 'mlx' "
-            "on non-Apple errors cleanly."
+            "backend. MLX is an EXPERIMENTAL, UNVERIFIED PREVIEW (LoRA SFT only, "
+            "Apple-Silicon only, not dogfood-verified on real silicon — no "
+            "support); forcing 'mlx' on non-Apple errors cleanly."
         ),
     )
     train_parser.add_argument(
@@ -8550,6 +8595,15 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "Training mode for the per-config estimate. 'lora' (default) "
             "or 'full'. Full FT uses gradient_checkpointing=True so the "
             "activation memory scales as sqrt(num_layers)."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--full-ft-offload",
+        action="store_true",
+        help=(
+            "Estimate the FSDP2 CPU-offload full-FT path: params + optimizer "
+            "spill to host RAM (reported as host_ram) so the GPU total drops "
+            "to the working set + activations. mode='full' only."
         ),
     )
     estimate_vram_parser.add_argument(

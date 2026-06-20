@@ -348,7 +348,7 @@ except PackageNotFoundError:
 # grace period was extended one more minor release rather than hard-breaking
 # callers. v1.6 shipped the gradio purge + the gradio-named-alias removal but
 # kept these v1.1.0-removed attrs on the ImportError grace one more cycle.)
-_REMOVED_IN_VERSION = "v1.7"
+_REMOVED_IN_VERSION = "v1.8"
 
 _DEPRECATED_UI_ATTRS = {
     "launch": (

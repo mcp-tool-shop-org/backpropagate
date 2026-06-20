@@ -87,6 +87,7 @@ __all__ = [
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
     "MLXUnavailableError",
+    "FsdpUnavailableError",
     "TrainingAbortedError",
     "CheckpointError",
     # Export
@@ -471,18 +472,37 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     # Machines 2025). VRAM split: a genuine ~3B fits 16GB; 3.8-4B needs 24GB+.
     "RUNTIME_FULL_FT_MODEL_TOO_LARGE": {
         "description": (
-            "mode='full' was selected but the target model exceeds the 4B "
-            "parameter ceiling for full fine-tuning. (A genuine ~3B fits a "
-            "16GB card; the 3.8-4B class needs 24GB+.)"
+            "mode='full' was selected but the target model exceeds the "
+            "card-aware full fine-tuning parameter ceiling. The pure-GPU "
+            "ceiling is derived from detected VRAM (16GB->4B, 24GB->5B, "
+            "32GB->6B); FSDP2 CPU-offload (--full-ft-offload) lifts it "
+            "(32GB->~8B, enabling 7B-class full-FT into 64GB host RAM)."
         ),
         "default_hint": (
-            "Re-run with mode='lora' (the default) to fine-tune a LoRA "
-            "adapter on the same model, OR switch to a model whose parameter "
-            "count fits the 4B ceiling — smollm3-3b / qwen2.5-3b / "
-            "llama-3.2-3b / llama-3.2-1b fit 16GB; phi-4-mini-3.8b / "
-            "qwen3.5-4b also support mode='full' but need a 24GB+ card. "
-            "See handbook/full-fine-tuning.md for the "
-            "Biderman 2024 + Thinking Machines 2025 quality math."
+            "If the model fits the FSDP2 CPU-offload ceiling, add "
+            "--full-ft-offload (Python: full_ft_offload=True) to spill "
+            "params+optimizer into host RAM (slower, needs ~64GB RAM). "
+            "Otherwise re-run with mode='lora' (the default) — LoRA/QLoRA "
+            "fits 7B-34B on a 32GB card — or switch to a smaller model. "
+            "See handbook/full-fine-tuning.md for the 4-addend VRAM math + "
+            "the Biderman 2024 + Thinking Machines 2025 quality comparison."
+        ),
+        "retryable": "no",
+    },
+    # v1.7: the FSDP2 CPU-offload full-FT path (full_ft_offload=True) was
+    # requested but the FSDP toolchain (torch.distributed FSDP / accelerate) is
+    # not importable/usable. Raised by trainer.py before the offload run starts.
+    "DEP_FSDP_UNAVAILABLE": {
+        "description": (
+            "full_ft_offload=True (FSDP2 CPU-offload full fine-tuning) was "
+            "requested but the FSDP toolchain (torch.distributed FSDP / "
+            "accelerate) is unavailable in this environment."
+        ),
+        "default_hint": (
+            "Install/repair the FSDP toolchain (a recent torch with "
+            "torch.distributed.fsdp, plus `pip install accelerate`), OR drop "
+            "--full-ft-offload and use a model within the pure-GPU full-FT "
+            "ceiling, OR use mode='lora' (QLoRA fits 7B-34B on a 32GB card)."
         ),
         "retryable": "no",
     },
@@ -1038,10 +1058,21 @@ class FullFinetuneModelTooLargeError(TrainingError):
         param_count_billions: float | None = None,
         ceiling_billions: float = 4.0,
         suggestion: str | None = None,
+        *,
+        offload_ceiling_billions: float | None = None,
+        offload_recoverable: bool = False,
+        offload_active: bool = False,
     ):
         self.model_name = model_name
         self.param_count_billions = param_count_billions
         self.ceiling_billions = ceiling_billions
+        # v1.7: card-aware FSDP2 CPU-offload context. ``offload_recoverable`` is
+        # True when the model clears the offload ceiling but not the pure-GPU
+        # ceiling AND offload is currently OFF — the case where --full-ft-offload
+        # is the right recovery (not LoRA).
+        self.offload_ceiling_billions = offload_ceiling_billions
+        self.offload_recoverable = offload_recoverable
+        self.offload_active = offload_active
 
         if param_count_billions is not None:
             # Concrete count available — name it so the operator can compare
@@ -1055,21 +1086,46 @@ class FullFinetuneModelTooLargeError(TrainingError):
             # the actionable hint even when the precise number is unknown.
             size_phrase = "exceeds the documented parameter ceiling"
 
-        message = (
-            f"model {model_name!r} {size_phrase}; mode='full' supports "
-            f"models up to {ceiling_billions:.0f}B parameters. "
-            f"Re-run with mode='lora' (the default) to fine-tune a LoRA "
-            f"adapter, OR switch to a smaller model "
-            f"(smollm3-3b / qwen2.5-3b / llama-3.2-3b / llama-3.2-1b fit 16GB; "
-            f"phi-4-mini-3.8b / qwen3.5-4b need 24GB+)."
-        )
+        if offload_recoverable and offload_ceiling_billions is not None:
+            # v1.7 CONTRASTIVE recovery: the model fits the FSDP2 CPU-offload
+            # ceiling but not the pure-GPU ceiling, and offload is OFF. Point the
+            # operator at --full-ft-offload BEFORE they reach for LoRA.
+            message = (
+                f"model {model_name!r} {size_phrase}; mode='full' fits up to "
+                f"~{ceiling_billions:.1f}B pure-GPU on this card, but up to "
+                f"~{offload_ceiling_billions:.1f}B with FSDP2 CPU-offload. "
+                f"Enable --full-ft-offload (Python: full_ft_offload=True) to "
+                f"spill params + optimizer state into host RAM and full-fine-tune "
+                f"this model (slower, PCIe/CPU-bandwidth-bound, needs ~64GB host "
+                f"RAM), OR re-run with mode='lora' (the default) for a LoRA adapter."
+            )
+        else:
+            # Exceeds even the offload ceiling, or offload is already active:
+            # the recovery is LoRA / QLoRA (fits 7B-34B on a 32GB card) or a
+            # smaller model. Card-aware: the ceiling figure already reflects the
+            # detected VRAM, so we no longer hard-code a 16GB model list.
+            ceiling_phrase = (
+                f"{ceiling_billions:.1f}B parameters even with FSDP2 CPU-offload"
+                if offload_active
+                else f"{ceiling_billions:.1f}B parameters"
+            )
+            message = (
+                f"model {model_name!r} {size_phrase}; mode='full' supports "
+                f"models up to {ceiling_phrase} on this card. "
+                f"Re-run with mode='lora' (the default) — LoRA / QLoRA fits "
+                f"7B-34B on a 32GB card — OR switch to a smaller model."
+            )
 
         details: dict[str, Any] = {
             "model_name": model_name,
             "ceiling_billions": ceiling_billions,
+            "offload_recoverable": offload_recoverable,
+            "offload_active": offload_active,
         }
         if param_count_billions is not None:
             details["param_count_billions"] = param_count_billions
+        if offload_ceiling_billions is not None:
+            details["offload_ceiling_billions"] = offload_ceiling_billions
 
         super().__init__(
             message,
@@ -1114,6 +1170,42 @@ class MLXUnavailableError(TrainingError):
                 "backend='auto' (routes to CUDA)."
             ),
             code="DEP_MLX_UNAVAILABLE",
+            retryable=False,
+        )
+
+
+class FsdpUnavailableError(TrainingError):
+    """v1.7: raised when full_ft_offload=True but the FSDP toolchain is absent.
+
+    The FSDP2 CPU-offload full-FT path needs torch.distributed FSDP
+    (``fully_shard`` + ``CPUOffloadPolicy``) and accelerate to spill params +
+    optimizer state into host RAM. When the operator opts into the path
+    (``full_ft_offload=True`` / ``--full-ft-offload``) but the toolchain is not
+    importable, the trainer raises this BEFORE the run starts. Carries
+    ``code='DEP_FSDP_UNAVAILABLE'`` and is a ``TrainingError`` subclass so
+    callers catching ``TrainingError`` see it.
+    """
+
+    def __init__(self, reason: str | None = None, suggestion: str | None = None):
+        self.reason = reason
+        message = (
+            "FSDP2 CPU-offload full fine-tuning was requested "
+            "(full_ft_offload=True) but the FSDP toolchain "
+            "(torch.distributed FSDP / accelerate) is not available."
+        )
+        if reason:
+            message = f"{message} {reason}"
+        super().__init__(
+            message,
+            details={"reason": reason} if reason else None,
+            suggestion=suggestion
+            or (
+                "Install/repair the FSDP toolchain (a recent torch with "
+                "torch.distributed.fsdp + `pip install accelerate`), OR drop "
+                "--full-ft-offload, OR use mode='lora' (QLoRA fits 7B-34B "
+                "on a 32GB card)."
+            ),
+            code="DEP_FSDP_UNAVAILABLE",
             retryable=False,
         )
 

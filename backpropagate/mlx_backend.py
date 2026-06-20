@@ -1,25 +1,25 @@
 """
-Backpropagate - MLX / Apple-Silicon Training Backend (v1.5 T3.1)
-================================================================
+Backpropagate - MLX / Apple-Silicon Training Backend
+====================================================
+
+⚠️ **EXPERIMENTAL — UNVERIFIED PREVIEW.** ⚠️
+The MLX (Apple Silicon) rail is built and unit-tested but has **NOT** been
+dogfood-verified on real Apple Silicon. **No support; use at your own risk.**
+**Not part of the supported feature set.**
 
 A second training rail that targets **Apple Silicon** (M-series Macs) via
 Apple's ``mlx-lm`` toolchain (``mlx_lm.lora`` for LoRA training,
-``mlx_lm.fuse`` for adapter merge + optional GGUF export). It retires the
-"no macOS training" boundary (V1_5_BRIEF finding 21): the historical blocker
-was CUDA-coupling, not macOS, and unified memory removes the VRAM wall.
+``mlx_lm.fuse`` for adapter merge + optional GGUF export).
 
-⚠️ **BUILT-BUT-UNVERIFIED on Apple Silicon.** ⚠️
 ``mlx-lm`` is **Apple-Silicon-ONLY** (macOS + arm64) and CANNOT be installed or
-exercised on the Windows / CUDA rig this module was authored on. Every
-``mlx_lm`` invocation is therefore kept **behind a subprocess seam** — this
-module NEVER does ``import mlx_lm`` (it must import cleanly on a host where mlx
-is absent), drives the documented ``mlx_lm.lora`` / ``mlx_lm.fuse`` CLIs, and is
-covered by **mocked** unit tests. A real-hardware smoke (owned by a sibling
-agent) SKIPS on non-Apple hosts. This is the honest dual of the FP8 path's
-"experimental, skips on unsupported hardware" discipline: the code is wired and
-unit-verified, but the end-to-end MLX run has not been observed on real silicon
-as of v1.5. Report anomalies (loss parsing, argv shape, GGUF export) so the rail
-can graduate to "verified."
+exercised on a Windows / CUDA rig. Every ``mlx_lm`` invocation is therefore kept
+**behind a subprocess seam** — this module NEVER does ``import mlx_lm`` (it must
+import cleanly on a host where mlx is absent), drives the documented
+``mlx_lm.lora`` / ``mlx_lm.fuse`` CLIs, and is covered by **mocked** unit tests.
+A real-hardware smoke SKIPS on non-Apple hosts. The code is wired and
+unit-verified, but the end-to-end MLX run has **not** been observed on real
+silicon. Treat any output as unverified and report anomalies (loss parsing,
+argv shape, GGUF export).
 
 Architecture
 ------------
@@ -38,8 +38,8 @@ Architecture
   GGUF export route (:meth:`fuse`) is a thin wrapper over ``mlx_lm.fuse``.
 
 The MLX adapter directory is plain safetensors and feeds the existing
-``export_ollama_adapter`` path unchanged — no new export code is needed for
-v1.5 (DOCS notes this; this module does not build it).
+``export_ollama_adapter`` path unchanged — no new export code is needed
+(DOCS notes this; this module does not build it).
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def prepare_mlx_data_dir(
             (mirrors ``_load_dataset``'s shuffle-then-select ordering).
         shuffle: Whether to shuffle before the cap + split (default True,
             matching ``settings.data.shuffle``).
-        reasoning_trace: v1.5 T3.2 / re-audit #10. When True, run CORE's
+        reasoning_trace: When True, run CORE's
             :func:`datasets.filter_by_trace_length` over the converted ChatML
             rows BEFORE they become mlx ``messages`` records — dropping rows
             whose summed ``<think>`` span is empty / out of
@@ -237,7 +237,7 @@ def prepare_mlx_data_dir(
     # Universal conversion → list[{"text": "<chatml>"}].
     chatml_rows = DatasetLoader(dataset).to_chatml()
 
-    # v1.5 T3.2 / re-audit #10: trace-length filtering on the MLX rail. Run it
+    # Trace-length filtering on the MLX rail. Run it
     # on the ChatML ``{"text": ...}`` rows (CORE's filter operates on exactly
     # that shape) BEFORE the round-trip into mlx ``messages`` records, so empty
     # / over-long / unbalanced <think> traces are dropped here too — not just on
@@ -447,7 +447,7 @@ class MLXBackend:
         blocks). NB this diverges from the CUDA rail's PEFT "all-linear" default
         target — DOCS documents the q+v-on-N-layers vs all-linear divergence;
         this module does not attempt to force all-linear on mlx (mlx's
-        target-module spec differs and is out of scope for v1.5).
+        target-module spec differs and is out of scope for this preview rail).
         """
         return {
             "model": self.model,

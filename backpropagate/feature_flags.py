@@ -27,7 +27,7 @@ Installation commands for each feature:
     pip install backpropagate[logging]     # + structlog (structured JSON logs)
     pip install backpropagate[security]    # + PyJWT + cryptography (auth helpers)
     pip install backpropagate[fp8]         # + torchao FP8 compute path (Blackwell sm_90+; experimental)
-    pip install backpropagate[mlx]         # + MLX/Apple-Silicon training backend (macOS + arm64 ONLY)
+    pip install backpropagate[mlx]         # + MLX/Apple-Silicon backend (EXPERIMENTAL, UNVERIFIED PREVIEW; macOS + arm64 ONLY)
     pip install backpropagate[standard]    # unsloth + ui (recommended)
     pip install backpropagate[production]  # unsloth + ui + validation + logging + security
     pip install backpropagate[full]        # Everything
@@ -80,7 +80,8 @@ FEATURES: dict[str, bool] = {
     # _fp8_supported() adds the CUDA-available + sm>=9 capability gate on top of
     # this library-presence flag.
     "fp8": False,
-    # v1.5 T3.1 (MLX / Apple-Silicon backend): the `mlx_lm` toolchain
+    # MLX / Apple-Silicon backend (EXPERIMENTAL, UNVERIFIED PREVIEW — not part
+    # of the supported feature set): the `mlx_lm` toolchain
     # (mlx_lm.lora / mlx_lm.fuse), which is Apple-Silicon-ONLY (macOS + arm64).
     # Detected via find_spec("mlx_lm") only — NEVER imported here (mlx-lm pulls
     # in the mlx array framework, which probes Metal on import and is absent on
@@ -163,8 +164,11 @@ INSTALL_HINTS: dict[str, str] = {
         "speed/memory win."
     ),
     "mlx": (
-        "pip install 'backpropagate[mlx]' — installs the mlx-lm toolchain for "
-        "the Apple-Silicon training backend (LoRA via mlx_lm.lora, "
+        "EXPERIMENTAL — UNVERIFIED PREVIEW (not part of the supported feature "
+        "set; built and unit-tested but NOT dogfood-verified on real Apple "
+        "Silicon — no support, use at your own risk). "
+        "pip install 'backpropagate[mlx]' installs the mlx-lm toolchain for "
+        "the Apple-Silicon backend (LoRA via mlx_lm.lora, "
         "merge/GGUF via mlx_lm.fuse). macOS + arm64 ONLY — mlx-lm cannot "
         "install on Windows / Linux / Intel Macs. "
         "On a non-Apple host: backend='auto' routes to CUDA (no MLX needed) "
@@ -199,7 +203,7 @@ FEATURE_DESCRIPTIONS: dict[str, str] = {
     "flash_attention": "Flash Attention 2 for faster attention",
     "triton": "Triton kernels for optimized operations",
     "fp8": "FP8 compute path via torchao (Blackwell sm_90+; experimental)",
-    "mlx": "MLX/Apple-Silicon training backend (macOS + arm64 ONLY; mlx_lm.lora/fuse)",
+    "mlx": "MLX/Apple-Silicon backend — EXPERIMENTAL, UNVERIFIED PREVIEW (macOS + arm64 ONLY; mlx_lm.lora/fuse; not part of the supported feature set)",
     # F-005 per-tracker descriptions.
     "wandb": "Weights & Biases experiment tracking",
     "tensorboard": "TensorBoard local experiment logs",
@@ -369,7 +373,8 @@ def _detect_features() -> None:
     else:
         logger.debug("Feature 'fp8' unavailable: torchao not installed")
 
-    # v1.5 T3.1: MLX / Apple-Silicon backend. find_spec ONLY — importing
+    # MLX / Apple-Silicon backend (EXPERIMENTAL, UNVERIFIED PREVIEW). find_spec
+    # ONLY — importing
     # mlx_lm pulls in the mlx array framework, which probes Metal on import and
     # is absent on every non-Apple host (the import would raise). On a Windows /
     # Linux / Intel-Mac rig find_spec misses and this stays False, so

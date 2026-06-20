@@ -4724,6 +4724,144 @@ class TestEvalGateWiring:
         assert calls["n"] == 1
 
 
+def _mk_eval_metrics(loss, task_metrics, eval_n=200, metric_ci=None, run_id="r"):
+    """An EvalResult carrying C3 task metrics (for the conjunction-gate tests)."""
+    return EvalResult(
+        run_id=run_id,
+        model_name="test-model",
+        held_out_loss=loss,
+        perplexity=(None if loss is None else 2.718281828 ** loss),
+        generations=[GenerationSample(prompt="p", completion="c")],
+        n_prompts=1,
+        task_metrics=dict(task_metrics),
+        eval_n=eval_n,
+        metric_ci=metric_ci,
+    )
+
+
+class TestEvalGateTaskMetricConjunction:
+    """v1.6 C3: when eval_metrics is configured, _gated_merge consumes the
+    upgraded conjunction gate (loss floor AND task-metric noise band)."""
+
+    def test_metric_regression_rejects_even_when_loss_improves(self, tmp_path):
+        """Loss improving does NOT save a real exact_match regression."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path,
+            eval_gate=True,
+            eval_max_regression=0.0,
+            eval_metrics=["normalized_exact_match"],
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        new = _t22_lora(b_scale=5.0)
+
+        # before loss 1.0 EM 0.80; after loss 0.5 (better) EM 0.60 (worse, beyond
+        # the 0.02 CI band) -> conjunction REJECTS.
+        before_eval = _mk_eval_metrics(
+            1.0, {"normalized_exact_match": 0.80},
+            metric_ci={"normalized_exact_match": 0.02},
+        )
+        after_eval = _mk_eval_metrics(
+            0.5, {"normalized_exact_match": 0.60},
+            metric_ci={"normalized_exact_match": 0.02},
+        )
+        evals = iter([before_eval, after_eval])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is True
+        assert branched is False
+        # Snapshot restored.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+
+    def test_metric_within_noise_accepts(self, tmp_path):
+        """A metric drop within the CI band is noise -> the merge is kept."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path,
+            eval_gate=True,
+            eval_max_regression=0.0,
+            eval_metrics=["normalized_exact_match"],
+        )
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=2.0)
+
+        # EM 0.80 -> 0.77 (drop 0.03 < band 0.08) and loss improves -> ACCEPT.
+        before_eval = _mk_eval_metrics(
+            1.0, {"normalized_exact_match": 0.80},
+            metric_ci={"normalized_exact_match": 0.08},
+        )
+        after_eval = _mk_eval_metrics(
+            0.9, {"normalized_exact_match": 0.77},
+            metric_ci={"normalized_exact_match": 0.08},
+        )
+        evals = iter([before_eval, after_eval])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+        assert trainer._eval_cache is after_eval
+
+    def test_default_inert_no_metrics_is_loss_only(self, tmp_path):
+        """eval_metrics=None (default) -> loss-only gate, byte-identical to v1.5:
+        a loss improvement accepts even if (unsupplied) metrics would differ."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        assert trainer.config.eval_metrics is None
+        assert trainer.config.eval_references_path is None
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=2.0)
+
+        evals = iter([_mk_eval(2.0), _mk_eval(1.0)])  # loss improves
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+
+    def test_load_eval_references_reads_jsonl(self, tmp_path):
+        refs = tmp_path / "refs.jsonl"
+        refs.write_text(
+            '{"prompt": "Capital of France?", "reference": "Paris"}\n'
+            '\n'
+            '{"prompt": "2+2?", "references": ["4", "four"]}\n',
+            encoding="utf-8",
+        )
+        trainer = _GatedMergeHarness.build(tmp_path)
+        items = trainer._load_eval_references(str(refs))
+        assert len(items) == 2
+        assert items[0]["prompt"] == "Capital of France?"
+        assert items[1]["references"] == ["4", "four"]
+
+    def test_load_eval_references_missing_file_raises(self, tmp_path):
+        from backpropagate.exceptions import BackpropagateError
+
+        trainer = _GatedMergeHarness.build(tmp_path)
+        with pytest.raises(BackpropagateError) as exc:
+            trainer._load_eval_references(str(tmp_path / "nope.jsonl"))
+        assert exc.value.code == "INPUT_EVAL_HELDOUT_UNRESOLVED"
+
+
 # =============================================================================
 # v1.5 T2.2: full-run integration via the fake-trainer harness
 # =============================================================================

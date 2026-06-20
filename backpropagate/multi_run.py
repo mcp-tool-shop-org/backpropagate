@@ -475,6 +475,16 @@ class MultiRunConfig:
     eval_gate: bool = False               # When False the gate is inert (always accept)
     eval_max_regression: float = 0.0      # Tolerated held-out-loss increase
     eval_heldout_path: str | None = None  # Held-out set; None → derive the run's last-10% holdout in-process from full_dataset (TRAINER-A-002)
+    # v1.6 C3: deterministic, judge-free task-metric gating on top of the loss
+    # floor. DEFAULTS ARE INERT — eval_metrics=None + eval_references_path=None
+    # ⇒ the eval gate is loss-ONLY (byte-identical to v1.5). When BOTH are set,
+    # evaluate_run scores the named metrics against the references and eval_gate
+    # runs the conjunction (loss floor AND each task-metric noise band). The
+    # metric names are validated by eval.evaluate_run (INPUT_VALIDATION_FAILED
+    # on an unknown metric); the references file is a JSONL of
+    # {"prompt":..., "reference":...} (or "references":[...]) rows.
+    eval_metrics: list[str] | None = None      # None → loss-only gate (no task-metric conjunction)
+    eval_references_path: str | None = None    # JSONL of {prompt, reference|references}; None → no task metrics
 
 
 # Backwards compatibility alias
@@ -3149,6 +3159,9 @@ class MultiRunTrainer:
                 before_eval,
                 after_eval,
                 max_regression=self.config.eval_max_regression,
+                # v1.6 C3: gate on task metrics too when configured (inert when
+                # eval_metrics is None — loss-only, byte-identical to v1.5).
+                gated_metrics=self.config.eval_metrics,
             )
         except Exception:
             # Mid-gate failure: restore the snapshot and re-raise unchanged.
@@ -3324,6 +3337,52 @@ class MultiRunTrainer:
         )
         cfg.save_pretrained(str(adapter_dir))
 
+    def _load_eval_references(self, path: str) -> list[dict[str, Any]]:
+        """v1.6 C3: load a task-metric reference set from a JSONL file.
+
+        Each non-empty line is a JSON object with a ``prompt`` and a
+        ``reference`` (or ``references``) field; the exact shape is validated
+        downstream by :func:`evaluate_run`. A missing/unreadable file or a file
+        with zero usable rows raises ``BackpropagateError`` with the stable
+        ``INPUT_EVAL_HELDOUT_UNRESOLVED`` code (reused — the references file IS
+        the held-out evaluation set for the task-metric gate).
+        """
+        import json as _json
+
+        ref_path = Path(path)
+        if not ref_path.exists():
+            raise BackpropagateError(
+                f"eval_gate: eval_references_path not found: {path}",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                suggestion=(
+                    "Pass eval_references_path pointing at a readable JSONL of "
+                    '{"prompt": ..., "reference": ...} rows, or unset '
+                    "eval_metrics to gate on held-out loss only."
+                ),
+            )
+        items: list[dict[str, Any]] = []
+        with open(ref_path, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    items.append(obj)
+        if not items:
+            raise BackpropagateError(
+                f"eval_gate: eval_references_path produced no usable rows: {path}",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                suggestion=(
+                    "Each non-empty line must be a JSON object with a 'prompt' "
+                    "and a 'reference'/'references' field."
+                ),
+            )
+        return items
+
     def _evaluate_accumulator(
         self,
         accumulator_state: dict[str, Any] | None,
@@ -3400,11 +3459,23 @@ class MultiRunTrainer:
                     f"{hist_err}"
                 )
 
+            # v1.6 C3: load the task-metric reference set (JSONL) when both a
+            # metric selection AND a references file are configured. Inert by
+            # default (eval_metrics is None) — evaluate_run then computes no
+            # task metrics and the gate stays loss-only.
+            references = None
+            if self.config.eval_metrics and self.config.eval_references_path:
+                references = self._load_eval_references(
+                    self.config.eval_references_path
+                )
+
             return evaluate_run(
                 eval_run_id,
                 output_dir=str(self._checkpoint_manager.checkpoint_dir),
                 heldout=hold_path,
                 heldout_texts=hold_texts,
+                metrics=self.config.eval_metrics,
+                references=references,
             )
         finally:
             # Best-effort cleanup of the transient artifacts.

@@ -2,40 +2,18 @@
 Backpropagate - UI Security Module
 ==================================
 
-Production-hardened security utilities used by the Reflex web interface
-(canonical from v1.1.0). The helpers were originally authored against Gradio
-in v1.0; several still carry ``gradio`` in their names for back-compatibility
-(``safe_gradio_handler``, ``DEFAULT_GRADIO_CSP``, etc.) and the underlying
-behavior is framework-agnostic.
-
-**v1.4 symbol rename (FRONTEND, Wave 6a foundation).** The Gradio-prefixed
-public names were renamed to framework-agnostic canonical names. The legacy
-names continue to resolve via module-level ``__getattr__`` and emit a
-``DeprecationWarning`` pointing operators at the new symbol. The
-deprecation cycle (advisor 2026-05-25 Q4, removal version revised
-2026-06-20 to track the actual ship schedule):
-
-* **v1.4 → present** — ``DeprecationWarning`` on legacy name access.
-* **future release (v1.7 or later)** — legacy names removed; access
-  raises ``AttributeError``.
-
-| Legacy (v1.0 Gradio era) | Canonical (v1.4+) |
-|---|---|
-| ``safe_gradio_handler`` | ``safe_ui_handler`` |
-| ``raise_gradio_error`` | ``raise_ui_error`` |
-| ``raise_gradio_warning`` | ``raise_ui_warning`` |
-| ``raise_gradio_info`` | ``raise_ui_info`` |
-| ``RequestContext.from_gradio_request`` | ``RequestContext.from_request`` |
-| ``DEFAULT_GRADIO_CSP`` | ``DEFAULT_REFLEX_CSP`` (see FRONTEND-A-003 Wave 2) |
-| ``get_gradio_csp`` | ``get_reflex_csp`` (see FRONTEND-A-003 Wave 2) |
-
-See ``site/src/content/docs/handbook/migrations.md`` for the full operator
-migration narrative.
+Production-hardened, framework-agnostic security utilities used by the Reflex
+web interface (canonical from v1.1.0). Every helper here is pure
+string/path/auth/request manipulation — none of them import a UI framework.
+Request objects are accepted via a structural (duck-typed) contract: any
+object exposing ``.client`` / ``.headers`` (Starlette / FastAPI / Reflex
+requests all do) works, so the helpers stay importable and testable even when
+no UI extra is installed.
 
 Based on:
-- Trail of Bits Gradio 5 Security Audit (https://huggingface.co/blog/gradio-5-security)
 - OWASP Web Security Best Practices
-- Gradio CVE mitigations (CVE-2024-47872, CVE-2024-1727, CVE-2025-5320)
+- OWASP CSP / CSRF / Session Management Cheat Sheets
+- Upload-validation hardening against extension-spoofing (CVE-2024-47872 family)
 
 Features:
 - Enhanced rate limiting with IP tracking
@@ -57,7 +35,6 @@ Usage:
         EnhancedRateLimiter,
         FileValidator,
         validate_and_log_request,
-        raise_ui_error,
         get_health_status,
         RequestContext,
     )
@@ -69,78 +46,12 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from functools import wraps
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional, TypeVar
+from typing import Any, Optional
 from urllib.parse import urlparse
-
-# Gradio import is conditional. The Web UI migrated from Gradio to Reflex in
-# v1.1.0; many helpers in this module are framework-agnostic (rate limiter,
-# file validator, auth-shape, error sanitization, path/IP extraction) and
-# should stay importable when neither Gradio nor Reflex is installed.
-# Gradio-specific surfaces (gr.Error wrappers, gr.Request type hints) check
-# GRADIO_AVAILABLE before use; type-hint references to ``gr.Request`` resolve
-# to the lightweight stub below when Gradio is absent so the module body still
-# evaluates without ImportError under [ui] = reflex-only.
-try:
-    import gradio as gr
-    GRADIO_AVAILABLE = True
-except ImportError:  # pragma: no cover — exercised when [ui] uses reflex only
-    GRADIO_AVAILABLE = False
-
-    class _GradioShim:
-        """Stand-in for the ``gradio`` module when it isn't installed.
-
-        Provides a ``Request`` placeholder type for annotations and an
-        ``Error`` subclass that mirrors Gradio's user-facing exception so
-        ``raise gr.Error(...)`` keeps working in unit tests / mocks. The
-        ``Warning`` / ``Info`` shims are no-ops.
-
-        **Transitional during the v1.4 → v1.6 ui_security rename
-        deprecation cycle.** Wave 6b features attempted deletion of this
-        class; the cascade survey found 44 ``gr.*`` reference sites in
-        this module (18 ``gr.Request`` type hints + 24 ``gr.Error``
-        raises/handlers + 1 ``gr.Warning`` + 1 ``gr.Info``), 13 of
-        which sit inside the legacy ``safe_ui_handler`` decorator's
-        ``except gr.Error:`` block that the v1.4 → v1.6 deprecation
-        cycle keeps alive for real-Gradio consumers. Replacing the
-        shim cleanly requires either (a) wrapping every ``gr.*`` call
-        site behind ``if GRADIO_AVAILABLE:`` (not a mechanical rename —
-        each call site has different fallback semantics), or (b)
-        splitting this module into ``ui_security_core.py`` (framework-
-        agnostic helpers the Reflex UI uses) and
-        ``ui_security_legacy.py`` (Gradio-era classes preserved for
-        backward-compat). Both paths are v1.5 candidates; see
-        WAVE_6A_TODO.md → "FRONTEND symbol-rename gating → STILL
-        DEFERRED (later wave / v1.5 candidate)". The shim's continued
-        presence is NOT dead code — it's load-bearing whenever Gradio
-        isn't installed (the [ui] extra ships Reflex only).
-        """
-
-        class Request:  # type: ignore[no-redef]
-            pass
-
-        class Error(Exception):  # type: ignore[no-redef]
-            def __init__(self, message: str, *, duration: int = 10, title: str = "Error") -> None:
-                super().__init__(message)
-                self.duration = duration
-                self.title = title
-
-        @staticmethod
-        def Warning(message: str, *, duration: int = 5, title: str = "Warning") -> None:  # noqa: N802, ARG004
-            _ = (message, duration, title)
-            return None
-
-        @staticmethod
-        def Info(message: str, *, duration: int = 5, title: str = "Info") -> None:  # noqa: N802, ARG004
-            _ = (message, duration, title)
-            return None
-
-    gr = _GradioShim()  # type: ignore[assignment]
 
 __all__ = [
     # Configuration
@@ -157,15 +68,6 @@ __all__ = [
     "ALLOWED_MODEL_EXTENSIONS",
     "DANGEROUS_EXTENSIONS",
     "validate_file_magic",
-    # UI error helpers — canonical v1.4+ names (framework-agnostic).
-    # Legacy Gradio-prefixed names continue to resolve via module-level
-    # __getattr__ + emit DeprecationWarning (v1.4 → present) → AttributeError
-    # (future release, v1.7 or later). See module docstring for the rename
-    # table.
-    "raise_ui_error",
-    "raise_ui_warning",
-    "raise_ui_info",
-    "safe_ui_handler",
     # Request validation
     "validate_and_log_request",
     "sanitize_filename",
@@ -201,10 +103,8 @@ __all__ = [
     # Content Security Policy (2026)
     "CSPConfig",
     "ContentSecurityPolicy",
-    "DEFAULT_GRADIO_CSP",  # deprecated in v1.4 — use DEFAULT_REFLEX_CSP for new wiring
-    "DEFAULT_REFLEX_CSP",  # FRONTEND-A-003 (v1.4 Wave 2): Reflex/Next.js-tuned default
-    "get_gradio_csp",  # deprecated in v1.4 — use get_reflex_csp for new wiring
-    "get_reflex_csp",  # FRONTEND-A-003 (v1.4 Wave 2): factory used by security_headers_middleware
+    "DEFAULT_REFLEX_CSP",  # Reflex/Next.js-tuned default
+    "get_reflex_csp",  # factory used by security_headers_middleware
     "apply_security_headers",
     "security_headers_dict",  # FRONTEND-A-003 (v1.4 Wave 2): ASGI-shape helper
     # Framework-agnostic helpers (moved from ui.py during Reflex migration v1.1.0)
@@ -221,14 +121,15 @@ security_logger = logging.getLogger("backpropagate.security.ui")
 # CLIENT IP EXTRACTION (F-001 fix)
 # =============================================================================
 
-def _extract_client_ip(request: gr.Request | None) -> str:
+def _extract_client_ip(request: Any | None) -> str:
     """
-    Robustly extract a client IP from a Gradio/Starlette request.
+    Robustly extract a client IP from a Starlette/FastAPI/Reflex request.
 
     Handles all shapes that ``request.client`` can take in practice:
 
-    - ``Address`` namedtuple (Starlette/FastAPI's default — what Gradio passes
-      in production): exposes a ``host`` attribute (and a separate ``port``).
+    - ``Address`` namedtuple (Starlette/FastAPI's default — what the ASGI
+      server passes in production): exposes a ``host`` attribute (and a
+      separate ``port``).
       We deliberately use ONLY ``host`` so per-IP rate-limit buckets don't
       degenerate into per-TCP-connection buckets (different source port per
       connection = effectively no rate limiting).
@@ -740,7 +641,7 @@ class EnhancedRateLimiter:
     Enhanced rate limiter with IP tracking and per-user limits.
 
     Improvements over basic RateLimiter:
-    - Per-IP tracking (when available from gr.Request)
+    - Per-IP tracking (when available from the request object)
     - Configurable burst allowance
     - Automatic cleanup of old entries
     - Security event logging
@@ -765,7 +666,7 @@ class EnhancedRateLimiter:
         self._cleanup_interval = 300  # Cleanup every 5 minutes
         self._lock = Lock()
 
-    def _get_client_id(self, request: gr.Request | None = None) -> str:
+    def _get_client_id(self, request: Any | None = None) -> str:
         """Get client identifier (IP or fallback to 'unknown')."""
         return _extract_client_ip(request)
 
@@ -815,7 +716,7 @@ class EnhancedRateLimiter:
             for client_id, _ in by_age[:excess]:
                 del self._requests[client_id]
 
-    def check(self, request: gr.Request | None = None) -> tuple[bool, float]:
+    def check(self, request: Any | None = None) -> tuple[bool, float]:
         """
         Check if request is allowed.
 
@@ -861,12 +762,12 @@ class EnhancedRateLimiter:
             self._requests[client_id].append(now)
             return True, 0.0
 
-    def is_allowed(self, request: gr.Request | None = None) -> bool:
+    def is_allowed(self, request: Any | None = None) -> bool:
         """Simple check returning just bool."""
         allowed, _ = self.check(request)
         return allowed
 
-    def require(self, request: gr.Request | None = None) -> None:
+    def require(self, request: Any | None = None) -> None:
         """Raise exception if rate limited."""
         allowed, wait_time = self.check(request)
         if not allowed:
@@ -907,7 +808,7 @@ class FileValidator:
         Validate an uploaded file.
 
         Args:
-            file_obj: Gradio file object (has .name attribute)
+            file_obj: Uploaded file object (any object with a ``.name`` attribute)
             purpose: Description for logging
 
         Returns:
@@ -952,8 +853,8 @@ class FileValidator:
         # When BACKPROPAGATE_SECURITY__VALIDATE_FILE_MAGIC=true (or the
         # SecurityConfig is constructed with validate_file_magic=True), every
         # accepted-extension upload is also content-sniffed. This catches the
-        # "rename .html → .jsonl" extension-spoof case Trail of Bits flagged
-        # against Gradio 5 (CVE-2024-47872 family). For extensions with no
+        # "rename .html → .jsonl" extension-spoof case (CVE-2024-47872
+        # family). For extensions with no
         # canonical signature (.csv/.txt/.safetensors), validate_file_magic
         # still runs the suspicious-starts heuristic (HTML / shell / PHP),
         # so even no-signature types get a minimum defense.
@@ -1022,183 +923,6 @@ def sanitize_filename(filename: str) -> str:
 
 
 # =============================================================================
-# UI ERROR HELPERS (framework-agnostic; v1.4 rename of gradio_* names)
-# =============================================================================
-#
-# Authored against Gradio in v1.0; v1.1.0 migrated the canonical UI to Reflex
-# but the helpers stayed framework-agnostic — they wrap whatever ``gr.*`` the
-# module's import-time fallback resolved to (real Gradio when installed,
-# ``_GradioShim`` otherwise). The v1.4 rename drops the ``gradio_`` prefix
-# from the public names while preserving the legacy names as deprecation
-# aliases (see module-level ``__getattr__`` near the file footer).
-
-def raise_ui_error(
-    message: str,
-    duration: int | None = 10,
-    title: str = "Error",
-    log: bool = True,
-) -> None:
-    """
-    Raise a UI error with proper formatting.
-
-    Use this instead of returning error strings for better UX. The
-    function name lost the ``gradio_`` prefix in v1.4; the
-    ``raise_gradio_error`` legacy alias keeps working with a
-    ``DeprecationWarning`` until v1.6.
-
-    Args:
-        message: Error message to display
-        duration: Seconds to show (None = until closed)
-        title: Error dialog title
-        log: Whether to log the error
-
-    Raises:
-        gr.Error: Always raises
-    """
-    if log:
-        logger.error(f"UI Error: {message}")
-
-    raise gr.Error(message, duration=duration, title=title)
-
-
-def raise_ui_warning(
-    message: str,
-    duration: int | None = 5,
-    title: str = "Warning",
-    log: bool = True,
-) -> None:
-    """
-    Show a UI warning (non-blocking).
-
-    Unlike gr.Error, this does NOT halt execution. The function name lost
-    the ``gradio_`` prefix in v1.4; the ``raise_gradio_warning`` legacy
-    alias keeps working with a ``DeprecationWarning`` until v1.6.
-
-    Args:
-        message: Warning message
-        duration: Seconds to show
-        title: Warning dialog title
-        log: Whether to log
-    """
-    if log:
-        logger.warning(f"UI Warning: {message}")
-
-    gr.Warning(message, duration=duration, title=title)
-
-
-def raise_ui_info(
-    message: str,
-    duration: int | None = 3,
-    title: str = "Info",
-) -> None:
-    """
-    Show a UI info message (non-blocking).
-
-    The function name lost the ``gradio_`` prefix in v1.4; the
-    ``raise_gradio_info`` legacy alias keeps working with a
-    ``DeprecationWarning`` until v1.6.
-
-    Args:
-        message: Info message
-        duration: Seconds to show
-        title: Info dialog title
-    """
-    gr.Info(message, duration=duration, title=title)
-
-
-F = TypeVar('F', bound=Callable[..., Any])
-
-
-def safe_ui_handler(
-    operation_name: str = "operation",
-    rate_limiter: EnhancedRateLimiter | None = None,
-    log_errors: bool = True,
-) -> Callable[[F], F]:
-    """
-    Decorator to wrap UI handlers with security features.
-
-    Features:
-    - Converts exceptions to gr.Error for proper UI display
-    - Optional rate limiting
-    - Security event logging
-    - Request validation
-
-    The decorator was renamed from ``safe_gradio_handler`` in v1.4
-    (Reflex is canonical from v1.1.0 — the Gradio prefix no longer
-    matched the framework). The ``safe_gradio_handler`` legacy alias
-    keeps working with a ``DeprecationWarning`` until v1.6.
-
-    Usage:
-        @safe_ui_handler("training", rate_limiter=training_limiter)
-        def start_training(...):
-            ...
-    """
-    def decorator(func: F) -> F:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Check rate limit
-            if rate_limiter is not None:
-                request = kwargs.get("request")
-                allowed, wait_time = rate_limiter.check(request)
-                if not allowed:
-                    raise gr.Error(
-                        f"Too many requests. Please wait {wait_time:.0f} seconds.",
-                        duration=10,
-                        title="Rate Limited",
-                    )
-
-            try:
-                return func(*args, **kwargs)
-
-            except gr.Error:
-                # Re-raise Gradio errors as-is
-                raise
-
-            except RateLimitExceeded as e:
-                raise gr.Error(str(e), duration=10, title="Rate Limited")
-
-            except FileNotFoundError as e:
-                if log_errors:
-                    logger.error(f"{operation_name} failed - file not found: {e}")
-                raise gr.Error(f"File not found: {e}", duration=10, title="File Not Found")
-
-            except PermissionError as e:
-                if log_errors:
-                    logger.error(f"{operation_name} failed - permission denied: {e}")
-                raise gr.Error(
-                    "Permission denied. Check file/folder permissions.",
-                    duration=10,
-                    title="Permission Denied",
-                )
-
-            except ValueError as e:
-                if log_errors:
-                    logger.warning(f"{operation_name} validation error: {e}")
-                raise gr.Error(f"Invalid input: {e}", duration=10, title="Validation Error")
-
-            except Exception as e:
-                if log_errors:
-                    logger.exception(f"{operation_name} failed with unexpected error")
-
-                log_security_event(
-                    "handler_exception",
-                    operation=operation_name,
-                    error_type=type(e).__name__,
-                    error_message=str(e)[:200],
-                )
-
-                # Don't expose internal errors to users
-                raise gr.Error(
-                    f"An unexpected error occurred during {operation_name} ({type(e).__name__}). Check the terminal/logs for full details.",
-                    duration=10,
-                    title="Error",
-                )
-
-        return wrapper  # type: ignore
-    return decorator
-
-
-# =============================================================================
 # INPUT VALIDATION
 # =============================================================================
 
@@ -1223,23 +947,27 @@ def validate_numeric_input(
         Validated numeric value
 
     Raises:
-        gr.Error: If validation fails
+        UserInputError: If validation fails (code ``INPUT_VALIDATION_FAILED``).
     """
+    from .exceptions import UserInputError
+
     if value is None:
         if allow_none:
             return None
-        raise gr.Error(f"{name} is required", duration=5)
+        raise UserInputError(f"{name} is required")
 
     try:
         num = float(value)
     except (ValueError, TypeError):
-        raise gr.Error(f"{name} must be a number, got: {type(value).__name__}", duration=5)
+        raise UserInputError(
+            f"{name} must be a number, got: {type(value).__name__}"
+        )
 
     if min_value is not None and num < min_value:
-        raise gr.Error(f"{name} must be at least {min_value}, got {num}", duration=5)
+        raise UserInputError(f"{name} must be at least {min_value}, got {num}")
 
     if max_value is not None and num > max_value:
-        raise gr.Error(f"{name} must be at most {max_value}, got {num}", duration=5)
+        raise UserInputError(f"{name} must be at most {max_value}, got {num}")
 
     return num
 
@@ -1269,12 +997,14 @@ def validate_string_input(
         Validated string value
 
     Raises:
-        gr.Error: If validation fails
+        UserInputError: If validation fails (code ``INPUT_VALIDATION_FAILED``).
     """
+    from .exceptions import UserInputError
+
     if value is None:
         if allow_none:
             return None
-        raise gr.Error(f"{name} is required", duration=5)
+        raise UserInputError(f"{name} is required")
 
     text = str(value)
 
@@ -1283,31 +1013,29 @@ def validate_string_input(
 
     # Check length
     if len(text) > max_length:
-        raise gr.Error(
-            f"{name} is too long ({len(text)} chars). Maximum: {max_length}",
-            duration=5,
+        raise UserInputError(
+            f"{name} is too long ({len(text)} chars). Maximum: {max_length}"
         )
 
     if not allow_empty and len(text.strip()) == 0:
-        raise gr.Error(f"{name} cannot be empty", duration=5)
+        raise UserInputError(f"{name} cannot be empty")
 
     if len(text) < min_length:
-        raise gr.Error(
-            f"{name} is too short ({len(text)} chars). Minimum: {min_length}",
-            duration=5,
+        raise UserInputError(
+            f"{name} is too short ({len(text)} chars). Minimum: {min_length}"
         )
 
     # Check pattern
     if pattern is not None:
         if not re.match(pattern, text):
-            raise gr.Error(f"{name} has invalid format", duration=5)
+            raise UserInputError(f"{name} has invalid format")
 
     return text
 
 
 def validate_and_log_request(
     operation: str,
-    request: gr.Request | None = None,
+    request: Any | None = None,
     **params: Any,
 ) -> None:
     """
@@ -1315,7 +1043,7 @@ def validate_and_log_request(
 
     Args:
         operation: Operation name
-        request: Gradio request object
+        request: Request object (any object exposing ``.client`` / ``.headers``)
         **params: Additional parameters to log (sanitized)
     """
     if not DEFAULT_SECURITY_CONFIG.log_all_requests:
@@ -1408,16 +1136,17 @@ def log_security_event(event_type: str, **details: Any) -> None:
 # =============================================================================
 
 def check_csrf_protection(
-    request: gr.Request | None = None,
+    request: Any | None = None,
     config: SecurityConfig | None = None,
 ) -> bool:
     """
     Check if request passes CSRF protection.
 
-    Note: Gradio 5+ has built-in CSRF protection. This is an additional layer.
+    This is an additional, framework-independent layer on top of any CSRF
+    protection the serving framework already provides.
 
     Args:
-        request: Gradio request object
+        request: Request object (any object exposing ``.headers``)
         config: Security configuration
 
     Returns:
@@ -1771,17 +1500,15 @@ class RequestContext:
     @classmethod
     def from_request(
         cls,
-        request: gr.Request | None = None,
+        request: Any | None = None,
         operation: str | None = None,
     ) -> "RequestContext":
         """Create context from a UI request.
 
-        Renamed from ``from_gradio_request`` in v1.4 — the helper is
-        framework-agnostic (the ``gr.Request`` type hint is satisfied by
-        any object with a ``client`` attribute, which Starlette / FastAPI
-        / Reflex requests all provide). The legacy
-        ``RequestContext.from_gradio_request`` keeps working with a
-        ``DeprecationWarning`` until v1.6.
+        Framework-agnostic: the ``request`` argument is satisfied by any
+        object with a ``client`` attribute (Starlette / FastAPI / Reflex
+        requests all provide one), or ``None`` (the client IP falls back to
+        the ``"unknown"`` shared-bucket sentinel).
         """
         request_id = str(uuid.uuid4())[:8]
         client_ip = _extract_client_ip(request)
@@ -1792,36 +1519,6 @@ class RequestContext:
             timestamp=time.time(),
             operation=operation,
         )
-
-    # Legacy alias for the v1.0-era ``from_gradio_request`` classmethod.
-    # The classmethod's __getattr__ contract is preserved on the dataclass
-    # itself — ``RequestContext.from_gradio_request(...)`` still resolves
-    # but emits a DeprecationWarning. We can't use module-level __getattr__
-    # for class attributes, so the deprecation shim lives here as a
-    # classmethod that warns + delegates.
-    @classmethod
-    def from_gradio_request(
-        cls,
-        request: gr.Request | None = None,
-        operation: str | None = None,
-    ) -> "RequestContext":
-        """DEPRECATED v1.4 alias for :meth:`from_request`.
-
-        Emits ``DeprecationWarning`` and delegates to the canonical
-        ``from_request`` classmethod. The legacy name will be removed in a
-        future release (v1.7 or later) per the rename cycle (advisor
-        2026-05-25 Q4).
-        """
-        import warnings as _warnings
-
-        _warnings.warn(
-            "'RequestContext.from_gradio_request' is deprecated in v1.4; "
-            "use 'RequestContext.from_request' instead. The legacy name will "
-            "be removed in a future release (v1.7 or later).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return cls.from_request(request=request, operation=operation)
 
     def to_log_dict(self) -> dict[str, Any]:
         """Get dictionary for logging extra fields."""
@@ -1834,12 +1531,12 @@ class RequestContext:
         }
 
 
-def get_request_id(request: gr.Request | None = None) -> str:
+def get_request_id(request: Any | None = None) -> str:
     """
     Generate or extract a unique request ID.
 
     Args:
-        request: Optional Gradio request (may contain existing ID in headers)
+        request: Optional request object (may contain an existing ID in headers)
 
     Returns:
         8-character unique request ID
@@ -2115,16 +1812,16 @@ class ConcurrencyLimiter:
         self._active: dict[str, int] = {}
         self._lock = Lock()
 
-    def _get_client_id(self, request: gr.Request | None = None) -> str:
+    def _get_client_id(self, request: Any | None = None) -> str:
         """Get client identifier from request."""
         return _extract_client_ip(request)
 
-    def acquire(self, request: gr.Request | None = None) -> tuple[bool, str]:
+    def acquire(self, request: Any | None = None) -> tuple[bool, str]:
         """
         Try to acquire a slot for an operation.
 
         Args:
-            request: Gradio request for client identification
+            request: Request object for client identification
 
         Returns:
             Tuple of (success, message)
@@ -2147,7 +1844,7 @@ class ConcurrencyLimiter:
             self._active[client_id] = current + 1
             return True, "Acquired"
 
-    def release(self, request: gr.Request | None = None) -> None:
+    def release(self, request: Any | None = None) -> None:
         """Release a slot after operation completes."""
         client_id = self._get_client_id(request)
 
@@ -2158,7 +1855,7 @@ class ConcurrencyLimiter:
                 if self._active[client_id] == 0:
                     del self._active[client_id]
 
-    def get_active_count(self, request: gr.Request | None = None) -> int:
+    def get_active_count(self, request: Any | None = None) -> int:
         """Get count of active operations for a client."""
         client_id = self._get_client_id(request)
         with self._lock:
@@ -2352,7 +2049,6 @@ class JWTConfig:
     Based on:
     - IETF RFC 7519 (JWT)
     - OWASP Session Management Guidelines
-    - Gradio-Session patterns (https://discuss.huggingface.co/t/implementing-session-authentication-in-gradio)
     """
     secret: str = ""  # Must be set in production
     algorithm: str = "HS256"
@@ -2366,7 +2062,7 @@ class JWTConfig:
 
 class JWTManager:
     """
-    JWT-based session management for Gradio.
+    JWT-based session management for the web UI.
 
     Provides stateless authentication with configurable expiry.
     Tokens are stored in HTTP-only cookies when possible.
@@ -2530,7 +2226,7 @@ class CSRFProtection:
     Based on:
     - OWASP CSRF Prevention Cheat Sheet
     - Synchronizer Token Pattern
-    - Gradio CVE-2024-1727 mitigation
+    - CVE-2024-1727 mitigation
 
     Usage:
         csrf = CSRFProtection()
@@ -2661,7 +2357,7 @@ class SecureSessionHandler:
     """
     Combined session management with JWT and CSRF protection.
 
-    Provides a complete authentication solution for Gradio apps.
+    Provides a complete authentication solution for the web UI.
 
     Usage:
         handler = SecureSessionHandler()
@@ -2822,13 +2518,13 @@ class CSPConfig:
     - MDN CSP Documentation
     - 2026 Frontend Security Best Practices
 
-    The default policy is restrictive but allows Gradio to function.
+    The default policy is restrictive but allows the web UI to function.
     Adjust as needed for your deployment.
     """
     # Script sources
     script_src: list[str] = field(default_factory=lambda: ["'self'"])
     # Style sources
-    style_src: list[str] = field(default_factory=lambda: ["'self'", "'unsafe-inline'"])  # Gradio needs inline styles
+    style_src: list[str] = field(default_factory=lambda: ["'self'", "'unsafe-inline'"])  # UI needs inline styles
     # Image sources
     img_src: list[str] = field(default_factory=lambda: ["'self'", "data:", "blob:"])
     # Font sources
@@ -2999,35 +2695,18 @@ class ContentSecurityPolicy:
         return headers
 
 
-# DEPRECATED (v1.4): the Reflex UI no longer uses this — it's preserved as
-# a back-compat alias for downstream callers that ``from ui_security import
-# DEFAULT_GRADIO_CSP``. The v1.4 rename in V1_4_BRIEF item 7 will retire the
-# "gradio" prefix across this module; until then, prefer ``DEFAULT_REFLEX_CSP``
-# for any new wiring (see ``backpropagate/ui_app/middleware/security_headers.py``).
-DEFAULT_GRADIO_CSP = CSPConfig(
-    script_src=["'self'", "'unsafe-eval'"],  # Gradio needs eval for dynamic components
-    style_src=["'self'", "'unsafe-inline'"],  # Gradio uses inline styles
-    img_src=["'self'", "data:", "blob:", "https:"],  # Allow images from various sources
-    font_src=["'self'", "data:", "https://fonts.gstatic.com"],  # Google Fonts
-    connect_src=["'self'", "ws:", "wss:", "https://huggingface.co"],  # WebSocket + HF API
-    frame_ancestors=["'self'"],
-    object_src=["'none'"],
-)
-
-
 # FRONTEND-A-003 (v1.4 Wave 2): Reflex-tuned CSP for the production
 # middleware wired into ``ui_app/app.py::rx.App(api_transformer=...)``.
 #
-# Differences from ``DEFAULT_GRADIO_CSP`` and the load-bearing reasons:
+# Per-directive rationale and the load-bearing reasons:
 #
 # - ``script_src=['self', 'unsafe-eval', 'unsafe-inline']`` — Reflex's
 #   Next.js shell ships an inline bootstrap ``<script>`` block per page
 #   (the standard ``__NEXT_DATA__`` hydration payload + Reflex's own
 #   per-page Var-binding script). Without ``'unsafe-inline'`` the entire
-#   UI is blocked before the WS connects. ``'unsafe-eval'`` is still
-#   needed for Reflex's runtime Var → DOM expression machinery (same
-#   as Gradio, different mechanism).
-# - ``style_src`` unchanged from Gradio — Reflex uses inline styles for
+#   UI is blocked before the WS connects. ``'unsafe-eval'`` is needed for
+#   Reflex's runtime Var → DOM expression machinery.
+# - ``style_src=['self', 'unsafe-inline']`` — Reflex uses inline styles for
 #   the Radix theme + per-component CSS variables (the TOKENS_CSS
 #   ``<style>`` tag rx.el.style injects on every page).
 # - ``img_src=['self', 'data:', 'blob:', 'https:']`` — Reflex serves
@@ -3037,16 +2716,14 @@ DEFAULT_GRADIO_CSP = CSPConfig(
 # - ``connect_src=['self', 'ws:', 'wss:']`` — Reflex's /_event WS
 #   endpoint is on the same origin. ``ws:`` covers loopback; ``wss:``
 #   covers the documented cloudflared-tunnel / reverse-proxy deploy
-#   shapes. HF API is NOT included — the UI never directly calls
-#   huggingface.co from the browser (model downloads happen server-
+#   shapes. No external API origin is allowed — the UI never directly
+#   calls a model host from the browser (model downloads happen server-
 #   side in the trainer process; the UI only consumes WS frames).
 # - ``font_src=['self', 'data:']`` — Reflex's stylesheet bundle inlines
 #   the Inter / JetBrains Mono webfonts (Wave 5.5 design-token doc), so
-#   we don't need Google Fonts. Dropping the Google Fonts allowance
-#   tightens the surface and removes a third-party network dependency
-#   the UI doesn't actually use.
-# - ``object-src='none'`` and ``frame-ancestors='self'`` — same as
-#   Gradio. No plugin objects; no iframe-embedding outside same-origin.
+#   no third-party font CDN allowance is needed.
+# - ``object-src='none'`` and ``frame-ancestors='self'`` — no plugin
+#   objects; no iframe-embedding outside same-origin.
 DEFAULT_REFLEX_CSP = CSPConfig(
     script_src=["'self'", "'unsafe-eval'", "'unsafe-inline'"],
     style_src=["'self'", "'unsafe-inline'"],
@@ -3056,51 +2733,6 @@ DEFAULT_REFLEX_CSP = CSPConfig(
     frame_ancestors=["'self'"],
     object_src=["'none'"],
 )
-
-
-def get_gradio_csp(report_only: bool = False) -> ContentSecurityPolicy:
-    """
-    Get a CSP configured for Gradio apps.
-
-    DEPRECATED (v1.4): the Reflex UI uses ``get_reflex_csp`` instead. This
-    helper is preserved for back-compat with any downstream caller that
-    imported the Gradio name. The v1.4 rename in V1_4_BRIEF item 7 will
-    retire the "gradio" prefix across this module.
-
-    Args:
-        report_only: If True, only report violations (don't enforce)
-
-    Returns:
-        ContentSecurityPolicy instance
-    """
-    # FRONTEND-B-007 (v1.4 Wave 4 Stage C humanization): emit a
-    # DeprecationWarning so any downstream caller importing the Gradio
-    # name sees an audit-trail rather than silent grandfathering onto
-    # the historical Gradio-era allowlist. ``stacklevel=2`` points the
-    # warning at the caller of ``get_gradio_csp``, not this function.
-    # Wave 6a will retire ``DEFAULT_GRADIO_CSP`` / ``get_gradio_csp``
-    # outright per ``V1_4_BRIEF`` item 7; until then, this warning is
-    # the operator-facing migration nudge.
-    import warnings as _warnings
-
-    _warnings.warn(
-        "get_gradio_csp / DEFAULT_GRADIO_CSP are deprecated as of v1.4; "
-        "use get_reflex_csp / DEFAULT_REFLEX_CSP for the Reflex UI. "
-        "Wave 6a will remove the gradio-named symbols.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    config = CSPConfig(
-        script_src=DEFAULT_GRADIO_CSP.script_src.copy(),
-        style_src=DEFAULT_GRADIO_CSP.style_src.copy(),
-        img_src=DEFAULT_GRADIO_CSP.img_src.copy(),
-        font_src=DEFAULT_GRADIO_CSP.font_src.copy(),
-        connect_src=DEFAULT_GRADIO_CSP.connect_src.copy(),
-        frame_ancestors=DEFAULT_GRADIO_CSP.frame_ancestors.copy(),
-        object_src=DEFAULT_GRADIO_CSP.object_src.copy(),
-        report_only=report_only,
-    )
-    return ContentSecurityPolicy(config)
 
 
 def get_reflex_csp(report_only: bool = False) -> ContentSecurityPolicy:
@@ -3134,7 +2766,7 @@ def get_reflex_csp(report_only: bool = False) -> ContentSecurityPolicy:
 
 
 # =============================================================================
-# MIDDLEWARE HELPERS FOR GRADIO
+# MIDDLEWARE HELPERS
 # =============================================================================
 
 def apply_security_headers(
@@ -3144,17 +2776,12 @@ def apply_security_headers(
     """
     Apply security headers to a response object.
 
-    Works with various response types (Gradio, FastAPI, etc.).
+    Works with various response types (Starlette / FastAPI, etc.).
 
     Args:
         response: Response object with headers attribute
         csp: ContentSecurityPolicy instance. When ``None``, defaults to
-            :func:`get_reflex_csp` — the v1.4 Reflex-tuned CSP (FRONTEND-A-003).
-            Pre-v1.4 the default was :func:`get_gradio_csp`, which permitted
-            ``https://huggingface.co`` and ``https://fonts.gstatic.com``
-            (Gradio era); those are no longer needed in the Reflex era.
-            Callers that need the legacy default can pass
-            ``csp=get_gradio_csp()`` explicitly.
+            :func:`get_reflex_csp` — the Reflex-tuned CSP (FRONTEND-A-003).
     """
     if csp is None:
         csp = get_reflex_csp()
@@ -3173,7 +2800,7 @@ def security_headers_dict(csp: ContentSecurityPolicy | None = None) -> dict[str,
     """Return the full security-header dict for ASGI-level emission.
 
     FRONTEND-A-003 (v1.4 Wave 2): ``apply_security_headers`` mutates a
-    response object (Starlette / FastAPI / Gradio shape). ASGI middlewares
+    response object (Starlette / FastAPI shape). ASGI middlewares
     instead manipulate the ``headers`` list on the
     ``http.response.start`` message — they have no response object to
     mutate. This helper exposes the same set of headers (CSP +
@@ -3198,10 +2825,9 @@ def security_headers_dict(csp: ContentSecurityPolicy | None = None) -> dict[str,
 # =============================================================================
 # FRAMEWORK-AGNOSTIC HELPERS (moved from ui.py during Reflex migration v1.1.0)
 #
-# These helpers were authored against the Gradio surface in Stage B/C but their
-# logic is framework-independent — pure string/path/auth manipulation that the
-# Reflex pages call the same way. The moves preserve them as a stable surface
-# across the UI framework migration.
+# These helpers are framework-independent — pure string/path/auth manipulation
+# that the Reflex pages call directly. The moves preserve them as a stable
+# surface across the UI framework migration.
 # =============================================================================
 
 
@@ -3325,7 +2951,7 @@ def sanitize_error_for_user(
 def validate_auth_shape(auth: Any) -> None:
     """
     FB-012: Validate the shape of the ``auth`` kwarg before passing it to the
-    UI server (Gradio originally; Reflex/FastAPI in v1.1.0+).
+    UI server (Reflex/FastAPI).
 
     Frameworks' own validation is permissive in ways that can grant
     unintended access — e.g. an empty list silently disables auth, a
@@ -3338,8 +2964,8 @@ def validate_auth_shape(auth: Any) -> None:
         - ``None`` (caller's responsibility to enforce share+auth)
         - A 2-element tuple ``(username, password)`` — both non-empty strings.
         - A non-empty list of such 2-element tuples (multi-user).
-        - A ``callable`` (Gradio supports custom auth functions; preserved
-          for backward compat though Reflex doesn't use it).
+        - A ``callable`` (custom auth function; preserved for backward
+          compat though the Reflex UI doesn't use it).
 
     Rejects everything else with ``BackpropagateError(
     code="INPUT_AUTH_INVALID_SHAPE")`` and a hint enumerating the accepted
@@ -3351,7 +2977,7 @@ def validate_auth_shape(auth: Any) -> None:
         return
 
     if callable(auth):
-        # Callable auth (legacy Gradio) — defer validation to the framework.
+        # Callable auth — defer validation to the framework.
         return
 
     def _is_credential_pair(value: Any) -> bool:
@@ -3417,67 +3043,3 @@ def validate_auth_shape(auth: Any) -> None:
 # name from ui.py — those imports will be updated, but the alias prevents
 # transient breakage during the migration.
 _validate_auth_shape = validate_auth_shape
-
-
-# =============================================================================
-# LEGACY ALIAS SHIM (v1.4 rename — see module docstring for the cycle)
-# =============================================================================
-#
-# Wave 6a foundation (V1_4_BRIEF item 7) — drop the ``gradio_`` prefix from
-# the public UI-error helpers + classmethod, keeping the legacy names alive
-# via module-level ``__getattr__``. The shim emits a ``DeprecationWarning``
-# pointing operators at the new symbol so downstream consumers see an
-# audit-trail rather than silent grandfathering.
-#
-# Deprecation cycle (advisor 2026-05-25 Q4; removal version revised
-# 2026-06-20 to track the actual ship schedule):
-#   v1.4 → present → DeprecationWarning (silent by default; -W default shows it)
-#   future release (v1.7 or later) → AttributeError (legacy names removed)
-#
-# ``DEFAULT_GRADIO_CSP`` + ``get_gradio_csp`` are NOT in this table — they
-# keep the existing in-place ``DeprecationWarning`` shape from Wave 2
-# FRONTEND-A-003 + Stage C FRONTEND-B-007 (the canonical replacements are
-# ``DEFAULT_REFLEX_CSP`` + ``get_reflex_csp``, not a third ``DEFAULT_UI_*``
-# name). The constant continues to live in module globals because it's
-# referenced by ``get_gradio_csp()``'s internal ``.copy()`` calls.
-#
-# ``RequestContext.from_gradio_request`` is NOT in this table either — it's
-# a classmethod, not a module-level symbol, so the deprecation shim lives
-# on the dataclass itself (see :meth:`RequestContext.from_gradio_request`
-# above).
-
-_LEGACY_ALIASES: dict[str, str] = {
-    "safe_gradio_handler": "safe_ui_handler",
-    "raise_gradio_error": "raise_ui_error",
-    "raise_gradio_warning": "raise_ui_warning",
-    "raise_gradio_info": "raise_ui_info",
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Module-level legacy-alias resolver (PEP 562).
-
-    Resolves a v1.0-era ``gradio_``-prefixed symbol to its v1.4 canonical
-    name while emitting a ``DeprecationWarning`` so the operator sees the
-    migration nudge in stderr. ``stacklevel=2`` points the warning at the
-    caller of the import / attribute access, not this function.
-
-    Anything not in ``_LEGACY_ALIASES`` raises ``AttributeError`` per the
-    PEP 562 contract (so ``hasattr`` / ``getattr`` with default still work
-    naturally).
-    """
-    if name in _LEGACY_ALIASES:
-        new_name = _LEGACY_ALIASES[name]
-        import warnings as _warnings
-
-        _warnings.warn(
-            f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
-            f"The legacy name will be removed in a future release "
-            f"(v1.7 or later).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return globals()[new_name]
-    raise AttributeError(
-        f"module 'backpropagate.ui_security' has no attribute {name!r}"
-    )

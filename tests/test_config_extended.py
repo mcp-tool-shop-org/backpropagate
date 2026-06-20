@@ -372,11 +372,15 @@ class TestTrainingPresets:
     """Tests for training presets."""
 
     def test_presets_available(self):
-        """Training presets are available."""
-        from backpropagate.config import TRAINING_PRESETS
+        """Training presets are available.
 
-        assert TRAINING_PRESETS is not None
-        assert isinstance(TRAINING_PRESETS, dict)
+        v1.6 C2: the legacy ``TRAINING_PRESETS`` alias was removed from
+        ``config.py``; the canonical name is ``MULTI_RUN_PRESETS``.
+        """
+        from backpropagate.config import MULTI_RUN_PRESETS
+
+        assert MULTI_RUN_PRESETS is not None
+        assert isinstance(MULTI_RUN_PRESETS, dict)
 
     def test_fast_preset(self):
         """Fast preset has low steps, high lr."""

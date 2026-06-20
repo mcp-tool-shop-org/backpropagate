@@ -93,20 +93,9 @@ from .security import (
     safe_path,
 )
 
-# UI Security utilities (production-hardened). Authored against the v1.0
-# Gradio surface; in v1.1.0+ the Reflex UI consumes the same helpers via
-# subprocess. The module body imports gradio at type-hint level but the
-# import is conditional (see ui_security.py top), so this try/except guards
-# against the [ui] extra being absent rather than against gradio specifically.
-#
-# v1.4 rename (Wave 6a foundation, V1_4_BRIEF item 7): the canonical helper
-# is now ``safe_ui_handler`` (framework-agnostic). The legacy
-# ``safe_gradio_handler`` continues to resolve from ``ui_security`` via
-# module-level ``__getattr__`` + ``DeprecationWarning``, and we keep it in
-# this package's public namespace via the alias below so downstream code
-# that did ``from backpropagate import safe_gradio_handler`` continues to
-# work (with the same warning). The alias is removed in v1.6 alongside the
-# ui_security legacy shim.
+# UI Security utilities (production-hardened, framework-agnostic). The Reflex
+# UI (canonical from v1.1.0) consumes these helpers via subprocess. The
+# try/except guards against the [ui] extra being absent.
 try:
     from .ui_security import (
         ALLOWED_DATASET_EXTENSIONS,
@@ -116,15 +105,7 @@ try:
         FileValidator,
         SecurityConfig,
         log_security_event,
-        safe_ui_handler,
     )
-
-    # Back-compat alias — touching this name still routes through the
-    # ui_security __getattr__ shim, which emits the DeprecationWarning.
-    # We surface the canonical callable here (rather than re-importing
-    # the legacy name) so `from backpropagate import safe_gradio_handler`
-    # picks up the same warning at first attribute access.
-    safe_gradio_handler = safe_ui_handler
 except ImportError:
     # UI extra not installed — UI security helpers unavailable. Set every
     # exported name to None so downstream ``from backpropagate import X``
@@ -135,8 +116,6 @@ except ImportError:
     FileValidator = None  # type: ignore
     ALLOWED_DATASET_EXTENSIONS = None  # type: ignore
     DANGEROUS_EXTENSIONS = None  # type: ignore
-    safe_ui_handler = None  # type: ignore
-    safe_gradio_handler = None  # type: ignore
     log_security_event = None  # type: ignore
 
 # Feature flags (detect available optional features)
@@ -161,13 +140,7 @@ from .checkpoints import (
 # operators who need them can `from backpropagate.config import UIConfig`
 # explicitly.
 #
-# v1.4 rename (Wave 6a foundation, Wave 5 Decision 3): the multi-run-loop
-# preset dict is canonically ``MULTI_RUN_PRESETS``. The legacy
-# ``TRAINING_PRESETS`` name continues to resolve via config.py's
-# module-level ``__getattr__`` + ``DeprecationWarning``; we keep a
-# back-compat alias here so ``from backpropagate import TRAINING_PRESETS``
-# still works (silently — the warning fires only on direct
-# ``from backpropagate.config import TRAINING_PRESETS``).
+# The multi-run-loop preset dict is canonically ``MULTI_RUN_PRESETS``.
 from .config import (
     LORA_PRESETS,
     MODEL_PRESETS,
@@ -194,13 +167,6 @@ from .config import (
     reload_settings,
     settings,
 )
-
-# Back-compat alias for the v1.0-era name. Touching this name from THIS
-# package surface is silent (no warning) so the stable public API
-# preserves the original ergonomics. Importing the legacy name directly
-# from ``backpropagate.config`` still routes through the __getattr__ shim
-# and emits the DeprecationWarning, per the v1.4 rename cycle.
-TRAINING_PRESETS = MULTI_RUN_PRESETS
 
 # Dataset-quality report (v1.5 T1.1 — the moat). Pure-stdlib + numpy-light
 # analysis surface; does NOT pull torch, so re-exporting these names keeps
@@ -446,11 +412,6 @@ __all__ = [
     "FileValidator",
     "ALLOWED_DATASET_EXTENSIONS",
     "DANGEROUS_EXTENSIONS",
-    # v1.4 rename — ``safe_ui_handler`` is canonical;
-    # ``safe_gradio_handler`` is a back-compat alias that emits
-    # DeprecationWarning (cycle: v1.4 → v1.5 UserWarning → v1.6 removal).
-    "safe_ui_handler",
-    "safe_gradio_handler",
     "log_security_event",
 
     # Exceptions
@@ -511,12 +472,7 @@ __all__ = [
     # BRIDGE-B-010 (Stage C): training presets are documented public surface
     # (see `Research-backed presets based on SLAO paper` in config.py) and
     # now resolve via `from backpropagate import MULTI_RUN_PRESETS`.
-    # v1.4 rename (Wave 6a, Wave 5 Decision 3): canonical name is
-    # ``MULTI_RUN_PRESETS``; ``TRAINING_PRESETS`` is a back-compat alias
-    # (the DeprecationWarning fires only at the ``backpropagate.config``
-    # import surface, not here — see __init__.py header).
     "MULTI_RUN_PRESETS",
-    "TRAINING_PRESETS",
     "TrainingPreset",
     "get_preset",
     "get_recommended_lr",

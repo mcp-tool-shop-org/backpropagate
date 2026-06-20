@@ -25,7 +25,6 @@ from functools import lru_cache
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Any
 
 
 def _safe_pkg_version() -> str:
@@ -139,12 +138,14 @@ __all__ = [
     # dict is canonically ``MULTI_RUN_PRESETS`` to disambiguate from the
     # v1.3-era ``LORA_PRESETS`` (LoRA-architecture shape; CLI
     # ``--lora-preset``). Both formerly shared the keys ``"fast"`` +
-    # ``"quality"`` with semantically different values. The legacy
-    # ``TRAINING_PRESETS`` name continues to resolve via module-level
-    # ``__getattr__`` + ``DeprecationWarning`` (v1.4 → present) →
-    # ``AttributeError`` (future release, v1.7 or later).
+    # ``"quality"`` with semantically different values.
+    #
+    # v1.6 C2: the legacy ``TRAINING_PRESETS`` alias (module-level
+    # ``__getattr__`` + ``DeprecationWarning``) has been REMOVED. Use
+    # ``MULTI_RUN_PRESETS`` directly. (The top-level
+    # ``backpropagate.TRAINING_PRESETS`` re-export is removed in lockstep by
+    # the gradio-purge agent.)
     "MULTI_RUN_PRESETS",
-    "TRAINING_PRESETS",
     "MODEL_PRESETS",
     "ModelPreset",
     "get_preset",
@@ -183,6 +184,24 @@ WINDOWS_DEFAULTS = {
     "cuda_launch_blocking": False,
     "pre_tokenize": True,  # Avoid multiprocessing crashes
 }
+
+
+# =============================================================================
+# TRAINING-METHOD ALLOWED SET (v1.5 T1.2 ORPO + v1.6 C2 SimPO/KTO)
+# =============================================================================
+# Single source of truth for the ``TrainingConfig.method`` selector. The field
+# is typed ``str`` (not ``Literal``) so the structured ``InvalidSettingError``
+# (CONFIG_INVALID_SETTING) surfaces on a bad value instead of a generic
+# pydantic ``ValidationError`` (see the field comment + ``_reject_invalid_method``).
+# BOTH the pydantic ``_reject_invalid_method`` validator AND the dataclass
+# fallback ``__post_init__`` gate against this tuple so the two install shapes
+# can never drift. The trainer + CLI agents bind their dispatch / ``--method``
+# choices to these exact string values.
+#   * "sft"   — supervised fine-tuning (default; byte-identical to v1.4)
+#   * "orpo"  — reference-free monolithic preference optimization (paired data)
+#   * "simpo" — SimPO reference-free length-normalized reward (paired data)
+#   * "kto"   — Kahneman-Tversky Optimization (unpaired binary-label data; LoRA-only)
+_ALLOWED_METHODS: tuple[str, ...] = ("sft", "orpo", "simpo", "kto")
 
 
 # =============================================================================
@@ -414,24 +433,34 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         output_dir: str = "./output"
         # Overwrite output directory
         overwrite_output_dir: bool = True
-        # v1.5 T1.2 (ORPO): training objective selector. "sft" (default) =
-        # supervised fine-tuning — byte-identical to v1.4 behavior. "orpo" =
-        # reference-free monolithic preference optimization (Hong, Lee &
-        # Thorne 2024, arXiv:2403.07691): standard SFT NLL loss + a per-step
-        # odds-ratio penalty over (chosen, rejected) pairs, single stage, no
-        # reference model — so the VRAM envelope matches SFT. A later trainer
-        # wave dispatches on this; the default preserves the existing path.
+        # v1.5 T1.2 (ORPO) / v1.6 C2 (SimPO + KTO): training objective
+        # selector. "sft" (default) = supervised fine-tuning — byte-identical
+        # to v1.4 behavior. "orpo" = reference-free monolithic preference
+        # optimization (Hong, Lee & Thorne 2024, arXiv:2403.07691): standard
+        # SFT NLL loss + a per-step odds-ratio penalty over (chosen, rejected)
+        # pairs, single stage, no reference model — so the VRAM envelope
+        # matches SFT. "simpo" = SimPO (Meng et al. 2024, arXiv:2405.14734):
+        # reference-free, length-normalized reward with a target margin
+        # (TRL CPOTrainer/CPOConfig with loss_type="simpo"); reuses the same
+        # paired {chosen, rejected} data as ORPO. "kto" = Kahneman-Tversky
+        # Optimization (Ethayarajh et al. 2024, arXiv:2402.01306): a
+        # prospect-theory loss on UNPAIRED binary feedback
+        # ({prompt, completion, label:bool}); LoRA-mode-only in v1.6 (the
+        # frozen base is the free reference). The trainer wave dispatches on
+        # this; the default preserves the existing path.
         #
-        # NB: deliberately typed ``str`` (not ``Literal["sft", "orpo"]``) so
-        # the {"sft", "orpo"} constraint is enforced by the
-        # ``_reject_invalid_method`` after-validator below, which raises a
-        # structured ``InvalidSettingError`` (CONFIG_INVALID_SETTING) —
-        # mirroring ``_reject_bf16_and_fp16``. A ``Literal`` field would make
-        # pydantic's own type-check the gate, raising a generic
-        # ``ValidationError`` BEFORE the after-validator runs, so the
-        # contract's structured code/hint (the shape the trainer wave +
-        # operators key on) would never surface. The valid set is documented
-        # in the validator + the ``--method`` CLI choices + env-vars.md.
+        # NB: deliberately typed ``str`` (not
+        # ``Literal["sft","orpo","simpo","kto"]``) so the
+        # {"sft", "orpo", "simpo", "kto"} constraint is enforced by the
+        # ``_reject_invalid_method`` after-validator below (the single source
+        # of allowed methods), which raises a structured
+        # ``InvalidSettingError`` (CONFIG_INVALID_SETTING) — mirroring
+        # ``_reject_bf16_and_fp16``. A ``Literal`` field would make pydantic's
+        # own type-check the gate, raising a generic ``ValidationError`` BEFORE
+        # the after-validator runs, so the contract's structured code/hint
+        # (the shape the trainer wave + operators key on) would never surface.
+        # The valid set is documented in the validator + the ``--method`` CLI
+        # choices + env-vars.md.
         method: str = "sft"
         # v1.5 T1.2 (ORPO): the odds-ratio weight (the ORPO "lambda" /
         # ``beta`` in TRL's ORPOConfig). Scales the relative-ratio loss term
@@ -439,6 +468,37 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # setting). Ignored unless ``method == "orpo"``. Keep > 0 — a
         # non-positive weight degenerates ORPO back to plain SFT.
         orpo_beta: float = 0.1
+        # v1.6 C2 (SimPO): the reward-scaling temperature (``beta`` in TRL's
+        # CPOConfig under loss_type="simpo"). Default 2.0 — the cross-setup
+        # safe floor from the SimPO paper (Meng et al. 2024,
+        # arXiv:2405.14734). Ignored unless ``method == "simpo"``. No
+        # standalone validator (any finite beta is admissible); the
+        # gamma/beta RATIO is what carries a degeneration risk, surfaced as a
+        # WARN by ``_warn_high_simpo_gamma_ratio`` below.
+        simpo_beta: float = 2.0
+        # v1.6 C2 (SimPO): the target reward margin (``gamma`` / the
+        # ``simpo_gamma`` knob). Default 1.0 (= beta*0.5 at the default beta).
+        # Must be > 0 — a non-positive margin removes SimPO's margin term and
+        # degenerates the objective; ``_reject_invalid_simpo_gamma`` enforces
+        # it (structured CONFIG_INVALID_SETTING, mirroring orpo_beta). A
+        # gamma/beta ratio above 1.0 is a degeneration risk (repetitive
+        # output) but NOT an error — it only WARNs. Ignored unless
+        # ``method == "simpo"``.
+        simpo_gamma: float = 1.0
+        # v1.6 C2 (KTO): the KTO loss temperature (``beta`` in TRL's
+        # KTOConfig). Default 0.1 (the KTO paper / TRL default; Ethayarajh et
+        # al. 2024, arXiv:2402.01306). Ignored unless ``method == "kto"``.
+        kto_beta: float = 0.1
+        # v1.6 C2 (KTO): the loss weight on DESIRABLE (label=True) examples.
+        # Default 1.0. Must be > 0 (``_reject_invalid_kto_weights``). The
+        # trainer AUTO-rebalances the effective weights from the label counts
+        # to hit the [1:1, 4:3] desirable:undesirable band; this config value
+        # is the operator's starting point, not the final ratio.
+        kto_desirable_weight: float = 1.0
+        # v1.6 C2 (KTO): the loss weight on UNDESIRABLE (label=False)
+        # examples. Default 1.0. Must be > 0 (``_reject_invalid_kto_weights``).
+        # See ``kto_desirable_weight`` for the auto-rebalance note.
+        kto_undesirable_weight: float = 1.0
         # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao's
         # float8 (Blackwell 5th-gen tensor cores; Hong-/Dettmers-class memory
         # win — ~1.4x throughput, up to 60% less model memory, and the adapter
@@ -507,37 +567,143 @@ if PYDANTIC_SETTINGS_AVAILABLE:
 
         @model_validator(mode="after")
         def _reject_invalid_method(self) -> "TrainingConfig":
-            """Reject a ``method`` outside {"sft", "orpo"} at construction.
+            """Reject a ``method`` outside the allowed set at construction.
 
-            v1.5 T1.2: ``method`` is the ORPO/SFT objective selector and is the
-            authoritative validation gate for the field (the field is typed
-            ``str``, not ``Literal``, precisely so this validator — not
-            pydantic's type machinery — decides the valid set). It raises a
-            structured ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``),
-            mirroring ``_reject_bf16_and_fp16``, so a bad value supplied either
-            as a kwarg (``TrainingConfig(method="dpo")``) or via env var
+            v1.5 T1.2 / v1.6 C2: ``method`` is the objective selector and this
+            validator is the SINGLE SOURCE OF ALLOWED METHODS — the field is
+            typed ``str``, not ``Literal``, precisely so this validator (not
+            pydantic's type machinery) decides the valid set
+            {"sft", "orpo", "simpo", "kto"}. It raises a structured
+            ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``), mirroring
+            ``_reject_bf16_and_fp16``, so a bad value supplied either as a
+            kwarg (``TrainingConfig(method="dpo")``) or via env var
             (``BACKPROPAGATE_TRAINING__METHOD=dpo``) surfaces the SAME
             actionable code/hint the rest of the config-validation path emits.
             A non-``ValueError`` exception raised from a pydantic ``after``
             validator propagates as-is (it is NOT re-wrapped in
             ``ValidationError``), so the structured code/hint survive.
             """
-            if self.method not in ("sft", "orpo"):
+            if self.method not in _ALLOWED_METHODS:
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
                     "method",
                     self.method,
-                    "one of {'sft', 'orpo'}",
+                    "one of {'sft', 'orpo', 'simpo', 'kto'}",
                     suggestion=(
                         "Set method='sft' for supervised fine-tuning (the "
-                        "default) or method='orpo' for reference-free "
-                        "preference tuning (needs a {chosen, rejected} "
-                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
-                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
-                        "for those."
+                        "default), 'orpo' or 'simpo' for reference-free "
+                        "preference tuning (both need a {chosen, rejected} "
+                        "dataset), or 'kto' for unpaired binary-feedback "
+                        "tuning ({prompt, completion, label} data; LoRA-only "
+                        "in v1.6). Other objectives (DPO/PPO/GRPO) are not "
+                        "implemented — use TRL / LLaMA-Factory for those."
                     ),
                 )
+            return self
+
+        @model_validator(mode="after")
+        def _reject_invalid_simpo_gamma(self) -> "TrainingConfig":
+            """Reject a non-positive ``simpo_gamma`` at construction.
+
+            v1.6 C2: ``simpo_gamma`` is SimPO's target reward margin. A
+            non-positive margin removes the margin term and degenerates the
+            objective — the silent-correctness-bug class the orpo_beta guard
+            also covers. Enforced unconditionally (not only when
+            ``method == 'simpo'``) so the error is deterministic regardless of
+            field-evaluation order, mirroring ``_reject_invalid_orpo_beta``.
+            Raises a structured ``InvalidSettingError``
+            (``CONFIG_INVALID_SETTING``); a non-``ValueError`` from a pydantic
+            ``after`` validator propagates as-is, so the code/hint survive.
+            """
+            if self.simpo_gamma <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "simpo_gamma",
+                    self.simpo_gamma,
+                    "a positive number",
+                    suggestion=(
+                        "Set simpo_gamma to a value > 0 (the default is 1.0). "
+                        "It is SimPO's target reward margin; a non-positive "
+                        "margin removes the margin term and degenerates the "
+                        "objective. Keep the gamma/beta ratio <= 1.0 to avoid "
+                        "the repetitive-output degeneration band."
+                    ),
+                )
+            return self
+
+        @model_validator(mode="after")
+        def _warn_high_simpo_gamma_ratio(self) -> "TrainingConfig":
+            """WARN (do not fail) when ``simpo_gamma / simpo_beta > 1.0``.
+
+            v1.6 C2: the SimPO paper / TRL guidance pin gamma at roughly
+            beta*0.5; a gamma-to-beta ratio above 1.0 over-weights the margin
+            relative to the reward scale and risks repetitive / degenerate
+            output. That is a soft signal — the run is still launchable — so
+            this is a one-line WARN, not a raise (contrast
+            ``_reject_invalid_simpo_gamma`` which hard-fails a non-positive
+            gamma). Guarded so a zero/negative beta (already odd, but not
+            gated) cannot divide-by-zero here.
+            """
+            if self.simpo_beta > 0 and (self.simpo_gamma / self.simpo_beta) > 1.0:
+                try:
+                    from .logging_config import get_logger as _get_logger
+
+                    _logger = _get_logger(__name__)
+                except Exception:  # noqa: BLE001 — logging must never block config
+                    import logging as _logging
+
+                    _logger = _logging.getLogger(__name__)
+                _logger.warning(
+                    "simpo_gamma (%s) / simpo_beta (%s) = %.3f > 1.0 — the "
+                    "target margin out-weighs the reward scale, a SimPO "
+                    "degeneration band (repetitive output). The paper pins "
+                    "gamma at ~beta*0.5; consider lowering simpo_gamma or "
+                    "raising simpo_beta.",
+                    self.simpo_gamma,
+                    self.simpo_beta,
+                    self.simpo_gamma / self.simpo_beta,
+                )
+            return self
+
+        @model_validator(mode="after")
+        def _reject_invalid_kto_weights(self) -> "TrainingConfig":
+            """Reject a non-positive KTO desirable/undesirable weight.
+
+            v1.6 C2: ``kto_desirable_weight`` / ``kto_undesirable_weight`` are
+            the per-polarity loss weights on KTO's prospect-theory objective. A
+            zero weight removes one side of the loss and a negative weight
+            inverts it — both silent correctness bugs, the class the orpo_beta
+            guard also covers. Enforced unconditionally (not only under
+            ``method == 'kto'``) for deterministic ordering, mirroring
+            ``_reject_invalid_orpo_beta``. The desirable weight is checked
+            first so its ``setting_name`` is deterministic when both are bad.
+            (Auto-rebalancing from label counts happens in the trainer, not
+            here — this only gates the VALUE.) Raises a structured
+            ``InvalidSettingError`` (``CONFIG_INVALID_SETTING``).
+            """
+            for _name, _value in (
+                ("kto_desirable_weight", self.kto_desirable_weight),
+                ("kto_undesirable_weight", self.kto_undesirable_weight),
+            ):
+                if _value <= 0:
+                    from .exceptions import InvalidSettingError
+
+                    raise InvalidSettingError(
+                        _name,
+                        _value,
+                        "a positive number",
+                        suggestion=(
+                            f"Set {_name} to a value > 0 (the default is "
+                            "1.0). KTO's desirable/undesirable weights scale "
+                            "the two polarities of the prospect-theory loss; "
+                            "a zero weight removes one side and a negative "
+                            "weight inverts it. The trainer auto-rebalances "
+                            "these from your label counts toward the "
+                            "[1:1, 4:3] band — start from positive values."
+                        ),
+                    )
             return self
 
         @model_validator(mode="after")
@@ -982,10 +1148,18 @@ else:
         overwrite_output_dir: bool = True
         # v1.5 T1.2 (ORPO): parity with the pydantic branch above. The
         # dataclass fallback can't express a Literal at the type level, so
-        # the {"sft", "orpo"} constraint is enforced in __post_init__ below
-        # to keep behavior byte-identical across the two installs.
+        # the {"sft", "orpo", "simpo", "kto"} constraint is enforced in
+        # __post_init__ below to keep behavior byte-identical across installs.
         method: str = "sft"
         orpo_beta: float = 0.1
+        # v1.6 C2 (SimPO + KTO): parity with the pydantic branch above —
+        # byte-identical defaults so a pydantic-settings-less install ships the
+        # same SimPO/KTO knobs. Validation lives in __post_init__ below.
+        simpo_beta: float = 2.0
+        simpo_gamma: float = 1.0
+        kto_beta: float = 0.1
+        kto_desirable_weight: float = 1.0
+        kto_undesirable_weight: float = 1.0
         # v1.5 T2.1 (FP8 compute path): parity with the pydantic branch above —
         # byte-identical default so a pydantic-settings-less install doesn't
         # silently change FP8 behavior. No validation needed (a bool can't be
@@ -1015,24 +1189,26 @@ else:
                         "modes."
                     ),
                 )
-            # v1.5 T1.2 (ORPO): reject an invalid method here too so the
-            # dataclass-fallback install gives the same structured
-            # CONFIG_INVALID_SETTING the pydantic _reject_invalid_method
-            # validator raises.
-            if self.method not in ("sft", "orpo"):
+            # v1.5 T1.2 (ORPO) / v1.6 C2 (SimPO + KTO): reject an invalid
+            # method here too so the dataclass-fallback install gives the same
+            # structured CONFIG_INVALID_SETTING the pydantic
+            # _reject_invalid_method validator raises. Gated against the same
+            # _ALLOWED_METHODS single source of truth.
+            if self.method not in _ALLOWED_METHODS:
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
                     "method",
                     self.method,
-                    "one of {'sft', 'orpo'}",
+                    "one of {'sft', 'orpo', 'simpo', 'kto'}",
                     suggestion=(
                         "Set method='sft' for supervised fine-tuning (the "
-                        "default) or method='orpo' for reference-free "
-                        "preference tuning (needs a {chosen, rejected} "
-                        "dataset). Other objectives (DPO/SimPO/KTO/PPO/GRPO) "
-                        "are not implemented in v1.5 — use TRL / LLaMA-Factory "
-                        "for those."
+                        "default), 'orpo' or 'simpo' for reference-free "
+                        "preference tuning (both need a {chosen, rejected} "
+                        "dataset), or 'kto' for unpaired binary-feedback "
+                        "tuning ({prompt, completion, label} data; LoRA-only "
+                        "in v1.6). Other objectives (DPO/PPO/GRPO) are not "
+                        "implemented — use TRL / LLaMA-Factory for those."
                     ),
                 )
             # v1.5 T1.2 (ORPO): reject a non-positive orpo_beta here too so the
@@ -1054,6 +1230,72 @@ else:
                         "plain SFT — and a negative value trains toward the "
                         "REJECTED completion."
                     ),
+                )
+            # v1.6 C2 (SimPO): reject a non-positive simpo_gamma here too —
+            # byte-for-byte parity with the pydantic
+            # _reject_invalid_simpo_gamma validator. A non-positive target
+            # margin degenerates the SimPO objective.
+            if self.simpo_gamma <= 0:
+                from .exceptions import InvalidSettingError
+
+                raise InvalidSettingError(
+                    "simpo_gamma",
+                    self.simpo_gamma,
+                    "a positive number",
+                    suggestion=(
+                        "Set simpo_gamma to a value > 0 (the default is 1.0). "
+                        "It is SimPO's target reward margin; a non-positive "
+                        "margin removes the margin term and degenerates the "
+                        "objective. Keep the gamma/beta ratio <= 1.0 to avoid "
+                        "the repetitive-output degeneration band."
+                    ),
+                )
+            # v1.6 C2 (KTO): reject a non-positive desirable/undesirable
+            # weight here too — byte-for-byte parity with the pydantic
+            # _reject_invalid_kto_weights validator. Desirable checked first so
+            # the surfaced setting_name is deterministic when both are bad.
+            for _name, _value in (
+                ("kto_desirable_weight", self.kto_desirable_weight),
+                ("kto_undesirable_weight", self.kto_undesirable_weight),
+            ):
+                if _value <= 0:
+                    from .exceptions import InvalidSettingError
+
+                    raise InvalidSettingError(
+                        _name,
+                        _value,
+                        "a positive number",
+                        suggestion=(
+                            f"Set {_name} to a value > 0 (the default is "
+                            "1.0). KTO's desirable/undesirable weights scale "
+                            "the two polarities of the prospect-theory loss; "
+                            "a zero weight removes one side and a negative "
+                            "weight inverts it. The trainer auto-rebalances "
+                            "these from your label counts toward the "
+                            "[1:1, 4:3] band — start from positive values."
+                        ),
+                    )
+            # v1.6 C2 (SimPO): WARN (do not fail) on a gamma/beta ratio > 1.0
+            # — parity with the pydantic _warn_high_simpo_gamma_ratio
+            # validator. Soft degeneration signal; the run stays launchable.
+            if self.simpo_beta > 0 and (self.simpo_gamma / self.simpo_beta) > 1.0:
+                try:
+                    from .logging_config import get_logger as _get_logger
+
+                    _logger = _get_logger(__name__)
+                except Exception:  # noqa: BLE001 — logging must never block config
+                    import logging as _logging
+
+                    _logger = _logging.getLogger(__name__)
+                _logger.warning(
+                    "simpo_gamma (%s) / simpo_beta (%s) = %.3f > 1.0 — the "
+                    "target margin out-weighs the reward scale, a SimPO "
+                    "degeneration band (repetitive output). The paper pins "
+                    "gamma at ~beta*0.5; consider lowering simpo_gamma or "
+                    "raising simpo_beta.",
+                    self.simpo_gamma,
+                    self.simpo_beta,
+                    self.simpo_gamma / self.simpo_beta,
                 )
             # v1.5 T3.1 (MLX): reject an invalid backend here too so the
             # dataclass-fallback install gives the same structured
@@ -1620,9 +1862,9 @@ def lookup_model_preset_by_id(model_id: str) -> ModelPreset | None:
 #
 # The two namespaces formerly shared the keys ``"fast"`` and ``"quality"``
 # with semantically different values, which surfaced as a Wave 5 audit
-# finding (operator-trap class). The legacy ``TRAINING_PRESETS`` name
-# continues to resolve via the module-level ``__getattr__`` shim at the
-# bottom of this file + emits a ``DeprecationWarning``.
+# finding (operator-trap class). v1.6 C2: the legacy ``TRAINING_PRESETS``
+# alias (the module-level ``__getattr__`` shim that used to live at the bottom
+# of this file) has been REMOVED — use ``MULTI_RUN_PRESETS`` directly.
 MULTI_RUN_PRESETS = {
     "fast-3b": TrainingPreset(
         name="fast-3b",
@@ -1687,9 +1929,9 @@ def get_preset(name: str) -> TrainingPreset:
 
     The preset table was renamed from ``TRAINING_PRESETS`` to
     ``MULTI_RUN_PRESETS`` in v1.4 to disambiguate from the v1.3-era
-    ``LORA_PRESETS`` (LoRA-shape preset). The legacy
-    ``backpropagate.config.TRAINING_PRESETS`` name continues to resolve
-    via module-level ``__getattr__`` + ``DeprecationWarning`` until v1.6.
+    ``LORA_PRESETS`` (LoRA-shape preset). v1.6 C2 REMOVED the legacy
+    ``backpropagate.config.TRAINING_PRESETS`` alias entirely — use
+    ``MULTI_RUN_PRESETS`` directly.
 
     Args:
         name: Preset name ("fast", "balanced", or "quality")
@@ -1725,14 +1967,19 @@ def get_recommended_lr(
     Args:
         dataset_size: Number of training samples
         base_lr: Base learning rate (default: 2e-4). Ignored when
-            ``method == "orpo"`` (the ORPO ladder is anchored on its own
-            published settings, not scaled off the SFT base).
-        method: Training objective (v1.5 T1.2). ``"sft"`` (default) returns
-            the SFT ladder UNCHANGED from earlier releases. ``"orpo"``
+            ``method`` is ``"orpo"``, ``"simpo"`` or ``"kto"`` (those ladders
+            are anchored on their own published settings, not scaled off the
+            SFT base).
+        method: Training objective (v1.5 T1.2 / v1.6 C2). ``"sft"`` (default)
+            returns the SFT ladder UNCHANGED from earlier releases. ``"orpo"``
             returns the ORPO ladder (small=2e-5, medium=1e-5, large=5e-6) —
             roughly an order of magnitude below the SFT LRs because ORPO's
             odds-ratio loss is sensitive to large steps (Hong, Lee & Thorne
             2024, arXiv:2403.07691, train Mistral-ORPO around 5e-6 / 8e-6).
+            ``"simpo"`` and ``"kto"`` auto-lower to a FIXED 1e-6 anchor at
+            every dataset size: SimPO degrades to repetitive output at LR
+            >= 1e-5 (Meng et al. 2024, arXiv:2405.14734) and KTO's published
+            runs sit at 1e-6 (Ethayarajh et al. 2024, arXiv:2402.01306).
 
     Returns:
         Recommended learning rate
@@ -1747,7 +1994,20 @@ def get_recommended_lr(
         >>> lr = get_recommended_lr(5000)  # Returns 2e-4
         >>> lr = get_recommended_lr(50000)  # Returns 1e-4
         >>> lr = get_recommended_lr(500, method="orpo")  # Returns 2e-5
+        >>> lr = get_recommended_lr(500, method="simpo")  # Returns 1e-6
+        >>> lr = get_recommended_lr(50000, method="kto")  # Returns 1e-6
     """
+    if method in ("simpo", "kto"):
+        # v1.6 C2: SimPO + KTO auto-lower. Both pin to a FIXED 1e-6 anchor
+        # regardless of dataset size (NOT a size-scaled ladder): SimPO
+        # degrades to repetitive output at LR >= 1e-5 (clamp/warn band per
+        # arXiv:2405.14734) and KTO's published runs sit at 1e-6
+        # (arXiv:2402.01306). base_lr does NOT scale this — like the ORPO
+        # branch, the anchor is published, not derived from the SFT base.
+        # (The trainer applies the SAME 1e-6 single-value default when the
+        # operator hasn't set an LR — mirrors trainer.py's _ORPO_DEFAULT_LR.)
+        return 1e-6
+
     if method == "orpo":
         # v1.5 T1.2: ORPO ladder. Fixed anchors (not base_lr-scaled) — ORPO's
         # odds-ratio penalty is unstable at the SFT LR magnitudes, so the
@@ -1834,52 +2094,8 @@ def get_recommended_warmup(dataset_size: int, num_steps: int) -> int:
     return max(1, int(num_steps * ratio))
 
 
-# =============================================================================
-# LEGACY ALIAS SHIM (v1.4 rename — Wave 6a foundation, Wave 5 Decision 3)
-# =============================================================================
-#
-# ``TRAINING_PRESETS`` was renamed to ``MULTI_RUN_PRESETS`` to disambiguate
-# from ``LORA_PRESETS`` (LoRA-shape preset, surfaced via the CLI flag
-# ``--lora-preset``). Both formerly shared the keys ``"fast"`` + ``"quality"``
-# with semantically different values — a Wave 5 audit finding flagged the
-# collision as an operator-trap class.
-#
-# Deprecation cycle (advisor 2026-05-25 Q4; removal version revised
-# 2026-06-20 to track the actual ship schedule):
-#   v1.4 → present → DeprecationWarning (silent by default; -W default shows it)
-#   future release (v1.7 or later) → AttributeError (legacy name removed)
-
-_LEGACY_CONFIG_ALIASES: dict[str, str] = {
-    "TRAINING_PRESETS": "MULTI_RUN_PRESETS",
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Module-level legacy-alias resolver (PEP 562).
-
-    Resolves the legacy ``TRAINING_PRESETS`` name to its v1.4 canonical
-    ``MULTI_RUN_PRESETS`` form while emitting a ``DeprecationWarning`` at
-    the import / attribute-access site. ``stacklevel=2`` points the
-    warning at the caller, not this function.
-
-    Anything not in ``_LEGACY_CONFIG_ALIASES`` raises ``AttributeError``
-    per the PEP 562 contract so ``hasattr`` / ``getattr`` with a default
-    still work naturally.
-    """
-    if name in _LEGACY_CONFIG_ALIASES:
-        new_name = _LEGACY_CONFIG_ALIASES[name]
-        import warnings as _warnings
-
-        _warnings.warn(
-            f"{name!r} is deprecated in v1.4; use {new_name!r} instead. "
-            f"The legacy name will be removed in a future release "
-            f"(v1.7 or later). "
-            f"Note: this is the multi-run-loop preset table, NOT the "
-            f"LoRA-shape preset 'LORA_PRESETS' (surfaced via --lora-preset).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return globals()[new_name]
-    raise AttributeError(
-        f"module 'backpropagate.config' has no attribute {name!r}"
-    )
+# v1.6 C2: the module-level ``__getattr__`` legacy-alias shim that resolved the
+# pre-v1.4 ``TRAINING_PRESETS`` name to ``MULTI_RUN_PRESETS`` (with a
+# ``DeprecationWarning``) has been REMOVED. ``MULTI_RUN_PRESETS`` is the only
+# name now. (The top-level ``backpropagate.TRAINING_PRESETS`` re-export is
+# removed in lockstep by the gradio-purge agent.)

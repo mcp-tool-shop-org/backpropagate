@@ -3431,3 +3431,444 @@ class TestPreferenceFormat:
         assert "text" in ds.column_names
         assert "a1" in ds[0]["text"]
         assert "x1" not in ds[0]["text"]
+
+
+# =============================================================================
+# KTO FORMAT TESTS (v1.6 Contract C1)
+# =============================================================================
+# KTO (Ethayarajh et al. 2024, arXiv:2402.01306) trains on UNPAIRED binary
+# feedback: each row is a {prompt, completion, label:bool} triple — distinct
+# from the paired {prompt, chosen, rejected} PREFERENCE shape. Detection keys
+# off the boolean ``label`` key (+ ``completion``); to_kto_dataset preserves
+# the raw columns exactly (no chatml munging), mirroring to_preference_dataset.
+
+class TestKTOFormat:
+    """detect_format / _validate_kto / to_kto_dataset for the unpaired
+    {prompt, completion, label} KTO contract."""
+
+    # ---- detection -------------------------------------------------------
+
+    def test_detect_kto_bool_label(self):
+        """A {prompt, completion, label:bool} row detects as KTO."""
+        sample = {"prompt": "p", "completion": "c", "label": True}
+        assert detect_format(sample) == DatasetFormat.KTO
+
+    def test_detect_kto_false_label(self):
+        """label=False is still a valid KTO row (undesirable example)."""
+        sample = {"prompt": "p", "completion": "c", "label": False}
+        assert detect_format(sample) == DatasetFormat.KTO
+
+    def test_detect_kto_int_label_zero_one(self):
+        """An int 0/1 label is accepted as the boolean-feedback discriminator."""
+        assert detect_format({"prompt": "p", "completion": "c", "label": 1}) == DatasetFormat.KTO
+        assert detect_format({"prompt": "p", "completion": "c", "label": 0}) == DatasetFormat.KTO
+
+    def test_detect_kto_implicit_prompt(self):
+        """A {completion, label} row (no prompt) still detects as KTO."""
+        sample = {"completion": "c", "label": True}
+        assert detect_format(sample) == DatasetFormat.KTO
+
+    def test_detect_kto_from_list(self):
+        """Detection from a list inspects the first sample."""
+        samples = [{"prompt": "p", "completion": "c", "label": True}]
+        assert detect_format(samples) == DatasetFormat.KTO
+
+    def test_detect_kto_runs_before_preference(self):
+        """KTO's label is the discriminator; a row with chosen/rejected (no
+        label) stays PREFERENCE, but a clean KTO row never gets stolen by the
+        paired check."""
+        kto = {"prompt": "p", "completion": "c", "label": True}
+        assert detect_format(kto) == DatasetFormat.KTO
+
+    # ---- KTO does not steal other formats --------------------------------
+
+    def test_preference_pair_not_kto(self):
+        """A paired {chosen, rejected} row (no label) is PREFERENCE, NOT KTO."""
+        sample = {"prompt": "p", "chosen": "a", "rejected": "b"}
+        assert detect_format(sample) == DatasetFormat.PREFERENCE
+
+    def test_completion_without_label_not_kto(self):
+        """A lone 'completion' with no label is NOT KTO (label is required)."""
+        # No other discriminator -> UNKNOWN.
+        assert detect_format({"completion": "c"}) == DatasetFormat.UNKNOWN
+
+    def test_string_label_not_kto(self):
+        """A non-bool / non-0-1 'label' (e.g. a string class label) is NOT the
+        KTO binary-feedback discriminator."""
+        sample = {"prompt": "p", "completion": "c", "label": "positive"}
+        assert detect_format(sample) != DatasetFormat.KTO
+
+    def test_label_without_completion_not_kto(self):
+        """A bool 'label' with no 'completion' is NOT KTO (completion required)."""
+        assert detect_format({"prompt": "p", "label": True}) != DatasetFormat.KTO
+
+    def test_no_regression_alpaca_with_kto_added(self):
+        """An ordinary Alpaca row still detects as ALPACA after KTO lands."""
+        sample = {"instruction": "Translate", "input": "Hi", "output": "Bonjour"}
+        assert detect_format(sample) == DatasetFormat.ALPACA
+
+    def test_no_regression_openai_with_kto_added(self):
+        """An ordinary OpenAI row still detects as OPENAI after KTO lands."""
+        sample = {"messages": [{"role": "user", "content": "Hi"}]}
+        assert detect_format(sample) == DatasetFormat.OPENAI
+
+    # ---- _validate_kto ---------------------------------------------------
+
+    def test_validate_kto_accepts_valid_bool_row(self):
+        """A {prompt, completion, label:bool} row validates clean."""
+        samples = [{"prompt": "p", "completion": "good", "label": True}]
+        result = validate_dataset(samples, DatasetFormat.KTO)
+        assert result.is_valid
+        assert result.valid_rows == 1
+        assert result.error_count == 0
+
+    def test_validate_kto_accepts_int_label(self):
+        """An int 0/1 label validates clean (bool is a Python int subclass; 0/1
+        are also accepted)."""
+        from backpropagate.datasets import _validate_kto
+
+        assert not _validate_kto({"prompt": "p", "completion": "c", "label": 1}, 0)
+        assert not _validate_kto({"prompt": "p", "completion": "c", "label": 0}, 0)
+
+    def test_validate_kto_missing_completion_is_error(self):
+        """A row missing 'completion' is flagged as a missing_field error."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto({"prompt": "p", "label": True}, 0)
+        assert any(
+            e.field == "completion" and e.error_type == "missing_field"
+            for e in errors
+        )
+
+    def test_validate_kto_missing_label_is_error(self):
+        """A row missing 'label' is flagged as a missing_field error."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto({"prompt": "p", "completion": "c"}, 0)
+        assert any(
+            e.field == "label" and e.error_type == "missing_field"
+            for e in errors
+        )
+
+    def test_validate_kto_non_bool_label_is_error(self):
+        """A label that is not a bool / 0 / 1 is an invalid_value error."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto(
+            {"prompt": "p", "completion": "c", "label": "yes"}, 0
+        )
+        assert any(e.field == "label" for e in errors)
+        assert not any(e.error_type == "missing_field" and e.field == "label" for e in errors)
+
+    def test_validate_kto_int_other_than_zero_one_is_error(self):
+        """An int label like 2 is NOT valid binary feedback."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto({"prompt": "p", "completion": "c", "label": 2}, 0)
+        assert any(e.field == "label" for e in errors)
+
+    def test_validate_kto_blank_completion_is_warning(self):
+        """An empty 'completion' is flagged as empty_content (warning, mirroring
+        the preference/alpaca empty-field handling)."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto({"prompt": "p", "completion": "", "label": True}, 0)
+        assert any(
+            e.field == "completion" and e.error_type == "empty_content"
+            for e in errors
+        )
+
+    def test_validate_kto_none_completion_does_not_crash(self):
+        """A None completion (CSV/parquet empty cell) is treated as empty, not an
+        AttributeError (DATA-B-002 sibling)."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto(
+            {"prompt": "p", "completion": None, "label": True}, 0
+        )
+        assert any(
+            e.field == "completion" and e.error_type == "empty_content"
+            for e in errors
+        )
+
+    def test_validate_kto_missing_prompt_is_not_error(self):
+        """A missing 'prompt' is informational (implicit-prompt), never a hard
+        error — the dataset stays valid."""
+        samples = [{"completion": "c", "label": True}]
+        result = validate_dataset(samples, DatasetFormat.KTO)
+        assert result.is_valid
+        assert result.error_count == 0
+
+    def test_validate_kto_paired_routed_to_kto_is_error(self):
+        """A paired {chosen, rejected} row mis-routed to KTO validation gets a
+        clear error (no completion / no label)."""
+        from backpropagate.datasets import _validate_kto
+
+        errors = _validate_kto({"prompt": "p", "chosen": "a", "rejected": "b"}, 0)
+        # Both completion and label are missing -> errors, not a silent pass.
+        assert any(e.field == "completion" for e in errors)
+        assert any(e.field == "label" for e in errors)
+
+    # ---- to_kto_dataset --------------------------------------------------
+
+    def test_to_kto_dataset_columns_exact(self):
+        """to_kto_dataset returns columns EXACTLY {prompt, completion, label}
+        with label coerced to bool — raw columns preserved, no chatml munging."""
+        pytest.importorskip("datasets")
+        from datasets import Dataset
+
+        samples = [
+            {"prompt": "p1", "completion": "c1", "label": True},
+            {"prompt": "p2", "completion": "c2", "label": False},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_kto_dataset()
+
+        assert isinstance(ds, Dataset)
+        assert len(ds) == 2
+        assert set(ds.column_names) == {"prompt", "completion", "label"}
+        assert "text" not in ds.column_names
+        assert ds[0]["prompt"] == "p1"
+        assert ds[0]["completion"] == "c1"
+        assert ds[0]["label"] is True
+        assert ds[1]["label"] is False
+
+    def test_to_kto_dataset_int_label_coerced_to_bool(self):
+        """An int 0/1 label is coerced to a Python bool so the column dtype is
+        uniform bool (the contract)."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"prompt": "p1", "completion": "c1", "label": 1},
+            {"prompt": "p2", "completion": "c2", "label": 0},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_kto_dataset()
+        assert ds[0]["label"] is True
+        assert ds[1]["label"] is False
+
+    def test_to_kto_dataset_implicit_prompt_filled(self):
+        """Rows without a prompt get prompt="" so the columnar schema stays
+        uniform {prompt, completion, label} (KTO always needs a prompt column)."""
+        pytest.importorskip("datasets")
+
+        samples = [{"completion": "c", "label": True}]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_kto_dataset()
+        assert set(ds.column_names) == {"prompt", "completion", "label"}
+        assert ds[0]["prompt"] == ""
+
+    def test_to_kto_dataset_with_split(self):
+        """split= returns {split: Dataset}, mirroring to_preference_dataset."""
+        pytest.importorskip("datasets")
+
+        samples = [{"prompt": "p", "completion": "c", "label": True}]
+        loader = DatasetLoader(samples, validate=False)
+        result = loader.to_kto_dataset(split="train")
+        assert isinstance(result, dict)
+        assert "train" in result
+
+    def test_to_kto_dataset_mixed_keeps_only_kto_rows(self):
+        """A mixed file contributes only rows carrying completion + a bool
+        label."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"prompt": "p", "completion": "c", "label": True},   # kept
+            {"prompt": "p", "chosen": "a", "rejected": "b"},      # dropped (paired)
+            {"completion": "lone"},                                # dropped (no label)
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_kto_dataset()
+        assert len(ds) == 1
+        assert ds[0]["completion"] == "c"
+
+    def test_to_kto_dataset_raises_on_paired_dataset(self):
+        """to_kto_dataset on a PAIRED preference dataset raises DatasetFormatError
+        with code INPUT_DATASET_FORMAT_UNSUPPORTED (no new code) — the mis-route
+        guard."""
+        pytest.importorskip("datasets")
+        from backpropagate.exceptions import DatasetFormatError
+
+        samples = [
+            {"prompt": "p1", "chosen": "a1", "rejected": "b1"},
+            {"prompt": "p2", "chosen": "a2", "rejected": "b2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+
+        with pytest.raises(DatasetFormatError) as exc_info:
+            loader.to_kto_dataset()
+        assert exc_info.value.code == "INPUT_DATASET_FORMAT_UNSUPPORTED"
+
+    def test_to_kto_dataset_raises_on_sft_dataset(self):
+        """to_kto_dataset on a plain SFT dataset raises DatasetFormatError too."""
+        pytest.importorskip("datasets")
+        from backpropagate.exceptions import DatasetFormatError
+
+        samples = [{"instruction": "Translate", "input": "Hi", "output": "Bonjour"}]
+        loader = DatasetLoader(samples, validate=False)
+        with pytest.raises(DatasetFormatError):
+            loader.to_kto_dataset()
+
+    def test_to_kto_dataset_preserves_completion_verbatim(self):
+        """The completion value is preserved AS-IS (no chatml templating)."""
+        pytest.importorskip("datasets")
+
+        samples = [{"prompt": "q", "completion": "RAW_TEXT_XYZ", "label": True}]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_kto_dataset()
+        assert ds[0]["completion"] == "RAW_TEXT_XYZ"
+        assert "<|im_start|>" not in ds[0]["completion"]
+
+
+# =============================================================================
+# split_dataset TESTS (v1.6 Contract C1 — for `backprop data split`)
+# =============================================================================
+
+class TestSplitDataset:
+    """Module-level deterministic shuffle+split helper used by `data split`."""
+
+    def test_split_basic_proportions(self):
+        """A 0.2 heldout ratio on 10 rows yields 8 train / 2 heldout."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(10)]
+        train, heldout = split_dataset(records, heldout_ratio=0.2, seed=0)
+        assert len(train) == 8
+        assert len(heldout) == 2
+
+    def test_split_deterministic_same_seed(self):
+        """Same seed -> identical split (byte-for-byte replayable)."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(20)]
+        a_train, a_held = split_dataset(records, heldout_ratio=0.25, seed=42)
+        b_train, b_held = split_dataset(records, heldout_ratio=0.25, seed=42)
+        assert a_train == b_train
+        assert a_held == b_held
+
+    def test_split_different_seed_differs(self):
+        """Different seeds generally produce a different heldout selection."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(50)]
+        _, held1 = split_dataset(records, heldout_ratio=0.2, seed=1)
+        _, held2 = split_dataset(records, heldout_ratio=0.2, seed=2)
+        assert held1 != held2
+
+    def test_split_is_a_partition(self):
+        """train + heldout together contain every input row exactly once."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(13)]
+        train, heldout = split_dataset(records, heldout_ratio=0.3, seed=7)
+        combined = train + heldout
+        assert len(combined) == len(records)
+        # Every original record appears exactly once across the two splits.
+        for r in records:
+            assert combined.count(r) == 1
+
+    def test_split_does_not_mutate_input(self):
+        """The caller's list is not shuffled in place."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(10)]
+        original = list(records)
+        split_dataset(records, heldout_ratio=0.2, seed=0)
+        assert records == original
+
+    def test_split_ratio_zero_raises(self):
+        """heldout_ratio must be in (0,1) — 0.0 is rejected."""
+        from backpropagate.datasets import split_dataset
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError):
+            split_dataset([{"i": 1}, {"i": 2}], heldout_ratio=0.0, seed=0)
+
+    def test_split_ratio_one_raises(self):
+        """heldout_ratio must be in (0,1) — 1.0 is rejected."""
+        from backpropagate.datasets import split_dataset
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError):
+            split_dataset([{"i": 1}, {"i": 2}], heldout_ratio=1.0, seed=0)
+
+    def test_split_ratio_out_of_range_raises(self):
+        """A ratio above 1 or below 0 is rejected."""
+        from backpropagate.datasets import split_dataset
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError):
+            split_dataset([{"i": 1}], heldout_ratio=1.5, seed=0)
+        with pytest.raises(InvalidSettingError):
+            split_dataset([{"i": 1}], heldout_ratio=-0.1, seed=0)
+
+    def test_split_too_few_rows_raises(self):
+        """A dataset too small to yield >=1 row each side gives a clear error."""
+        from backpropagate.datasets import split_dataset
+        from backpropagate.exceptions import InvalidSettingError
+
+        # 1 row can never be split into two non-empty halves.
+        with pytest.raises(InvalidSettingError):
+            split_dataset([{"i": 1}], heldout_ratio=0.2, seed=0)
+
+    def test_split_tiny_ratio_still_one_heldout(self):
+        """A tiny ratio on enough rows still yields at least 1 heldout row (no
+        empty heldout split)."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(100)]
+        train, heldout = split_dataset(records, heldout_ratio=0.001, seed=0)
+        assert len(heldout) >= 1
+        assert len(train) >= 1
+        assert len(train) + len(heldout) == 100
+
+    def test_split_large_ratio_still_one_train(self):
+        """A near-1 ratio still leaves at least 1 train row."""
+        from backpropagate.datasets import split_dataset
+
+        records = [{"i": i} for i in range(100)]
+        train, heldout = split_dataset(records, heldout_ratio=0.999, seed=0)
+        assert len(train) >= 1
+        assert len(heldout) >= 1
+
+    def test_split_empty_records_raises(self):
+        """An empty record list cannot be split."""
+        from backpropagate.datasets import split_dataset
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError):
+            split_dataset([], heldout_ratio=0.2, seed=0)
+
+
+# =============================================================================
+# SimPO suitability (v1.6 Contract C1 — NO new data path)
+# =============================================================================
+# SimPO reuses the existing paired {prompt, chosen, rejected} PREFERENCE data
+# via to_preference_dataset (TRL CPOTrainer loss_type="simpo"). This test
+# confirms the existing output is suitable for a CPO/SimPO trainer (paired
+# columns present). It does NOT modify to_preference_dataset.
+
+class TestSimPODataSuitability:
+    """SimPO needs no new data path — it consumes to_preference_dataset's
+    paired output. Lock that the paired columns a CPO/SimPO trainer requires
+    are present."""
+
+    def test_preference_dataset_has_paired_columns_for_simpo(self):
+        """to_preference_dataset output carries the {prompt, chosen, rejected}
+        columns TRL's CPOTrainer(loss_type='simpo') consumes."""
+        pytest.importorskip("datasets")
+
+        samples = [
+            {"prompt": "p1", "chosen": "good1", "rejected": "bad1"},
+            {"prompt": "p2", "chosen": "good2", "rejected": "bad2"},
+        ]
+        loader = DatasetLoader(samples, validate=False)
+        ds = loader.to_preference_dataset()
+        # The paired columns SimPO/CPO requires.
+        assert "chosen" in ds.column_names
+        assert "rejected" in ds.column_names
+        assert "prompt" in ds.column_names
+        # NOT collapsed to a single SFT text column.
+        assert "text" not in ds.column_names
+        assert len(ds) == 2

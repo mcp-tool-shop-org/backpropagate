@@ -66,11 +66,11 @@ classifiers = [
 #     with a working-range remedy regardless of what resolves.
 dependencies = [
     "torch>=2.0.0,<3",
-    "transformers>=4.36.0,<6",
-    "datasets>=2.14.0",
-    "trl>=0.7.0,<0.28",
-    "peft>=0.7.0",
-    "accelerate>=0.25.0",
+    "transformers>=4.46.0,<6",
+    "datasets>=2.19.0",
+    "trl>=0.18.0,<0.28",
+    "peft>=0.13.0",
+    "accelerate>=0.34.0",
     "bitsandbytes>=0.41.0",
     "tenacity>=8.0.0",
     "packaging>=21.0",  # Version parsing for security checks

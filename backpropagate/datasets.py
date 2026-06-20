@@ -202,6 +202,8 @@ __all__ = [
     "order_by_difficulty",
     "get_curriculum_chunks",
     "analyze_curriculum",
+    # Dataset split (v1.6 Contract C1 — `backprop data split`)
+    "split_dataset",
 ]
 
 
@@ -222,6 +224,17 @@ class DatasetFormat(Enum):
     # discriminator regardless of the value shape, so detection runs BEFORE
     # the sharegpt/openai/alpaca checks (see ``detect_format``).
     PREFERENCE = "preference"
+    # v1.6 Contract C1 (KTO): UNPAIRED binary-feedback data — a dict carrying a
+    # ``completion`` (str OR message-list) plus a boolean ``label`` (or 0/1)
+    # marking that completion desirable (True/1) or undesirable (False/0), with
+    # an optional ``prompt``. This is distinct from the PAIRED ``PREFERENCE``
+    # shape ({chosen, rejected}): KTO (Ethayarajh et al. 2024, arXiv:2402.01306)
+    # trains on a stream of single-completion judgements, not pairs. The bool
+    # ``label`` (+ ``completion``) is the discriminator, so detection runs
+    # BEFORE the chosen/rejected and sharegpt/openai/alpaca checks (see
+    # ``detect_format``) — a KTO row never carries chosen/rejected, and a paired
+    # row never carries a bool label, so the two shapes don't collide.
+    KTO = "kto"
     RAW_TEXT = "raw_text"
     UNKNOWN = "unknown"
 
@@ -416,6 +429,28 @@ class TraceFilterStats:
 # FORMAT DETECTION
 # =============================================================================
 
+def _is_kto_label(value: Any) -> bool:
+    """Return True when ``value`` is a valid KTO binary-feedback label.
+
+    v1.6 Contract C1: KTO labels are boolean — ``True`` (desirable) or
+    ``False`` (undesirable). The integers ``1`` / ``0`` are accepted as the
+    common JSONL spelling of that bool. Everything else (other ints like ``2``,
+    floats, strings such as ``"positive"``, ``None``, message-lists) is NOT a
+    binary-feedback label and must not be treated as KTO.
+
+    Note ``bool`` is a subclass of ``int`` in Python (so ``True`` is an
+    ``int``); the explicit ``value in (0, 1)`` membership covers both the real
+    bools and the 0/1 ints while ``isinstance(value, (bool, int))`` excludes
+    floats (``True == 1`` but we want ``1.0`` rejected so a numeric score column
+    is not misread as a label).
+    """
+    if isinstance(value, bool):
+        return True
+    # Exclude floats explicitly (1.0/0.0 are numeric scores, not labels) and
+    # accept only the literal ints 0 and 1.
+    return bool(isinstance(value, int) and value in (0, 1))
+
+
 def detect_format(data: dict | list[dict | str] | str) -> DatasetFormat:
     """
     Auto-detect the format of a dataset sample.
@@ -441,6 +476,17 @@ def detect_format(data: dict | list[dict | str] | str) -> DatasetFormat:
 
     if not isinstance(data, dict):
         return DatasetFormat.UNKNOWN
+
+    # Check for KTO unpaired binary-feedback format (v1.6 Contract C1) FIRST,
+    # before the paired PREFERENCE check. A KTO row carries a ``completion`` AND
+    # a BOOLEAN ``label`` (or the ints 0/1 — the binary-feedback discriminator);
+    # it never carries chosen/rejected, so this ordering cannot steal a paired
+    # row (which has no bool ``label``). A non-bool / non-0-1 ``label`` (e.g. a
+    # string class label) is NOT the KTO discriminator and falls through to the
+    # other checks. We do NOT inspect ``completion`` value shape here (str or
+    # message-list both valid) — _validate_kto / to_kto_dataset handle content.
+    if "completion" in data and _is_kto_label(data.get("label")):
+        return DatasetFormat.KTO
 
     # Check for preference-pair format (v1.5 T1.2 / ORPO) FIRST.
     # A row carrying BOTH "chosen" and "rejected" is preference data — the
@@ -1110,6 +1156,88 @@ def _validate_preference(sample: dict, row_index: int) -> list[ValidationError]:
     return errors
 
 
+def _validate_kto(sample: dict, row_index: int) -> list[ValidationError]:
+    """Validate a KTO unpaired binary-feedback sample (v1.6 Contract C1).
+
+    A valid KTO row needs a non-blank ``completion`` (string OR non-empty
+    message-list — ``_is_blank`` accepts both) AND a boolean ``label`` (True /
+    False, or the ints 1 / 0). A missing ``completion`` or ``label`` is a hard
+    error; a present-but-non-boolean ``label`` (e.g. the string ``"positive"``
+    or an int like ``2``) is an ``invalid_value`` error. A blank ``completion``
+    is an ``empty_content`` warning (mirroring ``_validate_preference`` /
+    ``_validate_alpaca``). A missing ``prompt`` is the *implicit-prompt* case —
+    info, not an error.
+
+    This is also the mis-route guard: a PAIRED ``{chosen, rejected}`` row routed
+    here has neither ``completion`` nor ``label``, so it surfaces clear
+    missing-field errors rather than silently passing.
+
+    There are deliberately NO ChatML balance checks: the ``completion`` is a RAW
+    value (string or message-list) that TRL's KTOTrainer renders with the
+    model's chat template at train time — this loader preserves it verbatim (see
+    ``DatasetLoader.to_kto_dataset``).
+    """
+    errors = []
+
+    if "completion" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="completion",
+            error_type="missing_field",
+            message="Missing 'completion' field",
+        ))
+
+    if "label" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="label",
+            error_type="missing_field",
+            message="Missing 'label' field",
+        ))
+    elif not _is_kto_label(sample.get("label")):
+        # Present but not a binary-feedback label (not bool, not 0/1).
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="label",
+            error_type="invalid_value",
+            message=(
+                f"KTO 'label' must be a boolean (True/False) or the ints 1/0 "
+                f"marking the completion desirable/undesirable; got "
+                f"{sample.get('label')!r}"
+            ),
+            value=sample.get("label"),
+        ))
+
+    # Empty-content check reuses the shared _is_blank helper (handles
+    # None/NaN/empty-string AND empty message-list). Only flag it when the key
+    # is present — a wholly-absent completion already raised missing_field.
+    if "completion" in sample and _is_blank(sample.get("completion")):
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="completion",
+            error_type="empty_content",
+            message="Empty completion",
+        ))
+
+    # A missing 'prompt' is NOT an error: implicit-prompt KTO data (prompt
+    # embedded in the completion) is a first-class shape. Surface it as an
+    # info-level WARN row only when the key is wholly absent, so a curated
+    # {prompt, completion, label} corpus stays silent.
+    if "prompt" not in sample:
+        errors.append(ValidationError(
+            row_index=row_index,
+            field="prompt",
+            error_type="implicit_prompt",
+            message=(
+                "No 'prompt' field — treating as implicit-prompt KTO data (the "
+                "prompt is assumed to live inside the completion). This is "
+                "informational, not an error."
+            ),
+        ))
+
+    return errors
+
+
 def _validate_openai(sample: dict, row_index: int) -> list[ValidationError]:
     """Validate an OpenAI chat formatted sample."""
     errors = []
@@ -1220,6 +1348,16 @@ def validate_sample(
                 message=f"Preference format requires dict, got {type(sample).__name__}",
             )]
         return _validate_preference(sample, row_index)
+
+    if format_type == DatasetFormat.KTO:
+        if not isinstance(sample, dict):
+            return [ValidationError(
+                row_index=row_index,
+                field="sample",
+                error_type="invalid_type",
+                message=f"KTO format requires dict, got {type(sample).__name__}",
+            )]
+        return _validate_kto(sample, row_index)
 
     if format_type == DatasetFormat.OPENAI:
         if not isinstance(sample, dict):
@@ -3024,6 +3162,88 @@ class DatasetLoader:
             return {split: dataset}
         return dataset
 
+    def to_kto_dataset(self, split: str | None = None) -> Any:
+        """Build a HuggingFace ``Dataset`` of KTO unpaired binary feedback (v1.6).
+
+        Mirrors :meth:`to_preference_dataset`: it preserves the RAW KTO columns
+        and does NOT route through :meth:`to_chatml` — collapsing to a single
+        ``{"text": ...}`` column would destroy the ``(completion, label)``
+        pairing TRL's ``KTOTrainer`` requires. The ``completion`` value is left
+        exactly as it appears in the source (a string OR a message-list); TRL
+        renders it with the model's chat template at train time.
+
+        The returned columns are EXACTLY ``{"prompt", "completion", "label"}``
+        (Contract C1). ``label`` is coerced to a Python ``bool`` so the column
+        dtype is uniform (an int 0/1 in the source becomes ``False`` / ``True``).
+        Rows without a ``prompt`` get ``prompt=""`` so the columnar schema stays
+        uniform — KTO always carries a prompt column (the implicit-prompt case).
+
+        Only rows that carry a ``completion`` AND a boolean (or 0/1) ``label``
+        are kept — the same per-row philosophy the SFT/preference converters
+        use, so a mixed file contributes only its real KTO rows.
+
+        Args:
+            split: Optional split name (e.g. "train"); when set, returns
+                ``{split: Dataset}`` to mirror :meth:`to_preference_dataset`.
+
+        Returns:
+            A ``datasets.Dataset`` with columns ``{prompt, completion, label}``,
+            or ``{split: Dataset}``.
+
+        Raises:
+            DatasetFormatError: when NO row is a valid KTO row — i.e. the
+                operator pointed KTO at a paired preference dataset (or any
+                non-KTO data). Code ``INPUT_DATASET_FORMAT_UNSUPPORTED`` (reused;
+                no new code).
+        """
+        try:
+            from datasets import Dataset
+        except ImportError:
+            raise ImportError("datasets required: pip install datasets")
+
+        from .exceptions import DatasetFormatError
+
+        # Keep only genuine KTO rows (dict carrying a completion AND a bool/0-1
+        # label). Done row-by-row rather than trusting the cached single
+        # ``_format`` so a mixed file contributes only its real KTO rows.
+        kto_rows: list[dict[str, Any]] = []
+        for sample in self._samples:
+            if not isinstance(sample, dict):
+                continue
+            if "completion" not in sample or not _is_kto_label(sample.get("label")):
+                continue
+            kto_rows.append({
+                # prompt defaults to "" (implicit-prompt) so every row has the
+                # column; completion preserved AS-IS (str or message-list) — TRL
+                # renders it later, we must not stringify/template here.
+                "prompt": sample.get("prompt", ""),
+                "completion": sample["completion"],
+                # Coerce 0/1 ints to a real bool for a uniform column dtype.
+                "label": bool(sample["label"]),
+            })
+
+        if not kto_rows:
+            # No usable KTO row anywhere — this is the "operator pointed KTO at a
+            # paired preference / SFT dataset" case. Reuse DatasetFormatError
+            # (already mapped to INPUT_DATASET_FORMAT_UNSUPPORTED — no new code).
+            raise DatasetFormatError(
+                "method='kto' requires unpaired binary-feedback rows, but no "
+                "row had both a 'completion' and a boolean 'label'. (A paired "
+                "{chosen, rejected} dataset is PREFERENCE data — use "
+                "method='orpo'/'simpo' instead.)",
+                detected_format=self._format.value,
+                supported_formats=[
+                    "{prompt, completion, label}",
+                    "{completion, label}",
+                ],
+            )
+
+        dataset = Dataset.from_list(kto_rows)
+
+        if split:
+            return {split: dataset}
+        return dataset
+
     def preview(self, n: int = 3, as_chatml: bool = True) -> list[str]:
         """
         Preview samples.
@@ -4022,3 +4242,89 @@ def analyze_curriculum(
         chunk_sizes=chunk_sizes,
         difficulty_ranges=difficulty_ranges,
     )
+
+
+# =============================================================================
+# DATASET SPLIT (v1.6 Contract C1 — for `backprop data split`)
+# =============================================================================
+
+def split_dataset(
+    records: list[dict],
+    heldout_ratio: float,
+    seed: int,
+) -> tuple[list[dict], list[dict]]:
+    """Deterministically shuffle ``records`` and split off a held-out portion.
+
+    The backing helper `backprop data split` wires to (v1.6 Contract C1). The
+    shuffle uses a LOCAL ``random.Random(seed)`` (never the global RNG — same
+    no-global-mutation discipline as :meth:`DatasetLoader.shuffle`), so a given
+    ``(records, heldout_ratio, seed)`` triple is byte-for-byte replayable
+    (PIN_PER_STEP). The caller's list is NOT mutated.
+
+    Args:
+        records: The rows to split (any list of dicts — JSONL records).
+        heldout_ratio: Fraction of rows to place in the HELD-OUT split, in the
+            OPEN interval ``(0, 1)``. The held-out count is rounded so that BOTH
+            splits get at least one row whenever ``len(records) >= 2`` (a tiny
+            ratio still yields >=1 held-out row; a near-1 ratio still leaves >=1
+            train row).
+        seed: Seed for the deterministic shuffle.
+
+    Returns:
+        ``(train, heldout)`` — two disjoint lists whose concatenation is a
+        permutation of ``records`` (every input row appears exactly once).
+
+    Raises:
+        InvalidSettingError: if ``heldout_ratio`` is not strictly inside
+            ``(0, 1)``, or if ``records`` is too small to yield at least one row
+            on each side (i.e. fewer than 2 rows). Code
+            ``CONFIG_INVALID_SETTING`` (reused; no new code).
+    """
+    # Guard the ratio: must be strictly inside (0, 1). 0.0 / 1.0 / out-of-range
+    # would produce an empty split, which the operator only discovers after the
+    # fact — fail loud with the bad value + the fix (mirrors the trace-filter
+    # bound guards).
+    if not (0.0 < heldout_ratio < 1.0):
+        raise InvalidSettingError(
+            "heldout_ratio",
+            heldout_ratio,
+            "a float strictly between 0 and 1 (exclusive)",
+            suggestion=(
+                "heldout_ratio is the FRACTION of rows held out for evaluation; "
+                "it must be in the open interval (0, 1) — e.g. 0.1 holds out "
+                "10%. 0.0 (no held-out rows) and 1.0 (no training rows) are "
+                "both rejected."
+            ),
+        )
+
+    n = len(records)
+    if n < 2:
+        # Can never produce two non-empty splits from fewer than 2 rows.
+        raise InvalidSettingError(
+            "records",
+            n,
+            "a dataset with at least 2 rows (so each split gets >=1 row)",
+            suggestion=(
+                "split_dataset needs at least 2 rows to put >=1 row in each of "
+                "the train and held-out splits. The dataset you passed has "
+                f"{n} row(s). Add more data, or skip the split entirely."
+            ),
+        )
+
+    # Held-out count: round to nearest, then clamp to [1, n-1] so BOTH splits
+    # are guaranteed non-empty regardless of how extreme the ratio is. A tiny
+    # ratio (e.g. 0.001 on 100 rows -> round() == 0) is bumped to 1; a near-1
+    # ratio (0.999 -> round() == 100) is capped at n-1 so train keeps >=1 row.
+    n_heldout = round(n * heldout_ratio)
+    n_heldout = max(1, min(n_heldout, n - 1))
+
+    # Deterministic shuffle on a COPY via a local RNG (no global-seed mutation;
+    # nosec B311 — non-crypto dataset shuffle, same rationale as
+    # DatasetLoader.shuffle).
+    shuffled = list(records)
+    rng = random.Random(seed)  # nosec B311 — deterministic dataset split, not crypto
+    rng.shuffle(shuffled)
+
+    heldout = shuffled[:n_heldout]
+    train = shuffled[n_heldout:]
+    return train, heldout

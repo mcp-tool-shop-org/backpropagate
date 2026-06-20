@@ -524,6 +524,206 @@ class TestTrainingConfig:
         assert exc_info.value.code == "CONFIG_INVALID_SETTING"
         assert exc_info.value.setting_name == "orpo_beta"
 
+    # -------------------------------------------------------------------------
+    # v1.6 C2 (SimPO + KTO) — method literal extension + new objective fields
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.parametrize("good_method", ["sft", "orpo", "simpo", "kto"])
+    def test_training_config_accepts_v16_methods(self, good_method):
+        """v1.6 C2: the method literal is {'sft','orpo','simpo','kto'}.
+
+        SimPO (Meng 2024, arXiv:2405.14734) and KTO (Ethayarajh 2024,
+        arXiv:2402.01306) join ORPO as accepted reference-free / unpaired
+        objectives. The single allowed-set must admit all four.
+        """
+        from backpropagate.config import TrainingConfig
+
+        assert TrainingConfig(method=good_method).method == good_method
+
+    @pytest.mark.parametrize("good_method", ["simpo", "kto"])
+    def test_training_config_v16_method_via_env(self, monkeypatch, good_method):
+        """v1.6 C2: BACKPROPAGATE_TRAINING__METHOD={simpo,kto} round-trips."""
+        from backpropagate.config import TrainingConfig
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__METHOD", good_method)
+        assert TrainingConfig().method == good_method
+
+    def test_training_config_rejects_unknown_method_lists_v16_set(self):
+        """v1.6 C2: the reject message names the full {sft,orpo,simpo,kto} set.
+
+        An operator typing a not-implemented objective (dpo/ppo/grpo) must
+        see the four valid choices in the structured hint, not the stale
+        v1.5 {sft, orpo} pair.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(method="dpo")
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "method"
+        # All four canonical methods are named in the structured error so the
+        # operator sees the full menu of valid values.
+        rendered = f"{exc_info.value.expected} {exc_info.value.suggestion}"
+        for m in ("sft", "orpo", "simpo", "kto"):
+            assert m in rendered, (
+                f"method reject error must name {m!r}; got {rendered!r}"
+            )
+
+    # ----- SimPO fields: simpo_beta + simpo_gamma -----
+
+    def test_training_config_simpo_defaults(self):
+        """v1.6 C2: simpo_beta defaults to 2.0, simpo_gamma to 1.0.
+
+        Defaults from the SimPO paper / TRL CPO docs: beta=2.0 is the
+        cross-setup-safe floor; gamma=1.0 is the beta*0.5 target-margin ratio.
+        """
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.simpo_beta == pytest.approx(2.0)
+        assert config.simpo_gamma == pytest.approx(1.0)
+
+    def test_training_config_accepts_positive_simpo_gamma(self):
+        """v1.6 C2: a positive simpo_gamma constructs."""
+        from backpropagate.config import TrainingConfig
+
+        assert TrainingConfig(simpo_gamma=0.5).simpo_gamma == pytest.approx(0.5)
+        assert TrainingConfig(simpo_gamma=1.0).simpo_gamma == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("bad_gamma", [0.0, -1.0, -0.25])
+    def test_training_config_rejects_nonpositive_simpo_gamma(self, bad_gamma):
+        """v1.6 C2: simpo_gamma <= 0 raises InvalidSettingError.
+
+        gamma is SimPO's target reward margin; a non-positive margin removes
+        the margin term (degenerates the objective). Mirrors the orpo_beta
+        guard — structured CONFIG_INVALID_SETTING up front.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(simpo_gamma=bad_gamma)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "simpo_gamma"
+
+    def test_training_config_rejects_nonpositive_simpo_gamma_via_env(self, monkeypatch):
+        """v1.6 C2: a non-positive simpo_gamma via env var raises the SAME error."""
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__SIMPO_GAMMA", "0")
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig()
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "simpo_gamma"
+
+    def test_training_config_simpo_high_gamma_ratio_warns(self, capsys):
+        """v1.6 C2: simpo_gamma/simpo_beta > 1.0 WARNS (does not fail).
+
+        A gamma-to-beta ratio above 1.0 is a degeneration risk (the margin
+        outweighs the reward scale -> repetitive output), but it is a soft
+        signal, not an error — the run is still launchable. The warning is
+        emitted through the project logger (structlog -> stdout/stderr), the
+        same channel ``_warn_deprecated_env_vars`` uses, so we assert on
+        captured output via ``capsys`` (mirrors
+        ``test_deprecated_env_var_warns_with_replacement``).
+        """
+        from backpropagate.config import TrainingConfig
+
+        # gamma 3.0 / beta 2.0 = 1.5 > 1.0
+        config = TrainingConfig(simpo_beta=2.0, simpo_gamma=3.0)
+
+        assert config.simpo_gamma == pytest.approx(3.0)
+        captured = capsys.readouterr()
+        combined = (captured.out + captured.err).lower()
+        assert "simpo" in combined, (
+            "simpo_gamma/simpo_beta > 1.0 must emit a degeneration-risk "
+            f"warning; captured: {captured.out + captured.err!r}"
+        )
+
+    def test_training_config_simpo_safe_ratio_does_not_warn(self, capsys):
+        """v1.6 C2: a gamma/beta ratio <= 1.0 (the defaults) is silent."""
+        from backpropagate.config import TrainingConfig
+
+        TrainingConfig(simpo_beta=2.0, simpo_gamma=1.0)  # ratio 0.5
+
+        captured = capsys.readouterr()
+        combined = (captured.out + captured.err).lower()
+        assert "simpo" not in combined, (
+            "the default-safe gamma/beta ratio (0.5) must NOT warn; "
+            f"captured: {captured.out + captured.err!r}"
+        )
+
+    # ----- KTO fields: kto_beta + desirable/undesirable weights -----
+
+    def test_training_config_kto_defaults(self):
+        """v1.6 C2: kto_beta=0.1, kto_desirable_weight=1.0, kto_undesirable_weight=1.0.
+
+        Defaults from the KTO paper / TRL KTOConfig; the weights default to
+        1.0 each and are auto-rebalanced from the label counts in the TRAINER
+        (not here) to hit the [1:1, 4:3] target band.
+        """
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.kto_beta == pytest.approx(0.1)
+        assert config.kto_desirable_weight == pytest.approx(1.0)
+        assert config.kto_undesirable_weight == pytest.approx(1.0)
+
+    def test_training_config_accepts_positive_kto_weights(self):
+        """v1.6 C2: positive KTO weights + beta construct."""
+        from backpropagate.config import TrainingConfig
+
+        config = TrainingConfig(
+            kto_beta=0.2, kto_desirable_weight=1.5, kto_undesirable_weight=0.75
+        )
+        assert config.kto_beta == pytest.approx(0.2)
+        assert config.kto_desirable_weight == pytest.approx(1.5)
+        assert config.kto_undesirable_weight == pytest.approx(0.75)
+
+    @pytest.mark.parametrize(
+        "field_name,kwargs",
+        [
+            ("kto_desirable_weight", {"kto_desirable_weight": 0.0}),
+            ("kto_desirable_weight", {"kto_desirable_weight": -1.0}),
+            ("kto_undesirable_weight", {"kto_undesirable_weight": 0.0}),
+            ("kto_undesirable_weight", {"kto_undesirable_weight": -0.5}),
+        ],
+    )
+    def test_training_config_rejects_nonpositive_kto_weights(self, field_name, kwargs):
+        """v1.6 C2: KTO weights <= 0 raise InvalidSettingError.
+
+        A zero/negative weight on either polarity removes (or inverts) one
+        side of the prospect-theory loss — a silent correctness bug. Gate it
+        up front, mirroring the orpo_beta guard.
+        """
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig(**kwargs)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == field_name
+
+    def test_training_config_rejects_nonpositive_kto_weight_via_env(self, monkeypatch):
+        """v1.6 C2: a non-positive KTO weight via env var raises the SAME error."""
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__KTO_UNDESIRABLE_WEIGHT", "0")
+        with pytest.raises(InvalidSettingError) as exc_info:
+            TrainingConfig()
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "kto_undesirable_weight"
+
+    def test_training_config_kto_beta_via_env(self, monkeypatch):
+        """v1.6 C2: BACKPROPAGATE_TRAINING__KTO_BETA env override round-trips."""
+        from backpropagate.config import TrainingConfig
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__KTO_BETA", "0.25")
+        assert TrainingConfig().kto_beta == pytest.approx(0.25)
+
 
 class TestOrpoDataclassFallback:
     """v1.5 T1.2: the dataclass-fallback TrainingConfig must match the pydantic
@@ -630,6 +830,63 @@ class TestOrpoDataclassFallback:
             cfg_cls(orpo_beta=bad_beta)
         assert exc_info.value.code == "CONFIG_INVALID_SETTING"
         assert exc_info.value.setting_name == "orpo_beta"
+
+    # ----- v1.6 C2: SimPO + KTO dataclass-fallback parity -----
+
+    def test_dataclass_simpo_kto_defaults(self):
+        """v1.6 C2: the fallback ships the same SimPO/KTO defaults."""
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        config = mod.__dict__["TrainingConfig"]()
+        assert config.simpo_beta == pytest.approx(2.0)
+        assert config.simpo_gamma == pytest.approx(1.0)
+        assert config.kto_beta == pytest.approx(0.1)
+        assert config.kto_desirable_weight == pytest.approx(1.0)
+        assert config.kto_undesirable_weight == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("good_method", ["simpo", "kto"])
+    def test_dataclass_accepts_v16_methods(self, good_method):
+        """v1.6 C2: the fallback admits method='simpo' and 'kto'."""
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        assert cfg_cls(method=good_method).method == good_method
+
+    @pytest.mark.parametrize("bad_gamma", [0.0, -1.0])
+    def test_dataclass_rejects_nonpositive_simpo_gamma(self, bad_gamma):
+        """v1.6 C2: the fallback __post_init__ rejects simpo_gamma <= 0."""
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            cfg_cls(simpo_gamma=bad_gamma)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == "simpo_gamma"
+
+    @pytest.mark.parametrize(
+        "field_name,kwargs",
+        [
+            ("kto_desirable_weight", {"kto_desirable_weight": 0.0}),
+            ("kto_undesirable_weight", {"kto_undesirable_weight": -1.0}),
+        ],
+    )
+    def test_dataclass_rejects_nonpositive_kto_weights(self, field_name, kwargs):
+        """v1.6 C2: the fallback __post_init__ rejects KTO weights <= 0."""
+        mod = self._load_dataclass_config_module()
+        if mod is None:
+            pytest.skip("dataclass fallback branch not materialisable here")
+        cfg_cls = mod.__dict__["TrainingConfig"]
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as exc_info:
+            cfg_cls(**kwargs)
+        assert exc_info.value.code == "CONFIG_INVALID_SETTING"
+        assert exc_info.value.setting_name == field_name
 
 
 class TestDataConfig:
@@ -1101,13 +1358,17 @@ class TestTrainingPresets:
     """Tests for training presets (Phase 1.2)."""
 
     def test_training_presets_exist(self):
-        """Test TRAINING_PRESETS dict exists."""
-        from backpropagate.config import TRAINING_PRESETS
+        """Test MULTI_RUN_PRESETS dict exists.
 
-        assert isinstance(TRAINING_PRESETS, dict)
-        assert "fast" in TRAINING_PRESETS
-        assert "balanced" in TRAINING_PRESETS
-        assert "quality" in TRAINING_PRESETS
+        v1.6 C2: the legacy ``TRAINING_PRESETS`` alias was removed from
+        ``config.py``; the canonical name is ``MULTI_RUN_PRESETS``.
+        """
+        from backpropagate.config import MULTI_RUN_PRESETS
+
+        assert isinstance(MULTI_RUN_PRESETS, dict)
+        assert "fast" in MULTI_RUN_PRESETS
+        assert "balanced" in MULTI_RUN_PRESETS
+        assert "quality" in MULTI_RUN_PRESETS
 
     def test_training_preset_dataclass(self):
         """Test TrainingPreset dataclass structure."""
@@ -1355,6 +1616,44 @@ class TestLRScaling:
             assert get_recommended_lr(5000, base_lr=base, method="orpo") == 1e-5
             assert get_recommended_lr(50000, base_lr=base, method="orpo") == 5e-6
 
+    # ----- v1.6 C2: SimPO + KTO LR auto-lower -----
+
+    @pytest.mark.parametrize("method", ["simpo", "kto"])
+    def test_get_recommended_lr_simpo_kto_anchor(self, method):
+        """v1.6 C2: method='simpo'/'kto' auto-lower to a fixed 1e-6 anchor.
+
+        SimPO degrades to repetitive output at high LR (>=1e-5) and KTO's
+        published runs sit at 1e-6; the research bands pin both at 1e-6
+        regardless of dataset size — a fixed anchor like the ORPO ladder,
+        not a size-scaled ladder.
+        """
+        from backpropagate.config import get_recommended_lr
+
+        for size in (500, 5000, 50000):
+            assert get_recommended_lr(size, method=method) == 1e-6, (
+                f"method={method!r} must auto-lower to 1e-6 at every dataset "
+                f"size (size={size})."
+            )
+
+    @pytest.mark.parametrize("method", ["simpo", "kto"])
+    def test_get_recommended_lr_simpo_kto_ignores_base_lr(self, method):
+        """v1.6 C2: the SimPO/KTO 1e-6 anchor is fixed — base_lr does not scale it."""
+        from backpropagate.config import get_recommended_lr
+
+        for base in (1e-4, 2e-4, 5e-4):
+            assert get_recommended_lr(500, base_lr=base, method=method) == 1e-6
+            assert get_recommended_lr(50000, base_lr=base, method=method) == 1e-6
+
+    @pytest.mark.parametrize("method", ["simpo", "kto"])
+    def test_get_recommended_lr_simpo_kto_below_sft(self, method):
+        """v1.6 C2: the SimPO/KTO anchor sits well below the SFT ladder."""
+        from backpropagate.config import get_recommended_lr
+
+        for size in (500, 5000, 50000):
+            assert get_recommended_lr(size, method=method) < get_recommended_lr(
+                size, method="sft"
+            )
+
 
 class TestWarmupScaling:
     """Tests for warmup steps scaling helpers."""
@@ -1480,7 +1779,10 @@ class TestPresetExports:
         from backpropagate import config
 
         assert "TrainingPreset" in config.__all__
-        assert "TRAINING_PRESETS" in config.__all__
+        # v1.6 C2: the legacy TRAINING_PRESETS alias was removed from config;
+        # MULTI_RUN_PRESETS is the canonical exported name.
+        assert "MULTI_RUN_PRESETS" in config.__all__
+        assert "TRAINING_PRESETS" not in config.__all__
         assert "get_preset" in config.__all__
         assert "get_recommended_lr" in config.__all__
         assert "get_recommended_warmup" in config.__all__
@@ -1488,7 +1790,7 @@ class TestPresetExports:
     def test_imports_from_config(self):
         """Test presets can be imported from config."""
         from backpropagate.config import (
-            TRAINING_PRESETS,
+            MULTI_RUN_PRESETS,
             TrainingPreset,
             get_preset,
             get_recommended_lr,
@@ -1496,7 +1798,7 @@ class TestPresetExports:
         )
 
         assert TrainingPreset is not None
-        assert isinstance(TRAINING_PRESETS, dict)
+        assert isinstance(MULTI_RUN_PRESETS, dict)
         assert callable(get_preset)
         assert callable(get_recommended_lr)
         assert callable(get_recommended_warmup)
@@ -1508,7 +1810,7 @@ class TestPresetExports:
         but should be accessible from backpropagate.config.
         """
         from backpropagate.config import (
-            TRAINING_PRESETS,
+            MULTI_RUN_PRESETS,
             TrainingPreset,
             get_preset,
             get_recommended_lr,
@@ -1516,7 +1818,7 @@ class TestPresetExports:
         )
 
         assert TrainingPreset is not None
-        assert TRAINING_PRESETS is not None
+        assert MULTI_RUN_PRESETS is not None
         assert get_preset is not None
         assert get_recommended_lr is not None
         assert get_recommended_warmup is not None

@@ -811,6 +811,77 @@ def test_eval_result_to_dict_shape():
 
 
 # =============================================================================
+# C3: EvalResult task-metric fields (always present, backward-compatible)
+# =============================================================================
+
+def test_eval_result_task_metric_fields_default_empty():
+    """task_metrics defaults to {} (always present), eval_n to 0, metric_ci None."""
+    result = EvalResult(
+        run_id="rid",
+        model_name="mn",
+        held_out_loss=0.5,
+        perplexity=1.6,
+        generations=[],
+        n_prompts=0,
+    )
+    assert result.task_metrics == {}
+    assert result.eval_n == 0
+    assert result.metric_ci is None
+
+
+def test_eval_result_positional_construction_still_six_args():
+    """The 6-positional-arg construction used across the suite still works —
+    new fields are keyword/defaulted AFTER n_prompts."""
+    result = EvalResult("a", "m", None, None, [], 0)
+    assert result.run_id == "a"
+    assert result.task_metrics == {}
+    assert result.eval_n == 0
+    assert result.metric_ci is None
+
+
+def test_eval_result_to_dict_includes_task_metric_fields():
+    """to_dict surfaces the new fields so they persist onto run history."""
+    result = EvalResult(
+        run_id="rid",
+        model_name="mn",
+        held_out_loss=0.5,
+        perplexity=1.6,
+        generations=[],
+        n_prompts=0,
+        task_metrics={"normalized_exact_match": 0.8, "token_f1": 0.75},
+        eval_n=120,
+        metric_ci={"normalized_exact_match": 0.05},
+    )
+    d = result.to_dict()
+    assert d["task_metrics"] == {"normalized_exact_match": 0.8, "token_f1": 0.75}
+    assert d["eval_n"] == 120
+    assert d["metric_ci"] == {"normalized_exact_match": 0.05}
+
+
+def test_diff_evals_surfaces_task_metrics():
+    """diff_evals renders task-metric rows (union of both sides' metric keys)."""
+    a = EvalResult(
+        "a", "m", 1.0, 2.7, [], 3,
+        task_metrics={"token_f1": 0.6}, eval_n=50,
+    )
+    b = EvalResult(
+        "b", "m", 0.9, 2.4, [], 3,
+        task_metrics={"token_f1": 0.8, "contains": 1.0}, eval_n=50,
+    )
+    diff = diff_evals(a, b)
+    names = {row[0] for row in diff.rows}
+    assert "token_f1" in names
+    assert "contains" in names
+    f1_row = next(r for r in diff.rows if r[0] == "token_f1")
+    assert f1_row[1] == "0.6000"
+    assert f1_row[2] == "0.8000"
+    # A metric present only on one side renders "n/a" for the other.
+    contains_row = next(r for r in diff.rows if r[0] == "contains")
+    assert contains_row[1] == "n/a"
+    assert contains_row[2] == "1.0000"
+
+
+# =============================================================================
 # _load_model_and_tokenizer — real load path with sys.modules fakes
 # =============================================================================
 

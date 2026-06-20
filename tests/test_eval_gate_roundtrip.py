@@ -288,3 +288,59 @@ class TestRealAdapterRoundTrip:
         assert math.isfinite(result.held_out_loss)
         # Generations populate against the default prompt set.
         assert result.n_prompts > 0
+        # C3: no references configured -> task_metrics stays empty.
+        assert result.task_metrics == {}
+        assert result.eval_n == 0
+
+    def test_evaluate_accumulator_with_task_metrics_real_eval(self, tmp_path):
+        """v1.6 C3 round-trip: eval_metrics + a references JSONL drive a REAL,
+        UN-MOCKED evaluate_run that scores deterministic task metrics against
+        the references — task_metrics + eval_n populate, no crash.
+
+        The tiny random model won't produce correct answers, so we assert the
+        metric KEYS + eval_n + value RANGE (in [0, 1]) rather than exact scores;
+        determinism is verified by the metric primitives' own unit tests."""
+        import json as _json
+
+        model, _cfg = _build_tiny_peft_model()
+
+        refs_path = tmp_path / "refs.jsonl"
+        refs_path.write_text(
+            _json.dumps({"prompt": "Capital of France?", "reference": "Paris"})
+            + "\n"
+            + _json.dumps({"prompt": "2 plus 2?", "references": ["4", "four"]})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        trainer = _make_trainer(
+            tmp_path,
+            eval_gate=True,
+            eval_max_regression=0.0,
+            eval_metrics=["normalized_exact_match", "token_f1"],
+            eval_references_path=str(refs_path),
+        )
+        from unittest.mock import MagicMock
+
+        inner = MagicMock()
+        inner._model = model
+        inner.max_seq_length = 64
+        trainer._trainer = inner
+
+        accumulator = self._real_accumulator_state(model)
+        full_dataset = _FakeHFDataset(n=20)
+
+        # evaluate_run is NOT patched — exercises the real generation against the
+        # reference prompts + the real deterministic metric scoring.
+        result = trainer._evaluate_accumulator(
+            accumulator, run_idx=2, full_dataset=full_dataset, phase="after"
+        )
+
+        assert result is not None
+        # Both configured metrics are present (always populated when references
+        # are scored), valued in [0, 1].
+        assert set(result.task_metrics) == {"normalized_exact_match", "token_f1"}
+        for v in result.task_metrics.values():
+            assert 0.0 <= v <= 1.0
+        # eval_n counts the 2 reference items.
+        assert result.eval_n == 2

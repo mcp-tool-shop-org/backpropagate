@@ -342,11 +342,13 @@ except PackageNotFoundError:
 # raises ImportError (the transition was deferred — the back-compat
 # contract callers wrap as ``except ImportError`` was kept one more cycle).
 # Bumped to the next planned removal (v1.6) so the warning text no longer
-# names a version that already shipped (v1.5 IS the current release). The
-# actual swap to AttributeError happens in __getattr__ at the v1.6 cut, not here.
-# (History: the marker was v1.4 → v1.5 → v1.6; each cycle the ImportError grace
-# period was extended one more minor release rather than hard-breaking callers.)
-_REMOVED_IN_VERSION = "v1.6"
+# names a version ahead of the current release. The actual swap to
+# AttributeError happens in __getattr__ at the marker's cut, not here.
+# (History: the marker was v1.4 → v1.5 → v1.6 → v1.7; each cycle the ImportError
+# grace period was extended one more minor release rather than hard-breaking
+# callers. v1.6 shipped the gradio purge + the gradio-named-alias removal but
+# kept these v1.1.0-removed attrs on the ImportError grace one more cycle.)
+_REMOVED_IN_VERSION = "v1.7"
 
 _DEPRECATED_UI_ATTRS = {
     "launch": (
@@ -375,10 +377,10 @@ def __getattr__(name: str) -> Any:
 
     BRIDGE-B-015 (Stage C): when a user touches a removed Gradio-era
     attribute we (1) emit a DeprecationWarning naming the future removal
-    version (currently ``v1.6`` — see CLI-A-005) so callers wrapping the
+    version (currently ``v1.7`` — see CLI-A-005) so callers wrapping the
     access in ``try: ... except ImportError: pass`` still see the heads-up
     in stderr, then (2) raise ``ImportError`` with the migration hint so the
-    existing contract is preserved. At the v1.6 cut the ImportError can be
+    existing contract is preserved. At the v1.7 cut the ImportError can be
     swapped for a plain AttributeError to match the rest of
     ``__getattr__``'s contract.
     """

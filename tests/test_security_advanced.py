@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backpropagate.ui_security import (
-    DEFAULT_GRADIO_CSP,
+    DEFAULT_REFLEX_CSP,
     JWT_AVAILABLE,
     ContentSecurityPolicy,
     # CSP
@@ -28,7 +28,7 @@ from backpropagate.ui_security import (
     # Combined Session
     SecureSessionHandler,
     apply_security_headers,
-    get_gradio_csp,
+    get_reflex_csp,
     get_secure_session_handler,
 )
 
@@ -757,48 +757,52 @@ class TestContentSecurityPolicy:
         assert "report-uri /report" in policy
 
 
-class TestDefaultGradioCSP:
-    """Tests for DEFAULT_GRADIO_CSP."""
+class TestDefaultReflexCSP:
+    """Tests for DEFAULT_REFLEX_CSP."""
 
-    def test_gradio_csp_allows_eval(self):
-        """Gradio CSP allows unsafe-eval for dynamic components."""
-        assert "'unsafe-eval'" in DEFAULT_GRADIO_CSP.script_src
+    def test_reflex_csp_allows_eval(self):
+        """Reflex CSP allows unsafe-eval for the runtime Var → DOM machinery."""
+        assert "'unsafe-eval'" in DEFAULT_REFLEX_CSP.script_src
 
-    def test_gradio_csp_allows_inline_styles(self):
-        """Gradio CSP allows inline styles."""
-        assert "'unsafe-inline'" in DEFAULT_GRADIO_CSP.style_src
+    def test_reflex_csp_allows_inline_scripts(self):
+        """Reflex CSP allows inline scripts for the Next.js hydration bootstrap."""
+        assert "'unsafe-inline'" in DEFAULT_REFLEX_CSP.script_src
 
-    def test_gradio_csp_allows_websocket(self):
-        """Gradio CSP allows WebSocket connections."""
-        assert "ws:" in DEFAULT_GRADIO_CSP.connect_src
-        assert "wss:" in DEFAULT_GRADIO_CSP.connect_src
+    def test_reflex_csp_allows_inline_styles(self):
+        """Reflex CSP allows inline styles (Radix theme + CSS variables)."""
+        assert "'unsafe-inline'" in DEFAULT_REFLEX_CSP.style_src
 
-    def test_gradio_csp_allows_data_images(self):
-        """Gradio CSP allows data: images."""
-        assert "data:" in DEFAULT_GRADIO_CSP.img_src
+    def test_reflex_csp_allows_websocket(self):
+        """Reflex CSP allows WebSocket connections (the /_event endpoint)."""
+        assert "ws:" in DEFAULT_REFLEX_CSP.connect_src
+        assert "wss:" in DEFAULT_REFLEX_CSP.connect_src
 
-    def test_gradio_csp_blocks_objects(self):
-        """Gradio CSP blocks object/embed."""
-        assert "'none'" in DEFAULT_GRADIO_CSP.object_src
+    def test_reflex_csp_allows_data_images(self):
+        """Reflex CSP allows data: images (inline SVG data URIs)."""
+        assert "data:" in DEFAULT_REFLEX_CSP.img_src
+
+    def test_reflex_csp_blocks_objects(self):
+        """Reflex CSP blocks object/embed."""
+        assert "'none'" in DEFAULT_REFLEX_CSP.object_src
 
 
-class TestGetGradioCSP:
-    """Tests for get_gradio_csp function."""
+class TestGetReflexCSP:
+    """Tests for get_reflex_csp function."""
 
     def test_returns_csp(self):
-        """get_gradio_csp returns ContentSecurityPolicy."""
-        csp = get_gradio_csp()
+        """get_reflex_csp returns ContentSecurityPolicy."""
+        csp = get_reflex_csp()
         assert isinstance(csp, ContentSecurityPolicy)
 
     def test_report_only_mode(self):
-        """get_gradio_csp supports report-only mode."""
-        csp = get_gradio_csp(report_only=True)
+        """get_reflex_csp supports report-only mode."""
+        csp = get_reflex_csp(report_only=True)
         name, _ = csp.get_header()
         assert name == "Content-Security-Policy-Report-Only"
 
     def test_enforce_mode(self):
-        """get_gradio_csp defaults to enforce mode."""
-        csp = get_gradio_csp(report_only=False)
+        """get_reflex_csp defaults to enforce mode."""
+        csp = get_reflex_csp(report_only=False)
         name, _ = csp.get_header()
         assert name == "Content-Security-Policy"
 

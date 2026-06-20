@@ -247,6 +247,10 @@ def _error_callout() -> rx.Component:
         code="UI · MODELS",
         title="Could not load model cache",
         message=ModelsState.error,
+        # HUX-02: remedy slot wired to the dedicated suggestion var so a
+        # future suggestion-bearing error renders on its own dimmed line
+        # (design-digest §4d). Empty today → collapses to a fragment.
+        hint=ModelsState.error_suggestion,
     )
 
 

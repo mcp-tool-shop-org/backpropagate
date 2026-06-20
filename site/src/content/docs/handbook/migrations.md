@@ -7,6 +7,58 @@ sidebar:
 
 Operator-facing migration narratives. Each section covers one upgrade hop with breaking changes, behavioural fixes, and the recommended migration steps. For older transitions (v1.0 → v1.1, the Gradio → Reflex pivot) see the [v1.1.0 CHANGELOG section](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#110---2026-05-21).
 
+## v1.5 → v1.6
+
+A feature release that also closes the deprecation cycle opened in v1.4. New preference methods (SimPO, KTO), deterministic eval task-metrics, two new CLI verbs, and the final removal of the legacy Gradio-era / `TRAINING_PRESETS` aliases.
+
+### TL;DR
+
+- **New training methods.** `--method simpo` (SimPO — paired, reference-free, tightest VRAM) and `--method kto` (KTO — unpaired binary-feedback, LoRA-only) join `sft` and `orpo`. See [Preference tuning](/backpropagate/handbook/preference-tuning/). Purely additive — `method` still defaults to `sft` and existing SFT/ORPO runs are byte-identical.
+- **Eval task-metrics.** `backprop eval` gained deterministic, judge-free task metrics (`--metric` / `--references` / `--gate-metric`); `EvalResult` gained `task_metrics`, `eval_n`, and `metric_ci` fields (appended last, so 6-positional construction still works). The eval gate is now a **conjunction** of a held-out-loss floor AND task-metric non-regression. See [Recipes → task metrics](/backpropagate/handbook/recipes/#score-a-run-against-a-held-out-set-with-task-metrics-and-gate-on-it).
+- **New CLI verbs.** `backprop generate <adapter_dir> "<prompt>"` (ad-hoc inference) and `backprop data split <jsonl>` (carve a train + held-out reference set).
+- **FP8 verified on Blackwell.** The `--fp8` path is no longer labelled experimental — it is verified on Blackwell (RTX 5090, sm_120). Still `--mode lora` + `--method sft` only.
+- **Legacy aliases removed (breaking).** The Gradio-era `ui_security` aliases and the `TRAINING_PRESETS` config alias — deprecated in v1.4, escalated to `UserWarning` in v1.5 — are **gone** in v1.6. Access now raises `AttributeError`. This is exactly the removal the [v1.3 → v1.4 deprecation table](#deprecation-cycle-locked-advisor-2026-05-25-q4) scheduled.
+
+### Breaking change — legacy aliases removed
+
+Gradio is now fully purged from the package. The following names no longer resolve and raise `AttributeError` on access:
+
+| Removed name | Use instead |
+|---|---|
+| `backpropagate.config.TRAINING_PRESETS` | `backpropagate.config.MULTI_RUN_PRESETS` |
+| `backpropagate.TRAINING_PRESETS` (top-level re-export) | `backpropagate.MULTI_RUN_PRESETS` |
+| `backpropagate.ui_security.safe_gradio_handler` | `safe_ui_handler` |
+| `backpropagate.ui_security.raise_gradio_error` | `raise_ui_error` |
+| `backpropagate.ui_security.raise_gradio_warning` | `raise_ui_warning` |
+| `backpropagate.ui_security.raise_gradio_info` | `raise_ui_info` |
+| `backpropagate.ui_security.RequestContext.from_gradio_request` | `RequestContext.from_request` |
+
+If you migrated when the v1.4 `DeprecationWarning` (or the v1.5 `UserWarning`) first appeared, nothing changes for you. If you are still importing a legacy name, switch to the canonical name in the right-hand column — the canonical names have existed since v1.4 and their behaviour is unchanged.
+
+```python
+# Removed in v1.6 — raises AttributeError
+from backpropagate.config import TRAINING_PRESETS
+from backpropagate.ui_security import safe_gradio_handler
+
+# v1.6
+from backpropagate.config import MULTI_RUN_PRESETS
+from backpropagate.ui_security import safe_ui_handler
+```
+
+### New: SimPO + KTO preference methods
+
+Both are reference-free on a 16 GB card and purely additive. SimPO reuses the same paired `{prompt, chosen, rejected}` data as ORPO; KTO takes **unpaired** `{prompt, completion, label}` binary-feedback data and is **LoRA-mode-only**. The learning rate auto-anchors to `1e-6` for both (a published-stable setting, not scaled off the SFT LR). New knobs: `--simpo-beta` / `--simpo-gamma` / `--kto-beta` / `--kto-desirable-weight` / `--kto-undesirable-weight` and their `BACKPROPAGATE_TRAINING__*` env vars. Full method-selection guide, data shapes, and hyperparameters are in [Preference tuning](/backpropagate/handbook/preference-tuning/).
+
+### New: deterministic eval task-metrics
+
+`backprop eval` can now score a run's generations against a held-out reference set with deterministic, judge-free metrics (`normalized_exact_match`, `token_f1`, `contains`, `regex`, `pass_rate`) — no LLM judge. The eval gate (`--gate-against`) became a conjunction: it rejects on a held-out-loss regression beyond `--max-regression` **OR** a task-metric regression beyond its noise band (the metric's bootstrap CI half-width, or a default band). If you consume `EvalResult` programmatically, note the three new fields (`task_metrics`, `eval_n`, `metric_ci`) — they are defaulted and appended after `n_prompts`, so existing positional construction is unaffected.
+
+### What did NOT change (v1.5 → v1.6)
+
+- **`method` still defaults to `sft`**; SFT and ORPO runs are byte-identical to v1.5.
+- **The MLX / Apple-Silicon backend (`--backend mlx`) remains experimental** — built and unit-tested (mocked) but still pending verification on real Apple Silicon. Unchanged from v1.5.
+- **`MULTI_RUN_PRESETS`, `LORA_PRESETS`, and `get_preset` / `get_lora_preset`** are untouched — only the removed `TRAINING_PRESETS` alias is affected.
+
 ## v1.3 → v1.4
 
 A symbol-rename release. Two legacy names — `safe_gradio_handler` (a v1.0-era Gradio relic preserved through the v1.1.0 → Reflex migration) and `TRAINING_PRESETS` (which collided in name space with the v1.3 `LORA_PRESETS`) — were renamed to framework-agnostic and namespace-distinct canonical forms. **The legacy names continue to resolve** via module-level `__getattr__` shims; they emit a `DeprecationWarning` so downstream consumers get a migration nudge. Three-version deprecation cycle.

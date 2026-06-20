@@ -145,7 +145,7 @@ Cela entraîne un adaptateur Qwen 2.5 7B sur 5 courtes conversations au format 
 
 Les formats Alpaca (`instruction` / `output`), OpenAI chat (`messages`) et texte brut fonctionnent également — Backpropagate détecte automatiquement le format.
 
-### Affinage des préférences (ORPO)
+### Réglage des préférences (ORPO, SimPO, KTO)
 
 Nouveau dans la version 1.5 : entraînez-vous sur des préférences au lieu de simples démonstrations. ORPO est sans référence et en une seule étape — il intègre le signal de préférence dans l’étape d’affinage supervisé, il n’y a donc pas de modèle de récompense ou de référence distinct et la forme en 3 lignes reste la même. Passez `--method orpo` (CLI) ou `method="orpo"` (Python) et fournissez un ensemble de données de lignes `{prompt, chosen, rejected}` (ou simplement `{chosen, rejected}` :
 
@@ -166,7 +166,9 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-Le taux d’apprentissage par défaut est automatiquement réduit à `8e-6` pour ORPO (la perte est plus marquée que pour SFT simple) ; ajustez `--orpo-beta` (par défaut `0.1`) pour pondérer la pénalité du rapport de cotes. Dans la version 1.5, ORPO est uniquement en mode `mode="lora"`. SimPO et KTO sont prévus comme prochaines étapes ; pour l’apprentissage par renforcement en ligne (PPO/GRPO), consultez [Ce que la rétropropagation n’est PAS](#what-backpropagate-is-not-for).
+Le taux d’apprentissage par défaut est automatiquement réduit à `8e-6` pour ORPO (la perte est plus marquée que dans le cas de SFT simple) ; réglez `--orpo-beta` (par défaut `0.1`) pour pondérer la pénalité du rapport de cotes. ORPO utilise uniquement `mode="lora"`.
+
+**Nouveauté dans la version 1.6 : SimPO et KTO.** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734)) ne nécessite pas de données de référence et utilise une récompense normalisée en fonction de la longueur, tout en utilisant les mêmes données appariées `{prompt, chosen, rejected}` qu’ORPO (`--simpo-beta`, `--simpo-gamma`). `--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306)) utilise des données **non appariées** `{prompt, completion, label}` — évaluation positive/négative par exemple — pour la vaste catégorie de commentaires qui ne sont pas des paires A/B sélectionnées ; il équilibre automatiquement les poids de perte souhaitables/indésirables en fonction du nombre d’étiquettes. Les deux utilisent uniquement `mode="lora"` et restent dans l’enveloppe SFT sur une seule GPU (pas de modèle de référence distinct). Consultez le [guide de réglage des préférences](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/) pour savoir lequel utiliser. Pour l’apprentissage par renforcement en ligne (PPO/GRPO), consultez [Ce que Backpropagate n’est PAS](#what-backpropagate-is-not-for).
 
 ### SFT avec suivi du raisonnement (distillation R1)
 
@@ -190,7 +192,7 @@ backprop train --data my_data.jsonl --backend mlx --steps 100
 
 Dans la version 1.5, l’option MLX est **uniquement LoRA SFT** — pas d’ORPO, pas de FP8, pas de `mode='full'`, pas d’exécution multiple sur MLX pour le moment (chacune est rejetée avec `CONFIG_INVALID_SETTING` ; utilisez `backend='cuda'`/`'auto'` sur une machine NVIDIA pour ces options). L’adaptateur résultant est un simple fichier safetensors et est exporté vers Ollama via le même chemin que l’option CUDA.
 
-> ⚠️ **État honnête :** l’option MLX est incluse dans la version 1.5, **construite et testée avec des simulations**, mais **pas encore vérifiée sur du matériel Apple Silicon réel** — `mlx-lm` est uniquement pour Apple et n’a pas pu être exécutée sur la machine NVIDIA sur laquelle ce code a été écrit. Considérez-la comme expérimentale (même approche que l’option FP8) et veuillez [signaler les anomalies](#reporting-bugs) une fois qu’elle sera exécutée sur un Mac de la série M. Forcer `--backend mlx` sur un hôte non Apple génère une erreur `CONFIG_INVALID_SETTING` ; l’absence de la chaîne d’outils `mlx_lm` sur un Mac génère une erreur `DEP_MLX_UNAVAILABLE`.
+> ⚠️ **État actuel :** la version MLX incluse dans la v1.5 est **intégrée et testée (avec des simulations)**, mais **n’a pas encore été validée sur du matériel Apple Silicon réel**. `mlx-lm` est uniquement compatible avec Apple et n’a pas pu être exécuté sur le système NVIDIA utilisé pour sa création. Considérez-la comme expérimentale — la même approche a été utilisée pour le chemin FP8 dans la v1.5 (FP8 a ensuite été validé sur Blackwell dans la v1.6 ; MLX doit encore passer cette étape sur du matériel réel) — et veuillez [signaler les anomalies](#reporting-bugs) une fois qu’elle sera exécutée sur un Mac de la série M. Forcer `--backend mlx` sur un hôte non Apple génère l’erreur `CONFIG_INVALID_SETTING` ; l’absence de la chaîne d’outils `mlx_lm` sur un Mac provoque l’erreur `DEP_MLX_UNAVAILABLE`.
 
 Pour des flux de travail de bout en bout plus complets (affiner et pousser vers HF-Hub, reprendre après une erreur de mémoire, SLAO multi-exécution sur une longue campagne, etc.), consultez la [page des recettes du manuel](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
@@ -303,7 +305,7 @@ Les écritures dans le système de fichiers à partir de l’interface utilisate
 
 **Configuration requise :** Python 3.10+ ; GPU CUDA (8 Go ou plus de VRAM) ; PyTorch 2.0+
 
-La prise en charge de Python 3.10 sera interrompue en octobre 2026 et sa suppression est prévue dans la version 1.5. Pour les nouvelles installations, privilégiez Python 3.11 ou 3.12 ; la version 3.11 est la version la plus testée.
+Python 3.10 est pris en charge jusqu’à au moins la v1.6 ; sa prise en charge par le fournisseur initial prendra fin en octobre 2026 et il est prévu de le supprimer dans la première version après cette date. Pour les nouvelles installations, privilégiez Python 3.11 ou 3.12 — 3.11 est la version la plus testée.
 
 Backpropagate gère les particularités de l’exécution de l’entraînement sur différentes plateformes, mais il ne peut pas résoudre les problèmes survenant lors de l’installation. Les deux problèmes les plus courants sont les suivants :
 

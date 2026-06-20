@@ -92,7 +92,7 @@ For models 3B and smaller, full fine-tuning (not just LoRA) is feasible on 16GB 
 If your use case is below, you'll have a better time with a different library — Backpropagate is not the right pick and trying to make it work would cost more than just reaching for the right tool. Reading this section before you start saves the install-and-bounce cycle:
 
 - **Full-parameter fine-tuning of 7B+ models** — Backpropagate uses LoRA / QLoRA, which trains a small adapter rather than updating every weight. For models 7B and larger, full fine-tuning needs 24GB+ of GPU memory and doesn't fit on a 16GB consumer card. For models 3B and smaller, full fine-tuning IS feasible on 16GB and ships in v1.4 as `mode="full"` (pass `Trainer(..., mode="full")` or `--mode=full` on the CLI; a hard gate raises `RUNTIME_FULL_FT_MODEL_TOO_LARGE` for models > 4B and names LoRA + the sub-4B presets as recoveries). The bigger picture: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at 67% of the compute — so for the work most operators actually want, you don't lose anything by sticking with LoRA. `mode="full"` exists for the cases where you've measured a quality gap and decided to spend the extra compute. If you genuinely need full fine-tuning of a 7B+ model, use HuggingFace `transformers.Trainer` directly on a 24GB+ card.
-- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO ships in v1.5; SimPO/KTO are planned). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
+- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO in v1.5; SimPO + KTO in v1.6). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
 - **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.
 - **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path has to run on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. **New in v1.5:** an experimental MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--experimental-v15). It is LoRA-SFT-only and built-but-not-yet-dogfood-verified on real silicon, so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you still want the CUDA rail.
 - **Anything outside the tested model families** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Other models often work but aren't pinned in CI.
@@ -145,9 +145,9 @@ This trains a Qwen 2.5 7B adapter on 5 short ShareGPT-format conversations, then
 
 Alpaca (`instruction` / `output`), OpenAI chat (`messages`), and raw text formats also work — Backpropagate auto-detects the format.
 
-### Preference tuning (ORPO)
+### Preference tuning (ORPO, SimPO, KTO)
 
-New in v1.5: train on preferences instead of plain demonstrations. ORPO is reference-free and single-stage — it folds the preference signal into the SFT step, so there's no separate reward or reference model and the 3-line shape is unchanged. Pass `--method orpo` (CLI) or `method="orpo"` (Python) and feed it a dataset of `{prompt, chosen, rejected}` (or just `{chosen, rejected}`) rows:
+Train on preferences instead of plain demonstrations. ORPO is reference-free and single-stage — it folds the preference signal into the SFT step, so there's no separate reward or reference model and the 3-line shape is unchanged. Pass `--method orpo` (CLI) or `method="orpo"` (Python) and feed it a dataset of `{prompt, chosen, rejected}` (or just `{chosen, rejected}`) rows:
 
 ```jsonl
 {"prompt": "What is Python?", "chosen": "A high-level programming language known for readability.", "rejected": "idk look it up"}
@@ -166,7 +166,9 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. In v1.5 ORPO is `mode="lora"` only. SimPO and KTO are planned follow-ons; for online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
+The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. ORPO is `mode="lora"` only.
+
+**New in v1.6 — SimPO and KTO.** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734)) is reference-free with a length-normalized reward and takes the same paired `{prompt, chosen, rejected}` data as ORPO (`--simpo-beta`, `--simpo-gamma`). `--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306)) takes **unpaired** `{prompt, completion, label}` data — per-example thumbs-up/down — for the large class of feedback that isn't curated A/B pairs; it auto-balances the desirable/undesirable loss weights from your label counts. Both are `mode="lora"` only and stay in the single-GPU SFT envelope (no separate reference model). See the [preference-tuning handbook](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/) for which to use. For online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
 
 ### Reasoning-trace SFT (R1 distillation)
 
@@ -190,7 +192,7 @@ backprop train --data my_data.jsonl --backend mlx --steps 100
 
 In v1.5 the MLX rail is **LoRA SFT only** — no ORPO, no FP8, no `mode='full'`, no multi-run on MLX yet (each is rejected with `CONFIG_INVALID_SETTING`; use `backend='cuda'`/`'auto'` on an NVIDIA box for those). The resulting adapter is plain safetensors and exports to Ollama through the same path as the CUDA rail.
 
-> ⚠️ **Honest status:** the MLX rail ships in v1.5 **built + unit-tested (mocked)** but **NOT yet dogfood-verified on real Apple Silicon** — `mlx-lm` is Apple-only and could not be run on the NVIDIA rig this was authored on. Treat it as experimental (same framing as the FP8 path), and please [report anomalies](#reporting-bugs) once it runs on an M-series Mac. Forcing `--backend mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; a missing `mlx_lm` toolchain on a Mac raises `DEP_MLX_UNAVAILABLE`.
+> ⚠️ **Honest status:** the MLX rail ships in v1.5 **built + unit-tested (mocked)** but **NOT yet dogfood-verified on real Apple Silicon** — `mlx-lm` is Apple-only and could not be run on the NVIDIA rig this was authored on. Treat it as experimental — the same framing the FP8 path had in v1.5 (FP8 graduated to dogfood-verified on Blackwell in v1.6; MLX still needs that pass on real silicon) — and please [report anomalies](#reporting-bugs) once it runs on an M-series Mac. Forcing `--backend mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; a missing `mlx_lm` toolchain on a Mac raises `DEP_MLX_UNAVAILABLE`.
 
 For more end-to-end workflows (fine-tune-and-push-to-HF-Hub, resume after OOM, multi-run SLAO across a long campaign, etc.) see the [handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
@@ -303,7 +305,7 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
-Python 3.10 reaches upstream end-of-life in October 2026 and is scheduled for drop in v1.5. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
+Python 3.10 is supported through at least v1.6; it reaches upstream end-of-life in October 2026 and is scheduled for removal in the first release after that. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
 
 Backpropagate handles the runtime quirks of training on different platforms, but it can't fix install-time problems. The two most common are:
 

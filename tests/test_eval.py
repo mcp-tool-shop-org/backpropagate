@@ -453,6 +453,129 @@ def test_heldout_resplit_used_when_no_path(tmp_path):
 
 
 # =============================================================================
+# Held-out resolution via in-memory texts (TRAINER-A-002 eval-gate seam)
+# =============================================================================
+
+def test_resolve_heldout_texts_in_memory_wins(tmp_path):
+    """In-memory ``heldout_texts`` take precedence over a path + dataset_info,
+    and blank entries are filtered out."""
+    run = _run_entry(dataset_info=str(tmp_path / "nope.jsonl"))
+    texts = ev._resolve_heldout_texts(
+        run, heldout="/some/path.jsonl", seed=0,
+        heldout_texts=["  hello world  ", "", "   ", "second text"],
+    )
+    assert texts == ["hello world", "second text"]
+
+
+def test_resolve_heldout_texts_in_memory_all_blank_raises(tmp_path):
+    """An all-empty in-memory held-out list raises the stable unresolved code,
+    not a silent empty pass-through."""
+    run = _run_entry()
+    with pytest.raises(UserInputError) as exc:
+        ev._resolve_heldout_texts(run, heldout=None, seed=0, heldout_texts=["", "  "])
+    assert exc.value.code == "INPUT_EVAL_HELDOUT_UNRESOLVED"
+
+
+def test_evaluate_run_uses_in_memory_heldout_texts(tmp_path):
+    """evaluate_run with heldout_texts=[...] computes loss against them WITHOUT
+    touching the path or dataset re-split resolvers."""
+    model = _make_model(loss_value=0.75)
+    tokenizer = _make_tokenizer()
+    history = MagicMock()
+    history.get_run.return_value = _run_entry()
+
+    with patch.dict(sys.modules, {"torch": _FakeTorch()}), \
+         patch.object(ev, "_load_model_and_tokenizer", return_value=(model, tokenizer)), \
+         patch.object(ev, "_heldout_texts_from_path") as path_resolver, \
+         patch("backpropagate.checkpoints.RunHistoryManager", return_value=history):
+        result = evaluate_run(
+            "abc123def456",
+            output_dir=str(tmp_path),
+            heldout_texts=["a held out text", "another held out text"],
+            n=1,
+        )
+
+    # The path resolver was never consulted (in-memory texts win).
+    path_resolver.assert_not_called()
+    # Mean CE of constant 0.75 over the 2 in-memory texts == 0.75.
+    assert result.held_out_loss == pytest.approx(0.75)
+
+
+# =============================================================================
+# Device-move atomicity (TRAINER-DATA-002): input_ids + attention_mask must
+# never end up split across devices on an asymmetric .to(device) failure.
+# =============================================================================
+
+class _DeviceTrackingTensor:
+    """A fake tensor tracking which device it currently lives on. ``.to`` can be
+    configured to raise (simulating an asymmetric device-move failure)."""
+
+    def __init__(self, rows, device="cpu", raise_on_to=False):
+        self._rows = rows
+        self.device = device
+        self._raise_on_to = raise_on_to
+
+    @property
+    def shape(self):
+        n_rows = len(self._rows)
+        n_cols = len(self._rows[0]) if n_rows else 0
+        return (n_rows, n_cols)
+
+    def to(self, device):
+        if self._raise_on_to:
+            raise RuntimeError("simulated asymmetric device-move failure")
+        return _DeviceTrackingTensor(self._rows, device=device)
+
+    def __getitem__(self, idx):
+        return _FakeRow(self._rows[idx])
+
+
+def test_compute_loss_device_move_stays_atomic_on_asymmetric_failure():
+    """When attention_mask.to(device) raises, input_ids must NOT have been moved
+    either — both reach the model on the SAME (original) device.
+
+    Pre-fix the two moves were committed independently inside one try/except, so
+    a failure AFTER input_ids moved but BEFORE attention_mask moved left them on
+    different devices. The fix stages both moves and only commits them together.
+    """
+    captured = {}
+
+    def _forward(**kwargs):
+        captured["input_ids"] = kwargs["input_ids"]
+        captured["attention_mask"] = kwargs["attention_mask"]
+        return SimpleNamespace(loss=_FakeLoss(0.5))
+
+    model = MagicMock()
+    model.device = "cuda:0"
+    model.eval = MagicMock()
+    model.side_effect = _forward
+
+    tok = MagicMock()
+
+    def _tokenize(text, **kwargs):
+        return {
+            # input_ids moves fine; attention_mask raises on .to(device).
+            "input_ids": _DeviceTrackingTensor([[0, 1, 2]], device="cpu"),
+            "attention_mask": _DeviceTrackingTensor(
+                [[1, 1, 1]], device="cpu", raise_on_to=True
+            ),
+        }
+
+    tok.side_effect = _tokenize
+
+    with patch.dict(sys.modules, {"torch": _FakeTorch()}):
+        loss = ev._compute_held_out_loss(
+            model, tok, ["one text"], max_length=64
+        )
+
+    assert loss == pytest.approx(0.5)
+    # The load-bearing assertion: both tensors reached the forward pass on the
+    # SAME device. The asymmetric failure rolled BOTH back to the original "cpu".
+    assert captured["input_ids"].device == captured["attention_mask"].device
+    assert captured["input_ids"].device == "cpu"
+
+
+# =============================================================================
 # Held-out resolution on a PREFERENCE/ORPO dataset (Phase 8 fix)
 # =============================================================================
 # Before the FormatConverter PREFERENCE branch landed, a held-out file in
@@ -685,6 +808,77 @@ def test_eval_result_to_dict_shape():
     assert d["perplexity"] == 1.6
     assert d["n_prompts"] == 1
     assert d["generations"] == [{"prompt": "p", "completion": "c"}]
+
+
+# =============================================================================
+# C3: EvalResult task-metric fields (always present, backward-compatible)
+# =============================================================================
+
+def test_eval_result_task_metric_fields_default_empty():
+    """task_metrics defaults to {} (always present), eval_n to 0, metric_ci None."""
+    result = EvalResult(
+        run_id="rid",
+        model_name="mn",
+        held_out_loss=0.5,
+        perplexity=1.6,
+        generations=[],
+        n_prompts=0,
+    )
+    assert result.task_metrics == {}
+    assert result.eval_n == 0
+    assert result.metric_ci is None
+
+
+def test_eval_result_positional_construction_still_six_args():
+    """The 6-positional-arg construction used across the suite still works —
+    new fields are keyword/defaulted AFTER n_prompts."""
+    result = EvalResult("a", "m", None, None, [], 0)
+    assert result.run_id == "a"
+    assert result.task_metrics == {}
+    assert result.eval_n == 0
+    assert result.metric_ci is None
+
+
+def test_eval_result_to_dict_includes_task_metric_fields():
+    """to_dict surfaces the new fields so they persist onto run history."""
+    result = EvalResult(
+        run_id="rid",
+        model_name="mn",
+        held_out_loss=0.5,
+        perplexity=1.6,
+        generations=[],
+        n_prompts=0,
+        task_metrics={"normalized_exact_match": 0.8, "token_f1": 0.75},
+        eval_n=120,
+        metric_ci={"normalized_exact_match": 0.05},
+    )
+    d = result.to_dict()
+    assert d["task_metrics"] == {"normalized_exact_match": 0.8, "token_f1": 0.75}
+    assert d["eval_n"] == 120
+    assert d["metric_ci"] == {"normalized_exact_match": 0.05}
+
+
+def test_diff_evals_surfaces_task_metrics():
+    """diff_evals renders task-metric rows (union of both sides' metric keys)."""
+    a = EvalResult(
+        "a", "m", 1.0, 2.7, [], 3,
+        task_metrics={"token_f1": 0.6}, eval_n=50,
+    )
+    b = EvalResult(
+        "b", "m", 0.9, 2.4, [], 3,
+        task_metrics={"token_f1": 0.8, "contains": 1.0}, eval_n=50,
+    )
+    diff = diff_evals(a, b)
+    names = {row[0] for row in diff.rows}
+    assert "token_f1" in names
+    assert "contains" in names
+    f1_row = next(r for r in diff.rows if r[0] == "token_f1")
+    assert f1_row[1] == "0.6000"
+    assert f1_row[2] == "0.8000"
+    # A metric present only on one side renders "n/a" for the other.
+    contains_row = next(r for r in diff.rows if r[0] == "contains")
+    assert contains_row[1] == "n/a"
+    assert contains_row[2] == "1.0000"
 
 
 # =============================================================================

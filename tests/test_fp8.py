@@ -390,8 +390,8 @@ class TestFp8GracefulFallback:
             trainer = Trainer(fp8=True, use_unsloth=False)
         assert trainer._fp8_effective is False
 
-    def test_supported_sets_effective_and_warns_experimental(self, caplog):
-        """A fully capable host → _fp8_effective True + ONE experimental WARN."""
+    def test_supported_sets_effective_and_warns_fp8_path(self, caplog):
+        """A fully capable host → _fp8_effective True + ONE FP8-path WARN."""
         from backpropagate.trainer import Trainer
 
         with caplog.at_level(logging.WARNING, logger="backpropagate.trainer"):
@@ -401,8 +401,9 @@ class TestFp8GracefulFallback:
                 trainer = Trainer(fp8=True, use_unsloth=False)
         assert trainer._fp8_effective is True
         assert any(
-            "EXPERIMENTAL" in r.message for r in caplog.records
-        ), "the one-shot experimental WARN should fire when FP8 is effective"
+            "FP8 compute path" in r.message and "verified" in r.message
+            for r in caplog.records
+        ), "the one-shot FP8-path WARN should fire when FP8 is effective"
 
 
 # =============================================================================

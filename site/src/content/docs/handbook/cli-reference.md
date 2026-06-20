@@ -55,9 +55,14 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--init-lora-weights` | `default` | One of `default` / `pissa` / `loftq`. PiSSA + LoftQ recover quality lost during QLoRA quantization at zero runtime cost. |
 | `--optim` | auto | Optimizer string. `auto` picks `paged_adamw_8bit` on consumer GPUs (<24GB VRAM), `adamw_torch_fused` otherwise. Override with `adamw_torch` / `paged_adamw_8bit` / `adamw_8bit` etc. |
 | `--mode` | `lora` | **v1.4** — one of `lora` / `full`. `lora` (the default) trains a low-rank adapter; `full` updates every weight of the base model. `full` is supported only for models up to 3B parameters on consumer 16GB cards — picking `--mode=full` with a >3B model exits `2` with `[RUNTIME_FULL_FT_MODEL_TOO_LARGE]` naming `--mode=lora` + the three sub-3B presets (Phi-4-mini-3.8B / Qwen-3.5-4B / SmolLM3-3B) as the recovery options. See [full fine-tuning →](/backpropagate/handbook/full-fine-tuning/) for the LoRA-vs-full quality math and the Biderman 2024 / Thinking Machines 2025 citations. |
-| `--method` | `sft` | **v1.5** — one of `sft` / `orpo`. `sft` (the default) is supervised fine-tuning. `orpo` is reference-free preference tuning (Hong, Lee & Thorne 2024) — needs a `{chosen, rejected}` (or `{prompt, chosen, rejected}`) dataset, runs single-stage with no reference model, and so stays in the same VRAM envelope as SFT. ORPO supports `--mode lora` only in v1.5. |
+| `--method` | `sft` | **v1.5 / v1.6** — one of `sft` / `orpo` / `simpo` / `kto`. `sft` (the default) is supervised fine-tuning. `orpo`, `simpo`, `kto` are reference-free preference tuning that stay in the SFT VRAM envelope (no separate reference model held in memory). All three are `--mode lora` only. `orpo` (Hong, Lee & Thorne 2024) and `simpo` (Meng et al. 2024, arXiv:2405.14734) take a paired `{chosen, rejected}` (or `{prompt, chosen, rejected}`) dataset; `kto` (Ethayarajh et al. 2024, arXiv:2402.01306) takes an **unpaired** `{prompt, completion, label}` dataset (binary thumbs-up/down — the `label` is a bool). |
 | `--orpo-beta` | `0.1` | **v1.5** — ORPO odds-ratio weight (the `lambda` / `beta` in TRL's `ORPOConfig`). Keep > 0. Ignored unless `--method orpo`. |
-| `--fp8` | off | **v1.5 (experimental)** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao. Base weights in float8 (~1.4× throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge still works. `--mode lora` + `--method sft` only in v1.5; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Sets `BACKPROPAGATE_TRAINING__FP8`. |
+| `--simpo-beta` | unset (cfg 2.0) | **v1.6** — SimPO reward-scaling `beta` (TRL `CPOConfig`, `loss_type="simpo"`, `cpo_alpha=0` forced). Keep > 0. Ignored unless `--method simpo`. |
+| `--simpo-gamma` | unset (cfg 1.0) | **v1.6** — SimPO target reward margin `gamma` (absolute; = `beta`×0.5 ratio by default). Keep > 0; a `gamma/beta` ratio > 1 risks degeneration (warns). SimPO's LR auto-lowers to `1e-6` (clamped + warned if you set ≥ `1e-5` — high LR makes SimPO repetitive). Ignored unless `--method simpo`. |
+| `--kto-beta` | unset (cfg 0.1) | **v1.6** — KTO reward-scaling `beta` (TRL `KTOConfig`). Keep > 0. KTO uses the frozen LoRA base as its reference, so no second model is loaded (16 GB envelope preserved). LR auto-lowers to `1e-6` (clamped if ≥ `5e-6`). Ignored unless `--method kto`. |
+| `--kto-desirable-weight` | unset (cfg 1.0) | **v1.6** — KTO loss weight on desirable (`label=true`) examples. The trainer **auto-balances** desirable/undesirable weights from the dataset's label counts toward a 1:1–4:3 effective ratio (this flag is the starting point, logged at preflight). Keep > 0. Ignored unless `--method kto`. |
+| `--kto-undesirable-weight` | unset (cfg 1.0) | **v1.6** — KTO loss weight on undesirable (`label=false`) examples; auto-balanced alongside `--kto-desirable-weight`. Keep > 0. Ignored unless `--method kto`. |
+| `--fp8` | off | **v1.5; verified on Blackwell in v1.6** — FP8 compute path on Blackwell/Hopper (sm_90+) via torchao, dogfood-verified end-to-end on an RTX 5090 (sm_120). Base weights in float8 (~1.4× throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge still works. `--mode lora` + `--method sft` only; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Sets `BACKPROPAGATE_TRAINING__FP8`. |
 | `--use-rslora` | off | **v1.5** — rank-stabilized LoRA scaling (`alpha/sqrt(r)` instead of `alpha/r`). Zero inference cost, still mergeable; the benefit grows with rank (relevant at the rank-256 default). Sets `BACKPROPAGATE_LORA__USE_RSLORA`. |
 | `--reasoning-trace` | off | **v1.5 T3.2** — reasoning-trace SFT (R1/QwQ distillation). Keeps the `<think>` chain-of-thought in the SFT target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to `8192` (set `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` to override). `<think>` is plain text — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama. SFT only (`--method sft`). Sets `BACKPROPAGATE_DATA__REASONING_TRACE`; tune the band with `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` / `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS`. |
 | `--backend` | `auto` | **v1.5 T3.1 (experimental — Apple-Silicon rail BUILT-BUT-UNVERIFIED)** — one of `auto` / `cuda` / `mlx`. The compute rail. `auto` (the default) routes to CUDA on an NVIDIA host and to the MLX rail on an Apple-Silicon Mac with the `[mlx]` extra installed — so existing CUDA rigs are byte-identical. `cuda` forces the CUDA rail; `mlx` forces the Apple-Silicon (`mlx_lm.lora`) rail. **MLX is LoRA SFT only in v1.5** — `--method orpo`, `--mode full`, `--fp8`, and `multi-run` are not supported on the MLX rail and are rejected at construction with `CONFIG_INVALID_SETTING`. Forcing `--backend mlx` on a non-Apple host is unrunnable (`mlx-lm` is macOS + arm64 only) and errors with `CONFIG_INVALID_SETTING`; if the resolved rail is `mlx` but `mlx_lm` is missing the run raises `DEP_MLX_UNAVAILABLE` — install `pip install 'backpropagate[mlx]'`. Sets `BACKPROPAGATE_TRAINING__BACKEND`. The MLX rail is built + unit-tested (mocked) but not yet dogfood-verified on real Apple Silicon as of v1.5 — see the [README MLX note](https://github.com/mcp-tool-shop-org/backpropagate#apple-silicon-mlx--experimental-v15). |
@@ -369,6 +374,52 @@ backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.
 
 Exit codes: `0` advisory run or all gates passed / clean; `1` on bad input (dataset missing / is a directory / not UTF-8 / unreadable, or `--against` was passed but its file is missing); `65` (`EX_DATAERR`) when a `--fail-*` / `--strict` gate trips **or** the dataset has zero parseable rows. A tripped gate stamps `INPUT_DATASET_REPORT_THRESHOLD` into the structured log so the failure is greppable.
 
+## `backprop data split` (v1.6)
+
+Deterministically split a JSONL dataset into a train file and a held-out file — the missing half of the eval/contamination workflow (`backprop data report --against` and `backprop eval --heldout` both assume you already *have* a held-out split). Pure file I/O (no torch, no download); the second verb under the `data` noun group.
+
+```bash
+# 10% held-out, default output names (<stem>.train.jsonl / <stem>.heldout.jsonl)
+backprop data split my_data.jsonl
+
+# Explicit ratio + seed + output paths
+backprop data split my_data.jsonl --heldout-ratio 0.2 --seed 7 --out-train train.jsonl --out-heldout heldout.jsonl
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `dataset` (positional) | **required** | Path to the JSONL dataset to split. |
+| `--heldout-ratio` | `0.1` | Fraction in `(0, 1)` to route to the held-out file (validated by `_unit_float`). The split always leaves ≥ 1 row on each side. |
+| `--seed` | `0` | Seed for the deterministic shuffle (a local RNG — same seed → same split, never touches global state). |
+| `--out-train` | unset (-> `<stem>.train.jsonl`) | Output path for the training split. |
+| `--out-heldout` | unset (-> `<stem>.heldout.jsonl`) | Output path for the held-out split. |
+
+Exit codes: `0` on success (prints `n_train` / `n_heldout`); `1` on bad input (dataset missing / a directory / empty, or `--heldout-ratio` out of range / too few rows — surfaces `CONFIG_INVALID_SETTING` from `split_dataset`).
+
+## `backprop generate` (v1.6)
+
+Ad-hoc "did my fine-tune actually work?" generation against a trained adapter **path** — no recorded run_id, no GGUF export, no Ollama round-trip needed. Reuses the eval harness's generation primitive; the base model is inferred from the adapter's `adapter_config.json` when `--base` is omitted. Cheap user-error checks (missing path, unresolvable base) run *before* the torch import.
+
+```bash
+# One completion, base inferred from the adapter
+backprop generate ./output/lora "Summarize: the cat sat on the mat."
+
+# Three samples against an explicit base
+backprop generate ./output/lora "Write a haiku about gradients" --base Qwen/Qwen2.5-7B-Instruct -n 3 --temperature 0.8
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `adapter_path` (positional) | **required** | Path to a trained LoRA adapter directory (the `--output` of a `backprop train` run). |
+| `prompt` (positional) | **required** | The prompt to generate from. |
+| `--base` | unset (inferred) | Base model id/path. Default: read `base_model_name_or_path` from the adapter's `adapter_config.json`. Required (else `INPUT_VALIDATION_FAILED`) if the adapter doesn't record it. |
+| `--max-new-tokens` | `128` | Max new tokens per completion. |
+| `--num`, `-n` | `1` | Number of completions to produce. |
+| `--temperature` | `0.7` | Sampling temperature. |
+| `--seed` | `0` | Generation seed (determinism). |
+
+Exit codes: `0` on success; `1` on user error (adapter path missing / not a directory / base unresolvable — `INPUT_VALIDATION_FAILED`); `2` if model load / generation crashes.
+
 ## `backprop eval` (v1.5)
 
 Lightweight post-train eval harness — held-out loss + perplexity + N sample generations against a fixed prompt set, with an optional before/after diff (`--vs`) and an **eval-gate** (`--gate-against`) that backstops continual-merge / SLAO campaigns. Flat top-level subcommand, modeled on `diff-runs`. Imports the (torch-heavy) eval engine lazily, after the cheap run-resolution checks, so a typo'd run_id fails fast without loading a model.
@@ -396,7 +447,10 @@ backprop eval <run_id> --gate-against <baseline_run_id> --max-regression 0.0
 | `--max-new-tokens` | `128` | Max new tokens per sample generation. |
 | `--max-regression` | `0.0` | Maximum tolerated regression for `--gate-against` (`0.0` = any regression rejects). Raise to allow a small regression. |
 | `--seed` | `0` | Random seed for the re-split + generation determinism. |
-| `--json` | off | Emit the eval outcome (single / diff / gate) as JSON under a `schema_version` field for CI consumers. |
+| `--metric` | unset (loss only) | **v1.6** — deterministic, judge-free task metric to compute against `--references`. Repeatable. One of `normalized_exact_match` / `token_f1` / `contains` / `regex` / `pass_rate` (default pair `normalized_exact_match` + `token_f1` when `--references` is given without `--metric`). Populates `EvalResult.task_metrics` + a bootstrap `metric_ci`. No LLM judge. |
+| `--references` / `--eval-set` | unset | **v1.6** — JSONL of `{prompt, reference}` (or `{prompt, references:[...]}`) rows scored by `--metric`. Without it, eval stays loss + perplexity + generations as before. |
+| `--gate-metric` | unset | **v1.6** — task metric(s) the eval-gate must not regress, *in addition to* held-out loss (the gate is now a conjunction — loss non-regress AND each gated metric non-regress beyond a noise band, comparing the delta to the bootstrap CI rather than zero). Repeatable. Warns when the held-out set is underpowered (`eval_n < 100`). |
+| `--json` | off | Emit the eval outcome (single / diff / gate) as JSON under a `schema_version` field for CI consumers (now includes `task_metrics`, `eval_n`, `metric_ci`). |
 
 Exit codes: `0` the eval ran (and, with `--gate-against`, the gate ACCEPTED); `1` run-not-found (eval target / `--vs` / `--gate-against`) or `--heldout` / `--prompts` could not be resolved / read; `65` (`EX_DATAERR`) when `--gate-against` tripped — the run regressed beyond `--max-regression` (stamps `RUNTIME_EVAL_GATE_REGRESSED`). An eval that crashes inside the engine surfaces via the catch-all: `RUNTIME_EVAL_FAILED` → `2`, CUDA OOM → `137`, Hub failure → `69`.
 

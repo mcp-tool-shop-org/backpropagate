@@ -146,8 +146,7 @@ class TestUISecurityImports:
 
     def test_security_utilities(self):
         """Security utility functions can be imported."""
-        from backpropagate import log_security_event, safe_gradio_handler
-        assert callable(safe_gradio_handler)
+        from backpropagate import log_security_event
         assert callable(log_security_event)
 
 

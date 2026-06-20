@@ -2167,6 +2167,28 @@ class TestRunHistoryManagerLifecycle:
         in_progress = manager.in_progress_runs()
         assert [r["run_id"] for r in in_progress] == ["x"]
 
+    def test_in_progress_runs_tolerates_tz_aware_started_at(self, tmp_path):
+        """TRAINER-A-101: a tz-AWARE ``started_at`` must not crash the filter.
+
+        ``in_progress_runs`` parses ``started_at`` with ``fromisoformat`` (which
+        happily parses an offset-aware string like ``...+00:00``) then subtracts
+        it from a tz-NAIVE ``datetime.now()``. naive − aware raises ``TypeError``
+        in CPython. Pre-fix the subtraction lived OUTSIDE the parse guard, so the
+        TypeError escaped and crashed the whole call (the F-002 auto-resume
+        path). After the fix the mixed-tz entry is treated like an unparseable
+        one — KEPT, not crashed.
+        """
+        manager = self._manager(tmp_path)
+        manager.record_run_started(run_id="tzaware", model_name="m")
+        # Patch the entry's started_at to an offset-aware ISO string.
+        manager.update_run("tzaware", started_at="2026-06-20T12:00:00+00:00")
+
+        # Must NOT raise. A TTL filter is requested (positive threshold) so the
+        # parse + subtraction path is exercised, not the disabled short-circuit.
+        in_progress = manager.in_progress_runs(stale_threshold_seconds=3600.0)
+        # The mixed-tz entry is surfaced (kept for operator triage), not dropped.
+        assert any(r["run_id"] == "tzaware" for r in in_progress)
+
 
 # =============================================================================
 # F-003 TRAINER + MULTI-RUN INTEGRATION HOOKS

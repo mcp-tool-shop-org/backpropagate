@@ -56,16 +56,6 @@ async def _stub_http_200_app(scope, receive, send) -> None:
     await send({"type": "http.response.body", "body": b"ok"})
 
 
-async def _stub_http_401_app(scope, receive, send) -> None:
-    """Minimal ASGI app — sends a 401 (proves AFTER-auth wiring)."""
-    await send({
-        "type": "http.response.start",
-        "status": 401,
-        "headers": [(b"www-authenticate", b'Basic realm="backpropagate"')],
-    })
-    await send({"type": "http.response.body", "body": b"unauthorized"})
-
-
 async def _stub_ws_app(scope, receive, send) -> None:
     """Minimal ASGI app for WebSocket scopes — accept + close."""
     message = await receive()
@@ -76,6 +66,21 @@ async def _stub_ws_app(scope, receive, send) -> None:
 
 async def _empty_receive():
     return {"type": "websocket.connect"}
+
+
+async def _http_receive():
+    """Minimal HTTP receive — a single empty request body, then disconnect."""
+    return {"type": "http.request", "body": b"", "more_body": False}
+
+
+async def middleware_send(app, scope: dict, recorder: "_Recorder") -> None:
+    """Drive an ASGI ``app`` with ``scope`` + an HTTP receive, recording sends.
+
+    Used by the UI-A-002 production-layering tests: composes the real auth
+    middleware behind ``security_headers_middleware`` and captures the
+    response messages so the test can assert on status + headers.
+    """
+    await app(scope, _http_receive, recorder.send)
 
 
 def _make_http_scope(path: str = "/", method: str = "GET") -> dict:
@@ -162,30 +167,113 @@ async def test_security_headers_present_on_200_response():
 
 
 # =============================================================================
-# (b) HEADERS ON 401 (AFTER-AUTH WIRING)
+# (b) HEADERS ON AUTH-REJECTED RESPONSES — PRODUCTION LAYERING (UI-A-002)
 # =============================================================================
+#
+# UI-A-002: the original test here wrapped a *stub* 401 app INSIDE
+# ``security_headers_middleware`` — the INVERSE of production. In production
+# the ASGI chain is (see ``ui_app/app.py`` ``api_transformer=``):
+#
+#     security_headers  →  request_logging  →  basic_auth  →  rate_limit  →  ...
+#
+# Reflex applies ``api_transformer`` left-to-right via repeated
+# ``asgi_app = transformer(asgi_app)`` (see reflex/app.py), so the LAST entry
+# is outermost and ``security_headers`` (FIRST entry) is INNERMOST — closest
+# to the Reflex app. ``basic_auth`` therefore wraps OUTSIDE
+# ``security_headers``. The auth-rejection paths (``_build_401`` /
+# ``_build_421`` / ``_build_403``) call ``send()`` directly and ``return``
+# WITHOUT delegating to their inner app — so the security-headers middleware's
+# ``wrapped_send`` (which only runs when the inner app emits the response)
+# NEVER sees them. The original stub-inside-security_headers test passed green
+# regardless of whether the production rejection path carried the headers, so
+# it could not catch the gap.
+#
+# These two tests exercise the PRODUCTION layering: ``basic_auth_transformer``
+# wraps OUTSIDE ``security_headers_middleware`` (auth is the outer middleware,
+# security_headers the inner). The REAL auth middleware emits the rejection;
+# because it short-circuits before delegating to its inner app, the
+# security-headers wrapped_send never runs, so the headers must come from the
+# auth-builder set itself (UI-A-002 fix) — these tests FAIL if those headers
+# are dropped from the _build_*_response builders.
 
 
 @pytest.mark.asyncio
-async def test_security_headers_present_on_401_response():
-    """A 401 from upstream auth still carries security headers.
+async def test_auth_421_rejection_carries_security_headers_in_production_layering():
+    """A 421 Host-mismatch rejection (real auth middleware) carries the headers.
 
-    The FRONTEND-A-003 rationale: if we wrapped BEFORE auth, the 401
-    would skip our wrap entirely and ship without CSP / X-Frame-Options
-    — leaving an XSS gap on the auth error page itself. This test pins
-    that the headers stamp on EVERY HTTP response, regardless of status.
+    The Host-header allowlist fires in EVERY auth mode (including
+    no_auth_local_only), so this needs no credential env setup. We compose
+    the production chain — ``basic_auth(security_headers(stub))`` (auth is the
+    OUTER middleware) — and send a request with a disallowed Host header. The
+    421 is emitted by ``basic_auth_transformer`` via ``send()`` directly,
+    bypassing the security-headers wrapped_send; the headers therefore prove
+    the UI-A-002 auth-builder hardening, not the middleware wrap.
     """
-    middleware = security_headers_middleware(_stub_http_401_app)
-    recorder = _Recorder()
-    await middleware(_make_http_scope(), _empty_receive, recorder.send)
+    from backpropagate.ui_app.auth import basic_auth_transformer
+    from tests.helpers.asgi import stub_asgi_http_app
 
-    assert recorder.status == 401
+    # Production layering: basic_auth OUTSIDE security_headers (security_headers
+    # is the innermost api_transformer entry, closest to the Reflex app).
+    app = basic_auth_transformer(security_headers_middleware(stub_asgi_http_app))
+
+    scope = _make_http_scope()
+    # Disallowed Host header -> 421 Misdirected Request.
+    scope["headers"] = [(b"host", b"evil.attacker.example")]
+
+    recorder = _Recorder()
+    await middleware_send(app, scope, recorder)
+
+    assert recorder.status == 421, (
+        f"expected a 421 Host-mismatch rejection; got {recorder.status}"
+    )
     headers = recorder.headers
     assert b"content-security-policy" in headers, (
-        "401 response must carry CSP — see security_headers.py FRONTEND-A-003 rationale"
+        "UI-A-002: auth-rejection 421 must carry CSP. The rejection bypasses "
+        "the security-headers wrapped_send, so the header must be stamped by "
+        "the _build_421_response builder itself."
     )
     assert b"x-frame-options" in headers
-    # The upstream www-authenticate header should still be present.
+    assert b"x-content-type-options" in headers
+
+
+@pytest.mark.asyncio
+async def test_auth_401_rejection_carries_security_headers_in_production_layering(monkeypatch):
+    """A 401 missing-credentials rejection (real auth middleware) carries headers.
+
+    Forces EXPLICIT_CREDS mode (``BACKPROPAGATE_UI_AUTH`` set + enforcement
+    available) and sends an allowed-Host request with NO Authorization header
+    -> the middleware emits a 401 via ``_build_401_response``. Composed in the
+    production order so the 401 bypasses the security-headers wrapped_send;
+    the headers therefore prove the UI-A-002 fix.
+    """
+    monkeypatch.setattr("backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True)
+    monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "testuser:testpass")
+    # Clear any launch-token so we don't land in TOKEN_AUTO mode.
+    monkeypatch.delenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", raising=False)
+
+    from backpropagate.ui_app.auth import basic_auth_transformer
+    from tests.helpers.asgi import stub_asgi_http_app
+
+    # Production layering: basic_auth OUTSIDE security_headers.
+    app = basic_auth_transformer(security_headers_middleware(stub_asgi_http_app))
+
+    scope = _make_http_scope(path="/")
+    # Allowed Host (localhost), but NO Authorization header / cookie -> 401.
+    scope["headers"] = [(b"host", b"localhost:7860")]
+
+    recorder = _Recorder()
+    await middleware_send(app, scope, recorder)
+
+    assert recorder.status == 401, (
+        f"expected a 401 missing-credentials rejection; got {recorder.status}"
+    )
+    headers = recorder.headers
+    assert b"content-security-policy" in headers, (
+        "UI-A-002: auth-rejection 401 must carry CSP (stamped by "
+        "_build_401_response, not the bypassed wrapped_send)."
+    )
+    assert b"x-frame-options" in headers
+    # The Basic challenge header must still be present.
     assert b"www-authenticate" in headers
 
 

@@ -50,9 +50,9 @@ from .exceptions import (
 # input contract here so the error message is structured (``ExportError`` with
 # a stable ``code``) instead of leaking out of a downstream library.
 
-# Ollama model name: typical shape is "user/name:tag" but we accept any name
-# made up of alphanumerics + ``.``, ``_``, ``-``, ``:``. We disallow leading
-# ``-`` (option injection) and any whitespace / control char (newline,
+# Ollama model name: a single-segment name (NO ``/``) made up of
+# alphanumerics + ``.``, ``_``, ``-``, ``:`` (e.g. "my-model:latest"). We
+# disallow leading ``-`` (option injection) and any whitespace / control char (newline,
 # carriage return, NUL would otherwise produce a malformed Modelfile or
 # truncate the ``ollama create`` argv). Length cap 128 chars matches Ollama's
 # own internal limit comfortably.
@@ -80,7 +80,7 @@ def _validate_model_name(model_name: str) -> None:
     if not isinstance(model_name, str) or not model_name:
         err = ExportError(
             "Ollama model name must be a non-empty string",
-            suggestion="Pass --ollama-name <name> with a name like 'my-finetune' or 'org/model:tag'.",
+            suggestion="Pass --ollama-name <name> with a name like 'my-finetune' or 'my-model:latest'.",
             code="INPUT_VALIDATION_FAILED",
         )
         raise err
@@ -1997,7 +1997,7 @@ def remove_ollama_model(model_name: str) -> bool:
 
     Args:
         model_name: The Ollama model name to remove (e.g. ``"my-finetune"``
-            or ``"alice/qwen-finetune:latest"``). Validated against the same
+            or ``"qwen-finetune:latest"``). Validated against the same
             allowlist as ``register_with_ollama``.
 
     Returns:

@@ -644,6 +644,111 @@ class TestExportStateSetters:
         assert state.ollama_name_error == ""
 
 
+class TestExportStateHubTokenFilePath:
+    """UI-A-001: ``set_hub_token_file_path`` validates a credential READ path.
+
+    The HF token-file path is a path to read an *existing user-owned secret
+    file* — NOT a path the UI writes into. Pre-fix it was validated against
+    the UI OUTPUT sandbox (``~/.backpropagate/ui-outputs``) via
+    ``_validate_ui_path`` → ``safe_path(allowed_base=get_ui_output_dir())``.
+    That sandbox is mutually exclusive with the documented / placeholder
+    location ``~/.config/backpropagate/hf-token`` (``~/.config`` is on the
+    UI-output forbidden-base denylist), so the documented path could NEVER
+    be entered — the shipped ``--token-file`` UI field was unusable.
+
+    Post-fix the path is validated for the READ-a-credential intent (mirrors
+    the CLI ``_read_hub_token_file``): expanduser + resolve, require an
+    existing regular file, reject NUL bytes / directories / missing files —
+    but ALLOW standard user locations like ``~/.config/...``.
+    """
+
+    def test_documented_config_location_is_accepted(self, tmp_path, monkeypatch):
+        """A real file under ``~/.config/backpropagate/`` is ACCEPTED.
+
+        The regression this pins: the documented placeholder path
+        (``~/.config/backpropagate/hf-token``) lives inside a UI-output
+        FORBIDDEN base, so the pre-fix sandbox validator rejected it
+        outright (``Invalid path: ...``). The fix must accept it.
+        """
+        from backpropagate.ui_state import ExportState
+
+        # Point HOME at a temp dir so ~/.config resolves under tmp_path and
+        # the test never touches the operator's real ~/.config tree.
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        token_file = tmp_path / ".config" / "backpropagate" / "hf-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text("hf_" + "a" * 40, encoding="utf-8")
+
+        state = ExportState()
+        state.set_hub_token_file_path(str(token_file))
+        assert state.hub_token_file_path_error == "", (
+            "UI-A-001: the documented ~/.config/backpropagate/hf-token "
+            f"location must be accepted; got error {state.hub_token_file_path_error!r}"
+        )
+        assert state.hub_token_file_path != "", (
+            "UI-A-001: a valid existing token file must be staged"
+        )
+        # The staged value points at the same file (resolved form).
+        from pathlib import Path
+
+        assert Path(state.hub_token_file_path) == token_file.resolve()
+
+    def test_nonexistent_path_is_rejected(self, tmp_path):
+        """A path that does not exist is rejected with a clear error."""
+        from backpropagate.ui_state import ExportState
+
+        missing = tmp_path / "does-not-exist" / "hf-token"
+        state = ExportState()
+        state.set_hub_token_file_path(str(missing))
+        assert state.hub_token_file_path == "", (
+            "a nonexistent token file must not be staged"
+        )
+        assert state.hub_token_file_path_error != "", (
+            "a nonexistent token file must surface an operator-facing error"
+        )
+
+    def test_directory_is_rejected(self, tmp_path):
+        """A directory (not a regular file) is rejected with a clear error."""
+        from backpropagate.ui_state import ExportState
+
+        a_dir = tmp_path / "some-dir"
+        a_dir.mkdir()
+        state = ExportState()
+        state.set_hub_token_file_path(str(a_dir))
+        assert state.hub_token_file_path == "", (
+            "a directory must not be staged as a token file"
+        )
+        assert state.hub_token_file_path_error != "", (
+            "a directory must surface an operator-facing error"
+        )
+        assert "file" in state.hub_token_file_path_error.lower(), (
+            "the directory-rejection error should mention it expected a file; "
+            f"got {state.hub_token_file_path_error!r}"
+        )
+
+    def test_null_byte_is_rejected(self, tmp_path):
+        """A NUL byte in the path is rejected (hostile input)."""
+        from backpropagate.ui_state import ExportState
+
+        state = ExportState()
+        state.set_hub_token_file_path(str(tmp_path / "hf\x00token"))
+        assert state.hub_token_file_path == ""
+        assert state.hub_token_file_path_error != ""
+
+    def test_empty_clears_field_and_error(self, tmp_path):
+        """Empty input clears both the path and the error (pass-through)."""
+        from backpropagate.ui_state import ExportState
+
+        state = ExportState()
+        # First set an error.
+        state.set_hub_token_file_path(str(tmp_path / "missing"))
+        assert state.hub_token_file_path_error != ""
+        # Now clear it.
+        state.set_hub_token_file_path("")
+        assert state.hub_token_file_path == ""
+        assert state.hub_token_file_path_error == ""
+
+
 class TestExportStateEventHandlers:
     """Exercise the Export Start event handler (CLIUI-B-001 honesty floor)."""
 
@@ -2594,3 +2699,119 @@ class TestRunDetailReplayInProcess:
 
         assert state.action_result == ""
         assert "invalid run id" in state.action_error.lower()
+
+
+# =============================================================================
+# HUX-02 (Stage C humanization): the operator-actionable remedy from
+# ``sanitize_error_for_user`` must be held SEPARATELY from ``error`` (on the
+# dedicated ``error_suggestion`` var) so the error callout can render it on its
+# own dimmed ``hint=`` line instead of folding it into the message as a run-on
+# "… Try: {suggestion}" sentence.
+# =============================================================================
+
+
+class TestRunsStateErrorSuggestionSplit:
+    """``RunsState.load_runs`` exposes the remedy on ``error_suggestion``, kept
+    out of the ``error`` message (HUX-02).
+    """
+
+    def test_suggestion_available_separately_not_run_on(self, monkeypatch, tmp_path):
+        """A BackpropagateError with a suggestion routes its remedy to the
+        dedicated ``error_suggestion`` var; ``error`` carries only the message
+        (no "Try:" run-on tail).
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.exceptions import BackpropagateError
+        from backpropagate.ui_state import RunsState
+
+        class _RaisingManager:
+            def __init__(self, _dir):
+                pass
+
+            def list_runs(self, status=None, limit=50):
+                raise BackpropagateError(
+                    "history index is corrupt",
+                    code="STATE_RUN_HISTORY_CORRUPT",
+                    suggestion="delete the index and reload",
+                )
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
+
+        state = RunsState()
+        state.output_dir_override = str(tmp_path)
+        state.load_runs()
+
+        # The remedy lives on its own var, scannable as a distinct hint line.
+        assert state.error_suggestion == "delete the index and reload"
+        # The message carries the error but NOT the folded-in remedy.
+        assert "history index is corrupt" in state.error
+        assert "Try:" not in state.error
+        assert "delete the index and reload" not in state.error
+        assert state.runs == []
+
+    def test_no_suggestion_leaves_hint_empty(self, monkeypatch, tmp_path):
+        """A non-BackpropagateError (generic, suggestion=None) leaves
+        ``error_suggestion`` empty so the callout hint collapses to a fragment
+        (backward-compatible).
+        """
+        from backpropagate import checkpoints as _ck
+        from backpropagate.ui_state import RunsState
+
+        class _RaisingManager:
+            def __init__(self, _dir):
+                pass
+
+            def list_runs(self, status=None, limit=50):
+                raise RuntimeError("opaque internal failure")
+
+        monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
+
+        state = RunsState()
+        state.output_dir_override = str(tmp_path)
+        state.load_runs()
+
+        assert state.error_suggestion == ""
+        assert state.error  # a generic, sanitized message is still surfaced
+        assert "Try:" not in state.error
+
+    def test_clear_error_resets_suggestion(self):
+        """``clear_error`` wipes both ``error`` and ``error_suggestion`` so a
+        dismissed banner leaves no stale hint behind.
+        """
+        from backpropagate.ui_state import RunsState
+
+        state = RunsState()
+        state.error = "something broke"
+        state.error_suggestion = "do the thing"
+        state.clear_error()
+
+        assert state.error == ""
+        assert state.error_suggestion == ""
+
+
+class TestErrorSuggestionSlotsBackwardCompatible:
+    """The /models and /run-detail callouts have a dedicated suggestion var so
+    a future suggestion-bearing error surfaces in the same scannable hierarchy;
+    both default empty today (HUX-02 backward compatibility).
+    """
+
+    def test_models_state_error_suggestion_defaults_empty(self):
+        from backpropagate.ui_state import ModelsState
+
+        assert ModelsState().error_suggestion == ""
+
+    def test_run_detail_action_error_suggestion_defaults_empty(self):
+        from backpropagate.ui_state import RunDetailState
+
+        assert RunDetailState().action_error_suggestion == ""
+
+    def test_clear_action_message_resets_suggestion(self):
+        from backpropagate.ui_state import RunDetailState
+
+        state = RunDetailState()
+        state.action_error = "action broke"
+        state.action_error_suggestion = "retry it"
+        state.clear_action_message()
+
+        assert state.action_error == ""
+        assert state.action_error_suggestion == ""

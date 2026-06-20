@@ -145,7 +145,7 @@ trainer.export('gguf', quantization='q4_k_m')
 
 Alpaca（`instruction` / `output`）、OpenAIチャット（`messages`）、および生のテキスト形式も機能します。Backpropagateは、形式を自動的に検出します。
 
-### 優先度調整（ORPO）
+### 嗜好性チューニング（ORPO、SimPO、KTO）
 
 v1.5の新機能：プレーンなデモンストレーションではなく、優先度に基づいてトレーニングします。ORPOは参照なしで、単一ステージです。優先度のシグナルをSFTステップに組み込むため、個別の報酬モデルや参照モデルはなく、3行の構造は変わりません。`--method orpo`（CLI）または`method="orpo"`（Python）を渡し、`{prompt, chosen, rejected}`（または`{chosen, rejected}`のみ）の行のデータセットを渡します。
 
@@ -166,7 +166,9 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-デフォルトの学習率は、ORPO（損失が単純なSFTよりも鋭い）に対して自動的に `8e-6` に低下します。`--orpo-beta`（デフォルトは `0.1`）を調整して、オッズ比ペナルティの重みを調整します。v1.5では、ORPOは `mode="lora"` のみです。SimPOとKTOは今後の計画です。オンラインRL（PPO/GRPO）については、[What Backpropagate is NOT for](#what-backpropagate-is-not-for) を参照してください。
+デフォルトの学習率は、ORPOに対して自動的に`8e-6`まで低下します（損失は単純なSFTよりも急峻です）。オッズ比ペナルティの重みを調整するために、`--orpo-beta`（デフォルトは`0.1`）を調整してください。ORPOは`mode="lora"`でのみ使用できます。
+
+**v1.6の新機能 — SimPOとKTO。** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734))は、長さで正規化された報酬を使用し、参照を必要とせず、ORPOと同じペアの`{prompt, chosen, rejected}`データを受け取ります（`--simpo-beta`、`--simpo-gamma`）。`--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306))は、**ペアになっていない** `{prompt, completion, label}`データを受け取ります。これは、キュレーションされたA/Bペアではない大規模なフィードバックのクラスに対して、サンプルごとの肯定/否定の評価を行います。また、ラベル数に基づいて、望ましい/望ましくない損失の重みを自動的に調整します。どちらも`mode="lora"`でのみ使用でき、単一GPU SFT環境に留まります（個別の参照モデルは使用しません）。どの方法を使用するかについては、[嗜好性チューニングハンドブック](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/)を参照してください。オンラインRL（PPO/GRPO）については、[Backpropagateが適さない理由](#what-backpropagate-is-not-for)をご覧ください。
 
 ### 推論トレースSFT（R1蒸留）
 
@@ -190,7 +192,7 @@ backprop train --data my_data.jsonl --backend mlx --steps 100
 
 v1.5では、MLXレールは **LoRA SFTのみ** です。ORPO、FP8、`mode='full'`、MLXでのマルチランはまだサポートされていません（それぞれ `CONFIG_INVALID_SETTING` で拒否されます。それらの機能を使用する場合は、NVIDIA環境で `backend='cuda'` / `'auto'` を使用してください）。結果として得られるアダプターは、プレーンなsafetensorsであり、CUDAレールと同じパスを通じてOllamaにエクスポートされます。
 
-> ⚠️ **正直な状況：** MLXレールはv1.5に **構築およびユニットテスト済み（モック）** として含まれていますが、**まだ実際のApple Siliconでドッグフード検証されていません**。`mlx-lm` はApple専用であり、このソフトウェアが作成されたNVIDIA環境では実行できません。実験的なものとして扱い（FP8パスと同じ）、MシリーズMacで実行した後に、[バグの報告](#reporting-bugs) をお願いします。Apple以外のホストで `--backend mlx` を強制すると、`CONFIG_INVALID_SETTING` エラーが発生します。Macに `mlx_lm` ツールチェーンがない場合、`DEP_MLX_UNAVAILABLE` が発生します。
+> ⚠️ **現状:** v1.5でMLXレールは**構築され、ユニットテストも完了（モックを使用）**していますが、**まだ実際のApple Siliconでの実証検証は行われていません** — `mlx-lm`はApple専用であり、このコードが作成されたNVIDIA環境では実行できません。実験的なものとして扱ってください。これは、v1.5でFP8パスが採用されたときと同じ考え方です（FP8はv1.6でBlackwell上で実証検証に合格しました。MLXはまだ実際のシリコンでの検証が必要です）。MシリーズのMacで実行したら、[不具合を報告してください](#reporting-bugs)。Apple以外のホストで`--backend mlx`を強制すると、`CONFIG_INVALID_SETTING`エラーが発生します。Macに`mlx_lm`ツールチェーンがない場合、`DEP_MLX_UNAVAILABLE`エラーが発生します。
 
 よりエンドツーエンドのワークフロー（ファインチューンとHF Hubへのプッシュ、OOM後の再開、長期間のキャンペーンにおけるマルチランSLAOなど）については、[ハンドブックのレシピページ](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/) を参照してください。
 
@@ -303,7 +305,7 @@ UIからのファイルシステムへの書き込みは、単一のディレク
 
 **要件：** Python 3.10+、CUDA GPU（8GB以上のVRAM）、PyTorch 2.0+
 
-Python 3.10は、2026年10月にサポートが終了し、v1.5で廃止される予定です。新しいインストールの場合、Python 3.11または3.12を推奨します。3.11は最もテストされたバージョンです。
+Python 3.10は少なくともv1.6までサポートされます。2026年10月にアップストリームのサポートが終了し、その後最初のリリースで削除される予定です。新しいインストールでは、Python 3.11または3.12を推奨します。3.11は最もテストされたバージョンです。
 
 Backpropagateは、さまざまなプラットフォームでのトレーニングにおける実行時の癖に対処しますが、インストール時の問題を修正することはできません。最も一般的な問題は次の2つです。
 

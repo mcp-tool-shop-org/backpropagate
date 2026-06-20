@@ -8,8 +8,9 @@ chain caught two examples from Stage C's own ship in Wave 5. This script is
 the forcing function that fires on every PR so Wave 6+ commits get caught
 BEFORE merge instead of after.
 
-Eight checks (5-class extension landed v1.4 Wave 6a — was 4 in v1.3)
--------------------------------------------------------------------
+Ten checks (5-class extension landed v1.4 Wave 6a — was 4 in v1.3; Class 4
+gained a 4b README variant in v1.4 Wave A1, bringing the wired total to ten)
+----------------------------------------------------------------------------
 1. New ``BACKPROPAGATE_*`` env vars read by ``backpropagate/**/*.py`` must
    appear in both ``site/src/content/docs/handbook/env-vars.md`` AND the
    ``_enumerate_env_vars`` catalog in ``backpropagate/cli.py``.
@@ -43,7 +44,7 @@ Five-class extension (added v1.4 Wave 6a)
    handbook reference to ``BACKPROPAGATE_*``, ``--flag``, or another
    error code inside the error-codes.md Fix column must point at a thing
    that still exists (env var read, registered flag, catalog entry).
-8b. CLASS 4b (README error-code refs, added v1.4 Wave A1) — every
+9. CLASS 4b (README error-code refs, added v1.4 Wave A1) — every
    backtick-wrapped ``PREFIX_...`` token in README.md drawn from a live
    ERROR_CODES prefix family must be an actual key in
    ``backpropagate/exceptions.py:ERROR_CODES``. Catches the case where the
@@ -51,7 +52,7 @@ Five-class extension (added v1.4 Wave 6a)
    (TESTSCI-A-001: the --share/--auth row named INPUT_AUTH_REQUIRED instead
    of the runtime's RUNTIME_UI_AUTH_NOT_ENFORCED). Class 4 scanned only the
    handbook, leaving README drift invisible to the gate built to catch it.
-9. CLASS 5 (CI workflow step NAMES / comments vs flag semantics) —
+10. CLASS 5 (CI workflow step NAMES / comments vs flag semantics) —
    every ``MEDIUM/MEDIUM`` / ``HIGH`` / ``LOW/LOW`` etc. severity-claim
    in a workflow step name or comment must match the actual flag
    semantics on the next command line (catches the Bandit
@@ -1250,6 +1251,18 @@ def check_workflow_severity_drift() -> list[str]:
 
 
 def main() -> int:
+    # Windows-first: this script prints doc cells verbatim (drift findings echo
+    # the offending text). A non-cp1252 glyph in a doc — e.g. an arrow or a >=
+    # sign — would otherwise crash the gate with UnicodeEncodeError on a legacy
+    # console. Reconfigure to UTF-8 with errors="replace" so the gate reports
+    # rather than crashes (mirrors the cli._reconfigure_stdio_utf8 fix).
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            try:
+                _reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001  # nosec B110 — never fail the gate over stdio
+                pass
     all_findings: list[str] = []
     checks = (
         check_env_vars,

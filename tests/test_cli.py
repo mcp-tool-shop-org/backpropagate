@@ -775,13 +775,19 @@ class TestPrintHelpers:
         assert "WARN" in captured.out
 
     def test_print_info(self, capsys):
-        """Test _print_info output."""
+        """Test _print_info output.
+
+        VIS-CLI-003: _print_info now uses the bracketed ``[INFO]`` prefix so
+        it matches the [OK]/[ERROR]/[WARN] family instead of the old bare
+        ``i `` prefix.
+        """
         from backpropagate.cli import _print_info
 
         _print_info("Info message")
         captured = capsys.readouterr()
 
         assert "Info message" in captured.out
+        assert "[INFO]" in captured.out
 
     def test_print_kv(self, capsys):
         """Test _print_kv output."""
@@ -794,7 +800,101 @@ class TestPrintHelpers:
         assert "Value" in captured.out
 
 
-class TestModuleExports:
+class TestStdioReconfigureUtf8:
+    """VIS-CLI-001: stdout/stderr UTF-8 reconfiguration for legacy Windows.
+
+    The Run-ID banner printed on every train/multi-run/export/resume/push/eval
+    run (and several status/error strings) contains the em-dash U+2014, which
+    raises UnicodeEncodeError on a legacy cp437/cp850 Windows console and aborts
+    the command before training. ``main()`` calls ``_reconfigure_stdio_utf8()``
+    at the top to make the streams UTF-8 with ``errors="replace"`` so the dash
+    degrades to a safe char instead of crashing.
+    """
+
+    def test_reconfigure_invokes_utf8_replace_on_real_streams(self, monkeypatch):
+        """A stream exposing ``reconfigure`` is switched to utf-8/replace."""
+        import backpropagate.cli as cli
+
+        calls = []
+
+        class _FakeStream:
+            def reconfigure(self, *, encoding=None, errors=None):
+                calls.append((encoding, errors))
+
+        monkeypatch.setattr(cli.sys, "stdout", _FakeStream())
+        monkeypatch.setattr(cli.sys, "stderr", _FakeStream())
+
+        cli._reconfigure_stdio_utf8()
+
+        assert calls == [("utf-8", "replace"), ("utf-8", "replace")]
+
+    def test_reconfigure_noops_when_stream_lacks_reconfigure(self, monkeypatch):
+        """A pipe/captured stream with no ``reconfigure`` must not raise."""
+        import backpropagate.cli as cli
+
+        class _NoReconfigure:
+            # No ``reconfigure`` attribute — e.g. a pytest capture buffer.
+            def write(self, _s):  # pragma: no cover - not exercised
+                return 0
+
+        monkeypatch.setattr(cli.sys, "stdout", _NoReconfigure())
+        monkeypatch.setattr(cli.sys, "stderr", _NoReconfigure())
+
+        # Must be a silent no-op, never an AttributeError.
+        cli._reconfigure_stdio_utf8()
+
+    def test_reconfigure_swallows_reconfigure_failure(self, monkeypatch):
+        """A stream whose ``reconfigure`` raises must not abort startup."""
+        import backpropagate.cli as cli
+
+        class _AngryStream:
+            def reconfigure(self, *, encoding=None, errors=None):
+                raise OSError("detached / already closed")
+
+        monkeypatch.setattr(cli.sys, "stdout", _AngryStream())
+        monkeypatch.setattr(cli.sys, "stderr", _AngryStream())
+
+        # The try/except inside the helper must absorb this.
+        cli._reconfigure_stdio_utf8()
+
+    def test_em_dash_banner_does_not_crash_after_reconfigure(self, monkeypatch):
+        """End-to-end: an em-dash string survives a cp437-restricted stream
+        once the reconfigure path has run.
+
+        Simulates a legacy Windows console by wrapping a byte buffer in a
+        TextIOWrapper that *starts* encoding-restricted (cp437, which cannot
+        encode U+2014) but supports ``reconfigure``. After
+        ``_reconfigure_stdio_utf8()`` flips it to utf-8/replace, driving
+        ``_print_error`` with the banner's em-dash must NOT raise
+        UnicodeEncodeError.
+        """
+        import io
+
+        import backpropagate.cli as cli
+
+        raw_out = io.BytesIO()
+        raw_err = io.BytesIO()
+        restricted_out = io.TextIOWrapper(raw_out, encoding="cp437", errors="strict")
+        restricted_err = io.TextIOWrapper(raw_err, encoding="cp437", errors="strict")
+
+        monkeypatch.setattr(cli.sys, "stdout", restricted_out)
+        monkeypatch.setattr(cli.sys, "stderr", restricted_err)
+
+        banner = "[INFO] Run ID: deadbeef — share with support if you file a bug"
+
+        # Sanity: before reconfigure, encoding this em-dash under cp437 raises.
+        with pytest.raises(UnicodeEncodeError):
+            restricted_err.write(banner)
+        restricted_err.seek(0)
+        raw_err.seek(0)
+        raw_err.truncate(0)
+
+        # The fix: reconfigure to utf-8/replace, then the dash must go through.
+        cli._reconfigure_stdio_utf8()
+        cli._print_error(banner)          # the em-dash error/banner path
+        cli.sys.stderr.flush()
+
+        assert raw_err.getvalue()  # something was written, no exception raised
     """Tests for module exports."""
 
     def test_main_exported(self):

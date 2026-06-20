@@ -85,7 +85,14 @@ def _metadata_header() -> rx.Component:
                     rx.cond(
                         RunDetailState.status == "failed",
                         rx.badge("failed", color_scheme="red", variant="soft", size="2"),
-                        rx.badge(RunDetailState.status, color_scheme="gray", variant="soft", size="2"),
+                        rx.cond(
+                            # VIS-UI-003: parity with the runs-list badge
+                            # (runs.py ``_status_badge``) which gives an
+                            # interrupted run an amber badge.
+                            RunDetailState.status == "interrupted",
+                            rx.badge("interrupted", color_scheme="amber", variant="soft", size="2"),
+                            rx.badge(RunDetailState.status, color_scheme="gray", variant="soft", size="2"),
+                        ),
                     ),
                 ),
             ),

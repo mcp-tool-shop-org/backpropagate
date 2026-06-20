@@ -143,7 +143,7 @@ def BpErrorCallout(
                             "margin": "6px 0 0",
                             "padding": "8px",
                             "background": "var(--bp-surface-2)",
-                            "border_radius": "4px",
+                            "border_radius": "var(--bp-r-1)",
                             "font_family": "var(--bp-mono)",
                             "font_size": "11px",
                             "color": "var(--bp-text-2)",

@@ -480,6 +480,39 @@ from .logging_config import (
 # TERMINAL COLORS (ANSI)
 # =============================================================================
 
+def _reconfigure_stdio_utf8() -> None:
+    """Force ``sys.stdout`` / ``sys.stderr`` to UTF-8 with ``errors="replace"``.
+
+    VIS-CLI-001 (Windows robustness): dozens of runtime strings — most
+    importantly the Run-ID banner printed on every train / multi-run / export /
+    resume / push / eval run — contain the em-dash U+2014 ("—"). On a legacy
+    Windows console whose code page is cp437 / cp850, writing that character
+    raises ``UnicodeEncodeError`` and aborts the command before training ever
+    starts, against the first-class-Windows promise.
+
+    Reconfiguring the streams to UTF-8 fixes pipe mojibake too, and
+    ``errors="replace"`` degrades any still-unencodable character to a safe
+    placeholder instead of crashing. This runs from ``main()`` only (the CLI
+    entry point), never at module import, so library importers keep their own
+    stream configuration untouched.
+
+    Guarded defensively: only streams exposing ``reconfigure`` (real
+    ``io.TextIOWrapper`` consoles) are touched, and the whole thing is wrapped
+    in ``try/except`` so a redirected / captured / pipe stream or pytest's
+    capture machinery can never make the CLI fail on startup.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001  # nosec B110 — never fail CLI startup over stdio
+            # A non-reconfigurable / detached / already-closed stream must not
+            # abort the CLI; we simply fall back to whatever encoding it has.
+            pass
+
+
 def _supports_color() -> bool:
     """Check if terminal supports ANSI colors."""
     if os.environ.get("NO_COLOR"):
@@ -585,7 +618,7 @@ def _print_warning(text: str) -> None:
 
 def _print_info(text: str) -> None:
     """Print info message."""
-    print(f"{Colors.BLUE}i{Colors.RESET} {text}")
+    print(f"{Colors.BLUE}[INFO]{Colors.RESET} {text}")
 
 
 def _print_kv(key: str, value: str, indent: int = 2) -> None:
@@ -2126,12 +2159,21 @@ def cmd_info(args: argparse.Namespace) -> int:
                 else Colors.YELLOW if tier == "experimental"
                 else Colors.RED
             )
-            print(f"{name:<{name_w}}  {color}{tier:<{tier_w}}{Colors.RESET}")
+            # VIS-CLI-004: rstrip so the left-justified tier column does not
+            # leave trailing whitespace on each row.
+            print(f"{name:<{name_w}}  {color}{tier:<{tier_w}}{Colors.RESET}".rstrip())
         print()
+        # VIS-CLI-004: emit each tier on its own line so the three names align
+        # under the [INFO] prefix (the previous single call baked in 8-space
+        # continuation indents + trailing pad that no longer line up).
+        _print_info("stable — documented contract, no removal planned.")
         _print_info(
-            "stable    — documented contract, no removal planned.\n"
-            "        experimental — may change shape between minor versions; pin the exact version.\n"
-            "        deprecated-prefer-X — will be removed in a future major; use `X` instead."
+            "experimental — may change shape between minor versions; "
+            "pin the exact version."
+        )
+        _print_info(
+            "deprecated-prefer-X — will be removed in a future major; "
+            "use `X` instead."
         )
         return EXIT_OK
 
@@ -6644,8 +6686,8 @@ Tips:
         default="quality",
         help=(
             "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
             "defaults; smaller memory footprint)."
         ),
     )
@@ -6876,8 +6918,8 @@ Tips:
         default="quality",
         help=(
             "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
             "defaults; smaller memory footprint)."
         ),
     )
@@ -8351,6 +8393,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from .logging_config import bind_run_context, configure_logging, get_logger
 
+    # VIS-CLI-001 (Windows robustness): make stdout/stderr UTF-8 tolerant
+    # BEFORE we print anything (the Run-ID banner and several status/error
+    # strings carry the em-dash U+2014, which crashes a legacy cp437/cp850
+    # Windows console). Entry-point only — never at module import.
+    _reconfigure_stdio_utf8()
+
     # BRIDGE-B-016 (Stage C): mint the cli_run_id BEFORE parse_args so the
     # KeyboardInterrupt during arg validation has a token to print.
     cli_run_id = uuid.uuid4().hex
@@ -8372,7 +8420,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         # KeyboardInterrupt during argparse (rare but possible if a custom
         # validator does I/O) should still exit 130 per the Ship Gate contract.
-        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # prefix + stderr + color treatment (no test pins the literal string;
+        # operators grep abnormal-exit lines on stderr).
+        _print_error(f"Interrupted (run_id={cli_run_id[:12]}).")
         return EXIT_INTERRUPTED
 
     # CLI-A-001 (v1.4 Wave A1): backfill the four shared logging flags.
@@ -8546,7 +8597,10 @@ def main(argv: list[str] | None = None) -> int:
         result: int = args.func(args)
         return result
     except KeyboardInterrupt:
-        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # prefix + stderr + color treatment (no test pins the literal string;
+        # operators grep abnormal-exit lines on stderr).
+        _print_error(f"Interrupted (run_id={cli_run_id[:12]}).")
         return EXIT_INTERRUPTED
     except SystemExit:
         # Let argparse / library SystemExit propagate so tests that catch
@@ -8561,8 +8615,13 @@ def main(argv: list[str] | None = None) -> int:
         # downstream library exception may quote a credential-bearing URL /
         # header. BACKPROPAGATE_DEBUG still prints the full (un-redacted)
         # traceback for the operator who opted in.
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # ``[ERROR]`` prefix + stderr + color treatment. The stable ``{code}:``
+        # surfacing (added earlier) is preserved as the message body, and the
+        # message stays redacted (the per-handler redaction is bypassed on this
+        # pre-subcommand path — see CLI-A-003).
         code = getattr(e, "code", None) or "RUNTIME"
-        print(f"{code}: {_redact_secrets(str(e))}", file=sys.stderr)
+        _print_error(f"{code}: {_redact_secrets(str(e))}")
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
 

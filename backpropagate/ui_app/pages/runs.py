@@ -351,7 +351,7 @@ def runs_page() -> rx.Component:
             BpLeftNav(active="runs"),
             rx.scroll_area(
                 rx.flex(
-                    rx.text(
+                    rx.heading(
                         "Run history",
                         size="6",
                         style={"color": "var(--bp-text)", "font_weight": "500"},

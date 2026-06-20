@@ -1523,3 +1523,183 @@ class TestOllamaShelfVerb:
             rc = cmd_ollama_shelf(args)
 
         assert rc == EXIT_UNAVAILABLE
+
+
+# =============================================================================
+# CLI-A-001 (v1.6): train --batch-size validator + replay --override batch_size
+# coercion contract. Two siblings of the same defect: a non-numeric batch size
+# slipping past the CLI surface to detonate as a bare int() ValueError deep in
+# Trainer, masked by `except Exception` -> redacted EXIT_RUNTIME_ERROR (exit 2)
+# instead of a flag-named EXIT_USER_ERROR (exit 1).
+# =============================================================================
+
+
+class TestTrainBatchSizeValidator:
+    """``train --batch-size`` now has an ``_auto_or_positive_int`` validator."""
+
+    def test_batch_size_auto_default_stays_string(self, cli_parser):
+        args = cli_parser.parse_args(["train", "-d", "data.jsonl"])
+        assert args.batch_size == "auto"
+
+    def test_batch_size_auto_literal_accepted(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--batch-size", "auto"]
+        )
+        assert args.batch_size == "auto"
+
+    def test_batch_size_auto_case_insensitive(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--batch-size", "AUTO"]
+        )
+        assert args.batch_size == "auto"
+
+    def test_batch_size_numeric_parses_to_int(self, cli_parser):
+        args = cli_parser.parse_args(
+            ["train", "-d", "data.jsonl", "--batch-size", "8"]
+        )
+        assert args.batch_size == 8
+        assert isinstance(args.batch_size, int)
+
+    def test_batch_size_non_numeric_rejected_at_parse(self, cli_parser, capsys):
+        """``--batch-size foo`` exits 2 at argparse with a flag-named message.
+
+        Pre-fix this slipped through (no ``type=``) and the tautology at
+        cmd_train forwarded the raw string to Trainer, which did a bare
+        ``int(batch_size)`` -> ValueError -> redacted EXIT_RUNTIME_ERROR.
+        """
+        with pytest.raises(SystemExit) as exc:
+            cli_parser.parse_args(["train", "-d", "data.jsonl", "--batch-size", "foo"])
+        # argparse exits with code 2 on a type-validation failure.
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "batch-size" in err.lower()
+
+    def test_batch_size_zero_rejected_at_parse(self, cli_parser):
+        with pytest.raises(SystemExit) as exc:
+            cli_parser.parse_args(["train", "-d", "data.jsonl", "--batch-size", "0"])
+        assert exc.value.code == 2
+
+    def test_auto_or_positive_int_helper_directly(self):
+        """Unit-level contract for the new validator helper."""
+        import argparse
+
+        from backpropagate.cli import _auto_or_positive_int
+
+        assert _auto_or_positive_int("auto") == "auto"
+        assert _auto_or_positive_int("AUTO") == "auto"
+        assert _auto_or_positive_int("4") == 4
+        with pytest.raises(argparse.ArgumentTypeError):
+            _auto_or_positive_int("foo")
+        with pytest.raises(argparse.ArgumentTypeError):
+            _auto_or_positive_int("0")
+
+
+class TestReplayOverrideCoercion:
+    """``replay --override batch_size=...`` honors the _coerce docstring."""
+
+    def _record_single_run(self, tmp_path):
+        from backpropagate.checkpoints import RunHistoryManager
+
+        mgr = RunHistoryManager(str(tmp_path))
+        mgr.record_run_started(
+            run_id="ovr-run",
+            model_name="m",
+            dataset_info="data.jsonl",
+            hyperparameters={
+                "max_steps": 10,
+                "lora_r": 8,
+                "learning_rate": 1e-4,
+            },
+            session_kind="single_run",
+        )
+        mgr.record_run_completed(run_id="ovr-run", final_loss=0.1)
+        return mgr
+
+    def _replay_args(self, tmp_path, override_tokens):
+        return Namespace(
+            run_id="ovr-run",
+            output=str(tmp_path),
+            override=override_tokens,
+            data=None,
+            json=False,
+            cli_run_id=None,
+            verbose=False,
+        )
+
+    def test_bad_batch_size_override_is_user_error(self, tmp_path, capsys):
+        """``--override batch_size=foo`` -> EXIT_USER_ERROR (1), NOT exit 2.
+
+        Pre-fix ``_coerce`` returned the raw string "foo" (falling through its
+        own docstring promise), which became batch_size and hit a bare int()
+        ValueError deep in Trainer -> redacted EXIT_RUNTIME_ERROR.
+        """
+        from backpropagate.cli import EXIT_USER_ERROR, _parse_replay_override, cmd_replay
+
+        self._record_single_run(tmp_path)
+        args = self._replay_args(tmp_path, [_parse_replay_override("batch_size=foo")])
+
+        rc = cmd_replay(args)
+
+        assert rc == EXIT_USER_ERROR
+        combined = (capsys.readouterr().out + capsys.readouterr().err).lower()
+        # The error must name the offending override key (not a redacted
+        # generic runtime failure).
+        assert "batch_size" in combined or "batch-size" in combined
+
+    def test_bad_lr_override_is_user_error(self, tmp_path, capsys):
+        """A non-numeric value on another numeric key (lr) also user-errors."""
+        from backpropagate.cli import EXIT_USER_ERROR, _parse_replay_override, cmd_replay
+
+        self._record_single_run(tmp_path)
+        args = self._replay_args(tmp_path, [_parse_replay_override("lr=fast")])
+
+        rc = cmd_replay(args)
+        assert rc == EXIT_USER_ERROR
+
+    def test_batch_size_auto_override_accepted(self, tmp_path):
+        """``--override batch_size=auto`` is the documented escape hatch."""
+        from backpropagate.cli import EXIT_OK, _parse_replay_override, cmd_replay
+
+        self._record_single_run(tmp_path)
+        args = self._replay_args(
+            tmp_path, [_parse_replay_override("batch_size=auto")]
+        )
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(final_loss=0.05, run_id="r2")
+        with patch("backpropagate.trainer.Trainer", return_value=fake_trainer) as cls:
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        # "auto" reached the Trainer kwargs as the literal string, not coerced.
+        assert cls.call_args.kwargs.get("batch_size") == "auto"
+
+    def test_numeric_batch_size_override_coerces_to_int(self, tmp_path):
+        """``--override batch_size=4`` still coerces to int 4."""
+        from backpropagate.cli import EXIT_OK, _parse_replay_override, cmd_replay
+
+        self._record_single_run(tmp_path)
+        args = self._replay_args(tmp_path, [_parse_replay_override("batch_size=4")])
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(final_loss=0.05, run_id="r3")
+        with patch("backpropagate.trainer.Trainer", return_value=fake_trainer) as cls:
+            rc = cmd_replay(args)
+
+        assert rc == EXIT_OK
+        assert cls.call_args.kwargs.get("batch_size") == 4
+
+    def test_string_valued_override_unaffected(self, tmp_path):
+        """A genuinely string-valued key (optim) keeps best-effort behavior."""
+        from backpropagate.cli import EXIT_OK, _parse_replay_override, cmd_replay
+
+        self._record_single_run(tmp_path)
+        args = self._replay_args(tmp_path, [_parse_replay_override("optim=adamw_8bit")])
+
+        fake_trainer = MagicMock()
+        fake_trainer.train.return_value = MagicMock(final_loss=0.05, run_id="r4")
+        with patch("backpropagate.trainer.Trainer", return_value=fake_trainer):
+            rc = cmd_replay(args)
+
+        # No InvalidSettingError for a string key — replay proceeds.
+        assert rc == EXIT_OK

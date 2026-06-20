@@ -2697,6 +2697,33 @@ class TestResumeLivenessGuard:
         trainer = MultiRunTrainer(model="m", config=config)
         assert trainer._maybe_resume(_Path(str(tmp_path))) == "legacyrun"
 
+    def test_is_entry_live_tolerates_tz_aware_heartbeat(self, tmp_path):
+        """TRAINER-A-101 sibling: a tz-AWARE ``heartbeat_at`` must not crash
+        ``_is_entry_live`` (and thus ``_maybe_resume``).
+
+        ``_is_entry_live`` parses ``heartbeat_at`` with ``fromisoformat`` (which
+        parses an offset-aware ``...+00:00`` string) then subtracts it from a
+        tz-NAIVE ``datetime.now()`` — naive − aware raises ``TypeError``. Pre-fix
+        the subtraction lived OUTSIDE the parse guard, so the TypeError escaped
+        and crashed the auto-resume path. After the fix the mixed-tz heartbeat is
+        treated like an unparseable one: the heartbeat signal returns "not live"
+        (and the foreign-host/dead-PID entry is then resumable as a crashed run).
+        """
+        import socket
+
+        self._started_entry(
+            tmp_path,
+            "tzheartbeat",
+            host="long-gone-box-" + socket.gethostname(),
+            pid=999999,  # dead/foreign → PID signal cannot mark it live
+            heartbeat_at="2026-06-20T12:00:00+00:00",  # tz-AWARE → naive-minus-aware
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        # Must NOT raise; the mixed-tz heartbeat is not "live", so the crashed
+        # foreign-host entry remains resumable.
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "tzheartbeat"
+
     def test_live_holder_skipped_but_stale_sibling_adopted(self, tmp_path):
         """With BOTH a live holder and an older crashed run present, auto-
         resume skips the live one and adopts the crashed one. This is the
@@ -4352,6 +4379,33 @@ def _mk_eval(loss, run_id="r"):
     )
 
 
+class _FakeHFDataset:
+    """A minimal HF-Dataset stand-in: ``len()`` + ``select(indices)`` over a
+    list of ChatML ``{"text": ...}`` rows.
+
+    Used by the eval-gate tests so ``_evaluate_accumulator`` can derive its
+    reserved last-10% in-memory held-out split (TRAINER-A-002) before reaching
+    the mocked ``evaluate_run``. Mirrors the surface the real code touches.
+    """
+
+    def __init__(self, n=20):
+        self._rows = [{"text": f"<|im_start|>user\nq{i}<|im_end|>"} for i in range(n)]
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __getitem__(self, idx):
+        return self._rows[idx]
+
+    def select(self, indices):
+        sub = _FakeHFDataset(0)
+        sub._rows = [self._rows[i] for i in indices]
+        return sub
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class TestMultiRunConfigT22Defaults:
     """The v1.5 T2.2 fields exist with behavior-preserving defaults."""
 
@@ -4552,7 +4606,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is True
@@ -4592,7 +4646,7 @@ class TestEvalGateWiring:
             side_effect=[_mk_eval(1.0), boom],
         ):
             with pytest.raises(RuntimeError, match="eval crashed"):
-                trainer._gated_merge(new, run_idx=2, full_dataset=None)
+                trainer._gated_merge(new, run_idx=2, full_dataset=_FakeHFDataset())
 
         # The exception propagated, but the merger is byte-for-byte the
         # pre-merge snapshot: accumulator unchanged, _run_index NOT advanced,
@@ -4618,7 +4672,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is False
@@ -4643,7 +4697,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is True
@@ -4664,7 +4718,7 @@ class TestEvalGateWiring:
             return _mk_eval(1.0)  # after-eval (improvement)
 
         with patch("backpropagate.multi_run.evaluate_run", side_effect=_fake_eval):
-            trainer._gated_merge(new, run_idx=3, full_dataset=None)
+            trainer._gated_merge(new, run_idx=3, full_dataset=_FakeHFDataset())
 
         # Only the AFTER eval ran (before came from cache) -> exactly 1 call.
         assert calls["n"] == 1

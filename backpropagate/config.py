@@ -177,7 +177,10 @@ WINDOWS_DEFAULTS = {
     "dataloader_num_workers": 0,
     "tokenizers_parallelism": False,
     "xformers_disabled": True,  # SM 12.0+ (Blackwell/Ada)
-    "cuda_launch_blocking": True,
+    # Mirror WindowsConfig.cuda_launch_blocking (default False): blocking
+    # launches slow training and are debug-only. Keep this dict in lockstep
+    # with the dataclass default (CONFIG-A-003).
+    "cuda_launch_blocking": False,
     "pre_tokenize": True,  # Avoid multiprocessing crashes
 }
 

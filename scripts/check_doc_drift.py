@@ -8,8 +8,9 @@ chain caught two examples from Stage C's own ship in Wave 5. This script is
 the forcing function that fires on every PR so Wave 6+ commits get caught
 BEFORE merge instead of after.
 
-Eight checks (5-class extension landed v1.4 Wave 6a — was 4 in v1.3)
--------------------------------------------------------------------
+Ten checks (5-class extension landed v1.4 Wave 6a — was 4 in v1.3; Class 4
+gained a 4b README variant in v1.4 Wave A1, bringing the wired total to ten)
+----------------------------------------------------------------------------
 1. New ``BACKPROPAGATE_*`` env vars read by ``backpropagate/**/*.py`` must
    appear in both ``site/src/content/docs/handbook/env-vars.md`` AND the
    ``_enumerate_env_vars`` catalog in ``backpropagate/cli.py``.
@@ -43,7 +44,7 @@ Five-class extension (added v1.4 Wave 6a)
    handbook reference to ``BACKPROPAGATE_*``, ``--flag``, or another
    error code inside the error-codes.md Fix column must point at a thing
    that still exists (env var read, registered flag, catalog entry).
-8b. CLASS 4b (README error-code refs, added v1.4 Wave A1) — every
+9. CLASS 4b (README error-code refs, added v1.4 Wave A1) — every
    backtick-wrapped ``PREFIX_...`` token in README.md drawn from a live
    ERROR_CODES prefix family must be an actual key in
    ``backpropagate/exceptions.py:ERROR_CODES``. Catches the case where the
@@ -51,7 +52,7 @@ Five-class extension (added v1.4 Wave 6a)
    (TESTSCI-A-001: the --share/--auth row named INPUT_AUTH_REQUIRED instead
    of the runtime's RUNTIME_UI_AUTH_NOT_ENFORCED). Class 4 scanned only the
    handbook, leaving README drift invisible to the gate built to catch it.
-9. CLASS 5 (CI workflow step NAMES / comments vs flag semantics) —
+10. CLASS 5 (CI workflow step NAMES / comments vs flag semantics) —
    every ``MEDIUM/MEDIUM`` / ``HIGH`` / ``LOW/LOW`` etc. severity-claim
    in a workflow step name or comment must match the actual flag
    semantics on the next command line (catches the Bandit

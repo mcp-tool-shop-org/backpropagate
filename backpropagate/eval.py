@@ -258,10 +258,16 @@ def _resolve_heldout_texts(
     run: dict[str, Any],
     heldout: str | None,
     seed: int,
+    heldout_texts: list[str] | None = None,
 ) -> list[str]:
     """Resolve held-out text per the documented precedence.
 
-    1. ``heldout`` path wins — loaded + flattened to ChatML text.
+    0. ``heldout_texts`` (in-memory list of already-flattened text strings)
+       wins outright — this is the seam the SLAO eval gate uses to pass the
+       run's reserved last-10% holdout it derived in-process (no on-disk file).
+       Empty / blank entries are filtered; an all-empty list raises
+       ``INPUT_EVAL_HELDOUT_UNRESOLVED``.
+    1. ``heldout`` path next — loaded + flattened to ChatML text.
     2. Else best-effort re-split of the run's ``dataset_info`` (when it names a
        readable on-disk file) with the fixed ``seed``, emitting a loud WARN that
        overlap with the training split is possible.
@@ -269,6 +275,21 @@ def _resolve_heldout_texts(
     """
     from backpropagate.datasets import DatasetLoader
     from backpropagate.exceptions import UserInputError
+
+    # (0) explicit in-memory held-out texts win (the eval-gate hook).
+    if heldout_texts is not None:
+        cleaned = [str(t).strip() for t in heldout_texts if str(t).strip()]
+        if not cleaned:
+            raise UserInputError(
+                "In-memory held-out set resolved to zero usable text samples.",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                hint=(
+                    "The caller passed an explicit held-out text list, but every "
+                    "entry was empty after stripping. Pass at least one non-empty "
+                    "held-out text."
+                ),
+            )
+        return cleaned
 
     # (1) explicit held-out path wins.
     if heldout is not None:
@@ -323,12 +344,14 @@ def _compute_held_out_loss(
     *,
     max_length: int,
 ) -> float | None:
-    """Mean per-token cross-entropy over ``texts`` (eval mode, no_grad).
+    """Unweighted mean of per-sequence cross-entropy over ``texts`` (eval mode, no_grad).
 
     Returns ``None`` when ``texts`` is empty (caller treats perplexity as
     ``None`` too). Each text is the labels==input_ids language-modelling loss
-    that the HF model returns from ``outputs.loss``; we average the per-example
-    losses. torch is imported lazily here so module import stays torch-free.
+    that the HF model returns from ``outputs.loss`` (itself a per-token mean over
+    that sequence); we average those per-sequence losses with EQUAL weight per
+    text — i.e. this is NOT token-weighted, a long sequence counts the same as a
+    short one. torch is imported lazily here so module import stays torch-free.
     """
     import torch  # lazy — keeps module import cheap + torch-free
 
@@ -347,19 +370,32 @@ def _compute_held_out_loss(
                 max_length=max_length,
             )
             input_ids = enc["input_ids"]
-            # Move to the model's device when the model exposes one (real
-            # models do; MagicMocks in tests do not — guard so tests stay CPU).
+            attention_mask = enc.get("attention_mask")
+            # Move BOTH tensors to the model's device atomically when the model
+            # exposes one (real models do; MagicMocks in tests do not — guard so
+            # tests stay CPU). TRAINER-DATA-002: compute both moved tensors into
+            # locals FIRST and only commit them together, so a failure mid-move
+            # leaves input_ids + attention_mask on the SAME (original) device
+            # rather than a half-moved, device-mismatched pair.
             device = getattr(model, "device", None)
             if device is not None:
                 try:
-                    input_ids = input_ids.to(device)
-                    if "attention_mask" in enc:
-                        enc["attention_mask"] = enc["attention_mask"].to(device)
+                    moved_input_ids = input_ids.to(device)
+                    moved_attention_mask = (
+                        attention_mask.to(device)
+                        if attention_mask is not None
+                        else None
+                    )
                 except Exception:  # nosec B110 — device move is best-effort
+                    # Asymmetric failure: keep BOTH on their original device so
+                    # the forward pass never sees a split-device pair.
                     pass
+                else:
+                    input_ids = moved_input_ids
+                    attention_mask = moved_attention_mask
             outputs = model(
                 input_ids=input_ids,
-                attention_mask=enc.get("attention_mask"),
+                attention_mask=attention_mask,
                 labels=input_ids,
             )
             loss = outputs.loss
@@ -505,6 +541,7 @@ def evaluate_run(
     *,
     output_dir: str,
     heldout: str | None = None,
+    heldout_texts: list[str] | None = None,
     prompts: str | None = None,
     n: int = 5,
     seed: int = 0,
@@ -528,6 +565,10 @@ def evaluate_run(
         output_dir: Directory holding ``run_history.json``.
         heldout: Path to a held-out jsonl; if ``None``, re-split the run's
             dataset with a loud WARN that overlap is possible.
+        heldout_texts: An already-flattened in-memory list of held-out text
+            strings. When provided it takes precedence over ``heldout`` and the
+            dataset re-split — the SLAO eval gate uses this to pass the run's
+            reserved last-10% holdout it derived in-process (no on-disk file).
         prompts: Path to prompts (one per line OR jsonl ``{"prompt": ...}``); if
             ``None`` use the built-in :data:`DEFAULT_PROMPTS` set.
         n: Number of generations (and prompt truncation length).
@@ -566,7 +607,7 @@ def evaluate_run(
 
     # Resolve inputs BEFORE the heavy model load so a bad --heldout / --prompts
     # fails fast (and cheap) with a UserInputError rather than after a download.
-    held_out_texts = _resolve_heldout_texts(run, heldout, seed)
+    held_out_texts = _resolve_heldout_texts(run, heldout, seed, heldout_texts)
     prompt_set = _load_prompts(prompts, n)
 
     # Load model + tokenizer + adapter (lazy heavy imports inside).

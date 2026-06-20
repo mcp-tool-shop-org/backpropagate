@@ -474,7 +474,7 @@ class MultiRunConfig:
     # reuses eval.evaluate_run + eval.eval_gate, the shipped T1.1 seam).
     eval_gate: bool = False               # When False the gate is inert (always accept)
     eval_max_regression: float = 0.0      # Tolerated held-out-loss increase
-    eval_heldout_path: str | None = None  # Held-out set; None → reuse the run's last-10% holdout
+    eval_heldout_path: str | None = None  # Held-out set; None → derive the run's last-10% holdout in-process from full_dataset (TRAINER-A-002)
 
 
 # Backwards compatibility alias
@@ -962,9 +962,14 @@ class MultiRunTrainer:
         if hb:
             try:
                 parsed = datetime.fromisoformat(str(hb))
+                # TRAINER-A-101 sibling: keep the subtraction INSIDE the guard.
+                # ``datetime.now()`` is tz-naive; a tz-AWARE ``parsed`` makes
+                # the subtraction raise ``TypeError`` (can't mix aware + naive).
+                # Pre-fix that escaped the guard and crashed _is_entry_live().
+                # Treat a mixed-tz heartbeat like an unparseable one: not live.
+                age = (datetime.now() - parsed).total_seconds()
             except (ValueError, TypeError):
                 return False
-            age = (datetime.now() - parsed).total_seconds()
             if 0 <= age <= _LIVENESS_HEARTBEAT_FRESH_SECONDS:
                 return True
 
@@ -2987,9 +2992,11 @@ class MultiRunTrainer:
           returned with ``branched=False``.
 
         The eval gate snapshots the pre-merge accumulator (deepcopy), performs
-        the candidate merge in-memory, evaluates before vs after against the
-        reserved last-10% held-out split (or ``eval_heldout_path``), and decides
-        via :func:`eval_gate`. Steady-state it costs ONE eval/run: the previous
+        the candidate merge in-memory, evaluates before vs after against
+        ``eval_heldout_path`` (when set) or the run's reserved last-10% held-out
+        split derived in-process from ``full_dataset`` (TRAINER-A-002 — the
+        default when ``eval_heldout_path`` is None), and decides via
+        :func:`eval_gate`. Steady-state it costs ONE eval/run: the previous
         run's after-eval is cached and reused as this run's before-eval.
         """
         assert self._slao_merger is not None
@@ -3175,21 +3182,149 @@ class MultiRunTrainer:
         self._eval_cache = after_eval
         return candidate, False, False
 
+    def _derive_last_decile_heldout(self, full_dataset: Any) -> list[str]:
+        """TRAINER-A-002: materialize the run's reserved last-10% held-out texts.
+
+        The advertised eval-gate default (``eval_heldout_path=None``) reuses the
+        run's reserved last-10% holdout. ``full_dataset`` is the HF ``Dataset``
+        produced by :meth:`_load_full_dataset` (ChatML rows keyed by ``"text"``);
+        the last decile mirrors the validation holdout convention used elsewhere
+        in this class (``[train_pool_size, total_samples)`` with a 10% holdout).
+
+        Degenerate guard: a dataset too small for a 10% slice still yields AT
+        LEAST ONE example (the final row), so the gate is never silently
+        starved of a held-out set. Returns the flattened, non-empty text rows.
+
+        Raises:
+            BackpropagateError(code="INPUT_EVAL_HELDOUT_UNRESOLVED"): when
+                ``full_dataset`` is None/empty or no usable text rows survive.
+        """
+        if full_dataset is None:
+            raise BackpropagateError(
+                "eval_gate: eval_heldout_path is None and no in-memory dataset "
+                "was available to derive the reserved last-10% held-out split.",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                suggestion=(
+                    "Pass eval_heldout_path pointing at a held-out file, or run "
+                    "with a dataset large enough to reserve a 10% holdout."
+                ),
+            )
+
+        total = len(full_dataset)
+        if total <= 0:
+            raise BackpropagateError(
+                "eval_gate: the in-memory dataset is empty; cannot derive a "
+                "reserved last-10% held-out split.",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                suggestion=(
+                    "Provide a non-empty dataset, or pass eval_heldout_path."
+                ),
+            )
+
+        # Last decile, at least one row (degenerate-small guard).
+        holdout_n = max(1, total // 10)
+        start = total - holdout_n
+        indices = list(range(start, total))
+
+        # Prefer HF ``.select`` (zero-copy view); fall back to indexing for any
+        # sequence-like dataset that lacks it.
+        if hasattr(full_dataset, "select"):
+            holdout_rows = full_dataset.select(indices)
+        else:
+            holdout_rows = [full_dataset[i] for i in indices]
+
+        texts: list[str] = []
+        for row in holdout_rows:
+            if isinstance(row, dict):
+                text = str(row.get("text", "")).strip()
+            else:
+                text = str(row).strip()
+            if text:
+                texts.append(text)
+
+        if not texts:
+            raise BackpropagateError(
+                "eval_gate: the reserved last-10% held-out slice flattened to "
+                "zero usable text rows.",
+                code="INPUT_EVAL_HELDOUT_UNRESOLVED",
+                suggestion=(
+                    "Confirm the dataset rows carry non-empty ChatML 'text', or "
+                    "pass eval_heldout_path pointing at a usable held-out file."
+                ),
+            )
+        return texts
+
+    def _write_eval_adapter_config(self, adapter_dir: Path) -> None:
+        """TRAINER-A-001: write a valid ``adapter_config.json`` next to the
+        eval adapter so :func:`evaluate_run`'s ``PeftModel.from_pretrained``
+        can load it.
+
+        The accumulator written by :meth:`_evaluate_accumulator` is only the
+        adapter WEIGHTS (``adapter_model.bin``); PEFT additionally requires an
+        ``adapter_config.json`` describing the LoRA hyperparameters. We source
+        it from the live PeftModel's ACTIVE config (the single source of truth —
+        it reflects exactly the ``r`` / ``lora_alpha`` / ``target_modules`` /
+        ``task_type`` / ``base_model_name_or_path`` the accumulator was trained
+        under) and persist it via ``LoraConfig.save_pretrained``. When the live
+        config is unreachable (e.g. a mocked trainer in tests) we fall back to
+        constructing a minimal :class:`peft.LoraConfig` from the trainer's
+        recorded hyperparameters so a valid, well-formed config is still written.
+        """
+        from peft import LoraConfig
+
+        active_config = None
+        model = getattr(self._trainer, "_model", None) if self._trainer else None
+        peft_config = getattr(model, "peft_config", None)
+        if isinstance(peft_config, dict) and peft_config:
+            # PeftModel.peft_config maps adapter_name -> config; prefer the
+            # active adapter, else the first entry.
+            active_name = getattr(model, "active_adapter", None)
+            if isinstance(active_name, str) and active_name in peft_config:
+                active_config = peft_config[active_name]
+            else:
+                active_config = next(iter(peft_config.values()))
+
+        if active_config is not None and hasattr(active_config, "save_pretrained"):
+            active_config.save_pretrained(str(adapter_dir))
+            return
+
+        # Fallback: build a minimal LoraConfig from the trainer's recorded
+        # hyperparameters. r / lora_alpha live on the inner Trainer; the base
+        # model name comes from self.model_name. target_modules is left to PEFT
+        # defaults (None) — the written weights still carry the real module set,
+        # and from_pretrained reads the weight keys, not target_modules, to
+        # rebuild the adapter geometry.
+        lora_r = getattr(self._trainer, "lora_r", None) or 16
+        lora_alpha = getattr(self._trainer, "lora_alpha", None) or 32
+        cfg = LoraConfig(
+            r=int(lora_r),
+            lora_alpha=int(lora_alpha),
+            task_type="CAUSAL_LM",
+            base_model_name_or_path=self.model_name,
+        )
+        cfg.save_pretrained(str(adapter_dir))
+
     def _evaluate_accumulator(
         self,
         accumulator_state: dict[str, Any] | None,
         run_idx: int,
-        full_dataset: Any,  # noqa: ARG002 — reserved (holdout re-derivation hook)
+        full_dataset: Any,
         *,
         phase: str,
     ) -> EvalResult:
         """v1.5 T2.2: evaluate a SLAO accumulator snapshot for the eval gate.
 
-        Writes ``accumulator_state`` to a temp adapter dir, records a TRANSIENT
+        Writes ``accumulator_state`` (the adapter WEIGHTS) plus a matching
+        ``adapter_config.json`` to a temp adapter dir, records a TRANSIENT
         run-history entry pointing at it (so :func:`evaluate_run` — the shipped
-        T1.1 seam — can resolve + load it), and returns the
-        :class:`EvalResult`. The held-out set is ``eval_heldout_path`` when set,
-        else :func:`evaluate_run` re-derives the run's reserved last-10% split.
+        T1.1 seam — can resolve + load it via ``PeftModel.from_pretrained``),
+        and returns the :class:`EvalResult`.
+
+        Held-out resolution: ``eval_heldout_path`` wins when set; otherwise
+        (TRAINER-A-002) the run's reserved last-10% split is derived in-process
+        from ``full_dataset`` and handed to :func:`evaluate_run` as in-memory
+        ``heldout_texts`` — no on-disk held-out file required for the advertised
+        default.
 
         The temp dir + transient history entry are cleaned up before returning.
         In tests, ``backpropagate.multi_run.evaluate_run`` is mocked so neither
@@ -3208,14 +3343,24 @@ class MultiRunTrainer:
         adapter_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Persist the accumulator so evaluate_run's adapter load has a path.
+            # Persist the accumulator WEIGHTS + a matching adapter_config.json so
+            # evaluate_run's PeftModel.from_pretrained(adapter_dir) actually
+            # loads (TRAINER-A-001: weights alone are NOT loadable by PEFT).
             if accumulator_state is not None:
                 torch.save(accumulator_state, adapter_dir / "adapter_model.bin")
+                self._write_eval_adapter_config(adapter_dir)
+
+            # Resolve the held-out set. eval_heldout_path wins; else derive the
+            # reserved last-10% split from full_dataset as in-memory texts
+            # (TRAINER-A-002 — the advertised None default now actually works).
+            hold_path = self.config.eval_heldout_path
+            hold_texts: list[str] | None = None
+            if hold_path is None:
+                hold_texts = self._derive_last_decile_heldout(full_dataset)
 
             # Transient run-history entry under the SAME checkpoint_dir so
             # evaluate_run(output_dir=checkpoint_dir) resolves it.
             history = RunHistoryManager(str(self._checkpoint_manager.checkpoint_dir))
-            hold_path = self.config.eval_heldout_path
             try:
                 history.record_run_started(
                     run_id=eval_run_id,
@@ -3239,6 +3384,7 @@ class MultiRunTrainer:
                 eval_run_id,
                 output_dir=str(self._checkpoint_manager.checkpoint_dir),
                 heldout=hold_path,
+                heldout_texts=hold_texts,
             )
         finally:
             # Best-effort cleanup of the transient artifacts.

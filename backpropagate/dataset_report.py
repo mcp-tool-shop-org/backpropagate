@@ -474,6 +474,7 @@ def token_length_histogram(
     samples: list[dict],
     *,
     bins: tuple[int, ...] = (64, 128, 256, 512, 1024, 2048, 4096, 8192),
+    chatml_texts: list[str | None] | None = None,
 ) -> list[tuple[int, int]]:
     """Bucket samples by approximate ChatML token length.
 
@@ -486,6 +487,12 @@ def token_length_histogram(
         samples: List of samples in any supported format.
         bins: Ascending bucket upper bounds. A trailing "infinity" bucket is
             always appended with an upper bound of ``-1``.
+        chatml_texts: Optional pre-converted ChatML text per sample (``None``
+            for unconvertible rows), parallel to ``samples``. When supplied the
+            conversion is reused instead of re-running ``convert_to_chatml`` —
+            this is how :func:`analyze_dataset` keeps its single-pass contract
+            (TRAINER-DATA-003). Direct callers may omit it; the result is
+            identical either way.
 
     Returns:
         ``[(upper_bound, count), ...]`` with one entry per bin plus a final
@@ -494,8 +501,10 @@ def token_length_histogram(
     sorted_bins = tuple(sorted(bins))
     counts = [0] * (len(sorted_bins) + 1)  # +1 for the overflow ("inf") bucket
 
-    for s in samples:
-        chatml = _to_chatml_text(s)
+    texts = chatml_texts if chatml_texts is not None else (
+        _to_chatml_text(s) for s in samples
+    )
+    for chatml in texts:
         if chatml is None:
             continue
         tokens = _count_tokens_approx(chatml)
@@ -519,6 +528,7 @@ def trace_length_histogram(
     samples: list[dict],
     *,
     bins: tuple[int, ...] = (8, 32, 128, 512, 2048, 8192),
+    chatml_texts: list[str | None] | None = None,
 ) -> list[tuple[int, int]]:
     """Bucket samples by the token length of their ``<think>`` reasoning trace.
 
@@ -534,6 +544,12 @@ def trace_length_histogram(
         samples: List of samples in any supported format.
         bins: Ascending bucket upper bounds (token counts). A trailing
             "infinity" bucket is always appended with an upper bound of ``-1``.
+        chatml_texts: Optional pre-converted ChatML text per sample (``None``
+            for unconvertible rows), parallel to ``samples``. When supplied the
+            conversion is reused instead of re-running ``convert_to_chatml`` —
+            this is how :func:`analyze_dataset` keeps its single-pass contract
+            (TRAINER-DATA-003). Direct callers may omit it; the result is
+            identical either way.
 
     Returns:
         ``[(upper_bound, count), ...]`` with one entry per bin plus a final
@@ -546,8 +562,10 @@ def trace_length_histogram(
     sorted_bins = tuple(sorted(bins))
     counts = [0] * (len(sorted_bins) + 1)  # +1 for the overflow ("inf") bucket
 
-    for s in samples:
-        chatml = _to_chatml_text(s)
+    texts = chatml_texts if chatml_texts is not None else (
+        _to_chatml_text(s) for s in samples
+    )
+    for chatml in texts:
         if chatml is None:
             continue
         spans = _extract_think_spans(chatml)
@@ -774,8 +792,10 @@ def analyze_dataset(
         )
     )
 
-    # --- token histogram (over ALL samples; skips unconvertible internally) -
-    token_histogram = token_length_histogram(samples)
+    # --- token histogram (reuses the single-pass chatml_texts; skips Nones) -
+    token_histogram = token_length_histogram(
+        samples, chatml_texts=chatml_texts
+    )
 
     # --- per-row quality flags over the converted ChatML -------------------
     empty_turn_rows = 0
@@ -798,7 +818,9 @@ def analyze_dataset(
     # think_pct is over TOTAL rows (matching the histogram's row universe and
     # the summary's "(X%)" reading); 0.0 on an empty dataset.
     think_pct = think_rows / total_rows if total_rows else 0.0
-    trace_histogram = trace_length_histogram(samples)
+    trace_histogram = trace_length_histogram(
+        samples, chatml_texts=chatml_texts
+    )
 
     # --- length outliers ---------------------------------------------------
     outlier_rows = _count_length_outliers(token_lengths, sigma=outlier_sigma)

@@ -183,6 +183,32 @@ def redact_secrets(text: str) -> str:
     return text
 
 
+def _redact_value(value: Any) -> Any:
+    """Recursively redact secret-shaped strings in ``value``.
+
+    Descends into nested ``dict`` and ``list`` / ``tuple`` containers,
+    redacting string leaves at any depth. ``tuple`` inputs come back as
+    ``tuple`` (container type preserved); non-string scalars (int, float,
+    bool, None, …) are returned untouched.
+
+    LOGGING-A-002: ``bind_run_context(**kwargs)`` accepts arbitrary keys, so
+    a nested-credential value (e.g. ``creds={"hf_token": ...}``) would bypass
+    redaction if we only scrubbed top-level string values. Walking the
+    structure closes that gap.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, MutableMapping):
+        for key, inner in list(value.items()):
+            value[key] = _redact_value(inner)
+        return value
+    if isinstance(value, tuple):
+        return tuple(_redact_value(inner) for inner in value)
+    if isinstance(value, list):
+        return [_redact_value(inner) for inner in value]
+    return value
+
+
 def _redact_event_processor(
     _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
@@ -194,10 +220,13 @@ def _redact_event_processor(
     ``event`` message and any string-valued bound field (e.g. a ``token``
     bound via ``logger.bind(token=...)`` or run-context) before the bytes
     leave the process.
+
+    LOGGING-A-002: recurses into nested ``dict`` / ``list`` / ``tuple`` values
+    so a secret nested under an arbitrary ``bind_run_context`` key (which
+    accepts any kwargs) is redacted at any depth, not just at the top level.
     """
     for key, value in list(event_dict.items()):
-        if isinstance(value, str):
-            event_dict[key] = redact_secrets(value)
+        event_dict[key] = _redact_value(value)
     return event_dict
 
 

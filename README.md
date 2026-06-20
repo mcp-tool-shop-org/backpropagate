@@ -303,7 +303,7 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
-Python 3.10 reaches upstream end-of-life in October 2026 and is scheduled for drop in v1.5. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
+Python 3.10 is supported through at least v1.6; it reaches upstream end-of-life in October 2026 and is scheduled for removal in the first release after that. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
 
 Backpropagate handles the runtime quirks of training on different platforms, but it can't fix install-time problems. The two most common are:
 

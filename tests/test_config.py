@@ -1013,8 +1013,23 @@ class TestWindowsDefaults:
         assert WINDOWS_DEFAULTS["dataloader_num_workers"] == 0
         assert WINDOWS_DEFAULTS["tokenizers_parallelism"] is False
         assert WINDOWS_DEFAULTS["xformers_disabled"] is True
-        assert WINDOWS_DEFAULTS["cuda_launch_blocking"] is True
+        assert WINDOWS_DEFAULTS["cuda_launch_blocking"] is False
         assert WINDOWS_DEFAULTS["pre_tokenize"] is True
+
+    def test_windows_defaults_match_dataclass_defaults(self):
+        """CONFIG-A-003: WINDOWS_DEFAULTS must not contradict the live
+        WindowsConfig dataclass defaults. Pre-fix the dict pinned
+        cuda_launch_blocking=True while the dataclass default is False,
+        a silent contradiction since no production path reads the dict.
+        """
+        from backpropagate.config import WINDOWS_DEFAULTS, WindowsConfig
+
+        config = WindowsConfig()
+        assert WINDOWS_DEFAULTS["dataloader_num_workers"] == config.dataloader_num_workers
+        assert WINDOWS_DEFAULTS["tokenizers_parallelism"] == config.tokenizers_parallelism
+        assert WINDOWS_DEFAULTS["xformers_disabled"] == config.xformers_disabled
+        assert WINDOWS_DEFAULTS["cuda_launch_blocking"] == config.cuda_launch_blocking
+        assert WINDOWS_DEFAULTS["pre_tokenize"] == config.pre_tokenize
 
 
 # =============================================================================

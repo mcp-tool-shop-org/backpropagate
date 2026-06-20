@@ -449,11 +449,45 @@ def _header_value(headers: list[tuple[bytes, bytes]], name: bytes) -> str:
     return ""
 
 
+def _hardened_header_pairs() -> list[tuple[bytes, bytes]]:
+    """Build the OWASP security-header set as ASGI ``(bytes, bytes)`` pairs.
+
+    UI-A-002: the auth-rejection paths (``_build_401`` / ``_build_421`` /
+    ``_build_403``) emit responses by calling ``send()`` directly and
+    ``return``-ing — they never delegate to the inner app, so the
+    ``security_headers_middleware`` wrapped-send (which sits INSIDE this
+    auth middleware in the ASGI chain) never runs on those responses. The
+    ``security_headers.py`` docstring asserts "even auth-rejected responses
+    carry the hardened header set", so we stamp the same set directly onto
+    the rejection builders here.
+
+    Reuses ``ui_security.security_headers_dict`` — the single source of truth
+    for the CSP + X-Content-Type-Options + X-Frame-Options + X-XSS-Protection
+    + Referrer-Policy + Permissions-Policy set — so the auth-error pages and
+    the normal-response middleware never drift apart. Best-effort: if the
+    builder import/raise (extremely unlikely — pure stdlib), the rejection
+    response still ships without the extra headers rather than 500ing.
+    """
+    try:
+        from backpropagate.ui_security import security_headers_dict
+
+        raw = security_headers_dict()
+        return [
+            (name.encode("ascii"), value.encode("ascii"))
+            for name, value in raw.items()
+        ]
+    except Exception:  # noqa: BLE001 — header build must never break a rejection
+        return []
+
+
 def _build_401_response(realm: str = _COOKIE_REALM, hint: str | None = None) -> tuple[bytes, list[tuple[bytes, bytes]]]:
     """Build the 401 body + headers (HTTP-Basic challenge).
 
     Returns ``(body, headers)``. The body is the operator-facing message from
-    DESIGN_BRIEF §Operator UX → Error messages.
+    DESIGN_BRIEF §Operator UX → Error messages. UI-A-002: the hardened OWASP
+    security-header set is stamped here so the 401 auth-error page carries
+    CSP / X-Frame-Options / X-Content-Type-Options even though it bypasses
+    the security-headers middleware wrapped-send.
     """
     default_hint = (
         "Authentication required. If you launched without --auth, paste the "
@@ -467,30 +501,43 @@ def _build_401_response(realm: str = _COOKIE_REALM, hint: str | None = None) -> 
         (b"www-authenticate", f'Basic realm="{realm}"'.encode("ascii")),
         (b"cache-control", b"no-store"),
     ]
+    headers.extend(_hardened_header_pairs())
     return body, headers
 
 
 def _build_421_response(host: str) -> tuple[bytes, list[tuple[bytes, bytes]]]:
-    """Build the 421 Misdirected Request body for Host-header mismatch."""
+    """Build the 421 Misdirected Request body for Host-header mismatch.
+
+    UI-A-002: hardened OWASP security headers are stamped here too — the 421
+    rejection bypasses the security-headers middleware wrapped-send.
+    """
     body = (
         f"421 Misdirected Request: Host header '{host}' is not in the "
         "allowlist for this backpropagate UI instance (DNS-rebinding defense)."
     ).encode()
-    return body, [
+    headers = [
         (b"content-type", b"text/plain; charset=utf-8"),
         (b"content-length", str(len(body)).encode("ascii")),
     ]
+    headers.extend(_hardened_header_pairs())
+    return body, headers
 
 
 def _build_403_response(reason: str) -> tuple[bytes, list[tuple[bytes, bytes]]]:
-    """Build the 403 body for Origin-header mismatch (CSWSH defense)."""
+    """Build the 403 body for Origin-header mismatch (CSWSH defense).
+
+    UI-A-002: hardened OWASP security headers are stamped here too — the 403
+    rejection bypasses the security-headers middleware wrapped-send.
+    """
     body = (
         f"403 Forbidden: {reason} (CSWSH defense, CWE-1385)."
     ).encode()
-    return body, [
+    headers = [
         (b"content-type", b"text/plain; charset=utf-8"),
         (b"content-length", str(len(body)).encode("ascii")),
     ]
+    headers.extend(_hardened_header_pairs())
+    return body, headers
 
 
 # Reflex's reserved/passthrough paths that should NOT require auth even with

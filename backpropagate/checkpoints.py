@@ -1975,12 +1975,19 @@ class RunHistoryManager:
                 continue
             try:
                 parsed = _dt.fromisoformat(str(ts))
+                # TRAINER-A-101: the subtraction must live INSIDE the guard.
+                # ``now`` is tz-naive; a tz-AWARE ``parsed`` makes
+                # ``now - parsed`` raise ``TypeError`` (can't subtract offset-
+                # aware from offset-naive). Pre-fix this TypeError escaped the
+                # guard and crashed in_progress_runs() (the F-002 auto-resume
+                # path). Treat the mixed-tz case like a parse failure: keep the
+                # entry so the operator can triage rather than crashing.
+                age_seconds = (now - parsed).total_seconds()
             except (ValueError, TypeError):
-                # Unparseable timestamp — keep so the operator can triage
-                # rather than silently dropping a real session.
+                # Unparseable OR mixed-tz timestamp — keep so the operator can
+                # triage rather than silently dropping a real session.
                 live.append(entry)
                 continue
-            age_seconds = (now - parsed).total_seconds()
             if age_seconds <= stale_threshold_seconds:
                 live.append(entry)
             else:

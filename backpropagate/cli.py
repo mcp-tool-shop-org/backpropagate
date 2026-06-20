@@ -221,6 +221,36 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _auto_or_positive_int(value: str) -> "int | str":
+    """argparse type for the ``train --batch-size`` flag.
+
+    Accepts the literal ``"auto"`` (the default — defer batch-size selection
+    to the Trainer's auto-detection) OR a positive integer. Any other value
+    (e.g. ``--batch-size foo`` or ``--batch-size 0``) is rejected at the
+    argparse boundary with a flag-named message and the conventional argparse
+    exit code (2), instead of slipping through to a bare ``int(batch_size)``
+    ``ValueError`` deep in ``trainer.py`` that the cmd_train ``except
+    Exception`` handler would mask as a redacted EXIT_RUNTIME_ERROR.
+
+    Returns:
+        ``"auto"`` (str) or the parsed positive int.
+
+    Raises:
+        argparse.ArgumentTypeError: if value is neither ``"auto"`` nor a
+            positive int.
+    """
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    try:
+        return _positive_int(value)
+    except argparse.ArgumentTypeError:
+        # Re-raise with a message that names the literal escape hatch so the
+        # operator knows ``auto`` is the other accepted form.
+        raise argparse.ArgumentTypeError(
+            f"--batch-size expects 'auto' or a positive integer, got {value!r}"
+        )
+
+
 def _non_negative_int(value: str) -> int:
     """argparse type for integers that must be >= 0 (allows 0)."""
     try:
@@ -730,7 +760,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             model=args.model,
             lora_r=args.lora_r,
             learning_rate=args.lr,
-            batch_size=args.batch_size if args.batch_size != "auto" else "auto",
+            batch_size=args.batch_size,
             output_dir=args.output,
             use_unsloth=not args.no_unsloth,
             **wave6b_kwargs,
@@ -4514,6 +4544,32 @@ _REPLAY_ALLOWED_OVERRIDE_KEYS: frozenset[str] = frozenset({
 })
 
 
+# CLI-A-001 sibling (v1.6): the subset of the override whitelist that MUST
+# coerce to a number. ``_coerce`` honors its own docstring contract for these
+# keys — a non-numeric value (e.g. ``--override batch_size=foo``) raises
+# ``InvalidSettingError`` (CONFIG_INVALID_SETTING) at the CLI surface instead
+# of falling through as a raw string that detonates as a bare ``int()``
+# ``ValueError`` deep in the Trainer (caught by ``except Exception`` ->
+# redacted EXIT_RUNTIME_ERROR). ``batch_size`` is numeric-with-an-escape-hatch:
+# it additionally accepts the literal ``"auto"`` (mirrors the train --batch-size
+# ``_auto_or_positive_int`` validator). The remaining whitelist keys
+# (use_dora / packing / init_lora_weights / lora_preset / optim / mode) are
+# genuinely string/bool-valued and keep the best-effort coercion.
+_REPLAY_NUMERIC_OVERRIDE_KEYS: frozenset[str] = frozenset({
+    "seed",
+    "learning_rate",
+    "lr",
+    "batch_size",
+    "gradient_accumulation",
+    "max_steps",
+    "steps",
+    "samples",
+    "lora_r",
+    "lora_alpha",
+    "lora_dropout",
+})
+
+
 def cmd_replay(args: argparse.Namespace) -> int:
     """Execute ``backprop replay <run_id>`` (BRIDGE Wave 6b).
 
@@ -4651,6 +4707,11 @@ def cmd_replay(args: argparse.Namespace) -> int:
     # parse; non-numeric raise InvalidSettingError so the operator gets a
     # clear error instead of a silent ValueError deep in Trainer.
     def _coerce(key: str, raw: str) -> Any:
+        # CLI-A-001 sibling (v1.6): batch_size is numeric-with-escape-hatch —
+        # the literal "auto" is valid (defers to the Trainer's auto-detection),
+        # mirroring the train --batch-size _auto_or_positive_int validator.
+        if key == "batch_size" and isinstance(raw, str) and raw.strip().lower() == "auto":
+            return "auto"
         # Best-effort: int → float → bool ('true'/'false') → str fallback.
         try:
             return int(raw)
@@ -4660,12 +4721,44 @@ def cmd_replay(args: argparse.Namespace) -> int:
             return float(raw)
         except ValueError:
             pass
+        # CLI-A-001 sibling (v1.6): honor the docstring contract. For a key the
+        # whitelist marks as numeric, a value that parsed as neither int nor
+        # float is an operator error — raise InvalidSettingError
+        # (CONFIG_INVALID_SETTING) here so it surfaces as a clear,
+        # flag-named EXIT_USER_ERROR rather than falling through as a raw
+        # string that becomes a bare int()/float() ValueError deep in Trainer
+        # (masked by `except Exception` -> redacted EXIT_RUNTIME_ERROR).
+        if key in _REPLAY_NUMERIC_OVERRIDE_KEYS:
+            raise InvalidSettingError(
+                setting_name=f"--override {key}",
+                value=raw,
+                expected=(
+                    "a number"
+                    + (" or 'auto'" if key == "batch_size" else "")
+                ),
+                suggestion=(
+                    f"--override {key}={raw!r} is not numeric. Pass a numeric "
+                    f"value (e.g. `--override {key}=4`)"
+                    + (
+                        " or the literal `--override batch_size=auto`"
+                        if key == "batch_size"
+                        else ""
+                    )
+                    + "."
+                ),
+            )
         if raw.lower() in ("true", "false"):
             return raw.lower() == "true"
         return raw
 
-    for key, value in overrides.items():
-        hp[key] = _coerce(key, value)
+    try:
+        for key, value in overrides.items():
+            hp[key] = _coerce(key, value)
+    except InvalidSettingError as exc:
+        _print_error(str(exc.message))
+        if exc.suggestion:
+            _print_info(f"Suggestion: {exc.suggestion}")
+        return EXIT_USER_ERROR
 
     try:
         # BRIDGE-A-002 (v1.4): the cmd_replay --override whitelist accepts the
@@ -6449,8 +6542,9 @@ Tips:
     )
     train_parser.add_argument(
         "--batch-size",
+        type=_auto_or_positive_int,
         default="auto",
-        help="Batch size (default: auto)",
+        help="Batch size: 'auto' (default) or a positive integer",
     )
     train_parser.add_argument(
         "--lr",

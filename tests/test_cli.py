@@ -38,7 +38,10 @@ class TestParser:
         assert args.model == "custom/model"
         assert args.steps == 200
         assert args.samples == 5000
-        assert args.batch_size == "4"
+        # CLI-A-001 (v1.6): --batch-size now has a type validator
+        # (_auto_or_positive_int), so a numeric value parses to int (was the
+        # raw string "4" pre-fix). The literal "auto" stays a string.
+        assert args.batch_size == 4
         assert args.lr == 1e-4
         assert args.lora_r == 32
         assert args.output == "./custom-output"

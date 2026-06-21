@@ -553,15 +553,18 @@ def _build_reproduce_block(
             f"  --lora-r {_fmt_num(_lora_r, '16')} \\",
             f"  --lora-alpha {_fmt_num(_lora_alpha, '<lora-alpha>')} \\",
         ]
-        # v1.5 (HIGH #4 — honest reproduce command): pre-fix this block
+        # Honest reproduce command (HIGH #4): pre-fix this block
         # emitted ONLY the SFT-shaped flags, so re-running an ORPO / FP8 /
         # rsLoRA / reasoning-trace / MLX run trained a DIFFERENT model
         # (silently dropping --method orpo etc. fell back to plain SFT on
-        # the default CUDA rail). Emit each v1.5 training knob present in
+        # the default CUDA rail). Emit each training knob present in
         # the captured hyperparameters so the printed command actually
         # reproduces the run. Keys match what the trainer stamps into its
         # hyperparameters dict (trainer.py record_run_started): method,
         # orpo_beta, fp8 (effective), use_rslora, reasoning_trace, backend.
+        # NB: backend='mlx' is an EXPERIMENTAL, UNVERIFIED PREVIEW rail (not
+        # part of the supported feature set); the flag is still emitted so the
+        # reproduce command is faithful to whatever rail actually ran.
         method = extra_hyperparameters.get("method")
         if isinstance(method, str) and method.lower() == "orpo":
             cmd_lines.append("  --method orpo \\")

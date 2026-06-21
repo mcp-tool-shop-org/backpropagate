@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - Unreleased
+
+### Added
+
+- **Card-aware full fine-tuning ceiling.** `mode="full"` no longer caps at a hard 4B. The ceiling is derived from the 4-addend training-memory arithmetic against detected VRAM — **16 GB → 4B, 24 GB → 5B, 32 GB → 6B** pure-GPU (`_full_ft_ceiling_for_vram`). Override explicitly with `--full-ft-ceiling-billions` / `Trainer(full_ft_ceiling_billions=...)`.
+- **FSDP2 CPU-offload full fine-tuning — single-card 7B-class.** `--full-ft-offload` / `Trainer(full_ft_offload=True)` configures FSDP2 `fully_shard` + `CPUOffloadPolicy` + activation checkpointing + bf16 to spill params + optimizer state into host RAM, lifting the full-FT ceiling to **~8B / 7B-class on a 32 GB card** (+~64 GB host RAM). It's a documented escape hatch: slower (PCIe/CPU-bandwidth-bound) and needs an NCCL backend (Linux/WSL2). On a host without NCCL (e.g. Windows-native) it fails fast with the new `DEP_FSDP_UNAVAILABLE` rather than silently running without offload and OOMing. The trainer initializes a single-process group automatically (no `accelerate launch` / `torchrun` needed).
+- **24–34B QLoRA model presets.** New presets for the 32 GB envelope: `qwen2.5-14b` (~8.5 GB, the daily-driver sweet spot), `mistral-small-24b` (~18 GB), `qwen2.5-32b` (~26 GB, just fits at `max_len 2048`), and `llama-3.1-8b`. rank=alpha per size, paged 8-bit AdamW.
+- **32 / 48 GB batch + VRAM tiers.** `Trainer._detect_batch_size` and the `estimate-vram` tier table gained 32 GB (batch 6) and 48 GB (batch 8) tiers. `estimate_vram(..., offload=True)` models the FSDP2 offload path and reports a new `host_ram_gb`.
+- **Contrastive full-FT error.** `RUNTIME_FULL_FT_MODEL_TOO_LARGE` now names the right recovery for the situation — `--full-ft-offload` when the model fits the offload ceiling, LoRA/QLoRA when it's past even that.
+
+### Changed
+
+- **Repositioned for the 32 GB envelope.** README, handbook (full-fine-tuning, cli-reference, error-codes, estimate-vram), and presets now lead with single-card 7B-class full fine-tuning + 24–34B QLoRA → Ollama, with an honest "scales down to 16 GB" note. The old "7B+ full FT → use HuggingFace/A100" anti-pitch is replaced by the `--full-ft-offload` path.
+- **MLX rail reframed to an explicit unverified preview.** All "New in v1.5" version hype removed from the MLX surfaces (code docstrings, feature flags, `--backend` help, README, model cards). The rail is kept but labeled experimental / not dogfood-verified on real Apple Silicon / not part of the supported feature set. No functional change.
+
 ## [1.6.0] - 2026-06-20
 
 ### Added

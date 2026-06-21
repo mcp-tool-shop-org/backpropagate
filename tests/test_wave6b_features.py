@@ -91,10 +91,11 @@ class TestTrainerModeFullGate:
         assert "Qwen/Qwen2.5-7B-Instruct" in str(err)
         # The 4B ceiling is the documented contract — drift surfaces here.
         assert err.ceiling_billions == 4.0
-        # The recovery hint names the lora alternative + at least one
-        # mode='full'-compatible preset.
+        # The recovery hint names the LoRA / QLoRA alternative. v1.7 made the
+        # message card-aware — it no longer hard-codes a sub-4B preset list
+        # (the ceiling figure itself now reflects the detected card).
         assert "mode='lora'" in str(err)
-        assert "phi-4-mini-3.8b" in str(err) or "smollm3-3b" in str(err)
+        assert "lora" in str(err).lower() or "QLoRA" in str(err)
 
     def test_mode_full_rejects_mistral_7b(self):
         """Trainer(mode='full', model='mistralai/Mistral-7B-Instruct-v0.3') raises."""

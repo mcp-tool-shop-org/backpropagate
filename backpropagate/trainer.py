@@ -51,6 +51,7 @@ from .exceptions import (
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
+    FsdpUnavailableError,
     FullFinetuneModelTooLargeError,
     GPUNotAvailableError,
     InvalidSettingError,
@@ -660,9 +661,218 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 # The gate only bounds the parameter COUNT — it does not promise 16GB fit for
 # every admitted model. Operators >4B use mode='lora'. A pre-4B value of 3.0
 # wrongly rejected every "3B" preset at load time (count > 3.0); raised to 4.0
-# in the v1.4.x mode='full' fix. Future v1.5 may expose a
-# `--full-ft-ceiling-billions` flag to lift it further on 24GB+ cards.
+# in the v1.4.x mode='full' fix. v1.7 "32 GB envelope" shipped the
+# `--full-ft-ceiling-billions` flag + VRAM-derived ceilings
+# (:func:`_full_ft_ceiling_for_vram` / :func:`_full_ft_offload_ceiling_for_vram`);
+# this constant remains the DOCUMENTED FALLBACK used when VRAM can't be
+# detected (no CUDA / query failure) and no explicit override was passed.
 _FULL_FT_PARAM_CEILING_BILLIONS: float = 4.0
+
+
+# =============================================================================
+# v1.7 "32 GB envelope" — VRAM-DERIVED FULL-FT PARAMETER CEILINGS
+# =============================================================================
+# The pre-v1.7 ceiling was a single 4B constant tuned to the 16GB consumer
+# card. On the studio's RTX 5090 (32 GB, sm_120 Blackwell) full-FT of a 6B-class
+# model fits pure-GPU, and a 7B-class full fine-tune fits via FSDP2 CPU-offload.
+# Hard-coding 4B left those headroom regimes inaccessible. These two helpers
+# derive the ceiling from the DETECTED card size instead.
+#
+# Derivation (4-addend training-memory arithmetic, MEASURED on this rig):
+#   For a TRUE (non-LoRA) full fine-tune in bf16 with paged-8-bit AdamW +
+#   gradient checkpointing, the GPU-resident cost is roughly:
+#     weights (2 B/param) + gradients (2 B/param) + optimizer (paged-8bit
+#     AdamW ~2 B/param) ≈ 6 B/param resident, + O(√n) activations + ~15%
+#     framework/fragmentation overhead. So a card with `V` GB fits about
+#     V / 6 billion params pure-GPU once a working/overhead margin is reserved.
+#   Anchored to the measured fit points rather than the raw quotient so the
+#   table matches what actually trains on each card:
+#     <=16 GB -> 4.0B   (the v1.4 consumer contract; a genuine ~3B + the
+#                        3.8-4B class clear it; 7B needs LoRA)
+#       24 GB -> 5.0B
+#       32 GB -> 6.0B    (RTX 5090 pure-GPU full-FT top, measured)
+#     >=48 GB -> 10.0B   (A6000 / L40-class headroom)
+#   None (VRAM unknown) -> the 4.0B fallback constant.
+_FULL_FT_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    # (min_vram_gb_inclusive, ceiling_billions) — highest threshold first.
+    (48.0, 10.0),
+    (32.0, 6.0),
+    (24.0, 5.0),
+    (0.0, 4.0),
+)
+
+# When FSDP2 CPU-offload is enabled the params + optimizer state spill into
+# host RAM (64 GB on this rig), so the GPU only has to hold the active shard +
+# activations + overhead. That lifts the param ceiling materially per card.
+# Anchored to the MEASURED FSDP2 `fully_shard` + `CPUOffloadPolicy` +
+# activation-checkpointing + bf16 recipe (the documented escape hatch — slow,
+# PCIe/CPU-bandwidth-bound, NOT the default):
+#     <=16 GB -> 4.0B   (offload buys little headroom on a tiny card; the
+#                        host-RAM spill still needs a working GPU shard)
+#       24 GB -> 7.0B
+#       32 GB -> 8.0B    (RTX 5090: a 7B-class full-FT fits comfortably here,
+#                        measured; the table leaves margin to 8B)
+#     >=48 GB -> 16.0B
+#   None (VRAM unknown) -> the 4.0B fallback constant.
+_FULL_FT_OFFLOAD_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    (48.0, 16.0),
+    (32.0, 8.0),
+    (24.0, 7.0),
+    (0.0, 4.0),
+)
+
+# Nominal-vs-reported VRAM tolerance. A "32 GB" card reports total_memory of
+# ~31.4-31.8 GiB (driver / ECC / context reserve); a "24 GB" card ~23.6, etc.
+# Comparing the reported value against an exact nominal threshold (32.0) drops a
+# real 5090 into the 24 GB tier. Add this tolerance so a card within ~1.5 GB of
+# a nominal tier counts as that tier. Tier gaps are 8 GB, so 1.5 GB can never
+# cross two tiers. (Caught by the v1.7 pure-GPU full-FT GPU smoke: a 5090
+# reported 31.8 GB and resolved ceiling 5.0B instead of 6.0B.)
+_VRAM_TIER_TOLERANCE_GB: float = 1.5
+
+
+def _full_ft_ceiling_for_vram(vram_gb: float | None) -> float:
+    """v1.7: pure-GPU full-FT parameter ceiling (billions) for a card size.
+
+    Derived from the 4-addend training-memory arithmetic (weights + gradients
+    + paged-8-bit-AdamW optimizer ≈ 6 B/param GPU-resident, + O(√n) activations
+    + overhead). Anchored to MEASURED fit points on this rig:
+
+        None -> 4.0   (VRAM unknown — the documented fallback constant)
+        <=16 -> 4.0
+          24 -> 5.0
+          32 -> 6.0   (RTX 5090 pure-GPU full-FT top)
+        >=48 -> 10.0
+
+    Returns the ceiling in billions. ``None`` returns the fallback constant so
+    callers that can't probe the card degrade to the conservative 4B contract.
+    """
+    if vram_gb is None:
+        return _FULL_FT_PARAM_CEILING_BILLIONS
+    for threshold, ceiling in _FULL_FT_VRAM_CEILING_TIERS:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+            return ceiling
+    # The (0.0, 4.0) sentinel row makes this unreachable for any non-negative
+    # vram_gb; kept as a defensive floor for a pathological negative reading.
+    return _FULL_FT_PARAM_CEILING_BILLIONS
+
+
+def _full_ft_offload_ceiling_for_vram(vram_gb: float | None) -> float:
+    """v1.7: full-FT parameter ceiling (billions) WHEN FSDP2 CPU-offload is on.
+
+    With FSDP2 ``fully_shard`` + ``CPUOffloadPolicy`` the params + optimizer
+    spill to host RAM, leaving the GPU to hold the active shard + activations +
+    overhead. Anchored to the MEASURED FSDP2-CPUOffload recipe on this rig
+    (RTX 5090 32 GB + 64 GB host RAM):
+
+        None -> 4.0   (VRAM unknown — the documented fallback constant)
+        <=16 -> 4.0
+          24 -> 7.0
+          32 -> 8.0   (RTX 5090: 7B-class full-FT fits comfortably; offload top)
+        >=48 -> 16.0
+
+    Returns the ceiling in billions. ``None`` returns the fallback constant.
+    """
+    if vram_gb is None:
+        return _FULL_FT_PARAM_CEILING_BILLIONS
+    for threshold, ceiling in _FULL_FT_OFFLOAD_VRAM_CEILING_TIERS:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+            return ceiling
+    return _FULL_FT_PARAM_CEILING_BILLIONS
+
+
+def _detect_total_vram_gb() -> float | None:
+    """v1.7: total VRAM of the primary CUDA device in GB, or None.
+
+    Mirrors the try/except pattern in :meth:`Trainer._detect_batch_size`:
+    probes ``torch.cuda.get_device_properties(0).total_memory`` and returns the
+    value in GB, or ``None`` on any failure (torch not installed, no CUDA
+    device, query error). Pure / side-effect-free so the full-FT ceiling
+    resolution stays stable across construction + load + OOM-retry.
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    except ImportError:
+        return None
+    except Exception as exc:  # noqa: BLE001 — best-effort VRAM probe
+        logger.debug(f"_detect_total_vram_gb: VRAM probe failed: {exc!r}")
+        return None
+    return None
+
+
+def _ensure_fsdp_runtime() -> None:
+    """v1.7: verify + lazily initialize the FSDP2 CPU-offload runtime, or raise.
+
+    The full-FT offload path (``mode='full'`` + ``full_ft_offload=True``) spills
+    params + optimizer state to host RAM via FSDP2 ``fully_shard`` +
+    ``CPUOffloadPolicy``. That needs a usable **NCCL** distributed backend, which
+    is Linux / WSL2 only — NOT Windows-native (gloo cannot carry CUDA
+    collectives). The MEASURED studio recipe runs this under WSL2. Rather than
+    silently run without offload and OOM, fail fast with
+    ``DEP_FSDP_UNAVAILABLE`` naming the WSL2 / Linux requirement.
+
+    On a capable host, lazily init a single-process group so FSDP engages inside
+    a bare ``python`` run (no ``accelerate launch`` / ``torchrun``).
+    """
+    try:
+        import torch
+        import torch.distributed as dist
+    except Exception as exc:  # noqa: BLE001 — torch import failure is terminal here
+        raise FsdpUnavailableError(
+            reason=f"torch.distributed is not importable ({exc})."
+        ) from exc
+
+    if not torch.cuda.is_available():
+        raise FsdpUnavailableError(
+            reason="no CUDA device is visible — FSDP2 CPU-offload full-FT needs a GPU."
+        )
+    # FSDP CUDA collectives require NCCL. Windows-native has gloo only; the
+    # offload path is a Linux / WSL2 capability (matches the measured recipe).
+    if not (dist.is_available() and dist.is_nccl_available()):
+        raise FsdpUnavailableError(
+            reason=(
+                "NCCL is unavailable on this host, so FSDP2 CPU-offload cannot run "
+                "(the Windows-native case — gloo cannot carry CUDA collectives). "
+                "Run --full-ft-offload under WSL2 / Linux (the measured recipe), "
+                "or use mode='lora' / QLoRA which fits 7B-34B natively on a 32GB card."
+            )
+        )
+    # Single-process group so FSDP engages without accelerate launch / torchrun.
+    if not dist.is_initialized():
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        os.environ.setdefault("RANK", "0")
+        os.environ.setdefault("WORLD_SIZE", "1")
+        os.environ.setdefault("LOCAL_RANK", "0")
+        try:
+            dist.init_process_group(backend="nccl", rank=0, world_size=1)
+        except Exception as exc:  # noqa: BLE001 — surface as a structured error
+            raise FsdpUnavailableError(
+                reason=f"could not initialize the FSDP process group ({exc})."
+            ) from exc
+    # Host-RAM advisory: the spill target. Warn (don't fail) if well under 64GB.
+    try:
+        import psutil
+
+        host_gb = psutil.virtual_memory().total / (1024 ** 3)
+        if host_gb < 56:  # ~64GB minus OS headroom
+            logger.warning(
+                "FSDP2 CPU-offload spills params+optimizer to host RAM, but this "
+                "host has only %.0fGB — the measured 7B recipe wants ~64GB; the "
+                "run may exhaust host RAM.",
+                host_gb,
+            )
+    except Exception:  # noqa: BLE001 — psutil is optional; advisory only
+        pass  # nosec B110 — host-RAM probe is advisory; its absence must not block training
+    logger.warning(
+        "FSDP2 CPU-offload active: params+optimizer spilled to host RAM. This is "
+        "the documented escape hatch — expect a slower, PCIe/CPU-bandwidth-bound "
+        "run than a model that fits the pure-GPU full-FT ceiling."
+    )
+
 
 # Default learning rate for mode='full'. Full fine-tuning literature
 # (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
@@ -792,8 +1002,10 @@ def _enforce_full_ft_param_ceiling(
     *,
     ceiling_billions: float = _FULL_FT_PARAM_CEILING_BILLIONS,
     loaded_model: Any = None,
+    full_ft_offload: bool = False,
+    offload_ceiling_billions: float | None = None,
 ) -> None:
-    """v1.4 BACKEND-F-008: refuse mode='full' for models > 3B.
+    """v1.4 BACKEND-F-008 / v1.7: refuse mode='full' for oversized models.
 
     Probe order:
       1. ``loaded_model.num_parameters()`` when a loaded model is supplied
@@ -803,8 +1015,20 @@ def _enforce_full_ft_param_ceiling(
       3. If neither produces a count, accept construction silently (the
          load-time recheck is the safety net).
 
-    Raises :class:`FullFinetuneModelTooLargeError` when the count exceeds
-    the ceiling. Pure function side-effect-free otherwise.
+    The EFFECTIVE pure-GPU ceiling is ``ceiling_billions`` (the caller resolves
+    it from an explicit override / detected-VRAM tier / fallback constant before
+    calling). ``offload_ceiling_billions`` (v1.7) is the higher ceiling
+    reachable via FSDP2 CPU-offload; it makes the error CONTRASTIVE:
+
+      * model exceeds the pure-GPU ceiling but fits the offload ceiling AND
+        offload is OFF -> the error names ``--full-ft-offload`` /
+        ``full_ft_offload=True`` as the recovery (spills params+optimizer to
+        host RAM; slower; needs ~64 GB RAM).
+      * model exceeds even the offload ceiling (or offload is already ON) ->
+        the error names LoRA / QLoRA as the recovery.
+
+    Raises :class:`FullFinetuneModelTooLargeError` when the count exceeds the
+    effective ceiling. Pure function side-effect-free otherwise.
     """
     estimated_billions: float | None = None
 
@@ -846,16 +1070,30 @@ def _enforce_full_ft_param_ceiling(
         return
 
     if estimated_billions > ceiling_billions:
+        # v1.7 contrastive recovery hint. When the model clears the offload
+        # ceiling but not the pure-GPU ceiling AND offload is OFF, point the
+        # operator at --full-ft-offload before they reach for LoRA. When it
+        # exceeds even the offload ceiling (or offload is already on), the
+        # exception's own default message names LoRA / QLoRA.
+        offload_recoverable = (
+            not full_ft_offload
+            and offload_ceiling_billions is not None
+            and estimated_billions <= offload_ceiling_billions
+        )
         raise FullFinetuneModelTooLargeError(
             model_name=model_id,
             param_count_billions=estimated_billions,
             ceiling_billions=ceiling_billions,
+            offload_ceiling_billions=offload_ceiling_billions,
+            offload_recoverable=offload_recoverable,
+            offload_active=full_ft_offload,
         )
 
     logger.info(
         f"_enforce_full_ft_param_ceiling: mode='full' approved — "
         f"model={model_id!r} estimated_params={estimated_billions:.2f}B "
-        f"<= ceiling={ceiling_billions:.0f}B."
+        f"<= ceiling={ceiling_billions:.1f}B"
+        f"{' (FSDP2 CPU-offload)' if full_ft_offload else ''}."
     )
 
 
@@ -901,6 +1139,11 @@ class VRAMEstimate:
     gradient_accumulation: int
     max_seq_length: int
     lora_r: int
+    # v1.7: host-RAM estimate for the FSDP2 CPU-offload full-FT path. 0.0 when
+    # offload is off (everything is GPU-resident). When > 0, params + gradients
+    # + optimizer state are spilled to host RAM and ``total_gb`` reflects only
+    # the GPU-resident working set + activations.
+    host_ram_gb: float = 0.0
     notes: list[str] = field(default_factory=list)
 
     def fits_on_card(self, vram_gb: float) -> bool:
@@ -909,6 +1152,11 @@ class VRAMEstimate:
 
     def summary(self) -> str:
         """Operator-readable one-line summary of the estimate."""
+        host = (
+            f" + host_ram={self.host_ram_gb:.1f}GB (FSDP2 offload)"
+            if self.host_ram_gb > 0
+            else ""
+        )
         return (
             f"VRAM estimate ({self.mode}, {self.param_count_billions:.1f}B "
             f"params, batch={self.batch_size}, seq={self.max_seq_length}): "
@@ -918,7 +1166,7 @@ class VRAMEstimate:
             f"optim={self.optimizer_state_gb:.1f} + "
             f"activations={self.activations_gb:.1f} + "
             f"kv={self.kv_cache_gb:.1f} + "
-            f"overhead={self.overhead_gb:.1f})"
+            f"overhead={self.overhead_gb:.1f}){host}"
         )
 
 
@@ -938,6 +1186,7 @@ def estimate_vram(
     num_heads: int = 32,  # 7B-class default
     overhead_fraction: float = 0.15,
     param_count_billions: float | None = None,
+    offload: bool = False,
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1066,6 +1315,27 @@ def estimate_vram(
         * 0.25  # Training amortization factor — full cache not retained
     ) * bytes_to_gb
 
+    # 6. v1.7 FSDP2 CPU-offload (mode='full', full_ft_offload=True). Params +
+    #    gradients + optimizer state spill into host RAM; the GPU keeps only the
+    #    active working set + activations + overhead. Offload full-FT does NOT
+    #    quantize the base — host weights are bf16 (2 bytes/param). host_ram_gb
+    #    captures the host-resident estimate; the GPU lines shrink accordingly.
+    host_ram_gb = 0.0
+    if offload and mode == "full":
+        bf16_weights_gb = (params * 2) * bytes_to_gb
+        host_grads_gb = (params * 2) * bytes_to_gb
+        host_optimizer_gb = (params * 2) * bytes_to_gb  # paged 8-bit moments
+        host_ram_gb = bf16_weights_gb + host_grads_gb + host_optimizer_gb
+        # GPU holds ~one transformer block's params resident at a time under
+        # fully_shard + CPUOffloadPolicy.
+        model_weights_gb = bf16_weights_gb / max(1.0, float(num_layers))
+        optimizer_state_gb = 0.0
+        notes.append(
+            f"FSDP2 CPU-offload: ~{host_ram_gb:.1f}GB of params+gradients+"
+            f"optimizer spilled to host RAM; GPU holds a working shard + "
+            f"activations (PCIe/CPU-bandwidth-bound, slower than a fitting run)"
+        )
+
     subtotal = (
         model_weights_gb
         + lora_adapter_gb
@@ -1090,6 +1360,7 @@ def estimate_vram(
         gradient_accumulation=gradient_accumulation,
         max_seq_length=max_seq_length,
         lora_r=lora_r,
+        host_ram_gb=host_ram_gb,
         notes=notes,
     )
 
@@ -1150,6 +1421,7 @@ def _build_sft_config(
     # parameter that doesn't map cleanly to mode-dispatch), escalate to
     # Wave 6a.5 hotfix rather than fork the helper.
     mode: str = "lora",
+    full_ft_offload: bool = False,
 ) -> Any:
     """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
 
@@ -1291,6 +1563,28 @@ def _build_sft_config(
         # default for HF gradient checkpointing — avoids the silent bug
         # where reentrant=True breaks DDP gradients on some models.
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+
+    # v1.7: FSDP2 CPU-offload for the full-FT escape hatch. Spills params +
+    # optimizer state into host RAM via fully_shard + CPUOffloadPolicy so a
+    # 7B-class full fine-tune fits a 32GB card (+64GB host RAM). fsdp_version=2
+    # selects the FSDP2 API; auto_wrap wraps transformer blocks (transformers
+    # infers the layer class from the model's _no_split_modules). The RUNTIME
+    # requirement (a usable NCCL backend — Linux/WSL2, NOT Windows-native) is
+    # enforced separately by _ensure_fsdp_runtime() in train(); here we set
+    # CONFIG ONLY so this stays construction-safe for unit tests.
+    if mode == "full" and full_ft_offload:
+        # FSDP full-shard prefers activation_checkpointing in fsdp_config over
+        # TrainingArguments.gradient_checkpointing — the latter adds a redundant
+        # AllGather in the backward pass (HF transformers#30404). Move the
+        # checkpointing knob into the FSDP config so we don't double-wrap.
+        kwargs.pop("gradient_checkpointing", None)
+        kwargs.pop("gradient_checkpointing_kwargs", None)
+        kwargs["fsdp"] = "full_shard offload auto_wrap"
+        kwargs["fsdp_config"] = {
+            "fsdp_version": 2,
+            "cpu_ram_efficient_loading": True,
+            "activation_checkpointing": True,
+        }
 
     return SFTConfig(**kwargs)
 
@@ -1957,6 +2251,30 @@ class Trainer:
         # trainer that lifts the ceiling — the 3B gate is the documented
         # consumer-tier contract and not a soft-warning.
         mode: str = "lora",
+        # v1.7 "32 GB envelope": full-FT parameter-ceiling controls. Both are
+        # additive keyword params with defaults so EVERY existing caller stays
+        # byte-identical (the pre-v1.7 4B-constant behavior survives when VRAM
+        # can't be detected and no override is passed).
+        #
+        # ``full_ft_ceiling_billions`` (default None) — an EXPLICIT override of
+        # the mode='full' parameter ceiling, in billions. When None the gate
+        # derives the ceiling from the DETECTED card VRAM
+        # (:func:`_full_ft_ceiling_for_vram`, or
+        # :func:`_full_ft_offload_ceiling_for_vram` when offload is on), falling
+        # back to the 4B constant when VRAM is unknown. When set, the operator's
+        # value WINS over both the derived and fallback ceilings — the escape
+        # hatch for operators who know their card / their memory budget.
+        full_ft_ceiling_billions: float | None = None,
+        # ``full_ft_offload`` (default False) — opt in to the FSDP2 CPU-offload
+        # full-FT path. When True AND mode='full', the trainer configures FSDP2
+        # ``full_shard`` + ``offload`` + activation checkpointing + bf16 so the
+        # params + optimizer state spill into host RAM, enabling a 7B-class TRUE
+        # full fine-tune on a 32 GB card. It is the documented escape hatch, NOT
+        # the default: PCIe/CPU-bandwidth-bound (slow) and needs ~64 GB host RAM.
+        # The toolchain (accelerate/torch.distributed FSDP) must be importable;
+        # if not, the trainer raises DEP_FSDP_UNAVAILABLE. Offload also lifts the
+        # derived parameter ceiling (see _full_ft_offload_ceiling_for_vram).
+        full_ft_offload: bool = False,
         # v1.5 T1.2 (ORPO Wave 2): training objective. ``"sft"`` (the default)
         # is the supervised fine-tuning path — byte-identical pre-v1.5
         # behavior for callers who do not pass this kwarg. ``"orpo"`` selects
@@ -2215,6 +2533,23 @@ class Trainer:
                 ),
             )
         self.mode = mode
+
+        # v1.7 "32 GB envelope": store the full-FT ceiling controls. Stored
+        # unconditionally (cheap) so introspection + the gate + the FSDP2 wiring
+        # all read the same instance state.
+        self.full_ft_ceiling_billions = full_ft_ceiling_billions
+        self.full_ft_offload = full_ft_offload
+        # full_ft_offload only has effect under mode='full'. A LoRA run with the
+        # flag set is almost certainly an operator mistake — warn (do not error;
+        # the flag is simply inert for LoRA, and erroring would be a sharp edge
+        # for the CLI introspection-filter path that forwards it generically).
+        if self.full_ft_offload and self.mode != "full":
+            logger.warning(
+                "full_ft_offload=True has no effect with mode=%r — FSDP2 "
+                "CPU-offload is a full-fine-tuning escape hatch. Pass "
+                "mode='full' to use it; ignoring the flag for this run.",
+                self.mode,
+            )
 
         # v1.5 T1.2 (ORPO Wave 2): training-objective resolution. Kwarg-
         # authoritative (per-invocation ``method=`` wins), falling back to
@@ -2508,7 +2843,19 @@ class Trainer:
         # we can't estimate get a deferred check; operators passing a
         # preset name or canonical HF id get the early refusal.
         if self.mode == "full":
-            _enforce_full_ft_param_ceiling(self.model_name)
+            # v1.7: resolve the EFFECTIVE ceiling (explicit override wins ->
+            # else derived from detected VRAM, offload-aware -> else fallback
+            # constant) and pass BOTH the pure-GPU + offload ceilings so the
+            # error can be contrastive about --full-ft-offload.
+            _resolved_ceiling, _offload_ceiling = (
+                self._resolve_full_ft_ceilings()
+            )
+            _enforce_full_ft_param_ceiling(
+                self.model_name,
+                ceiling_billions=_resolved_ceiling,
+                full_ft_offload=self.full_ft_offload,
+                offload_ceiling_billions=_offload_ceiling,
+            )
             # Per the Biderman 2024 / Thinking Machines 2025 quality math
             # (full FT needs ~10x lower LR than LoRA). Apply the divisor
             # ONLY when the operator did not explicitly override the
@@ -3019,17 +3366,29 @@ class Trainer:
             import torch
             if torch.cuda.is_available():
                 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                if vram_gb >= 24:
+                # Nominal-vs-reported tolerance: a "32 GB" 5090 reports ~31.8.
+                vram_tier = vram_gb + _VRAM_TIER_TOLERANCE_GB
+                if vram_tier >= 48:
                     logger.info(
-                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=>=24 -> batch_size=4"
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=>=48 -> batch_size=8"
+                    )
+                    return 8
+                elif vram_tier >= 32:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=32-48 -> batch_size=6 (RTX 5090 class)"
+                    )
+                    return 6
+                elif vram_tier >= 24:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=24-32 -> batch_size=4"
                     )
                     return 4
-                elif vram_gb >= 16:
+                elif vram_tier >= 16:
                     logger.info(
                         f"_detect_batch_size: vram={vram_gb:.1f}GB tier=16-24 -> batch_size=2"
                     )
                     return 2
-                elif vram_gb >= 12:
+                elif vram_tier >= 12:
                     logger.info(
                         f"_detect_batch_size: vram={vram_gb:.1f}GB tier=12-16 -> batch_size=1"
                     )
@@ -3060,6 +3419,27 @@ class Trainer:
                 f"(reason=unexpected_error: {type(e).__name__}: {e})"
             )
         return 2  # Safe default
+
+    def _resolve_full_ft_ceilings(self) -> tuple[float, float]:
+        """v1.7: resolve ``(effective_ceiling, offload_ceiling)`` in billions for
+        the mode='full' gate.
+
+        Resolution order for the effective ceiling: an explicit
+        ``full_ft_ceiling_billions`` override wins; else it is derived from
+        detected VRAM — the FSDP2 CPU-offload ceiling when ``full_ft_offload`` is
+        on, the pure-GPU ceiling otherwise. The offload ceiling is ALWAYS
+        returned so :class:`FullFinetuneModelTooLargeError` can be contrastive
+        about ``--full-ft-offload`` even when offload is off.
+        """
+        vram = _detect_total_vram_gb()
+        offload_ceiling = _full_ft_offload_ceiling_for_vram(vram)
+        if self.full_ft_ceiling_billions is not None:
+            effective = float(self.full_ft_ceiling_billions)
+        elif self.full_ft_offload:
+            effective = offload_ceiling
+        else:
+            effective = _full_ft_ceiling_for_vram(vram)
+        return effective, offload_ceiling
 
     # =========================================================================
     # v1.3 BACKEND-5 / BACKEND-7 — per-card optim + dtype resolution
@@ -3679,8 +4059,18 @@ class Trainer:
         # — if the authoritative reading exceeds the ceiling, refuse before
         # any training happens. The check is no-op for mode='lora'.
         if self.mode == "full":
+            # v1.7: re-resolve the effective ceiling at load time too — the card
+            # VRAM is the same, but resolving here keeps the two call sites
+            # symmetric and lets an explicit override flow to both.
+            _resolved_ceiling, _offload_ceiling = (
+                self._resolve_full_ft_ceilings()
+            )
             _enforce_full_ft_param_ceiling(
-                self.model_name, loaded_model=self._model
+                self.model_name,
+                ceiling_billions=_resolved_ceiling,
+                loaded_model=self._model,
+                full_ft_offload=self.full_ft_offload,
+                offload_ceiling_billions=_offload_ceiling,
             )
 
         # v1.5 T2.1 (FP8): convert the base projection linears to Float8Linear
@@ -4259,6 +4649,9 @@ class Trainer:
             # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
             # resolved training mode (``"lora"`` default | ``"full"``).
             mode=self.mode,
+            # v1.7: thread the FSDP2 CPU-offload opt-in so _build_sft_config
+            # wires fsdp/fsdp_config for the full-FT escape hatch.
+            full_ft_offload=self.full_ft_offload,
         )
         # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
         # SFTConfig rather than threading fp8 into _build_sft_config (which
@@ -4519,6 +4912,15 @@ class Trainer:
             return self._train_with_mlx(
                 dataset, steps=steps, samples=samples, callback=callback
             )
+
+        # v1.7: FSDP2 CPU-offload runtime guard. Fail fast BEFORE loading the
+        # model when the offload path was opted into on a host that cannot run
+        # it (no NCCL — Windows-native), and lazily init the single-process
+        # group on a capable host so FSDP engages in a bare `python` run. No-op
+        # unless mode='full' + full_ft_offload (the construction-time ceiling
+        # gate already lifted the param ceiling for this path).
+        if self.mode == "full" and self.full_ft_offload:
+            _ensure_fsdp_runtime()
 
         # Load model if not loaded
         if not self._is_loaded:

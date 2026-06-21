@@ -73,6 +73,9 @@ backprop estimate-vram --vram-gb 24
 
 # Machine-readable output for CI consumers
 backprop estimate-vram --vram-gb 16 --json | jq .recommended_batch_size
+
+# 32 GB card, 7B full fine-tuning via FSDP2 CPU-offload — see host_ram_gb
+backprop estimate-vram Qwen/Qwen2.5-7B-Instruct --vram-gb 32 --mode full --full-ft-offload --json
 ```
 
 See [CLI reference → `backprop estimate-vram`](/backpropagate/handbook/cli-reference/#backprop-estimate-vram-v13) for the full flag table.
@@ -89,7 +92,18 @@ A few canonical configurations on 16GB consumer cards (RTX 4080 / 5080 / 4070 Ti
 | SmolLM3-3B | `mode="full"`, batch=2, seq=2048 | ~11.2 GB | Yes |
 | Qwen 2.5 7B | `mode="full"` (raises before estimate) | n/a | Refused — `RUNTIME_FULL_FT_MODEL_TOO_LARGE` |
 
-For the third row, the trainer's mode='full' gate fires at `Trainer.__init__` before the estimator gets a chance — see [full fine-tuning](/backpropagate/handbook/full-fine-tuning/).
+For the last row, the trainer's mode='full' gate fires at `Trainer.__init__` before the estimator gets a chance — see [full fine-tuning](/backpropagate/handbook/full-fine-tuning/).
+
+On a **32 GB** card (RTX 5090) the envelope opens up — and the offload path reports `host_ram_gb`:
+
+| Model | Config | GPU total | Host RAM (offload) |
+|-------|--------|-----------|--------------------|
+| Qwen 2.5 14B | QLoRA r=32, batch=2, seq=4096 | ~8.5 GB | — |
+| Qwen 2.5 32B | QLoRA r=32, seq=2048 | ~26 GB (just fits) | — |
+| Qwen 2.5 7B | `mode="full"` (pure-GPU, 7B > 6B ceiling) | refused → use `--full-ft-offload` | — |
+| Qwen 2.5 7B | `mode="full" --full-ft-offload` | ~1 GB working set + activations | ~39 GB |
+
+The recommended auto-batch is **6 at 32 GB** and **8 at 48 GB** (`backprop estimate-vram --vram-gb 32`).
 
 ## Limitations
 

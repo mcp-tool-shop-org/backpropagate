@@ -1814,6 +1814,100 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
             "in a small model."
         ),
     ),
+    # =========================================================================
+    # v1.7 — 24-34B QLoRA tier (the 32 GB "envelope" — RTX 5090 / A6000)
+    # =========================================================================
+    # These open the catalog past the 7B ceiling the README has marketed. They
+    # are QLoRA presets: a 4-bit NF4-quantized BASE + a trainable LoRA adapter,
+    # NOT full fine-tuning (full-FT a 14B+ in 16-bit does not fit 32 GB). VRAM
+    # strings are MEASURED on one RTX 5090 (32 GB) with paged_adamw_8bit, bf16
+    # (Blackwell-native), per_device_bs 2 x accum 4. Per the training KB, LoRA
+    # rank == alpha and the recommendation climbs to 32 at the 14B+ tier (the
+    # adapter has enough base capacity to use the wider rank). The 32B preset
+    # "just fits" only with max_seq_length dropped to 2048 — it is set that way
+    # here, NOT inherited from the 4096 default. Each carries the QLoRA caveat
+    # in license_restriction so the operator sees it at Trainer boot.
+    # ----- v1.7: Llama-3.1-8B (Llama-3.1-Community) -----
+    "llama-3.1-8b": ModelPreset(
+        name="llama-3.1-8b",
+        model_id="meta-llama/Llama-3.1-8B-Instruct",
+        description=(
+            "Llama 3.1 8B Instruct — ~7-8GB (QLoRA). Comfortable daily "
+            "driver on a 16GB+ card; native 128K context."
+        ),
+        license="Llama-3.1-Community",
+        # 8B: rank == alpha at 16 per the KB floor (sub-14B tier). The trainer
+        # derives alpha = recommended_lora_r for these envelope presets.
+        recommended_lora_r=16,
+        recommended_max_seq_length=4096,
+        recommended_packing=True,
+        best_for=(
+            "QLoRA on an 8B with Meta's ecosystem tooling and 128K native "
+            "context. ~7-8GB measured — fits a 16GB card with room to spare. "
+            "Llama 3.1 Community License (the >700M-MAU clause needs a separate "
+            "Meta license)."
+        ),
+    ),
+    # ----- v1.7: Qwen2.5-14B (Apache 2.0) — the 14B-class envelope preset -----
+    "qwen2.5-14b": ModelPreset(
+        name="qwen2.5-14b",
+        model_id="Qwen/Qwen2.5-14B-Instruct",
+        description=(
+            "Qwen2.5 14B Instruct — ~8.5GB (QLoRA). The comfortable "
+            "daily-driver on a 32GB card; the sweet spot of the envelope."
+        ),
+        license="Apache-2.0",
+        # 14B+ tier: rank == alpha at 32 per the KB (wider rank pays off once
+        # the base is large enough to use it). alpha is derived == rank.
+        recommended_lora_r=32,
+        recommended_max_seq_length=4096,
+        recommended_packing=True,
+        best_for=(
+            "The 32GB daily driver — Apache-2.0 14B QLoRA at ~8.5GB measured, "
+            "rank/alpha 32 on all-linear, paged_adamw_8bit, max_seq 4096. "
+            "Best quality-per-VRAM in the envelope tier."
+        ),
+    ),
+    # ----- v1.7: Mistral-Small-24B (Apache 2.0) — the ~24B envelope preset ---
+    "mistral-small-24b": ModelPreset(
+        name="mistral-small-24b",
+        model_id="mistralai/Mistral-Small-24B-Instruct-2501",
+        description=(
+            "Mistral Small 24B Instruct (2501) — ~18GB (QLoRA). Apache-2.0 "
+            "24B that fits the 32GB envelope with headroom for 4096 context."
+        ),
+        license="Apache-2.0",
+        recommended_lora_r=32,
+        # 24B fits 4096 on a 32GB card (still ~6GB of headroom at ~18GB used).
+        recommended_max_seq_length=4096,
+        recommended_packing=True,
+        best_for=(
+            "Apache-2.0 24B QLoRA on a 32GB card — ~18GB measured, rank/alpha "
+            "32, paged_adamw_8bit, max_seq 4096. Strong reasoning at a size "
+            "that still leaves VRAM headroom."
+        ),
+    ),
+    # ----- v1.7: Qwen2.5-32B (Apache 2.0) — the 32B-class ceiling preset -----
+    "qwen2.5-32b": ModelPreset(
+        name="qwen2.5-32b",
+        model_id="Qwen/Qwen2.5-32B-Instruct",
+        description=(
+            "Qwen2.5 32B Instruct — ~26GB (QLoRA, max_len 2048). The top of "
+            "the 32GB envelope: it JUST fits with reduced context."
+        ),
+        license="Apache-2.0",
+        recommended_lora_r=32,
+        # 32B "just fits" 32GB ONLY at max_seq 2048 — do NOT raise this. At
+        # 4096 the activation memory pushes past 32GB and the run OOMs. Set
+        # explicitly here (not inherited) so the preset is self-documenting.
+        recommended_max_seq_length=2048,
+        recommended_packing=True,
+        best_for=(
+            "The largest model the 32GB envelope holds — Apache-2.0 32B QLoRA "
+            "at ~26GB measured, but ONLY with max_seq dropped to 2048 and "
+            "paged_adamw_8bit. It just fits; expect zero VRAM headroom."
+        ),
+    ),
 }
 
 

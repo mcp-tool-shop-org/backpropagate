@@ -71,7 +71,99 @@ What `--reasoning-trace` does:
 - **Trace-length filtering.** Rows whose summed `<think>` token count falls outside `[8, 8192]` tokens are dropped — empty / degenerate traces and runaway ones both hurt distillation. Tune the band with `BACKPROPAGATE_DATA__MIN_TRACE_TOKENS` / `BACKPROPAGATE_DATA__MAX_TRACE_TOKENS` (the tokenizer's own `encode` does the counting, so the cutoffs are exact for your model). Rows with no `<think>` span at all are dropped too.
 - **Raises the default `max_seq_length` to 8192.** Reasoning traces routinely exceed the shipped 2048-token window; the bump only fires when you left `max_seq_length` at the default. An explicit value — kwarg `max_seq_length=...` or `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` — always wins.
 
-The recipe is **SFT only** — it is ignored under `--method orpo`. If your model's chat template injects its own empty `<think>` opener AND your data already opens with `<think>`, you'll get a one-line advisory warning about the doubled tag (strip the leading `<think>` from your data, or use a template that doesn't inject one).
+The recipe is **SFT only** — it is ignored under any preference method (`--method orpo` / `simpo` / `kto`), which logs a one-line advisory if you set both. If your model's chat template injects its own empty `<think>` opener AND your data already opens with `<think>`, you'll get a one-line advisory warning about the doubled tag (strip the leading `<think>` from your data, or use a template that doesn't inject one).
+
+## Preference-tune on paired data with SimPO
+
+**New in v1.6.** SimPO is the tightest-VRAM paired-preference method — reference-free, length-normalized reward, no second model. Your data is paired `{prompt, chosen, rejected}` (see [Preference tuning → data shapes](/backpropagate/handbook/preference-tuning/#paired-preference-data-orpo-simpo)):
+
+```bash
+backprop train \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --data prefs.jsonl \
+  --method simpo \
+  --steps 200 \
+  --output ./output/qwen-simpo
+```
+
+Python:
+
+```python
+from backpropagate import Trainer
+
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", method="simpo")
+trainer.train("prefs.jsonl", steps=200)
+trainer.save("./output/qwen-simpo")
+```
+
+You do **not** need to set a learning rate — SimPO auto-anchors to `1e-6` (high LR is SimPO's documented repetitive-output failure mode; a value ≥ `1e-5` is clamped with a warning). The defaults `--simpo-beta 2.0` and `--simpo-gamma 1.0` are the paper's safe floor; keep the `gamma/beta` ratio ≤ 1.0 (a higher ratio warns about degeneration). SimPO is TRL's `CPOTrainer` with `loss_type="simpo"` + `cpo_alpha=0` forced (pure SimPO, never CPO-SimPO).
+
+## Preference-tune on unpaired binary feedback with KTO
+
+**New in v1.6.** KTO is the unpaired / binary-feedback method — use it when you have thumbs-up/thumbs-down telemetry rather than matched pairs. Each row is `{prompt, completion, label}` with a boolean `label` (no requirement that good and bad rows share a prompt):
+
+```json
+{"prompt": "Write a commit message for a one-line typo fix.", "completion": "fix typo in README", "label": true}
+{"prompt": "Write a commit message for a one-line typo fix.", "completion": "Various changes and improvements.", "label": false}
+{"prompt": "Summarize the meeting in one sentence.", "completion": "We agreed to ship Friday; Jia owns rollback.", "label": true}
+```
+
+```bash
+backprop train \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --data feedback.jsonl \
+  --method kto \
+  --steps 200 \
+  --output ./output/qwen-kto
+```
+
+KTO is **LoRA-only** in v1.6 (`--mode full` is rejected) — it uses the frozen LoRA base as its own reference, so no second model is loaded and the 16 GB envelope is preserved. The LR auto-anchors to `1e-6`. You set `--kto-desirable-weight` / `--kto-undesirable-weight` as a **starting point**; the trainer auto-rebalances the effective weights from your label counts toward the `[1:1, 4:3]` band (logged at preflight), so a class-imbalanced dataset still trains both polarities. See [Preference tuning](/backpropagate/handbook/preference-tuning/) for the full method comparison.
+
+## Score a run against a held-out set with task metrics (and gate on it)
+
+**New in v1.6.** Evaluate a recorded run with deterministic, judge-free task metrics — no LLM judge. First carve a held-out reference set out of your data, then score the run against it:
+
+```bash
+# 1. Split off a reproducible 10% held-out reference set
+backprop data split my_data.jsonl --heldout-ratio 0.1 --seed 0
+#    -> writes my_data.train.jsonl + my_data.heldout.jsonl next to the input
+
+# 2. Score the run on exact-match + token-F1 against the held-out references
+backprop eval <run_id> \
+  --references my_data.heldout.jsonl \
+  --metric normalized_exact_match \
+  --metric token_f1
+```
+
+Each held-out reference line is `{"prompt": "...", "reference": "..."}` (or `"references": ["...", "..."]` for multiple acceptable answers). Available metrics: `normalized_exact_match`, `token_f1`, `contains`, `regex`, `pass_rate`. `--metric` is repeatable; when you pass `--references` with no `--metric`, it defaults to `normalized_exact_match` + `token_f1`. (ROUGE-L / BLEU are intentionally **not** gateable metrics — they reward surface n-gram overlap and are easily gamed.)
+
+To **gate** a continual-merge / SLAO campaign on non-regression, add `--gate-against` and name the metrics that must not regress with `--gate-metric`:
+
+```bash
+backprop eval <candidate_run_id> \
+  --gate-against <baseline_run_id> \
+  --references my_data.heldout.jsonl \
+  --metric normalized_exact_match --metric token_f1 \
+  --gate-metric normalized_exact_match \
+  --max-regression 0.0
+```
+
+The gate is a **conjunction**: it accepts only if held-out loss did not regress beyond `--max-regression` (a non-regression *floor*) **and** every `--gate-metric` did not drop beyond its noise band (the metric's bootstrap CI half-width, or a default 5-point band). A real metric regression rejects even when loss improved; a metric drop smaller than the band is treated as sampling noise. A tripped gate exits `65` (`EX_DATAERR`) and stamps `RUNTIME_EVAL_GATE_REGRESSED` in the structured log. If fewer than ~100 reference items are scored, the gate logs a loud underpowered warning (it still returns a verdict — it does not block on statistical power alone).
+
+## Quick "did my finetune work?" generation
+
+**New in v1.6.** `backprop generate` runs ad-hoc inference against an adapter **directory** on disk (not a recorded run_id) — the fastest sanity check after a run, with no run history or held-out set required:
+
+```bash
+# Base model inferred from the adapter's adapter_config.json
+backprop generate ./output "Explain LoRA in one sentence."
+
+# Explicit base + 3 samples at a higher temperature
+backprop generate ./output "Write a haiku about GPUs." \
+  --base Qwen/Qwen2.5-7B-Instruct -n 3 --temperature 0.9
+```
+
+The base model is read from the adapter's `adapter_config.json` (`base_model_name_or_path`) when present; pass `--base <model>` if it cannot be inferred. `--temperature 0` (or any value ≤ 0) gives greedy / deterministic decoding; `--max-new-tokens` caps generation length (default 128); `--seed` fixes sampling. It reuses the eval harness's model loader + generator, so the load/decode path matches `backprop eval` exactly.
 
 ## Export a trained adapter to Ollama (one command)
 

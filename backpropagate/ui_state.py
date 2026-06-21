@@ -122,19 +122,20 @@ def _validate_ui_path(value: str) -> tuple[str, str]:
 #
 # Run IDs originate from two user-controlled surfaces: the dynamic route
 # param ``rid`` (``/runs/[rid]``) and the ``diff_other_run_id`` text input.
-# Both flow into ``subprocess`` argv for the diff-runs / replay shell-outs.
-# An option-shaped value (e.g. ``--to=/etc/passwd`` or ``-o``) is parsed by
-# the downstream argparse-based CLI as a FLAG, not a positional run id —
-# letting a remote operator (under the documented ``--share + --auth`` flow)
-# smuggle arbitrary flags into the spawned process.
+# Both flow into ``subprocess`` argv for the diff-runs shell-out (the only
+# action that still shells out — Replay / Delete / Export run in-process via
+# RunHistoryManager). An option-shaped value (e.g. ``--to=/etc/passwd`` or
+# ``-o``) is parsed by the downstream argparse-based CLI as a FLAG, not a
+# positional run id — letting a remote operator (under the documented
+# ``--share + --auth`` flow) smuggle arbitrary flags into the spawned process.
 #
 # Real run IDs are UUID-hex / wandb-style slugs: ``[A-Za-z0-9_-]``. We pin a
 # strict allowlist (1-64 chars, no leading ``-``) at the trust boundary so a
 # malformed value is rejected with a clean error before it can reach argv.
 # The leading char is constrained to ``[A-Za-z0-9_]`` (NOT ``-``) so the
 # value can never be parsed as a CLI flag even before the ``--`` separator.
-# (The ``--`` end-of-options separator inserted in each shell-out is the
-# defense-in-depth second layer; this regex is the first.)
+# (The ``--`` end-of-options separator inserted in the diff-runs shell-out is
+# the defense-in-depth second layer; this regex is the first.)
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 
 
@@ -159,6 +160,76 @@ def _validate_run_id(value: str) -> tuple[str, str]:
             "'_' or '-' (no leading '-', no path separators)."
         )
     return candidate, ""
+
+
+# ---------------------------------------------------------------------------
+# HF token-file path validation helper — UI-A-001 fix
+# ---------------------------------------------------------------------------
+#
+# The HF token-file path field (``set_hub_token_file_path``, mirroring the
+# ``--token-file`` CLI flag) is a path to READ an EXISTING user-owned secret
+# file — NOT a path the UI writes into. It must NOT be validated against the
+# UI OUTPUT sandbox (``get_ui_output_dir()`` → ``~/.backpropagate/ui-outputs``):
+# that sandbox is mutually exclusive with the documented / placeholder token
+# location ``~/.config/backpropagate/hf-token`` (``~/.config`` sits on the
+# UI-output forbidden-base denylist). Routing this READ path through the WRITE
+# sandbox made the documented path impossible to enter and the shipped
+# ``--token-file`` UI field unusable.
+#
+# The correct validation mirrors the CLI's ``_read_hub_token_file``
+# (cli.py ~1115): expanduser + resolve, then require the target to be an
+# EXISTING regular file (a credential the operator already created). We add a
+# basic hostile-input guard (reject NUL bytes) and reject directories /
+# missing files with clear, operator-facing messages. The file is NEVER read
+# or written here — only its shape is validated; ``push_to_hub`` reads it at
+# push time via the CLI helper so the mode-0600 warning + empty-file error
+# stay in one place. Standard user locations (``~/.config/...``,
+# ``~/.hf-token``, an absolute path under the operator's home, etc.) are
+# allowed by design — this is the operator's own credential, not a UI write.
+def _validate_token_file_path(value: str) -> tuple[str, str]:
+    """Validate a user-supplied HF token-FILE path for READING a credential.
+
+    Returns a ``(cleaned_value, error_message)`` tuple mirroring
+    ``_validate_ui_path`` / ``_validate_run_id``: on success the error is the
+    empty string and ``cleaned_value`` is the resolved path; on failure
+    ``cleaned_value`` is the empty string and the error carries a short
+    operator-facing message. Empty input is a pass-through (no error, no
+    value) so the field can be cleared.
+
+    Unlike ``_validate_ui_path`` this does NOT constrain the path to the UI
+    output sandbox — the token file is a pre-existing user-owned secret the
+    operator points us at (e.g. ``~/.config/backpropagate/hf-token``), not a
+    UI write target. We require an existing regular file and reject NUL bytes,
+    directories, and missing paths.
+    """
+    if not value or not value.strip():
+        return "", ""
+    candidate = value.strip()
+    # Reject obviously hostile input before touching the filesystem.
+    if "\x00" in candidate:
+        return "", "Invalid token-file path: contains a NUL byte."
+    try:
+        path = Path(candidate).expanduser()
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError):
+            # Fall back to the un-resolved expansion if resolve() blows up
+            # (e.g. a symlink loop); existence checks below still apply.
+            resolved = path
+        if not resolved.exists():
+            return "", (
+                f"Token-file path does not exist: {resolved}. Create the file "
+                "(e.g. `printf 'hf_xxx' > ~/.config/backpropagate/hf-token`) "
+                "and point this field at it."
+            )
+        if not resolved.is_file():
+            return "", (
+                f"Token-file path is not a regular file: {resolved}. "
+                "Point this field at the token FILE, not a directory."
+            )
+        return str(resolved), ""
+    except (OSError, ValueError) as exc:
+        return "", f"Invalid token-file path: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -502,8 +573,11 @@ class TrainState(rx.State):
         Drives the Train page's "heads-up" recovery banner — e.g. GPU temp
         approaching threshold, dataset row skipped, batch auto-shrunk for
         VRAM. Distinct from ``err``: warn is a recovered-or-recoverable
-        condition; err is a hard failure (rendered via the structured
-        error callout instead).
+        condition; err is a hard failure. HUX-01: ``err``-level events are
+        NOT surfaced on the Train page today — UI training is an honest stub
+        (``start_training`` directs the operator to ``backprop train``), so no
+        ``BpErrorCallout`` is wired on this page yet. The structured callout
+        is consumed by the /runs, /models, and /run-detail pages.
         """
         for ev in reversed(self.events):
             if isinstance(ev, dict) and ev.get("level") == "warn":
@@ -1013,10 +1087,21 @@ class ExportState(rx.State):
         """Validate the HF token-file path and stage it for the push.
 
         FRONTEND-F-004: mirrors the ``--token-file`` CLI flag. The file is
-        not read here — only validated for shape (length / no traversal /
-        no nulls). ``push_to_hub`` reads the file at push time via the
-        existing ``_read_hub_token_file`` helper so the file-mode check
-        + POSIX-warning + empty-file error stay in one place.
+        NOT read here — only validated for shape. ``push_to_hub`` reads the
+        file at push time via the existing ``_read_hub_token_file`` helper so
+        the file-mode check + POSIX-warning + empty-file error stay in one
+        place.
+
+        UI-A-001: this is the path to READ an existing user-owned credential
+        file, NOT a UI WRITE target — so it is validated via
+        ``_validate_token_file_path`` (expanduser + resolve + require an
+        existing regular file + reject NUL bytes), NOT against the UI output
+        sandbox (``get_ui_output_dir()``). The prior ``_validate_ui_path``
+        forced the file under ``~/.backpropagate/ui-outputs``, which made the
+        documented placeholder location ``~/.config/backpropagate/hf-token``
+        (a UI-output forbidden base) impossible to enter — the field was
+        unusable. Mirrors the CLI's ``_read_hub_token_file`` intent, which
+        does a plain ``Path(path_str).expanduser()`` with no write-sandbox.
 
         Mutual exclusion with ``hub_token`` is enforced at push time
         (the inline token wins the field-clear when both are set; the
@@ -1026,7 +1111,7 @@ class ExportState(rx.State):
             self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
             self.hub_token_file_path_error = ""  # nosec B105 — error-message sentinel, not a password
             return
-        cleaned, err = _validate_ui_path(value)
+        cleaned, err = _validate_token_file_path(value)
         self.hub_token_file_path = cleaned
         self.hub_token_file_path_error = err
 
@@ -1563,6 +1648,12 @@ class RunsState(rx.State):
     runs: list[dict] = []
     loading: bool = False
     error: str = ""
+    # HUX-02 (Stage C humanization): the operator-actionable remedy from
+    # ``sanitize_error_for_user`` is held SEPARATELY from ``error`` (not folded
+    # into it as a run-on "… Try: {suggestion}") so the /runs error callout can
+    # render it on its own dimmed line via the ``BpErrorCallout`` ``hint=``
+    # slot. Empty when there is no error or the error carries no suggestion.
+    error_suggestion: str = ""
     status_filter: str = ""  # "" / running / completed / failed
     output_dir_override: str = ""
     last_loaded_at: str = ""
@@ -1587,6 +1678,7 @@ class RunsState(rx.State):
 
         self.loading = True
         self.error = ""
+        self.error_suggestion = ""
         try:
             # Resolve the history directory. Use the override if set, otherwise
             # fall back to the UI's own output dir (the default training sink).
@@ -1669,9 +1761,12 @@ class RunsState(rx.State):
                 message, suggestion = sanitize_error_for_user(
                     exc, operation="loading run history"
                 )
-                self.error = (
-                    message + (f" Try: {suggestion}" if suggestion else "")
-                )
+                # HUX-02: keep the (message, suggestion) split — the remedy
+                # rides the separate ``error_suggestion`` var (rendered as a
+                # scannable dimmed ``hint=`` line in the callout) rather than
+                # being concatenated into ``error`` as a run-on sentence.
+                self.error = message
+                self.error_suggestion = suggestion or ""
                 self.runs = []
                 return
 
@@ -1768,6 +1863,7 @@ class RunsState(rx.State):
     def clear_error(self) -> None:
         """Dismiss the error banner."""
         self.error = ""
+        self.error_suggestion = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1860,7 +1956,7 @@ class AuthBadgeState(rx.State):
 
 
 # ---------------------------------------------------------------------------
-# RunDetailState — backs /runs/[run_id] (Wave 6b drill-down)
+# RunDetailState — backs /runs/[rid] (Wave 6b drill-down)
 # ---------------------------------------------------------------------------
 #
 # Wave 6 shipped the read-only run list; Wave 6b adds the drill-down per
@@ -1869,21 +1965,25 @@ class AuthBadgeState(rx.State):
 # list + log tail) using the existing ``RunHistoryManager.get_run`` API
 # (which supports partial-prefix matching for operator convenience).
 #
-# The four action buttons (Diff, Replay, Delete, Export) DO NOT modify
-# state from inside this class — they shell out to the bridge subcommands
-# via the action handlers, then re-load on completion. The bridge owns the
-# CLI surfaces; this UI surface just renders the output.
+# Of the four action buttons, only Diff shells out — to ``backprop
+# diff-runs`` (the bridge owns that subcommand; the handler dispatches and
+# renders the output). Replay, Delete, and Export run IN-PROCESS via
+# ``RunHistoryManager`` (UI-A-004): their prior shell-outs targeted
+# phantom CLI surfaces (no ``delete-run`` subcommand, no ``--run-id`` on
+# ``export-runs``, no ``--dry-run`` on ``replay``) and always failed, so
+# they were rewired to do the work directly and re-load on completion.
 
 
 class RunDetailState(rx.State):
     """Per-run drill-down state.
 
     The active run id is read from the dynamic route parameter inside
-    ``load_run`` (Reflex 0.9's ``self.router.page.params.get("run_id")``
-    pattern). We cannot name the state field ``run_id`` because Reflex
-    refuses to bind a dynamic route arg that shadows an existing state
-    var (DynamicRouteArgShadowsStateVarError); the state field is named
-    ``current_run_id`` and the route arg writes to it on mount.
+    ``load_run`` (Reflex 0.9's ``self.router.page.params.get("rid")``
+    pattern — the route is ``/runs/[rid]``). We name the route arg ``rid``
+    (not ``run_id``) because Reflex refuses to bind a dynamic route arg that
+    shadows an existing state var (DynamicRouteArgShadowsStateVarError); the
+    state field is named ``current_run_id`` and the route arg writes to it on
+    mount.
 
     The remaining fields are filled by ``load_run`` on mount.
     """
@@ -1961,18 +2061,31 @@ class RunDetailState(rx.State):
             return "-"
         return _redact_action(self._checkpoint_path)
 
-    # Action panel — last shell-out result (for the operator-facing toast).
+    # Action panel — last action result (for the operator-facing toast).
+    # Diff shells out to ``backprop diff-runs``; Replay / Delete / Export run
+    # in-process via RunHistoryManager.
     action_result: str = ""
     action_error: str = ""
+    # HUX-02 (Stage C humanization): operator-actionable remedy for the most
+    # recent action failure, held separately from ``action_error`` so the
+    # run-detail callout can render it on its own dimmed ``hint=`` line instead
+    # of folding it into the message as a run-on. RunDetailState's action
+    # errors are currently all path-redacted informational strings (no
+    # ``sanitize_error_for_user`` suggestion split), so this stays empty today;
+    # the slot is wired backward-compatibly for a future suggestion-bearing
+    # action error and keeps the three error callouts (/runs, /models,
+    # /run-detail) on one scannable hierarchy.
+    action_error_suggestion: str = ""
     # FRONTEND-B-014-EXTENDED (v1.4 Wave 4 Stage C humanization): action-in-
-    # flight state for the diff / replay / delete / export shell-outs. The
-    # handlers run synchronously and can block up to 30s (diff/replay/delete)
-    # or 60s (export). Pre-fix the operator clicked the button and saw NO
-    # feedback until the subprocess returned — a long, silent gap that read
-    # as a frozen UI. The action panel now branches on this Var to render an
-    # inline spinner + "Running …" copy so the operator knows the shell-out
-    # is in flight. Set to a short human label (e.g. ``"diff-runs"``) at the
-    # start of each handler and cleared at the end via try/finally.
+    # flight state for the diff / replay / delete / export actions. The
+    # handlers run synchronously and can block (the diff-runs subprocess up to
+    # 30s; the in-process replay / delete / export are bounded by disk I/O).
+    # Pre-fix the operator clicked the button and saw NO feedback until the
+    # handler returned — a long, silent gap that read as a frozen UI. The
+    # action panel now branches on this Var to render an inline spinner +
+    # "Running …" copy so the operator knows the action is in flight. Set to a
+    # short human label (e.g. ``"diff-runs"``) at the start of each handler and
+    # cleared at the end via try/finally.
     action_in_flight: str = ""
 
     # FRONTEND-A-001 (v1.4 Wave 2): comparison run id for the Diff button.
@@ -2519,6 +2632,7 @@ class RunDetailState(rx.State):
         """Dismiss the action result / error banner."""
         self.action_result = ""
         self.action_error = ""
+        self.action_error_suggestion = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2547,6 +2661,14 @@ class ModelsState(rx.State):
     _cache_dir: str = ""
     loading: bool = False
     error: str = ""
+    # HUX-02 (Stage C humanization): operator-actionable remedy, held
+    # separately from ``error`` so the /models callout can render it on its own
+    # dimmed ``hint=`` line. ModelsState errors are currently all path-redacted
+    # informational strings (no ``sanitize_error_for_user`` suggestion split),
+    # so this stays empty today — the slot is wired backward-compatibly so a
+    # future suggestion-bearing error surfaces in the same scannable hierarchy
+    # as /runs and /run-detail.
+    error_suggestion: str = ""
     last_loaded_at: str = ""
     # CLIUI-B-005 (Stage C): per-row in-flight flag for the delete affordance.
     # Holds the ``dir_name`` currently being deleted (empty when idle). Drives

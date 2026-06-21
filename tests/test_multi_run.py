@@ -2697,6 +2697,33 @@ class TestResumeLivenessGuard:
         trainer = MultiRunTrainer(model="m", config=config)
         assert trainer._maybe_resume(_Path(str(tmp_path))) == "legacyrun"
 
+    def test_is_entry_live_tolerates_tz_aware_heartbeat(self, tmp_path):
+        """TRAINER-A-101 sibling: a tz-AWARE ``heartbeat_at`` must not crash
+        ``_is_entry_live`` (and thus ``_maybe_resume``).
+
+        ``_is_entry_live`` parses ``heartbeat_at`` with ``fromisoformat`` (which
+        parses an offset-aware ``...+00:00`` string) then subtracts it from a
+        tz-NAIVE ``datetime.now()`` — naive − aware raises ``TypeError``. Pre-fix
+        the subtraction lived OUTSIDE the parse guard, so the TypeError escaped
+        and crashed the auto-resume path. After the fix the mixed-tz heartbeat is
+        treated like an unparseable one: the heartbeat signal returns "not live"
+        (and the foreign-host/dead-PID entry is then resumable as a crashed run).
+        """
+        import socket
+
+        self._started_entry(
+            tmp_path,
+            "tzheartbeat",
+            host="long-gone-box-" + socket.gethostname(),
+            pid=999999,  # dead/foreign → PID signal cannot mark it live
+            heartbeat_at="2026-06-20T12:00:00+00:00",  # tz-AWARE → naive-minus-aware
+        )
+        config = MultiRunConfig(checkpoint_dir=str(tmp_path))
+        trainer = MultiRunTrainer(model="m", config=config)
+        # Must NOT raise; the mixed-tz heartbeat is not "live", so the crashed
+        # foreign-host entry remains resumable.
+        assert trainer._maybe_resume(_Path(str(tmp_path))) == "tzheartbeat"
+
     def test_live_holder_skipped_but_stale_sibling_adopted(self, tmp_path):
         """With BOTH a live holder and an older crashed run present, auto-
         resume skips the live one and adopts the crashed one. This is the
@@ -4352,6 +4379,33 @@ def _mk_eval(loss, run_id="r"):
     )
 
 
+class _FakeHFDataset:
+    """A minimal HF-Dataset stand-in: ``len()`` + ``select(indices)`` over a
+    list of ChatML ``{"text": ...}`` rows.
+
+    Used by the eval-gate tests so ``_evaluate_accumulator`` can derive its
+    reserved last-10% in-memory held-out split (TRAINER-A-002) before reaching
+    the mocked ``evaluate_run``. Mirrors the surface the real code touches.
+    """
+
+    def __init__(self, n=20):
+        self._rows = [{"text": f"<|im_start|>user\nq{i}<|im_end|>"} for i in range(n)]
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __getitem__(self, idx):
+        return self._rows[idx]
+
+    def select(self, indices):
+        sub = _FakeHFDataset(0)
+        sub._rows = [self._rows[i] for i in indices]
+        return sub
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class TestMultiRunConfigT22Defaults:
     """The v1.5 T2.2 fields exist with behavior-preserving defaults."""
 
@@ -4552,7 +4606,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is True
@@ -4592,7 +4646,7 @@ class TestEvalGateWiring:
             side_effect=[_mk_eval(1.0), boom],
         ):
             with pytest.raises(RuntimeError, match="eval crashed"):
-                trainer._gated_merge(new, run_idx=2, full_dataset=None)
+                trainer._gated_merge(new, run_idx=2, full_dataset=_FakeHFDataset())
 
         # The exception propagated, but the merger is byte-for-byte the
         # pre-merge snapshot: accumulator unchanged, _run_index NOT advanced,
@@ -4618,7 +4672,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is False
@@ -4643,7 +4697,7 @@ class TestEvalGateWiring:
             side_effect=lambda *a, **k: next(evals),
         ):
             result, branched, eval_rejected = trainer._gated_merge(
-                new, run_idx=2, full_dataset=None
+                new, run_idx=2, full_dataset=_FakeHFDataset()
             )
 
         assert eval_rejected is True
@@ -4664,10 +4718,148 @@ class TestEvalGateWiring:
             return _mk_eval(1.0)  # after-eval (improvement)
 
         with patch("backpropagate.multi_run.evaluate_run", side_effect=_fake_eval):
-            trainer._gated_merge(new, run_idx=3, full_dataset=None)
+            trainer._gated_merge(new, run_idx=3, full_dataset=_FakeHFDataset())
 
         # Only the AFTER eval ran (before came from cache) -> exactly 1 call.
         assert calls["n"] == 1
+
+
+def _mk_eval_metrics(loss, task_metrics, eval_n=200, metric_ci=None, run_id="r"):
+    """An EvalResult carrying C3 task metrics (for the conjunction-gate tests)."""
+    return EvalResult(
+        run_id=run_id,
+        model_name="test-model",
+        held_out_loss=loss,
+        perplexity=(None if loss is None else 2.718281828 ** loss),
+        generations=[GenerationSample(prompt="p", completion="c")],
+        n_prompts=1,
+        task_metrics=dict(task_metrics),
+        eval_n=eval_n,
+        metric_ci=metric_ci,
+    )
+
+
+class TestEvalGateTaskMetricConjunction:
+    """v1.6 C3: when eval_metrics is configured, _gated_merge consumes the
+    upgraded conjunction gate (loss floor AND task-metric noise band)."""
+
+    def test_metric_regression_rejects_even_when_loss_improves(self, tmp_path):
+        """Loss improving does NOT save a real exact_match regression."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path,
+            eval_gate=True,
+            eval_max_regression=0.0,
+            eval_metrics=["normalized_exact_match"],
+        )
+        before_idx = trainer._slao_merger.run_index
+        before_state = {
+            k: v.clone() for k, v in trainer._slao_merger.get_merged_lora().items()
+        }
+        new = _t22_lora(b_scale=5.0)
+
+        # before loss 1.0 EM 0.80; after loss 0.5 (better) EM 0.60 (worse, beyond
+        # the 0.02 CI band) -> conjunction REJECTS.
+        before_eval = _mk_eval_metrics(
+            1.0, {"normalized_exact_match": 0.80},
+            metric_ci={"normalized_exact_match": 0.02},
+        )
+        after_eval = _mk_eval_metrics(
+            0.5, {"normalized_exact_match": 0.60},
+            metric_ci={"normalized_exact_match": 0.02},
+        )
+        evals = iter([before_eval, after_eval])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is True
+        assert branched is False
+        # Snapshot restored.
+        assert trainer._slao_merger.run_index == before_idx
+        for k, v in before_state.items():
+            assert torch.equal(trainer._slao_merger.get_merged_lora()[k], v)
+
+    def test_metric_within_noise_accepts(self, tmp_path):
+        """A metric drop within the CI band is noise -> the merge is kept."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path,
+            eval_gate=True,
+            eval_max_regression=0.0,
+            eval_metrics=["normalized_exact_match"],
+        )
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=2.0)
+
+        # EM 0.80 -> 0.77 (drop 0.03 < band 0.08) and loss improves -> ACCEPT.
+        before_eval = _mk_eval_metrics(
+            1.0, {"normalized_exact_match": 0.80},
+            metric_ci={"normalized_exact_match": 0.08},
+        )
+        after_eval = _mk_eval_metrics(
+            0.9, {"normalized_exact_match": 0.77},
+            metric_ci={"normalized_exact_match": 0.08},
+        )
+        evals = iter([before_eval, after_eval])
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+        assert trainer._eval_cache is after_eval
+
+    def test_default_inert_no_metrics_is_loss_only(self, tmp_path):
+        """eval_metrics=None (default) -> loss-only gate, byte-identical to v1.5:
+        a loss improvement accepts even if (unsupplied) metrics would differ."""
+        trainer = _GatedMergeHarness.build(
+            tmp_path, eval_gate=True, eval_max_regression=0.0
+        )
+        assert trainer.config.eval_metrics is None
+        assert trainer.config.eval_references_path is None
+        before_idx = trainer._slao_merger.run_index
+        new = _t22_lora(b_scale=2.0)
+
+        evals = iter([_mk_eval(2.0), _mk_eval(1.0)])  # loss improves
+        with patch(
+            "backpropagate.multi_run.evaluate_run",
+            side_effect=lambda *a, **k: next(evals),
+        ):
+            result, branched, eval_rejected = trainer._gated_merge(
+                new, run_idx=2, full_dataset=_FakeHFDataset()
+            )
+
+        assert eval_rejected is False
+        assert trainer._slao_merger.run_index == before_idx + 1
+
+    def test_load_eval_references_reads_jsonl(self, tmp_path):
+        refs = tmp_path / "refs.jsonl"
+        refs.write_text(
+            '{"prompt": "Capital of France?", "reference": "Paris"}\n'
+            '\n'
+            '{"prompt": "2+2?", "references": ["4", "four"]}\n',
+            encoding="utf-8",
+        )
+        trainer = _GatedMergeHarness.build(tmp_path)
+        items = trainer._load_eval_references(str(refs))
+        assert len(items) == 2
+        assert items[0]["prompt"] == "Capital of France?"
+        assert items[1]["references"] == ["4", "four"]
+
+    def test_load_eval_references_missing_file_raises(self, tmp_path):
+        from backpropagate.exceptions import BackpropagateError
+
+        trainer = _GatedMergeHarness.build(tmp_path)
+        with pytest.raises(BackpropagateError) as exc:
+            trainer._load_eval_references(str(tmp_path / "nope.jsonl"))
+        assert exc.value.code == "INPUT_EVAL_HELDOUT_UNRESOLVED"
 
 
 # =============================================================================

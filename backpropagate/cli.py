@@ -221,6 +221,36 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _auto_or_positive_int(value: str) -> "int | str":
+    """argparse type for the ``train --batch-size`` flag.
+
+    Accepts the literal ``"auto"`` (the default — defer batch-size selection
+    to the Trainer's auto-detection) OR a positive integer. Any other value
+    (e.g. ``--batch-size foo`` or ``--batch-size 0``) is rejected at the
+    argparse boundary with a flag-named message and the conventional argparse
+    exit code (2), instead of slipping through to a bare ``int(batch_size)``
+    ``ValueError`` deep in ``trainer.py`` that the cmd_train ``except
+    Exception`` handler would mask as a redacted EXIT_RUNTIME_ERROR.
+
+    Returns:
+        ``"auto"`` (str) or the parsed positive int.
+
+    Raises:
+        argparse.ArgumentTypeError: if value is neither ``"auto"`` nor a
+            positive int.
+    """
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    try:
+        return _positive_int(value)
+    except argparse.ArgumentTypeError:
+        # Re-raise with a message that names the literal escape hatch so the
+        # operator knows ``auto`` is the other accepted form.
+        raise argparse.ArgumentTypeError(
+            f"--batch-size expects 'auto' or a positive integer, got {value!r}"
+        )
+
+
 def _non_negative_int(value: str) -> int:
     """argparse type for integers that must be >= 0 (allows 0)."""
     try:
@@ -450,6 +480,39 @@ from .logging_config import (
 # TERMINAL COLORS (ANSI)
 # =============================================================================
 
+def _reconfigure_stdio_utf8() -> None:
+    """Force ``sys.stdout`` / ``sys.stderr`` to UTF-8 with ``errors="replace"``.
+
+    VIS-CLI-001 (Windows robustness): dozens of runtime strings — most
+    importantly the Run-ID banner printed on every train / multi-run / export /
+    resume / push / eval run — contain the em-dash U+2014 ("—"). On a legacy
+    Windows console whose code page is cp437 / cp850, writing that character
+    raises ``UnicodeEncodeError`` and aborts the command before training ever
+    starts, against the first-class-Windows promise.
+
+    Reconfiguring the streams to UTF-8 fixes pipe mojibake too, and
+    ``errors="replace"`` degrades any still-unencodable character to a safe
+    placeholder instead of crashing. This runs from ``main()`` only (the CLI
+    entry point), never at module import, so library importers keep their own
+    stream configuration untouched.
+
+    Guarded defensively: only streams exposing ``reconfigure`` (real
+    ``io.TextIOWrapper`` consoles) are touched, and the whole thing is wrapped
+    in ``try/except`` so a redirected / captured / pipe stream or pytest's
+    capture machinery can never make the CLI fail on startup.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001  # nosec B110 — never fail CLI startup over stdio
+            # A non-reconfigurable / detached / already-closed stream must not
+            # abort the CLI; we simply fall back to whatever encoding it has.
+            pass
+
+
 def _supports_color() -> bool:
     """Check if terminal supports ANSI colors."""
     if os.environ.get("NO_COLOR"):
@@ -514,6 +577,40 @@ def _print_error_redacted(exc: BaseException, prefix: str = "") -> None:
     _print_error(msg)
 
 
+def _print_structured_error(exc: "BackpropagateError", prefix: str = "") -> None:
+    """Print a structured ``BackpropagateError`` with its stable code + run_id.
+
+    Centralises the subcommand error-handler print shape so an operator sees,
+    on a single failing run, everything they need to act and to file a bug:
+
+    * OBS-002 — the stable, machine-readable ``code`` (e.g. ``RUNTIME_GPU_OOM``)
+      prefixed in ``[CODE]`` form. Previously the code only reached the
+      terminal via the last-resort ``main()`` handler, which the per-subcommand
+      handlers preempt — so an operator could not see / grep / cite the code
+      without re-running under ``--verbose``. The code is a non-secret, fixed
+      vocabulary string from ``exceptions.ERROR_CODES``; it is safe to print.
+    * OBS-001 — the trainer ``run_id`` when the exception carries one in
+      ``details`` (e.g. the OOM-exhausted path stamps ``run_id`` there). The
+      on-disk checkpoint + ``run_history.json`` are keyed by this id, so
+      surfacing it lets a failed run point the operator at its own artifacts.
+
+    Only the code and run_id are added — the message itself is emitted as-is
+    (callers that catch ``Exception`` use ``_print_error_redacted`` instead, so
+    secret-redaction stays on the unstructured path). ``suggestion`` is printed
+    by the caller after this, matching the existing handler layout.
+    """
+    code = getattr(exc, "code", None)
+    code_prefix = f"[{code}] " if code else ""
+    _print_error(f"{code_prefix}{prefix}{exc.message}")
+
+    # Surface the trainer run_id when the structured error carries one — it is
+    # the key under which the checkpoint + run_history entry live on disk.
+    details = getattr(exc, "details", None) or {}
+    run_id = details.get("run_id")
+    if run_id:
+        _print_info(f"Run id: {run_id}")
+
+
 def _print_warning(text: str) -> None:
     """Print warning message."""
     print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {text}")
@@ -521,7 +618,7 @@ def _print_warning(text: str) -> None:
 
 def _print_info(text: str) -> None:
     """Print info message."""
-    print(f"{Colors.BLUE}i{Colors.RESET} {text}")
+    print(f"{Colors.BLUE}[INFO]{Colors.RESET} {text}")
 
 
 def _print_kv(key: str, value: str, indent: int = 2) -> None:
@@ -689,6 +786,14 @@ def cmd_train(args: argparse.Namespace) -> int:
             # kwarg silently when the installed Trainer doesn't accept
             # it (pre-Wave-6b builds), so this flag is forward-compatible.
             "mode": getattr(args, "mode", "lora"),
+            # v1.7: --full-ft-ceiling-billions / --full-ft-offload thread to
+            # Trainer(full_ft_ceiling_billions=..., full_ft_offload=...). The
+            # ceiling override lifts the card-aware full-FT param ceiling; offload
+            # enables the FSDP2 CPU-offload path (7B-class full-FT spilling
+            # params+optimizer to host RAM; Linux/WSL2). Same introspection
+            # filter → forward-compatible / dropped on pre-v1.7 builds.
+            "full_ft_ceiling_billions": getattr(args, "full_ft_ceiling_billions", None),
+            "full_ft_offload": bool(getattr(args, "full_ft_offload", False)),
             # v1.5 T1.2 (ORPO): --method / --orpo-beta thread to
             # Trainer(method=..., orpo_beta=...). Same introspection filter
             # contract — these are dropped until the trainer wave adds the
@@ -696,6 +801,21 @@ def cmd_train(args: argparse.Namespace) -> int:
             # forward-compatible. Default 'sft' / 0.1 preserve v1.4 behavior.
             "method": getattr(args, "method", "sft"),
             "orpo_beta": getattr(args, "orpo_beta", 0.1),
+            # v1.6 C4 (SimPO/KTO): the per-method hyperparameters. Defaulted to
+            # None on the argparse side so the config's own field defaults
+            # (simpo_beta=2.0, simpo_gamma=1.0, kto_beta=0.1, kto_*_weight=1.0)
+            # govern unless the operator explicitly set a flag. Only the
+            # explicitly-set ones survive the None-filter below; the rest are
+            # dropped so the config (not argparse) owns the default. The C2
+            # config validators run on TrainingConfig construction and surface
+            # bad values as UserInputError via the existing structured-error
+            # path. Same introspection filter routes them to the trainer once
+            # the matching __init__ kwargs land.
+            "simpo_beta": getattr(args, "simpo_beta", None),
+            "simpo_gamma": getattr(args, "simpo_gamma", None),
+            "kto_beta": getattr(args, "kto_beta", None),
+            "kto_desirable_weight": getattr(args, "kto_desirable_weight", None),
+            "kto_undesirable_weight": getattr(args, "kto_undesirable_weight", None),
             # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): Trainer.__init__ accepts
             # ``fp8`` / ``use_rslora`` (named to match) so the introspection
             # filter below threads them through. fp8=True is EXPERIMENTAL —
@@ -720,9 +840,23 @@ def cmd_train(args: argparse.Namespace) -> int:
             # silently on a pre-T3.1 Trainer build.
             "backend": getattr(args, "backend", "auto"),
         }
+        # v1.6 C4: the SimPO/KTO hyperparameter flags default to None on the
+        # argparse side ("operator did not set it"). Drop the unset ones so the
+        # config's own field defaults govern rather than forwarding None (which
+        # would clobber e.g. simpo_beta=2.0 with None). The non-optional Wave 6b
+        # keys keep their concrete defaults and are always forwarded (subject to
+        # the introspection filter).
+        _optional_none_keys = {
+            "simpo_beta",
+            "simpo_gamma",
+            "kto_beta",
+            "kto_desirable_weight",
+            "kto_undesirable_weight",
+        }
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
-            if _trainer_sig_params is None or k in _trainer_sig_params
+            if (_trainer_sig_params is None or k in _trainer_sig_params)
+            and not (k in _optional_none_keys and v is None)
         }
 
         # Create trainer
@@ -730,7 +864,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             model=args.model,
             lora_r=args.lora_r,
             learning_rate=args.lr,
-            batch_size=args.batch_size if args.batch_size != "auto" else "auto",
+            batch_size=args.batch_size,
             output_dir=args.output,
             use_unsloth=not args.no_unsloth,
             **wave6b_kwargs,
@@ -785,7 +919,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         _print_warning("Training interrupted by user")
         return EXIT_INTERRUPTED
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -794,7 +928,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except DatasetError as e:
         # DatasetError covers user-supplied dataset issues (missing file,
         # parse failure, validation) — user-actionable.
-        _print_error(f"Dataset error: {e.message}")
+        _print_structured_error(e, prefix="Dataset error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -803,7 +937,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except TrainingError as e:
         # TrainingError covers model load failures, training aborts, checkpoint
         # IO — runtime-level problems the user generally cannot pre-validate.
-        _print_error(f"Training error: {e.message}")
+        _print_structured_error(e, prefix="Training error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -817,7 +951,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     except BackpropagateError as e:
         # Default for any other structured BackpropagateError subclass —
         # treat as runtime error unless it is explicitly user-actionable.
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -979,6 +1113,20 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             # below route the kwarg to the right binding point and drop
             # it silently when the installed build doesn't accept it.
             "mode": getattr(args, "mode", "lora"),
+            # v1.6 C4: --method + per-method hyperparameters, mirroring
+            # cmd_train. method/orpo_beta carry concrete defaults; the SimPO/KTO
+            # params default to None ("operator didn't set it") and are dropped
+            # by the _optional_none_keys filter below so the config defaults
+            # govern. The dataclass-fields / inspect filters route each to the
+            # config or trainer (and drop it on a backend that doesn't accept
+            # it). Cross-field validation lives in the C2 config validators.
+            "method": getattr(args, "method", "sft"),
+            "orpo_beta": getattr(args, "orpo_beta", 0.1),
+            "simpo_beta": getattr(args, "simpo_beta", None),
+            "simpo_gamma": getattr(args, "simpo_gamma", None),
+            "kto_beta": getattr(args, "kto_beta", None),
+            "kto_desirable_weight": getattr(args, "kto_desirable_weight", None),
+            "kto_undesirable_weight": getattr(args, "kto_undesirable_weight", None),
             # v1.5 T2.2 (merge framework, Wave 6b GLUE): the 9 merge-strategy /
             # drift-gate / eval-gate knobs. Each is a MultiRunConfig dataclass
             # FIELD, so the dataclasses.fields(MultiRunConfig) filter below
@@ -995,12 +1143,26 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
             "eval_max_regression": getattr(args, "eval_max_regression", 0.0),
             "eval_heldout_path": getattr(args, "eval_heldout", None),
         }
-        wave6b_cfg_kwargs = {
+        # v1.6 C4: drop the SimPO/KTO hyperparameter keys when unset (None) so
+        # the config field defaults govern instead of clobbering them with None
+        # (mirrors cmd_train's _optional_none_keys filter).
+        _optional_none_keys = {
+            "simpo_beta",
+            "simpo_gamma",
+            "kto_beta",
+            "kto_desirable_weight",
+            "kto_undesirable_weight",
+        }
+        _multi_candidate = {
             k: v for k, v in wave6b_candidate_kwargs.items()
+            if not (k in _optional_none_keys and v is None)
+        }
+        wave6b_cfg_kwargs = {
+            k: v for k, v in _multi_candidate.items()
             if k in _multi_cfg_fields
         }
         wave6b_trainer_kwargs = {
-            k: v for k, v in wave6b_candidate_kwargs.items()
+            k: v for k, v in _multi_candidate.items()
             if k not in _multi_cfg_fields and (_multi_trainer_params is None or k in _multi_trainer_params)
         }
 
@@ -1063,12 +1225,12 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_warning("Training interrupted by user")
         return EXIT_INTERRUPTED
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
     except DatasetError as e:
-        _print_error(f"Dataset error: {e.message}")
+        _print_structured_error(e, prefix="Dataset error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1085,7 +1247,7 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
         _print_error(f"Invalid argument: {e}")
         return EXIT_USER_ERROR
     except BackpropagateError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1714,13 +1876,13 @@ def cmd_export(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     except UserInputError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
     except ExportError as e:
         # ExportError covers GGUF / merge / Ollama failures — runtime-level.
-        _print_error(f"Export error: {e.message}")
+        _print_structured_error(e, prefix="Export error: ")
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1732,7 +1894,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_PARTIAL_SUCCESS
     except BackpropagateError as e:
-        _print_error(f"{e.message}")
+        _print_structured_error(e)
         if e.suggestion:
             _print_info(f"Suggestion: {e.suggestion}")
         if args.verbose:
@@ -1773,11 +1935,8 @@ def _detect_installed_versions() -> dict[str, str]:
         # CLIUI-B-006 (Stage C proactive): reflex is a first-class shipped
         # surface (the Web UI, `backprop ui`). Operators triaging a UI launch
         # failure need its version in the support payload the same way they
-        # need transformers/peft for a training failure. ``gradio`` is the
-        # legacy pre-v1.1 UI stack — kept in the probe so a stale gradio left
-        # over from a v1.0.x install shows up (it should read "not installed").
+        # need transformers/peft for a training failure.
         "reflex",
-        "gradio",
         "pydantic",
         "wandb",
     ]
@@ -2062,12 +2221,21 @@ def cmd_info(args: argparse.Namespace) -> int:
                 else Colors.YELLOW if tier == "experimental"
                 else Colors.RED
             )
-            print(f"{name:<{name_w}}  {color}{tier:<{tier_w}}{Colors.RESET}")
+            # VIS-CLI-004: rstrip so the left-justified tier column does not
+            # leave trailing whitespace on each row.
+            print(f"{name:<{name_w}}  {color}{tier:<{tier_w}}{Colors.RESET}".rstrip())
         print()
+        # VIS-CLI-004: emit each tier on its own line so the three names align
+        # under the [INFO] prefix (the previous single call baked in 8-space
+        # continuation indents + trailing pad that no longer line up).
+        _print_info("stable — documented contract, no removal planned.")
         _print_info(
-            "stable    — documented contract, no removal planned.\n"
-            "        experimental — may change shape between minor versions; pin the exact version.\n"
-            "        deprecated-prefer-X — will be removed in a future major; use `X` instead."
+            "experimental — may change shape between minor versions; "
+            "pin the exact version."
+        )
+        _print_info(
+            "deprecated-prefer-X — will be removed in a future major; "
+            "use `X` instead."
         )
         return EXIT_OK
 
@@ -2958,8 +3126,8 @@ def cmd_ui(args: argparse.Namespace) -> int:
     try:
         from .ui_security import validate_auth_shape
     except ImportError:
-        # ui_security pulls gradio in for type hints; if [ui] isn't installed
-        # the import above already failed, but be defensive.
+        # ui_security is framework-neutral, but be defensive in case an
+        # optional dependency it touches isn't installed.
         _print_error("UI security helpers not importable")
         return EXIT_USER_ERROR
 
@@ -4010,6 +4178,21 @@ RUNS_JSON_SCHEMA_VERSION = "1"
 #   * Top-level shape change    -> bump to "2", document migration
 CLI_JSON_SCHEMA_VERSION = "1"
 
+# v1.6 C4: the deterministic, judge-free task-metric names exposed by
+# `backprop eval --metric` / `--gate-metric`. Hard-coded here (rather than
+# imported from backpropagate.eval.TASK_METRICS) so `backprop eval --help`
+# stays cheap — the eval module pulls torch. Mirrors the C3 registry
+# (backpropagate.eval.TASK_METRICS); evaluate_run re-validates each name on
+# the heavy path, so a drift here surfaces as a clean INPUT_VALIDATION_FAILED
+# rather than a silent mismatch.
+EVAL_METRIC_CHOICES = [
+    "normalized_exact_match",
+    "token_f1",
+    "contains",
+    "regex",
+    "pass_rate",
+]
+
 
 def _build_runs_payload(
     runs: list[dict[str, Any]],
@@ -4514,6 +4697,32 @@ _REPLAY_ALLOWED_OVERRIDE_KEYS: frozenset[str] = frozenset({
 })
 
 
+# CLI-A-001 sibling (v1.6): the subset of the override whitelist that MUST
+# coerce to a number. ``_coerce`` honors its own docstring contract for these
+# keys — a non-numeric value (e.g. ``--override batch_size=foo``) raises
+# ``InvalidSettingError`` (CONFIG_INVALID_SETTING) at the CLI surface instead
+# of falling through as a raw string that detonates as a bare ``int()``
+# ``ValueError`` deep in the Trainer (caught by ``except Exception`` ->
+# redacted EXIT_RUNTIME_ERROR). ``batch_size`` is numeric-with-an-escape-hatch:
+# it additionally accepts the literal ``"auto"`` (mirrors the train --batch-size
+# ``_auto_or_positive_int`` validator). The remaining whitelist keys
+# (use_dora / packing / init_lora_weights / lora_preset / optim / mode) are
+# genuinely string/bool-valued and keep the best-effort coercion.
+_REPLAY_NUMERIC_OVERRIDE_KEYS: frozenset[str] = frozenset({
+    "seed",
+    "learning_rate",
+    "lr",
+    "batch_size",
+    "gradient_accumulation",
+    "max_steps",
+    "steps",
+    "samples",
+    "lora_r",
+    "lora_alpha",
+    "lora_dropout",
+})
+
+
 def cmd_replay(args: argparse.Namespace) -> int:
     """Execute ``backprop replay <run_id>`` (BRIDGE Wave 6b).
 
@@ -4651,6 +4860,11 @@ def cmd_replay(args: argparse.Namespace) -> int:
     # parse; non-numeric raise InvalidSettingError so the operator gets a
     # clear error instead of a silent ValueError deep in Trainer.
     def _coerce(key: str, raw: str) -> Any:
+        # CLI-A-001 sibling (v1.6): batch_size is numeric-with-escape-hatch —
+        # the literal "auto" is valid (defers to the Trainer's auto-detection),
+        # mirroring the train --batch-size _auto_or_positive_int validator.
+        if key == "batch_size" and isinstance(raw, str) and raw.strip().lower() == "auto":
+            return "auto"
         # Best-effort: int → float → bool ('true'/'false') → str fallback.
         try:
             return int(raw)
@@ -4660,12 +4874,44 @@ def cmd_replay(args: argparse.Namespace) -> int:
             return float(raw)
         except ValueError:
             pass
+        # CLI-A-001 sibling (v1.6): honor the docstring contract. For a key the
+        # whitelist marks as numeric, a value that parsed as neither int nor
+        # float is an operator error — raise InvalidSettingError
+        # (CONFIG_INVALID_SETTING) here so it surfaces as a clear,
+        # flag-named EXIT_USER_ERROR rather than falling through as a raw
+        # string that becomes a bare int()/float() ValueError deep in Trainer
+        # (masked by `except Exception` -> redacted EXIT_RUNTIME_ERROR).
+        if key in _REPLAY_NUMERIC_OVERRIDE_KEYS:
+            raise InvalidSettingError(
+                setting_name=f"--override {key}",
+                value=raw,
+                expected=(
+                    "a number"
+                    + (" or 'auto'" if key == "batch_size" else "")
+                ),
+                suggestion=(
+                    f"--override {key}={raw!r} is not numeric. Pass a numeric "
+                    f"value (e.g. `--override {key}=4`)"
+                    + (
+                        " or the literal `--override batch_size=auto`"
+                        if key == "batch_size"
+                        else ""
+                    )
+                    + "."
+                ),
+            )
         if raw.lower() in ("true", "false"):
             return raw.lower() == "true"
         return raw
 
-    for key, value in overrides.items():
-        hp[key] = _coerce(key, value)
+    try:
+        for key, value in overrides.items():
+            hp[key] = _coerce(key, value)
+    except InvalidSettingError as exc:
+        _print_error(str(exc.message))
+        if exc.suggestion:
+            _print_info(f"Suggestion: {exc.suggestion}")
+        return EXIT_USER_ERROR
 
     try:
         # BRIDGE-A-002 (v1.4): the cmd_replay --override whitelist accepts the
@@ -5458,6 +5704,137 @@ def cmd_data_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_data_split(args: argparse.Namespace) -> int:
+    """Execute ``backprop data split <jsonl>`` (v1.6 C4).
+
+    Deterministically shuffle + split a JSONL dataset into a train file and a
+    held-out file via :func:`datasets.split_dataset`. The held-out file is the
+    reference set a later ``backprop eval --references`` / ``--gate-against``
+    run scores against, so carving it out up front is the first step of a
+    non-regression workflow.
+
+    Reads the file directly (no DatasetLoader, no torch). When --out-train /
+    --out-heldout are omitted, derives ``<stem>.train.jsonl`` /
+    ``<stem>.heldout.jsonl`` next to the input.
+
+    Exit codes:
+        0   split written; n_train / n_heldout printed
+        1   user error — input missing / is a directory / not UTF-8 /
+            unreadable / zero parseable rows, OR an invalid ratio / too-few
+            rows (split_dataset raises InvalidSettingError →
+            CONFIG_INVALID_SETTING), OR an output path could not be written
+    """
+    from .logging_config import get_logger
+
+    _print_header("Backpropagate Dataset Split")
+
+    dataset_path = Path(args.dataset).expanduser()
+    if not dataset_path.exists():
+        _print_error(f"Dataset not found: {dataset_path}")
+        _print_info(
+            "Pass a local JSONL file path. `backprop data split` reads the "
+            "file directly (no HuggingFace download)."
+        )
+        return EXIT_USER_ERROR
+    if dataset_path.is_dir():
+        _print_error(f"Dataset path is a directory, expected a file: {dataset_path}")
+        return EXIT_USER_ERROR
+
+    # Plain JSONL line-read (mirror cmd_data_report's tolerant reader).
+    import json
+
+    rows: list[dict[str, Any]] = []
+    try:
+        with open(dataset_path, encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    obj = json.loads(stripped)
+                except json.JSONDecodeError:
+                    # Skip unparseable lines (same tolerance as cmd_validate /
+                    # cmd_data_report); the split operates on parseable rows.
+                    continue
+                rows.append(obj)
+    except UnicodeDecodeError as exc:
+        _print_error(f"Dataset is not valid UTF-8: {exc}")
+        _print_info("Re-encode the file: `iconv -f <enc> -t utf-8 < src > dst`")
+        return EXIT_USER_ERROR
+    except OSError as exc:
+        _print_error(f"Could not read dataset: {exc}")
+        return EXIT_USER_ERROR
+
+    if not rows:
+        _print_error("Dataset has no parseable rows — nothing to split.")
+        return EXIT_USER_ERROR
+
+    ratio = float(getattr(args, "heldout_ratio", 0.1))
+    seed = int(getattr(args, "seed", 0))
+
+    # split_dataset guards the ratio (0,1) + the >=1-row-each-side floor and
+    # raises InvalidSettingError (CONFIG_INVALID_SETTING) on a bad ratio / too
+    # few rows. InvalidSettingError subclasses ConfigurationError (a sibling of
+    # UserInputError under BackpropagateError), so catch the structured base
+    # class and route it as a user error — a bad ratio / row count is
+    # operator-fixable.
+    from .datasets import split_dataset
+
+    try:
+        train_rows, heldout_rows = split_dataset(rows, ratio, seed)
+    except BackpropagateError as e:
+        _print_structured_error(e)
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        return EXIT_USER_ERROR
+
+    # Resolve output paths: explicit flags win, else derive from the input stem
+    # so a bare `data split data.jsonl` writes data.train.jsonl + data.heldout.jsonl.
+    stem = dataset_path.stem
+    parent = dataset_path.parent
+    out_train = Path(args.out_train).expanduser() if getattr(args, "out_train", None) else parent / f"{stem}.train.jsonl"
+    out_heldout = Path(args.out_heldout).expanduser() if getattr(args, "out_heldout", None) else parent / f"{stem}.heldout.jsonl"
+
+    def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            for rec in records:
+                fh.write(json.dumps(rec, ensure_ascii=False))
+                fh.write("\n")
+
+    try:
+        _write_jsonl(out_train, train_rows)
+        _write_jsonl(out_heldout, heldout_rows)
+    except OSError as exc:
+        _print_error(f"Could not write split output: {exc}")
+        _print_info("Check the --out-train / --out-heldout paths are writable.")
+        return EXIT_USER_ERROR
+
+    try:
+        get_logger(__name__).info(
+            "data_split_complete",
+            dataset=str(dataset_path),
+            n_train=len(train_rows),
+            n_heldout=len(heldout_rows),
+            heldout_ratio=ratio,
+            seed=seed,
+        )
+    except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+        pass
+
+    _print_kv("Input rows", str(len(rows)))
+    _print_kv("n_train", f"{len(train_rows)}  -> {out_train}")
+    _print_kv("n_heldout", f"{len(heldout_rows)}  -> {out_heldout}")
+    _print_kv("Held-out ratio", f"{ratio} (seed {seed})")
+    print()
+    _print_success("Dataset split complete")
+    _print_info(
+        "Next step: `backprop eval <run_id> --references "
+        f"{out_heldout}` to score a run against the held-out set."
+    )
+    return EXIT_OK
+
+
 # =============================================================================
 # COMMAND: eval (v1.5 T1.1 — lightweight eval harness)
 # =============================================================================
@@ -5623,6 +6000,71 @@ def cmd_eval(args: argparse.Namespace) -> int:
                 pass
             return EXIT_USER_ERROR
 
+    # v1.6 C4: resolve + load the --references / --eval-set held-out reference
+    # set (cheap user-error path, BEFORE the torch import). Each row is a
+    # {"prompt": ..., "reference": ...} (or {"prompt": ..., "references": [...]})
+    # JSONL object; evaluate_run scores the run's generations against it on the
+    # selected task metrics. A missing / unreadable / empty file is a user
+    # error. --references and --eval-set are aliases for the same dest.
+    references: list[dict[str, Any]] | None = None
+    references_arg = getattr(args, "references", None)
+    if references_arg:
+        ref_path = Path(references_arg).expanduser()
+        if not ref_path.exists() or ref_path.is_dir():
+            _print_error(
+                f"--references/--eval-set file not found (or is a directory): {ref_path}"
+            )
+            _print_info(
+                'Pass a readable JSONL held-out reference set, one '
+                '{"prompt": "...", "reference": "..."} object per line.'
+            )
+            try:
+                get_logger(__name__).warning(
+                    "eval_references_unresolved",
+                    code="INPUT_VALIDATION_FAILED",
+                    references=str(ref_path),
+                )
+            except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+                pass
+            return EXIT_USER_ERROR
+        import json as _refs_json
+
+        references = []
+        try:
+            with open(ref_path, encoding="utf-8") as fh:
+                for line in fh:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        references.append(_refs_json.loads(stripped))
+                    except _refs_json.JSONDecodeError:
+                        # Skip unparseable lines (tolerant reader, same as
+                        # data report / data split); evaluate_run validates the
+                        # {prompt, reference} shape of the rows that survive.
+                        continue
+        except UnicodeDecodeError as exc:
+            _print_error(f"--references/--eval-set is not valid UTF-8: {exc}")
+            return EXIT_USER_ERROR
+        except OSError as exc:
+            _print_error(f"Could not read --references/--eval-set: {exc}")
+            return EXIT_USER_ERROR
+        if not references:
+            _print_error(
+                f"--references/--eval-set has no parseable reference rows: {ref_path}"
+            )
+            _print_info(
+                'Each line must be a JSON object with a "prompt" key and a '
+                '"reference" (or "references") answer.'
+            )
+            return EXIT_USER_ERROR
+
+    # v1.6 C4: the selected task metrics (--metric, repeatable) and the gate
+    # metrics (--gate-metric, repeatable). argparse `choices` already enforces
+    # the 5 valid names; evaluate_run re-validates each name (defensive).
+    metrics = list(getattr(args, "metric", None) or []) or None
+    gate_metrics = list(getattr(args, "gate_metric", None) or []) or None
+
     # All references resolved — NOW pull the torch-heavy eval module. Any
     # crash inside evaluate_run (model load, forward pass, generation)
     # propagates to main()'s catch-all, which maps it to the right sysexits
@@ -5636,6 +6078,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
         "n": args.num_samples,
         "seed": args.seed,
         "max_new_tokens": args.max_new_tokens,
+        # v1.6 C4: task-metric selection + held-out reference set. When
+        # references is None, evaluate_run's task_metrics stay {} and behavior
+        # is byte-identical to the pre-C4 surface.
+        "metrics": metrics,
+        "references": references,
     }
 
     primary = evaluate_run(args.run_id, **eval_kwargs)
@@ -5647,8 +6094,14 @@ def cmd_eval(args: argparse.Namespace) -> int:
         baseline = evaluate_run(args.gate_against, **eval_kwargs)
         # eval_gate(before, after): the baseline is "before", the run under
         # test is "after".
+        # v1.6 C4: --gate-metric (repeatable) names the task metrics that must
+        # not regress beyond their noise band, on top of the held-out-loss
+        # floor. None/empty -> loss-only gate (pre-C4 behavior).
         decision = eval_gate(
-            baseline, primary, max_regression=args.max_regression
+            baseline,
+            primary,
+            max_regression=args.max_regression,
+            gated_metrics=gate_metrics,
         )
         if emit_json:
             print(json.dumps({
@@ -5747,9 +6200,230 @@ def cmd_eval(args: argparse.Namespace) -> int:
             f"{perplexity:.4f}" if isinstance(perplexity, (int, float)) else "n/a",
         )
         _print_kv("Prompts", str(getattr(primary, "n_prompts", 0)))
+        # v1.6 C4: surface any task metrics computed from --references so the
+        # operator sees the deterministic, judge-free scores (not just loss).
+        task_metrics = getattr(primary, "task_metrics", None) or {}
+        if task_metrics:
+            print()
+            _print_info("Task metrics:")
+            metric_ci = getattr(primary, "metric_ci", None) or {}
+            for name in sorted(task_metrics):
+                val = task_metrics[name]
+                ci = metric_ci.get(name)
+                val_str = f"{val:.4f}" if isinstance(val, (int, float)) else str(val)
+                if isinstance(ci, (int, float)):
+                    val_str += f" (+/- {ci:.4f})"
+                _print_kv(name, val_str)
+            eval_n = getattr(primary, "eval_n", 0)
+            if eval_n:
+                _print_kv("Scored over", f"{eval_n} held-out reference items")
         print()
         _print_success("Eval complete")
     return EXIT_OK
+
+
+# =============================================================================
+# COMMAND: generate (v1.6 C4)
+# =============================================================================
+
+def _infer_base_model_from_adapter(adapter_dir: Path) -> str | None:
+    """Read ``base_model_name_or_path`` out of a PEFT adapter_config.json.
+
+    Returns the recorded base-model name when the adapter directory carries a
+    readable ``adapter_config.json`` with a non-empty ``base_model_name_or_path``
+    field (peft stamps this at save time), else ``None`` so the caller can fall
+    back to an explicit ``--base`` or fail with a clear UserInputError. Best-
+    effort: any read / parse error returns ``None`` rather than raising.
+    """
+    cfg_path = adapter_dir / "adapter_config.json"
+    if not cfg_path.is_file():
+        return None
+    try:
+        import json
+
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    base = cfg.get("base_model_name_or_path") if isinstance(cfg, dict) else None
+    if isinstance(base, str) and base.strip():
+        return base.strip()
+    return None
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    """Execute ``backprop generate <adapter_path> "<prompt>"`` (v1.6 C4).
+
+    Ad-hoc "did my finetune work?" generation against an adapter DIRECTORY on
+    disk — NOT a recorded run_id (use ``backprop eval`` for run-keyed eval). The
+    base model is read from the adapter's ``adapter_config.json`` when present,
+    or supplied via ``--base``. Reuses :func:`eval._load_model_and_tokenizer`
+    and :func:`eval._generate` so the load + decode path matches the eval
+    harness exactly. Dependency-light: no run history, no held-out set.
+
+    Exit codes:
+        0   generation(s) printed
+        1   user error — adapter path missing / not a directory, or the base
+            model could not be inferred and no --base was supplied
+        2   runtime error — model/adapter load or generation crashed
+        130 interrupted (Ctrl+C)
+    """
+    import uuid
+
+    from .logging_config import bind_run_context, get_logger
+
+    _print_header("Backpropagate Generate")
+
+    cli_run_id_full = getattr(args, "cli_run_id", None) or uuid.uuid4().hex
+    cli_run_id = cli_run_id_full[:12]
+    try:
+        bind_run_context(run_id=cli_run_id_full, subcommand="generate")
+    except Exception:  # noqa: BLE001  # nosec B110 — best-effort observability; must not abort CLI
+        pass
+    print(
+        f"[INFO] Run ID: {cli_run_id} — share with support if asking for help.",
+        file=sys.stderr,
+    )
+
+    # --- cheap user-error validation BEFORE the torch-heavy import -----------
+    adapter_path = Path(args.adapter_path).expanduser()
+    if not adapter_path.exists():
+        try:
+            get_logger(__name__).warning(
+                "generate_adapter_not_found",
+                code="INPUT_VALIDATION_FAILED",
+                adapter_path=str(adapter_path),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        _print_error(f"Adapter path not found: {adapter_path}")
+        _print_info(
+            "Pass the directory an adapter was saved to (the folder holding "
+            "adapter_config.json + adapter_model.safetensors), e.g. ./output."
+        )
+        return EXIT_USER_ERROR
+    if not adapter_path.is_dir():
+        try:
+            get_logger(__name__).warning(
+                "generate_adapter_not_dir",
+                code="INPUT_VALIDATION_FAILED",
+                adapter_path=str(adapter_path),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        _print_error(f"Adapter path is a file, expected a directory: {adapter_path}")
+        _print_info(
+            "Pass the adapter DIRECTORY (it holds adapter_config.json), not a "
+            "single file."
+        )
+        return EXIT_USER_ERROR
+
+    # Resolve the base model: explicit --base wins, else read the adapter's
+    # adapter_config.json. A missing base is a user error (we won't guess).
+    base_model = getattr(args, "base", None)
+    inferred = False
+    if not base_model:
+        base_model = _infer_base_model_from_adapter(adapter_path)
+        inferred = base_model is not None
+    if not base_model:
+        try:
+            get_logger(__name__).warning(
+                "generate_base_unresolved",
+                code="INPUT_VALIDATION_FAILED",
+                adapter_path=str(adapter_path),
+            )
+        except Exception:  # noqa: BLE001  # nosec B110 — logging must not abort CLI
+            pass
+        _print_error(
+            "Could not infer the base model from the adapter directory "
+            f"({adapter_path}/adapter_config.json missing or has no "
+            "base_model_name_or_path)."
+        )
+        _print_info(
+            "Pass --base <model> (the base model the adapter was trained on), "
+            "e.g. --base Qwen/Qwen2.5-7B-Instruct."
+        )
+        return EXIT_USER_ERROR
+
+    n = max(1, int(getattr(args, "num", 1) or 1))
+    max_new_tokens = int(getattr(args, "max_new_tokens", 128))
+    temperature = float(getattr(args, "temperature", 0.7))
+    seed = int(getattr(args, "seed", 0))
+
+    _print_kv("Adapter", str(adapter_path))
+    _print_kv("Base model", f"{base_model}{' (inferred)' if inferred else ''}")
+    _print_kv("Prompt", args.prompt)
+    _print_kv("Samples", str(n))
+
+    try:
+        # Lazy import — pulls torch + transformers + peft. Reuse the eval
+        # harness's loader + generator so the load/decode path is identical.
+        from .eval import _generate, _load_model_and_tokenizer
+
+        _print_info("==> Loading base model + adapter (may take 30s-3min)...")
+        # Synthetic run dict matching the shape _load_model_and_tokenizer reads.
+        synthetic_run = {
+            "run_id": str(adapter_path),
+            "model_name": base_model,
+            "checkpoint_path": str(adapter_path),
+        }
+        model, tokenizer = _load_model_and_tokenizer(synthetic_run)
+
+        _print_info("==> Generating...")
+        # Generate n completions for the single prompt (the prompt list is the
+        # same prompt repeated n times; each gets the same fixed seed so a
+        # do_sample=False run is deterministic and a sampled run is stable).
+        samples = _generate(
+            model,
+            tokenizer,
+            [args.prompt] * n,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            seed=seed,
+        )
+
+        print()
+        for i, sample in enumerate(samples):
+            completion = getattr(sample, "completion", str(sample))
+            if n > 1:
+                _print_header(f"Generation {i + 1}/{n}")
+            print(completion)
+            if n > 1 and i < len(samples) - 1:
+                print()
+        print()
+        _print_success("Generation complete")
+        return EXIT_OK
+
+    except KeyboardInterrupt:
+        print()
+        _print_warning("Generation interrupted by user")
+        return EXIT_INTERRUPTED
+    except UserInputError as e:
+        _print_structured_error(e)
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        if args.verbose:
+            logger.exception("User input error details")
+        return EXIT_USER_ERROR
+    except BackpropagateError as e:
+        # Model/adapter load + generation failures surface as TrainingError
+        # (RUNTIME_EVAL_FAILED) from _load_model_and_tokenizer, or any other
+        # structured error — treat as runtime.
+        _print_structured_error(e, prefix="Generation error: ")
+        if e.suggestion:
+            _print_info(f"Suggestion: {e.suggestion}")
+        if args.verbose:
+            logger.exception("Generation error details")
+        return EXIT_RUNTIME_ERROR
+    except Exception as e:
+        if args.verbose:
+            _print_error(f"Generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            _print_error_redacted(e, prefix="Generation failed: ")
+            _print_info("Run with --verbose for full traceback")
+        return EXIT_RUNTIME_ERROR
 
 
 # =============================================================================
@@ -5761,11 +6435,18 @@ def cmd_eval(args: argparse.Namespace) -> int:
 # duplication is intentional so the CLI surface doesn't need to construct
 # a Trainer (which would import torch + transformers).
 _VRAM_BATCH_SIZE_TIERS: list[tuple[float, int, str]] = [
-    (24.0, 4, "RTX 4090 / 3090 / A5000 — 7B fits with LoRA r=64"),
+    (48.0, 8, "A6000 / L40 / dual-5090 — large batch; 24-34B QLoRA comfortable"),
+    (32.0, 6, "RTX 5090 — 14B QLoRA comfortable; 32B QLoRA just fits (max_len 2048 + paged 8-bit AdamW); 7B-class full-FT via --full-ft-offload"),
+    (24.0, 4, "RTX 4090 / 3090 / A5000 — 7B LoRA r=64; up to ~14B QLoRA"),
     (16.0, 2, "RTX 5080 / 4070 Ti Super — 7B with LoRA r=16-32"),
     (12.0, 1, "RTX 4070 / 3060 12GB — 7B with LoRA r=8 + gradient checkpointing"),
     (0.0, 1, "Tight fit / fallback — batch=1 + LoRA r=8 + gradient ckpt"),
 ]
+
+# Nominal-vs-reported VRAM tolerance — mirrors trainer._VRAM_TIER_TOLERANCE_GB.
+# A "32 GB" 5090 reports total_memory of ~31.8 GiB; matching the displayed
+# nominal thresholds with this tolerance keeps a real card in its intended tier.
+_VRAM_TIER_TOLERANCE_GB: float = 1.5
 
 
 def cmd_estimate_vram(args: argparse.Namespace) -> int:
@@ -5815,7 +6496,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     # Pick the matching tier.
     selected_tier = _VRAM_BATCH_SIZE_TIERS[-1]
     for threshold, bs, note in _VRAM_BATCH_SIZE_TIERS:
-        if vram_gb >= threshold:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
             selected_tier = (threshold, bs, note)
             break
 
@@ -5828,7 +6509,8 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     mode = getattr(args, "mode", "lora")
     cli_lora_r = getattr(args, "lora_r", None)
     cli_batch_size = getattr(args, "batch_size", None)
-    if cli_batch_size is not None or mode == "full":
+    cli_offload = bool(getattr(args, "full_ft_offload", False))
+    if cli_batch_size is not None or mode == "full" or cli_offload:
         try:
             from .trainer import estimate_vram as _estimate_vram
             estimate = _estimate_vram(
@@ -5836,6 +6518,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                 mode=mode,
                 lora_r=cli_lora_r if cli_lora_r is not None else 16,
                 batch_size=cli_batch_size if cli_batch_size is not None else 1,
+                offload=cli_offload,
             )
             # Coerce the dataclass-shaped estimate into a dict for JSON /
             # human-readable rendering. Defensive: accept either a dict
@@ -5853,6 +6536,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                         "optimizer_state_gb",
                         "activations_gb",
                         "overhead_gb",
+                        "host_ram_gb",
                         "param_count_billions",
                         "mode",
                         "notes",
@@ -6311,7 +6995,9 @@ Subcommands (grouped by workflow):
     export-runs     Bulk export of run history (JSONL)
     validate        Pre-flight a JSONL dataset before training
     data report     Dataset-quality report (dups / outliers / contamination)
+    data split      Split a JSONL dataset into train + held-out files
     eval            Evaluate a run (held-out loss + samples; diff / gate)
+    generate        Ad-hoc generation from an adapter dir against a prompt
     estimate-vram   Pre-flight VRAM tier table for a model / GPU
 
   Export:
@@ -6449,8 +7135,9 @@ Tips:
     )
     train_parser.add_argument(
         "--batch-size",
+        type=_auto_or_positive_int,
         default="auto",
-        help="Batch size (default: auto)",
+        help="Batch size: 'auto' (default) or a positive integer",
     )
     train_parser.add_argument(
         "--lr",
@@ -6516,8 +7203,8 @@ Tips:
         default="quality",
         help=(
             "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
             "defaults; smaller memory footprint)."
         ),
     )
@@ -6548,30 +7235,121 @@ Tips:
         help=(
             "Training mode. 'lora' (default) = LoRA adapter training "
             "(rank, alpha, dropout govern). 'full' = full fine-tuning "
-            "(no adapter; trains all params). Full FT is allowed up to 4B "
-            "params; a genuine ~3B fits a 16GB card, the 3.8-4B class needs "
-            "24GB+. The backend refuses full FT on >4B models. (Wave 6b)"
+            "(no adapter; trains all params). The full-FT parameter ceiling "
+            "is card-aware (derived from detected VRAM: 16GB->4B, 24GB->5B, "
+            "32GB->6B pure-GPU). --full-ft-offload lifts it to 7B-class via "
+            "FSDP2 CPU-offload (Linux/WSL2). (Wave 6b / v1.7)"
         ),
     )
-    # v1.5 T1.2 (ORPO): --method selector + --orpo-beta. Threaded into the
+    # v1.7: full-FT ceiling override + FSDP2 CPU-offload opt-in. Both thread
+    # through the wave6b_candidate_kwargs introspection filter to Trainer.
+    train_parser.add_argument(
+        "--full-ft-ceiling-billions",
+        type=_positive_float,
+        default=None,
+        metavar="B",
+        help=(
+            "Override the card-aware full fine-tuning parameter ceiling "
+            "(billions). Default: unset (derived from detected VRAM: "
+            "16GB->4B, 24GB->5B, 32GB->6B pure-GPU; --full-ft-offload lifts "
+            "it). mode='full' only."
+        ),
+    )
+    train_parser.add_argument(
+        "--full-ft-offload",
+        action="store_true",
+        help=(
+            "Enable the FSDP2 CPU-offload full fine-tuning path: spill params "
+            "+ optimizer state into host RAM so a 7B-class full FT fits a 32GB "
+            "card (+~64GB host RAM). Slower (PCIe/CPU-bandwidth-bound) and "
+            "requires a usable NCCL backend (Linux/WSL2 — NOT Windows-native; "
+            "raises DEP_FSDP_UNAVAILABLE otherwise). mode='full' only."
+        ),
+    )
+    # v1.5 T1.2 (ORPO) + v1.6 C4 (SimPO/KTO): --method selector + the
+    # per-method hyperparameter flags. All thread into the
     # wave6b_candidate_kwargs introspection-filter dict below; the filter
-    # drops them until the trainer wave adds the matching Trainer.__init__
-    # kwargs, so the flags are forward-compatible (parse + bind to args now,
+    # drops a kwarg until the trainer wave adds the matching Trainer.__init__
+    # parameter, so the flags are forward-compatible (parse + bind to args now,
     # reach the backend once it lands). Default 'sft' preserves byte-identical
-    # v1.4 behavior.
+    # v1.4 behavior. Cross-field validation (e.g. simpo_gamma/beta ratio, kto
+    # weight bands, kto+full block, LR auto-lower) lives in the C2 config
+    # validators on TrainingConfig construction — the CLI just passes the
+    # values through and surfaces any UserInputError cleanly via the existing
+    # structured-error path.
     train_parser.add_argument(
         "--method",
-        choices=["sft", "orpo"],
+        choices=["sft", "orpo", "simpo", "kto"],
         default="sft",
-        help="Training objective. 'sft' (default) = supervised fine-tuning. 'orpo' = reference-free "
-             "preference tuning (needs a {chosen, rejected} dataset). Single-stage, no reference model "
-             "— same VRAM envelope as SFT. ORPO supports mode='lora' only in v1.5.",
+        help=(
+            "Training objective. 'sft' (default) = supervised fine-tuning. "
+            "'orpo' / 'simpo' = reference-free preference tuning on a "
+            "{prompt, chosen, rejected} dataset (single-stage, no reference "
+            "model — same VRAM envelope as SFT). 'kto' = prospect-theory tuning "
+            "on UNPAIRED {prompt, completion, label} feedback. ORPO/SimPO/KTO "
+            "support mode='lora' only in v1.6."
+        ),
     )
     train_parser.add_argument(
         "--orpo-beta",
         type=float,
         default=0.1,
         help="ORPO odds-ratio weight (lambda). Default 0.1. Ignored unless --method orpo.",
+    )
+    # v1.6 C4 (SimPO): reference-free, length-normalized reward + target margin
+    # (Meng et al. 2024, arXiv:2405.14734). simpo_beta=2.0 / simpo_gamma=1.0 are
+    # the cross-setup-safe defaults; the config validator warns when
+    # simpo_gamma/simpo_beta > 1.0. Ignored unless --method simpo.
+    train_parser.add_argument(
+        "--simpo-beta",
+        type=_positive_float,
+        default=None,
+        help=(
+            "SimPO reward scaling (beta). Default 2.0 (config). Must be > 0. "
+            "Ignored unless --method simpo."
+        ),
+    )
+    train_parser.add_argument(
+        "--simpo-gamma",
+        type=_positive_float,
+        default=None,
+        help=(
+            "SimPO target reward margin (gamma). Default 1.0 (config). Must be "
+            "> 0; the config validator warns when gamma/beta > 1.0. Ignored "
+            "unless --method simpo."
+        ),
+    )
+    # v1.6 C4 (KTO): prospect-theory loss on unpaired binary feedback
+    # (Ethayarajh et al. 2024, arXiv:2402.01306). kto_beta=0.1; the
+    # desirable/undesirable weights default to 1.0 then the trainer
+    # auto-weights from the label counts. Ignored unless --method kto.
+    train_parser.add_argument(
+        "--kto-beta",
+        type=_positive_float,
+        default=None,
+        help=(
+            "KTO loss aversion (beta). Default 0.1 (config). Must be > 0. "
+            "Ignored unless --method kto."
+        ),
+    )
+    train_parser.add_argument(
+        "--kto-desirable-weight",
+        type=_positive_float,
+        default=None,
+        help=(
+            "KTO weight on desirable (label=true) examples. Default 1.0 "
+            "(config); the trainer auto-weights from label counts to hit the "
+            "research ratio band. Must be > 0. Ignored unless --method kto."
+        ),
+    )
+    train_parser.add_argument(
+        "--kto-undesirable-weight",
+        type=_positive_float,
+        default=None,
+        help=(
+            "KTO weight on undesirable (label=false) examples. Default 1.0 "
+            "(config). Must be > 0. Ignored unless --method kto."
+        ),
     )
     # v1.5 T2.1 (FP8 + rsLoRA, Wave 6b GLUE): both thread into the
     # wave6b_candidate_kwargs introspection-filter dict in cmd_train below.
@@ -6634,8 +7412,9 @@ Tips:
         help=(
             "Training backend. 'auto' (default) uses CUDA on NVIDIA, MLX on "
             "Apple Silicon (needs the [mlx] extra). 'cuda'/'mlx' force a "
-            "backend. MLX = LoRA SFT only, Apple-Silicon only; forcing 'mlx' "
-            "on non-Apple errors cleanly."
+            "backend. MLX is an EXPERIMENTAL, UNVERIFIED PREVIEW (LoRA SFT only, "
+            "Apple-Silicon only, not dogfood-verified on real silicon — no "
+            "support); forcing 'mlx' on non-Apple errors cleanly."
         ),
     )
     train_parser.add_argument(
@@ -6748,8 +7527,8 @@ Tips:
         default="quality",
         help=(
             "LoRA configuration preset. 'quality' = rank 256 + all-linear "
-            "+ 10x LR (new v1.3 default, matches full fine-tuning per"
-            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2"
+            "+ 10x LR (new v1.3 default, matches full fine-tuning per "
+            "Biderman 2024). 'fast' = rank 16 + q+v + 1x LR (v1.2 "
             "defaults; smaller memory footprint)."
         ),
     )
@@ -6777,6 +7556,61 @@ Tips:
             "'full' = full fine-tuning. See `backprop train --help` for "
             "the full mode contract."
         ),
+    )
+    # v1.6 C4: mirror train_parser's --method + per-method hyperparameter flags
+    # for multi-run, so a multi-run campaign can use the same training objective
+    # as a single run. Each binds to a MultiRunConfig / Trainer kwarg of the
+    # matching name; the dataclass-fields / inspect introspection filters in
+    # cmd_multi_run route them to the right binding point and drop a kwarg
+    # silently on a backend build that doesn't accept it (forward-compatible).
+    # Default 'sft' keeps a default multi-run byte-identical. Cross-field
+    # validation lives in the C2 config validators on construction.
+    multi_parser.add_argument(
+        "--method",
+        choices=["sft", "orpo", "simpo", "kto"],
+        default="sft",
+        help=(
+            "Training objective for each run. 'sft' (default) = supervised "
+            "fine-tuning; 'orpo'/'simpo' = reference-free preference tuning "
+            "({prompt, chosen, rejected}); 'kto' = prospect-theory tuning on "
+            "unpaired {prompt, completion, label}. See `backprop train --help`."
+        ),
+    )
+    multi_parser.add_argument(
+        "--orpo-beta",
+        type=float,
+        default=0.1,
+        help="ORPO odds-ratio weight (lambda). Default 0.1. Ignored unless --method orpo.",
+    )
+    multi_parser.add_argument(
+        "--simpo-beta",
+        type=_positive_float,
+        default=None,
+        help="SimPO reward scaling (beta). Default 2.0 (config). Ignored unless --method simpo.",
+    )
+    multi_parser.add_argument(
+        "--simpo-gamma",
+        type=_positive_float,
+        default=None,
+        help="SimPO target margin (gamma). Default 1.0 (config). Ignored unless --method simpo.",
+    )
+    multi_parser.add_argument(
+        "--kto-beta",
+        type=_positive_float,
+        default=None,
+        help="KTO loss aversion (beta). Default 0.1 (config). Ignored unless --method kto.",
+    )
+    multi_parser.add_argument(
+        "--kto-desirable-weight",
+        type=_positive_float,
+        default=None,
+        help="KTO weight on desirable examples. Default 1.0 (config). Ignored unless --method kto.",
+    )
+    multi_parser.add_argument(
+        "--kto-undesirable-weight",
+        type=_positive_float,
+        default=None,
+        help="KTO weight on undesirable examples. Default 1.0 (config). Ignored unless --method kto.",
     )
     # v1.5 T2.2 (merge framework, Wave 6b GLUE): the four merge strategies +
     # drift gate + eval gate. Each flag binds to a MultiRunConfig dataclass
@@ -7764,6 +8598,15 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         ),
     )
     estimate_vram_parser.add_argument(
+        "--full-ft-offload",
+        action="store_true",
+        help=(
+            "Estimate the FSDP2 CPU-offload full-FT path: params + optimizer "
+            "spill to host RAM (reported as host_ram) so the GPU total drops "
+            "to the working set + activations. mode='full' only."
+        ),
+    )
+    estimate_vram_parser.add_argument(
         "--json",
         action="store_true",
         help="Emit the table as JSON for CI / scripting consumers.",
@@ -7878,6 +8721,48 @@ RUNTIME_EVAL_GATE_REGRESSED in the structured log.
         default=0,
         help="Random seed for sample generation (default: 0).",
     )
+    # v1.6 C4: deterministic, judge-free task metrics. --metric is repeatable
+    # (action="append"); --references/--eval-set supplies the held-out
+    # reference set the metrics are scored against; --gate-metric (repeatable)
+    # names the metrics the --gate-against gate must not regress.
+    eval_parser.add_argument(
+        "--metric",
+        action="append",
+        choices=EVAL_METRIC_CHOICES,
+        default=None,
+        metavar="NAME",
+        help=(
+            "Task metric to compute against --references (repeatable). One of: "
+            f"{', '.join(EVAL_METRIC_CHOICES)}. Defaults to "
+            "normalized_exact_match + token_f1 when --references is given but "
+            "no --metric is. Requires --references."
+        ),
+    )
+    eval_parser.add_argument(
+        "--references", "--eval-set",
+        dest="references",
+        metavar="PATH",
+        default=None,
+        help=(
+            'Held-out reference JSONL — one {"prompt": "...", "reference": '
+            '"..."} (or "references": [...]) object per line. The run\'s '
+            "generations are scored against it on the --metric set "
+            "(deterministic, judge-free). --eval-set is an alias."
+        ),
+    )
+    eval_parser.add_argument(
+        "--gate-metric",
+        action="append",
+        choices=EVAL_METRIC_CHOICES,
+        default=None,
+        metavar="NAME",
+        help=(
+            "Task metric the --gate-against gate must not regress beyond its "
+            "noise band (repeatable), on top of the held-out-loss floor. One "
+            f"of: {', '.join(EVAL_METRIC_CHOICES)}. Requires --references + "
+            "--gate-against."
+        ),
+    )
     eval_parser.add_argument(
         "--json",
         action="store_true",
@@ -7888,6 +8773,79 @@ RUNTIME_EVAL_GATE_REGRESSED in the structured log.
     )
     eval_parser.set_defaults(func=cmd_eval)
 
+    # generate command (v1.6 C4) — ad-hoc "did my finetune work?" generation
+    # against an adapter DIRECTORY on disk (not a recorded run_id). Flat
+    # top-level verb; dependency-light local inference. Reuses the eval
+    # harness's loader + generator under the hood.
+    generate_parser = subparsers.add_parser(
+        "generate",
+        parents=[_common],
+        help="Generate from an adapter directory against a prompt (ad-hoc)",
+        description=(
+            "Run ad-hoc generation against a LoRA adapter saved on disk — a "
+            "quick \"did my finetune work?\" check. Takes an adapter DIRECTORY "
+            "(not a recorded run_id) and a prompt; loads the base model "
+            "(inferred from the adapter's adapter_config.json, or --base) + the "
+            "adapter and prints the completion(s). Local inference only — no "
+            "run history, no held-out set required."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Base model inferred from the adapter's adapter_config.json
+  backprop generate ./output "Explain LoRA in one sentence."
+
+  # Explicit base model + 3 samples at higher temperature
+  backprop generate ./output "Write a haiku about GPUs." \\
+      --base Qwen/Qwen2.5-7B-Instruct -n 3 --temperature 0.9
+        """,
+    )
+    generate_parser.add_argument(
+        "adapter_path",
+        help="Path to the adapter DIRECTORY (holds adapter_config.json).",
+    )
+    generate_parser.add_argument(
+        "prompt",
+        help="The prompt to generate a continuation for.",
+    )
+    generate_parser.add_argument(
+        "--base",
+        metavar="MODEL",
+        default=None,
+        help=(
+            "Base model name/path the adapter was trained on. Default: read "
+            "from the adapter's adapter_config.json (base_model_name_or_path)."
+        ),
+    )
+    generate_parser.add_argument(
+        "--max-new-tokens",
+        type=_positive_int,
+        default=128,
+        help="Max new tokens to generate per sample (default: 128; must be > 0).",
+    )
+    generate_parser.add_argument(
+        "-n", "--num",
+        type=_positive_int,
+        default=1,
+        help="Number of completions to generate (default: 1; must be > 0).",
+    )
+    generate_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help=(
+            "Sampling temperature (default: 0.7). <= 0 -> greedy / deterministic "
+            "decoding."
+        ),
+    )
+    generate_parser.add_argument(
+        "--seed",
+        type=_non_negative_int,
+        default=0,
+        help="Random seed for sampling (default: 0).",
+    )
+    generate_parser.set_defaults(func=cmd_generate)
+
     # data command (v1.5 T1.1 — dataset-quality moat). The SECOND nested
     # subparser in the CLI (after `ollama`): groups the dataset-quality
     # surface under a noun so v1.5+ can extend it (`data report`, later
@@ -7896,12 +8854,13 @@ RUNTIME_EVAL_GATE_REGRESSED in the structured log.
     data_parser = subparsers.add_parser(
         "data",
         parents=[_common],
-        help="Dataset-quality tools (report)",
+        help="Dataset-quality tools (report, split)",
         description=(
-            "Dataset-quality tooling. Today exposes `data report` (duplicate "
-            "clusters, length/format outliers, optional train/test "
+            "Dataset-quality tooling. `data report` analyzes a dataset "
+            "(duplicate clusters, length/format outliers, optional train/test "
             "contamination, format-validity, token-length distribution); "
-            "future verbs extend this nested group."
+            "`data split` carves a JSONL dataset into a train file + a "
+            "held-out reference file for non-regression eval."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -7914,6 +8873,9 @@ Examples:
 
   # CI gate: fail if >10%% near-duplicates or any contamination
   backprop data report my_data.jsonl --fail-on-dups 0.1 --fail-on-contamination 0.0
+
+  # Split into train + held-out (10% held out, reproducible)
+  backprop data split my_data.jsonl --heldout-ratio 0.1 --seed 0
         """,
     )
     data_subparsers = data_parser.add_subparsers(
@@ -8013,6 +8975,72 @@ Examples:
         ),
     )
     data_report_parser.set_defaults(func=cmd_data_report)
+
+    # backprop data split <dataset> [flags] (v1.6 C4) — sibling of `data
+    # report`. Deterministic shuffle + split into a train file + a held-out
+    # file (the reference set a later `eval --references` scores against).
+    data_split_parser = data_subparsers.add_parser(
+        "split",
+        parents=[_common],
+        help="Split a JSONL dataset into a train file + a held-out file",
+        description=(
+            "Deterministically shuffle and split a JSONL dataset into a train "
+            "set and a held-out set (the reference split for a later "
+            "`backprop eval --references` / `--gate-against` non-regression "
+            "check). Reads the file directly (no HuggingFace download, no "
+            "torch). The split is seeded so it is reproducible."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # 10% held out (default), reproducible seed 0; writes data.train.jsonl +
+  # data.heldout.jsonl next to the input
+  backprop data split data.jsonl
+
+  # 20% held out, explicit output paths + seed
+  backprop data split data.jsonl --heldout-ratio 0.2 --seed 7 \\
+      --out-train train.jsonl --out-heldout heldout.jsonl
+        """,
+    )
+    data_split_parser.add_argument(
+        "dataset",
+        help="Path to the JSONL dataset to split.",
+    )
+    data_split_parser.add_argument(
+        "--heldout-ratio",
+        type=_unit_float,
+        default=0.1,
+        metavar="RATIO",
+        help=(
+            "Fraction held out in [0, 1] (default: 0.1 = 10%%). Must leave at "
+            "least one row on each side or the split errors."
+        ),
+    )
+    data_split_parser.add_argument(
+        "--seed",
+        type=_non_negative_int,
+        default=0,
+        help="Seed for the deterministic shuffle (default: 0).",
+    )
+    data_split_parser.add_argument(
+        "--out-train",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Output path for the train split (default: <input-stem>.train.jsonl "
+            "next to the input)."
+        ),
+    )
+    data_split_parser.add_argument(
+        "--out-heldout",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Output path for the held-out split (default: "
+            "<input-stem>.heldout.jsonl next to the input)."
+        ),
+    )
+    data_split_parser.set_defaults(func=cmd_data_split)
 
     # When `backprop data` is invoked with no subcommand, print the data
     # subparser's help text and exit non-zero (mirror _ollama_no_subcommand).
@@ -8223,6 +9251,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from .logging_config import bind_run_context, configure_logging, get_logger
 
+    # VIS-CLI-001 (Windows robustness): make stdout/stderr UTF-8 tolerant
+    # BEFORE we print anything (the Run-ID banner and several status/error
+    # strings carry the em-dash U+2014, which crashes a legacy cp437/cp850
+    # Windows console). Entry-point only — never at module import.
+    _reconfigure_stdio_utf8()
+
     # BRIDGE-B-016 (Stage C): mint the cli_run_id BEFORE parse_args so the
     # KeyboardInterrupt during arg validation has a token to print.
     cli_run_id = uuid.uuid4().hex
@@ -8244,7 +9278,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         # KeyboardInterrupt during argparse (rare but possible if a custom
         # validator does I/O) should still exit 130 per the Ship Gate contract.
-        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # prefix + stderr + color treatment (no test pins the literal string;
+        # operators grep abnormal-exit lines on stderr).
+        _print_error(f"Interrupted (run_id={cli_run_id[:12]}).")
         return EXIT_INTERRUPTED
 
     # CLI-A-001 (v1.4 Wave A1): backfill the four shared logging flags.
@@ -8418,7 +9455,10 @@ def main(argv: list[str] | None = None) -> int:
         result: int = args.func(args)
         return result
     except KeyboardInterrupt:
-        print(f"Interrupted (run_id={cli_run_id[:12]}).", file=sys.stderr)
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # prefix + stderr + color treatment (no test pins the literal string;
+        # operators grep abnormal-exit lines on stderr).
+        _print_error(f"Interrupted (run_id={cli_run_id[:12]}).")
         return EXIT_INTERRUPTED
     except SystemExit:
         # Let argparse / library SystemExit propagate so tests that catch
@@ -8433,8 +9473,13 @@ def main(argv: list[str] | None = None) -> int:
         # downstream library exception may quote a credential-bearing URL /
         # header. BACKPROPAGATE_DEBUG still prints the full (un-redacted)
         # traceback for the operator who opted in.
+        # VIS-CLI-003: route through _print_error for the uniform bracketed
+        # ``[ERROR]`` prefix + stderr + color treatment. The stable ``{code}:``
+        # surfacing (added earlier) is preserved as the message body, and the
+        # message stays redacted (the per-handler redaction is bypassed on this
+        # pre-subcommand path — see CLI-A-003).
         code = getattr(e, "code", None) or "RUNTIME"
-        print(f"{code}: {_redact_secrets(str(e))}", file=sys.stderr)
+        _print_error(f"{code}: {_redact_secrets(str(e))}")
         if os.environ.get("BACKPROPAGATE_DEBUG"):
             traceback.print_exc()
 

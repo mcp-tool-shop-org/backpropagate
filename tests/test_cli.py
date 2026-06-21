@@ -38,7 +38,10 @@ class TestParser:
         assert args.model == "custom/model"
         assert args.steps == 200
         assert args.samples == 5000
-        assert args.batch_size == "4"
+        # CLI-A-001 (v1.6): --batch-size now has a type validator
+        # (_auto_or_positive_int), so a numeric value parses to int (was the
+        # raw string "4" pre-fix). The literal "auto" stays a string.
+        assert args.batch_size == 4
         assert args.lr == 1e-4
         assert args.lora_r == 32
         assert args.output == "./custom-output"
@@ -772,13 +775,19 @@ class TestPrintHelpers:
         assert "WARN" in captured.out
 
     def test_print_info(self, capsys):
-        """Test _print_info output."""
+        """Test _print_info output.
+
+        VIS-CLI-003: _print_info now uses the bracketed ``[INFO]`` prefix so
+        it matches the [OK]/[ERROR]/[WARN] family instead of the old bare
+        ``i `` prefix.
+        """
         from backpropagate.cli import _print_info
 
         _print_info("Info message")
         captured = capsys.readouterr()
 
         assert "Info message" in captured.out
+        assert "[INFO]" in captured.out
 
     def test_print_kv(self, capsys):
         """Test _print_kv output."""
@@ -791,7 +800,101 @@ class TestPrintHelpers:
         assert "Value" in captured.out
 
 
-class TestModuleExports:
+class TestStdioReconfigureUtf8:
+    """VIS-CLI-001: stdout/stderr UTF-8 reconfiguration for legacy Windows.
+
+    The Run-ID banner printed on every train/multi-run/export/resume/push/eval
+    run (and several status/error strings) contains the em-dash U+2014, which
+    raises UnicodeEncodeError on a legacy cp437/cp850 Windows console and aborts
+    the command before training. ``main()`` calls ``_reconfigure_stdio_utf8()``
+    at the top to make the streams UTF-8 with ``errors="replace"`` so the dash
+    degrades to a safe char instead of crashing.
+    """
+
+    def test_reconfigure_invokes_utf8_replace_on_real_streams(self, monkeypatch):
+        """A stream exposing ``reconfigure`` is switched to utf-8/replace."""
+        import backpropagate.cli as cli
+
+        calls = []
+
+        class _FakeStream:
+            def reconfigure(self, *, encoding=None, errors=None):
+                calls.append((encoding, errors))
+
+        monkeypatch.setattr(cli.sys, "stdout", _FakeStream())
+        monkeypatch.setattr(cli.sys, "stderr", _FakeStream())
+
+        cli._reconfigure_stdio_utf8()
+
+        assert calls == [("utf-8", "replace"), ("utf-8", "replace")]
+
+    def test_reconfigure_noops_when_stream_lacks_reconfigure(self, monkeypatch):
+        """A pipe/captured stream with no ``reconfigure`` must not raise."""
+        import backpropagate.cli as cli
+
+        class _NoReconfigure:
+            # No ``reconfigure`` attribute — e.g. a pytest capture buffer.
+            def write(self, _s):  # pragma: no cover - not exercised
+                return 0
+
+        monkeypatch.setattr(cli.sys, "stdout", _NoReconfigure())
+        monkeypatch.setattr(cli.sys, "stderr", _NoReconfigure())
+
+        # Must be a silent no-op, never an AttributeError.
+        cli._reconfigure_stdio_utf8()
+
+    def test_reconfigure_swallows_reconfigure_failure(self, monkeypatch):
+        """A stream whose ``reconfigure`` raises must not abort startup."""
+        import backpropagate.cli as cli
+
+        class _AngryStream:
+            def reconfigure(self, *, encoding=None, errors=None):
+                raise OSError("detached / already closed")
+
+        monkeypatch.setattr(cli.sys, "stdout", _AngryStream())
+        monkeypatch.setattr(cli.sys, "stderr", _AngryStream())
+
+        # The try/except inside the helper must absorb this.
+        cli._reconfigure_stdio_utf8()
+
+    def test_em_dash_banner_does_not_crash_after_reconfigure(self, monkeypatch):
+        """End-to-end: an em-dash string survives a cp437-restricted stream
+        once the reconfigure path has run.
+
+        Simulates a legacy Windows console by wrapping a byte buffer in a
+        TextIOWrapper that *starts* encoding-restricted (cp437, which cannot
+        encode U+2014) but supports ``reconfigure``. After
+        ``_reconfigure_stdio_utf8()`` flips it to utf-8/replace, driving
+        ``_print_error`` with the banner's em-dash must NOT raise
+        UnicodeEncodeError.
+        """
+        import io
+
+        import backpropagate.cli as cli
+
+        raw_out = io.BytesIO()
+        raw_err = io.BytesIO()
+        restricted_out = io.TextIOWrapper(raw_out, encoding="cp437", errors="strict")
+        restricted_err = io.TextIOWrapper(raw_err, encoding="cp437", errors="strict")
+
+        monkeypatch.setattr(cli.sys, "stdout", restricted_out)
+        monkeypatch.setattr(cli.sys, "stderr", restricted_err)
+
+        banner = "[INFO] Run ID: deadbeef — share with support if you file a bug"
+
+        # Sanity: before reconfigure, encoding this em-dash under cp437 raises.
+        with pytest.raises(UnicodeEncodeError):
+            restricted_err.write(banner)
+        restricted_err.seek(0)
+        raw_err.seek(0)
+        raw_err.truncate(0)
+
+        # The fix: reconfigure to utf-8/replace, then the dash must go through.
+        cli._reconfigure_stdio_utf8()
+        cli._print_error(banner)          # the em-dash error/banner path
+        cli.sys.stderr.flush()
+
+        assert raw_err.getvalue()  # something was written, no exception raised
     """Tests for module exports."""
 
     def test_main_exported(self):
@@ -2723,3 +2826,119 @@ class TestHelpSurfaceRenders:
             f"`backprop {subcommand} --help` exited with code "
             f"{exc_info.value.code!r}; expected 0 (clean help render)."
         )
+
+
+class TestStructuredErrorPrinting:
+    """OBS-001 / OBS-002: the subcommand error handlers surface the stable
+    error code AND the trainer run_id on the failure paths.
+
+    Pre-fix the per-subcommand handlers printed only ``e.message`` +
+    ``e.suggestion``; the stable ``code`` reached the terminal only via the
+    last-resort ``main()`` handler (which the subcommand handlers preempt), and
+    the trainer ``run_id`` reached the terminal only on the SUCCESS branch — so
+    a failed run could not be mapped to its on-disk checkpoint / run_history
+    entry without digging through JSON logs.
+    """
+
+    def test_print_structured_error_includes_code(self, capsys):
+        """OBS-002: a structured error's stable code prints in ``[CODE]`` form."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import TrainingError
+
+        exc = TrainingError("training blew up", code="RUNTIME_TRAINING_FAILED")
+        _print_structured_error(exc)
+
+        err = capsys.readouterr().err
+        assert "[RUNTIME_TRAINING_FAILED]" in err
+        assert "training blew up" in err
+
+    def test_print_structured_error_honours_prefix(self, capsys):
+        """The optional prefix is preserved after the code (handler labels)."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import ExportError
+
+        exc = ExportError("gguf convert failed", code="RUNTIME_GGUF_EXPORT_FAILED")
+        _print_structured_error(exc, prefix="Export error: ")
+
+        err = capsys.readouterr().err
+        assert "[RUNTIME_GGUF_EXPORT_FAILED]" in err
+        assert "Export error: gguf convert failed" in err
+
+    def test_print_structured_error_surfaces_run_id_from_details(self, capsys):
+        """OBS-001: a run_id carried in ``details`` is surfaced to the operator."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import TrainingError
+
+        exc = TrainingError(
+            "OOM recovery exhausted",
+            code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+            details={"run_id": "abc123def456"},
+        )
+        _print_structured_error(exc)
+
+        captured = capsys.readouterr()
+        # Code on stderr, run_id surfaced (it keys the on-disk checkpoint +
+        # run_history.json entry) so the operator can find their artifacts.
+        assert "[RUNTIME_OOM_RECOVERY_EXHAUSTED]" in captured.err
+        assert "abc123def456" in (captured.out + captured.err)
+
+    def test_print_structured_error_no_run_id_when_absent(self, capsys):
+        """No spurious 'Run id' line when details carry no run_id."""
+        from backpropagate.cli import _print_structured_error
+        from backpropagate.exceptions import UserInputError
+
+        exc = UserInputError("bad flag", code="INPUT_VALIDATION_FAILED")
+        _print_structured_error(exc)
+
+        captured = capsys.readouterr()
+        assert "Run id" not in (captured.out + captured.err)
+
+    def test_cmd_train_failure_prints_code_and_run_id(self, capsys):
+        """End-to-end: cmd_train surfaces the code + run_id on a structured
+        TrainingError raised during the run.
+
+        This is the real operator path OBS-001 + OBS-002 fix: a training
+        failure that stamps run_id into details now lets the operator both
+        cite the stable code and find the on-disk artifacts keyed by run_id —
+        without re-running under --verbose.
+        """
+        import argparse
+
+        from backpropagate.cli import cmd_train
+        from backpropagate.exceptions import TrainingError
+
+        def _boom(*_args, **_kwargs):
+            raise TrainingError(
+                "training aborted mid-run",
+                code="RUNTIME_OOM_RECOVERY_EXHAUSTED",
+                details={"run_id": "deadbeefcafe"},
+            )
+
+        args = argparse.Namespace(
+            data="data.jsonl",
+            model="test",
+            steps=10,
+            samples=None,
+            batch_size="auto",
+            lr=2e-4,
+            lora_r=16,
+            output="./output",
+            no_unsloth=True,
+            verbose=False,
+            cli_run_id="0123456789abcdef",
+        )
+
+        # Patch the Trainer constructor (imported inside cmd_train via
+        # `from .trainer import Trainer`) to raise the structured error.
+        with patch("backpropagate.trainer.Trainer", side_effect=_boom):
+            result = cmd_train(args)
+
+        from backpropagate.cli import EXIT_RUNTIME_ERROR
+
+        assert result == EXIT_RUNTIME_ERROR
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        # OBS-002: stable code is now visible without --verbose.
+        assert "[RUNTIME_OOM_RECOVERY_EXHAUSTED]" in captured.err
+        # OBS-001: trainer run_id (keys checkpoint + run_history) is surfaced.
+        assert "deadbeefcafe" in combined

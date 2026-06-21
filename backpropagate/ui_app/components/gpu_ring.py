@@ -56,13 +56,15 @@ def BpGpuRing(temp_c: float = 0.0, max_c: int = 95, size: int = 60) -> rx.Compon
 
     # FRONTEND-B-012: native Reflex SVG primitives instead of ``rx.html``.
     svg = rx.el.svg(
-        # Background track.
+        # Background track. VIS-UI-005: ``--bp-surface-3`` reads as a slightly
+        # more present outline than the very faint ``--bp-border``, so the
+        # unfilled portion of the ring stays visible.
         rx.el.svg.circle(
             cx=f"{cx}",
             cy=f"{cy}",
             r=f"{r}",
             fill="none",
-            stroke="var(--bp-border)",
+            stroke="var(--bp-surface-3)",
             stroke_width="4",
         ),
         # Fill arc — rotates -90deg so 0% starts at 12 o'clock.

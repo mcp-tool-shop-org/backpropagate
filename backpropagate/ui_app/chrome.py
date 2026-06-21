@@ -197,8 +197,11 @@ def _nav_link(key: str, label: str, href: str, icon_url: str, active_key: str) -
                 src=icon_url,
                 width="18px",
                 height="18px",
+                # FRONTEND-B-005: CSS ``color`` is inert on an ``<img>`` SVG
+                # (fill is baked into the file), so no active-state tint is
+                # applied here. The active row is conveyed by the text
+                # weight/color + the teal inset bar below.
                 style={
-                    "color": "var(--bp-text)" if is_active else "var(--bp-muted)",
                     "flex_shrink": "0",
                 },
                 alt="",

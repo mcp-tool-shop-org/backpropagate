@@ -1,4 +1,4 @@
-"""Run-detail page — ``/runs/[run_id]`` — per-run drill-down.
+"""Run-detail page — ``/runs/[rid]`` — per-run drill-down.
 
 V1_3_BRIEF P1 / Wave 6b FRONTEND-4. Closes the read-only-summary-only gap
 that Wave 6 deferred (``runs.py`` notes "Drill-down to a per-run page is
@@ -14,16 +14,19 @@ Surfaces from V1_3_BRIEF:
 - Checkpoint list (numbered checkpoint dirs with size + timestamp)
 - Logs viewer (read-only; tail of ``training.log`` for the run)
 - Action buttons: "Diff", "Replay", "Delete run", "Export this run".
-  Diff / Replay shell out to the bridge subcommands (``backprop diff-runs``,
-  ``backprop replay``) with a ``--`` end-of-options separator and run-id
-  allowlist validation (UI-A-003). Delete / Export run IN-PROCESS via
-  ``RunHistoryManager`` (UI-A-004) — there is no ``delete-run`` subcommand
-  and ``export-runs`` has no ``--run-id`` flag, so the prior shell-outs
-  were broken; Export writes a single-run JSONL to a sandboxed path.
+  Only Diff shells out — to ``backprop diff-runs`` with a ``--``
+  end-of-options separator and run-id allowlist validation (UI-A-003).
+  Replay / Delete / Export run IN-PROCESS via ``RunHistoryManager``
+  (UI-A-004): there is no ``delete-run`` subcommand, ``export-runs`` has no
+  ``--run-id`` flag, and ``replay`` has no ``--dry-run`` flag, so the prior
+  shell-outs for those three were broken phantom-CLI surfaces. Replay now
+  validates replayability in-process; Export writes a single-run JSONL to a
+  sandboxed path; Delete removes the run via ``RunHistoryManager.delete_run``.
 
-Routing: ``/runs/[run_id]`` is a Reflex dynamic route; the parameter is
-exposed via ``self.router.page.params.get("run_id")`` inside the state's
-``load_run`` event (see ``ui_state.RunDetailState``).
+Routing: ``/runs/[rid]`` is a Reflex dynamic route; the parameter is exposed
+via ``self.router.page.params.get("rid")`` inside the state's ``load_run``
+event (see ``ui_state.RunDetailState``). The route arg is named ``rid``
+(not ``run_id``) so it doesn't shadow a state var.
 """
 
 from __future__ import annotations
@@ -82,7 +85,14 @@ def _metadata_header() -> rx.Component:
                     rx.cond(
                         RunDetailState.status == "failed",
                         rx.badge("failed", color_scheme="red", variant="soft", size="2"),
-                        rx.badge(RunDetailState.status, color_scheme="gray", variant="soft", size="2"),
+                        rx.cond(
+                            # VIS-UI-003: parity with the runs-list badge
+                            # (runs.py ``_status_badge``) which gives an
+                            # interrupted run an amber badge.
+                            RunDetailState.status == "interrupted",
+                            rx.badge("interrupted", color_scheme="amber", variant="soft", size="2"),
+                            rx.badge(RunDetailState.status, color_scheme="gray", variant="soft", size="2"),
+                        ),
                     ),
                 ),
             ),
@@ -378,11 +388,15 @@ def _action_panel() -> rx.Component:
       existed but no UI control invoked it (closed the producer-without-
       consumer dead-state). The result / error surfaces via the same
       ``action_result`` / ``action_error`` panes the other actions use.
-    - **Replay** — dry-runs the bridge ``replay`` subcommand so the
-      operator sees the resolved hyperparams before re-launching.
-    - **Export this run** — invokes ``backprop export-runs --run-id <id>
-      --format jsonl`` for a single-run JSONL dump.
-    - **Delete run** — invokes ``backprop delete-run <id> --yes``.
+    - **Replay** — validates replayability IN-PROCESS via
+      ``RunHistoryManager`` and surfaces the resolved hyperparams so the
+      operator sees them before re-launching (no ``backprop replay``
+      shell-out — that subcommand has no ``--dry-run`` flag).
+    - **Export this run** — writes a single-run JSONL dump IN-PROCESS via
+      ``RunHistoryManager`` to a sandboxed path (no ``export-runs``
+      shell-out — there is no ``--run-id`` flag).
+    - **Delete run** — removes the run IN-PROCESS via
+      ``RunHistoryManager.delete_run`` (no ``delete-run`` subcommand exists).
 
     The diff form is rendered above the action row so the operator's eye
     lands on it first when arriving at the panel after a multi-run pass.
@@ -396,8 +410,9 @@ def _action_panel() -> rx.Component:
         # FRONTEND-A-001 (v1.4 Wave 2): Diff form — text input + Compare
         # button. Wired to ``RunDetailState.set_diff_other_run_id`` for the
         # input and ``diff_with_input`` for the submit. The form sits above
-        # the action row so it doesn't crowd the other 3 destructive /
-        # heavy-shell-out actions.
+        # the action row so it doesn't crowd the other 3 actions (Replay /
+        # Delete / Export, all in-process via RunHistoryManager). Diff is the
+        # only shell-out (``backprop diff-runs``).
         rx.flex(
             rx.text(
                 "Diff against another run",
@@ -560,6 +575,10 @@ def _action_panel() -> rx.Component:
                     code="UI · RUN-DETAIL",
                     title="Action failed",
                     message=RunDetailState.action_error,
+                    # HUX-02: remedy slot wired to the dedicated suggestion
+                    # var so it renders on its own dimmed line (design-digest
+                    # §4d) rather than as a run-on. Empty today → fragment.
+                    hint=RunDetailState.action_error_suggestion,
                 ),
                 rx.button(
                     "Dismiss",
@@ -640,7 +659,7 @@ def _was_deleted() -> rx.Component:
 
 
 def run_detail_page() -> rx.Component:
-    """The ``/runs/[run_id]`` route."""
+    """The ``/runs/[rid]`` route."""
     return rx.flex(
         BpHeader(),
         rx.flex(

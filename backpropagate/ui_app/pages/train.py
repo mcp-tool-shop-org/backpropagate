@@ -278,9 +278,13 @@ def _recovery_banners() -> rx.Component:
     - ``info``-level events are NOT surfaced as banners (would flood the
       page during a normal run). They remain in the side-rail event log
       via ``BpEventLog`` for operators who want the full timeline.
-    - ``err``-level events are NOT surfaced here either — hard failures
-      route through the structured error callout (``BpErrorCallout``,
-      consumed by the per-page inline error chrome in v1.4 Wave 2).
+    - ``err``-level events are NOT surfaced here either. HUX-01: UI-driven
+      training is an honest stub today (``start_training`` stays idle and
+      sets ``TrainState.cli_notice`` directing the operator to ``backprop
+      train`` — see ``_cli_notice``), so no ``BpErrorCallout`` is wired on
+      this page yet. The structured callout IS consumed by the /runs,
+      /models, and /run-detail pages (v1.4 Wave 2); when UI training lands,
+      err-level events on this page will route there too.
 
     Per design digest §4e: recovery is good news, even if the original
     event wasn't — never render in red.

@@ -732,6 +732,49 @@ class TestLogPipelineRedaction:
         assert out["loss"] == 1.23
         assert out["step"] == 100
 
+    def test_processor_redacts_secret_in_nested_dict(self):
+        """LOGGING-A-002: a secret-shaped string nested inside a dict value
+        is redacted (the processor descends into nested mappings)."""
+        from backpropagate.logging_config import _redact_event_processor
+
+        event = {
+            "event": "run_started",
+            "creds": {"hf_token": "hf_abcdefgh12345678", "user": "alice"},
+        }
+        out = _redact_event_processor(None, "info", event)
+        assert out["creds"]["hf_token"] == "hf_<REDACTED>"
+        assert out["creds"]["user"] == "alice"  # non-secret leaf untouched
+
+    def test_processor_redacts_secret_in_nested_list(self):
+        """LOGGING-A-002: a secret-shaped string nested inside a list value
+        is redacted (the processor descends into sequences)."""
+        from backpropagate.logging_config import _redact_event_processor
+
+        event = {
+            "event": "run_started",
+            "args": ["--token", "hf_abcdefgh12345678", "--quiet"],
+        }
+        out = _redact_event_processor(None, "info", event)
+        assert "hf_abcdefgh12345678" not in out["args"]
+        assert "hf_<REDACTED>" in out["args"]
+        assert "--quiet" in out["args"]  # non-secret element untouched
+
+    def test_processor_redacts_secret_in_deeply_nested_structure(self):
+        """LOGGING-A-002: redaction reaches string leaves at any depth
+        through mixed dict/list nesting, leaving non-string scalars intact."""
+        from backpropagate.logging_config import _redact_event_processor
+
+        event = {
+            "event": "run_started",
+            "ctx": {
+                "retries": 3,
+                "auth": [{"bearer": "Bearer abcdef123456"}],
+            },
+        }
+        out = _redact_event_processor(None, "info", event)
+        assert out["ctx"]["retries"] == 3  # non-string scalar untouched
+        assert out["ctx"]["auth"][0]["bearer"] == "Bearer <REDACTED>"
+
     def test_stdlib_filter_redacts_rendered_message(self):
         from backpropagate.logging_config import _SecretRedactingFilter
 

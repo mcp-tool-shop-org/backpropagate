@@ -39,7 +39,9 @@ def _upload_group() -> rx.Component:
                     src="/icons/upload.svg",
                     width="32px",
                     height="32px",
-                    style={"color": "var(--bp-muted)", "margin": "0 auto"},
+                    # FRONTEND-B-005: CSS ``color`` is inert on an ``<img>``
+                    # SVG; drop it and keep only the centering margin.
+                    style={"margin": "0 auto"},
                     alt="",
                 ),
                 rx.text(

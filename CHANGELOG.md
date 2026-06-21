@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - Unreleased
+
+### Added
+
+- **Card-aware full fine-tuning ceiling.** `mode="full"` no longer caps at a hard 4B. The ceiling is derived from the 4-addend training-memory arithmetic against detected VRAM — **16 GB → 4B, 24 GB → 5B, 32 GB → 6B** pure-GPU (`_full_ft_ceiling_for_vram`). Override explicitly with `--full-ft-ceiling-billions` / `Trainer(full_ft_ceiling_billions=...)`.
+- **FSDP2 CPU-offload full fine-tuning — single-card 7B-class.** `--full-ft-offload` / `Trainer(full_ft_offload=True)` configures FSDP2 `fully_shard` + `CPUOffloadPolicy` + activation checkpointing + bf16 to spill params + optimizer state into host RAM, lifting the full-FT ceiling to **~8B / 7B-class on a 32 GB card** (+~64 GB host RAM). It's a documented escape hatch: slower (PCIe/CPU-bandwidth-bound) and needs an NCCL backend (Linux/WSL2). On a host without NCCL (e.g. Windows-native) it fails fast with the new `DEP_FSDP_UNAVAILABLE` rather than silently running without offload and OOMing. The trainer initializes a single-process group automatically (no `accelerate launch` / `torchrun` needed).
+- **24–34B QLoRA model presets.** New presets for the 32 GB envelope: `qwen2.5-14b` (~8.5 GB, the daily-driver sweet spot), `mistral-small-24b` (~18 GB), `qwen2.5-32b` (~26 GB, just fits at `max_len 2048`), and `llama-3.1-8b`. rank=alpha per size, paged 8-bit AdamW.
+- **32 / 48 GB batch + VRAM tiers.** `Trainer._detect_batch_size` and the `estimate-vram` tier table gained 32 GB (batch 6) and 48 GB (batch 8) tiers. `estimate_vram(..., offload=True)` models the FSDP2 offload path and reports a new `host_ram_gb`.
+- **Contrastive full-FT error.** `RUNTIME_FULL_FT_MODEL_TOO_LARGE` now names the right recovery for the situation — `--full-ft-offload` when the model fits the offload ceiling, LoRA/QLoRA when it's past even that.
+
+### Changed
+
+- **Repositioned for the 32 GB envelope.** README, handbook (full-fine-tuning, cli-reference, error-codes, estimate-vram), and presets now lead with single-card 7B-class full fine-tuning + 24–34B QLoRA → Ollama, with an honest "scales down to 16 GB" note. The old "7B+ full FT → use HuggingFace/A100" anti-pitch is replaced by the `--full-ft-offload` path.
+- **MLX rail reframed to an explicit unverified preview.** All "New in v1.5" version hype removed from the MLX surfaces (code docstrings, feature flags, `--backend` help, README, model cards). The rail is kept but labeled experimental / not dogfood-verified on real Apple Silicon / not part of the supported feature set. No functional change.
+
+## [1.6.0] - 2026-06-20
+
+### Added
+
+- **SimPO — reference-free preference tuning.** `--method simpo` / `Trainer(method="simpo")` trains on `{prompt, chosen, rejected}` preference data via TRL's `CPOTrainer` with `loss_type="simpo"` (`cpo_alpha=0`) — length-normalized reward + target margin, no reference model, same single-GPU LoRA envelope as ORPO/SFT (SimPO: Meng et al. 2024, [arXiv:2405.14734](https://arxiv.org/abs/2405.14734)). Defaults `--simpo-beta 2.0` / `--simpo-gamma 1.0`; the LR auto-lowers to `1e-6` (clamped if set ≥ `1e-5` — high LR degrades SimPO). `mode="lora"` only.
+- **KTO — preference tuning on unpaired binary feedback.** `--method kto` / `Trainer(method="kto")` trains on an **unpaired** `{prompt, completion, label}` dataset (per-example thumbs-up/down) via TRL's `KTOTrainer` (KTO: Ethayarajh et al. 2024, [arXiv:2402.01306](https://arxiv.org/abs/2402.01306)) — the data shape ORPO/SimPO/DPO can't consume. New `DatasetFormat.KTO` + `DatasetLoader.to_kto_dataset()` + detection/validation. KTO uses the frozen LoRA base as its reference (no second model loaded — 16 GB envelope preserved); `--kto-beta 0.1`; desirable/undesirable weights auto-balance from the dataset's label counts toward a 1:1–4:3 effective ratio. `mode="lora"` only. Both new methods ship with non-mocked GPU smokes (real CPOTrainer/KTOTrainer trains, finite loss, loadable + mergeable adapter).
+- **Eval task-metrics + conjunction merge-gate.** `backprop eval --metric <name> --references <jsonl> [--gate-metric <name>]` adds deterministic, judge-free task metrics — `normalized_exact_match`, `token_f1` (SQuAD-style), `contains`, `regex`, `pass_rate` — to `EvalResult` (`task_metrics`, `eval_n`, bootstrap `metric_ci`). No LLM judge. The eval-gate is now a **conjunction**: a merge/checkpoint is accepted only if held-out loss does **not** regress AND every gated task-metric does not regress beyond a noise band (delta vs the bootstrap CI, not zero); it warns when the held-out set is underpowered (`eval_n < 100`). Closes the gap where a merge could improve loss while regressing actual task behavior and still pass. (Grounded in HELM [arXiv:2211.09110], SQuAD EM/F1 [arXiv:1606.05250], and the AlpacaEval null-model result [arXiv:2410.07137].)
+- **`backprop generate <adapter_path> "<prompt>"`** — ad-hoc "did my fine-tune work?" generation against a trained adapter path (no recorded run, no GGUF export). Base model inferred from `adapter_config.json`; `--base`, `--max-new-tokens`, `-n/--num`, `--temperature`.
+- **`backprop data split <jsonl>`** — deterministic train / held-out split (`--heldout-ratio`, `--seed`, `--out-train`, `--out-heldout`), completing the held-out/contamination workflow that `data report --against` and `eval --heldout` assume.
+- **FP8 compute path is now verified.** The v1.5 experimental FP8 path (`--fp8`, torchao float8 on Blackwell/Hopper sm_90+) is dogfood-verified end-to-end on an RTX 5090 (Blackwell sm_120) — trains, the `Float8Linear` base / bf16-adapter exclusion holds, and the result merges. Status promoted experimental → verified.
+
+### Changed
+
+- **README capability boundary updated:** ORPO (v1.5) + **SimPO + KTO (v1.6)** are the shipped reference-free preference methods; "SimPO/KTO planned" is retired. No online RL (PPO/GRPO/RLVR) — use TRL / LLaMA-Factory.
+- Conservative dependency floor-raises (`transformers>=4.46`, `datasets>=2.19`, `trl>=0.18`, `peft>=0.13`, `accelerate>=0.34`); upper caps unchanged. The `trl` ORPO/CPO/KTO imports are guarded (structured error + working-range remedy) against the experimental-namespace relocation.
+
+### Removed
+
+- **BREAKING — Gradio fully purged.** Gradio was replaced by the Reflex web UI in v1.2.0, but ~98 dead `gr.*` references survived behind a shim in `ui_security.py`. Removed the entire gradio apparatus (`_GradioShim`, the dead `safe_ui_handler` / `raise_ui_*` helpers) and the long-deprecated **gradio-named aliases** (`safe_gradio_handler`, `RequestContext.from_gradio_request`, `get_gradio_csp`, `DEFAULT_GRADIO_CSP`). `validate_numeric_input` / `validate_string_input` now raise `UserInputError`. All framework-neutral security helpers are unchanged.
+- **BREAKING — `TRAINING_PRESETS` alias removed** (deprecated since v1.4). Use `MULTI_RUN_PRESETS`.
+  Both removals were `DeprecationWarning`-flagged since v1.4 and had zero in-package consumers.
+
+### Fixed
+
+- **Eval-gated SLAO merge made functional.** The v1.5 eval-gated merge was non-functional outside its mocks: `_evaluate_accumulator` wrote a LoRA adapter with no `adapter_config.json` (so `PeftModel.from_pretrained` raised and aborted the whole multi-run session on the first merge), and the documented default (`eval_heldout_path=None`) hit an unimplemented "reuse last-10% split" hook. Now writes a valid `adapter_config.json` and derives the last-decile held-out set in-process; de-mocked with a real PeftModel round-trip test.
+- **Windows-console crash guard.** The per-run Run-ID banner used an em-dash with no stdout/stderr UTF-8 reconfiguration, so on a legacy cp437/cp850 Windows console the first status line could raise `UnicodeEncodeError` before training. `main()` now reconfigures the streams to UTF-8 (`errors="replace"`), fixing the crash and pipe-mojibake.
+- Dataset dedup now uses a stable SHA-1 instead of the salted builtin `hash()` (exact + reproducible across processes); CLI failures surface the stable error `[code]` and the trainer `run_id`; tz-aware timestamps no longer crash resume auto-detect; `backprop data report` converts each sample to ChatML once (was 3×); UI HF-token-file path accepts the documented `~/.config` location; auth-error responses now carry the hardened security headers; numerous doc/help accuracy fixes. README states Python 3.10 is supported through at least v1.6.
+
+### Internal
+
+- A pre-existing pytest-xdist test-isolation bug (a test popped `backpropagate.mlx_backend` from `sys.modules` without restoring it, desyncing other mlx tests' mocks under work-stealing) was fixed. The doc-drift gate was hardened to reconfigure stdout to UTF-8. 3139 → 3437 tests (CI lane); full suite 3467 passed.
+
 ## [1.5.0] - 2026-05-31
 
 ### Added

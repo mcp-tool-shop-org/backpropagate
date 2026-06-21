@@ -593,3 +593,71 @@ class TestTraceLengthHistogram:
             [_think_alpaca("q", "x" * 200_000, "ans")]
         )
         assert hist[-1][1] == 1
+
+
+# =============================================================================
+# SINGLE-PASS CONVERSION (TRAINER-DATA-003)
+# =============================================================================
+
+
+class TestSinglePassConversion:
+    """The module's "single pass" / "cheap, torch-free" contract (docstring
+    lines 5, 11): ``analyze_dataset`` must convert each sample to ChatML ONCE.
+
+    Regression guard for TRAINER-DATA-003: the format-distribution loop,
+    ``token_length_histogram``, and ``trace_length_histogram`` each used to
+    re-run ``convert_to_chatml`` over ALL samples, costing ~3x per report.
+    ``convert_to_chatml`` is the single shared primitive every per-sample
+    conversion routes through (via ``_to_chatml_text``), so counting its calls
+    counts conversions. It must be invoked exactly once per sample.
+    """
+
+    def _spy(self, monkeypatch):
+        from backpropagate import dataset_report as dr
+
+        real = dr.convert_to_chatml
+        counter = {"per_sample": 0, "batch": 0}
+
+        def _counting(samples, *args, **kwargs):
+            counter["batch"] += 1
+            counter["per_sample"] += len(samples)
+            return real(samples, *args, **kwargs)
+
+        monkeypatch.setattr(dr, "convert_to_chatml", _counting)
+        return counter
+
+    def test_clean_dataset_converts_each_sample_once(self, monkeypatch):
+        counter = self._spy(monkeypatch)
+        samples = _clean_dataset(15)
+        analyze_dataset(samples)
+        # Exactly one conversion per sample — not 3x (format-dist + token-hist
+        # + trace-hist). _to_chatml_text converts one sample per call, so the
+        # per-sample tally equals the number of _to_chatml_text invocations.
+        assert counter["per_sample"] == len(samples)
+
+    def test_reasoning_dataset_converts_each_sample_once(self, monkeypatch):
+        # Reasoning rows exercise the trace-histogram path too.
+        counter = self._spy(monkeypatch)
+        samples = [
+            _think_alpaca("q1", "reasoning one here", "ans one"),
+            _think_alpaca("q2", "reasoning two here", "ans two"),
+            _alpaca("plain", "a plain answer with no trace"),
+        ]
+        analyze_dataset(samples)
+        assert counter["per_sample"] == len(samples)
+
+    def test_against_set_converts_each_held_out_row_once(self, monkeypatch):
+        # The contamination path converts the held-out rows once each, on top
+        # of the train-set single pass.
+        counter = self._spy(monkeypatch)
+        train = _clean_dataset(8)
+        against = _clean_dataset(4)
+        analyze_dataset(train, against=against)
+        assert counter["per_sample"] == len(train) + len(against)
+
+    def test_report_is_byte_identical_after_single_pass(self):
+        # Output must not change: same input -> same report dict.
+        samples = _clean_dataset(12)
+        a = analyze_dataset(samples).to_dict()
+        b = analyze_dataset(samples).to_dict()
+        assert a == b

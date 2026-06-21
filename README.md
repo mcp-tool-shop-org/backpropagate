@@ -15,9 +15,9 @@
   <a href="https://mcp-tool-shop-org.github.io/backpropagate/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-# Train an adapter. Ship it to Ollama. Move on.
+# Fine-tune a 32B QLoRA — or a 7B end to end — on one GPU. Ship it to Ollama.
 
-Backpropagate is a Python library for fine-tuning large language models on a single GPU. Three lines of code train a 7B model on a 16GB card. One more command exports it to Ollama so you can `ollama run` your finetune. Works first-class on Windows.
+Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–34B model on one 32 GB consumer card (RTX 5090); one flag — `--full-ft-offload` — full-fine-tunes a 7B-class model by spilling the optimizer state to host RAM. One more command exports to Ollama, then `ollama run` your finetune. Scales cleanly down to 16 GB. First-class on Windows.
 
 ```python
 from backpropagate import Trainer
@@ -69,32 +69,37 @@ Backpropagate is the missing option: **a 3-line Python API for solo operators on
 
 If you tried one of the libraries above and bounced off the config-file ceremony, or hit a model-family gap, or wanted Windows-first defaults — Backpropagate is for you.
 
-## What you can fine-tune on a 16GB consumer GPU
+## What you can fine-tune on one GPU
 
-Here's the practical envelope on a 16GB card (RTX 4080 / 5080 / 4070 Ti Super):
+Backpropagate sizes the run to your card. Here's the practical envelope on a **32 GB** consumer GPU (RTX 5090) with 64 GB host RAM — the rig it's tuned on:
 
-| Model | Method | Status |
+| Model size | Method | Status on a 32 GB card |
 |---|---|---|
-| Qwen-3.5-4B / Phi-4-mini-3.8B / SmolLM3-3B | LoRA / QLoRA / DoRA | Comfortable. Full sequence length, room to spare. |
-| SmolLM3-3B / Qwen2.5-3B / Llama-3.2-3B / Llama-3.2-1B | `mode="full"` (full fine-tuning) | v1.4 — pass `--mode=full` on `backprop train` or `Trainer(..., mode="full")`. Loads full-precision (bf16) weights — no 4-bit, no adapter; gradient checkpointing + paged 8-bit Adam keep the footprint inside 16GB. |
-| Qwen-2.5-7B / Llama-3.1-8B / Mistral-7B | QLoRA | Standard. ~7-8 GB. Backpropagate's default presets. |
-| Llama-3 13B | QLoRA + sample packing | Tight but works. Use shorter sequences. |
-| Mixtral 8x7B (47B total parameters) | — | Out of scope — 2-bit (AQLM / QuIP#) breaks the mergeable-adapter + GGUF-export contract, so it was retired in the [v1.5 trajectory brief](docs/V1_5_BRIEF.md). On a 16GB card, use a ≤8B base. |
+| 7B (Qwen 2.5 7B / Llama-3.1-8B / Mistral 7B) | QLoRA | Comfortable — ~7–8 GB. Full sequence length, lots of headroom. |
+| **14B** (Qwen2.5-14B) | QLoRA | **The daily-driver sweet spot — ~8.5 GB** measured. rank/alpha 32, paged 8-bit AdamW, 4096 ctx. |
+| 24B (Mistral-Small-24B) | QLoRA | ~18 GB. Fits with headroom at 4096 ctx. |
+| **32B** (Qwen2.5-32B) | QLoRA | **Just fits — ~26 GB** at `max_len 2048` + paged 8-bit AdamW. Top of the envelope. |
+| ≤6B | `mode="full"` (true full fine-tuning) | Pure-GPU full FT — bf16 weights, no adapter. The card-aware ceiling is 6B on 32 GB. |
+| **7B-class** (Qwen 2.5 7B / Llama-3.1-8B / Mistral 7B) | `mode="full" --full-ft-offload` | **Full fine-tuning via FSDP2 CPU-offload** — spills params + optimizer to 64 GB host RAM. Slower (bandwidth-bound); Linux/WSL2. |
 
-`mode="full"` admits models up to **4B parameters**. The four presets in the full-FT row above are genuine ~3B (true parameter count 3.08–3.24B) and fit a 16GB card. The 3.8–4B class (Phi-4-mini-3.8B, Qwen-3.5-4B) is also accepted by the ceiling but needs a **24GB+** card for full FT — weights + gradients alone approach 16GB before the optimizer and activations — so on a 16GB card use `mode="lora"` for those (they're in the LoRA row). Models >4B exit with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`.
+Two things most single-GPU libraries send you elsewhere for — **24–34B QLoRA** and **single-card 7B-class full fine-tuning** — Backpropagate does on one consumer card, then exports the result straight to Ollama.
 
-2-bit quantization (AQLM / QuIP#) is **out of scope**. It was scoped for v1.4, then retired in the [v1.5 trajectory brief](docs/V1_5_BRIEF.md): a 2-bit base can't be cleanly merged back into full-precision weights, which breaks Backpropagate's mergeable-adapter → GGUF → Ollama export contract (the whole point of the pipeline). The headroom levers Backpropagate ships instead are the v1.5 **FP8 compute path** (`--fp8`, Blackwell/Hopper) and `mode="full"` for ≤4B models — both stay mergeable and exportable.
+**The full-FT ceiling is card-aware.** It's derived from the 4-addend training-memory arithmetic (weights + gradients + optimizer + activations) against your *detected* VRAM: **16 GB → 4B, 24 GB → 5B, 32 GB → 6B** pure-GPU. `--full-ft-offload` lifts it to **7B-class** by spilling params + optimizer state into host RAM via FSDP2 `fully_shard` + `CPUOffloadPolicy` (slower, PCIe/CPU-bandwidth-bound; needs ~64 GB host RAM and an NCCL backend, i.e. Linux/WSL2). Override the ceiling explicitly with `--full-ft-ceiling-billions`. A model past even the offload ceiling exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`, naming the recovery (`--full-ft-offload`, or LoRA/QLoRA). See [the full fine-tuning handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/) for the VRAM math + the Biderman 2024 / Thinking Machines 2025 quality comparison.
 
-For models 3B and smaller, full fine-tuning (not just LoRA) is feasible on 16GB and now ships in v1.4 as `mode="full"`. Pass `Trainer(..., mode="full")` or `backprop train --mode=full --model phi-4-mini-3.8b` to enable it. A hard gate refuses the mode for models > 4B with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`, naming LoRA + the sub-4B presets as the recovery options. See [the full fine-tuning handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/) for the configuration math + Biderman 2024 / Thinking Machines 2025 quality comparison. For 7B+ models, full fine-tuning needs a 24GB+ GPU — consider an A100 cloud rental, or stick with LoRA, which recent research shows matches full fine-tuning quality on most post-training tasks anyway (see [the anti-pitch section](#what-backpropagate-is-not-for) for citations).
+### Scales down to 16 GB
+
+The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA at ~7–8 GB, and true full fine-tuning of a genuine ~3B (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) inside 16 GB via `mode="full"` (bf16 weights + gradient checkpointing + paged 8-bit AdamW). The same code picks the batch size and full-FT ceiling that fit whatever card it detects — no flags to change between rigs.
+
+2-bit quantization (AQLM / QuIP#) stays **out of scope** — a 2-bit base can't be cleanly merged back into full-precision weights, which breaks the mergeable-adapter → GGUF → Ollama export contract (the whole point of the pipeline). The headroom levers Backpropagate ships instead — QLoRA, `mode="full"`, `--full-ft-offload`, and the FP8 compute path (`--fp8`, Blackwell/Hopper) — all stay mergeable and exportable.
 
 ## What Backpropagate is NOT for
 
 If your use case is below, you'll have a better time with a different library — Backpropagate is not the right pick and trying to make it work would cost more than just reaching for the right tool. Reading this section before you start saves the install-and-bounce cycle:
 
-- **Full-parameter fine-tuning of 7B+ models** — Backpropagate uses LoRA / QLoRA, which trains a small adapter rather than updating every weight. For models 7B and larger, full fine-tuning needs 24GB+ of GPU memory and doesn't fit on a 16GB consumer card. For models 3B and smaller, full fine-tuning IS feasible on 16GB and ships in v1.4 as `mode="full"` (pass `Trainer(..., mode="full")` or `--mode=full` on the CLI; a hard gate raises `RUNTIME_FULL_FT_MODEL_TOO_LARGE` for models > 4B and names LoRA + the sub-4B presets as recoveries). The bigger picture: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows that LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at 67% of the compute — so for the work most operators actually want, you don't lose anything by sticking with LoRA. `mode="full"` exists for the cases where you've measured a quality gap and decided to spend the extra compute. If you genuinely need full fine-tuning of a 7B+ model, use HuggingFace `transformers.Trainer` directly on a 24GB+ card.
-- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO ships in v1.5; SimPO/KTO are planned). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
+- **Full-parameter fine-tuning past the offload ceiling (≈13B+)** — Backpropagate full-fine-tunes up to **~6B pure-GPU and ~7B-class via `--full-ft-offload`** on a 32 GB card (see [the envelope](#what-you-can-fine-tune-on-one-gpu)). A *true full* fine-tune of a 13B+ model is past that — it wants multi-GPU FSDP or a bigger card (reach for `transformers.Trainer` across multiple GPUs, or rent an A100/H100). Before spending that compute, though: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at ~67% of the compute — so QLoRA up to 34B, which Backpropagate does on one card, loses nothing for the work most operators actually want.
+- **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO in v1.5; SimPO + KTO in v1.6). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
 - **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.
-- **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path has to run on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. **New in v1.5:** an experimental MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--experimental-v15). It is LoRA-SFT-only and built-but-not-yet-dogfood-verified on real silicon, so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you still want the CUDA rail.
+- **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path runs on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. An **experimental, unverified-preview** MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--unverified-preview). It is LoRA-SFT-only and **not dogfood-verified on real silicon** (no support), so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you want the CUDA rail.
 - **Anything outside the tested model families** — Qwen 2.5 / 3.5 (7B / 4B), Phi-4-mini-3.8B, SmolLM3-3B, Llama 3.2 (3B / 1B), Mistral 7B. Other models often work but aren't pinned in CI.
 
 If you need any of those things, reach for one of the libraries listed above. They're better at them.
@@ -145,9 +150,9 @@ This trains a Qwen 2.5 7B adapter on 5 short ShareGPT-format conversations, then
 
 Alpaca (`instruction` / `output`), OpenAI chat (`messages`), and raw text formats also work — Backpropagate auto-detects the format.
 
-### Preference tuning (ORPO)
+### Preference tuning (ORPO, SimPO, KTO)
 
-New in v1.5: train on preferences instead of plain demonstrations. ORPO is reference-free and single-stage — it folds the preference signal into the SFT step, so there's no separate reward or reference model and the 3-line shape is unchanged. Pass `--method orpo` (CLI) or `method="orpo"` (Python) and feed it a dataset of `{prompt, chosen, rejected}` (or just `{chosen, rejected}`) rows:
+Train on preferences instead of plain demonstrations. ORPO is reference-free and single-stage — it folds the preference signal into the SFT step, so there's no separate reward or reference model and the 3-line shape is unchanged. Pass `--method orpo` (CLI) or `method="orpo"` (Python) and feed it a dataset of `{prompt, chosen, rejected}` (or just `{chosen, rejected}`) rows:
 
 ```jsonl
 {"prompt": "What is Python?", "chosen": "A high-level programming language known for readability.", "rejected": "idk look it up"}
@@ -166,15 +171,19 @@ trainer.export("gguf", quantization="q4_k_m")
 backprop train --data preferences.jsonl --method orpo --steps 100
 ```
 
-The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. In v1.5 ORPO is `mode="lora"` only. SimPO and KTO are planned follow-ons; for online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
+The default learning rate auto-lowers to `8e-6` for ORPO (the loss is sharper than plain SFT); tune `--orpo-beta` (default `0.1`) to weight the odds-ratio penalty. ORPO is `mode="lora"` only.
+
+**New in v1.6 — SimPO and KTO.** `--method simpo` ([Meng et al. 2024](https://arxiv.org/abs/2405.14734)) is reference-free with a length-normalized reward and takes the same paired `{prompt, chosen, rejected}` data as ORPO (`--simpo-beta`, `--simpo-gamma`). `--method kto` ([Ethayarajh et al. 2024](https://arxiv.org/abs/2402.01306)) takes **unpaired** `{prompt, completion, label}` data — per-example thumbs-up/down — for the large class of feedback that isn't curated A/B pairs; it auto-balances the desirable/undesirable loss weights from your label counts. Both are `mode="lora"` only and stay in the single-GPU SFT envelope (no separate reference model). See the [preference-tuning handbook](https://mcp-tool-shop-org.github.io/backpropagate/handbook/preference-tuning/) for which to use. For online RL (PPO/GRPO) see [What Backpropagate is NOT for](#what-backpropagate-is-not-for).
 
 ### Reasoning-trace SFT (R1 distillation)
 
-New in v1.5: distill a reasoning model the easy way. Pass `--reasoning-trace` (CLI) or `Trainer(..., reasoning_trace=True)` (Python) and feed it traces that keep a `<think>...</think>` chain-of-thought inside the assistant turn — the pure-SFT half of [DeepSeek-R1](https://arxiv.org/abs/2501.12948) distillation, no RL required. Backpropagate keeps `<think>` in the training target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to 8192 for the longer CoT. Critically, `<think>` stays **plain text** — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama like any other fine-tune. SFT only. See the [reasoning-trace recipe](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/#reasoning-trace-sft-r1-distillation) for the dataset shape and the tunable token band.
+Distill a reasoning model the easy way. Pass `--reasoning-trace` (CLI) or `Trainer(..., reasoning_trace=True)` (Python) and feed it traces that keep a `<think>...</think>` chain-of-thought inside the assistant turn — the pure-SFT half of [DeepSeek-R1](https://arxiv.org/abs/2501.12948) distillation, no RL required. Backpropagate keeps `<think>` in the training target, drops empty / over-long traces (trace-length filtering), and raises the default `max_seq_length` to 8192 for the longer CoT. Critically, `<think>` stays **plain text** — no special tokens, no embedding resize — so the merged GGUF still exports to Ollama like any other fine-tune. SFT only. See the [reasoning-trace recipe](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/#reasoning-trace-sft-r1-distillation) for the dataset shape and the tunable token band.
 
-### Apple Silicon (MLX) — experimental, v1.5
+### Apple Silicon (MLX) — unverified preview
 
-New in v1.5: **one API, two rails.** CUDA stays the canonical, verified backend; MLX is a second rail that trains on an M-series Mac via Apple's [`mlx_lm.lora`](https://github.com/ml-explore/mlx-lm) toolchain (unified memory, no CUDA). The same 3-line shape picks the rail by hardware — `backend='auto'` (the default) routes to CUDA on NVIDIA and to MLX on Apple Silicon, so existing CUDA rigs are byte-identical:
+> ⚠️ **Unverified preview — not part of the supported feature set.** The MLX rail is built and unit-tested but has **not** been dogfood-verified on real Apple Silicon (`mlx-lm` is Apple-only and can't run on the NVIDIA rigs Backpropagate is developed on). Treat everything below as experimental, use at your own risk, and [report anomalies](#reporting-bugs) if you run it on an M-series Mac.
+
+**One API, two rails.** CUDA is the canonical, verified backend; MLX is a second rail that trains on an M-series Mac via Apple's [`mlx_lm.lora`](https://github.com/ml-explore/mlx-lm) toolchain (unified memory, no CUDA). The 3-line shape picks the rail by hardware — `backend='auto'` (the default) routes to CUDA on NVIDIA and to MLX on Apple Silicon, so existing CUDA rigs are byte-identical:
 
 ```python
 from backpropagate import Trainer
@@ -188,9 +197,9 @@ trainer.train("examples/quickstart.jsonl", steps=100)
 backprop train --data my_data.jsonl --backend mlx --steps 100
 ```
 
-In v1.5 the MLX rail is **LoRA SFT only** — no ORPO, no FP8, no `mode='full'`, no multi-run on MLX yet (each is rejected with `CONFIG_INVALID_SETTING`; use `backend='cuda'`/`'auto'` on an NVIDIA box for those). The resulting adapter is plain safetensors and exports to Ollama through the same path as the CUDA rail.
+The MLX rail is **LoRA SFT only** — no ORPO, no FP8, no `mode='full'`, no multi-run (each is rejected with `CONFIG_INVALID_SETTING`; use `backend='cuda'`/`'auto'` on an NVIDIA box for those). The resulting adapter is plain safetensors and exports to Ollama through the same path as the CUDA rail.
 
-> ⚠️ **Honest status:** the MLX rail ships in v1.5 **built + unit-tested (mocked)** but **NOT yet dogfood-verified on real Apple Silicon** — `mlx-lm` is Apple-only and could not be run on the NVIDIA rig this was authored on. Treat it as experimental (same framing as the FP8 path), and please [report anomalies](#reporting-bugs) once it runs on an M-series Mac. Forcing `--backend mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; a missing `mlx_lm` toolchain on a Mac raises `DEP_MLX_UNAVAILABLE`.
+> Forcing `--backend mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; a missing `mlx_lm` toolchain on a Mac raises `DEP_MLX_UNAVAILABLE`.
 
 For more end-to-end workflows (fine-tune-and-push-to-HF-Hub, resume after OOM, multi-run SLAO across a long campaign, etc.) see the [handbook recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
@@ -303,14 +312,14 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 **Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
 
-Python 3.10 reaches upstream end-of-life in October 2026 and is scheduled for drop in v1.5. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
+Python 3.10 is supported through at least v1.6; it reaches upstream end-of-life in October 2026 and is scheduled for removal in the first release after that. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
 
 Backpropagate handles the runtime quirks of training on different platforms, but it can't fix install-time problems. The two most common are:
 
 - **Wrong CUDA wheel.** PyTorch is published one binary per CUDA version. If you pick the wrong one, you silently get CPU-only PyTorch and training is impossibly slow. Use the wheel picker at <https://pytorch.org/get-started/locally/> for your driver. Run `nvidia-smi` to see your driver / CUDA version.
 - **Windows + GGUF export.** The `[export]` extra builds `llama-cpp-python` from source, which needs Visual Studio Build Tools (C++ component) and CMake.
 
-**macOS:** the CUDA rail is not supported (no CUDA) — a CUDA-routed `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`, and you can run the trained adapter on a Mac via Ollama. **New in v1.5:** an experimental MLX rail (`--backend mlx`, `pip install 'backpropagate[mlx]'`) trains a LoRA adapter natively on Apple Silicon via `mlx_lm.lora` — LoRA SFT only, and built + unit-tested but not yet dogfood-verified on real silicon (see [Apple Silicon (MLX)](#apple-silicon-mlx--experimental-v15)). For the CUDA path, or for ORPO / full fine-tune / FP8 / multi-run, use a CUDA Linux or Windows machine.
+**macOS:** the CUDA rail is not supported (no CUDA) — a CUDA-routed `trainer.train()` raises `DEP_GPU_NOT_AVAILABLE`, and you can run the trained adapter on a Mac via Ollama. An **experimental, unverified-preview** MLX rail (`--backend mlx`, `pip install 'backpropagate[mlx]'`) trains a LoRA adapter natively on Apple Silicon via `mlx_lm.lora` — LoRA SFT only, and **not dogfood-verified on real silicon** (see [Apple Silicon (MLX)](#apple-silicon-mlx--unverified-preview)). For the CUDA path, or for ORPO / full fine-tune / FP8 / multi-run, use a CUDA Linux or Windows machine.
 
 See the [troubleshooting handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting/) for the long-form install fix-it guide, and the dedicated [CUDA troubleshooting page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/troubleshooting-cuda/) for driver / VRAM / xformers / bf16-vs-fp16 issues.
 
@@ -362,8 +371,12 @@ Nested keys use double underscore (`MODEL__NAME`, not `MODEL_NAME`). The full re
 | Llama 3.2 3B | ~8GB | Llama Community | Solid alternative to Qwen 3B with permissive caveats. |
 | Llama 3.2 1B | ~6GB | Llama Community | For quick experiments on small cards. |
 | Mistral 7B | ~12GB | Apache 2.0 | Comparable to Qwen 7B, different chat template. |
+| Llama-3.1-8B | ~7-8GB (QLoRA) | Llama-3.1-Community | 8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license). |
+| **Qwen2.5-14B** | ~8.5GB (QLoRA) | Apache 2.0 | **The 32 GB daily-driver sweet spot** — rank/alpha 32, paged 8-bit AdamW, 4096 ctx. |
+| Mistral-Small-24B | ~18GB (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card with 4096-ctx headroom. |
+| **Qwen2.5-32B** | ~26GB (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope** — just fits at `max_len 2048` + paged 8-bit AdamW. |
 
-Other models often work, but only these eight are pinned in CI. Pass `--lora-preset=quality` (default) for rank-256 / all-linear targets per Biderman 2024 + Thinking Machines 2025, or `--lora-preset=fast` for the legacy rank-16 / q+v target if you need the v1.2.x footprint.
+Other models often work; the rows above are the curated presets — the 14B–32B tier is QLoRA-tuned for a 32 GB card (the measured envelope). Pass `--lora-preset=quality` (default) for rank-256 / all-linear targets per Biderman 2024 + Thinking Machines 2025, or `--lora-preset=fast` for the legacy rank-16 / q+v target if you need the v1.2.x footprint.
 
 ## Troubleshooting
 

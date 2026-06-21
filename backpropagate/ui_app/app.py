@@ -175,8 +175,9 @@ app.add_page(lambda: _with_tokens(export_page()), route="/export", title="backpr
 app.add_page(lambda: _with_tokens(dataset_page()), route="/dataset", title="backpropagate · dataset")
 app.add_page(lambda: _with_tokens(runs_page()), route="/runs", title="backpropagate · runs")
 # Wave 6b (v1.3): drill-down + models surface.
-# Dynamic route: ``/runs/[run_id]`` populates ``RunDetailState`` on mount and
-# renders the per-run page (mirrors ``backprop show-run``). Models surface
-# lists local HF cache contents + disk usage + per-model cleanup affordance.
+# Dynamic route: ``/runs/[rid]`` populates ``RunDetailState`` on mount and
+# renders the per-run page (mirrors ``backprop show-run``). The route arg is
+# named ``rid`` (not ``run_id``) so it doesn't shadow a state var. Models
+# surface lists local HF cache contents + disk usage + per-model cleanup.
 app.add_page(lambda: _with_tokens(run_detail_page()), route="/runs/[rid]", title="backpropagate · run detail")
 app.add_page(lambda: _with_tokens(models_page()), route="/models", title="backpropagate · models")

@@ -319,6 +319,11 @@ def _error_callout() -> rx.Component:
             code="UI · RUNS",
             title="Could not load run history",
             message=RunsState.error,
+            # HUX-02: the operator-actionable remedy rides its own state var
+            # (not concatenated into ``error``) so it renders on a distinct
+            # dimmed line per the design-digest §4d reading order. Empty
+            # ``hint`` collapses to a fragment (no DOM).
+            hint=RunsState.error_suggestion,
         ),
         rx.button(
             "Dismiss",
@@ -346,7 +351,7 @@ def runs_page() -> rx.Component:
             BpLeftNav(active="runs"),
             rx.scroll_area(
                 rx.flex(
-                    rx.text(
+                    rx.heading(
                         "Run history",
                         size="6",
                         style={"color": "var(--bp-text)", "font_weight": "500"},

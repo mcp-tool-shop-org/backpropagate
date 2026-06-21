@@ -51,6 +51,7 @@ from .exceptions import (
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
+    FsdpUnavailableError,
     FullFinetuneModelTooLargeError,
     GPUNotAvailableError,
     InvalidSettingError,
@@ -660,9 +661,218 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 # The gate only bounds the parameter COUNT — it does not promise 16GB fit for
 # every admitted model. Operators >4B use mode='lora'. A pre-4B value of 3.0
 # wrongly rejected every "3B" preset at load time (count > 3.0); raised to 4.0
-# in the v1.4.x mode='full' fix. Future v1.5 may expose a
-# `--full-ft-ceiling-billions` flag to lift it further on 24GB+ cards.
+# in the v1.4.x mode='full' fix. v1.7 "32 GB envelope" shipped the
+# `--full-ft-ceiling-billions` flag + VRAM-derived ceilings
+# (:func:`_full_ft_ceiling_for_vram` / :func:`_full_ft_offload_ceiling_for_vram`);
+# this constant remains the DOCUMENTED FALLBACK used when VRAM can't be
+# detected (no CUDA / query failure) and no explicit override was passed.
 _FULL_FT_PARAM_CEILING_BILLIONS: float = 4.0
+
+
+# =============================================================================
+# v1.7 "32 GB envelope" — VRAM-DERIVED FULL-FT PARAMETER CEILINGS
+# =============================================================================
+# The pre-v1.7 ceiling was a single 4B constant tuned to the 16GB consumer
+# card. On the studio's RTX 5090 (32 GB, sm_120 Blackwell) full-FT of a 6B-class
+# model fits pure-GPU, and a 7B-class full fine-tune fits via FSDP2 CPU-offload.
+# Hard-coding 4B left those headroom regimes inaccessible. These two helpers
+# derive the ceiling from the DETECTED card size instead.
+#
+# Derivation (4-addend training-memory arithmetic, MEASURED on this rig):
+#   For a TRUE (non-LoRA) full fine-tune in bf16 with paged-8-bit AdamW +
+#   gradient checkpointing, the GPU-resident cost is roughly:
+#     weights (2 B/param) + gradients (2 B/param) + optimizer (paged-8bit
+#     AdamW ~2 B/param) ≈ 6 B/param resident, + O(√n) activations + ~15%
+#     framework/fragmentation overhead. So a card with `V` GB fits about
+#     V / 6 billion params pure-GPU once a working/overhead margin is reserved.
+#   Anchored to the measured fit points rather than the raw quotient so the
+#   table matches what actually trains on each card:
+#     <=16 GB -> 4.0B   (the v1.4 consumer contract; a genuine ~3B + the
+#                        3.8-4B class clear it; 7B needs LoRA)
+#       24 GB -> 5.0B
+#       32 GB -> 6.0B    (RTX 5090 pure-GPU full-FT top, measured)
+#     >=48 GB -> 10.0B   (A6000 / L40-class headroom)
+#   None (VRAM unknown) -> the 4.0B fallback constant.
+_FULL_FT_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    # (min_vram_gb_inclusive, ceiling_billions) — highest threshold first.
+    (48.0, 10.0),
+    (32.0, 6.0),
+    (24.0, 5.0),
+    (0.0, 4.0),
+)
+
+# When FSDP2 CPU-offload is enabled the params + optimizer state spill into
+# host RAM (64 GB on this rig), so the GPU only has to hold the active shard +
+# activations + overhead. That lifts the param ceiling materially per card.
+# Anchored to the MEASURED FSDP2 `fully_shard` + `CPUOffloadPolicy` +
+# activation-checkpointing + bf16 recipe (the documented escape hatch — slow,
+# PCIe/CPU-bandwidth-bound, NOT the default):
+#     <=16 GB -> 4.0B   (offload buys little headroom on a tiny card; the
+#                        host-RAM spill still needs a working GPU shard)
+#       24 GB -> 7.0B
+#       32 GB -> 8.0B    (RTX 5090: a 7B-class full-FT fits comfortably here,
+#                        measured; the table leaves margin to 8B)
+#     >=48 GB -> 16.0B
+#   None (VRAM unknown) -> the 4.0B fallback constant.
+_FULL_FT_OFFLOAD_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    (48.0, 16.0),
+    (32.0, 8.0),
+    (24.0, 7.0),
+    (0.0, 4.0),
+)
+
+# Nominal-vs-reported VRAM tolerance. A "32 GB" card reports total_memory of
+# ~31.4-31.8 GiB (driver / ECC / context reserve); a "24 GB" card ~23.6, etc.
+# Comparing the reported value against an exact nominal threshold (32.0) drops a
+# real 5090 into the 24 GB tier. Add this tolerance so a card within ~1.5 GB of
+# a nominal tier counts as that tier. Tier gaps are 8 GB, so 1.5 GB can never
+# cross two tiers. (Caught by the v1.7 pure-GPU full-FT GPU smoke: a 5090
+# reported 31.8 GB and resolved ceiling 5.0B instead of 6.0B.)
+_VRAM_TIER_TOLERANCE_GB: float = 1.5
+
+
+def _full_ft_ceiling_for_vram(vram_gb: float | None) -> float:
+    """v1.7: pure-GPU full-FT parameter ceiling (billions) for a card size.
+
+    Derived from the 4-addend training-memory arithmetic (weights + gradients
+    + paged-8-bit-AdamW optimizer ≈ 6 B/param GPU-resident, + O(√n) activations
+    + overhead). Anchored to MEASURED fit points on this rig:
+
+        None -> 4.0   (VRAM unknown — the documented fallback constant)
+        <=16 -> 4.0
+          24 -> 5.0
+          32 -> 6.0   (RTX 5090 pure-GPU full-FT top)
+        >=48 -> 10.0
+
+    Returns the ceiling in billions. ``None`` returns the fallback constant so
+    callers that can't probe the card degrade to the conservative 4B contract.
+    """
+    if vram_gb is None:
+        return _FULL_FT_PARAM_CEILING_BILLIONS
+    for threshold, ceiling in _FULL_FT_VRAM_CEILING_TIERS:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+            return ceiling
+    # The (0.0, 4.0) sentinel row makes this unreachable for any non-negative
+    # vram_gb; kept as a defensive floor for a pathological negative reading.
+    return _FULL_FT_PARAM_CEILING_BILLIONS
+
+
+def _full_ft_offload_ceiling_for_vram(vram_gb: float | None) -> float:
+    """v1.7: full-FT parameter ceiling (billions) WHEN FSDP2 CPU-offload is on.
+
+    With FSDP2 ``fully_shard`` + ``CPUOffloadPolicy`` the params + optimizer
+    spill to host RAM, leaving the GPU to hold the active shard + activations +
+    overhead. Anchored to the MEASURED FSDP2-CPUOffload recipe on this rig
+    (RTX 5090 32 GB + 64 GB host RAM):
+
+        None -> 4.0   (VRAM unknown — the documented fallback constant)
+        <=16 -> 4.0
+          24 -> 7.0
+          32 -> 8.0   (RTX 5090: 7B-class full-FT fits comfortably; offload top)
+        >=48 -> 16.0
+
+    Returns the ceiling in billions. ``None`` returns the fallback constant.
+    """
+    if vram_gb is None:
+        return _FULL_FT_PARAM_CEILING_BILLIONS
+    for threshold, ceiling in _FULL_FT_OFFLOAD_VRAM_CEILING_TIERS:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+            return ceiling
+    return _FULL_FT_PARAM_CEILING_BILLIONS
+
+
+def _detect_total_vram_gb() -> float | None:
+    """v1.7: total VRAM of the primary CUDA device in GB, or None.
+
+    Mirrors the try/except pattern in :meth:`Trainer._detect_batch_size`:
+    probes ``torch.cuda.get_device_properties(0).total_memory`` and returns the
+    value in GB, or ``None`` on any failure (torch not installed, no CUDA
+    device, query error). Pure / side-effect-free so the full-FT ceiling
+    resolution stays stable across construction + load + OOM-retry.
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    except ImportError:
+        return None
+    except Exception as exc:  # noqa: BLE001 — best-effort VRAM probe
+        logger.debug(f"_detect_total_vram_gb: VRAM probe failed: {exc!r}")
+        return None
+    return None
+
+
+def _ensure_fsdp_runtime() -> None:
+    """v1.7: verify + lazily initialize the FSDP2 CPU-offload runtime, or raise.
+
+    The full-FT offload path (``mode='full'`` + ``full_ft_offload=True``) spills
+    params + optimizer state to host RAM via FSDP2 ``fully_shard`` +
+    ``CPUOffloadPolicy``. That needs a usable **NCCL** distributed backend, which
+    is Linux / WSL2 only — NOT Windows-native (gloo cannot carry CUDA
+    collectives). The MEASURED studio recipe runs this under WSL2. Rather than
+    silently run without offload and OOM, fail fast with
+    ``DEP_FSDP_UNAVAILABLE`` naming the WSL2 / Linux requirement.
+
+    On a capable host, lazily init a single-process group so FSDP engages inside
+    a bare ``python`` run (no ``accelerate launch`` / ``torchrun``).
+    """
+    try:
+        import torch
+        import torch.distributed as dist
+    except Exception as exc:  # noqa: BLE001 — torch import failure is terminal here
+        raise FsdpUnavailableError(
+            reason=f"torch.distributed is not importable ({exc})."
+        ) from exc
+
+    if not torch.cuda.is_available():
+        raise FsdpUnavailableError(
+            reason="no CUDA device is visible — FSDP2 CPU-offload full-FT needs a GPU."
+        )
+    # FSDP CUDA collectives require NCCL. Windows-native has gloo only; the
+    # offload path is a Linux / WSL2 capability (matches the measured recipe).
+    if not (dist.is_available() and dist.is_nccl_available()):
+        raise FsdpUnavailableError(
+            reason=(
+                "NCCL is unavailable on this host, so FSDP2 CPU-offload cannot run "
+                "(the Windows-native case — gloo cannot carry CUDA collectives). "
+                "Run --full-ft-offload under WSL2 / Linux (the measured recipe), "
+                "or use mode='lora' / QLoRA which fits 7B-34B natively on a 32GB card."
+            )
+        )
+    # Single-process group so FSDP engages without accelerate launch / torchrun.
+    if not dist.is_initialized():
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        os.environ.setdefault("RANK", "0")
+        os.environ.setdefault("WORLD_SIZE", "1")
+        os.environ.setdefault("LOCAL_RANK", "0")
+        try:
+            dist.init_process_group(backend="nccl", rank=0, world_size=1)
+        except Exception as exc:  # noqa: BLE001 — surface as a structured error
+            raise FsdpUnavailableError(
+                reason=f"could not initialize the FSDP process group ({exc})."
+            ) from exc
+    # Host-RAM advisory: the spill target. Warn (don't fail) if well under 64GB.
+    try:
+        import psutil
+
+        host_gb = psutil.virtual_memory().total / (1024 ** 3)
+        if host_gb < 56:  # ~64GB minus OS headroom
+            logger.warning(
+                "FSDP2 CPU-offload spills params+optimizer to host RAM, but this "
+                "host has only %.0fGB — the measured 7B recipe wants ~64GB; the "
+                "run may exhaust host RAM.",
+                host_gb,
+            )
+    except Exception:  # noqa: BLE001 — psutil is optional; advisory only
+        pass  # nosec B110 — host-RAM probe is advisory; its absence must not block training
+    logger.warning(
+        "FSDP2 CPU-offload active: params+optimizer spilled to host RAM. This is "
+        "the documented escape hatch — expect a slower, PCIe/CPU-bandwidth-bound "
+        "run than a model that fits the pure-GPU full-FT ceiling."
+    )
+
 
 # Default learning rate for mode='full'. Full fine-tuning literature
 # (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
@@ -682,6 +892,30 @@ _FULL_FT_DEFAULT_LR_DIVISOR: float = 10.0
 # not scale with the LoRA default). full+orpo is blocked, so the two
 # LR-default branches are mutually exclusive.
 _ORPO_DEFAULT_LR: float = 8e-6
+
+# v1.6 C2 (SimPO): default learning rate for method='simpo'. SimPO (Meng et
+# al. 2024, "SimPO: Simple Preference Optimization with a Reference-Free
+# Reward", arXiv:2405.14734) is reference-free and length-normalized; its
+# reward is far more sensitive to step size than SFT — the paper and TRL's CPO
+# example scripts anchor SimPO around 1e-6, and LR >= 1e-5 degrades the model
+# to repetitive output. We lower the default to 1e-6 so a bare
+# Trainer(method='simpo') lands in the documented-stable band without operator
+# intervention; explicit ``learning_rate=`` wins. Mirrors _ORPO_DEFAULT_LR (a
+# fixed published anchor, NOT a divisor off the LoRA SFT default — SimPO's
+# stable band does not scale with the LoRA default). simpo+full is blocked at
+# construction, so this branch is mutually exclusive with the mode='full' LR
+# divisor. Matches config.get_recommended_lr(method='simpo') == 1e-6.
+_SIMPO_DEFAULT_LR: float = 1e-6
+
+# v1.6 C2 (KTO): default learning rate for method='kto'. KTO (Ethayarajh et
+# al. 2024, "Model Alignment as Prospect Theoretic Optimization",
+# arXiv:2402.01306) trains a prospect-theory loss on UNPAIRED binary feedback;
+# the published runs sit at 1e-6 and LR > 5e-6 destabilizes the KL estimate.
+# We anchor the default at 1e-6, mirroring _ORPO_DEFAULT_LR / _SIMPO_DEFAULT_LR
+# (fixed published anchor, not a divisor). kto+full is blocked at construction
+# (KTO is mode='lora'-only in v1.6), so this branch is mutually exclusive with
+# the mode='full' divisor. Matches config.get_recommended_lr(method='kto').
+_KTO_DEFAULT_LR: float = 1e-6
 
 
 def _estimate_param_count_billions(model_id: str) -> float | None:
@@ -768,8 +1002,10 @@ def _enforce_full_ft_param_ceiling(
     *,
     ceiling_billions: float = _FULL_FT_PARAM_CEILING_BILLIONS,
     loaded_model: Any = None,
+    full_ft_offload: bool = False,
+    offload_ceiling_billions: float | None = None,
 ) -> None:
-    """v1.4 BACKEND-F-008: refuse mode='full' for models > 3B.
+    """v1.4 BACKEND-F-008 / v1.7: refuse mode='full' for oversized models.
 
     Probe order:
       1. ``loaded_model.num_parameters()`` when a loaded model is supplied
@@ -779,8 +1015,20 @@ def _enforce_full_ft_param_ceiling(
       3. If neither produces a count, accept construction silently (the
          load-time recheck is the safety net).
 
-    Raises :class:`FullFinetuneModelTooLargeError` when the count exceeds
-    the ceiling. Pure function side-effect-free otherwise.
+    The EFFECTIVE pure-GPU ceiling is ``ceiling_billions`` (the caller resolves
+    it from an explicit override / detected-VRAM tier / fallback constant before
+    calling). ``offload_ceiling_billions`` (v1.7) is the higher ceiling
+    reachable via FSDP2 CPU-offload; it makes the error CONTRASTIVE:
+
+      * model exceeds the pure-GPU ceiling but fits the offload ceiling AND
+        offload is OFF -> the error names ``--full-ft-offload`` /
+        ``full_ft_offload=True`` as the recovery (spills params+optimizer to
+        host RAM; slower; needs ~64 GB RAM).
+      * model exceeds even the offload ceiling (or offload is already ON) ->
+        the error names LoRA / QLoRA as the recovery.
+
+    Raises :class:`FullFinetuneModelTooLargeError` when the count exceeds the
+    effective ceiling. Pure function side-effect-free otherwise.
     """
     estimated_billions: float | None = None
 
@@ -822,16 +1070,30 @@ def _enforce_full_ft_param_ceiling(
         return
 
     if estimated_billions > ceiling_billions:
+        # v1.7 contrastive recovery hint. When the model clears the offload
+        # ceiling but not the pure-GPU ceiling AND offload is OFF, point the
+        # operator at --full-ft-offload before they reach for LoRA. When it
+        # exceeds even the offload ceiling (or offload is already on), the
+        # exception's own default message names LoRA / QLoRA.
+        offload_recoverable = (
+            not full_ft_offload
+            and offload_ceiling_billions is not None
+            and estimated_billions <= offload_ceiling_billions
+        )
         raise FullFinetuneModelTooLargeError(
             model_name=model_id,
             param_count_billions=estimated_billions,
             ceiling_billions=ceiling_billions,
+            offload_ceiling_billions=offload_ceiling_billions,
+            offload_recoverable=offload_recoverable,
+            offload_active=full_ft_offload,
         )
 
     logger.info(
         f"_enforce_full_ft_param_ceiling: mode='full' approved — "
         f"model={model_id!r} estimated_params={estimated_billions:.2f}B "
-        f"<= ceiling={ceiling_billions:.0f}B."
+        f"<= ceiling={ceiling_billions:.1f}B"
+        f"{' (FSDP2 CPU-offload)' if full_ft_offload else ''}."
     )
 
 
@@ -877,6 +1139,11 @@ class VRAMEstimate:
     gradient_accumulation: int
     max_seq_length: int
     lora_r: int
+    # v1.7: host-RAM estimate for the FSDP2 CPU-offload full-FT path. 0.0 when
+    # offload is off (everything is GPU-resident). When > 0, params + gradients
+    # + optimizer state are spilled to host RAM and ``total_gb`` reflects only
+    # the GPU-resident working set + activations.
+    host_ram_gb: float = 0.0
     notes: list[str] = field(default_factory=list)
 
     def fits_on_card(self, vram_gb: float) -> bool:
@@ -885,6 +1152,11 @@ class VRAMEstimate:
 
     def summary(self) -> str:
         """Operator-readable one-line summary of the estimate."""
+        host = (
+            f" + host_ram={self.host_ram_gb:.1f}GB (FSDP2 offload)"
+            if self.host_ram_gb > 0
+            else ""
+        )
         return (
             f"VRAM estimate ({self.mode}, {self.param_count_billions:.1f}B "
             f"params, batch={self.batch_size}, seq={self.max_seq_length}): "
@@ -894,7 +1166,7 @@ class VRAMEstimate:
             f"optim={self.optimizer_state_gb:.1f} + "
             f"activations={self.activations_gb:.1f} + "
             f"kv={self.kv_cache_gb:.1f} + "
-            f"overhead={self.overhead_gb:.1f})"
+            f"overhead={self.overhead_gb:.1f}){host}"
         )
 
 
@@ -914,6 +1186,7 @@ def estimate_vram(
     num_heads: int = 32,  # 7B-class default
     overhead_fraction: float = 0.15,
     param_count_billions: float | None = None,
+    offload: bool = False,
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1042,6 +1315,27 @@ def estimate_vram(
         * 0.25  # Training amortization factor — full cache not retained
     ) * bytes_to_gb
 
+    # 6. v1.7 FSDP2 CPU-offload (mode='full', full_ft_offload=True). Params +
+    #    gradients + optimizer state spill into host RAM; the GPU keeps only the
+    #    active working set + activations + overhead. Offload full-FT does NOT
+    #    quantize the base — host weights are bf16 (2 bytes/param). host_ram_gb
+    #    captures the host-resident estimate; the GPU lines shrink accordingly.
+    host_ram_gb = 0.0
+    if offload and mode == "full":
+        bf16_weights_gb = (params * 2) * bytes_to_gb
+        host_grads_gb = (params * 2) * bytes_to_gb
+        host_optimizer_gb = (params * 2) * bytes_to_gb  # paged 8-bit moments
+        host_ram_gb = bf16_weights_gb + host_grads_gb + host_optimizer_gb
+        # GPU holds ~one transformer block's params resident at a time under
+        # fully_shard + CPUOffloadPolicy.
+        model_weights_gb = bf16_weights_gb / max(1.0, float(num_layers))
+        optimizer_state_gb = 0.0
+        notes.append(
+            f"FSDP2 CPU-offload: ~{host_ram_gb:.1f}GB of params+gradients+"
+            f"optimizer spilled to host RAM; GPU holds a working shard + "
+            f"activations (PCIe/CPU-bandwidth-bound, slower than a fitting run)"
+        )
+
     subtotal = (
         model_weights_gb
         + lora_adapter_gb
@@ -1066,6 +1360,7 @@ def estimate_vram(
         gradient_accumulation=gradient_accumulation,
         max_seq_length=max_seq_length,
         lora_r=lora_r,
+        host_ram_gb=host_ram_gb,
         notes=notes,
     )
 
@@ -1126,6 +1421,7 @@ def _build_sft_config(
     # parameter that doesn't map cleanly to mode-dispatch), escalate to
     # Wave 6a.5 hotfix rather than fork the helper.
     mode: str = "lora",
+    full_ft_offload: bool = False,
 ) -> Any:
     """Assemble an ``SFTConfig`` with the v1.3 quality contracts applied.
 
@@ -1268,6 +1564,28 @@ def _build_sft_config(
         # where reentrant=True breaks DDP gradients on some models.
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
 
+    # v1.7: FSDP2 CPU-offload for the full-FT escape hatch. Spills params +
+    # optimizer state into host RAM via fully_shard + CPUOffloadPolicy so a
+    # 7B-class full fine-tune fits a 32GB card (+64GB host RAM). fsdp_version=2
+    # selects the FSDP2 API; auto_wrap wraps transformer blocks (transformers
+    # infers the layer class from the model's _no_split_modules). The RUNTIME
+    # requirement (a usable NCCL backend — Linux/WSL2, NOT Windows-native) is
+    # enforced separately by _ensure_fsdp_runtime() in train(); here we set
+    # CONFIG ONLY so this stays construction-safe for unit tests.
+    if mode == "full" and full_ft_offload:
+        # FSDP full-shard prefers activation_checkpointing in fsdp_config over
+        # TrainingArguments.gradient_checkpointing — the latter adds a redundant
+        # AllGather in the backward pass (HF transformers#30404). Move the
+        # checkpointing knob into the FSDP config so we don't double-wrap.
+        kwargs.pop("gradient_checkpointing", None)
+        kwargs.pop("gradient_checkpointing_kwargs", None)
+        kwargs["fsdp"] = "full_shard offload auto_wrap"
+        kwargs["fsdp_config"] = {
+            "fsdp_version": 2,
+            "cpu_ram_efficient_loading": True,
+            "activation_checkpointing": True,
+        }
+
     return SFTConfig(**kwargs)
 
 
@@ -1340,7 +1658,30 @@ def _build_orpo_config(
     Returns:
         A configured ``ORPOConfig`` instance.
     """
-    from trl import ORPOConfig
+    # FC-01: guard the trl ORPO import. ORPOTrainer/ORPOConfig are slated to
+    # relocate to ``trl.experimental`` (see the comment in ``_build_trainer``),
+    # and pyproject pins ``trl`` with no upper bound, so a routine trl upgrade
+    # would make this top-level import die with a bare ImportError (no code,
+    # no remedy). Mirror the FP8 import discipline (search
+    # ``RUNTIME_FP8_UNSUPPORTED``): catch the ImportError and re-raise as a
+    # structured TrainingError that names the working trl range. SFT is
+    # unaffected (it imports SFTConfig/SFTTrainer separately).
+    try:
+        from trl import ORPOConfig
+    except ImportError as exc:
+        raise TrainingError(
+            "Could not import 'ORPOConfig' from trl — the ORPO objective is "
+            f"unavailable in the installed trl ({type(exc).__name__}: {exc}). "
+            "trl's ORPO API is migrating to trl.experimental, so a newer trl "
+            "may have moved or removed the top-level ORPOConfig symbol.",
+            suggestion=(
+                "Pin a trl version that still exposes top-level ORPOConfig / "
+                "ORPOTrainer: pip install 'trl>=0.7.0,<0.28'. Or train with "
+                "method='sft' (the default), which does not need ORPO."
+            ),
+            code="RUNTIME_TRAINING_FAILED",
+            cause=exc,
+        ) from exc
 
     # Reuse the exact detectors the SFT builder uses so the two configs
     # converge on the same card-specific resolution (single source of truth).
@@ -1388,6 +1729,314 @@ def _build_orpo_config(
     # rejects it) or force ``gradient_checkpointing`` (no full-FT contract for
     # ORPO in v1.5; ORPOConfig's own default governs).
     return ORPOConfig(**kwargs)
+
+
+# =============================================================================
+# SHARED CPOCONFIG BUILDER — SimPO loss (v1.6 C2 — SimPO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_orpo_config` for the reference-free SimPO objective.
+# SimPO has NO dedicated TRL trainer — it is TRL's ``CPOTrainer`` / ``CPOConfig``
+# driven with ``loss_type="simpo"`` and ``cpo_alpha=0.0`` (Meng et al. 2024,
+# arXiv:2405.14734; TRL CPO docs). The two are NOT the same method:
+#   * ``loss_type="simpo"`` + ``cpo_alpha=0.0`` ⇒ pure SimPO (length-normalized,
+#     reference-free reward with a target margin gamma).
+#   * ``loss_type="simpo"`` + ``cpo_alpha>0`` ⇒ "CPO-SimPO", a DIFFERENT method
+#     (a SimPO reward with an added CPO/SFT regularizer). We FORCE ``cpo_alpha``
+#     to 0.0 here so ``method='simpo'`` always means *pure* SimPO; the config
+#     field is intentionally not operator-exposed in v1.6.
+#
+# Like the ORPO builder it reuses the SAME GPU-dependent detectors
+# (:meth:`Trainer._detect_optim_for_card` / :meth:`Trainer._detect_optimal_dtype`)
+# so the SimPO config cannot drift from the SFT/ORPO configs on card-specific
+# decisions, and it is CPU-constructible for free (the CPU detectors downgrade
+# bnb-8bit → adamw_torch and force fp32). SimPO consumes the SAME paired
+# ``{prompt, chosen, rejected}`` dataset as ORPO (to_preference_dataset) — there
+# is NO new data path.
+#
+# Contract differences vs ORPOConfig:
+#   * ``loss_type="simpo"`` + ``cpo_alpha=0.0`` (FORCED) select pure SimPO.
+#   * ``beta`` ← ``simpo_beta`` (default 2.0) and ``simpo_gamma`` (default 1.0,
+#     the target reward margin) are SimPO-specific. ORPO's ``beta`` and SimPO's
+#     ``beta`` are different quantities (odds-ratio weight vs reward scale), so
+#     they map from distinct config fields.
+#   * Same ``max_length`` mapping, optional truncation knobs, and "no packing /
+#     no gradient_checkpointing forcing" stance as ORPO (SimPO is mode='lora'
+#     only in v1.6).
+
+
+def _build_cpo_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    simpo_beta: float,
+    simpo_gamma: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble a ``CPOConfig`` for the SimPO objective (``loss_type='simpo'``).
+
+    Parameters mirror :func:`_build_orpo_config` with the SimPO-specific
+    ``simpo_beta`` (→ ``beta``) and ``simpo_gamma`` (→ ``simpo_gamma``, the
+    target reward margin). ``cpo_alpha`` is FORCED to 0.0 so this is pure
+    SimPO, never CPO-SimPO. ``max_seq_length`` maps to ``CPOConfig.max_length``.
+
+    Returns:
+        A configured ``CPOConfig`` instance with ``loss_type='simpo'``.
+    """
+    # FC-01 discipline (mirrors _build_orpo_config): guard the trl CPO import.
+    # In the project's target trl (0.24) the working path is the TOP-LEVEL
+    # ``from trl import CPOConfig`` (verified in the venv 2026-06-20; the
+    # ``trl.experimental.cpo`` submodule does NOT exist in 0.24). The trl pin
+    # has no upper bound, and a future trl may relocate CPO to
+    # ``trl.experimental`` (as it is doing for several preference trainers), so
+    # we try the top-level symbol first and FALL BACK to the experimental path,
+    # re-raising a structured TrainingError (reusing RUNTIME_TRAINING_FAILED —
+    # the same code the ORPO/FP8 guards use) only when BOTH miss.
+    try:
+        from trl import CPOConfig
+    except ImportError:
+        try:
+            from trl.experimental.cpo import CPOConfig  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise TrainingError(
+                "Could not import 'CPOConfig' from trl (tried top-level "
+                "'trl.CPOConfig' and 'trl.experimental.cpo.CPOConfig') — the "
+                "SimPO objective is unavailable in the installed trl "
+                f"({type(exc).__name__}: {exc}). SimPO is TRL's CPOTrainer with "
+                "loss_type='simpo'; a newer trl may have moved or removed the "
+                "CPOConfig symbol.",
+                suggestion=(
+                    "Pin a trl version that exposes CPOConfig / CPOTrainer "
+                    "(top-level or trl.experimental.cpo): pip install "
+                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
+                    "default), which does not need SimPO."
+                ),
+                code="RUNTIME_TRAINING_FAILED",
+                cause=exc,
+            ) from exc
+
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        "max_length": max_seq_length,
+        # SimPO selection: loss_type='simpo' + cpo_alpha=0.0 (FORCED — non-zero
+        # is CPO-SimPO, a different method). beta is the SimPO reward scale;
+        # simpo_gamma is the target reward margin.
+        "loss_type": "simpo",
+        "cpo_alpha": 0.0,
+        "beta": simpo_beta,
+        "simpo_gamma": simpo_gamma,
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # CPOTrainer enforces ``max_prompt_length < max_length`` at construction.
+    # CPOConfig's default ``max_prompt_length`` is 512, so a small operator
+    # ``max_seq_length`` (→ max_length) of, say, 128 would crash the trainer
+    # with "max_prompt_length (512) should be strictly less than max_length
+    # (128)" — a real footgun for anyone training SimPO with a short window.
+    # When the operator passed an explicit ``max_prompt_length`` we honor it
+    # as-is; otherwise we DERIVE a safe value (half of max_length, min 16) only
+    # when the 512 default would violate the invariant. This makes SimPO work
+    # at any max_seq_length out of the box. (Surfaced by the non-mocked SimPO
+    # smoke on the RTX 5090, 2026-06-20.)
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    elif max_seq_length <= 512:
+        derived = max(max_seq_length // 2, 16)
+        kwargs["max_prompt_length"] = derived
+        logger.debug(
+            "SimPO: max_seq_length=%d <= CPOConfig's default max_prompt_length "
+            "(512); derived max_prompt_length=%d (max_length // 2) to satisfy "
+            "CPOTrainer's max_prompt_length < max_length invariant.",
+            max_seq_length, derived,
+        )
+
+    return CPOConfig(**kwargs)
+
+
+# =============================================================================
+# SHARED KTOCONFIG BUILDER (v1.6 C2 — KTO Wave 2)
+# =============================================================================
+# Mirror of :func:`_build_orpo_config` for the KTO objective (Ethayarajh et al.
+# 2024, arXiv:2402.01306). KTO = TRL's ``KTOTrainer`` / ``KTOConfig``. KTO is
+# reference-BASED, but with a LoRA adapter the FROZEN base model IS the
+# reference (KTOTrainer disables the adapter to compute reference logprobs), so
+# we deliberately pass NO explicit ``ref_model`` (a second model would blow the
+# 16GB envelope). KTO is mode='lora'-only in v1.6 (kto+full is blocked at
+# construction, exactly where orpo+full is).
+#
+# KTO consumes the UNPAIRED ``{prompt, completion, label:bool}`` dataset
+# (DatasetLoader.to_kto_dataset) — a DIFFERENT data path from the paired
+# ORPO/SimPO one.
+#
+# Contract differences vs ORPOConfig:
+#   * ``beta`` ← ``kto_beta`` (default 0.1).
+#   * ``desirable_weight`` / ``undesirable_weight`` scale the two polarities of
+#     the prospect-theory loss. The config holds STARTING weights; the trainer
+#     AUTO-REBALANCES them from the dataset's label counts (see
+#     :meth:`Trainer._auto_balance_kto_weights`) so the effective ratio lands in
+#     [1:1, 4:3]. This builder receives the ALREADY-RESOLVED weights.
+#   * ``train_sampling_strategy="sequential"`` (FORCED) — KTO's KL estimate
+#     requires the sequential sampler; the default would corrupt the estimate.
+#   * Same "no packing / no gradient_checkpointing forcing" stance as ORPO.
+
+
+def _build_kto_config(
+    output_dir: str,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    max_steps: int,
+    learning_rate: float,
+    warmup_steps: int,
+    max_seq_length: int,
+    *,
+    kto_beta: float,
+    desirable_weight: float,
+    undesirable_weight: float,
+    seed: int,
+    lr_scheduler_type: str,
+    logging_steps: int,
+    save_steps: int | None = None,
+    weight_decay: float | None = None,
+    max_prompt_length: int | None = None,
+    max_completion_length: int | None = None,
+    report_to: Any = None,
+    run_name: str | None = None,
+    optim: str | None = None,
+) -> Any:
+    """Assemble a ``KTOConfig`` with the v1.6 quality contracts applied.
+
+    Parameters mirror :func:`_build_orpo_config` with the KTO-specific
+    ``kto_beta`` (→ ``beta``) and the AUTO-RESOLVED ``desirable_weight`` /
+    ``undesirable_weight`` (the trainer computes these from the dataset's label
+    counts before calling this builder). ``train_sampling_strategy`` is forced
+    to ``"sequential"`` (required for the KL estimate). ``max_seq_length`` maps
+    to ``KTOConfig.max_length``.
+
+    Returns:
+        A configured ``KTOConfig`` instance.
+    """
+    # FC-01 discipline (mirrors _build_orpo_config / _build_cpo_config): guard
+    # the trl KTO import. In trl 0.24 the working path is the TOP-LEVEL
+    # ``from trl import KTOConfig`` (verified in the venv 2026-06-20; the
+    # ``trl.experimental.kto`` submodule does NOT exist in 0.24). Try top-level
+    # first, fall back to the experimental path, then re-raise a structured
+    # TrainingError (reusing RUNTIME_TRAINING_FAILED) if BOTH miss.
+    try:
+        from trl import KTOConfig
+    except ImportError:
+        try:
+            from trl.experimental.kto import KTOConfig  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise TrainingError(
+                "Could not import 'KTOConfig' from trl (tried top-level "
+                "'trl.KTOConfig' and 'trl.experimental.kto.KTOConfig') — the "
+                "KTO objective is unavailable in the installed trl "
+                f"({type(exc).__name__}: {exc}). A newer trl may have moved or "
+                "removed the KTOConfig symbol.",
+                suggestion=(
+                    "Pin a trl version that exposes KTOConfig / KTOTrainer "
+                    "(top-level or trl.experimental.kto): pip install "
+                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
+                    "default), which does not need KTO."
+                ),
+                code="RUNTIME_TRAINING_FAILED",
+                cause=exc,
+            ) from exc
+
+    _configured_optim = optim if optim is not None else settings.training.optim
+    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+    resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
+        settings.training.bf16, settings.training.fp16
+    )
+
+    kwargs: dict[str, Any] = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": per_device_train_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "max_steps": max_steps,
+        "learning_rate": learning_rate,
+        "warmup_steps": warmup_steps,
+        "optim": resolved_optim,
+        "lr_scheduler_type": lr_scheduler_type,
+        "logging_steps": logging_steps,
+        "bf16": resolved_bf16,
+        "fp16": resolved_fp16,
+        "seed": seed,
+        "dataloader_num_workers": 0 if os.name == "nt" else 4,
+        "report_to": report_to,
+        "run_name": run_name,
+        "max_length": max_seq_length,
+        # KTO-specific: beta is the prospect-theory loss temperature; the two
+        # weights are the AUTO-REBALANCED polarity weights (resolved by the
+        # trainer from label counts). train_sampling_strategy MUST be
+        # "sequential" for KTO's in-batch KL estimate.
+        "beta": kto_beta,
+        "desirable_weight": desirable_weight,
+        "undesirable_weight": undesirable_weight,
+        "train_sampling_strategy": "sequential",
+    }
+    if save_steps is not None:
+        kwargs["save_steps"] = save_steps
+    if weight_decay is not None:
+        kwargs["weight_decay"] = weight_decay
+    if max_completion_length is not None:
+        kwargs["max_completion_length"] = max_completion_length
+
+    # Same max_prompt_length guard as _build_cpo_config: KTOConfig's default
+    # max_prompt_length is 512, which on a small max_length over-truncates (or
+    # trips length invariants). Honor an explicit value; otherwise derive a
+    # safe half-of-max_length value when the 512 default would exceed the
+    # window. Keeps KTO consistent with SimPO at any max_seq_length.
+    if max_prompt_length is not None:
+        kwargs["max_prompt_length"] = max_prompt_length
+    elif max_seq_length <= 512:
+        derived = max(max_seq_length // 2, 16)
+        kwargs["max_prompt_length"] = derived
+        logger.debug(
+            "KTO: max_seq_length=%d <= KTOConfig's default max_prompt_length "
+            "(512); derived max_prompt_length=%d (max_length // 2).",
+            max_seq_length, derived,
+        )
+
+    return KTOConfig(**kwargs)
 
 
 def _apply_train_on_responses_only(
@@ -1602,6 +2251,30 @@ class Trainer:
         # trainer that lifts the ceiling — the 3B gate is the documented
         # consumer-tier contract and not a soft-warning.
         mode: str = "lora",
+        # v1.7 "32 GB envelope": full-FT parameter-ceiling controls. Both are
+        # additive keyword params with defaults so EVERY existing caller stays
+        # byte-identical (the pre-v1.7 4B-constant behavior survives when VRAM
+        # can't be detected and no override is passed).
+        #
+        # ``full_ft_ceiling_billions`` (default None) — an EXPLICIT override of
+        # the mode='full' parameter ceiling, in billions. When None the gate
+        # derives the ceiling from the DETECTED card VRAM
+        # (:func:`_full_ft_ceiling_for_vram`, or
+        # :func:`_full_ft_offload_ceiling_for_vram` when offload is on), falling
+        # back to the 4B constant when VRAM is unknown. When set, the operator's
+        # value WINS over both the derived and fallback ceilings — the escape
+        # hatch for operators who know their card / their memory budget.
+        full_ft_ceiling_billions: float | None = None,
+        # ``full_ft_offload`` (default False) — opt in to the FSDP2 CPU-offload
+        # full-FT path. When True AND mode='full', the trainer configures FSDP2
+        # ``full_shard`` + ``offload`` + activation checkpointing + bf16 so the
+        # params + optimizer state spill into host RAM, enabling a 7B-class TRUE
+        # full fine-tune on a 32 GB card. It is the documented escape hatch, NOT
+        # the default: PCIe/CPU-bandwidth-bound (slow) and needs ~64 GB host RAM.
+        # The toolchain (accelerate/torch.distributed FSDP) must be importable;
+        # if not, the trainer raises DEP_FSDP_UNAVAILABLE. Offload also lifts the
+        # derived parameter ceiling (see _full_ft_offload_ceiling_for_vram).
+        full_ft_offload: bool = False,
         # v1.5 T1.2 (ORPO Wave 2): training objective. ``"sft"`` (the default)
         # is the supervised fine-tuning path — byte-identical pre-v1.5
         # behavior for callers who do not pass this kwarg. ``"orpo"`` selects
@@ -1623,6 +2296,26 @@ class Trainer:
         # Defaults to None so ``settings.training.orpo_beta`` (default 0.1)
         # governs when omitted.
         orpo_beta: float | None = None,
+        # v1.6 C2 (SimPO Wave 2): SimPO reward scale (``beta`` in CPOConfig
+        # under loss_type='simpo') and the target reward margin
+        # (``simpo_gamma``). Ignored unless method='simpo'. Default None so
+        # ``settings.training.simpo_beta`` (2.0) / ``settings.training.
+        # simpo_gamma`` (1.0) govern when omitted. Named EXACTLY so the CLI's
+        # wave6b introspection filter threads ``--simpo-beta`` / ``--simpo-gamma``
+        # through (GLUE owns the flags).
+        simpo_beta: float | None = None,
+        simpo_gamma: float | None = None,
+        # v1.6 C2 (KTO Wave 2): KTO prospect-theory loss temperature
+        # (``kto_beta`` → KTOConfig.beta) and the STARTING desirable /
+        # undesirable polarity weights. The trainer AUTO-REBALANCES the weights
+        # from the dataset's label counts toward the [1:1, 4:3] band; these are
+        # the seed values. Ignored unless method='kto'. Default None so
+        # ``settings.training.kto_*`` govern when omitted. Named EXACTLY so the
+        # CLI threads ``--kto-beta`` / ``--kto-desirable-weight`` /
+        # ``--kto-undesirable-weight`` through.
+        kto_beta: float | None = None,
+        kto_desirable_weight: float | None = None,
+        kto_undesirable_weight: float | None = None,
         # v1.5 T2.1 (FP8 compute path): opt-in FP8 training via torchao float8
         # (Blackwell sm_90+). None ⇒ ``settings.training.fp8`` (default False)
         # governs. When True AND the card supports it (CUDA + sm>=9 + torchao
@@ -1841,6 +2534,23 @@ class Trainer:
             )
         self.mode = mode
 
+        # v1.7 "32 GB envelope": store the full-FT ceiling controls. Stored
+        # unconditionally (cheap) so introspection + the gate + the FSDP2 wiring
+        # all read the same instance state.
+        self.full_ft_ceiling_billions = full_ft_ceiling_billions
+        self.full_ft_offload = full_ft_offload
+        # full_ft_offload only has effect under mode='full'. A LoRA run with the
+        # flag set is almost certainly an operator mistake — warn (do not error;
+        # the flag is simply inert for LoRA, and erroring would be a sharp edge
+        # for the CLI introspection-filter path that forwards it generically).
+        if self.full_ft_offload and self.mode != "full":
+            logger.warning(
+                "full_ft_offload=True has no effect with mode=%r — FSDP2 "
+                "CPU-offload is a full-fine-tuning escape hatch. Pass "
+                "mode='full' to use it; ignoring the flag for this run.",
+                self.mode,
+            )
+
         # v1.5 T1.2 (ORPO Wave 2): training-objective resolution. Kwarg-
         # authoritative (per-invocation ``method=`` wins), falling back to
         # ``settings.training.method`` (the env-var path), default "sft".
@@ -1850,16 +2560,23 @@ class Trainer:
         # layer entirely, so the constructor must re-validate (defense in
         # depth). InvalidSettingError carries code CONFIG_INVALID_SETTING.
         self.method = method if method is not None else settings.training.method
-        if self.method not in {"sft", "orpo"}:
+        # v1.6 C2: extended to the four shipped objectives. config.py's
+        # _ALLOWED_METHODS is the single source of truth on the SETTINGS path;
+        # a DIRECT Trainer(method=...) bypasses that layer, so re-validate here
+        # against the same set (defense in depth). simpo/kto consume preference
+        # / unpaired-binary data respectively (see _load_dataset).
+        if self.method not in {"sft", "orpo", "simpo", "kto"}:
             raise InvalidSettingError(
                 setting_name="method",
                 value=self.method,
-                expected="one of {'sft', 'orpo'}",
+                expected="one of {'sft', 'orpo', 'simpo', 'kto'}",
                 suggestion=(
                     "Pass method='sft' (the default) for supervised "
-                    "fine-tuning, OR method='orpo' for reference-free ORPO "
-                    "preference training (requires a {chosen, rejected} "
-                    "dataset and mode='lora')."
+                    "fine-tuning, method='orpo' or method='simpo' for "
+                    "reference-free preference training on {chosen, rejected} "
+                    "pairs, or method='kto' for prospect-theory training on "
+                    "unpaired {prompt, completion, label} feedback. All "
+                    "preference objectives require mode='lora'."
                 ),
             )
         # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight. Kwarg-
@@ -1889,6 +2606,116 @@ class Trainer:
                     "small positive value, e.g. orpo_beta=0.1."
                 ),
             )
+
+        # v1.6 C2 (SimPO): resolve the SimPO knobs, kwarg-authoritative with the
+        # settings layer as fallback (same ``is not None`` discipline as
+        # orpo_beta). Inert unless method='simpo'.
+        self.simpo_beta = (
+            simpo_beta if simpo_beta is not None else settings.training.simpo_beta
+        )
+        self.simpo_gamma = (
+            simpo_gamma if simpo_gamma is not None else settings.training.simpo_gamma
+        )
+        # Defend the DIRECT kwarg the same way config.py's
+        # _reject_invalid_simpo_gamma defends the settings path: a non-positive
+        # target margin degenerates the SimPO objective. Only fires for
+        # method='simpo' so a stray value under another method never blocks a
+        # run. (simpo_beta>0 is enforced by clamp/warn semantics — beta=0 is a
+        # valid edge for CPOConfig — but a non-positive gamma is always wrong.)
+        if self.method == "simpo" and self.simpo_gamma <= 0:
+            raise InvalidSettingError(
+                "simpo_gamma",
+                self.simpo_gamma,
+                "a positive number",
+                suggestion=(
+                    "SimPO's target reward margin gamma must be > 0 (the "
+                    "default is 1.0; Meng et al. 2024 anchor gamma at "
+                    "~beta*0.5). A non-positive gamma removes the margin and "
+                    "degenerates the objective."
+                ),
+            )
+        # WARN (do not fail) when gamma/beta > 1.0 — parity with config.py's
+        # _warn_high_simpo_gamma_ratio. A high ratio over-penalizes and tends
+        # to repetitive output. Only meaningful for method='simpo'.
+        if (
+            self.method == "simpo"
+            and self.simpo_beta > 0
+            and (self.simpo_gamma / self.simpo_beta) > 1.0
+        ):
+            logger.warning(
+                "simpo_gamma (%s) / simpo_beta (%s) = %.3f > 1.0 — the target "
+                "margin exceeds the reward scale, which over-penalizes and "
+                "tends toward repetitive output. Meng et al. 2024 anchor gamma "
+                "at ~beta*0.5; consider lowering simpo_gamma or raising "
+                "simpo_beta.",
+                self.simpo_gamma,
+                self.simpo_beta,
+                self.simpo_gamma / self.simpo_beta,
+            )
+
+        # v1.6 C2 (KTO): resolve the KTO knobs (kwarg-authoritative, settings
+        # fallback). The two weights are STARTING values — the trainer
+        # auto-rebalances them from the dataset label counts at train() time
+        # (see _auto_balance_kto_weights). Inert unless method='kto'.
+        self.kto_beta = (
+            kto_beta if kto_beta is not None else settings.training.kto_beta
+        )
+        self.kto_desirable_weight = (
+            kto_desirable_weight
+            if kto_desirable_weight is not None
+            else settings.training.kto_desirable_weight
+        )
+        self.kto_undesirable_weight = (
+            kto_undesirable_weight
+            if kto_undesirable_weight is not None
+            else settings.training.kto_undesirable_weight
+        )
+        # Defend the DIRECT kwargs (config.py validates the settings path):
+        # KTO's beta and both polarity weights must be > 0 — a zero/negative
+        # weight removes or inverts one side of the prospect-theory loss, and a
+        # non-positive beta breaks the loss temperature. Only fires for
+        # method='kto'.
+        if self.method == "kto":
+            for _name, _value in (
+                ("kto_beta", self.kto_beta),
+                ("kto_desirable_weight", self.kto_desirable_weight),
+                ("kto_undesirable_weight", self.kto_undesirable_weight),
+            ):
+                if _value <= 0:
+                    raise InvalidSettingError(
+                        _name,
+                        _value,
+                        "a positive number",
+                        suggestion=(
+                            f"KTO's {_name} must be > 0 (defaults: beta=0.1, "
+                            "weights=1.0). A zero/negative weight removes or "
+                            "inverts one polarity of the prospect-theory loss; "
+                            "a non-positive beta breaks the loss temperature. "
+                            "The trainer auto-rebalances the weights from your "
+                            "label counts toward [1:1, 4:3] — start positive."
+                        ),
+                    )
+            # KTOTrainer requires an ACTUAL per-device batch size > 1 when it
+            # computes the KL term (the default ``calculate_KL=True``): at batch
+            # size 1 the in-batch KL estimate degenerates to the implied reward
+            # and KTO "will not work properly" (trl raises a hard ValueError
+            # several frames deep, AFTER the model + dataset are loaded). Rather
+            # than let every batch_size=1 KTO run crash cryptically, bump the
+            # floor to 2 here with ONE WARN; the operator can offset the VRAM
+            # cost with gradient_accumulation. (self.batch_size is already
+            # resolved above; self.method == 'kto' here.) Found by the
+            # non-mocked KTO smoke on the RTX 5090, 2026-06-20.
+            if self.batch_size < 2:
+                logger.warning(
+                    "method='kto': per-device batch_size=%d is too small — "
+                    "KTO's in-batch KL estimate requires an ACTUAL batch size "
+                    "> 1 (at batch 1 the KL term collapses to the implied "
+                    "reward and TRL rejects the run). Bumping batch_size to 2. "
+                    "Raise gradient_accumulation to keep the same effective "
+                    "batch while holding VRAM down.",
+                    self.batch_size,
+                )
+                self.batch_size = 2
 
         # v1.5 T2.1 (FP8) / T2.3 (rsLoRA): resolve the two new feature knobs,
         # kwarg-authoritative with the settings layer as fallback (same
@@ -1975,6 +2802,38 @@ class Trainer:
                 suggestion="Use mode='lora' (default) with method='orpo'.",
             )
 
+        # v1.6 C2: SimPO + mode='full' guard. Identical contract to ORPO+full —
+        # SimPO is a reference-free preference objective supported with
+        # mode='lora' ONLY in v1.6 (the paired-data + adapter path). Refuse the
+        # combination at construction.
+        if self.method == "simpo" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "simpo", "mode": "full"},
+                expected="SimPO is supported with mode='lora' only in v1.6",
+                suggestion="Use mode='lora' (default) with method='simpo'.",
+            )
+
+        # v1.6 C2: KTO + mode='full' guard — placed EXACTLY where orpo+full is
+        # blocked. KTO is mode='lora'-ONLY in v1.6 for a load-bearing reason
+        # beyond the memory ceiling: KTO is reference-BASED, and the LoRA path
+        # gives the reference FOR FREE (KTOTrainer disables the adapter to score
+        # the frozen base). A full-FT KTO run has no adapter to disable, so it
+        # would require a SECOND loaded model as the reference — breaking the
+        # 16GB envelope. Refuse full+kto at construction.
+        if self.method == "kto" and self.mode == "full":
+            raise InvalidSettingError(
+                setting_name="method+mode",
+                value={"method": "kto", "mode": "full"},
+                expected="KTO is supported with mode='lora' only in v1.6",
+                suggestion=(
+                    "Use mode='lora' (default) with method='kto'. KTO needs a "
+                    "reference model; the LoRA path provides it free (the "
+                    "frozen base via adapter-disable). Full FT would require a "
+                    "second loaded model and exceed the 16GB envelope."
+                ),
+            )
+
         # v1.4 BACKEND-F-008 (Wave 6b features): mode='full' gate. Refuse
         # construction for models whose parameter count exceeds the 3B
         # ceiling. The probe is best-effort at construction time (preset
@@ -1984,7 +2843,19 @@ class Trainer:
         # we can't estimate get a deferred check; operators passing a
         # preset name or canonical HF id get the early refusal.
         if self.mode == "full":
-            _enforce_full_ft_param_ceiling(self.model_name)
+            # v1.7: resolve the EFFECTIVE ceiling (explicit override wins ->
+            # else derived from detected VRAM, offload-aware -> else fallback
+            # constant) and pass BOTH the pure-GPU + offload ceilings so the
+            # error can be contrastive about --full-ft-offload.
+            _resolved_ceiling, _offload_ceiling = (
+                self._resolve_full_ft_ceilings()
+            )
+            _enforce_full_ft_param_ceiling(
+                self.model_name,
+                ceiling_billions=_resolved_ceiling,
+                full_ft_offload=self.full_ft_offload,
+                offload_ceiling_billions=_offload_ceiling,
+            )
             # Per the Biderman 2024 / Thinking Machines 2025 quality math
             # (full FT needs ~10x lower LR than LoRA). Apply the divisor
             # ONLY when the operator did not explicitly override the
@@ -2041,6 +2912,71 @@ class Trainer:
                     f"applied; explicit override wins)."
                 )
 
+        # v1.6 C2 (SimPO): SimPO LR default + high-LR clamp/warn. SimPO's
+        # length-normalized reward degrades to repetitive output at LR >= 1e-5
+        # (Meng et al. 2024). When the operator set NO LR we apply the 1e-6
+        # anchor; when they set one >= 1e-5 we WARN and CLAMP to 1e-6 (a high
+        # SimPO LR is a known footgun, not an expressed preference for divergent
+        # output). full+simpo is blocked above, so this branch is exclusive with
+        # the mode='full' divisor.
+        elif self.method == "simpo":
+            if learning_rate is None:
+                self.learning_rate = _SIMPO_DEFAULT_LR
+                logger.info(
+                    f"method='simpo': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (SimPO is reference-free + "
+                    f"length-normalized; LR >= 1e-5 degrades to repetitive "
+                    f"output). Pass learning_rate=<value> to override."
+                )
+            elif self.learning_rate >= 1e-5:
+                logger.warning(
+                    "method='simpo': learning_rate=%.2e is at/above the 1e-5 "
+                    "instability threshold — SimPO degrades to repetitive "
+                    "output at high LR (Meng et al. 2024, arXiv:2405.14734). "
+                    "Clamping to the stable %.2e anchor. Pass an explicit LR "
+                    "below 1e-5 to override this clamp.",
+                    self.learning_rate,
+                    _SIMPO_DEFAULT_LR,
+                )
+                self.learning_rate = _SIMPO_DEFAULT_LR
+            else:
+                logger.info(
+                    f"method='simpo': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (below the 1e-5 "
+                    f"instability threshold)."
+                )
+
+        # v1.6 C2 (KTO): KTO LR default + high-LR clamp/warn. KTO's published
+        # runs sit at 1e-6 and LR > 5e-6 destabilizes the KL estimate
+        # (Ethayarajh et al. 2024). Same default/clamp discipline as SimPO with
+        # the KTO band (clamp threshold 5e-6). full+kto is blocked above.
+        elif self.method == "kto":
+            if learning_rate is None:
+                self.learning_rate = _KTO_DEFAULT_LR
+                logger.info(
+                    f"method='kto': applied default learning_rate "
+                    f"-> {self.learning_rate:.2e} (KTO's published runs sit at "
+                    f"1e-6; LR > 5e-6 destabilizes the KL estimate). Pass "
+                    f"learning_rate=<value> to override."
+                )
+            elif self.learning_rate > 5e-6:
+                logger.warning(
+                    "method='kto': learning_rate=%.2e is above the 5e-6 "
+                    "stability ceiling — KTO's in-batch KL estimate "
+                    "destabilizes at high LR (Ethayarajh et al. 2024, "
+                    "arXiv:2402.01306). Clamping to the published %.2e anchor. "
+                    "Pass an explicit LR <= 5e-6 to override this clamp.",
+                    self.learning_rate,
+                    _KTO_DEFAULT_LR,
+                )
+                self.learning_rate = _KTO_DEFAULT_LR
+            else:
+                logger.info(
+                    f"method='kto': honoring operator-supplied "
+                    f"learning_rate={self.learning_rate:.2e} (within the 5e-6 "
+                    f"stability ceiling)."
+                )
+
         # v1.5 T2.1 (FP8 compute path): the gate ladder. Two distinct failure
         # philosophies, in priority order:
         #   * MISCONFIGURATION (a combination that can never work) → raise an
@@ -2068,16 +3004,20 @@ class Trainer:
                         "FP8 + full FT not supported in v1.5; use mode='lora'."
                     ),
                 )
-            # (2) MISCONFIG: FP8 + ORPO. FP8 was dogfood-validated with
-            # method='sft' only in v1.5; the ORPO odds-ratio loss on FP8 base
-            # linears is unverified.
-            if self.method == "orpo":
+            # (2) MISCONFIG: FP8 + a preference objective. FP8 was
+            # dogfood-validated with method='sft' only; the ORPO/SimPO/KTO
+            # losses on FP8 base linears are unverified (v1.6 keeps the
+            # sft-only contract — the gate now covers all three non-sft
+            # objectives, not just ORPO).
+            if self.method != "sft":
                 raise InvalidSettingError(
                     setting_name="fp8+method",
-                    value={"fp8": True, "method": "orpo"},
-                    expected="FP8 is supported with method='sft' only in v1.5",
+                    value={"fp8": True, "method": self.method},
+                    expected="FP8 is supported with method='sft' only",
                     suggestion=(
-                        "FP8 validated with method='sft' only in v1.5."
+                        f"FP8 validated with method='sft' only; method="
+                        f"'{self.method}' on an FP8 base is unverified. Drop "
+                        f"fp8=True or use method='sft'."
                     ),
                 )
             # (3) FP8 vs 4-bit. They are alternatives: FP8 keeps the base in
@@ -2130,16 +3070,16 @@ class Trainer:
             else:
                 # Provisionally effective — load_model()'s _apply_fp8_to_base
                 # may still flip this False if the actual conversion raises
-                # (try/except → bf16 fallback). The ONE experimental WARN fires
+                # (try/except → bf16 fallback). The ONE FP8-path WARN fires
                 # here so it is emitted exactly once per Trainer, at construction.
                 self._fp8_effective = True
                 logger.warning(
-                    "fp8=True: FP8 training is EXPERIMENTAL in v1.5 (torchao "
-                    "float8 path, validated on Blackwell sm_120). The base "
+                    "fp8=True: the FP8 compute path (torchao float8) is "
+                    "dogfood-verified on Blackwell (sm_120) as of v1.6. The base "
                     "projection linears will be converted to Float8Linear after "
                     "the LoRA adapter is attached; the adapter, lm_head, and "
                     "embeddings stay in bf16. Report anomalies (loss spikes, "
-                    "export mismatches) so the path can graduate to stable."
+                    "export mismatches) on other sm_90+ hardware (e.g. Hopper)."
                 )
                 # v1.5 T2.1 (FP8): FP8 vs default 4-bit. Now that FP8 is
                 # EFFECTIVE (supported host + library), the default 4-bit is
@@ -2227,15 +3167,18 @@ class Trainer:
         # (mlx_lm.lora is LoRA-SFT-only here). Co-located with the FP8 ladder so
         # all the cross-field training-shape refusals live together.
         if self._effective_backend == "mlx":
-            if self.method == "orpo":
+            if self.method != "sft":
                 raise InvalidSettingError(
                     setting_name="backend+method",
-                    value={"backend": "mlx", "method": "orpo"},
-                    expected="ORPO is not supported on the MLX backend in v1.5",
+                    value={"backend": "mlx", "method": self.method},
+                    expected=(
+                        "preference objectives (orpo/simpo/kto) are not "
+                        "supported on the MLX backend in v1.6"
+                    ),
                     suggestion=(
-                        "ORPO (reference-free preference tuning) runs on the "
-                        "CUDA rail only in v1.5. Use method='sft' with "
-                        "backend='mlx', or method='orpo' with a CUDA GPU."
+                        f"ORPO/SimPO/KTO preference tuning runs on the CUDA "
+                        f"rail only. Use method='sft' with backend='mlx', or "
+                        f"method='{self.method}' with a CUDA GPU."
                     ),
                 )
             if self.fp8:
@@ -2303,8 +3246,21 @@ class Trainer:
         logger.info(f"  Batch: {self.batch_size}, LR: {self.learning_rate}")
         # v1.5 T1.2 (ORPO Wave 2): surface the objective so a post-mortem grep
         # can confirm which path ran without reading the config.
+        # v1.6 C2: SimPO/KTO surfaced with their load-bearing knobs.
         if self.method == "orpo":
             logger.info(f"  Method: orpo (beta={self.orpo_beta})")
+        elif self.method == "simpo":
+            logger.info(
+                f"  Method: simpo (beta={self.simpo_beta}, "
+                f"gamma={self.simpo_gamma}, cpo_alpha=0.0)"
+            )
+        elif self.method == "kto":
+            logger.info(
+                f"  Method: kto (beta={self.kto_beta}, "
+                f"desirable_weight={self.kto_desirable_weight}, "
+                f"undesirable_weight={self.kto_undesirable_weight}; weights "
+                f"auto-rebalanced from label counts at train time)"
+            )
         logger.info(
             f"  Degradation knobs: oom_recovery={self.oom_recovery}, "
             f"unsloth_fallback={self.unsloth_fallback}"
@@ -2410,17 +3366,29 @@ class Trainer:
             import torch
             if torch.cuda.is_available():
                 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                if vram_gb >= 24:
+                # Nominal-vs-reported tolerance: a "32 GB" 5090 reports ~31.8.
+                vram_tier = vram_gb + _VRAM_TIER_TOLERANCE_GB
+                if vram_tier >= 48:
                     logger.info(
-                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=>=24 -> batch_size=4"
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=>=48 -> batch_size=8"
+                    )
+                    return 8
+                elif vram_tier >= 32:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=32-48 -> batch_size=6 (RTX 5090 class)"
+                    )
+                    return 6
+                elif vram_tier >= 24:
+                    logger.info(
+                        f"_detect_batch_size: vram={vram_gb:.1f}GB tier=24-32 -> batch_size=4"
                     )
                     return 4
-                elif vram_gb >= 16:
+                elif vram_tier >= 16:
                     logger.info(
                         f"_detect_batch_size: vram={vram_gb:.1f}GB tier=16-24 -> batch_size=2"
                     )
                     return 2
-                elif vram_gb >= 12:
+                elif vram_tier >= 12:
                     logger.info(
                         f"_detect_batch_size: vram={vram_gb:.1f}GB tier=12-16 -> batch_size=1"
                     )
@@ -2451,6 +3419,27 @@ class Trainer:
                 f"(reason=unexpected_error: {type(e).__name__}: {e})"
             )
         return 2  # Safe default
+
+    def _resolve_full_ft_ceilings(self) -> tuple[float, float]:
+        """v1.7: resolve ``(effective_ceiling, offload_ceiling)`` in billions for
+        the mode='full' gate.
+
+        Resolution order for the effective ceiling: an explicit
+        ``full_ft_ceiling_billions`` override wins; else it is derived from
+        detected VRAM — the FSDP2 CPU-offload ceiling when ``full_ft_offload`` is
+        on, the pure-GPU ceiling otherwise. The offload ceiling is ALWAYS
+        returned so :class:`FullFinetuneModelTooLargeError` can be contrastive
+        about ``--full-ft-offload`` even when offload is off.
+        """
+        vram = _detect_total_vram_gb()
+        offload_ceiling = _full_ft_offload_ceiling_for_vram(vram)
+        if self.full_ft_ceiling_billions is not None:
+            effective = float(self.full_ft_ceiling_billions)
+        elif self.full_ft_offload:
+            effective = offload_ceiling
+        else:
+            effective = _full_ft_ceiling_for_vram(vram)
+        return effective, offload_ceiling
 
     # =========================================================================
     # v1.3 BACKEND-5 / BACKEND-7 — per-card optim + dtype resolution
@@ -2950,27 +3939,14 @@ class Trainer:
             param_count_billions=param_count_billions,
         )
 
-    def _cleanup_vram(self) -> None:
-        """
-        Release unused GPU memory.
-
-        Calls gc.collect() to free Python-side references, then
-        torch.cuda.empty_cache() to return unreferenced GPU memory to the
-        CUDA allocator. Safe to call even when no GPU is present.
-
-        Intended for use between multi_run iterations or after training
-        completes to reclaim VRAM before the next operation.
-        """
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.debug("VRAM cleanup: gc.collect() + torch.cuda.empty_cache()")
-            else:
-                logger.debug("VRAM cleanup: gc.collect() (no CUDA available)")
-        except ImportError:
-            logger.debug("VRAM cleanup: gc.collect() (torch not installed)")
+    # RSI-01: removed dead ``_cleanup_vram`` (gc.collect() + empty_cache()).
+    # It had ZERO call sites, and its premise was unsound: empty_cache() cannot
+    # free tensors still pinned by self._model / self._trainer, so the claimed
+    # between-run OOM benefit was illusory. The genuine reclaim path lives
+    # inline in the OOM-recovery branch of train() (which drops self._trainer
+    # BEFORE gc.collect() + empty_cache() so the failed graph is actually
+    # collectable). The success path intentionally keeps the model resident for
+    # re-training, so no cleanup hook belongs there.
 
     def load_model(self) -> None:
         """
@@ -3083,8 +4059,18 @@ class Trainer:
         # — if the authoritative reading exceeds the ceiling, refuse before
         # any training happens. The check is no-op for mode='lora'.
         if self.mode == "full":
+            # v1.7: re-resolve the effective ceiling at load time too — the card
+            # VRAM is the same, but resolving here keeps the two call sites
+            # symmetric and lets an explicit override flow to both.
+            _resolved_ceiling, _offload_ceiling = (
+                self._resolve_full_ft_ceilings()
+            )
             _enforce_full_ft_param_ceiling(
-                self.model_name, loaded_model=self._model
+                self.model_name,
+                ceiling_billions=_resolved_ceiling,
+                loaded_model=self._model,
+                full_ft_offload=self.full_ft_offload,
+                offload_ceiling_billions=_offload_ceiling,
             )
 
         # v1.5 T2.1 (FP8): convert the base projection linears to Float8Linear
@@ -3416,39 +4402,113 @@ class Trainer:
         the objective grows a third construction wrinkle, there is exactly one
         place to change.
 
-        For ``method == "orpo"`` builds an ``ORPOTrainer`` (NO reference model —
-        ORPO is reference-free; NO ``peft_config`` — the LoRA adapter is
-        already attached by :meth:`load_model`'s ``get_peft_model`` before
-        train() runs, exactly as the SFT path relies on). Otherwise builds an
-        ``SFTTrainer`` identically to the pre-ORPO path. Imports are
-        method-conditional and local so the test mocks
-        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")``) bind at
-        call time.
+        For ``method == "orpo"`` builds an ``ORPOTrainer``; ``"simpo"`` a
+        ``CPOTrainer`` (SimPO is CPOTrainer with loss_type='simpo'); ``"kto"`` a
+        ``KTOTrainer``. All three are reference-free OR (KTO) reference-via-
+        frozen-base, so NONE passes an explicit reference model, and NONE passes
+        ``peft_config`` — the LoRA adapter is already attached by
+        :meth:`load_model`'s ``get_peft_model`` before train() runs, exactly as
+        the SFT path relies on. (For KTO the attached adapter is precisely what
+        gives the free reference: KTOTrainer disables it to score the frozen
+        base.) Otherwise builds an ``SFTTrainer`` identically to the pre-ORPO
+        path. Imports are method-conditional and local so the test mocks
+        (``patch("trl.SFTTrainer")`` / ``patch("trl.ORPOTrainer")`` /
+        ``patch("trl.CPOTrainer")`` / ``patch("trl.KTOTrainer")``) bind at call
+        time.
 
-        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on both
-        trainers.
+        TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on all trainers.
         """
-        if self.method == "orpo":
-            from trl import ORPOTrainer
+        if self.method in ("orpo", "simpo", "kto"):
+            # FC-01: guard the trl preference-trainer import (see
+            # _build_orpo_config / _build_cpo_config / _build_kto_config for the
+            # full rationale). The trl pin has no upper bound, so a routine
+            # upgrade could relocate these symbols; catch a bare ImportError and
+            # re-raise the same structured TrainingError shape as the config
+            # builders (code RUNTIME_TRAINING_FAILED + a working trl range). The
+            # narrow ``except ImportError`` keeps the existing
+            # ``patch("trl.<X>Trainer")`` test path intact — when the symbol
+            # resolves (real or mocked) the import succeeds and this guard is
+            # inert. In trl 0.24 ALL of ORPOTrainer/CPOTrainer/KTOTrainer are
+            # top-level (verified in the venv 2026-06-20); we try top-level
+            # first and fall back to trl.experimental for the SimPO/KTO future.
+            #
+            # _trl_cls: the trainer class. _trl_name: the symbol name for the
+            # error message. _is_kto: KTO needs the no-ref_model handling below.
+            _trl_name = {
+                "orpo": "ORPOTrainer",
+                "simpo": "CPOTrainer",  # SimPO rides CPOTrainer + loss_type
+                "kto": "KTOTrainer",
+            }[self.method]
+            _experimental_mod = {
+                "orpo": None,  # ORPO has no experimental fallback path in 0.24
+                "simpo": "trl.experimental.cpo",
+                "kto": "trl.experimental.kto",
+            }[self.method]
+            try:
+                import trl as _trl_top
 
-            # Cross-version shim (v1.5 T1.2): trl's ORPOTrainer (through 0.24)
-            # sets ``model.warnings_issued["estimate_tokens"] = True`` to mute a
-            # transformers FLOP-estimate warning. transformers 5.x REMOVED the
-            # ``warnings_issued`` attribute from ``PreTrainedModel``, so that
-            # write raises ``AttributeError`` inside the constructor — before a
-            # single step — on the project's own target stack (trl 0.24 +
-            # transformers 5.5, verified on LlamaForCausalLM under a PEFT
-            # wrapper). Provide an inert dict when the attribute is absent so
-            # ORPO works across the transformers 4.x/5.x boundary. Harmless on
-            # 4.x (the attribute is already present via ``PreTrainedModel.
-            # __init__`` and is left untouched); on 5.x it is an empty dict trl
-            # writes to and nothing reads. Scoped to the ORPO path — SFT is
-            # unaffected. Remove once trl's ORPOTrainer stops touching
-            # ``warnings_issued`` (it is slated to move to trl.experimental).
+                _trl_cls = getattr(_trl_top, _trl_name)
+            except (ImportError, AttributeError) as exc:
+                _trl_cls = None
+                if _experimental_mod is not None:
+                    try:
+                        _exp = __import__(
+                            _experimental_mod, fromlist=[_trl_name]
+                        )
+                        _trl_cls = getattr(_exp, _trl_name)
+                    except (ImportError, AttributeError):
+                        _trl_cls = None
+                if _trl_cls is None:
+                    _tried = f"top-level 'trl.{_trl_name}'" + (
+                        f" and '{_experimental_mod}.{_trl_name}'"
+                        if _experimental_mod
+                        else ""
+                    )
+                    raise TrainingError(
+                        f"Could not import '{_trl_name}' from trl (tried "
+                        f"{_tried}) — the {self.method.upper()} objective is "
+                        f"unavailable in the installed trl "
+                        f"({type(exc).__name__}: {exc}). trl's preference "
+                        "trainers are migrating to trl.experimental, so a newer "
+                        "trl may have moved or removed the symbol.",
+                        suggestion=(
+                            f"Pin a trl version that exposes {_trl_name}: pip "
+                            "install 'trl>=0.18,<0.28'. Or train with "
+                            "method='sft' (the default)."
+                        ),
+                        code="RUNTIME_TRAINING_FAILED",
+                        cause=exc,
+                    ) from exc
+
+            # Cross-version shim (v1.5 T1.2): trl's preference trainers (through
+            # 0.24) set ``model.warnings_issued["estimate_tokens"] = True`` to
+            # mute a transformers FLOP-estimate warning. transformers 5.x
+            # REMOVED ``warnings_issued`` from ``PreTrainedModel``, so that write
+            # raises ``AttributeError`` inside the constructor — before a single
+            # step. Provide an inert dict when the attribute is absent so the
+            # preference paths work across the transformers 4.x/5.x boundary.
+            # Harmless on 4.x (already present) and on a trainer that never
+            # touches it (an empty dict nothing reads). Applied to all three
+            # preference objectives — SFT is unaffected.
             if not hasattr(self._model, "warnings_issued"):
                 self._model.warnings_issued = {}
 
-            return ORPOTrainer(
+            if self.method == "kto":
+                # KTO is reference-BASED, but with the LoRA adapter already
+                # attached the frozen base IS the reference: KTOTrainer disables
+                # the adapter to score it. We therefore DELIBERATELY pass NO
+                # ref_model (its default is None) — passing one would load a
+                # SECOND full model and blow the 16GB envelope (design-lock C2).
+                return _trl_cls(
+                    model=self._model,
+                    processing_class=self._tokenizer,
+                    train_dataset=train_dataset,
+                    args=training_args,
+                    callbacks=callbacks,
+                )
+
+            # ORPO + SimPO (CPOTrainer): reference-free, no ref_model arg at all.
+            return _trl_cls(
                 model=self._model,
                 processing_class=self._tokenizer,
                 train_dataset=train_dataset,
@@ -3484,8 +4544,14 @@ class Trainer:
         ``steps`` / ``report_to`` / ``run_name``.
 
         For ``method == "orpo"`` delegates to :func:`_build_orpo_config`
-        (beta + max_length; NO packing / gradient checkpointing). Otherwise
-        delegates to :func:`_build_sft_config` exactly as the pre-ORPO path.
+        (beta + max_length; NO packing / gradient checkpointing). For
+        ``method == "simpo"`` delegates to :func:`_build_cpo_config`
+        (loss_type='simpo', cpo_alpha=0.0). For ``method == "kto"`` delegates
+        to :func:`_build_kto_config` (reading the AUTO-REBALANCED weights
+        resolved onto ``self`` by :meth:`_auto_balance_kto_weights` before the
+        first build, so both the first attempt AND the OOM retry use the same
+        resolved weights). Otherwise delegates to :func:`_build_sft_config`
+        exactly as the pre-ORPO path.
         """
         if self.method == "orpo":
             return _build_orpo_config(
@@ -3497,6 +4563,60 @@ class Trainer:
                 warmup_steps=settings.training.warmup_steps,
                 max_seq_length=self.max_seq_length,
                 orpo_beta=self.orpo_beta,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        if self.method == "simpo":
+            # v1.6 C2: SimPO = CPOConfig(loss_type='simpo', cpo_alpha=0.0).
+            # Reuses the paired dataset; same shape contract as ORPO.
+            return _build_cpo_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                simpo_beta=self.simpo_beta,
+                simpo_gamma=self.simpo_gamma,
+                seed=settings.training.seed,
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                logging_steps=settings.training.logging_steps,
+                save_steps=settings.training.save_steps,
+                weight_decay=settings.training.weight_decay,
+                report_to=report_to,
+                run_name=run_name,
+                optim=self.optim,
+            )
+        if self.method == "kto":
+            # v1.6 C2: KTO = KTOConfig with the AUTO-REBALANCED polarity
+            # weights. _auto_balance_kto_weights populated
+            # self._kto_resolved_* before this call (in train(), before the
+            # first build); fall back to the seed weights if it has not run yet
+            # (defensive — should not happen on the train() path).
+            return _build_kto_config(
+                output_dir=str(self.output_dir),
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation,
+                max_steps=steps or settings.training.max_steps,
+                learning_rate=self.learning_rate,
+                warmup_steps=settings.training.warmup_steps,
+                max_seq_length=self.max_seq_length,
+                kto_beta=self.kto_beta,
+                desirable_weight=getattr(
+                    self, "_kto_resolved_desirable_weight",
+                    self.kto_desirable_weight,
+                ),
+                undesirable_weight=getattr(
+                    self, "_kto_resolved_undesirable_weight",
+                    self.kto_undesirable_weight,
+                ),
                 seed=settings.training.seed,
                 lr_scheduler_type=settings.training.lr_scheduler_type,
                 logging_steps=settings.training.logging_steps,
@@ -3529,6 +4649,9 @@ class Trainer:
             # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
             # resolved training mode (``"lora"`` default | ``"full"``).
             mode=self.mode,
+            # v1.7: thread the FSDP2 CPU-offload opt-in so _build_sft_config
+            # wires fsdp/fsdp_config for the full-FT escape hatch.
+            full_ft_offload=self.full_ft_offload,
         )
         # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
         # SFTConfig rather than threading fp8 into _build_sft_config (which
@@ -3574,6 +4697,140 @@ class Trainer:
             # packing elsewhere can't silently re-enable the ragged-sequence
             # shape FP8 can't handle.
             sft_config.packing = False
+
+    def _auto_balance_kto_weights(self, kto_dataset: Any) -> None:
+        """v1.6 C2 (KTO auto-weighting): rebalance KTO polarity weights from
+        the dataset's label counts toward the [1:1, 4:3] band.
+
+        KTO's prospect-theory loss weights desirable (label=True) vs
+        undesirable (label=False) examples by ``desirable_weight`` /
+        ``undesirable_weight``. TRL's own guidance (and Ethayarajh et al. 2024)
+        is to keep the EFFECTIVE ratio
+        ``(desirable_weight*#pos) : (undesirable_weight*#neg)`` inside roughly
+        ``[1:1, 4:3]`` — a dataset skewed heavily toward one label otherwise
+        lets that polarity dominate the gradient. Class-imbalance reweighting is
+        the standard fix.
+
+        Strategy (deterministic, audit-friendly):
+
+        * Count ``#pos`` / ``#neg`` from the ``label`` column.
+        * Start from the operator's seed weights (``self.kto_*_weight``).
+        * Compute the effective ratio. If it already lands in ``[1:1, 4:3]``,
+          keep the seed weights untouched (operator intent wins when valid).
+        * If it falls OUTSIDE the band, scale the UNDER-weighted side up so the
+          effective ratio lands at the nearest band edge (1.0 when pos-heavy,
+          4/3 when neg-heavy), preserving the other weight. We only ever scale
+          a weight UP from its seed (never below the operator's floor) and clamp
+          the result so a pathological 1000:1 split doesn't produce an absurd
+          weight.
+        * Emit ONE preflight INFO line with the counts + the before/after
+          effective ratio. If the OPERATOR explicitly set weights that leave the
+          ratio outside the band, emit a WARN first (their setting is honored as
+          the seed but the auto-rebalance still applies — the WARN tells them
+          why their numbers changed).
+
+        Resolves onto ``self._kto_resolved_desirable_weight`` /
+        ``self._kto_resolved_undesirable_weight`` (read by
+        :meth:`_build_training_args` and persisted into run-history). Degrades
+        gracefully — any failure to read labels leaves the seed weights in
+        place with a DEBUG note (never blocks a run).
+        """
+        # Seed weights (operator-supplied or settings defaults). These are the
+        # floor — auto-balance only scales UP from here.
+        seed_des = self.kto_desirable_weight
+        seed_undes = self.kto_undesirable_weight
+        self._kto_resolved_desirable_weight = seed_des
+        self._kto_resolved_undesirable_weight = seed_undes
+
+        # Count labels from the materialized dataset's ``label`` column.
+        try:
+            labels = list(kto_dataset["label"])
+        except Exception as exc:  # noqa: BLE001 - degrade, never block
+            logger.debug(
+                "KTO auto-weighting: could not read 'label' column (%r); "
+                "keeping seed weights desirable=%.3f undesirable=%.3f.",
+                exc, seed_des, seed_undes,
+            )
+            return
+
+        n_pos = sum(1 for v in labels if bool(v))
+        n_neg = len(labels) - n_pos
+
+        if n_pos == 0 or n_neg == 0:
+            # One-sided data: a ratio is undefined and KTO needs BOTH polarities
+            # to estimate the KL term. Warn loudly (this usually means the data
+            # was built wrong) but do not block — KTOTrainer will surface its
+            # own error if it truly can't proceed.
+            logger.warning(
+                "KTO auto-weighting: dataset has #desirable=%d, #undesirable=%d "
+                "— one polarity is EMPTY. KTO needs both desirable and "
+                "undesirable examples to estimate the reference KL; the run may "
+                "fail or train poorly. Keeping seed weights desirable=%.3f "
+                "undesirable=%.3f.",
+                n_pos, n_neg, seed_des, seed_undes,
+            )
+            return
+
+        # Effective ratio with the seed weights: (des_w*#pos) : (undes_w*#neg),
+        # normalized to "desirable units per undesirable unit".
+        eff_pos = seed_des * n_pos
+        eff_neg = seed_undes * n_neg
+        seed_ratio = eff_pos / eff_neg  # >1 ⇒ desirable side dominates
+
+        # Target band on the desirable:undesirable effective ratio. TRL/KTO
+        # guidance: keep it in [1:1, 4:3] = [1.0, 1.3333...].
+        BAND_LO, BAND_HI = 1.0, 4.0 / 3.0
+
+        res_des, res_undes = seed_des, seed_undes
+        # Clamp any scale-up so a pathological imbalance can't produce an absurd
+        # weight (cap the multiplier at 10x the seed).
+        _MAX_SCALE = 10.0
+
+        if seed_ratio < BAND_LO:
+            # Undesirable side dominates → scale the DESIRABLE weight UP so the
+            # effective ratio reaches the lower edge (1.0).
+            scale = min(BAND_LO / seed_ratio, _MAX_SCALE)
+            res_des = seed_des * scale
+        elif seed_ratio > BAND_HI:
+            # Desirable side dominates → scale the UNDESIRABLE weight UP so the
+            # effective ratio drops to the upper edge (4/3).
+            scale = min(seed_ratio / BAND_HI, _MAX_SCALE)
+            res_undes = seed_undes * scale
+        # else: already in band — keep seed weights.
+
+        self._kto_resolved_desirable_weight = res_des
+        self._kto_resolved_undesirable_weight = res_undes
+
+        final_ratio = (res_des * n_pos) / (res_undes * n_neg)
+        in_band = BAND_LO <= final_ratio <= BAND_HI + 1e-9
+
+        # If the OPERATOR explicitly set weights (not the defaults) and the seed
+        # ratio was out of band, tell them why their numbers changed.
+        operator_set_weights = (
+            seed_des != settings.training.kto_desirable_weight
+            or seed_undes != settings.training.kto_undesirable_weight
+        )
+        if operator_set_weights and not (BAND_LO <= seed_ratio <= BAND_HI + 1e-9):
+            logger.warning(
+                "KTO auto-weighting: your explicit weights (desirable=%.3f, "
+                "undesirable=%.3f) give an effective ratio of %.3f:1, OUTSIDE "
+                "the recommended [1:1, 4:3] band. Auto-rebalancing to "
+                "desirable=%.3f, undesirable=%.3f (effective %.3f:1). Pass "
+                "weights that land in-band to suppress this adjustment.",
+                seed_des, seed_undes, seed_ratio,
+                res_des, res_undes, final_ratio,
+            )
+
+        # The required preflight line: counts + before/after effective ratio.
+        logger.info(
+            "KTO auto-weighting preflight: #desirable=%d #undesirable=%d | "
+            "seed weights (d=%.3f, u=%.3f) effective ratio %.3f:1 -> resolved "
+            "weights (d=%.3f, u=%.3f) effective ratio %.3f:1 [%s]",
+            n_pos, n_neg,
+            seed_des, seed_undes, seed_ratio,
+            res_des, res_undes, final_ratio,
+            "in band [1:1, 4:3]" if in_band else "out of band (clamped)",
+        )
 
     def train(
         self,
@@ -3656,6 +4913,15 @@ class Trainer:
                 dataset, steps=steps, samples=samples, callback=callback
             )
 
+        # v1.7: FSDP2 CPU-offload runtime guard. Fail fast BEFORE loading the
+        # model when the offload path was opted into on a host that cannot run
+        # it (no NCCL — Windows-native), and lazily init the single-process
+        # group on a capable host so FSDP engages in a bare `python` run. No-op
+        # unless mode='full' + full_ft_offload (the construction-time ceiling
+        # gate already lifted the param ceiling for this path).
+        if self.mode == "full" and self.full_ft_offload:
+            _ensure_fsdp_runtime()
+
         # Load model if not loaded
         if not self._is_loaded:
             self.load_model()
@@ -3667,6 +4933,15 @@ class Trainer:
         # column, and so a mismatched dataset surfaces a structured
         # DatasetFormatError before the trainer is built.
         train_dataset = self._load_dataset(dataset, samples, method=self.method)
+
+        # v1.6 C2 (KTO auto-weighting): with the KTO dataset materialized, count
+        # its positive/negative labels and rebalance desirable/undesirable
+        # weights toward the [1:1, 4:3] band. Resolves onto self._kto_resolved_*
+        # so BOTH the first _build_training_args call below AND the OOM-retry
+        # rebuild read the same effective weights (no second resolution path).
+        # No-op for non-KTO methods.
+        if self.method == "kto":
+            self._auto_balance_kto_weights(train_dataset)
 
         # Pre-tokenize for Windows safety.
         #
@@ -3918,6 +5193,24 @@ class Trainer:
             # the audit field stays uniform across the run table).
             "method": self.method,
             "orpo_beta": self.orpo_beta,
+            # v1.6 C2: persist SimPO + KTO provenance for the audit table. The
+            # SimPO knobs (beta/gamma) and KTO knobs (beta + the EFFECTIVE
+            # auto-rebalanced weights) are recorded for every run so the table
+            # stays uniform; they are inert for the non-matching methods. For
+            # KTO we record the RESOLVED weights (what actually trained), not
+            # the seed weights — reproducing a KTO run needs the effective
+            # ratio. (Falls back to the seed weights if auto-balance hasn't run,
+            # which on the train() path it always has by this point.)
+            "simpo_beta": self.simpo_beta,
+            "simpo_gamma": self.simpo_gamma,
+            "kto_beta": self.kto_beta,
+            "kto_desirable_weight": getattr(
+                self, "_kto_resolved_desirable_weight", self.kto_desirable_weight
+            ),
+            "kto_undesirable_weight": getattr(
+                self, "_kto_resolved_undesirable_weight",
+                self.kto_undesirable_weight,
+            ),
             # v1.5 T2.1 (FP8): persist the EFFECTIVE FP8 state (not the
             # requested ``self.fp8``) so a run-history audit reflects what
             # actually ran — fp8=True that degraded to bf16 on an unsupported
@@ -4096,7 +5389,35 @@ class Trainer:
                         # path that DID retry and ran out of options).
                         from .exceptions import GPUMemoryError as _GPUMemErr
 
-                        raise _GPUMemErr(
+                        # OBS-003: stamp run_id + a best-effort PER-PROCESS
+                        # VRAM snapshot onto the error so the oom_recovery=False
+                        # raise carries the same diagnostic weight as the
+                        # recovery-EXHAUSTED sibling, instead of degrading to a
+                        # bare "Insufficient GPU memory". CAVEAT: gpu_safety's
+                        # vram_* fields come from torch.cuda.memory_reserved()
+                        # and are PER-PROCESS — they do NOT reflect other
+                        # processes' allocations, so this is "what THIS process
+                        # had reserved," not system-wide headroom. Best-effort:
+                        # a snapshot failure must never mask the OOM.
+                        _available_gb: float | None = None
+                        _vram_detail: dict[str, Any] = {}
+                        try:
+                            from .gpu_safety import get_gpu_status as _gpu_status
+
+                            _snap = _gpu_status()
+                            if _snap.available:
+                                _available_gb = _snap.vram_free_gb
+                                _vram_detail = {
+                                    "vram_total_gb": _snap.vram_total_gb,
+                                    "vram_used_gb_this_process": _snap.vram_used_gb,
+                                    "vram_free_gb_this_process": _snap.vram_free_gb,
+                                    "vram_scope": "per_process",
+                                }
+                        except Exception:  # nosec B110 — diagnostic snapshot is best-effort
+                            pass
+
+                        _oom_err = _GPUMemErr(
+                            available_gb=_available_gb,
                             suggestion=(
                                 "OOM hit with oom_recovery=False — the trainer "
                                 "did not attempt batch_size halving. To survive "
@@ -4107,7 +5428,12 @@ class Trainer:
                                 "shorten max_seq_length, or apply 4-bit / 8-bit "
                                 "quantization."
                             ),
-                        ) from exc
+                        )
+                        _oom_err.details["run_id"] = run_id
+                        if adjacent_marker is not None:
+                            _oom_err.details["adjacent_marker"] = adjacent_marker
+                        _oom_err.details.update(_vram_detail)
+                        raise _oom_err from exc
                     if not is_oom:
                         raise
 
@@ -4779,7 +6105,12 @@ class Trainer:
         from .datasets import DatasetFormat
         from .exceptions import DatasetFormatError
 
-        is_orpo = method == "orpo"
+        # v1.6 C2: SimPO consumes the SAME paired {prompt, chosen, rejected}
+        # data as ORPO (to_preference_dataset) — they share this path entirely.
+        # KTO consumes the UNPAIRED {prompt, completion, label} data
+        # (to_kto_dataset) — a distinct path.
+        is_preference = method in ("orpo", "simpo")
+        is_kto = method == "kto"
         max_samples = samples or settings.data.max_samples
 
         # File extensions that DatasetLoader handles
@@ -4788,33 +6119,52 @@ class Trainer:
         )
 
         # v1.5 T1.2 (ORPO Wave 2): the supported_formats list reused in every
-        # ORPO DatasetFormatError raised from the non-loader paths below.
+        # ORPO/SimPO DatasetFormatError raised from the non-loader paths below.
         _ORPO_SUPPORTED = ["{chosen, rejected}", "{prompt, chosen, rejected}"]
+        _KTO_SUPPORTED = ["{prompt, completion, label}", "{completion, label}"]
 
         def _emit_sft_on_preference_warning(detected: DatasetFormat) -> None:
             """WARN when an SFT run is pointed at a preference-shaped file."""
-            if not is_orpo and detected == DatasetFormat.PREFERENCE:
+            if method == "sft" and detected == DatasetFormat.PREFERENCE:
                 logger.warning(
                     "Dataset looks like preference pairs (detected format "
                     "'preference': rows carry {chosen, rejected}), but "
                     "method='sft'. Training SFT on the 'chosen' response "
                     "(each row renders as prompt -> chosen, dropping "
-                    "'rejected'). Pass --method orpo to also learn from the "
-                    "'rejected' response (reference-free ORPO preference "
-                    "training)."
+                    "'rejected'). Pass --method orpo (or --method simpo) to "
+                    "also learn from the 'rejected' response (reference-free "
+                    "preference training)."
                 )
 
         def _require_preference_columns(hf_ds: Any, source: str) -> None:
-            """Assert an HF/in-memory Dataset carries chosen+rejected for ORPO."""
+            """Assert an HF/in-memory Dataset carries chosen+rejected pairs.
+
+            Covers ORPO and SimPO (both consume paired preference data).
+            """
             cols = getattr(hf_ds, "column_names", []) or []
             if "chosen" not in cols or "rejected" not in cols:
                 raise DatasetFormatError(
-                    f"method='orpo' requires preference pairs but the {source} "
-                    f"has no chosen/rejected columns (columns: {list(cols)}). "
-                    f"ORPO needs each row to carry both 'chosen' and "
-                    f"'rejected' (optionally 'prompt').",
+                    f"method='{method}' requires preference pairs but the "
+                    f"{source} has no chosen/rejected columns (columns: "
+                    f"{list(cols)}). {method.upper()} needs each row to carry "
+                    f"both 'chosen' and 'rejected' (optionally 'prompt').",
                     detected_format=None,
                     supported_formats=_ORPO_SUPPORTED,
+                )
+
+        def _require_kto_columns(hf_ds: Any, source: str) -> None:
+            """Assert an HF/in-memory Dataset carries completion+label for KTO."""
+            cols = getattr(hf_ds, "column_names", []) or []
+            if "completion" not in cols or "label" not in cols:
+                raise DatasetFormatError(
+                    f"method='kto' requires unpaired binary feedback but the "
+                    f"{source} has no completion/label columns (columns: "
+                    f"{list(cols)}). KTO needs each row to carry 'completion' "
+                    f"and a boolean 'label' (optionally 'prompt'). A paired "
+                    f"{{chosen, rejected}} dataset is PREFERENCE data — use "
+                    f"method='orpo'/'simpo' instead.",
+                    detected_format=None,
+                    supported_formats=_KTO_SUPPORTED,
                 )
 
         try:
@@ -4826,8 +6176,10 @@ class Trainer:
                     split=settings.data.dataset_split,
                     _label=f"load_dataset:{settings.data.dataset_name}",
                 )
-                if is_orpo:
+                if is_preference:
                     _require_preference_columns(ds, "default HuggingFace dataset")
+                elif is_kto:
+                    _require_kto_columns(ds, "default HuggingFace dataset")
             elif isinstance(dataset, DatasetLoader):
                 # DatasetLoader passed directly — use its validated output
                 validation = dataset.validation_result
@@ -4841,10 +6193,15 @@ class Trainer:
                     )
                     for err in validation.errors[:5]:
                         logger.warning(f"  {err}")
-                if is_orpo:
+                if is_preference:
                     # Preserves raw chosen/rejected/[prompt]; raises
-                    # DatasetFormatError when no pair row exists.
+                    # DatasetFormatError when no pair row exists. ORPO + SimPO
+                    # share this paired path.
                     ds = dataset.to_preference_dataset()
+                elif is_kto:
+                    # Unpaired {prompt, completion, label}; raises
+                    # DatasetFormatError when no KTO row exists.
+                    ds = dataset.to_kto_dataset()
                 else:
                     _emit_sft_on_preference_warning(dataset.detected_format)
                     ds = dataset.to_hf_dataset()
@@ -4876,11 +6233,17 @@ class Trainer:
                         for err in validation.errors[:5]:
                             logger.warning(f"  {err}")
 
-                    if is_orpo:
+                    if is_preference:
                         # to_preference_dataset raises DatasetFormatError when
                         # the file is an SFT file with no chosen/rejected rows
-                        # (the "operator pointed ORPO at an SFT dataset" case).
+                        # (the "operator pointed ORPO/SimPO at an SFT dataset"
+                        # case). ORPO + SimPO share this paired path.
                         ds = loader.to_preference_dataset()
+                    elif is_kto:
+                        # to_kto_dataset raises DatasetFormatError when no row
+                        # carries {completion, label} (the "operator pointed KTO
+                        # at a paired/SFT dataset" case).
+                        ds = loader.to_kto_dataset()
                     else:
                         _emit_sft_on_preference_warning(loader.detected_format)
                         ds = loader.to_hf_dataset()
@@ -4899,14 +6262,20 @@ class Trainer:
                             f"Failed to load HuggingFace dataset '{dataset}': {e}",
                             suggestion="Check dataset name and network connection"
                         ) from e
-                    if is_orpo:
+                    if is_preference:
                         _require_preference_columns(
+                            ds, f"HuggingFace dataset '{dataset}'"
+                        )
+                    elif is_kto:
+                        _require_kto_columns(
                             ds, f"HuggingFace dataset '{dataset}'"
                         )
             elif isinstance(dataset, Dataset):
                 ds = dataset
-                if is_orpo:
+                if is_preference:
                     _require_preference_columns(ds, "in-memory Dataset")
+                elif is_kto:
+                    _require_kto_columns(ds, "in-memory Dataset")
             else:
                 raise DatasetError(
                     f"Unsupported dataset type: {type(dataset).__name__}",

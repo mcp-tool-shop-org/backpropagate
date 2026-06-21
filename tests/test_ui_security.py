@@ -613,7 +613,7 @@ class TestRequestContext:
     """Tests for request context and tracing."""
 
     def test_request_context_creation(self):
-        """RequestContext should be creatable from Gradio request.
+        """RequestContext should be creatable from a UI request.
 
         Default-IP sentinel changed from "anonymous" to "unknown" so the
         per-IP rate limiter fails CLOSED to a single shared bucket on
@@ -621,7 +621,7 @@ class TestRequestContext:
         """
         from backpropagate.ui_security import RequestContext
 
-        ctx = RequestContext.from_gradio_request(operation="test_op")
+        ctx = RequestContext.from_request(operation="test_op")
 
         assert len(ctx.request_id) == 8, "request_id must be 8 chars"
         assert ctx.client_ip == "unknown", "Default IP must be 'unknown'"
@@ -636,7 +636,7 @@ class TestRequestContext:
         request = MagicMock()
         request.client = {"host": "192.168.1.100"}
 
-        ctx = RequestContext.from_gradio_request(request, operation="train")
+        ctx = RequestContext.from_request(request, operation="train")
 
         assert ctx.client_ip == "192.168.1.100", "IP must be extracted from request"
         assert ctx.operation == "train", "operation must match"

@@ -38,12 +38,23 @@ permissions:
 
 jobs:
   test:
-    # Multi-OS matrix: tests Linux on full Python sweep, plus Windows + macOS
-    # smoke cells on 3.11 to catch path/multiprocessing/xformers-disable
-    # regressions on platforms the library actively supports (CLAUDE.md:
+    # Multi-OS matrix: tests Linux on full Python sweep, plus a Windows smoke
+    # cell on 3.11 to catch path/multiprocessing/xformers-disable regressions
+    # on the one non-Linux platform the library actively supports (CLAUDE.md:
     # "First-class Windows support"). PyInstaller binary distribution was
     # retired in v1.3 with the npm-launcher path; operators install via
     # pipx / uv tool / pip on every supported OS.
+    #
+    # THE macOS CELL WAS REMOVED 2026-09-07 under the studio Actions rule
+    # ("never macos-latest unless explicitly requested"). It was measured, not
+    # guessed: September's org billing shows macOS billing at ~10x Linux per
+    # minute ($0.062 vs $0.006), and this repo's 21 macOS minutes generated
+    # $1.30 of gross against 53 Windows minutes at $0.53. Nothing in CLAUDE.md
+    # ever named macOS a supported target -- the comment above cited the
+    # Windows promise and carried macOS along beside it without a mandate of
+    # its own. post-publish-smoke.yml's macOS cells were dropped in the same
+    # change, so the honest statement is that this repository no longer runs
+    # anything on macOS at all -- not that the coverage moved somewhere else.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -53,8 +64,6 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         include:
           - os: windows-latest
-            python-version: "3.11"
-          - os: macos-latest
             python-version: "3.11"
 
     steps:

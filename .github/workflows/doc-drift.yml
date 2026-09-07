@@ -41,6 +41,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Required by the studio Actions rules; this file had no block at all.
+  # `head_ref || ref` and not the bare `ref`: this workflow fires on BOTH
+  # push and pull_request, and `github.ref` differs between them for the same
+  # commit (`refs/heads/<branch>` vs `refs/pull/N/merge`), so a bare-ref group
+  # cannot collapse the pair and both runs go to completion on identical
+  # bytes. `github.head_ref` is set only on pull_request and holds the source
+  # branch, so both events share one group and the newer run cancels the older.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   drift-check:
     runs-on: ubuntu-latest

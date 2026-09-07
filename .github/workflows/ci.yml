@@ -29,7 +29,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # `head_ref || ref`, NOT the bare `ref`. On a branch with an open PR both
+  # `push` and `pull_request` fire on the same commit, and `github.ref` is
+  # `refs/heads/<branch>` for one and `refs/pull/N/merge` for the other -- two
+  # different group keys, so neither cancels the other and the full matrix runs
+  # TWICE on identical bytes. `github.head_ref` is set only on pull_request and
+  # holds the source branch, so both events land in one group and the PR run
+  # cancels the push run. Measured on the sibling repo armature (runs
+  # 34111791960 push / 34111797073 pull_request, same head_sha, four seconds
+  # apart, both running the whole matrix to completion).
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -61,7 +70,24 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # 3.12 IS NOT MISSING -- it is covered by a hard gate one job down.
+        # `parallel-xdist` runs Python 3.12 with the identical selection this
+        # matrix uses (`pytest tests/ -v --tb=short -m "not gpu and not slow
+        # and not integration"`) plus `-n auto --dist worksteal`, with no
+        # continue-on-error, so the 3.12 matrix cell was a strict SUBSET of a
+        # job that already had to pass. Dropping it removes ~5.8 min per CI run
+        # and loses no version coverage; the studio rule caps this list at 2-3
+        # Python versions and four was over.
+        #
+        # Every version pyproject promises still has a hard gate after the cut:
+        #   3.10  this matrix (floor; also the ruff + mypy cell)
+        #   3.11  this matrix (coverage + Codecov) AND the windows-latest include
+        #   3.12  parallel-xdist
+        #   3.13  this matrix (ceiling classifier)
+        # If a version is ever removed from `classifiers`, remove its gate in
+        # the same commit -- an untested promise is the failure this comment
+        # exists to prevent.
+        python-version: ["3.10", "3.11", "3.13"]
         include:
           - os: windows-latest
             python-version: "3.11"
@@ -82,11 +108,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,full]"
 
+      # RUFF AND MYPY RUN ON THE FLOOR CELL ONLY, and the condition is the fix
+      # for a month of red CI -- not an optimization bolted onto a green build.
+      #
+      # Both tools analyse against a target version declared in pyproject, NOT
+      # against the interpreter executing them: `[tool.ruff] target-version` and
+      # `[tool.mypy] python_version = "3.10"`. So all five matrix cells were
+      # asking the same question with the same configured answer, and four of
+      # them were redundant by construction.
+      #
+      # They were also WRONG, which is how this surfaced. mypy reads the type
+      # stubs of whatever is INSTALLED, and on 3.12/3.13 pip resolves a numpy
+      # whose `numpy/__init__.pyi` uses PEP 695 `type X = ...` statements. Told
+      # to target 3.10, mypy refuses to parse 3.12+ syntax and dies before it
+      # checks a single line of our code:
+      #
+      #     numpy/__init__.pyi:737: error: Type statement is only supported in
+      #     Python 3.12 and greater  [syntax]
+      #     Found 1 error in 1 file (errors prevented further checking)
+      #
+      # That is the whole of the CI failure -- every run since 2026-07-29, ten
+      # consecutive reds, all of them `test (ubuntu-latest, 3.12)` and `3.13`
+      # failing at "Type check with mypy" while 3.10 and 3.11 passed. Nothing
+      # was ever wrong with the code; the gate was checking a dependency's
+      # stubs against a version its own config forbade.
+      #
+      # Pinning the step to the cell whose interpreter MATCHES `python_version`
+      # keeps the gate honest (the stubs mypy reads are the ones a 3.10 target
+      # can parse) and stops paying for four duplicate executions. If the floor
+      # moves, move `python_version`, this condition, and `target-version`
+      # together -- they are one decision written in three places.
       - name: Lint with ruff
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
         shell: bash
         run: ruff check backpropagate/
 
       - name: Type check with mypy
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
         shell: bash
         # v1.1.2: mypy is a hard gate again. The ~12 known errors in the
         # Reflex tree + rxconfig.py are now covered by widened

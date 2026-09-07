@@ -1,14 +1,20 @@
 {
   "name": "@mcptoolshop/backpropagate",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Deprecated npm distribution shim for backpropagate — prints install guidance for pipx/uv tool/pip. See https://github.com/mcp-tool-shop-org/backpropagate",
   "type": "commonjs",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "backpropagate": "bin/backpropagate.js"
   },
-  "files": ["bin/", "README.md", "LICENSE"],
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/mcp-tool-shop-org/backpropagate.git"

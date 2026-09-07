@@ -76,7 +76,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS removed 2026-09-07 under the studio Actions rule ("never
+        # macos-latest unless explicitly requested"). This was the CHEAP half of
+        # this repo's macOS spend -- release-gated, four ~1-minute cells -- but
+        # it is stripped with the per-push cell in ci.yml so the repo has one
+        # answer to "do we run macOS" rather than two. Re-adding the literal to
+        # this list is the whole revert if macOS install coverage is wanted back.
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -195,7 +201,7 @@ jobs:
           The publish itself succeeded — \`${TAG}\` is live on PyPI + GHCR right now.
           This issue is the post-publish observability surface: the workflow ran
           \`pip install backpropagate==${TAG#v}\` + \`backprop --version\` across the
-          {ubuntu, macos, windows} × {3.10, 3.11, 3.12, 3.13} matrix plus a
+          {ubuntu, windows} × {3.10, 3.11, 3.12, 3.13} matrix plus a
           \`docker run\` smoke against GHCR, and at least one cell failed. Operators
           may already be hitting the same install failure.
 

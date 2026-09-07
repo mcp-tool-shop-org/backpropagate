@@ -12,7 +12,30 @@ name: Nightly Train Smoke
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # 04:00 UTC nightly — quiet runner-pool window
+    # WEEKLY, not nightly — Monday 04:00 UTC, still the quiet runner-pool
+    # window. Retimed 2026-09-07 to the cadence of the thing this smoke
+    # actually protects.
+    #
+    # The header above states the purpose exactly: trip the bell on an
+    # upstream HF / trl / transformers / torch break "BEFORE the weekly
+    # release cut". The cut is weekly; the smoke was running seven times per
+    # cut, and it "does NOT gate any release" — it opens an issue. Six of
+    # every seven runs could only re-report a break the seventh would have
+    # caught in time, and 27 of this repo's last 60 Actions runs were this
+    # workflow at ~4.5 min each.
+    #
+    # Measured cost: ~135 min/month daily -> ~18 min/month weekly, against a
+    # repo projecting 1,260 Actions min/month total. The studio rule ("org
+    # repos stay manual/paths-gated"; scheduled workflows are for the
+    # marketing repo) argues for dropping the cron entirely, and
+    # `workflow_dispatch` below is kept precisely so that stays available —
+    # but an upstream bump is invisible to a paths filter, since nothing in
+    # THIS repo changes when transformers ships a breaking release. A weekly
+    # tick is the smallest schedule that still catches it before the cut.
+    #
+    # If the release cut is not Monday-anchored, move this cron to the day
+    # before it. The value is entirely in landing ahead of the cut.
+    - cron: '0 4 * * 1'
   workflow_dispatch:
 
 concurrency:

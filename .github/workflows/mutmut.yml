@@ -53,6 +53,13 @@ permissions:
   pull-requests: write     # CIDOCS-B-002 — open the baseline-refresh PR
   issues: write            # `gh pr create --label` requires label-write scope (labels are issue-scoped)
 
+concurrency:
+  # Required by the studio Actions rules; this file had no block at all.
+  # Dispatch-only today, so this mainly stops a double-click from running two
+  # mutation sweeps at once — the most expensive job shape in the repo.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   mutmut:
     runs-on: ubuntu-latest

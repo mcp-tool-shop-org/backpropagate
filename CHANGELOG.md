@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.7.0] - Unreleased
+## [1.7.1] - 2026-09-07
+
+### Fixed
+
+- **CI had been red on every run since 2026-07-29** — ten consecutive failures,
+  always `test (ubuntu-latest, 3.12)` and `3.13` at the "Type check with mypy"
+  step while 3.10 and 3.11 passed. The code was never at fault.
+  `[tool.mypy] python_version = "3.10"` fixes the *analysis* target, but mypy
+  reads the stubs of whatever is *installed*, and on 3.12/3.13 pip resolves a
+  numpy whose `__init__.pyi` uses PEP 695 `type X = ...`. Told to target 3.10,
+  mypy refused to parse 3.12+ syntax and exited before reading a line of
+  project code (`Found 1 error in 1 file (errors prevented further checking)`).
+  `ruff` and `mypy` now run only on the cell whose interpreter matches the
+  configured target.
+- **Social preview pointed at a personal GitHub handle** rather than the
+  organisation, in `docs/assets/social-preview.svg` — both an operator-identity
+  leak into a public asset and a link to a URL that does not exist. The repo
+  lives at `mcp-tool-shop-org/backpropagate`. (The string remains in history at
+  `11883fd`; a later commit does not unpublish a pushed one.)
+- **`[1.7.0]` was headed `Unreleased`** in this file despite shipping to PyPI,
+  git tag and a GitHub release on 2026-06-21. Compare-links for 1.4.0 through
+  1.7.0 were missing entirely and `[Unreleased]` still diffed from `v1.3.0`.
+
+### Changed
+
+- **Actions spend cut roughly 60%.** The repo was on track for ~1,260 Actions
+  minutes/month (294 measured in Sept 1–7), which is 63% of a Free
+  organisation's entire monthly allowance from one repository.
+  - `macos-latest` cells dropped from `ci.yml` and `post-publish-smoke.yml`.
+    The `ci.yml` cell ran **zero unique tests**: the only macOS-gated module is
+    `tests/test_mlx_smoke.py`, and `pyproject.toml` deliberately keeps `mlx`
+    out of the `full` extra, so `mlx_lm` was never importable on that runner.
+  - Test matrix 4 → 3 Python versions. 3.12 is covered by `parallel-xdist`,
+    which runs the identical selection as a hard gate; every version in
+    `classifiers` still has one.
+  - `push` + `pull_request` no longer double-fire the whole matrix on identical
+    bytes. `group: <workflow>-<github.ref>` could not collapse the pair, since
+    the same commit is `refs/heads/<branch>` on push and `refs/pull/N/merge` on
+    the PR; both `ci.yml` and `doc-drift.yml` now key on `head_ref || ref`.
+  - Nightly Train Smoke → weekly. Its own header states it exists to trip the
+    bell "BEFORE the weekly release cut" and that it "does NOT gate any
+    release", yet it ran seven times per cut and was 27 of the repo's last 60
+    Actions runs.
+- `doc-drift.yml` and `mutmut.yml` gained the `concurrency:` block the studio
+  Actions rules require; neither had one.
+
+## [1.7.0] - 2026-06-21
 
 ### Added
 
@@ -487,7 +533,12 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.0...v1.7.1
+[1.7.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.1.0...v1.1.1

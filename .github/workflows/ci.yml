@@ -902,10 +902,30 @@ jobs:
             exit 1
           fi
           MISSING=()
+          # `grep -q ... <<< "${PKGINFO}"`, NEVER `echo "${PKGINFO}" | grep -q`.
+          #
+          # This step runs under `bash -e -o pipefail`. `grep -q` exits the
+          # instant it matches, which closes the pipe while `echo` is still
+          # writing the remaining ~40 KB of PKG-INFO; `echo` then dies on EPIPE,
+          # and pipefail promotes that to the pipeline's status. `if !` reads
+          # the failure as "no match" and reports a field that is demonstrably
+          # present as MISSING. The dump that follows even prints it: the
+          # 2026-09-17 20:43 run said "missing ... Version" directly above a
+          # PKG-INFO whose third line is `Version: 1.7.1`.
+          #
+          # It is a race, so it is intermittent and lands on a different field
+          # each time -- `main` failed at 20:38 the same day claiming `Name`,
+          # on a tree where nothing had changed. `build` is a REQUIRED status
+          # check, so every trip blocks a PR for no reason.
+          #
+          # A here-string has no writer process to receive SIGPIPE, so an early
+          # `grep -q` exit cannot fail anything. Do not "simplify" these back
+          # into pipes.
+          #
           # License-Expression is the PEP 639 modern shape (hatchling
           # 1.27+, setuptools 78+). Match either it or the legacy
           # ``License: ...`` so non-PEP-639 backends don't false-trip.
-          if ! echo "${PKGINFO}" | grep -qE '^(License-Expression|License):'; then
+          if ! grep -qE '^(License-Expression|License):' <<< "${PKGINFO}"; then
             MISSING+=("License-Expression or License")
           fi
           # Hatchling emits `Author-email:` (lowercase 'e'); setuptools emits
@@ -913,13 +933,13 @@ jobs:
           # `-email` suffix to accept both shapes — the actual PKG-INFO from
           # current hatchling has lowercase `Author-email:` which a
           # case-sensitive `-Email` regex would silently miss.
-          if ! echo "${PKGINFO}" | grep -qiE '^Author(-Email)?:'; then
+          if ! grep -qiE '^Author(-Email)?:' <<< "${PKGINFO}"; then
             MISSING+=("Author or Author-Email")
           fi
-          if ! echo "${PKGINFO}" | grep -qE '^Name:\s*backpropagate\b'; then
+          if ! grep -qE '^Name:\s*backpropagate\b' <<< "${PKGINFO}"; then
             MISSING+=("Name (== backpropagate)")
           fi
-          if ! echo "${PKGINFO}" | grep -qE '^Version:'; then
+          if ! grep -qE '^Version:' <<< "${PKGINFO}"; then
             MISSING+=("Version")
           fi
           if [ ${#MISSING[@]} -gt 0 ]; then

@@ -65,7 +65,24 @@ jobs:
     # change, so the honest statement is that this repository no longer runs
     # anything on macOS at all -- not that the coverage moved somewhere else.
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # 30, not 20. The windows-latest/3.11 cell blew a 20-minute cap twice --
+    # 2026-09-07 and 2026-09-17 -- and a timeout-cancellation reports as a
+    # non-success REQUIRED check, so both cancellations blocked their PRs and
+    # looked identical to a real test failure.
+    #
+    # The cap was not the bug; it was the messenger. Measured over the 20 most
+    # recent ci.yml runs, this cell is strictly bimodal and the split is the
+    # pip cache, not the tests:
+    #     cache HIT   5.8-8.0 min   (7 runs, 0 wheels built from source)
+    #     cache MISS 14.5-20.3 min  (11 runs, 8-10 built, ~480 MB downloaded)
+    # Tests themselves were flat at 2.4-2.7 min in every sample. The variance
+    # lived entirely in `Install dependencies` (3.1 min hit / 15.6 min miss),
+    # and 9.0 of those minutes were llama-cpp-python compiling from its sdist.
+    # Removing it from this cell (see the install step) puts the miss case near
+    # 11 min, so 30 leaves real headroom on a cold cache while still killing a
+    # genuinely hung job. Raise the floor by fixing the cause, then leave slack
+    # above the worst case -- not slack instead of a fix.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -106,7 +123,28 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -e ".[dev,full]"
+          # Windows takes the same feature surface MINUS `export`.
+          # llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its
+          # 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on
+          # 2026-09-17 (+2.6 to +11.6), the single largest item in this cell and
+          # the direct cause of two timeout cancellations.
+          #
+          # This costs no assertion. Nothing under test imports llama_cpp -- the
+          # package's only reference is a `_has_module("llama_cpp")` probe in
+          # feature_flags.py that flips FEATURES["export"], and no test asserts
+          # that flag. tests/test_export.py exercises the GGUF path entirely
+          # through enums and MagicMock, so it passes either way.
+          #
+          # pyproject defines `full = full-no-export + export`, so a feature
+          # group added later reaches both lists and Windows cannot quietly
+          # drift into testing less than Linux. If you ever need llama_cpp
+          # itself covered on Windows, install it from the project's prebuilt
+          # wheel index rather than restoring the source build here.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pip install -e ".[dev,full-no-export]"
+          else
+            pip install -e ".[dev,full]"
+          fi
 
       # RUFF AND MYPY RUN ON THE FLOOR CELL ONLY, and the condition is the fix
       # for a month of red CI -- not an optimization bolted onto a green build.

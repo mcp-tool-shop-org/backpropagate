@@ -23,8 +23,16 @@ on:
   #
   # To skip work on a PR, gate INSIDE a job with `if:`: a skipped job still
   # publishes its check run, and branch protection counts a skipped required
-  # check as passing. That is the supported way to be cheap here. This repo is
-  # public, so the matrix costs no billable Actions minutes either way.
+  # check as passing. This repo is public, so the matrix costs no billable
+  # Actions minutes either way.
+  #
+  # But read CIDOCS-A-008 (noted further down this file) before reaching for
+  # that: combining a workflow-level paths: filter with a job-level if: gate is
+  # what produced the build-site/deploy-site chain-reaction skip. `needs:`
+  # propagates a skip to every dependent job, and because protection reads a
+  # skipped required check as PASSING, a cascade goes green instead of loud --
+  # the same failure mode as this deadlock, inverted. If you gate a job that
+  # anything `needs:`, work out what the whole chain reports before you push.
   push:
     branches: [main]
     paths:

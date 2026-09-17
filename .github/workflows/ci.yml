@@ -1,11 +1,38 @@
 name: CI
 
 on:
-  # site/** is intentionally NOT in these paths: the Python test matrix
-  # (incl. the macOS ~10x / Windows ~2x smoke cells) has no job that reads
-  # site/, so a docs-only commit firing the full matrix is pure CI-minute
-  # waste. pages-deploy.yml owns site/** for build+deploy, and doc-drift.yml
-  # owns the handbook drift check — both are paths-gated on site/** already.
+  # push stays paths-gated. site/** is intentionally NOT in this list: no job
+  # here reads site/, so a docs-only commit on main firing the whole matrix is
+  # pure waste. pages-deploy.yml owns site/** for build+deploy and doc-drift.yml
+  # owns the handbook drift check. rules/github-actions.md requires this filter,
+  # and it is specifically `on.push.paths` that it requires.
+  #
+  # pull_request is deliberately NOT paths-gated. Do not re-gate it.
+  #
+  # Every job below is a REQUIRED status check on main. When a paths filter
+  # skips a workflow, GitHub creates no check run at all -- not a passing one,
+  # not a skipped one, nothing -- so branch protection sits at "Expected —
+  # Waiting for status to be reported" forever and the PR is BLOCKED with no
+  # way out but --admin. Measured 2026-09-17: PR #203 changed only
+  # site/package.json, received exactly one check (drift-check from
+  # doc-drift.yml, whose filter DOES cover site/**), and all sixteen contexts
+  # here were simply absent; PR #207 was the mirror image, green on all sixteen
+  # and missing drift-check. A paths filter on a pull_request trigger and a
+  # required status check cannot both be satisfied, and the filter is the half
+  # that has to go.
+  #
+  # To skip work on a PR, gate INSIDE a job with `if:`: a skipped job still
+  # publishes its check run, and branch protection counts a skipped required
+  # check as passing. This repo is public, so the matrix costs no billable
+  # Actions minutes either way.
+  #
+  # But read CIDOCS-A-008 (noted further down this file) before reaching for
+  # that: combining a workflow-level paths: filter with a job-level if: gate is
+  # what produced the build-site/deploy-site chain-reaction skip. `needs:`
+  # propagates a skip to every dependent job, and because protection reads a
+  # skipped required check as PASSING, a cascade goes green instead of loud --
+  # the same failure mode as this deadlock, inverted. If you gate a job that
+  # anything `needs:`, work out what the whole chain reports before you push.
   push:
     branches: [main]
     paths:
@@ -18,14 +45,6 @@ on:
       - '.github/workflows/**'
   pull_request:
     branches: [main]
-    paths:
-      - 'backpropagate/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - 'Dockerfile'
-      - 'requirements*.txt'
-      - '.github/workflows/**'
   workflow_dispatch:
 
 concurrency:

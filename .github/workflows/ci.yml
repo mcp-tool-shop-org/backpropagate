@@ -82,6 +82,13 @@ jobs:
     # 11 min, so 30 leaves real headroom on a cold cache while still killing a
     # genuinely hung job. Raise the floor by fixing the cause, then leave slack
     # above the worst case -- not slack instead of a fix.
+    #
+    # A wider cap is not a spend decision here. rules/github-actions.md prices
+    # windows-latest at ~2x Linux per minute, but that rate applies to billable
+    # minutes and this repository is PUBLIC, where GitHub does not bill standard
+    # runners at all. What a slow Windows cell actually costs is wall-clock on
+    # every PR and a required check that cancels at random -- which is why the
+    # 9-minute compile is removed rather than merely accommodated.
     timeout-minutes: 30
     strategy:
       fail-fast: false

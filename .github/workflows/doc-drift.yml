@@ -16,16 +16,16 @@ on:
   # here even though ci.yml omits them — the script's Class 4b (README error
   # codes) and Class 4 (error-codes catalog) checks read them directly, so a
   # README-only or catalog-only drift commit must still trip this gate.
+  # NOT paths-gated, and it must stay that way: `drift-check` is a required
+  # status check on main, and a paths filter that skips this workflow produces
+  # no check run for protection to read, leaving the PR BLOCKED forever. PR #207
+  # was green on all sixteen ci.yml contexts and unmergeable on this one alone,
+  # because a gitpython bump touches pyproject.toml/uv.lock and neither is in
+  # the list below. The script is one ubuntu job with a 5-minute cap; running it
+  # on every PR is cheaper than the deadlock. See ci.yml's `on:` block for the
+  # full reasoning and for the `if:`-inside-the-job alternative.
   pull_request:
     branches: [main]
-    paths:
-      - 'backpropagate/**'
-      - 'site/**'
-      - 'README.md'
-      - 'llms.txt'
-      - 'scripts/**'
-      - 'tests/test_error_codes_catalog.py'
-      - '.github/workflows/**'
   push:
     branches: [main]
     paths:

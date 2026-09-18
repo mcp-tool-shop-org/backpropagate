@@ -362,6 +362,19 @@ full = [
     { name = "unsloth" },
     { name = "wandb" },
 ]
+full-no-export = [
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "psutil" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "reflex" },
+    { name = "structlog" },
+    { name = "torchao" },
+    { name = "unsloth" },
+    { name = "wandb" },
+]
 logging = [
     { name = "structlog" },
 ]
@@ -407,9 +420,10 @@ validation = [
 requires-dist = [
     { name = "accelerate", specifier = ">=0.34.0" },
     { name = "argcomplete", specifier = ">=3.0.0" },
+    { name = "backpropagate", extras = ["full-no-export", "export"], marker = "extra == 'full'" },
     { name = "backpropagate", extras = ["unsloth", "ui"], marker = "extra == 'standard'" },
-    { name = "backpropagate", extras = ["unsloth", "ui", "validation", "export", "monitoring", "logging", "security", "fp8"], marker = "extra == 'full'" },
     { name = "backpropagate", extras = ["unsloth", "ui", "validation", "logging", "security"], marker = "extra == 'production'" },
+    { name = "backpropagate", extras = ["unsloth", "ui", "validation", "monitoring", "logging", "security", "fp8"], marker = "extra == 'full-no-export'" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "bitsandbytes", specifier = ">=0.41.0" },
     { name = "cryptography", marker = "extra == 'security'", specifier = ">=42.0.0" },
@@ -448,7 +462,7 @@ requires-dist = [
     { name = "unsloth", marker = "extra == 'unsloth'", specifier = ">=2024.1" },
     { name = "wandb", marker = "extra == 'monitoring'", specifier = ">=0.15.0" },
 ]
-provides-extras = ["unsloth", "ui", "validation", "export", "monitoring", "logging", "security", "fp8", "mlx", "standard", "full", "production", "dev"]
+provides-extras = ["unsloth", "ui", "validation", "export", "monitoring", "logging", "security", "fp8", "mlx", "standard", "full-no-export", "full", "production", "dev"]
 
 [[package]]
 name = "bandit"
@@ -3012,11 +3026,11 @@ wheels = [
 
 [[package]]
 name = "pip"
-version = "26.1.2"
+version = "26.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/01/91/47e7d486260f618783899587af63ccf7980fb60245c3e63dd4571c6b57ad/pip-26.1.2.tar.gz", hash = "sha256:f49cd134c61cf2fd75e0ce2676db03e4054504a5a4986d00f8299ae632dc4605", size = 1840799, upload-time = "2026-05-31T17:33:58.56Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/96/e6f8e9d9d7b9cc4457092712a7e919c3186aa2c2fa9ffed2c5d29cc947e8/pip-26.2.tar.gz", hash = "sha256:2d8542afcc84cdd8e846c2b36b2861fad1da376dd98f8e7113e9108a3c331690", size = 1848845, upload-time = "2026-07-29T21:57:56.407Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/95/6b5cb3461ea5673ba0995989746db58eb18b91b54dbf331e72f569540946/pip-26.1.2-py3-none-any.whl", hash = "sha256:382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab", size = 1813144, upload-time = "2026-05-31T17:33:56.772Z" },
+    { url = "https://files.pythonhosted.org/packages/62/36/a3aed958d60531cb442b7ab4596cda7b3621cfb916f8ae1d6769795c7dc1/pip-26.2-py3-none-any.whl", hash = "sha256:931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad", size = 1816475, upload-time = "2026-07-29T21:57:54.763Z" },
 ]
 
 [[package]]

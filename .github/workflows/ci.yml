@@ -84,7 +84,31 @@ jobs:
     # change, so the honest statement is that this repository no longer runs
     # anything on macOS at all -- not that the coverage moved somewhere else.
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # 30, not 20. The windows-latest/3.11 cell blew a 20-minute cap twice --
+    # 2026-09-07 and 2026-09-17 -- and a timeout-cancellation reports as a
+    # non-success REQUIRED check, so both cancellations blocked their PRs and
+    # looked identical to a real test failure.
+    #
+    # The cap was not the bug; it was the messenger. Measured over the 20 most
+    # recent ci.yml runs, this cell is strictly bimodal and the split is the
+    # pip cache, not the tests:
+    #     cache HIT   5.8-8.0 min   (7 runs, 0 wheels built from source)
+    #     cache MISS 14.5-20.3 min  (11 runs, 8-10 built, ~480 MB downloaded)
+    # Tests themselves were flat at 2.4-2.7 min in every sample. The variance
+    # lived entirely in `Install dependencies` (3.1 min hit / 15.6 min miss),
+    # and 9.0 of those minutes were llama-cpp-python compiling from its sdist.
+    # Removing it from this cell (see the install step) puts the miss case near
+    # 11 min, so 30 leaves real headroom on a cold cache while still killing a
+    # genuinely hung job. Raise the floor by fixing the cause, then leave slack
+    # above the worst case -- not slack instead of a fix.
+    #
+    # A wider cap is not a spend decision here. rules/github-actions.md prices
+    # windows-latest at ~2x Linux per minute, but that rate applies to billable
+    # minutes and this repository is PUBLIC, where GitHub does not bill standard
+    # runners at all. What a slow Windows cell actually costs is wall-clock on
+    # every PR and a required check that cancels at random -- which is why the
+    # 9-minute compile is removed rather than merely accommodated.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -125,7 +149,28 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -e ".[dev,full]"
+          # Windows takes the same feature surface MINUS `export`.
+          # llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its
+          # 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on
+          # 2026-09-17 (+2.6 to +11.6), the single largest item in this cell and
+          # the direct cause of two timeout cancellations.
+          #
+          # This costs no assertion. Nothing under test imports llama_cpp -- the
+          # package's only reference is a `_has_module("llama_cpp")` probe in
+          # feature_flags.py that flips FEATURES["export"], and no test asserts
+          # that flag. tests/test_export.py exercises the GGUF path entirely
+          # through enums and MagicMock, so it passes either way.
+          #
+          # pyproject defines `full = full-no-export + export`, so a feature
+          # group added later reaches both lists and Windows cannot quietly
+          # drift into testing less than Linux. If you ever need llama_cpp
+          # itself covered on Windows, install it from the project's prebuilt
+          # wheel index rather than restoring the source build here.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pip install -e ".[dev,full-no-export]"
+          else
+            pip install -e ".[dev,full]"
+          fi
 
       # RUFF AND MYPY RUN ON THE FLOOR CELL ONLY, and the condition is the fix
       # for a month of red CI -- not an optimization bolted onto a green build.
@@ -876,10 +921,30 @@ jobs:
             exit 1
           fi
           MISSING=()
+          # `grep -q ... <<< "${PKGINFO}"`, NEVER `echo "${PKGINFO}" | grep -q`.
+          #
+          # This step runs under `bash -e -o pipefail`. `grep -q` exits the
+          # instant it matches, which closes the pipe while `echo` is still
+          # writing the remaining ~40 KB of PKG-INFO; `echo` then dies on EPIPE,
+          # and pipefail promotes that to the pipeline's status. `if !` reads
+          # the failure as "no match" and reports a field that is demonstrably
+          # present as MISSING. The dump that follows even prints it: the
+          # 2026-09-17 20:43 run said "missing ... Version" directly above a
+          # PKG-INFO whose third line is `Version: 1.7.1`.
+          #
+          # It is a race, so it is intermittent and lands on a different field
+          # each time -- `main` failed at 20:38 the same day claiming `Name`,
+          # on a tree where nothing had changed. `build` is a REQUIRED status
+          # check, so every trip blocks a PR for no reason.
+          #
+          # A here-string has no writer process to receive SIGPIPE, so an early
+          # `grep -q` exit cannot fail anything. Do not "simplify" these back
+          # into pipes.
+          #
           # License-Expression is the PEP 639 modern shape (hatchling
           # 1.27+, setuptools 78+). Match either it or the legacy
           # ``License: ...`` so non-PEP-639 backends don't false-trip.
-          if ! echo "${PKGINFO}" | grep -qE '^(License-Expression|License):'; then
+          if ! grep -qE '^(License-Expression|License):' <<< "${PKGINFO}"; then
             MISSING+=("License-Expression or License")
           fi
           # Hatchling emits `Author-email:` (lowercase 'e'); setuptools emits
@@ -887,13 +952,13 @@ jobs:
           # `-email` suffix to accept both shapes — the actual PKG-INFO from
           # current hatchling has lowercase `Author-email:` which a
           # case-sensitive `-Email` regex would silently miss.
-          if ! echo "${PKGINFO}" | grep -qiE '^Author(-Email)?:'; then
+          if ! grep -qiE '^Author(-Email)?:' <<< "${PKGINFO}"; then
             MISSING+=("Author or Author-Email")
           fi
-          if ! echo "${PKGINFO}" | grep -qE '^Name:\s*backpropagate\b'; then
+          if ! grep -qE '^Name:\s*backpropagate\b' <<< "${PKGINFO}"; then
             MISSING+=("Name (== backpropagate)")
           fi
-          if ! echo "${PKGINFO}" | grep -qE '^Version:'; then
+          if ! grep -qE '^Version:' <<< "${PKGINFO}"; then
             MISSING+=("Version")
           fi
           if [ ${#MISSING[@]} -gt 0 ]; then

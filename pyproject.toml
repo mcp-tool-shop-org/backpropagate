@@ -136,8 +136,23 @@ mlx = [
 standard = [
     "backpropagate[unsloth,ui]",  # Recommended for most users
 ]
+# Every feature group that installs from a prebuilt wheel on all three
+# supported platforms. Split out of `full` so CI's Windows smoke cell can take
+# the whole feature surface WITHOUT `export`: llama-cpp-python publishes no
+# cp311 win_amd64 wheel, so pip falls back to its 74.9 MB sdist and compiles
+# it. Measured 2026-09-17 on the windows-latest/3.11 cell: 9.0 minutes of a
+# 20-minute job (+2.6 min to +11.6 min), which is what pushed that cell past
+# its timeout on 09-07 and again on 09-17. Both cancellations read as failed
+# REQUIRED status checks and blocked their PRs.
+#
+# `full` is defined below as this plus `export`, deliberately: a feature group
+# added to one reaches the other by construction, so the Windows cell can never
+# silently drift into testing less than Linux.
+full-no-export = [
+    "backpropagate[unsloth,ui,validation,monitoring,logging,security,fp8]",
+]
 full = [
-    "backpropagate[unsloth,ui,validation,export,monitoring,logging,security,fp8]",  # Everything (incl. experimental FP8)
+    "backpropagate[full-no-export,export]",  # Everything (incl. experimental FP8)
 ]
 production = [
     "backpropagate[unsloth,ui,validation,logging,security]",  # Production deployment

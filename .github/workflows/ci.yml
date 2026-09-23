@@ -644,55 +644,46 @@ jobs:
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
 
-      # CIDOCS-B-101 — triaged HIGH/MED advisories: decision-on-record, not a
-      # silent gap.
+      # CIDOCS-B-101 — triaged advisories: decision-on-record, not a silent gap.
       #
       # The CRITICAL-only gate below is intentionally narrow (false-positive
-      # flood from the v1.1.x rollback). That left three real-but-unfixable
-      # advisories *silently* invisible — reported by the advisory step but
-      # called out nowhere as a conscious accept:
+      # flood from the v1.1.x rollback). So anything this project knowingly
+      # accepts below CRITICAL is named HERE, by ID, with a one-line rationale
+      # and a review-by date — a conscious accept, not a line lost in the
+      # advisory markdown. Adding an ID REQUIRES that rationale in the diff.
       #
-      #   - GHSA-7wx4-6vff-v64p (diffusers, trust_remote_code bypass) — HIGH
-      #   - GHSA-98h9-4798-4q5v (diffusers, trust_remote_code bypass) — HIGH
-      #   - GHSA-69w3-r845-3855 (transformers.Trainer, arbitrary code exec) — MED
+      # THE ACCEPTED SET IS EMPTY as of 2026-09-23. The three IDs carried since
+      # v1.1.x were re-triaged after their 2026-08-31 review-by date, against
+      # the versions uv.lock pins, and all three are fixed there:
+      #   - GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v (diffusers trust_remote_code
+      #     bypass, HIGH): affect diffusers <0.38.0. uv.lock has 0.38.0, which
+      #     became installable once safetensors 0.8.0 went GA.
+      #   - GHSA-69w3-r845-3855 (transformers.Trainer ACE, MED): affects
+      #     transformers <5.0.0rc3. uv.lock has 5.5.0.
       #
-      # Accepted because:
-      #   - diffusers (0.37.1 in uv.lock) is transitive via unsloth and is NOT
-      #     imported by any backpropagate/**/*.py — no reachable codepath into
-      #     the vulnerable remote-code-load functions. The fix (0.38.0) requires
-      #     safetensors>=0.8.0rc0 (a pre-release); per baseline-before-enforce
-      #     we don't enable pre-releases for a security bump. Closes when
-      #     safetensors 0.8.0 GA lands OR unsloth loosens its floor (see
-      #     CHANGELOG "Security" / SECURITY.md).
-      #   - transformers.Trainer ACE is held on the 5.0 major-version-compat
-      #     work the v1.5 dispatch scopes; the rc-only fix is excluded by the
-      #     same pre-release policy.
-      # review-by: 2026-08-31 (re-triage at the v1.5 dep-sweep — drop any ID
-      # whose upstream fix went GA). Adding an ID here REQUIRES a one-line
-      # rationale in the diff.
+      # Note what this job can see: it installs `.[dev]` only, so a package
+      # reachable only through an extra (the unsloth tree, reflex, wandb,
+      # llama-cpp-python) is never audited here. The full locked closure is
+      # the Trivy job's scan of uv.lock.
       #
       # Mechanism: pip-audit has no --ignore-unfixed, so a bare hard gate would
-      # re-flood on the documented transitive baseline (.trivyignore). Instead
-      # this step ACKs the three IDs (--ignore-vuln matches GHSA aliases) and
-      # emits a ::warning:: annotation listing whatever non-accepted advisories
-      # remain — so a NEW advisory shows up as a named CI annotation (reviewable)
-      # rather than being lost in the advisory markdown, while the documented
-      # transitive baseline doesn't turn the run red. CRITICAL still hard-fails
-      # in the next step. continue-on-error keeps this informational.
+      # go red on every unfixed advisory. Instead each accepted ID is passed as
+      # --ignore-vuln (it matches the primary id OR any alias, so the GHSA form
+      # also suppresses PYSEC/CVE-keyed entries), and whatever remains is
+      # emitted as a ::warning:: annotation — a NEW advisory shows up as a
+      # named, reviewable CI annotation. CRITICAL still hard-fails in the next
+      # step. continue-on-error keeps this informational.
       - name: pip-audit (triaged-accept ACK + surface any new advisory)
         continue-on-error: true
         run: |
           set -euo pipefail
-          echo "Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855"
-          # --ignore-vuln matches the primary id OR any alias, so the GHSA form
-          # suppresses the PYSEC/CVE-keyed diffusers + transformers entries.
+          echo "Accepted-with-rationale: none (set emptied 2026-09-23 -- see CIDOCS-B-101 above)"
+          # To accept an ID: add `--ignore-vuln <GHSA-id> \` to this command AND
+          # its rationale + review-by date to the comment block above.
           pip-audit \
             --vulnerability-service osv \
-            --ignore-vuln GHSA-7wx4-6vff-v64p \
-            --ignore-vuln GHSA-98h9-4798-4q5v \
-            --ignore-vuln GHSA-69w3-r845-3855 \
-          && echo "pip-audit (post-accept): no advisories outside the accepted set." \
-          || echo "::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)"
+          && echo "pip-audit: no known advisories." \
+          || echo "::warning::pip-audit reports advisories (above) that are not on the decision-on-record list in ci.yml. Triage: bump the dep in pyproject.toml + uv.lock, or accept the ID with --ignore-vuln plus a one-line rationale and review-by date in the CIDOCS-B-101 comment. New FIXABLE advisories are the signal."
 
       # Gating step (v1.1.2): CRITICAL-only floor. Unfixed transitive
       # CVEs (huggingface-hub → requests → urllib3 etc.) at HIGH and
@@ -803,13 +794,27 @@ jobs:
         # Trivy ran as ADVISORY (no exit-code gate) until the v1.1.x
         # dep-bump wave. Stage B's B-CT-006 added `exit-code: '1'` to gate
         # CI on findings, but the actual baseline turned out to be 30+
-        # transitive CVEs across uv.lock + site/package-lock.json — far
-        # beyond the 14 documented in .trivyignore. Per the
+        # transitive CVEs across uv.lock + site/package-lock.json. Per the
         # baseline-before-enforce doctrine (memory/feedback_baseline_
         # before_enforce.md), gating before triage is wrong. This step
         # stays advisory; findings still surface in the GitHub Security
         # tab via SARIF upload. The CRITICAL-only gate below provides
         # the real floor in v1.1.2.
+        #
+        # .trivyignore WAS RETIRED 2026-09-23 at zero live entries, per its
+        # own protocol. All 13 of its IDs (urllib3, python-multipart, pip,
+        # Pillow, idna, GitPython) are fixed at the versions uv.lock pins, and
+        # Trivy 0.70.0 (this action's default) reported none of them with the
+        # file removed — at any severity, fixed or unfixed.
+        #
+        # The protocol's second half — re-tighten this step to
+        # `exit-code: '1'` — waits on a clean baseline, and the baseline is not
+        # clean yet: ONE finding, transformers CVE-2026-9856 (HIGH, fixed in
+        # 5.10.0), which uv cannot install because every current unsloth caps
+        # `transformers<=5.5.0`. Gating now would redden every PR on a fix
+        # nobody can install. If an advisory ever has to be suppressed,
+        # recreate .trivyignore with a one-line rationale + review-by date
+        # per entry and pass it back to BOTH steps as `trivyignores:`.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
@@ -818,7 +823,6 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: true
-          trivyignores: '.trivyignore'
         continue-on-error: true
 
       - name: Upload SARIF to GitHub Security
@@ -841,7 +845,6 @@ jobs:
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
-          trivyignores: '.trivyignore'
           exit-code: '1'
 
   # secrets-scan-baseline-noop: a deliberately-empty placeholder so the

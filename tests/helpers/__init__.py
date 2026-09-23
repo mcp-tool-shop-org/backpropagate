@@ -17,6 +17,9 @@ Modules:
   ``pytest.importorskip`` when ``httpx`` is not installed).
 - ``ws`` — WebSocket-upgrade helpers for the same auth-middleware surface
   (validates auth PRE-``websocket.accept()`` per DESIGN_BRIEF requirement 5).
+- ``trl_paths`` — ``trl_patch_target(name)``: the dotted path to patch for a
+  trl preference class, top level or ``trl.experimental.*``, wherever the
+  installed trl keeps it (trl 0.29 moved ORPO and CPO).
 
 Public API: the symbols re-exported below match the legacy
 ``tests.test_helpers`` shape so the conftest.py diff stays one-character

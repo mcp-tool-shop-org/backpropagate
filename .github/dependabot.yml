@@ -15,13 +15,14 @@ updates:
       prefix: "deps"
 
   # uv.lock is the source of truth for the fully-resolved transitive tree
-  # (the `pip` block above only sees the direct deps in pyproject.toml). The
-  # triaged-but-unfixed advisories the CI dep-audit accepts (diffusers
-  # trust_remote_code GHSA-7wx4-6vff-v64p / GHSA-98h9-4798-4q5v, transformers
-  # Trainer ACE GHSA-69w3-r845-3855) all live in the lockfile's transitive
-  # closure; without this ecosystem they get no scheduled forcing function and
-  # only close when a maintainer happens to re-run `uv lock`. Monthly, grouped,
-  # limit 3 — same cadence/shape as the `pip` block. (CIDOCS-B-102)
+  # (the `pip` block above only sees the direct deps in pyproject.toml), so an
+  # advisory deep in that closure needs a scheduled forcing function or it
+  # closes only when a maintainer happens to re-run `uv lock`. The three IDs
+  # the CI dep-audit once accepted for that reason (diffusers
+  # GHSA-7wx4-6vff-v64p / GHSA-98h9-4798-4q5v, transformers
+  # GHSA-69w3-r845-3855) are fixed in uv.lock and came off its list on
+  # 2026-09-23. Monthly, grouped, limit 3 — same cadence/shape as the `pip`
+  # block. (CIDOCS-B-102)
   - package-ecosystem: "uv"
     directory: "/"
     schedule:

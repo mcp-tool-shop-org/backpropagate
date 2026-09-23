@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **20 Dependabot alerts fixed on 2026-09-23 (1 critical, 12 high, 7
+  medium).** Each re-lock moved only its own package:
+  - anyio 4.14.0 → 4.14.2 (#211): CVE-2026-63374 (critical) plus one high
+    and one medium. Trivy's CRITICAL floor had turned every open PR red,
+    including the Atlas adoption PR #212, which touched no dependencies. The
+    same re-lock brought `uv.lock` back in line with `pyproject.toml`: #209
+    added the `full-no-export` extra without re-locking, and
+    `uv sync --frozen` does not check for that.
+  - Pillow 12.2.0 → 12.3.0 (#175): 13 alerts, 10 high.
+  - aiohttp 3.14.1 → 3.14.3 (#186): 3 alerts, 1 high.
+  - pip 26.1.2 → 26.2 (#192): 1 medium.
+- **Still open, blocked upstream by unsloth:** transformers CVE-2026-9856
+  (high, fixed in 5.10.0) and torch CVE-2025-3000 (low, fixed in 2.13.0).
+  Every current unsloth release, 2026.9.2 included, caps
+  `transformers<=5.5.0` and `torch<2.12`. The only way uv can take either fix
+  is to drag unsloth back to a release older than the cap: unsloth 2025.9.5
+  for transformers (#194) and 2026.3.11 for torch (#173). Both PRs were
+  closed without merging. #194 was green only because CPU CI cannot exercise
+  unsloth. Two medium alerts (accelerate, diskcache) have no upstream fix yet.
+
+### Changed
+
+- **Dependabot no longer widens the trl, transformers or torch caps** (#213).
+  `pyproject.toml` already says those caps move only with the compat work
+  they guard (CIDOCS-B-103, FC-01). Both the `pip` and `uv` blocks now ignore
+  `trl>=0.28`, `transformers>=6` and `torch>=3`. #169 widened trl to `<1.13`
+  and went green because no job installed a newly admitted trl. #210
+  re-locked trl 1.13.0 and broke ORPO: trl 1.x no longer exports
+  `ORPOConfig`/`ORPOTrainer` from the top level, and ORPO has no
+  `trl.experimental` fallback. Both were closed.
+
 ## [1.7.1] - 2026-09-07
 
 ### Fixed

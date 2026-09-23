@@ -1,0 +1,4484 @@
+{
+  "boundaries": [
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "980a74a6c0221c0ad286c88732ca1fd78c58462ec2af11238fd8d7b3d03959a0",
+          "path": ".claude/launch.json"
+        }
+      ],
+      "globs": [
+        ".claude/**"
+      ],
+      "importConfidence": "full",
+      "name": ".claude",
+      "origin": "authored",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "4462d4a6a4d407420ca6875d3e9cb4750593ff8ac3cd7ab5af91013e3efc75ae",
+          "path": ".github/ISSUE_TEMPLATE/bug_report.yml"
+        },
+        {
+          "hash": "b194686763cfb8ea6dd74eaf80d7870852deeed4920bb8d59397aaaba25d2c1c",
+          "path": ".github/ISSUE_TEMPLATE/config.yml"
+        },
+        {
+          "hash": "855ba46b78135a2f7363a95a4c8d1284b80f157e6b2d03b3062cc2f75cdee860",
+          "path": ".github/ISSUE_TEMPLATE/feature_request.yml"
+        },
+        {
+          "hash": "4c60a452667286a31aeca8c951751afd49e969401207c30107b362a196892de5",
+          "path": ".github/PULL_REQUEST_TEMPLATE.md"
+        },
+        {
+          "hash": "aec2c94e0c361964fe1b2f2fd9e7b3b47b228e9df71760b9e90ad4b23c592611",
+          "path": ".github/dependabot.yml"
+        },
+        {
+          "hash": "06aeeaed2726216a401cd56a64faa086ed47467e011039d9c86339d207edc46a",
+          "path": ".github/workflows/ci.yml"
+        },
+        {
+          "hash": "e4b4a780bbf7e326faa8284ce29cb4e315debd2d4d2dd1823d1cea276fe15771",
+          "path": ".github/workflows/doc-drift.yml"
+        },
+        {
+          "hash": "a9d4efcc76efa620010ab810253f6d35b790a7e5df12a0c78e8e7a6853aeeecb",
+          "path": ".github/workflows/mutmut.yml"
+        },
+        {
+          "hash": "324f7b811d9160dc08f29c7f5827f7788398ea79aad3fb4345f0573887e8d876",
+          "path": ".github/workflows/nightly-train-smoke.yml"
+        },
+        {
+          "hash": "1033738b1efa44573c569cebfbfa687efee6117b647623a26e311535057d4ce1",
+          "path": ".github/workflows/pages-deploy.yml"
+        },
+        {
+          "hash": "f2d7a702b1ac93bc496b0853a072d77e5bfe1ce3097aecdd66710fed0a94ec67",
+          "path": ".github/workflows/post-publish-smoke.yml"
+        },
+        {
+          "hash": "c6bd02d565d00d9470c718bccf5f8aab937d7bdf2cdcaa9c25042b6a508397e0",
+          "path": ".github/workflows/publish.yml"
+        },
+        {
+          "hash": "18fdf1aeb01f76ebcea57d79e62b632c82c929b9221058ba3a154b9ce7024640",
+          "path": ".github/workflows/release.yml"
+        },
+        {
+          "hash": "ae31942a136ce72881c6bdd196c52a16307ed489a779d9e023259f2fe74768d7",
+          "path": ".github/workflows/scorecard.yml"
+        }
+      ],
+      "globs": [
+        ".github/**"
+      ],
+      "importConfidence": "full",
+      "name": ".github",
+      "origin": "generated",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "ca1a753e1f8aa5ab8d8717c4303e40fb35cb5bee4fe6b32d7185bda004231b9f",
+          "path": "assets/logo.png"
+        }
+      ],
+      "globs": [
+        "assets/**"
+      ],
+      "importConfidence": "full",
+      "name": "assets",
+      "origin": "authored",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 31,
+      "dynamicWrites": 12,
+      "entryPoints": [
+        "backpropagate/cli.py"
+      ],
+      "externalNames": [
+        "datasets"
+      ],
+      "externals": 9,
+      "files": [
+        {
+          "hash": "043915c22abeb6ab2f1c2ade03ec9795524d32ab58d4dab331956501ee610428",
+          "path": "backpropagate/.gitignore"
+        },
+        {
+          "hash": "eca01d61a1d8120732e36b572e0d960cd547facee6754370a8e1aab9900a24b7",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/dataset_report.py",
+            "backpropagate/datasets.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/model_card.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/security.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "backpropagate/__init__.py"
+        },
+        {
+          "hash": "360a404e5962079284e644e40ae7891bc10bd1478eec1368300d1629b7982708",
+          "importsFiles": [
+            "backpropagate/cli.py"
+          ],
+          "path": "backpropagate/__main__.py"
+        },
+        {
+          "hash": "481385d8aa77a9f8ce3957f02954b7ccb6960929e52f95313eb7779d3d1f98ce",
+          "path": "backpropagate/assets/icons/alert.svg"
+        },
+        {
+          "hash": "e89a45832699648026c037560c3988a9af2c532057718be73929365183b30091",
+          "path": "backpropagate/assets/icons/arrow-down.svg"
+        },
+        {
+          "hash": "8687ebe4d8af1a5db62b1ea1a10aeaf6f1e59e1ac964100386e2871f982bb7ec",
+          "path": "backpropagate/assets/icons/check.svg"
+        },
+        {
+          "hash": "d76ff039c3a54739faba7792cc4a86774492549ad711b3e644ebbe58f6f82d58",
+          "path": "backpropagate/assets/icons/chev-down.svg"
+        },
+        {
+          "hash": "adc6f14c1cd20a7f7fd4fb9160cb20c3147674ae36bf4a710aa521afa36934f9",
+          "path": "backpropagate/assets/icons/chev-right.svg"
+        },
+        {
+          "hash": "2c1d32ea12b186fd75b268ce4b9c485be8203eb4e7d0ba3b12575b0b47811991",
+          "path": "backpropagate/assets/icons/chip.svg"
+        },
+        {
+          "hash": "92fb3a807298077d8d5266418e80bcdb64a0c53c42cfc415c453d4205c2027c9",
+          "path": "backpropagate/assets/icons/copy.svg"
+        },
+        {
+          "hash": "8871447fbc8928af19cf33a24bfc68951552a90057b5ef7deca9df05bfe5251f",
+          "path": "backpropagate/assets/icons/dataset.svg"
+        },
+        {
+          "hash": "c629c86668c00365a0c794fa2ef57296fed45ad77a3dcddb4a53cb88ea4babea",
+          "path": "backpropagate/assets/icons/export.svg"
+        },
+        {
+          "hash": "42922e523359380ce1e7a6c8f3c9807478f5c018a5a71cce92b1d8d0dae1decd",
+          "path": "backpropagate/assets/icons/external.svg"
+        },
+        {
+          "hash": "a2a31eb7d90d622a5e617bb83e55119c8ea91033a138bd8152990a2f14d245ef",
+          "path": "backpropagate/assets/icons/github.svg"
+        },
+        {
+          "hash": "6429a761c7cc7d90218569e1df74d6efb817f6e693eadb2cbf9dd02757644c7c",
+          "path": "backpropagate/assets/icons/gpu.svg"
+        },
+        {
+          "hash": "6f7b20b58c3ace82ff2269bef2ddb73ffec366f4c621ab989ce3a3b04f62e19c",
+          "path": "backpropagate/assets/icons/info.svg"
+        },
+        {
+          "hash": "ddf2b626f0fa6af73271811fd474160eeec5046ca296da2aab7819274dd6fc27",
+          "path": "backpropagate/assets/icons/log.svg"
+        },
+        {
+          "hash": "6955505fa4f0421585836034391e9d515f4e5e5316e97d295e1cd569641323ea",
+          "path": "backpropagate/assets/icons/moon.svg"
+        },
+        {
+          "hash": "0bc1636618f2d558815d4a5f27e4e8e2be34ba2d3954ab675dd1d0d3ec7669e5",
+          "path": "backpropagate/assets/icons/multi-run.svg"
+        },
+        {
+          "hash": "7e2b26e2f8716a9872ea299bb7723353c0f73c78151ad2de9cab60de6ed640d3",
+          "path": "backpropagate/assets/icons/pause.svg"
+        },
+        {
+          "hash": "8645a2bc7dc0af3b3c656a4e099617bac06865ed643e4e340af2088d5a846dbd",
+          "path": "backpropagate/assets/icons/plus.svg"
+        },
+        {
+          "hash": "60e517371be8f736c6241ed95c29bb59ed12aa9f10ce0c576c73000f674824f7",
+          "path": "backpropagate/assets/icons/records.svg"
+        },
+        {
+          "hash": "2b70d82716c7b8219360404862ff5b2421437532921111df16a0a50d6512cc8d",
+          "path": "backpropagate/assets/icons/search.svg"
+        },
+        {
+          "hash": "822efc65975149fbdefa838e679ebc4996ca4f447f1eb37facfaf894c444087a",
+          "path": "backpropagate/assets/icons/settings.svg"
+        },
+        {
+          "hash": "86f2fde12a5416649895fb2192e945edaa34c91bb4ddfebb0970f15816ddc227",
+          "path": "backpropagate/assets/icons/status-active.svg"
+        },
+        {
+          "hash": "08e3fbb679474fe601de7af708ae596e48fd986147bca08ecce8c81060af0cd3",
+          "path": "backpropagate/assets/icons/status-error.svg"
+        },
+        {
+          "hash": "224c61c601c3c5dcafbadf81fc4b80544f3fc964995dc0457ef96461f3d18562",
+          "path": "backpropagate/assets/icons/status-idle.svg"
+        },
+        {
+          "hash": "6937a77606aeacbc8e3296538271c6826553f094b78d0720d3e98ef88d03ba73",
+          "path": "backpropagate/assets/icons/stop.svg"
+        },
+        {
+          "hash": "86b243606b3811bab909b6d98337ef37a0014d6910934304c8cbc6a6c13d7feb",
+          "path": "backpropagate/assets/icons/sun.svg"
+        },
+        {
+          "hash": "da6fe24109e3b638d0453aa1e5474e2218764da5db4254c48ebb7f90740f770a",
+          "path": "backpropagate/assets/icons/temp.svg"
+        },
+        {
+          "hash": "b36fbab11f0e5a33453a2712911d44c70dbee6294990882c7169aea192880a9e",
+          "path": "backpropagate/assets/icons/train.svg"
+        },
+        {
+          "hash": "cb38411eea5ac552ec347be4eb5026fe4e719eae72a5d22f9f21f4d0cb12da2d",
+          "path": "backpropagate/assets/icons/upload.svg"
+        },
+        {
+          "hash": "f83694bfbefc0ae64e6883b982395fc340a9fa57ac7088027a75716065bb0053",
+          "path": "backpropagate/assets/icons/x.svg"
+        },
+        {
+          "hash": "6c2789e87d305db16521d5fd25d60b4aa955f7fc9c08c7eaf9b262a9c70fff55",
+          "path": "backpropagate/assets/logo.png"
+        },
+        {
+          "hash": "8a14e6f7d61bb25e8aba64bb57f3ad8cc9611a009be2fab80ac896c1ff6a7b34",
+          "path": "backpropagate/checkpoints.py"
+        },
+        {
+          "exports": [
+            "cmd_config",
+            "cmd_data_report",
+            "cmd_data_split",
+            "cmd_diff_runs",
+            "cmd_estimate_vram",
+            "cmd_eval",
+            "cmd_export",
+            "cmd_export_runs",
+            "cmd_generate",
+            "cmd_info",
+            "cmd_list_runs",
+            "cmd_multi_run",
+            "cmd_ollama_list",
+            "cmd_ollama_register",
+            "cmd_ollama_rm",
+            "cmd_ollama_shelf",
+            "cmd_push",
+            "cmd_replay",
+            "cmd_resume",
+            "cmd_runs",
+            "cmd_show_run",
+            "cmd_train",
+            "cmd_ui",
+            "cmd_validate",
+            "create_parser",
+            "main",
+            "write_launch_token_lock"
+          ],
+          "hash": "109f1f550ac469377f522f273afebbc06e3e8ee5376db3e3b1287723a46e5cf0",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/dataset_report.py",
+            "backpropagate/datasets.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/security.py",
+            "backpropagate/trainer.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "backpropagate/cli.py"
+        },
+        {
+          "exports": [
+            "get_cache_dir",
+            "get_lora_preset",
+            "get_model_preset",
+            "get_output_dir",
+            "get_preset",
+            "get_recommended_lr",
+            "get_recommended_warmup",
+            "get_settings",
+            "get_training_args",
+            "lookup_model_preset_by_id",
+            "reload_settings",
+            "unapply_windows_fixes"
+          ],
+          "hash": "94610669729d7f5ed77de4dd686acea91d2e33c6aded8371fdc118f9587b5df6",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/logging_config.py"
+          ],
+          "path": "backpropagate/config.py"
+        },
+        {
+          "exports": [
+            "analyze_dataset",
+            "contamination_overlap",
+            "find_duplicate_clusters",
+            "token_length_histogram",
+            "trace_length_histogram"
+          ],
+          "hash": "b82faa5d9a7afd57efb95280f765eff65bc13a3be4eed61612c88b596c787de0",
+          "importsFiles": [
+            "backpropagate/datasets.py"
+          ],
+          "path": "backpropagate/dataset_report.py"
+        },
+        {
+          "exports": [
+            "analyze_curriculum",
+            "compute_difficulty_score",
+            "compute_perplexity",
+            "convert_to_chatml",
+            "dataset_has_leading_think",
+            "deduplicate_exact",
+            "deduplicate_minhash",
+            "detect_format",
+            "filter_by_perplexity",
+            "filter_by_quality",
+            "filter_by_trace_length",
+            "get_curriculum_chunks",
+            "get_dataset_stats",
+            "order_by_difficulty",
+            "preview_samples",
+            "split_dataset",
+            "validate_dataset",
+            "validate_sample",
+            "warn_on_doubled_think"
+          ],
+          "hash": "f90bfe7799ef2afce7bfca70458f492f952f900d5d3f4bedaccb04aa0f868786",
+          "importsFiles": [
+            "backpropagate/exceptions.py"
+          ],
+          "path": "backpropagate/datasets.py"
+        },
+        {
+          "exports": [
+            "bootstrap_ci_halfwidth",
+            "compute_task_metric",
+            "contains_match",
+            "diff_evals",
+            "eval_gate",
+            "evaluate_run",
+            "normalize_squad_text",
+            "normalized_exact_match",
+            "pass_rate",
+            "regex_match",
+            "token_f1"
+          ],
+          "hash": "89f1f00b2673c4b8e15f32cc5f5f93d668f7b1aa4526b523770d00369275e719",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "backpropagate/eval.py"
+        },
+        {
+          "exports": [
+            "print_error_code_catalog"
+          ],
+          "hash": "16feb4082961731157d56a3fa2cb63e2ec0b0a2b1f2608f12eee37471f3eb9bc",
+          "path": "backpropagate/exceptions.py"
+        },
+        {
+          "exports": [
+            "create_adapter_modelfile",
+            "create_modelfile",
+            "export_gguf",
+            "export_lora",
+            "export_merged",
+            "export_ollama_adapter",
+            "list_adapter_shelf",
+            "list_ollama_models",
+            "push_to_hub",
+            "register_with_ollama",
+            "remove_ollama_model",
+            "write_model_card"
+          ],
+          "hash": "6e44a2f337da465fc5ba68bdd585ca939bbe973045f56f0853e5b7d230a76650",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/model_card.py"
+          ],
+          "path": "backpropagate/export.py"
+        },
+        {
+          "exports": [
+            "check_feature",
+            "check_unsloth_runtime",
+            "ensure_feature",
+            "get_gpu_info",
+            "get_install_hint",
+            "get_system_info",
+            "list_available_features",
+            "list_missing_features",
+            "refresh_features",
+            "require_feature"
+          ],
+          "hash": "f6bc7e1317a4504faddf286336a66d98e41d24b7092ab0b1b8086ee033cb3bcb",
+          "path": "backpropagate/feature_flags.py"
+        },
+        {
+          "exports": [
+            "check_gpu_safe",
+            "format_gpu_status",
+            "get_gpu_status",
+            "install_pynvml_hint",
+            "reset_nvml_state",
+            "wait_for_safe_gpu"
+          ],
+          "hash": "1d21fc7324952e1a1a764de5956cc0f807ed936498e934dbbc5bb787c7609156",
+          "path": "backpropagate/gpu_safety.py"
+        },
+        {
+          "exports": [
+            "add_request_context",
+            "bind_run_context",
+            "clear_request_context",
+            "configure_logging",
+            "get_logger",
+            "get_standard_logger",
+            "redact_secrets",
+            "run_context",
+            "unbind_run_context"
+          ],
+          "hash": "ac764e415afcf7fe8131eb96581263f8a2a65afed43a25aa6f1eda3beb2bb09d",
+          "path": "backpropagate/logging_config.py"
+        },
+        {
+          "exports": [
+            "detect_apple_silicon",
+            "prepare_mlx_data_dir",
+            "resolve_backend"
+          ],
+          "hash": "3fc60dc1756708a05f951f83552454ca3b717fe656a0e120b12a25b3fa6b85a1",
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py"
+          ],
+          "path": "backpropagate/mlx_backend.py"
+        },
+        {
+          "exports": [
+            "build_loss_sparkline",
+            "generate_model_card",
+            "infer_model_short_name",
+            "load_run_history_for_card",
+            "write_model_card_for_export"
+          ],
+          "hash": "dbe2b9f6495e68768cfe148b23e13870536437d4a0526d14c92028266490cff7",
+          "importsFiles": [
+            "backpropagate/checkpoints.py"
+          ],
+          "path": "backpropagate/model_card.py"
+        },
+        {
+          "exports": [
+            "main"
+          ],
+          "hash": "fe0b96da1c73f2a16726e5d3e46b2f42fe6faed79897728d5fadac8329e59ff5",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "backpropagate/multi_run.py"
+        },
+        {
+          "hash": "4228cb0fdab261ef7c27609ae48ac4828197cb5666377ca16f2d6bbb7bbb1dd3",
+          "importsFiles": [
+            "backpropagate/ui_app/auth.py"
+          ],
+          "path": "backpropagate/rxconfig.py"
+        },
+        {
+          "exports": [
+            "audit_log",
+            "check_torch_security",
+            "safe_path",
+            "safe_torch_load"
+          ],
+          "hash": "32e9f06d40aad3364166416d9023798bfe55483811cc519cc10f51d74e49e659",
+          "path": "backpropagate/security.py"
+        },
+        {
+          "exports": [
+            "adaptive_scale",
+            "apply_merge_strategy",
+            "compute_task_similarity",
+            "drift_gate",
+            "estimate_total_layers",
+            "get_layer_scale",
+            "merge_A_matrices",
+            "merge_B_matrices",
+            "merge_lora_weights",
+            "merge_strategy_dare",
+            "merge_strategy_linear",
+            "merge_strategy_qiao_mahdavi",
+            "merge_strategy_ties",
+            "orthogonal_init_A",
+            "time_aware_scale"
+          ],
+          "hash": "f5587fd0709625d298b1db26c64aa34cb36a9905765371dadc2a27c274c4bce7",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py"
+          ],
+          "path": "backpropagate/slao.py"
+        },
+        {
+          "entry": "estimate_vram",
+          "entryRule": 4,
+          "exports": [
+            "estimate_vram",
+            "load_dataset",
+            "load_model"
+          ],
+          "hash": "857f06ef3af3d10508c310f919da967001a3fb27b544f6fa2b26d8db477d7626",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/multi_run.py"
+          ],
+          "path": "backpropagate/trainer.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 447,
+                  "name": "apply_chat_template",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_detect_chat_markers"
+            },
+            {
+              "calls": [
+                {
+                  "line": 824,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_ensure_fsdp_runtime"
+            },
+            {
+              "calls": [
+                {
+                  "line": 948,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                },
+                {
+                  "line": 952,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_estimate_param_count_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1040,
+                  "name": "num_parameters",
+                  "target": null
+                },
+                {
+                  "line": 1045,
+                  "name": "parameters",
+                  "target": null
+                },
+                {
+                  "line": 948,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 952,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1083,
+                  "name": "FullFinetuneModelTooLargeError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_enforce_full_ft_param_ceiling"
+            },
+            {
+              "calls": [
+                {
+                  "line": 948,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 952,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "estimate_vram"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1672,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_orpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1814,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_cpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1968,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_kto_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 447,
+                  "name": "apply_chat_template",
+                  "target": null,
+                  "via": "_detect_chat_markers"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_apply_train_on_responses_only"
+            }
+          ]
+        },
+        {
+          "hash": "7469ae9e39ab2e96b9092daa910680ab734f11ba2b24e06b2c7ad0d131d2338c",
+          "path": "backpropagate/ui_app/__init__.py"
+        },
+        {
+          "hash": "e2ab18c9a6ddb2b81b5fed504f20b31fedb47f7433bd92d97927ac9468afd006",
+          "importsFiles": [
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_app/pages/dataset.py",
+            "backpropagate/ui_app/pages/export.py",
+            "backpropagate/ui_app/pages/models.py",
+            "backpropagate/ui_app/pages/multi_run.py",
+            "backpropagate/ui_app/pages/run_detail.py",
+            "backpropagate/ui_app/pages/runs.py",
+            "backpropagate/ui_app/pages/train.py",
+            "backpropagate/ui_theme.py"
+          ],
+          "path": "backpropagate/ui_app/app.py"
+        },
+        {
+          "exports": [
+            "basic_auth_transformer"
+          ],
+          "hash": "d0c9f96f4d9b533e5bc046eaf29b7bcda61009be5412526918a6e0b07a76d64e",
+          "importsFiles": [
+            "backpropagate/ui_security.py"
+          ],
+          "path": "backpropagate/ui_app/auth.py"
+        },
+        {
+          "exports": [
+            "BpFooter",
+            "BpHeader",
+            "BpLeftNav",
+            "BpSideRail"
+          ],
+          "hash": "8eca4ee2627bea90e66564fe2e3b3f59073d27a7d253f8032abc567e0e159047",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_app/components/auth_badge.py",
+            "backpropagate/ui_app/components/event_log.py",
+            "backpropagate/ui_app/components/gpu_ring.py",
+            "backpropagate/ui_app/components/loss_chart.py",
+            "backpropagate/ui_app/components/sparkline.py",
+            "backpropagate/ui_app/components/status_pill.py",
+            "backpropagate/ui_app/components/vram_bar.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/chrome.py"
+        },
+        {
+          "hash": "c7e85cf7248f9b36aec284c96eb0cbf1ebb7a5ec5e09a4133ef923609d4c70f2",
+          "path": "backpropagate/ui_app/components/__init__.py"
+        },
+        {
+          "exports": [
+            "BpAuthBadge"
+          ],
+          "hash": "2594960dd45fb72c0292bdd4cc45609c8746aaa545b2ac996aba3f4106de62f5",
+          "importsFiles": [
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/components/auth_badge.py"
+        },
+        {
+          "exports": [
+            "BpErrorCallout"
+          ],
+          "hash": "e8c1543dadf77065504a776fd61cfa79911cc3d4f79a54cea8a3616c33dd96f2",
+          "path": "backpropagate/ui_app/components/error_callout.py"
+        },
+        {
+          "exports": [
+            "BpEventLog"
+          ],
+          "hash": "26a303e45aece988c57d99c435cedeea1b06b6d75d8abf29cb5b996daa2fd4b9",
+          "path": "backpropagate/ui_app/components/event_log.py"
+        },
+        {
+          "exports": [
+            "BpGpuRing"
+          ],
+          "hash": "dc96a7e07deeec778caf0ce71745585544473fab6f6081e576710e6d855e7bef",
+          "path": "backpropagate/ui_app/components/gpu_ring.py"
+        },
+        {
+          "exports": [
+            "Group"
+          ],
+          "hash": "aadc18e7e3bc22ba0585ad0e16f14f8133e1ff890024f4a632713c51b0eeb1a9",
+          "path": "backpropagate/ui_app/components/group.py"
+        },
+        {
+          "exports": [
+            "BpLossChart"
+          ],
+          "hash": "34ced1e43b567ca57530f49d477478cda3593e3aa22a166ac3e4b9711c465bea",
+          "path": "backpropagate/ui_app/components/loss_chart.py"
+        },
+        {
+          "exports": [
+            "BpRecoveryBanner"
+          ],
+          "hash": "95efd503cc51669e1e35be57b8933bdef3f1bd9bf75af2dc08d9b6e78a8b1f8b",
+          "path": "backpropagate/ui_app/components/recovery_banner.py"
+        },
+        {
+          "exports": [
+            "BpSparkline"
+          ],
+          "hash": "e47518a077477b196f4f207d5ef49d9fd033736d2aede9e557eb16a3b9b7caa6",
+          "path": "backpropagate/ui_app/components/sparkline.py"
+        },
+        {
+          "exports": [
+            "BpStatusPill"
+          ],
+          "hash": "ff307a7a6c57085cd423822b66f537a414b29737abbcabaea04d54f381c11033",
+          "path": "backpropagate/ui_app/components/status_pill.py"
+        },
+        {
+          "exports": [
+            "BpVramBar"
+          ],
+          "hash": "fd23b9712d3e8f9ae5259476ad0d4096e8dcee5cd06f4ece6b47973cae64f5f8",
+          "path": "backpropagate/ui_app/components/vram_bar.py"
+        },
+        {
+          "hash": "c6d89706ab5da43077430ed572314c6fde870fe56e0aa0adbf79d8080e8fcd10",
+          "importsFiles": [
+            "backpropagate/ui_app/middleware/healthz.py",
+            "backpropagate/ui_app/middleware/rate_limit.py",
+            "backpropagate/ui_app/middleware/request_logging.py",
+            "backpropagate/ui_app/middleware/security_headers.py"
+          ],
+          "path": "backpropagate/ui_app/middleware/__init__.py"
+        },
+        {
+          "exports": [
+            "healthz_middleware"
+          ],
+          "hash": "ee0f606acabf443b431a85b053a8c606e4a9915c55132830de4eb7a5697ae126",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_app/auth.py"
+          ],
+          "path": "backpropagate/ui_app/middleware/healthz.py"
+        },
+        {
+          "exports": [
+            "rate_limit_middleware"
+          ],
+          "hash": "3abb35477ffe43998bbbb1f82d85916489e2a3324e6dec7ab46ba2ec5d8383d9",
+          "path": "backpropagate/ui_app/middleware/rate_limit.py"
+        },
+        {
+          "exports": [
+            "request_logging_middleware"
+          ],
+          "hash": "ef914392ec4904dfcc2a2c7f2a3928689510161b29e1f40d307cd153c479ad51",
+          "importsFiles": [
+            "backpropagate/logging_config.py",
+            "backpropagate/ui_app/auth.py"
+          ],
+          "path": "backpropagate/ui_app/middleware/request_logging.py"
+        },
+        {
+          "exports": [
+            "security_headers_middleware"
+          ],
+          "hash": "2a926706bcb932f182dafd401043b14680c54ba2f9a88d7308ef6d56a2fdf992",
+          "importsFiles": [
+            "backpropagate/ui_security.py"
+          ],
+          "path": "backpropagate/ui_app/middleware/security_headers.py"
+        },
+        {
+          "hash": "4ba82ad03f43436c0f197b2137fca3ae8c02502717b44553e974e7d0b6b655e9",
+          "path": "backpropagate/ui_app/pages/__init__.py"
+        },
+        {
+          "exports": [
+            "dataset_page"
+          ],
+          "hash": "e3c3600ed929df22a97b2e5ad96f832d361848f770343ad7e677d54fe56fa85b",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/dataset.py"
+        },
+        {
+          "exports": [
+            "export_page"
+          ],
+          "hash": "8d80524ae73aa837cac7c1e61acfd9ce6eea47f8c28aa74987694aeefafb03be",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/export.py"
+        },
+        {
+          "exports": [
+            "models_page"
+          ],
+          "hash": "033b5aa262110f0985c1c82ebd25f6ea80ef08f1247a759cd4c183c6b4c22320",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/models.py"
+        },
+        {
+          "exports": [
+            "multi_run_page"
+          ],
+          "hash": "1bf9206e8a223984f2f35dbdd2a8cab5a3a2a90719d019b89b2d61d1feb074d2",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/multi_run.py"
+        },
+        {
+          "exports": [
+            "run_detail_page"
+          ],
+          "hash": "f1adc92b3ebf683bc1afe9fa32f7f76cde68fd78e846cf3029013f4e31ce1e1e",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/loss_chart.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/run_detail.py"
+        },
+        {
+          "exports": [
+            "runs_page"
+          ],
+          "hash": "bd7531381f653c6fffb95bb78b7d9103209cbef3810237d373a5e89ea825fcb0",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/runs.py"
+        },
+        {
+          "exports": [
+            "train_page"
+          ],
+          "hash": "cf92b1075cfbeff57584512466120a6e0a39e0602afa6f69ca772a63210ef22e",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_app/components/recovery_banner.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "backpropagate/ui_app/pages/train.py"
+        },
+        {
+          "exports": [
+            "apply_security_headers",
+            "check_csrf_protection",
+            "configure_json_logging",
+            "get_auth_badge_context",
+            "get_health_status",
+            "get_reflex_csp",
+            "get_request_id",
+            "get_secure_session_handler",
+            "get_ui_output_dir",
+            "load_config_from_env",
+            "log_security_event",
+            "safe_markdown_fence",
+            "sanitize_error_for_user",
+            "sanitize_filename",
+            "security_headers_dict",
+            "validate_and_log_request",
+            "validate_auth_shape",
+            "validate_file_magic",
+            "validate_numeric_input",
+            "validate_string_input"
+          ],
+          "hash": "6db4fb4df43b85f2740d2758c6ba05e0a94b3266118fe6da901965c161e1009e",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py"
+          ],
+          "path": "backpropagate/ui_security.py"
+        },
+        {
+          "hash": "463c957f31916580cec22176f32f6f5c90f1afd8fe357df84094f5c069899a49",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/datasets.py",
+            "backpropagate/export.py",
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "backpropagate/ui_state.py"
+        },
+        {
+          "hash": "89116dbb57cb9da2874f53a7a656e8f96ef11c4cda3116fbcdb296288890878a",
+          "path": "backpropagate/ui_theme.py"
+        }
+      ],
+      "globs": [
+        "backpropagate/**"
+      ],
+      "importConfidence": "full",
+      "name": "backpropagate",
+      "origin": "authored",
+      "role": "code",
+      "testedBy": 63,
+      "unresolvedSites": 2
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "81d3a597024c6452ee408cad168d32ab32836aee74789809c73e6a38d6a7746d",
+          "path": "bin/backpropagate.js"
+        }
+      ],
+      "globs": [
+        "bin/**"
+      ],
+      "importConfidence": "full",
+      "name": "bin",
+      "origin": "authored",
+      "role": "code",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [
+        "docs/index.md"
+      ],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "b37ab865a96c9ded117a1dfec32a5dc3681d8b3190fc2ba78e2e0bf8fa87276a",
+          "path": "docs/V1_5_BRIEF.md"
+        },
+        {
+          "hash": "8024b5468ca1949d1c5777cb83952d2a7fa1420d0f5a826b5a3ef6d534a5f4c3",
+          "path": "docs/assets/social-preview.png"
+        },
+        {
+          "hash": "115fbc7596ba2af0e868704424a0040e5f0bf998e62b5ce77b6b9852b2d7e48b",
+          "path": "docs/assets/social-preview.svg"
+        },
+        {
+          "hash": "763f4c190dd1a9bb3f13227fe559ecd9864604cd43019ed43322e63fb268261e",
+          "path": "docs/ci-gates-triage-plan.md"
+        },
+        {
+          "hash": "b2f8bdb33ee09869a08bd064fcd972d9f13564b122335b9367c569de7ac0990e",
+          "path": "docs/index.md"
+        }
+      ],
+      "globs": [
+        "docs/**"
+      ],
+      "importConfidence": "full",
+      "name": "docs",
+      "origin": "authored",
+      "role": "docs",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "8d3ba7b8e01c8f81a6721558b3e2d0c3dc601ff29b8f4a6e596be4a3359130b5",
+          "path": "examples/quickstart.jsonl"
+        }
+      ],
+      "globs": [
+        "examples/**"
+      ],
+      "importConfidence": "full",
+      "name": "examples",
+      "origin": "authored",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "aa6c54a03d2589bc8ae7309c26cc869ba3f2ff3f26a5dffd8fe3719fbe7d5e69",
+          "path": ".dockerignore"
+        },
+        {
+          "hash": "a24912644b45bc136d71e2f52b29b7ec9ac1878a886180b22ca901ccd4d0dceb",
+          "path": ".gitignore"
+        },
+        {
+          "hash": "eb859ee639d7d3d151a4ee4eb5fcdd4d55c04ff95f4099484a05d64076c9d659",
+          "path": ".npmignore"
+        },
+        {
+          "hash": "66bfcc52b0a355929044cafaaea2cc15b085722be2b996f0da0e113facea388a",
+          "path": ".pre-commit-config.yaml"
+        },
+        {
+          "hash": "d4d5761e79d50d686ba64c6cf366a17b294059ddc66de3537d41e7b260840325",
+          "path": ".secrets.baseline"
+        },
+        {
+          "hash": "6266a26283b308a09864975f76352743acee47748608ad7a10ca106cb51e2780",
+          "path": ".trivyignore"
+        },
+        {
+          "hash": "d3dc0a594e03122b03f8e5ffb40e15731c15bc08488a228421e713900858e126",
+          "path": "CHANGELOG.md"
+        },
+        {
+          "hash": "6e4a20db869104c7fb4ae112cd99dc7817d09578daf03869e46a9b7328a3a6b2",
+          "path": "CITATION.cff"
+        },
+        {
+          "hash": "0e8e2ddb5cd1bf546427e0f556d59135c583f76bc79e35c24c46bf1c6aacb9fc",
+          "path": "CLAUDE.md"
+        },
+        {
+          "hash": "0ee072be11e93ec6b67974e2f7b3bbe85d3b5882d46ec13d122f8db06d04be10",
+          "path": "CODE_OF_CONDUCT.md"
+        },
+        {
+          "hash": "a4e5a308021856f5a76e303aa36cbe642f3969c9c14a2f5e84c83047dd702bc6",
+          "path": "CONTRIBUTING.md"
+        },
+        {
+          "hash": "efa40900d89c7103710d7f824f28b004a3f3971d30ce7ad8ff33ff29d4ef5d89",
+          "path": "Dockerfile"
+        },
+        {
+          "hash": "ff268f75ce4289a0e3ef757986ddd1f79c4a17da80da1f6e9e88de536dcaefa9",
+          "path": "LICENSE"
+        },
+        {
+          "hash": "ca6d84f3b82b1641828e00e08e010ab8dbfcb5146a3f8062e8d8b3647bc0bc17",
+          "path": "PRODUCTION_READINESS_AUDIT.md"
+        },
+        {
+          "hash": "355b0bd2fbca8ccca7df1faf29ae172eb943e0d34e340e939d8454e4c69d507d",
+          "path": "README.es.md"
+        },
+        {
+          "hash": "257c64a4c5c4956f5c517032ef0d01e48606e9c91f989fb80a32bf633155e73e",
+          "path": "README.fr.md"
+        },
+        {
+          "hash": "bc648a2b5133ff6a1d0f88e55d86e0e31062ce7031669e686fed8f4ae2239213",
+          "path": "README.hi.md"
+        },
+        {
+          "hash": "3e0603027d53a52c20191e05e480f8977fc9070393f7a906206ba2be52d1013d",
+          "path": "README.it.md"
+        },
+        {
+          "hash": "5d6b86484e1bd9c7f72702d0e367a5faeedffe557b34bda82f8bb4c99733d52e",
+          "path": "README.ja.md"
+        },
+        {
+          "hash": "cf58ac406be289c17029bf6deacdf4ead25551e89779def45eeb6e095212bb29",
+          "path": "README.md"
+        },
+        {
+          "hash": "5e705ca0870601cb0262b0b15299fcc51d8b70d561aba5700b63de21ead33cb6",
+          "path": "README.pt-BR.md"
+        },
+        {
+          "hash": "fc3b5fbe132f2c194aa221f77e232aaa82519d58a91b5d1ce615bc5e6f549954",
+          "path": "README.zh.md"
+        },
+        {
+          "hash": "291a29fb00793afef9655da273118b17f05d89ce4ab46d6dff4192cea6be4417",
+          "path": "ROADMAP.md"
+        },
+        {
+          "hash": "4fd6040dfb51e88457c6da3f221b35fa92347309067991ed78c7c9a81fc508e9",
+          "path": "SECURITY.md"
+        },
+        {
+          "hash": "be3ae62e04f8e6386160d0d02d15e0749092781baaa75b6ca619046fd21379dd",
+          "path": "SECURITY_AUDIT_REPORT.md"
+        },
+        {
+          "hash": "b2be1c153c1afa3d2f5bbece6e79d4ec962b86eeb1cabcb8adf9df7a4d4d7c69",
+          "path": "SHIP_GATE.md"
+        },
+        {
+          "hash": "8cbbc0d759edeca33fd6b081879fee04a9d077bf723050bedf3dad93d8874fad",
+          "path": "WAVE_5_FEATURE_AUDIT_NOTES.md"
+        },
+        {
+          "hash": "59fcb246de56afb4435cd000538bde6b3665d45a2bcd25469e269819172f6ba2",
+          "path": "WAVE_6A_TODO.md"
+        },
+        {
+          "hash": "0a734f59e252c78b35754de0e74d35eac612759a40222561f91b8d5ad89b8ca4",
+          "path": "compose.yaml"
+        },
+        {
+          "hash": "edd971d4e4bf0ab945e278818521096c73bc3e509ed36c47d405b2c11fd3e69d",
+          "path": "llms.txt"
+        },
+        {
+          "hash": "ca1a753e1f8aa5ab8d8717c4303e40fb35cb5bee4fe6b32d7185bda004231b9f",
+          "path": "logo.png"
+        },
+        {
+          "hash": "8d0b4c3a66374b0e5f04d94f886a1c6481a1094f8fe69b9bdedc816ea2ea64fc",
+          "path": "package.json"
+        },
+        {
+          "hash": "2f9f8eb5233fe33d9b2834156683236025c9cb471940c340047040df4907844b",
+          "path": "pyproject.toml"
+        },
+        {
+          "hash": "049b85f87ad649cd9659f522eb69aef5955b2e19142b4ee99fea4adcb2372056",
+          "path": "uv.lock"
+        },
+        {
+          "hash": "395d823b54cffc5d44e667b74b1df5ee446d5f4bd67df9f8659c9dff6fc75573",
+          "path": "verify.sh"
+        }
+      ],
+      "globs": [
+        "*"
+      ],
+      "importConfidence": "full",
+      "name": "root",
+      "origin": "mixed",
+      "role": "docs",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 8,
+      "dynamicWrites": 1,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "b0d43d5a940ce9c21fe5a5280ec21c8d73fee552a447d52ac894994cb8dd0e95",
+          "path": "scripts/README.md"
+        },
+        {
+          "entry": "main",
+          "entryRule": 1,
+          "exports": [
+            "check_argparse_default_drift",
+            "check_cli_flags",
+            "check_env_var_default_drift",
+            "check_env_vars",
+            "check_error_codes_doc_refs",
+            "check_error_codes_test_exists",
+            "check_llms_txt_env_vars",
+            "check_readme_error_code_refs",
+            "check_reflex_state_fields",
+            "check_workflow_severity_drift",
+            "main"
+          ],
+          "hash": "839d8067a59a73921f30461642d1a1c4afec5f407928fd52cbef9ec864198a61",
+          "path": "scripts/check_doc_drift.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_iter_python_sources"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_find_runtime_env_vars"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_find_indirect_module_const_env_vars"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_env_vars"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_find_consumers_for_field"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_reflex_state_fields"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_llms_txt_env_vars"
+            },
+            {
+              "calls": [
+                {
+                  "line": 153,
+                  "name": "rglob",
+                  "target": null,
+                  "via": "_iter_python_sources"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_error_codes_doc_refs"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1144,
+                  "name": "read_text",
+                  "target": null
+                },
+                {
+                  "line": 1210,
+                  "name": "relative_to",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_scan_workflow_for_severity_drift"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1144,
+                  "name": "read_text",
+                  "target": null,
+                  "via": "_scan_workflow_for_severity_drift"
+                },
+                {
+                  "line": 1210,
+                  "name": "relative_to",
+                  "target": null,
+                  "via": "_scan_workflow_for_severity_drift"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_workflow_severity_drift"
+            }
+          ]
+        },
+        {
+          "exports": [
+            "format_function_as_chat",
+            "main"
+          ],
+          "hash": "b53c4a0e6c9668d1a3ca51d87eae142ea533a13bb5d399ecb1e265048fa05337",
+          "path": "scripts/convert_validated_pairs.py"
+        },
+        {
+          "hash": "5a654079e0eac8a4b75385e6e749044ac4891d4dda8e971f89e8f588ec002a26",
+          "path": "scripts/doc-drift-allow.toml"
+        },
+        {
+          "entry": "main",
+          "entryRule": 1,
+          "exports": [
+            "main"
+          ],
+          "hash": "f9a6a20367fff16ebeefa9530b9dbae0173b9c4805ddc60733022a347853092b",
+          "importsFiles": [
+            "backpropagate/__init__.py"
+          ],
+          "path": "scripts/nightly_train_smoke.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 110,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 118,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": true,
+              "isDefaultExport": false,
+              "name": "main"
+            }
+          ]
+        },
+        {
+          "hash": "02c692179957e185e513d69c486595f0fbcc01820e41a818231388eaba842266",
+          "path": "scripts/preflight.sh"
+        },
+        {
+          "hash": "c4545037f4df868de8299d0ab5a665538f03f8185b46b3a10e464f4867cd1758",
+          "path": "scripts/prep_release.sh"
+        },
+        {
+          "hash": "e58045a6be6a4c7d29eec28ac486d92f0a4c56a0e29fc8565fb9ef3bd9451c5f",
+          "path": "scripts/repin_test_count.sh"
+        },
+        {
+          "hash": "593d1bc86018bfa219ffb7e874790e2fecc2f083c1302d0e9c3a46cc9ccd608a",
+          "path": "scripts/run_mutmut.sh"
+        },
+        {
+          "exports": [
+            "main"
+          ],
+          "hash": "c7847ed40996773de27c045d911ed2cb92b2a61c065b428e7c8743ec5f507744",
+          "importsFiles": [
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py"
+          ],
+          "path": "scripts/train_perfect_pairs.py"
+        }
+      ],
+      "globs": [
+        "scripts/**"
+      ],
+      "importConfidence": "full",
+      "name": "scripts",
+      "origin": "authored",
+      "role": "code",
+      "testedBy": 2,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "8a114363449376b441174c64763bf364b12a915bc448f7bfadf0ea178648d96f",
+          "path": "site/astro.config.mjs"
+        },
+        {
+          "hash": "43a3b05744c6b7f488a5e534aae0042848375c185de96aba8d0e6b6c88525206",
+          "path": "site/package-lock.json"
+        },
+        {
+          "hash": "3c027ea86d86dc5b4d6dc5d62341fc994628e878de3c251f5e8fb9bf7a779a74",
+          "path": "site/package.json"
+        },
+        {
+          "hash": "ec030f2e4bf6dc57eaca075d390c228b3212cf29db267e32ef92e110de1acdcc",
+          "path": "site/src/content.config.ts"
+        },
+        {
+          "hash": "3a28d698c5656aac2f847ef6db9cbcb509860fd2cde6ba2c71a88ee73cadb1ad",
+          "path": "site/src/content/docs/handbook/beginners.md"
+        },
+        {
+          "hash": "fdb1a3d29ac932127f050d660a7c02c3311866cc4885a230de47625320ba74d3",
+          "path": "site/src/content/docs/handbook/cli-reference.md"
+        },
+        {
+          "hash": "65edf43c0ad8f63440404f30eaf64f6b0e19ae44a1cbee62fa3e91810cbb4ed6",
+          "path": "site/src/content/docs/handbook/env-vars.md"
+        },
+        {
+          "hash": "effd1d133fb54ccf8492e15c6af2b98367f536edf4c1babd5bb211ed895986b4",
+          "path": "site/src/content/docs/handbook/error-codes.md"
+        },
+        {
+          "hash": "3b2dda25e40410a04bb1890523f9919e624425a28f3bcd610559f102aeb80ff7",
+          "path": "site/src/content/docs/handbook/estimate-vram.md"
+        },
+        {
+          "hash": "8b08a1eafebc1b586149446c2a57a4c77c5255486fe156a9f0e0dcf41a2c1ff7",
+          "path": "site/src/content/docs/handbook/export.md"
+        },
+        {
+          "hash": "677e5c4987e83debb8852a978388a52de0cca720543f07b4c847e8b017372be9",
+          "path": "site/src/content/docs/handbook/full-fine-tuning.md"
+        },
+        {
+          "hash": "4bb1e24d042290938eefd548dfcaf6ea51ed4ba234ba4b4ebc011b261abd8787",
+          "path": "site/src/content/docs/handbook/getting-started.md"
+        },
+        {
+          "hash": "11eff70a1b31826b3ac1eccf470af776a5a4a38076b2b2ec2cc9da33b7461be2",
+          "path": "site/src/content/docs/handbook/index.md"
+        },
+        {
+          "hash": "ea187f0e4749e0a84c589349a271992a9642e9b06a96e8ac6a140baf9497ad92",
+          "path": "site/src/content/docs/handbook/migrations.md"
+        },
+        {
+          "hash": "21dd8068d7a4737b7cba80b765c55dbcb13992beae4513930a841960ed8022ea",
+          "path": "site/src/content/docs/handbook/preference-tuning.md"
+        },
+        {
+          "hash": "8ae7beda6aa66a69bd9cc9b5af9dc1a2673b43c80d6add724ab928f75ee9ad57",
+          "path": "site/src/content/docs/handbook/recipes.md"
+        },
+        {
+          "hash": "384f326152d78f3206bd95637bcb737bc2e2413e20b51ff44530e58612ee943b",
+          "path": "site/src/content/docs/handbook/reference.md"
+        },
+        {
+          "hash": "aed68481f21e84a7de71cae46f1719dd13e1d3b077815e3ac39639571511f599",
+          "path": "site/src/content/docs/handbook/security.md"
+        },
+        {
+          "hash": "6376de605645121932d1b997ca8f4716eab47491e6eccccbbaf6f8ccc4704ea8",
+          "path": "site/src/content/docs/handbook/training.md"
+        },
+        {
+          "hash": "80ae5b164894192e37ccadfc0274f47fc0e7b5ad85adc735561264a53446864e",
+          "path": "site/src/content/docs/handbook/troubleshooting-cuda.md"
+        },
+        {
+          "hash": "cbfab22e9e572c73ef131425edca892d77b4d611a8ee2aef918806dc8190ba9e",
+          "path": "site/src/content/docs/handbook/troubleshooting.md"
+        },
+        {
+          "hash": "bf4377928158f7896d658074cec2c102cb740b1c39c1f890726f71b96d3ffa4f",
+          "path": "site/src/pages/404.astro"
+        },
+        {
+          "hash": "a699ad78a6d27d6864ccfe4c3a4a01993aca28ecb4a3d20893f37db9f9b1a522",
+          "path": "site/src/pages/index.astro"
+        },
+        {
+          "hash": "7f119e58b16689421ae385b727daa573a04eae5f813b5e8d4f00bff6abf97ae5",
+          "path": "site/src/site-config.ts"
+        },
+        {
+          "hash": "5995279a40a9a63426a93feec129006b261cc7200426a398914d0317722ef19b",
+          "path": "site/src/styles/global.css"
+        },
+        {
+          "hash": "9d8dddc46c99a1863e6980810ca6375e764db806f99696446751cbdc5be1a1d9",
+          "path": "site/src/styles/starlight-custom.css"
+        },
+        {
+          "hash": "61fc24492db9aef7ec38eb91cfeebaef96155014bb5f22648fd8ed2327c6cae2",
+          "path": "site/tsconfig.json"
+        }
+      ],
+      "globs": [
+        "site/**"
+      ],
+      "importConfidence": "full",
+      "name": "site",
+      "origin": "authored",
+      "role": "docs",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externalNames": [
+        "datasets"
+      ],
+      "externals": 31,
+      "files": [
+        {
+          "hash": "04631f58598d2bc1a6d1f03b5f5c613b17005fc7a0cd57c961a5458e8b636924",
+          "path": "tests/COVERAGE_ROADMAP.md"
+        },
+        {
+          "hash": "adc669499b8c349ba1c3bb2f8d3054ecc21aa288d43cb361e2b8d118ae6c1509",
+          "path": "tests/EVENT_HANDLER_ROADMAP.md"
+        },
+        {
+          "hash": "f546d1c9a8358679b698307d7f1032c53cdec877971647378e742463a6a3c11d",
+          "path": "tests/README.md"
+        },
+        {
+          "hash": "74c5da99d3092f11f5a3271f60e52e5796a110b61d7a7b0d018f60f428fc3950",
+          "path": "tests/__init__.py"
+        },
+        {
+          "exports": [
+            "async_callback_collector",
+            "callback_spy",
+            "callback_spy_factory",
+            "callback_tracker",
+            "checkpoint_dir",
+            "cli_parser",
+            "gpu_safety_config",
+            "gpu_status_critical",
+            "gpu_status_emergency",
+            "gpu_status_safe",
+            "large_sample_dataset",
+            "mock_cuda_available",
+            "mock_gpu_monitor_callbacks",
+            "mock_gpu_status",
+            "mock_multirun_callbacks",
+            "mock_peft_model",
+            "mock_settings",
+            "mock_tokenizer",
+            "mock_torch_cuda",
+            "mock_trainer",
+            "mock_trainer_factory",
+            "mock_training_callback",
+            "mock_training_result",
+            "multi_run_config",
+            "multi_run_config_fast",
+            "pytest_collection_modifyitems",
+            "sample_alpaca_data",
+            "sample_dataset",
+            "sample_gguf_path",
+            "sample_jsonl_file",
+            "sample_lora_pair",
+            "sample_lora_state",
+            "sample_openai_data",
+            "sample_sharegpt_data",
+            "slao_config",
+            "slao_merger",
+            "speedrun_config",
+            "speedrun_config_fast",
+            "temp_dir",
+            "tiny_model",
+            "training_dataset_file"
+          ],
+          "hash": "c0244903ad6fdf2fb434b3f1973a516c347607efeb4fd20bce259cc36f033a8e",
+          "importsFiles": [
+            "backpropagate/cli.py",
+            "backpropagate/config.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/__init__.py"
+          ],
+          "path": "tests/conftest.py"
+        },
+        {
+          "hash": "fc994b6954186b47be397c999b6d52a918919a008a5c6b0d5a463aefa7ec510c",
+          "importsFiles": [
+            "tests/helpers/callbacks.py"
+          ],
+          "path": "tests/helpers/__init__.py"
+        },
+        {
+          "exports": [
+            "basic_auth_header",
+            "make_asgi_client",
+            "malformed_auth_header",
+            "reflex_app_no_auth",
+            "reflex_app_with_auth_enforced",
+            "stub_asgi_http_app"
+          ],
+          "hash": "607c3a6d885cfae8fd92a76d51295e121cb048e09a38f081ec26024785c233d3",
+          "importsFiles": [
+            "backpropagate/ui_app/__init__.py"
+          ],
+          "path": "tests/helpers/asgi.py"
+        },
+        {
+          "exports": [
+            "assert_callback_sequence",
+            "wait_for_callback"
+          ],
+          "hash": "4f58e5659863583cec8b8f322097274c028139b7e63ac6149f4bee7eda42daed",
+          "path": "tests/helpers/callbacks.py"
+        },
+        {
+          "exports": [
+            "make_connect_receive",
+            "make_ws_scope"
+          ],
+          "hash": "524fc33a416cf76dda5d05e2439eee4b0dd37d345de391e3c8300941e9faf974",
+          "path": "tests/helpers/ws.py"
+        },
+        {
+          "exports": [
+            "test_auth_badge_bind_chip_reads_state_fields",
+            "test_auth_badge_component_constructs",
+            "test_auth_badge_full_render_includes_bind_chip",
+            "test_badge_state_basic_local",
+            "test_badge_state_basic_network_amber",
+            "test_badge_state_basic_shared_amber",
+            "test_badge_state_insecure_lan_bind_no_auth",
+            "test_badge_state_insecure_red",
+            "test_badge_state_is_dataclass",
+            "test_badge_state_loopback_bind_is_local",
+            "test_badge_state_no_auth_local",
+            "test_badge_state_password_never_in_hover_text",
+            "test_badge_state_respects_port_env_var",
+            "test_badge_state_token_local",
+            "test_chrome_footer_constructs_with_badge"
+          ],
+          "hash": "5903cdd585137f4dfad072679304460e60f953f1b200ca3aec682610675cecad",
+          "importsFiles": [
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/__init__.py",
+            "backpropagate/ui_app/components/auth_badge.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_auth_badge.py"
+        },
+        {
+          "exports": [
+            "basic_mode_middleware",
+            "default_mode_middleware",
+            "shared_mode_middleware",
+            "test_basic_auth_accepts_correct_creds",
+            "test_basic_auth_header_handles_empty_values",
+            "test_basic_auth_header_helper_encodes_correctly",
+            "test_basic_auth_rejects_wrong_password",
+            "test_cookie_hardening",
+            "test_cookie_hmac_signature_verification_uses_constant_time_compare",
+            "test_default_creds_not_present_in_auth_module",
+            "test_default_mode_redirects_token_to_clean_url",
+            "test_default_mode_serves_with_valid_token",
+            "test_host_header_allowlist_rejects_unknown",
+            "test_host_non_loopback_without_auth_refuses_to_start",
+            "test_malformed_auth_header_does_not_crash",
+            "test_origin_allowlist_rejects_cswsh",
+            "test_ping_endpoint_bypasses_auth",
+            "test_post_accept_dos_vector_absent",
+            "test_share_mode_adds_tunnel_to_allowlist",
+            "test_share_without_auth_refuses_to_start",
+            "test_token_lock_file_mode_0600",
+            "test_websocket_upgrade_accepts_valid_cookie",
+            "test_websocket_upgrade_requires_cookie",
+            "test_wrong_token_returns_401",
+            "test_ws_missing_origin_allowed_in_no_auth_local_mode",
+            "test_ws_missing_origin_rejected_in_authed_mode",
+            "test_ws_missing_origin_rejected_in_share_mode",
+            "test_ws_pre_accept_close_on_expired_cookie",
+            "test_ws_recorder_detects_post_accept_close_as_dos_vector",
+            "test_ws_recorder_detects_pre_accept_close",
+            "test_ws_scope_has_required_asgi_fields",
+            "test_ws_tampered_cookie_signature_closes_pre_accept"
+          ],
+          "hash": "a1bdcdbf1594301d7b5511bdba3f511dfec608f63ed6bbc6d7b1bc2785d3ccf8",
+          "importsFiles": [
+            "backpropagate/ui_app/__init__.py",
+            "backpropagate/ui_app/auth.py",
+            "tests/helpers/asgi.py",
+            "tests/helpers/ws.py"
+          ],
+          "path": "tests/test_auth_middleware.py"
+        },
+        {
+          "exports": [
+            "basic_mode_middleware",
+            "default_mode_middleware",
+            "test_arbitrary_authorization_header_never_authenticates_or_crashes",
+            "test_fuzz_basic_credentials_never_authenticate",
+            "test_fuzz_host_header_does_not_bypass_allowlist",
+            "test_fuzz_tampered_cookie_signature_rejected",
+            "test_fuzz_validate_cookie_never_raises",
+            "test_fuzz_ws_cookie_never_accepted_before_closed",
+            "test_fuzz_ws_origin_header_does_not_bypass_cswsh_defense",
+            "test_malformed_basic_b64_never_authenticates"
+          ],
+          "hash": "a2a5b927bfddc5c081c2a9129e7a3ef9694e3e3362f8b7de364e8968fd12f0c8",
+          "importsFiles": [
+            "backpropagate/ui_app/auth.py",
+            "tests/helpers/asgi.py",
+            "tests/helpers/ws.py"
+          ],
+          "path": "tests/test_auth_middleware_fuzz.py"
+        },
+        {
+          "hash": "9be39cd8f222dc165d5884e6e938e256cecafa4696292d53d57471ba3ec0acc1",
+          "importsFiles": [
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_callback_integration.py"
+        },
+        {
+          "exports": [
+            "drift_tree"
+          ],
+          "hash": "d68af43776f123dd1b7527ccf581dea36710c72e5c3c30fb6998d311df074fd5",
+          "importsFiles": [
+            "scripts/check_doc_drift.py"
+          ],
+          "path": "tests/test_check_doc_drift.py"
+        },
+        {
+          "exports": [
+            "create_dummy_checkpoint",
+            "manager",
+            "manager_no_auto_prune",
+            "sample_checkpoint_path",
+            "temp_checkpoint_dir"
+          ],
+          "hash": "90d0ef8b9d14945c4af2fa99c598fb925e007f105085b781619d7a5078a8dcb3",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "path": "tests/test_checkpoints.py"
+        },
+        {
+          "hash": "2e3dcc47170001bae3f361133f9fda4081a7a61f71d0a9a8c6f434f84929abb7",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_cli.py"
+        },
+        {
+          "hash": "abe9fc572da965a9d4db37deb6a9516ab92f129330c1c62e854ece3762cf7991",
+          "importsFiles": [
+            "backpropagate/cli.py"
+          ],
+          "path": "tests/test_cli_banner.py"
+        },
+        {
+          "exports": [
+            "cli_parser"
+          ],
+          "hash": "74669fb409d99b3b30834736abec06a929589063ab6ca8f99aa2d1b366746e9f",
+          "importsFiles": [
+            "backpropagate/cli.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_cli_data_eval.py"
+        },
+        {
+          "hash": "c1fbbf7ebe51fc066fdb72d441ed38e51bc1f3ab8e45528ff4517d6343637d88",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py"
+          ],
+          "path": "tests/test_cli_extended.py"
+        },
+        {
+          "exports": [
+            "test_feature_flags",
+            "test_get_gpu_info",
+            "test_get_system_info",
+            "test_settings_defaults_pin_user_facing_contract",
+            "test_settings_import",
+            "test_training_args",
+            "test_version"
+          ],
+          "hash": "4ad54aae0892b67202c94dc537ad59f809f999cd851e245006943f5e98f5f115",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_config.py"
+        },
+        {
+          "hash": "29e9254d5b44184530710a20e09e63a74704db47200197cf466861da357f056e",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py"
+          ],
+          "path": "tests/test_config_extended.py"
+        },
+        {
+          "hash": "7fc878e987f28fab07ec04b27d993ba70a82abcaa8dcbf6ae893c53bcfb8ca8f",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_crash_robustness.py"
+        },
+        {
+          "hash": "a331d3c3b2353eedf265ea23cd2379b01e7dea46cbd63c612a6ce4c12c41e967",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/dataset_report.py"
+          ],
+          "path": "tests/test_dataset_report.py"
+        },
+        {
+          "hash": "80e703b2721a0c11ba09c580246d7169e13ec688b92a659a643da51a83c8010e",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_datasets.py"
+        },
+        {
+          "hash": "39713d248a9f7e5afde5dee0acbc6e8c9c25150d857fc20c3ae32f9c881b65d9",
+          "importsFiles": [
+            "backpropagate/datasets.py"
+          ],
+          "path": "tests/test_datasets_extended.py"
+        },
+        {
+          "hash": "04e471b0e680e6248d2463c637ffc5532f739485fb834e74b97d6f7eaa02b2ea",
+          "importsFiles": [
+            "scripts/check_doc_drift.py"
+          ],
+          "path": "tests/test_doc_drift.py"
+        },
+        {
+          "hash": "e5590cfb7a4b0bf1c4c81e177d0eda6a07ccae248085e49836f2eb218b5115cf",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_e2e_chain.py"
+        },
+        {
+          "hash": "2da5059e7ad2dfa56eec6ffd398229c03307e4e874032dcf84b5059100505b0d",
+          "importsFiles": [
+            "backpropagate/cli.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_envelope_v17.py"
+        },
+        {
+          "exports": [
+            "test_catalog_describes_stale_entries",
+            "test_every_emitted_code_is_in_catalog_or_known_drift",
+            "test_known_drift_allowlist_codes_are_actually_emitted",
+            "test_known_drift_allowlist_is_still_drifting"
+          ],
+          "hash": "fd127f397c40949aa8f8cea79f5c3e5b91ecaedb932af01aabbcf0e290b28e06",
+          "importsFiles": [
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_error_codes_catalog.py"
+        },
+        {
+          "exports": [
+            "test_compute_loss_device_move_stays_atomic_on_asymmetric_failure",
+            "test_diff_evals_handles_none_metrics",
+            "test_diff_evals_row_shape",
+            "test_diff_evals_surfaces_task_metrics",
+            "test_eval_diff_to_dict_roundtrips_rows_as_lists",
+            "test_eval_gate_accepts_when_equal",
+            "test_eval_gate_accepts_when_improved",
+            "test_eval_gate_missing_loss_fails_safe",
+            "test_eval_gate_rejects_when_after_worse",
+            "test_eval_gate_tolerates_regression_within_budget",
+            "test_eval_module_body_imports_no_heavy_deps",
+            "test_eval_result_positional_construction_still_six_args",
+            "test_eval_result_task_metric_fields_default_empty",
+            "test_eval_result_to_dict_includes_task_metric_fields",
+            "test_eval_result_to_dict_shape",
+            "test_evaluate_run_happy_path",
+            "test_evaluate_run_heldout_unresolved_raises",
+            "test_evaluate_run_model_load_crash_raises_runtime",
+            "test_evaluate_run_on_preference_heldout_computes_loss",
+            "test_evaluate_run_persistence_failure_is_swallowed",
+            "test_evaluate_run_persists_eval_via_record_run_completed",
+            "test_evaluate_run_unknown_run_id_raises_not_found",
+            "test_evaluate_run_uses_in_memory_heldout_texts",
+            "test_heldout_path_wins_over_resplit",
+            "test_heldout_resplit_used_when_no_path",
+            "test_heldout_texts_from_preference_file_resolves",
+            "test_load_model_and_tokenizer_base_only_when_no_checkpoint",
+            "test_load_model_and_tokenizer_wraps_failures_as_runtime_eval_failed",
+            "test_load_prompts_builtin_when_none",
+            "test_load_prompts_missing_file_raises",
+            "test_load_prompts_reads_jsonl_objects",
+            "test_load_prompts_reads_plain_lines",
+            "test_load_prompts_truncates_to_n",
+            "test_resolve_heldout_texts_in_memory_all_blank_raises",
+            "test_resolve_heldout_texts_in_memory_wins"
+          ],
+          "hash": "4d760c491b23265851b557cf3675d96bcccad8a80a0fe849d48ea26241a68dd8",
+          "importsFiles": [
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_eval.py"
+        },
+        {
+          "hash": "760ecdc0117add215c1bf8ccad83245dfeb866207428e1f909da3b425e61ebf0",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py"
+          ],
+          "path": "tests/test_eval_gate_roundtrip.py"
+        },
+        {
+          "hash": "11436630bbb5061970e202989b3d4757670cae4065be82e03c744409116e3343",
+          "importsFiles": [
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_eval_metrics.py"
+        },
+        {
+          "hash": "72d332a392f30326bfe7c32ec4f53e918c722d0d55c3af8ed4eb28c9cfe5b995",
+          "importsFiles": [
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_event_handlers.py"
+        },
+        {
+          "hash": "5bf75af0f534911a58a40f956982c5bdb4358d1c1f114349e4f000119cb4cea4",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_exceptions.py"
+        },
+        {
+          "hash": "c67a5dd4d0e5d382efc4bbe96f21abccc61ee89db217c6744b2f16e292461c74",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py"
+          ],
+          "path": "tests/test_export.py"
+        },
+        {
+          "hash": "fb09a62ede290fbe4e6c9c7fc1163086382814e2bf30a82b614238edf108bb51",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/feature_flags.py"
+          ],
+          "path": "tests/test_feature_flags.py"
+        },
+        {
+          "hash": "07090288597444597ad41091e0ea8dfc40bd2863fc726d268c61e0851da01210",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_fp8.py"
+        },
+        {
+          "exports": [
+            "test_fp8_end_to_end_trains_converts_and_merges"
+          ],
+          "hash": "c27c6f630393460cf9f96af1db2deeb1a64cda44e97aa5f64b7a3166af832cb1",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_fp8_smoke.py"
+        },
+        {
+          "exports": [
+            "checkpoint_policy_strategy",
+            "validation_losses_strategy"
+          ],
+          "hash": "c82762be2bca739b235f631c47694901f1e9dfa8be051848739bad73ea8af41f",
+          "importsFiles": [
+            "backpropagate/checkpoints.py"
+          ],
+          "path": "tests/test_fuzz_checkpoints.py"
+        },
+        {
+          "hash": "deec6df608bb23bcea3a2aba6232742b0b3987aadf917f6d67f5a1a0de80a803",
+          "importsFiles": [
+            "backpropagate/gpu_safety.py"
+          ],
+          "path": "tests/test_gpu_safety.py"
+        },
+        {
+          "hash": "bc8103111d0ff8603006096c4ec1b8e9b8fd2555fd7affbf318fcb5756c560f8",
+          "importsFiles": [
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_host_gate.py"
+        },
+        {
+          "exports": [
+            "lora_state_dict"
+          ],
+          "hash": "72f28826864bd4e956a2a746cd389d85072eb0f935bc7bbb1fb5ed9658100eeb",
+          "importsFiles": [
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_hypothesis_slao.py"
+        },
+        {
+          "hash": "bfbc01aed4308006a60b07f178604005c057b0e7eb8869b4c4c201b965573933",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_init_imports.py"
+        },
+        {
+          "hash": "a5814df7b40040d6e4933df5ea2b451f28b41e51ecd410ca9fe2f99fb015a803",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/datasets.py",
+            "backpropagate/export.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_integration.py"
+        },
+        {
+          "exports": [
+            "test_kto_end_to_end_trains_and_saves_adapter"
+          ],
+          "hash": "3f5f7f840caefac47c962242562057ff9d969e24030560c4e72d039c07b78167",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_kto_smoke.py"
+        },
+        {
+          "hash": "06b0dd75b8cfa671efef6c23b558b1eff58fab20702747a2e41f8bc5f9fa87e8",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/logging_config.py"
+          ],
+          "path": "tests/test_logging_config.py"
+        },
+        {
+          "hash": "eb07be0d6672510f9b1f8b8ec22b5705a467b2fa51695e76f46e60ee7b6d9843",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/__main__.py",
+            "backpropagate/cli.py"
+          ],
+          "path": "tests/test_main_entry.py"
+        },
+        {
+          "hash": "8c0bc52acf760f29f985c71c746271438af42ca675356188c2c0dc2b430d9884",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_mlx_backend.py"
+        },
+        {
+          "exports": [
+            "test_mlx_end_to_end_trains_and_saves_adapter"
+          ],
+          "hash": "167aa816455d941e839450e1976306a1136b9824f022f8862038355d1dc58734",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_mlx_smoke.py"
+        },
+        {
+          "hash": "23f6d5b4f77f045c7cec40ed936fb8e39dabe50cf99b0f56bc1205a5793ed2fc",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/model_card.py"
+          ],
+          "path": "tests/test_model_card.py"
+        },
+        {
+          "hash": "dbd93851c6cb9662c5454d8dcb797b35ba03bc5c89420ccab2194f66f6f25056",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_multi_run.py"
+        },
+        {
+          "hash": "b3ddee67fdc315f2ed2da58f1e6b468617a8bb6f225565c003d216acb2342b04",
+          "importsFiles": [
+            "backpropagate/multi_run.py"
+          ],
+          "path": "tests/test_multi_run_extended.py"
+        },
+        {
+          "hash": "ed141ed9657550d2abc9d0af7bf8b7f02231ee4f5ddb9e0bb325081f471be15d",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_orpo.py"
+        },
+        {
+          "exports": [
+            "test_orpo_end_to_end_trains_and_saves_adapter"
+          ],
+          "hash": "81e76d5de413c4e8199f1ce67792e59fe1b43288ba51befb02f33451866ecbd2",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_orpo_smoke.py"
+        },
+        {
+          "exports": [
+            "test_429_response_includes_retry_after_header",
+            "test_build_429_response_returns_well_formed_envelope",
+            "test_client_addr_empty_for_malformed_tuple",
+            "test_client_addr_empty_for_none_client",
+            "test_client_addr_extracts_host_from_tuple",
+            "test_empty_client_ip_never_rate_limited",
+            "test_favicon_path_passthrough",
+            "test_http_cap_exceeded_returns_429",
+            "test_lifespan_scope_passthrough",
+            "test_middleware_passthrough_when_both_caps_zero",
+            "test_next_static_path_passthrough_under_load",
+            "test_per_ip_buckets_isolated",
+            "test_ping_path_passthrough_under_load",
+            "test_resolve_cap_empty_value_uses_default",
+            "test_resolve_cap_handles_non_integer",
+            "test_resolve_cap_negative_value_uses_default",
+            "test_resolve_cap_zero_disables",
+            "test_sliding_window_cap_zero_disables_check",
+            "test_sliding_window_empty_ip_returns_false",
+            "test_sliding_window_prune_idle_ips_removes_stale_entries",
+            "test_sliding_window_record_and_check_at_cap",
+            "test_sliding_window_record_and_check_below_cap",
+            "test_window_expiry_resets_bucket",
+            "test_ws_cap_exceeded_closes_pre_accept_with_4429",
+            "test_ws_cap_separate_from_http_cap"
+          ],
+          "hash": "6798c45f38206d2eb7d846693bc56458d2adecc550e951396c9a042a8d52a45a",
+          "importsFiles": [
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_app/middleware/rate_limit.py"
+          ],
+          "path": "tests/test_rate_limit_middleware.py"
+        },
+        {
+          "hash": "4bb883abaf88c578b751eb411261de7b51bff33a61abf801f2c100550f00ca6b",
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_reasoning.py"
+        },
+        {
+          "exports": [
+            "test_both_versions_are_plain_release_numbers",
+            "test_pyproject_and_package_json_versions_agree"
+          ],
+          "hash": "6b2ea8e61409f368831d4fb9663d3d83501bc11a960f7d823f08849d51205e4b",
+          "path": "tests/test_release_versions.py"
+        },
+        {
+          "exports": [
+            "logger_capture",
+            "test_client_addr_returns_empty_for_malformed_value",
+            "test_client_addr_returns_empty_for_none_client",
+            "test_client_addr_returns_host_from_tuple",
+            "test_enabled_via_env_falsy_values",
+            "test_enabled_via_env_truthy_values",
+            "test_enabled_via_env_unset_returns_false",
+            "test_lifespan_scope_bypassed_even_when_enabled",
+            "test_log_record_anonymous_auth_user_is_empty_string",
+            "test_log_record_auth_mode_resolved_from_auth_module",
+            "test_log_record_contains_all_required_structured_fields",
+            "test_log_record_status_captured_from_http_response_start",
+            "test_logger_failure_does_not_crash_request",
+            "test_logger_handles_stdlib_signature_fallback",
+            "test_middleware_logs_when_env_enabled",
+            "test_middleware_passthrough_when_env_disabled",
+            "test_middleware_passthrough_when_env_unset",
+            "test_ws_pre_accept_close_logs_close_code_as_status",
+            "test_ws_upgrade_logged_with_method_ws_and_status_101"
+          ],
+          "hash": "edce6269c44769a1b8d1765a1958a22cfc49ee4ced233437dcf699419bffaea9",
+          "importsFiles": [
+            "backpropagate/ui_app/middleware/request_logging.py"
+          ],
+          "path": "tests/test_request_logging_middleware.py"
+        },
+        {
+          "hash": "7924c55178603a9e711cc822518e8c2158d71e68c5535a680a438fd0c459a8d9",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "tests/test_runs_command.py"
+        },
+        {
+          "hash": "f72f50283d8834ddcfed6d3a44a92ede86c83acebcef87d75038fa1978644110",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/security.py"
+          ],
+          "path": "tests/test_security.py"
+        },
+        {
+          "hash": "a09634c921ebefbad470a3ebb6b27481c911f1e8e9f0edcb2a2261983483e499",
+          "importsFiles": [
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_security_advanced.py"
+        },
+        {
+          "exports": [
+            "middleware_send",
+            "test_auth_401_rejection_carries_security_headers_in_production_layering",
+            "test_auth_421_rejection_carries_security_headers_in_production_layering",
+            "test_broken_header_builder_does_not_crash_response",
+            "test_build_header_pairs_includes_owasp_set",
+            "test_build_header_pairs_returns_ascii_bytes_tuples",
+            "test_is_security_header_matches_case_insensitive",
+            "test_is_security_header_rejects_unrelated_names",
+            "test_lifespan_scope_passes_through_unmodified",
+            "test_security_headers_present_on_200_response",
+            "test_upstream_duplicate_csp_is_dropped",
+            "test_upstream_duplicate_x_frame_options_dropped",
+            "test_websocket_upgrade_passes_through_unmodified"
+          ],
+          "hash": "d728ab8f3d5ebc80427bd3e103fee6d12da26aa98da45d7e10e0723fb8fe2ddf",
+          "importsFiles": [
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_app/middleware/security_headers.py",
+            "tests/helpers/asgi.py"
+          ],
+          "path": "tests/test_security_headers_middleware.py"
+        },
+        {
+          "exports": [
+            "test_simpo_end_to_end_trains_and_saves_adapter"
+          ],
+          "hash": "c183b013c7743a065d90e383e9ee1b762cf30ef89a01aa45e97b71422e3f962c",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_simpo_smoke.py"
+        },
+        {
+          "hash": "05f55664e80bbbf544a76a7117c098597ddaa05101a3e31f8faded409a6057d7",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_slao.py"
+        },
+        {
+          "exports": [
+            "temp_dir"
+          ],
+          "hash": "f2504940b13106c85bc79a1425e78726d6eea0bfbd52012f74f1779daabfda72",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_trainer.py"
+        },
+        {
+          "exports": [
+            "temp_dir"
+          ],
+          "hash": "e8928ec86363becf7604bdf72de7594bc32287777e84ed86e235d9de79449d4c",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_trainer_simpo_kto.py"
+        },
+        {
+          "hash": "a6230bef4c104fa1e16a2dc53dca65ce7505ad44b3c2376e04119208fc496382",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_ui_security.py"
+        },
+        {
+          "hash": "5b08d61ef78336c59a00f8022a1a881a596aa40a50b8cf0e45914e91060b2e45",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/ui_theme.py"
+          ],
+          "path": "tests/test_ui_states.py"
+        },
+        {
+          "hash": "4263816a3c2e0646a0a9be44eb391cfbdce11de67730ba06c48b9ec07615ee6a",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py"
+          ],
+          "path": "tests/test_validators.py"
+        },
+        {
+          "hash": "a96c0e88fadd18df51ab9418c483e37748b639818ca2554f95fbca4a3d292996",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py"
+          ],
+          "path": "tests/test_wave6b_cli_features.py"
+        },
+        {
+          "hash": "7a4f91deb07a627250e1743a0e9bbc1a4eac86e5cea7c94beda8cb19e41f3bd7",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_wave6b_features.py"
+        },
+        {
+          "hash": "6e405e8ae76181323d6b30f037da7309a6bbb44317023fdc454b1eee856f67d4",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py",
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_wave6b_flags.py"
+        },
+        {
+          "hash": "9697d1ad47cc524463b7db21748eb08b3459ba63698ff0252e766f8b788eb8b7",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_windows_compat.py"
+        }
+      ],
+      "globs": [
+        "tests/**"
+      ],
+      "importConfidence": "full",
+      "name": "tests",
+      "origin": "authored",
+      "role": "test",
+      "testedBy": 0,
+      "unresolvedSites": 4
+    }
+  ],
+  "doors": [
+    {
+      "commands": [
+        {
+          "job": "test",
+          "step": "Install dependencies",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\n# Windows takes the same feature surface MINUS `export`.\n# llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its\n# 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on\n# 2026-09-17 (+2.6 to +11.6), the single largest item in this cell and\n# the direct cause of two timeout cancellations.\n#\n# This costs no assertion. Nothing under test imports llama_cpp -- the\n# package's only reference is a `_has_module(\"llama_cpp\")` probe in\n# feature_flags.py that flips FEATURES[\"export\"], and no test asserts\n# that flag. tests/test_export.py exercises the GGUF path entirely\n# through enums and MagicMock, so it passes either way.\n#\n# pyproject defines `full = full-no-export + export`, so a feature\n# group added later reaches both lists and Windows cannot quietly\n# drift into testing less than Linux. If you ever need llama_cpp\n# itself covered on Windows, install it from the project's prebuilt\n# wheel index rather than restoring the source build here.\nif [ \"${{ runner.os }}\" = \"Windows\" ]; then\n  pip install -e \".[dev,full-no-export]\"\nelse\n  pip install -e \".[dev,full]\"\nfi\n"
+        },
+        {
+          "job": "test",
+          "step": "Atlas check",
+          "text": "npx --yes @dogfood-lab/atlas@1.14.0 check"
+        },
+        {
+          "job": "test",
+          "step": "Lint with ruff",
+          "text": "ruff check backpropagate/"
+        },
+        {
+          "job": "test",
+          "step": "Type check with mypy",
+          "text": "mypy backpropagate/ --ignore-missing-imports"
+        },
+        {
+          "job": "test",
+          "step": "Run tests",
+          "text": "set -euo pipefail\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\"\n"
+        },
+        {
+          "job": "test",
+          "step": "Run tests with coverage",
+          "text": "set -euo pipefail\nCOV_FLOOR=$(python -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])\")\necho \"Coverage floor (from pyproject.toml): ${COV_FLOOR}\"\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  # coverage.py's combine step picks up the per-worker .coverage.*\n  # files automatically when -n is set, so --cov + xdist coexist\n  # without extra wiring beyond the standard `coverage combine`\n  # pytest-cov already does at session teardown.\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=\"${COV_FLOOR}\" ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\"\n"
+        },
+        {
+          "job": "test",
+          "step": "Run tests (Windows/macOS smoke)",
+          "text": "set -euo pipefail\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\"\n"
+        },
+        {
+          "job": "parallel-xdist",
+          "step": "Install dependencies",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\npip install -e \".[dev,full]\"\n"
+        },
+        {
+          "job": "parallel-xdist",
+          "step": "Run tests under -n auto --dist worksteal",
+          "text": "set -euo pipefail\necho \"::notice::pytest-xdist forced ON (BACKPROPAGATE_PYTEST_PARALLEL=1) — exercising serial-group scheduling\"\npytest tests/ -v --tb=short -n auto --dist worksteal -m \"not gpu and not slow and not integration\"\n"
+        },
+        {
+          "job": "uv-sync-pilot",
+          "step": "Install uv",
+          "text": "set -euo pipefail\ncurl -LsSf https://astral.sh/uv/install.sh | sh\necho \"$HOME/.local/bin\" >> \"$GITHUB_PATH\"\n"
+        },
+        {
+          "job": "uv-sync-pilot",
+          "step": "uv sync --frozen --extra dev --extra full",
+          "text": "set -euo pipefail\nuv --version\n# --frozen: refuse to update the lockfile mid-CI (the lock is the\n# source of truth for what got tested in this run; modifying it\n# would invalidate the green signal).\n# --extra dev --extra full: the same extras the pip install path\n# ships, so the pilot test surface matches the main matrix.\nuv sync --frozen --extra dev --extra full\n"
+        },
+        {
+          "job": "uv-sync-pilot",
+          "step": "Run pytest (non-gpu / non-slow / non-integration)",
+          "text": "set -euo pipefail\n# Run inside the uv-managed venv. `uv run` activates the right\n# interpreter without a manual `source .venv/bin/activate` step.\nuv run pytest tests/ -v --tb=short -m \"not gpu and not slow and not integration\"\n"
+        },
+        {
+          "job": "ui-compile-smoke",
+          "step": "Install the [ui] extra",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\npip install -e \".[ui]\"\n"
+        },
+        {
+          "job": "ui-compile-smoke",
+          "step": "Reflex dry-run compile (all pages)",
+          "text": "import sys\n\ntry:\n    import reflex  # presence probe for the [ui] extra\nexcept ModuleNotFoundError:\n    print(\"::notice::Reflex ([ui] extra) not installed — skipping UI dry-run compile smoke.\")\n    sys.exit(0)\n\n# Importing the app builds the page tree; _compile(dry_run=True)\n# walks every page and codegens React in-memory, surfacing any\n# render-time VarTypeError / TypeError that the import-only unit\n# tests never trigger. dry_run => nothing is written to disk.\nfrom backpropagate.ui_app import app as a\n\na.app._compile(dry_run=True)\nprint(\"Reflex dry-run compile: OK — all pages compiled.\")\n"
+        },
+        {
+          "job": "bandit",
+          "step": "Install Bandit",
+          "text": "pip install bandit[sarif]"
+        },
+        {
+          "job": "bandit",
+          "step": "Run Bandit scan (SARIF — all severities to Security tab)",
+          "text": "# --exit-zero: this step's job is to UPLOAD all findings to the\n# GitHub Security tab as SARIF. The gating happens in the next\n# step. Without --exit-zero, bandit exits non-zero on any LOW-\n# severity finding (which we intentionally don't gate on), which\n# silently fails the job before the gating step even runs.\nbandit -r backpropagate/ \\\n  -c pyproject.toml \\\n  --exit-zero \\\n  -f sarif \\\n  -o bandit-results.sarif\n"
+        },
+        {
+          "job": "bandit",
+          "step": "Run Bandit (gating — LOW severity / LOW confidence and above)",
+          "text": "set +e\nbandit -r backpropagate/ \\\n  -c pyproject.toml \\\n  --exit-zero \\\n  -f json \\\n  -o bandit-gating.json\nbandit -r backpropagate/ \\\n  -c pyproject.toml \\\n  -l -i \\\n  -f txt\nGATE_EXIT=$?\necho \"Bandit gating exit code: ${GATE_EXIT}\"\nexit ${GATE_EXIT}\n"
+        },
+        {
+          "job": "pip-audit",
+          "step": "Install dependencies",
+          "text": "python -m pip install --upgrade pip\npip install pip-audit\npip install -e \".[dev]\"\n"
+        },
+        {
+          "job": "pip-audit",
+          "step": "pip-audit (advisory — all vulnerabilities)",
+          "text": "set -euo pipefail\npip-audit \\\n  --desc on \\\n  --format markdown \\\n  --output pip-audit-report.md || true\n"
+        },
+        {
+          "job": "pip-audit",
+          "step": "Display advisory results",
+          "text": "cat pip-audit-report.md || echo \"No report generated\""
+        },
+        {
+          "job": "pip-audit",
+          "step": "pip-audit (triaged-accept ACK + surface any new advisory)",
+          "text": "set -euo pipefail\necho \"Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855\"\n# --ignore-vuln matches the primary id OR any alias, so the GHSA form\n# suppresses the PYSEC/CVE-keyed diffusers + transformers entries.\npip-audit \\\n  --vulnerability-service osv \\\n  --ignore-vuln GHSA-7wx4-6vff-v64p \\\n  --ignore-vuln GHSA-98h9-4798-4q5v \\\n  --ignore-vuln GHSA-69w3-r845-3855 \\\n&& echo \"pip-audit (post-accept): no advisories outside the accepted set.\" \\\n|| echo \"::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)\"\n"
+        },
+        {
+          "job": "pip-audit",
+          "step": "pip-audit (CRITICAL floor)",
+          "text": "set -euo pipefail\npip-audit \\\n  --vulnerability-service osv \\\n  --format json \\\n  --output pip-audit.json \\\n  --strict || true\npython3 -c \"\nimport json, sys\ndata = json.load(open('pip-audit.json'))\ndeps = data.get('dependencies', data) if isinstance(data, dict) else data\ncritical = []\nfor pkg in deps:\n    for v in pkg.get('vulns', []) or []:\n        sevs = v.get('severity') or []\n        for s in sevs:\n            score = (s.get('score') or '').upper()\n            stype = (s.get('type') or '').upper()\n            # OSV severity: type CVSS_V3/CVSS_V4 + score like 'CVSS:3.1/AV:N/...'.\n            # Critical CVSS-v3 base score >= 9.0; the score string also often\n            # carries a 'CRITICAL' rating tag — match either.\n            if 'CRITICAL' in score:\n                critical.append(f\\\"{pkg.get('name')}: {v.get('id')} ({stype}={score})\\\")\nif critical:\n    print('::error::pip-audit CRITICAL severity findings — release-blocking. Bump the offending dep in pyproject.toml + uv.lock; the GitHub Security tab also lists each advisory with the patched-version link.')\n    for c in critical:\n        print('  -', c)\n    sys.exit(1)\nprint('pip-audit CRITICAL floor: OK (no CRITICAL findings)')\n\"\n"
+        },
+        {
+          "job": "semgrep",
+          "step": "Run Semgrep",
+          "text": "semgrep scan \\\n  --config auto \\\n  --config p/python \\\n  --config p/security-audit \\\n  --sarif \\\n  --output semgrep-results.sarif \\\n  backpropagate/\n"
+        },
+        {
+          "job": "secrets-scan",
+          "step": "Confirm secret-scan delegation",
+          "text": "echo \"Secret scanning is performed by the Trivy job (trivy fs built-in secret scanner).\"\necho \"This job is a transparent placeholder kept stable for the security-summary aggregate gate.\"\necho \"See ci.yml comment block above + memory/feedback_trufflehog_action_push_diff.md.\"\n"
+        },
+        {
+          "job": "build",
+          "step": "Install build tools",
+          "text": "python -m pip install --upgrade pip\npip install build twine\n"
+        },
+        {
+          "job": "build",
+          "step": "Build package",
+          "text": "python -m build"
+        },
+        {
+          "job": "build",
+          "step": "Check package",
+          "text": "twine check dist/*"
+        },
+        {
+          "job": "build",
+          "step": "PKG-INFO smoke (License-Expression + Author present)",
+          "text": "set -euo pipefail\nSDIST=$(ls dist/backpropagate-*.tar.gz | head -1)\nif [ -z \"${SDIST}\" ]; then\n  echo \"::error::No sdist found in dist/ — build step likely produced wheel-only.\"\n  exit 1\nfi\n# tar -t lists the archive contents; the PKG-INFO path is\n# `<sdist-stem>/PKG-INFO`. Extract just that file to stdout.\nPKGINFO=$(tar -xOf \"${SDIST}\" --wildcards '*/PKG-INFO' 2>/dev/null || true)\nif [ -z \"${PKGINFO}\" ]; then\n  echo \"::error::PKG-INFO not found inside ${SDIST}.\"\n  exit 1\nfi\nMISSING=()\n# `grep -q ... <<< \"${PKGINFO}\"`, NEVER `echo \"${PKGINFO}\" | grep -q`.\n#\n# This step runs under `bash -e -o pipefail`. `grep -q` exits the\n# instant it matches, which closes the pipe while `echo` is still\n# writing the remaining ~40 KB of PKG-INFO; `echo` then dies on EPIPE,\n# and pipefail promotes that to the pipeline's status. `if !` reads\n# the failure as \"no match\" and reports a field that is demonstrably\n# present as MISSING. The dump that follows even prints it: the\n# 2026-09-17 20:43 run said \"missing ... Version\" directly above a\n# PKG-INFO whose third line is `Version: 1.7.1`.\n#\n# It is a race, so it is intermittent and lands on a different field\n# each time -- `main` failed at 20:38 the same day claiming `Name`,\n# on a tree where nothing had changed. `build` is a REQUIRED status\n# check, so every trip blocks a PR for no reason.\n#\n# A here-string has no writer process to receive SIGPIPE, so an early\n# `grep -q` exit cannot fail anything. Do not \"simplify\" these back\n# into pipes.\n#\n# License-Expression is the PEP 639 modern shape (hatchling\n# 1.27+, setuptools 78+). Match either it or the legacy\n# ``License: ...`` so non-PEP-639 backends don't false-trip.\nif ! grep -qE '^(License-Expression|License):' <<< \"${PKGINFO}\"; then\n  MISSING+=(\"License-Expression or License\")\nfi\n# Hatchling emits `Author-email:` (lowercase 'e'); setuptools emits\n# `Author:` separately. Match case-insensitively on the optional\n# `-email` suffix to accept both shapes — the actual PKG-INFO from\n# current hatchling has lowercase `Author-email:` which a\n# case-sensitive `-Email` regex would silently miss.\nif ! grep -qiE '^Author(-Email)?:' <<< \"${PKGINFO}\"; then\n  MISSING+=(\"Author or Author-Email\")\nfi\nif ! grep -qE '^Name:\\s*backpropagate\\b' <<< \"${PKGINFO}\"; then\n  MISSING+=(\"Name (== backpropagate)\")\nfi\nif ! grep -qE '^Version:' <<< \"${PKGINFO}\"; then\n  MISSING+=(\"Version\")\nfi\nif [ ${#MISSING[@]} -gt 0 ]; then\n  echo \"::error::PKG-INFO is missing load-bearing fields: ${MISSING[*]}\"\n  echo \"Full PKG-INFO follows ---\"\n  echo \"${PKGINFO}\"\n  exit 1\nfi\necho \"PKG-INFO smoke: load-bearing fields present\"\n"
+        },
+        {
+          "job": "verify-smoke",
+          "step": "Install dependencies",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\npip install -e \".[dev,full]\"\n# CIDOCS-F-006 (v1.4 Wave 6a) — verify.sh's `build` stage runs\n# `python -m build` + `twine check dist/*`. Pre-Wave-6a these\n# tools were missing from the verify-smoke environment; the\n# soft-gate + permission-denied verify.sh masked the missing\n# deps as a JSON parse failure. Strict-flip surfaced both. The\n# dedicated `build` job (line 540) installs them; verify-smoke\n# mirrors that install so the build + twine_check stages have\n# the tooling they advertise.\npip install build twine\n"
+        },
+        {
+          "job": "verify-smoke",
+          "step": "Run verify.sh --format=json",
+          "text": "set -euo pipefail\n# verify.sh exits 1 on any stage failure; capture so we can keep\n# the artifact-upload + drift-grep steps running even when the\n# smoke is red. The gating happens in the next step.\n# Separate stdout (JSON stream) from stderr (banner / progress)\n# so the consumer's `tail -1 | json.loads` sees pure JSON. Prior\n# `2>&1` interleaved stderr text with the JSON, breaking the\n# parse and producing the soft-gated red on every run.\n./verify.sh --format=json > verify.json 2> verify.stderr.log || true\n"
+        },
+        {
+          "job": "verify-smoke",
+          "step": "Gate on first_failed_stage (strict)",
+          "text": "set -euo pipefail\n# CIDOCS-F-006 (v1.4 Wave 6a) — strict gate. The final verify\n# record in JSON mode carries .first_failed_stage as either\n# null (pass) or a string naming the first failing stage. Pull\n# the LAST line of verify.json (the aggregate record) and\n# require it to be null. Any of:\n#   - verify.json missing / empty\n#   - last line fails jq parse\n#   - first_failed_stage is a non-empty string\n# fails the job. The JSON producer at verify.sh has been\n# stable across 5+ green runs; treating a parse error as\n# noise would mean a doc-lie banner (\"strict\") on a soft gate.\nif ! [ -s verify.json ]; then\n  echo \"::error::verify.json is empty or missing — verify.sh produced no output. Strict gate fails.\"\n  exit 1\nfi\n# jq -e: non-zero exit on null result. Then we check the\n# non-null result for being a non-empty string (= failure name).\n# Capture the parsed value separately so a jq-internal error is\n# distinguishable from \"field is null.\"\nPARSED=$(tail -1 verify.json | jq -r '.first_failed_stage // \"\"')\nif [ -n \"${PARSED}\" ]; then\n  echo \"::error::verify.sh failed at stage: ${PARSED}. Download the verify-json artifact for the per-stage .log files.\"\n  exit 1\nfi\necho \"verify.sh: all stages passed (first_failed_stage=null)\"\n"
+        },
+        {
+          "job": "security-summary",
+          "step": "Render security summary",
+          "text": "{\n  echo \"## Security Scan Results\"\n  echo \"\"\n  echo \"| Scanner | Status |\"\n  echo \"|---------|--------|\"\n  echo \"| Bandit SAST | ${{ needs.bandit.result }} |\"\n  echo \"| pip-audit | ${{ needs.pip-audit.result }} |\"\n  echo \"| Semgrep | ${{ needs.semgrep.result }} |\"\n  echo \"| Trivy | ${{ needs.trivy.result }} |\"\n  echo \"| Secret Detection | ${{ needs.secrets-scan.result }} |\"\n  echo \"\"\n  echo \"View detailed results in the Security tab.\"\n} >> \"$GITHUB_STEP_SUMMARY\"\n"
+        },
+        {
+          "job": "security-summary",
+          "step": "Gate on scanner results",
+          "text": "set -euo pipefail\ndeclare -A results=(\n  [bandit]=\"${{ needs.bandit.result }}\"\n  [pip-audit]=\"${{ needs.pip-audit.result }}\"\n  [semgrep]=\"${{ needs.semgrep.result }}\"\n  [trivy]=\"${{ needs.trivy.result }}\"\n  [secrets-scan]=\"${{ needs.secrets-scan.result }}\"\n)\nfailed=()\nfor scanner in \"${!results[@]}\"; do\n  result=\"${results[$scanner]}\"\n  if [ \"$result\" != \"success\" ] && [ \"$result\" != \"skipped\" ]; then\n    failed+=(\"$scanner=$result\")\n  fi\ndone\nif [ ${#failed[@]} -gt 0 ]; then\n  echo \"::error::Security scanners failed: ${failed[*]} — open each scanner's job above for the per-finding output. Bandit / pip-audit / Trivy gate on CRITICAL findings; Semgrep is advisory but a 'failure' status here means the scan itself errored (rate-limit, network, etc.) and should be re-run.\"\n  exit 1\nfi\necho \"All security scanners passed.\"\n"
+        }
+      ],
+      "file": ".github/workflows/ci.yml",
+      "landings": [],
+      "mentions": [
+        {
+          "job": "pip-audit",
+          "path": ".trivyignore"
+        },
+        {
+          "job": "bandit",
+          "path": "pyproject.toml"
+        },
+        {
+          "job": "pip-audit",
+          "path": "pyproject.toml"
+        },
+        {
+          "job": "test",
+          "path": "pyproject.toml"
+        },
+        {
+          "job": "pip-audit",
+          "path": "uv.lock"
+        }
+      ],
+      "name": "CI",
+      "permissions": [
+        "contents:read",
+        "security-events:write"
+      ],
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 51
+        },
+        {
+          "boundary": "root",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "tests",
+          "depth": 0,
+          "files": 70
+        },
+        {
+          "boundary": "scripts",
+          "depth": 1,
+          "enters": {
+            "file": "scripts/check_doc_drift.py",
+            "from": "tests/test_check_doc_drift.py"
+          },
+          "files": 1
+        }
+      ],
+      "readers": [],
+      "runs": [
+        {
+          "directory": true,
+          "job": "bandit",
+          "path": "backpropagate/"
+        },
+        {
+          "directory": true,
+          "job": "test",
+          "path": "backpropagate/"
+        },
+        {
+          "directory": true,
+          "job": "verify-smoke",
+          "path": "backpropagate/",
+          "via": "verify.sh"
+        },
+        {
+          "directory": true,
+          "job": "parallel-xdist",
+          "path": "tests/"
+        },
+        {
+          "directory": true,
+          "job": "test",
+          "path": "tests/"
+        },
+        {
+          "directory": true,
+          "job": "uv-sync-pilot",
+          "path": "tests/"
+        },
+        {
+          "directory": true,
+          "job": "verify-smoke",
+          "path": "tests/",
+          "via": "verify.sh"
+        },
+        {
+          "job": "verify-smoke",
+          "path": "verify.sh"
+        }
+      ],
+      "runsCount": 3,
+      "secrets": [
+        "DOCKERHUB_USERNAME"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "pull_request"
+        },
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "push",
+          "paths": [
+            ".github/workflows/**",
+            "Dockerfile",
+            "atlas/**",
+            "backpropagate/**",
+            "pyproject.toml",
+            "requirements*.txt",
+            "tests/**",
+            "uv.lock"
+          ]
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-node",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "aquasecurity/trivy-action",
+        "codecov/codecov-action",
+        "dorny/paths-filter",
+        "github/codeql-action/upload-sarif"
+      ],
+      "usesWorkflowToken": false
+    },
+    {
+      "commands": [
+        {
+          "job": "drift-check",
+          "step": "Run doc-drift check",
+          "text": "python scripts/check_doc_drift.py"
+        }
+      ],
+      "file": ".github/workflows/doc-drift.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "Doc Drift Check",
+      "permissions": [
+        "contents:read"
+      ],
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
+      "readers": [],
+      "runs": [
+        {
+          "job": "drift-check",
+          "path": "scripts/check_doc_drift.py"
+        }
+      ],
+      "runsCount": 1,
+      "secrets": [],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "pull_request"
+        },
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "push",
+          "paths": [
+            ".github/workflows/**",
+            "README.md",
+            "backpropagate/**",
+            "llms.txt",
+            "scripts/**",
+            "site/**",
+            "tests/test_error_codes_catalog.py"
+          ]
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-python"
+      ],
+      "usesWorkflowToken": false
+    },
+    {
+      "commands": [
+        {
+          "job": "mutmut",
+          "step": "Install backpropagate (dev extras)",
+          "text": "python -m pip install --upgrade pip\n# Install the package + dev extras (mutmut, pytest, hypothesis,\n# etc). The smoke-test fast path skips the heavy [ui]/[unsloth]\n# extras to keep wheel resolution fast.\npip install -e \".[dev,validation,logging,security]\"\n"
+        },
+        {
+          "job": "mutmut",
+          "step": "Show mutmut version",
+          "text": "mutmut --version"
+        },
+        {
+          "job": "mutmut",
+          "step": "Run mutmut on scoped subset",
+          "text": "# mutmut config block in pyproject.toml provides paths/runners; this\n# override allows the workflow_dispatch input to scope down further.\nset +e  # mutmut returns non-zero when mutants survive — don't fail the job\nmutmut run --paths-to-mutate \"${PATHS_TO_MUTATE}\"\n# capture exit code so we can decide on the gate below\necho \"mutmut_exit=$?\" >> \"$GITHUB_OUTPUT\"\nset -e\n"
+        },
+        {
+          "job": "mutmut",
+          "step": "Capture surviving-count + soft gate",
+          "text": "# mutmut results outputs to stdout; we parse the structured count.\nmutmut results 2>&1 | tee mutmut-results.txt\n# Extract surviving count (mutmut 2.x: \"<N> survived\"; mutmut 3.x: differs)\nSURVIVED=$(grep -oE '[0-9]+ survived' mutmut-results.txt | grep -oE '[0-9]+' || echo \"0\")\necho \"Surviving mutations: $SURVIVED\"\necho \"SURVIVED=$SURVIVED\" >> \"$GITHUB_ENV\"\n# Baseline lookup — if no baseline file, this is the first run; just\n# report and don't gate. Subsequent runs gate against +5% regression.\nBASELINE_FILE=\".github/mutmut-baseline.txt\"\nif [ ! -f \"$BASELINE_FILE\" ]; then\n  echo \"No baseline file at $BASELINE_FILE — recording $SURVIVED as the new baseline.\"\n  echo \"$SURVIVED\" > \"$BASELINE_FILE\"\n  exit 0\nfi\nBASELINE=$(cat \"$BASELINE_FILE\")\necho \"Baseline: $BASELINE; current: $SURVIVED\"\n# +5% regression threshold (rounded up)\nTHRESHOLD=$(python -c \"import math; print(math.ceil(${BASELINE} * 1.05))\")\nif [ \"$SURVIVED\" -gt \"$THRESHOLD\" ]; then\n  echo \"::error::Surviving mutations ($SURVIVED) exceeds 5% regression threshold ($THRESHOLD, baseline $BASELINE).\"\n  exit 1\nfi\necho \"Within tolerance. Soft gate green.\"\n"
+        },
+        {
+          "job": "mutmut",
+          "step": "Ensure required labels exist",
+          "text": "gh label create \"ci\" --description \"Continuous integration related issues\" --color \"0E8A16\" --force 2>/dev/null || true\ngh label create \"mutmut-baseline\" --description \"Automated mutmut baseline refresh PRs\" --color \"FBCA04\" --force 2>/dev/null || true\n"
+        },
+        {
+          "job": "mutmut",
+          "step": "Update baseline (if changed)",
+          "text": "set -euo pipefail\nif [ ! -f \"$BASELINE_FILE\" ]; then\n  echo \"No baseline file written by the soft-gate step — nothing to refresh.\"\n  exit 0\nfi\ngit fetch origin main --depth=1\nif git diff --quiet \"origin/main\" -- \"$BASELINE_FILE\" 2>/dev/null; then\n  echo \"Baseline unchanged vs origin/main — no PR needed.\"\n  exit 0\nfi\nBRANCH=\"ci/mutmut-baseline-$(date -u +%Y%m%d-%H%M%S)\"\ngit checkout -b \"$BRANCH\"\ngit add \"$BASELINE_FILE\"\ngit -c user.name=\"mcp-tool-shop\" \\\n    -c user.email=\"64996768+mcp-tool-shop@users.noreply.github.com\" \\\n    commit -m \"ci(mutmut): update baseline ($(date -u +%Y-%m-%d))\"\ngit push origin \"$BRANCH\"\ngh pr create \\\n  --title \"ci(mutmut): baseline update\" \\\n  --body \"Automated baseline refresh from $GITHUB_WORKFLOW run #$GITHUB_RUN_NUMBER. Surviving mutation count delta should be reviewed before merge — the soft gate compares against the file on main, so merging this PR moves the bar.\" \\\n  --label \"ci\" --label \"mutmut-baseline\" \\\n  --base main --head \"$BRANCH\"\n"
+        }
+      ],
+      "file": ".github/workflows/mutmut.yml",
+      "landings": [
+        ".github"
+      ],
+      "mentions": [
+        {
+          "job": "mutmut",
+          "path": "pyproject.toml"
+        }
+      ],
+      "name": "Mutation testing (mutmut)",
+      "permissions": [
+        "contents:write",
+        "issues:write",
+        "pull-requests:write"
+      ],
+      "pushes": true,
+      "reach": [],
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "glob",
+          "confidence": "ast",
+          "target": ".github"
+        }
+      ],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": true,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [
+        ".github/mutmut-baseline.txt"
+      ],
+      "triggers": [
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact"
+      ],
+      "usesWorkflowToken": true
+    },
+    {
+      "commands": [
+        {
+          "job": "smoke",
+          "step": "Install backpropagate + CPU torch",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\n# CPU-only torch wheels live on PyTorch's CPU index. Installing\n# the package's full [dev] extra would pull GPU-CUDA torch\n# transitively and add 2+ GB to the runner image for no smoke\n# benefit.\npip install --index-url https://download.pytorch.org/whl/cpu torch\npip install -e \".[dev]\"\n"
+        },
+        {
+          "job": "smoke",
+          "step": "Run nightly smoke",
+          "text": "python scripts/nightly_train_smoke.py"
+        },
+        {
+          "job": "smoke",
+          "step": "Ensure required labels exist",
+          "text": "gh label create \"ci\" --description \"Continuous integration related issues\" --color \"0E8A16\" --force 2>/dev/null || true\ngh label create \"nightly-smoke\" --description \"Issues from nightly train smoke test\" --color \"FBCA04\" --force 2>/dev/null || true\n"
+        },
+        {
+          "job": "smoke",
+          "step": "Open issue on smoke failure",
+          "text": "set -euo pipefail\nRUN_URL=\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"\nDATE_TAG=\"$(date -u +%Y-%m-%d)\"\nTITLE=\"nightly train smoke red — ${DATE_TAG}\"\nBODY_FILE=\"$(mktemp)\"\ncat > \"${BODY_FILE}\" <<EOF\nThe nightly \\`Trainer.train(max_steps=1)\\` CPU smoke went red on\n\\`${DATE_TAG}\\`.\n\n- Run URL: ${RUN_URL}\n- Workflow: \\`.github/workflows/nightly-train-smoke.yml\\`\n- Script:   \\`scripts/nightly_train_smoke.py\\`\n- Schedule: 04:00 UTC\n\nThe smoke does NOT gate any release; it is an observability\nforcing function for upstream HuggingFace / trl / transformers /\ntorch drift. Triage steps:\n\n1. Open the run URL and grep the \\`Run nightly smoke\\` step for\n   the \\`FAIL: <assertion>\\` line that the runner prints to stderr.\n2. If the failure is upstream (e.g. trl breaking change), pin\n   the affected dep in \\`pyproject.toml\\` or \\`uv.lock\\` and\n   re-run via \\`gh workflow run nightly-train-smoke.yml\\`.\n3. If the failure is in \\`backpropagate/trainer.py\\` itself,\n   treat as a release-blocking regression.\n\nClose this issue once the smoke is green again.\nEOF\n\n# Reuse an existing open smoke issue if present to avoid issue\n# spam when the regression spans multiple nights.\nEXISTING=$(gh issue list --state open --label nightly-smoke --json number --jq '.[0].number' 2>/dev/null || true)\nif [ -n \"${EXISTING}\" ] && [ \"${EXISTING}\" != \"null\" ]; then\n  gh issue comment \"${EXISTING}\" --body-file \"${BODY_FILE}\"\n  echo \"Commented on existing nightly-smoke issue #${EXISTING}\"\nelse\n  gh issue create \\\n    --title \"${TITLE}\" \\\n    --body-file \"${BODY_FILE}\" \\\n    --label \"ci\" \\\n    --label \"nightly-smoke\"\nfi\n"
+        }
+      ],
+      "file": ".github/workflows/nightly-train-smoke.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "Nightly Train Smoke",
+      "permissions": [
+        "contents:read",
+        "issues:write"
+      ],
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "backpropagate",
+          "depth": 1,
+          "enters": {
+            "file": "backpropagate/__init__.py",
+            "from": "scripts/nightly_train_smoke.py"
+          },
+          "files": 18
+        }
+      ],
+      "readers": [],
+      "runs": [
+        {
+          "job": "smoke",
+          "path": "scripts/nightly_train_smoke.py"
+        }
+      ],
+      "runsCount": 1,
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": true,
+        "opensIssuesOnFailure": true,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "cron": "0 4 * * 1",
+          "event": "schedule"
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-python"
+      ],
+      "usesWorkflowToken": true
+    },
+    {
+      "commands": [
+        {
+          "job": "build-site",
+          "step": "Install site dependencies",
+          "text": "npm ci"
+        },
+        {
+          "job": "build-site",
+          "step": "Build site",
+          "text": "npm run build"
+        }
+      ],
+      "file": ".github/workflows/pages-deploy.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "Pages deploy",
+      "permissions": [
+        "contents:read",
+        "id-token:write",
+        "pages:write"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [],
+      "sends": {
+        "deploysPages": true,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "push",
+          "paths": [
+            ".github/workflows/pages-deploy.yml",
+            "site/**"
+          ]
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/deploy-pages",
+        "actions/setup-node",
+        "actions/upload-pages-artifact"
+      ],
+      "usesWorkflowToken": false
+    },
+    {
+      "commands": [
+        {
+          "job": "gate",
+          "step": "Resolve tag to smoke",
+          "text": "set -euo pipefail\nif [ -n \"${{ inputs.tag || '' }}\" ]; then\n  TAG=\"${{ inputs.tag }}\"\nelse\n  # workflow_run triggers when Publish completes — read the\n  # head_branch (which for a release-published run is the tag\n  # ref). Fall back to the latest GH release if that fails.\n  TAG=\"${{ github.event.workflow_run.head_branch }}\"\n  if [ -z \"${TAG}\" ] || [ \"${TAG}\" = \"main\" ]; then\n    TAG=$(gh release view --repo \"${GITHUB_REPOSITORY}\" --json tagName --jq '.tagName')\n  fi\nfi\nVERSION=\"${TAG#v}\"\necho \"tag=${TAG}\" >> \"$GITHUB_OUTPUT\"\necho \"version=${VERSION}\" >> \"$GITHUB_OUTPUT\"\necho \"Smoking tag=${TAG} version=${VERSION}\"\n"
+        },
+        {
+          "job": "pypi-smoke",
+          "step": "pip install backpropagate==${{ needs.gate.outputs.version }}",
+          "text": "set -euo pipefail\n# PyPI's CDN can lag the publish by a few minutes — retry up to\n# five times with 30s backoff before declaring the install dead.\nfor attempt in 1 2 3 4 5; do\n  if pip install \"backpropagate==${{ needs.gate.outputs.version }}\"; then\n    break\n  fi\n  if [ \"${attempt}\" -eq 5 ]; then\n    echo \"::error::pip install failed after 5 attempts\"\n    exit 1\n  fi\n  echo \"::warning::pip install attempt ${attempt} failed — sleeping 30s and retrying\"\n  sleep 30\ndone\n"
+        },
+        {
+          "job": "pypi-smoke",
+          "step": "backprop --version smoke",
+          "text": "set -euo pipefail\nOUT=$(backprop --version)\necho \"${OUT}\"\n# The --version surface emits the package version somewhere in\n# stdout; assert the tag's version appears so we catch a stale\n# registry index or shadowed entry-point.\necho \"${OUT}\" | grep -F \"${{ needs.gate.outputs.version }}\"\n"
+        },
+        {
+          "job": "docker-smoke",
+          "step": "docker pull + run smoke",
+          "text": "set -euo pipefail\nfor attempt in 1 2 3 4 5; do\n  if docker pull \"${IMAGE}\"; then\n    break\n  fi\n  if [ \"${attempt}\" -eq 5 ]; then\n    echo \"::error::docker pull failed after 5 attempts\"\n    exit 1\n  fi\n  echo \"::warning::docker pull attempt ${attempt} failed — sleeping 30s and retrying\"\n  sleep 30\ndone\nOUT=$(docker run --rm \"${IMAGE}\" --version)\necho \"${OUT}\"\necho \"${OUT}\" | grep -F \"${{ needs.gate.outputs.version }}\"\n"
+        },
+        {
+          "job": "open-issue-on-failure",
+          "step": "Ensure required labels exist",
+          "text": "gh label create \"ci\" --repo \"${{ github.repository }}\" --description \"Continuous integration related issues\" --color \"0E8A16\" --force 2>/dev/null || true\ngh label create \"post-publish-smoke\" --repo \"${{ github.repository }}\" --description \"Issues from post-publish smoke test\" --color \"FBCA04\" --force 2>/dev/null || true\n"
+        },
+        {
+          "job": "open-issue-on-failure",
+          "step": "Open / append issue",
+          "text": "set -euo pipefail\nRUN_URL=\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"\nTITLE=\"post-publish smoke red — ${TAG}\"\nBODY_FILE=\"$(mktemp)\"\ncat > \"${BODY_FILE}\" <<EOF\nThe post-publish smoke for \\`${TAG}\\` went red.\n\n- Run URL: ${RUN_URL}\n- PyPI install matrix: ${PYPI_RESULT}\n- Docker pull + run:   ${DOCKER_RESULT}\n\n## What this means\n\nThe publish itself succeeded — \\`${TAG}\\` is live on PyPI + GHCR right now.\nThis issue is the post-publish observability surface: the workflow ran\n\\`pip install backpropagate==${TAG#v}\\` + \\`backprop --version\\` across the\n{ubuntu, windows} × {3.10, 3.11, 3.12, 3.13} matrix plus a\n\\`docker run\\` smoke against GHCR, and at least one cell failed. Operators\nmay already be hitting the same install failure.\n\n## Triage\n\n1. **Open the run URL above and find the failing cell(s).** The\n   \\`Annotations\\` tab shows the failing step + log excerpt for each\n   matrix entry. Common patterns:\n   - **PyPI CDN lag** — index returns 404 for \\`${TAG#v}\\` because the\n     CDN hasn't propagated yet. Already retried 5× with 30s backoff\n     before this issue fired, so a real lag is rare but possible.\n   - **GHCR pull failure** — image \\`ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}\\`\n     not yet visible. Same retry shape as PyPI.\n   - **Real install break** — a transitive dep, a Python-version-specific\n     syntax issue, or a missing platform wheel. Read the failing log\n     carefully; the install error message is the canonical signal.\n\n2. **If PyPI / GHCR was lagging, re-run the smoke** once you've waited\n   a few minutes:\n\n   \\`\\`\\`bash\n   gh workflow run post-publish-smoke.yml -f tag=${TAG}\n   \\`\\`\\`\n\n3. **If the install or smoke is genuinely broken, cut a patch release.**\n   Don't unpublish \\`${TAG}\\` — operators already have it cached. Roll\n   forward to the next patch with the fix.\n\nClose this issue once the re-run passes (or the patch release smoke goes green).\nEOF\n\nEXISTING=$(gh issue list --repo \"${{ github.repository }}\" --state open --label post-publish-smoke --json number --jq '.[0].number' 2>/dev/null || true)\nif [ -n \"${EXISTING}\" ] && [ \"${EXISTING}\" != \"null\" ]; then\n  gh issue comment \"${EXISTING}\" --repo \"${{ github.repository }}\" --body-file \"${BODY_FILE}\"\n  echo \"Commented on existing post-publish-smoke issue #${EXISTING}\"\nelse\n  gh issue create \\\n    --repo \"${{ github.repository }}\" \\\n    --title \"${TITLE}\" \\\n    --body-file \"${BODY_FILE}\" \\\n    --label \"ci\" \\\n    --label \"post-publish-smoke\"\nfi\n"
+        }
+      ],
+      "file": ".github/workflows/post-publish-smoke.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "Post-Publish Smoke",
+      "permissions": [
+        "contents:read",
+        "issues:write",
+        "packages:read"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": true,
+        "opensIssuesOnFailure": true,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "workflow_dispatch"
+        },
+        {
+          "event": "workflow_run",
+          "types": [
+            "completed"
+          ],
+          "workflows": [
+            "Publish"
+          ]
+        }
+      ],
+      "uses": [
+        "actions/setup-python",
+        "docker/login-action"
+      ],
+      "usesWorkflowToken": true
+    },
+    {
+      "commands": [
+        {
+          "job": "build",
+          "step": "Install build tools",
+          "text": "python -m pip install --upgrade pip\npip install build twine\n"
+        },
+        {
+          "job": "build",
+          "step": "Build package",
+          "text": "python -m build"
+        },
+        {
+          "job": "build",
+          "step": "Check package",
+          "text": "twine check dist/*"
+        },
+        {
+          "job": "publish-pypi",
+          "step": "Publish to PyPI (attempt 2 — retry after 60s on failure)",
+          "text": "set -euo pipefail\necho \"::warning::PyPI publish attempt 1 failed (likely E409 packument race) — sleeping 60s and retrying via twine\"\nsleep 60\n"
+        },
+        {
+          "job": "docker",
+          "step": "Resolve release version",
+          "text": "set -euo pipefail\ncase \"${{ github.event_name }}\" in\n  workflow_run) REF=\"${{ github.event.workflow_run.head_branch }}\";;\n  release)      REF=\"${{ github.event.release.tag_name }}\";;\n  *)            REF=\"${{ inputs.tag }}\";;   # workflow_dispatch backfill\nesac\nV=\"${REF#v}\"\necho \"version=${V}\" >> \"$GITHUB_OUTPUT\"\necho \"major_minor=$(echo \"$V\" | cut -d. -f1-2)\" >> \"$GITHUB_OUTPUT\"\necho \"resolved=${V} (event=${{ github.event_name }} ref=${REF})\"\n"
+        }
+      ],
+      "file": ".github/workflows/publish.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "Publish",
+      "permissions": [
+        "contents:read",
+        "id-token:write",
+        "packages:write"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": true,
+        "publishesTo": [
+          "container image",
+          "pypi"
+        ],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "release",
+          "types": [
+            "published"
+          ]
+        },
+        {
+          "event": "workflow_dispatch"
+        },
+        {
+          "event": "workflow_run",
+          "types": [
+            "completed"
+          ],
+          "workflows": [
+            "Release"
+          ]
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/download-artifact",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "docker/build-push-action",
+        "docker/login-action",
+        "docker/metadata-action",
+        "docker/setup-buildx-action",
+        "docker/setup-qemu-action",
+        "pypa/gh-action-pypi-publish"
+      ],
+      "usesWorkflowToken": true
+    },
+    {
+      "commands": [
+        {
+          "job": "release",
+          "step": "Install npm >=11.5 in sandbox for OIDC trusted-publishing auth",
+          "text": "# Node 22 ships npm 10.9, which signs Sigstore provenance fine but\n# cannot negotiate the OIDC auth path for trusted publishing — the\n# PUT returns a misleading 404 \"not in this registry\".\n#\n# An in-place `npm install -g npm@latest` races on Node 22's bundled\n# npm 10.9 arborist rebuild and breaks irrecoverably (MODULE_NOT_FOUND:\n# promise-retry). Sandbox install + PATH shadow avoids the race.\n# See memory: npm-115-required-for-oidc\nSANDBOX=\"$HOME/.npm-cli-sandbox\"\nmkdir -p \"$SANDBOX\"\npushd \"$SANDBOX\" >/dev/null\necho '{\"name\":\"npm-cli-sandbox\",\"version\":\"0.0.0\",\"private\":true}' > package.json\nnpm install --no-save --no-audit --no-fund --silent npm@latest\npopd >/dev/null\necho \"$SANDBOX/node_modules/.bin\" >> \"$GITHUB_PATH\"\n\"$SANDBOX/node_modules/.bin/npm\" --version\n"
+        },
+        {
+          "job": "release",
+          "step": "Verify tag matches package.json version",
+          "text": "PKG_VERSION=$(node -p \"require('./package.json').version\")\nTAG_VERSION=\"${GITHUB_REF_NAME#v}\"\necho \"Tag: ${GITHUB_REF_NAME} → ${TAG_VERSION}\"\necho \"Package: ${PKG_VERSION}\"\nif [ \"${PKG_VERSION}\" != \"${TAG_VERSION}\" ]; then\n  echo \"::error::Tag ${TAG_VERSION} does not match package.json version ${PKG_VERSION}\"\n  exit 1\nfi\n"
+        },
+        {
+          "job": "release",
+          "step": "Verify tag matches pyproject.toml version",
+          "text": "PY_VERSION=$(python3 -c \"import tomllib; print(tomllib.loads(open('pyproject.toml').read())['project']['version'])\")\nTAG_VERSION=\"${GITHUB_REF_NAME#v}\"\necho \"pyproject: ${PY_VERSION}\"\nif [ \"${PY_VERSION}\" != \"${TAG_VERSION}\" ]; then\n  echo \"::error::Tag ${TAG_VERSION} does not match pyproject.toml version ${PY_VERSION}\"\n  exit 1\nfi\n"
+        },
+        {
+          "job": "release",
+          "step": "Install dependencies",
+          "text": "npm install --no-audit --no-fund"
+        },
+        {
+          "job": "release",
+          "step": "npm pack dry-run (verify shape)",
+          "text": "npm pack --dry-run"
+        },
+        {
+          "job": "release",
+          "step": "Publish to npm with provenance (OIDC trusted publisher)",
+          "text": "npm publish --provenance --access public"
+        },
+        {
+          "job": "release",
+          "step": "Generate CycloneDX SBOMs",
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\n# cyclonedx-bom (entrypoint: cyclonedx-py) is the maintained\n# Python SBOM generator and the de-facto pick for CycloneDX in\n# PyPA tooling. The `environment` subcommand walks the current\n# venv's installed package list — install the package first so\n# the tree matches what `pip install backpropagate` would pull.\npip install \"cyclonedx-bom>=5.0.0\"\n# Install backpropagate WITHOUT optional extras so the SBOM\n# tracks the published wheel's required-dep closure. Operators\n# who install with [full] get extra packages; those are surfaced\n# via pyproject.toml's optional-dependencies table, which the\n# `requirements` subcommand below covers as a static manifest.\npip install .\n\n# Wheel SBOM — actual installed dependency closure.\ncyclonedx-py environment \\\n  --output-format JSON \\\n  --output-file backpropagate-sbom.cdx.json\n\n# Optional: capture the npm shim's tree too (single dep on the\n# friendly-error shim path; still useful for audit trail).\nif command -v npm >/dev/null 2>&1 && [ -f package.json ]; then\n  npm install --no-audit --no-fund --no-save || true\n  # @cyclonedx/cyclonedx-npm requires only the lockfile; the\n  # repo doesn't commit one but `npm install` above creates one\n  # locally for this run.\n  npx --yes @cyclonedx/cyclonedx-npm \\\n    --output-format JSON \\\n    --output-file backpropagate-npm-sbom.cdx.json || \\\n    echo \"::warning::npm SBOM generation skipped (non-fatal)\"\nfi\n"
+        },
+        {
+          "job": "release",
+          "step": "Create GitHub Release (idempotent)",
+          "text": "# Extract the [<version>] section from CHANGELOG.md as the release notes.\n# Falls back to the tag name if the section is missing or empty.\nVERSION=\"${GITHUB_REF_NAME#v}\"\nNOTES_FILE=\"$(mktemp)\"\nawk -v ver=\"${VERSION}\" '\n  $0 ~ \"^## \\\\[\" ver \"\\\\]\" {capture=1; next}\n  capture && /^## \\[/ {exit}\n  capture {print}\n' CHANGELOG.md > \"${NOTES_FILE}\"\n\nif [ ! -s \"${NOTES_FILE}\" ]; then\n  echo \"Backpropagate ${GITHUB_REF_NAME}\" > \"${NOTES_FILE}\"\n  echo \"\" >> \"${NOTES_FILE}\"\n  echo \"See CHANGELOG.md for details.\" >> \"${NOTES_FILE}\"\nfi\n\n# Create the release if it doesn't already exist. publish.yml fires\n# on the `release: published` event — it'll upload PyPI + Docker as\n# the chain reaction. (release-binaries.yml was retired in v1.3 —\n# PyInstaller distribution is no longer part of the chain.)\n# Skipping creation when the release exists\n# makes this step idempotent (re-runs via workflow_dispatch, or\n# second pushes of the same tag, no longer fail with HTTP 422\n# \"Release.tag_name already exists\").\nif gh release view \"${GITHUB_REF_NAME}\" >/dev/null 2>&1; then\n  echo \"Release ${GITHUB_REF_NAME} already exists; skipping create.\"\nelse\n  gh release create \"${GITHUB_REF_NAME}\" \\\n    --title \"Backpropagate ${GITHUB_REF_NAME}\" \\\n    --notes-file \"${NOTES_FILE}\" \\\n    --verify-tag\nfi\n"
+        },
+        {
+          "job": "release",
+          "step": "Attach SBOMs to GH Release",
+          "text": "set -euo pipefail\nif [ -f backpropagate-sbom.cdx.json ]; then\n  gh release upload \"${GITHUB_REF_NAME}\" backpropagate-sbom.cdx.json --clobber\nelse\n  echo \"::warning::backpropagate-sbom.cdx.json missing — SBOM step may have failed\"\nfi\nif [ -f backpropagate-npm-sbom.cdx.json ]; then\n  gh release upload \"${GITHUB_REF_NAME}\" backpropagate-npm-sbom.cdx.json --clobber\nfi\n"
+        }
+      ],
+      "file": ".github/workflows/release.yml",
+      "landings": [],
+      "mentions": [
+        {
+          "job": "release",
+          "path": "CHANGELOG.md"
+        },
+        {
+          "job": "release",
+          "path": "package.json"
+        },
+        {
+          "job": "release",
+          "path": "pyproject.toml"
+        }
+      ],
+      "name": "Release",
+      "permissions": [
+        "contents:write",
+        "id-token:write"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": true,
+        "publishesTo": [
+          "npm"
+        ],
+        "releases": true
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "push",
+          "tags": [
+            "v*"
+          ]
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-node",
+        "actions/setup-python"
+      ],
+      "usesWorkflowToken": true
+    },
+    {
+      "commands": [],
+      "file": ".github/workflows/scorecard.yml",
+      "landings": [],
+      "mentions": [],
+      "name": "OpenSSF Scorecard",
+      "permissions": [
+        "actions:read",
+        "all:read",
+        "contents:read",
+        "id-token:write",
+        "security-events:write"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "branch_protection_rule"
+        },
+        {
+          "branches": [
+            "main"
+          ],
+          "event": "push"
+        },
+        {
+          "cron": "0 6 * * 1",
+          "event": "schedule"
+        },
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/upload-artifact",
+        "github/codeql-action/upload-sarif",
+        "ossf/scorecard-action"
+      ],
+      "usesWorkflowToken": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "scripts",
+      "kind": "file",
+      "to": "backpropagate"
+    },
+    {
+      "from": "tests",
+      "fromTests": true,
+      "kind": "file",
+      "to": "backpropagate"
+    },
+    {
+      "from": "tests",
+      "fromTests": true,
+      "kind": "file",
+      "to": "scripts"
+    }
+  ],
+  "generatedFrom": {
+    "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+    "tracked": 251
+  },
+  "landings": [
+    {
+      "readers": [],
+      "target": ".github",
+      "writers": [
+        {
+          "by": ".github/workflows/mutmut.yml"
+        }
+      ]
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "glob",
+          "confidence": "ast"
+        }
+      ],
+      "target": ".github/workflows",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".pre-commit-config.yaml",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": ".secrets.baseline",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml"
+        }
+      ],
+      "target": ".trivyignore",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/release.yml"
+        }
+      ],
+      "target": "CHANGELOG.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/prep_release.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "CITATION.cff",
+      "writers": [
+        {
+          "by": "scripts/prep_release.sh",
+          "confidence": "text"
+        }
+      ]
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "package.json",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "LICENSE",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.es.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.fr.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.hi.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.it.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.ja.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "package.json",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "README.md",
+      "writers": [
+        {
+          "by": "backpropagate/export.py",
+          "confidence": "weak"
+        }
+      ]
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.pt-BR.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "README.zh.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".pre-commit-config.yaml",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "verify.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "backpropagate",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/run_mutmut.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "backpropagate/checkpoints.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "backpropagate/cli.py",
+          "call": "literal",
+          "confidence": "ast"
+        },
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "backpropagate/cli.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "backpropagate/config.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "backpropagate/exceptions.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/run_mutmut.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "backpropagate/slao.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "backpropagate/ui_state.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "package.json",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "bin",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "package.json",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "bin/backpropagate.js",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "README.es.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.it.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "docs/index.md",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "site/src/content/docs/handbook/getting-started.md",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "examples/quickstart.jsonl",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "llms.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/release.yml"
+        },
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "package.json",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml"
+        },
+        {
+          "by": ".github/workflows/mutmut.yml"
+        },
+        {
+          "by": ".github/workflows/release.yml"
+        },
+        {
+          "by": ".pre-commit-config.yaml",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/prep_release.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "pyproject.toml",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/prep_release.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "scripts/check_doc_drift.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/nightly_train_smoke.py",
+          "call": "literal",
+          "confidence": "ast"
+        }
+      ],
+      "target": "scripts/nightly_train_smoke.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/train_perfect_pairs.py",
+          "call": "literal",
+          "confidence": "ast"
+        }
+      ],
+      "target": "scripts/train_perfect_pairs.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "site/src/content/docs/handbook/cli-reference.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "site/src/content/docs/handbook/env-vars.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "site/src/content/docs/handbook/error-codes.md",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/preflight.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "scripts/repin_test_count.sh",
+          "call": "literal",
+          "confidence": "text"
+        },
+        {
+          "by": "verify.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "tests",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/check_doc_drift.py",
+          "call": "read_text",
+          "confidence": "ast"
+        }
+      ],
+      "target": "tests/test_error_codes_catalog.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml"
+        }
+      ],
+      "target": "uv.lock",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/prep_release.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "verify.sh",
+      "writers": []
+    }
+  ],
+  "overlaps": [],
+  "submodules": [],
+  "symlinks": [],
+  "testFiles": 73,
+  "unassigned": []
+}

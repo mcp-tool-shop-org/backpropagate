@@ -1,0 +1,323 @@
+{
+  "authored": [
+    ".claude/",
+    "assets/",
+    "docs/",
+    "examples/",
+    "site/"
+  ],
+  "breaks": [
+    {
+      "doors": 2,
+      "importedBy": [
+        "scripts"
+      ],
+      "importedByTests": [
+        "tests"
+      ],
+      "kind": "part",
+      "name": "backpropagate"
+    },
+    {
+      "doors": 3,
+      "importedBy": [],
+      "importedByTests": [
+        "tests"
+      ],
+      "kind": "part",
+      "name": "scripts"
+    },
+    {
+      "kind": "place",
+      "readers": [
+        "scripts"
+      ],
+      "target": "CITATION.cff",
+      "writers": [
+        "scripts"
+      ]
+    }
+  ],
+  "changes": {
+    "first": true
+  },
+  "changesTogether": [
+    {
+      "a": "backpropagate/cli.py",
+      "b": "backpropagate/trainer.py",
+      "either": 53,
+      "partLabels": [
+        "backpropagate",
+        "backpropagate"
+      ],
+      "parts": [
+        "backpropagate",
+        "backpropagate"
+      ],
+      "relation": "inside",
+      "shared": 28
+    }
+  ],
+  "changesTogetherNote": [
+    "2 files changed together with their own tests, as expected.",
+    "Window: 180 days; a pair counts from 10 shared commits."
+  ],
+  "changesTogetherWithTests": 2,
+  "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+  "doors": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "landings": [],
+      "name": "CI",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 51
+        },
+        {
+          "boundary": "root",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "tests",
+          "depth": 0,
+          "files": 70
+        },
+        {
+          "boundary": "scripts",
+          "depth": 1,
+          "files": 1
+        }
+      ],
+      "runs": [
+        "backpropagate/",
+        "tests/",
+        "verify.sh"
+      ],
+      "runsCount": 3,
+      "sends": [],
+      "stages": [],
+      "triggers": [
+        "on a pull request",
+        "on a push to main touching 8 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/nightly-train-smoke.yml",
+      "landings": [],
+      "name": "Nightly Train Smoke",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "backpropagate",
+          "depth": 1,
+          "files": 18
+        }
+      ],
+      "runs": [
+        "scripts/nightly_train_smoke.py"
+      ],
+      "runsCount": 1,
+      "sends": [
+        "opens an issue when it fails"
+      ],
+      "stages": [],
+      "triggers": [
+        "on a schedule (`0 4 * * 1`), Monday at 04:00 UTC",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/doc-drift.yml",
+      "landings": [],
+      "name": "Doc Drift Check",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
+      "runs": [
+        "scripts/check_doc_drift.py"
+      ],
+      "runsCount": 1,
+      "sends": [],
+      "stages": [],
+      "triggers": [
+        "on a pull request",
+        "on a push to main touching 7 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/mutmut.yml",
+      "landings": [
+        ".github/"
+      ],
+      "name": "Mutation testing (mutmut)",
+      "pushes": true,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "opens a pull request"
+      ],
+      "stages": [
+        ".github/mutmut-baseline.txt"
+      ],
+      "triggers": [
+        "by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/scorecard.yml",
+      "landings": [],
+      "name": "OpenSSF Scorecard",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": [
+        "on a `branch_protection_rule` event",
+        "on a push to main",
+        "on a schedule (`0 6 * * 1`), Monday at 06:00 UTC",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/pages-deploy.yml",
+      "landings": [],
+      "name": "Pages deploy",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "deploys the site"
+      ],
+      "stages": [],
+      "triggers": [
+        "on a push to main touching 2 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/post-publish-smoke.yml",
+      "landings": [],
+      "name": "Post-Publish Smoke",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "opens an issue when it fails"
+      ],
+      "stages": [],
+      "triggers": [
+        "when the workflow Publish completes",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/publish.yml",
+      "landings": [],
+      "name": "Publish",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "publishes to PyPI and a container image"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a release is published",
+        "when the workflow Release completes",
+        "or by hand"
+      ]
+    },
+    {
+      "file": ".github/workflows/release.yml",
+      "landings": [],
+      "name": "Release",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "sends": [
+        "publishes to npm",
+        "creates a GitHub release"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a tag matching `v*` is pushed",
+        "or by hand"
+      ]
+    }
+  ],
+  "duplicates": [],
+  "duplicatesLead": null,
+  "duplicatesNote": [],
+  "generated": [
+    {
+      "place": ".github/",
+      "writers": [
+        ".github/workflows/mutmut.yml"
+      ]
+    },
+    {
+      "place": "CITATION.cff",
+      "writers": [
+        "scripts/prep_release.sh"
+      ]
+    }
+  ],
+  "generatedAt": "2026-09-23T14:58:25.620Z",
+  "limits": [
+    "40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "6 import sites could not be resolved.",
+    "13 writes and 39 reads use paths built at run time and are not named here."
+  ],
+  "mainDoor": ".github/workflows/ci.yml",
+  "parts": 11,
+  "readers": [],
+  "repo": "mcp-tool-shop-org/backpropagate",
+  "sequences": [],
+  "startHere": [
+    ".github/workflows/ci.yml",
+    "tests/",
+    "scripts/check_doc_drift.py"
+  ],
+  "summary": null,
+  "summaryFrom": null,
+  "testFiles": 73,
+  "testedBy": {
+    "backpropagate": 63,
+    "bin": 0,
+    "scripts": 2
+  },
+  "unread": [],
+  "unreadNote": [],
+  "untested": [
+    {
+      "part": "bin",
+      "partLabel": "bin",
+      "testedBy": 0
+    }
+  ],
+  "untestedNote": [],
+  "written": 2
+}

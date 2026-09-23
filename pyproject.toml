@@ -57,13 +57,17 @@ classifiers = [
 #   - torch `<3`: same major-version risk class for the SFT/PEFT stack; holds the
 #     tested 2.x line (CI matrix + the RTX-5080 dev rig run 2.10.x) until a 3.x
 #     smoke cell exists.
-#   - trl `<0.28` (FC-01): trl self-flags that ORPOTrainer / ORPOConfig are
-#     migrating to `trl.experimental`. The top-level imports in trainer.py
-#     (`_build_orpo_config`, `_build_trainer`) break the moment that relocation
-#     lands, so cap below the next minors where it may surface. CI + the dev rig
-#     run trl 0.24.x, which this admits. The cap is a backstop only — the import
-#     guards in trainer.py re-raise the relocation as a structured TrainingError
-#     with a working-range remedy regardless of what resolves.
+#   - trl `<2` (FC-01): the next-major cap, same doctrine as torch and
+#     transformers. The `<0.28` it replaced guarded two breaks that have since
+#     landed and are handled: trl 0.29 moved ORPO and CPO to `trl.experimental`
+#     (trainer.py resolves the top level, then the experimental module), and
+#     trl drops config fields (`max_prompt_length` left ORPOConfig/CPOConfig in
+#     0.28, KTOConfig by 0.27.2; trainer.py passes a field only when the
+#     installed config declares it). Real ORPO/SimPO/KTO training passed on trl
+#     0.24.0, 0.27.2 and 1.13.0 (RTX 5090, 2026-09-23). The [unsloth] extra
+#     still holds unsloth installs at trl<=0.24.0, unsloth's own cap, restated
+#     there; this wider range is for installs without it. `_TRL_SUPPORTED_SPEC`
+#     in trainer.py is this range, and a test keeps the two equal.
 #   - unsloth FLOOR `>=2026.6.8` + the four caps beside it in the [unsloth]
 #     extra: the same doctrine, run from the other end. Every current unsloth
 #     caps its own stack (2026.9.11: torch<2.13, transformers<=5.5.0,
@@ -87,7 +91,7 @@ dependencies = [
     "torch>=2.0.0,<3",
     "transformers>=4.46.0,<6",
     "datasets>=2.19.0",
-    "trl>=0.18.0,<0.28",
+    "trl>=0.18.0,<2",
     "peft>=0.13.0",
     "accelerate>=0.34.0",
     "bitsandbytes>=0.41.0",

@@ -1596,7 +1596,7 @@ def _build_sft_config(
 # The working trl range, as pyproject.toml declares it. Every "install a
 # working trl" remedy below quotes this string, and a test holds it equal to
 # the pyproject requirement so the cap and the advice cannot drift apart.
-_TRL_SUPPORTED_SPEC = ">=0.18,<0.28"
+_TRL_SUPPORTED_SPEC = ">=0.18,<2"
 
 
 def _config_declares(config_cls: Any, name: str) -> bool:

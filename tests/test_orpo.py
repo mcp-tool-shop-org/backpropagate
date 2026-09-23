@@ -34,6 +34,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.helpers.trl_paths import trl_patch_target
+
 # =============================================================================
 # Shared stubs / helpers
 # =============================================================================
@@ -410,6 +412,67 @@ class TestBuildORPOConfig:
         assert bool(cfg.bf16) is False
         assert bool(cfg.fp16) is False
 
+    def test_falls_back_to_trl_experimental_orpo(self):
+        """trl >= 0.29 exports ORPOConfig only from ``trl.experimental.orpo``.
+
+        A top-level ``trl`` without ORPOConfig beside an experimental module
+        that has it is the real 0.29+ layout; the builder must take the
+        experimental class rather than raise.
+        """
+        import types
+
+        from backpropagate import trainer as trainer_mod
+
+        captured: dict = {}
+
+        class _Capture(_StubORPOConfig):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                captured.update(kwargs)
+
+        experimental = types.ModuleType("trl.experimental.orpo")
+        experimental.ORPOConfig = _Capture  # type: ignore[attr-defined]
+        with patch.dict(
+            "sys.modules",
+            {"trl": types.ModuleType("trl"), "trl.experimental.orpo": experimental},
+        ), patch("torch.cuda.is_available", return_value=False):
+            trainer_mod._build_orpo_config(**_ORPO_CFG_BASE)
+
+        assert captured.get("beta") == pytest.approx(0.1)
+        assert captured.get("max_length") == 1024
+
+    def test_explicit_knob_refused_when_config_lacks_field(self):
+        """A truncation knob the installed ORPOConfig dropped is an error.
+
+        trl 0.28 removed ``max_prompt_length`` from ORPOConfig. Passing it is a
+        TypeError inside trl, and dropping it silently would train on a longer
+        prompt than the caller asked for, so the builder refuses it.
+        """
+        import dataclasses
+
+        from backpropagate import trainer as trainer_mod
+        from backpropagate.exceptions import TrainingError
+
+        @dataclasses.dataclass
+        class _Trl028ORPOConfig:  # the field layout of trl >= 0.28
+            max_length: int = 1024
+            max_completion_length: int | None = None
+
+            def __init__(self, **kwargs):  # @dataclass keeps a defined __init__
+                self.kwargs = kwargs
+
+        with patch.dict(
+            "sys.modules", {"trl": MagicMock(ORPOConfig=_Trl028ORPOConfig)}
+        ), patch("torch.cuda.is_available", return_value=False), pytest.raises(
+            TrainingError
+        ) as exc_info:
+            trainer_mod._build_orpo_config(
+                **{**_ORPO_CFG_BASE, "max_prompt_length": 256}
+            )
+
+        assert exc_info.value.code == "RUNTIME_TRAINING_FAILED"
+        assert "max_prompt_length" in str(exc_info.value)
+
 
 # =============================================================================
 # train() objective dispatch
@@ -433,8 +496,8 @@ class TestTrainORPODispatch:
         orpo_inst = self._mock_orpo_instance()
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.ORPOTrainer", return_value=orpo_inst
-        ) as m_orpo, patch("trl.SFTTrainer") as m_sft, patch("trl.ORPOConfig"):
+            trl_patch_target("ORPOTrainer"), return_value=orpo_inst
+        ) as m_orpo, patch("trl.SFTTrainer") as m_sft, patch(trl_patch_target("ORPOConfig")):
             run = trainer.train("dummy", steps=5)
 
         assert m_orpo.called, "ORPOTrainer should be constructed for method='orpo'."
@@ -454,8 +517,8 @@ class TestTrainORPODispatch:
         orpo_inst = self._mock_orpo_instance()
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.ORPOTrainer", return_value=orpo_inst
-        ), patch("trl.SFTTrainer"), patch("trl.ORPOConfig"), patch.object(
+            trl_patch_target("ORPOTrainer"), return_value=orpo_inst
+        ), patch("trl.SFTTrainer"), patch(trl_patch_target("ORPOConfig")), patch.object(
             trainer_mod, "_apply_train_on_responses_only"
         ) as m_apply:
             trainer.train("dummy", steps=5)
@@ -485,8 +548,8 @@ class TestTrainORPODispatch:
         # Force the Windows branch ON via os.name + the setting; assert
         # _pre_tokenize is still NOT called because method='orpo' gates it.
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.ORPOTrainer", return_value=orpo_inst
-        ), patch("trl.SFTTrainer"), patch("trl.ORPOConfig"), patch(
+            trl_patch_target("ORPOTrainer"), return_value=orpo_inst
+        ), patch("trl.SFTTrainer"), patch(trl_patch_target("ORPOConfig")), patch(
             "backpropagate.trainer.os.name", "nt"
         ), patch(
             "backpropagate.config.settings.windows.pre_tokenize", True
@@ -510,8 +573,8 @@ class TestTrainORPODispatch:
         orpo_inst = self._mock_orpo_instance()
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.ORPOTrainer", return_value=orpo_inst
-        ), patch("trl.SFTTrainer"), patch("trl.ORPOConfig"):
+            trl_patch_target("ORPOTrainer"), return_value=orpo_inst
+        ), patch("trl.SFTTrainer"), patch(trl_patch_target("ORPOConfig")):
             run = trainer.train("dummy", steps=5)
 
         record = RunHistoryManager(str(temp_dir)).get_run(run.run_id)
@@ -536,13 +599,13 @@ class TestTrainORPODispatch:
         script = _ORPOOOMScript(oom_count=1)  # one OOM then success
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.ORPOTrainer", side_effect=script.factory
+            trl_patch_target("ORPOTrainer"), side_effect=script.factory
         ), patch(
             "trl.SFTTrainer",
             side_effect=AssertionError(
                 "SFTTrainer must NOT be constructed on an ORPO OOM-retry"
             ),
-        ), patch("trl.ORPOConfig"):
+        ), patch(trl_patch_target("ORPOConfig")):
             run = trainer.train("dummy", steps=5)
 
         assert script.train_calls == 2, (
@@ -584,7 +647,7 @@ class TestORPOWarningsIssuedShim:
         trainer._model = model
         assert not hasattr(model, "warnings_issued")  # precondition
 
-        with patch("trl.ORPOTrainer", return_value=MagicMock()) as m_orpo:
+        with patch(trl_patch_target("ORPOTrainer"), return_value=MagicMock()) as m_orpo:
             trainer._build_trainer(MagicMock(), MagicMock(), [])
 
         assert m_orpo.called
@@ -599,7 +662,7 @@ class TestORPOWarningsIssuedShim:
         model.warnings_issued = {"estimate_tokens": True, "preexisting": 1}
         trainer._model = model
 
-        with patch("trl.ORPOTrainer", return_value=MagicMock()):
+        with patch(trl_patch_target("ORPOTrainer"), return_value=MagicMock()):
             trainer._build_trainer(MagicMock(), MagicMock(), [])
 
         assert model.warnings_issued == {"estimate_tokens": True, "preexisting": 1}, (

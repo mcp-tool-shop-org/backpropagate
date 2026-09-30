@@ -37,6 +37,29 @@ import torch
 
 GB = 1024 ** 3
 
+
+def mem_breakdown():
+    """RssAnon / RssFile / RssShmem (GiB) + the CUDA pinned host-allocator stats."""
+    out = {}
+    try:
+        for line in open("/proc/self/status"):
+            if line.startswith(("RssAnon", "RssFile", "RssShmem")):
+                k, v = line.split(":")
+                out[k] = round(int(v.split()[0]) / 2**20, 2)
+    except OSError:
+        pass
+    try:
+        hs = torch.cuda.host_memory_stats()
+        for k in ("allocated_bytes.current", "reserved_bytes.current", "active_bytes.current"):
+            if k in hs:
+                out["pinned_" + k.split(".")[0]] = round(hs[k] / GB, 2)
+        if not any(k.startswith("pinned_") for k in out):
+            out["host_stats_keys"] = sorted(hs)[:12]
+    except Exception as e:  # noqa: BLE001
+        out["host_stats_err"] = str(e)[:80]
+    return out
+
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
 ap.add_argument("--engine", choices=["hf", "fsdp2"], required=True)
@@ -49,6 +72,8 @@ ap.add_argument("--seq", type=int, default=256)
 ap.add_argument("--batch", type=int, default=2)
 ap.add_argument("--precision-check", action="store_true")
 ap.add_argument("--no-pin", action="store_true")
+ap.add_argument("--register", action="store_true", help="pin_memory=False + cudaHostRegister the param storage (no pinned-allocator rounding/caching)")
+ap.add_argument("--empty-host-cache", action="store_true")
 ap.add_argument("--opt-device", default="cpu")
 ap.add_argument("--malloc-trim", action="store_true")
 ap.add_argument("--seed", type=int, default=0)
@@ -162,7 +187,22 @@ off = CPUOffloadPolicy(pin_memory=not args.no_pin)
 for layer in model.model.layers:
     fully_shard(layer, mp_policy=mp, offload_policy=off)
 fully_shard(model, mp_policy=mp, offload_policy=off)
+if args.register:
+    _cudart = torch.cuda.cudart()
+    _seen, _reg_ok, _reg_fail = set(), 0, 0
+    for p in model.parameters():
+        st = p.to_local().untyped_storage()
+        if st.data_ptr() in _seen:
+            continue
+        _seen.add(st.data_ptr())
+        rc = _cudart.cudaHostRegister(st.data_ptr(), st.nbytes(), 0)
+        if int(rc) == 0:
+            _reg_ok += 1
+        else:
+            _reg_fail += 1
+    receipt["host_register"] = {"ok": _reg_ok, "failed": _reg_fail}
 receipt["rss_after_shard_gb"] = round(psutil.Process().memory_info().rss / GB, 3)
+receipt["mem_after_shard"] = mem_breakdown()
 params = [p for p in model.parameters() if p.requires_grad]
 n = sum(p.numel() for p in params)
 receipt["num_params"] = n
@@ -172,6 +212,7 @@ receipt["param_device"] = str(params[0].to_local().device)
 
 def local(t):
     return t.to_local() if isinstance(t, DTensor) else t
+
 
 
 def _round_into(p32: torch.Tensor, dst: torch.Tensor, mode: str, comp: torch.Tensor | None):
@@ -288,7 +329,7 @@ if args.precision_check:
 
 torch.cuda.reset_peak_memory_stats()
 mon.reset_phase()
-losses, times, grad_bytes, phases, rss_steps = [], [], None, [], []
+losses, times, grad_bytes, phases, rss_steps, mem_steps, mem_bwd = [], [], None, [], [], [], []
 model.train()
 for step in range(args.steps):
     i = step % nb
@@ -299,6 +340,8 @@ for step in range(args.steps):
     torch.cuda.synchronize(); t1 = time.perf_counter(); r1 = psutil.Process().memory_info().rss
     out.loss.backward()
     torch.cuda.synchronize(); t2 = time.perf_counter(); r2 = psutil.Process().memory_info().rss
+    if step < 2:
+        mem_bwd.append(mem_breakdown())
     if grad_bytes is None:
         gl = [local(p.grad) for p in params if p.grad is not None]
         grad_bytes = sum(g.numel() * g.element_size() for g in gl)
@@ -311,7 +354,11 @@ for step in range(args.steps):
     times.append(time.perf_counter() - t0)
     if _libc is not None:
         _libc.malloc_trim(0)
+    if args.empty_host_cache:
+        torch._C._host_emptyCache()
     rss_steps.append(round(psutil.Process().memory_info().rss / GB, 2))
+    if step < 3:
+        mem_steps.append(mem_breakdown())
     phases.append({"fwd_s": round(t1 - t0, 2), "bwd_s": round(t2 - t1, 2), "opt_s": round(t3 - t2, 2),
                    "rss_fwd": round(r1 / GB, 2), "rss_bwd": round(r2 / GB, 2), "rss_opt": round(r3 / GB, 2)})
     losses.append(round(out.loss.item(), 4))
@@ -333,6 +380,8 @@ receipt.update(
     losses=losses,
     phases=phases[:3],
     rss_per_step=rss_steps,
+    mem_steps=mem_steps,
+    mem_after_bwd=mem_bwd,
     s_per_step=round(sum(times[1:]) / max(1, len(times) - 1), 3),
     host_param_B_per_param=round(param_bytes / n, 3),
     host_grad_B_per_param=round((grad_bytes or 0) / n, 3),

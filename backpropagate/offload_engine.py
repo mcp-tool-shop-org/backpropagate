@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
 import time
 from collections.abc import Callable
@@ -208,6 +209,44 @@ def _decoder_layers(model: Any) -> list[Any]:
     return best
 
 
+def _pin_mode() -> str:
+    """How host params are page-locked: "register" (default), "pinned" or "none".
+
+    * ``pinned``: ``CPUOffloadPolicy(pin_memory=True)``. Fastest, but it copies
+      params AND every step's grads through torch's pinned caching allocator,
+      which rounds each block up to a power of two. For Qwen2.5-7B that grows
+      host RAM ~1.8x (a 3584x18944 MLP weight, 136 MB, takes a 256 MB block).
+      MEASURED: the 7B run crossed a 60 GB ceiling (~56 GB during steps).
+    * ``register`` (default): ``pin_memory=False``, then ``cudaHostRegister``
+      the existing param storage in place, with no copy and no rounding. H2D
+      stays DMA-fast. Grads use pageable memory: exact size, but a slower
+      blocking D2H in backward.
+    * ``none``: pageable everything (slowest, smallest).
+    """
+    mode = os.environ.get("BACKPROPAGATE_OFFLOAD_PIN", "register").strip().lower()
+    return mode if mode in {"register", "pinned", "none"} else "register"
+
+
+def register_host_params(model: Any) -> list[int]:
+    """Page-lock each param's CPU storage in place; returns the registered pointers."""
+    cudart = torch.cuda.cudart()
+    done: list[int] = []
+    for p in model.parameters():
+        st = _local(p).untyped_storage()
+        ptr = st.data_ptr()
+        if ptr in done or st.device.type != "cpu" or st.nbytes() == 0:
+            continue
+        if int(cudart.cudaHostRegister(ptr, st.nbytes(), 0)) == 0:
+            done.append(ptr)
+    return done
+
+
+def unregister_host_params(ptrs: list[int]) -> None:
+    cudart = torch.cuda.cudart()
+    for ptr in ptrs:
+        cudart.cudaHostUnregister(ptr)
+
+
 def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16) -> Any:
     """Apply FSDP2 ``fully_shard`` + CPU offload in place, keeping param dtype.
 
@@ -222,7 +261,7 @@ def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat1
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     param_dtype = next(model.parameters()).dtype
     mp = MixedPrecisionPolicy(param_dtype=compute_dtype, reduce_dtype=param_dtype)
-    off = CPUOffloadPolicy(pin_memory=True)
+    off = CPUOffloadPolicy(pin_memory=_pin_mode() == "pinned")
     layers = _decoder_layers(model)
     if not layers:
         raise RuntimeError("full_ft_offload: could not find the model's decoder-layer ModuleList to shard.")
@@ -288,6 +327,37 @@ def run_offload_training(
     device = torch.device("cuda", torch.cuda.current_device())
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = shard_for_cpu_offload(model, compute_dtype=compute_dtype)
+    registered = register_host_params(model) if _pin_mode() == "register" else []
+    try:
+        return _train_loop(
+            model, tokenizer, dataset, steps=steps, batch_size=batch_size,
+            gradient_accumulation=gradient_accumulation, learning_rate=learning_rate,
+            max_seq_length=max_seq_length, warmup_steps=warmup_steps,
+            lr_scheduler_type=lr_scheduler_type, weight_decay=weight_decay,
+            rng=rng, device=device, on_step=on_step,
+        )
+    finally:
+        # Unregister before anything can free the storage (save() only reads it).
+        unregister_host_params(registered)
+
+
+def _train_loop(
+    model: Any,
+    tokenizer: Any,
+    dataset: Any,
+    *,
+    steps: int,
+    batch_size: int,
+    gradient_accumulation: int,
+    learning_rate: float,
+    max_seq_length: int,
+    warmup_steps: int,
+    lr_scheduler_type: str,
+    weight_decay: float,
+    rng: random.Random,
+    device: torch.device,
+    on_step: Callable[[int, float], None] | None,
+) -> dict[str, Any]:
     optimizer = OffloadAdafactor(
         [p for p in model.parameters() if p.requires_grad],
         lr=learning_rate,

@@ -18,28 +18,32 @@ of #132 and #133:
 3. **Check that the GGUF is real.** The file must start with the ``GGUF``
    magic, have a sane version, and hold tensors plus a KV table that parses.
    ``general.architecture`` must be present.
-4. **Ollama.** If a daemon is reachable, the GGUF is registered under a
-   throwaway name, a few tokens are generated, and the model is removed. If no
-   daemon is reachable, the test skips and says why.
+4. **Ollama.** With the default ``q4_k_m`` and ``--ollama``, the export must
+   succeed with neither Unsloth's GGUF path nor a compiled llama.cpp. The
+   source converter writes f16, and ``ollama create --quantize q4_K_M``
+   quantizes it. The test checks the registered model's level, generates a
+   few tokens, and removes it. If no daemon is reachable, the test skips and
+   says why.
 
 Tests
 -----
-* ``test_merged_export_from_checkpoint`` is the #132 regression. It runs
-  ``--format merged`` from the checkpoint and needs no GGUF tooling, so it runs
-  wherever CUDA and the model are available.
-* ``test_gguf_export_llama_cpp_fallback`` covers the #133 path. It runs
-  ``--format gguf --quantization q8_0`` through llama.cpp's
-  ``convert_hf_to_gguf.py``. It skips unless ``BACKPROPAGATE_LLAMA_CPP_PATH``
-  resolves to the script, and asserts ``general.name`` is not derived from the
-  temp directory name.
-* ``test_gguf_export_unsloth`` covers the default ``q4_k_m`` path through
-  Unsloth's ``save_pretrained_gguf``. It skips unless Unsloth is installed
-  and Unsloth's own llama.cpp build (``~/.unsloth/llama.cpp`` or
-  ``UNSLOTH_LLAMA_CPP_PATH``) is already in place. The export subprocess sets
-  ``UNSLOTH_AUTO_INSTALL=0``, because on Windows Unsloth would otherwise
-  ``winget install`` CMake, OpenSSL and VS Build Tools, accepting their
-  licence agreements. A smoke must never change the host system.
-* ``test_ollama_roundtrip`` registers whichever GGUF the run produced.
+* ``test_merged_export_from_checkpoint`` is the #132 regression
+  (``--format merged`` from the checkpoint; no GGUF tooling needed).
+* ``test_gguf_export_llama_cpp_fallback`` covers the #133 path: ``q8_0``
+  through ``convert_hf_to_gguf.py``, with a sane ``general.name``. It needs
+  ``BACKPROPAGATE_LLAMA_CPP_PATH``.
+* ``test_gguf_export_unsloth`` covers ``q4_k_m`` through Unsloth's
+  ``save_pretrained_gguf``. It skips unless Unsloth's own llama.cpp build is
+  already in place, because backpropagate never lets Unsloth install system
+  packages to build one.
+* ``test_default_q4_k_m_to_ollama`` is the README promise, end to end.
+* ``test_trainer_export_merged_in_memory`` and
+  ``test_trainer_export_gguf_in_memory`` cover the library path
+  (``trainer.export(...)`` from a live QLoRA trainer). It reloads onto a
+  16-bit base, the same as the CLI.
+
+The checkpoint fixture records which backend actually trained (Unsloth, or
+transformers after a fallback) into the ``gpu_smoke.sh`` receipt.
 
 Gating
 ------
@@ -305,17 +309,21 @@ def workdir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("golden_path")
 
 
-@pytest.fixture(scope="module")
-def checkpoint(workdir: Path) -> Path:
-    """QLoRA 4-bit SFT, 2 steps, with the Trainer's defaults. Returns checkpoint-N."""
-    import gc
+def _record_fact(key: str, value: str) -> None:
+    """Add a line to the gpu_smoke.sh receipt (GPU_SMOKE_FACTS), and print it."""
+    line = f"{key:<13} {value}"
+    print(line)
+    facts = os.environ.get("GPU_SMOKE_FACTS")
+    if facts:
+        with open(facts, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
 
-    import torch
 
+def _train_tiny(output_dir: Path) -> Any:
+    """QLoRA 4-bit SFT, 2 steps, with the Trainer's defaults. Returns the Trainer."""
     from backpropagate.trainer import Trainer, TrainingRun
 
     assert _QUICKSTART.is_file(), f"missing {_QUICKSTART}"
-    output_dir = workdir / "output"
     trainer = Trainer(
         model=_SMOKE_MODEL,
         max_seq_length=256,
@@ -334,6 +342,25 @@ def checkpoint(workdir: Path) -> Path:
     assert any(type(m).__name__ == "Linear4bit" for m in trainer.model.modules()), (
         "expected a bitsandbytes 4-bit base (QLoRA default); found no Linear4bit"
     )
+    return trainer
+
+
+@pytest.fixture(scope="module")
+def checkpoint(workdir: Path) -> Path:
+    """Train with the defaults; return the checkpoint-N a user would export."""
+    import gc
+
+    import torch
+
+    output_dir = workdir / "output"
+    trainer = _train_tiny(output_dir)
+    # A silent Unsloth -> transformers fallback must be a visible fact. The
+    # Trainer flips use_unsloth to False when its Unsloth load fails.
+    if _unsloth_installed():
+        backend = "unsloth" if trainer.use_unsloth else "transformers (Unsloth installed; its load FAILED and fell back)"
+    else:
+        backend = "transformers (Unsloth not installed)"
+    _record_fact("trained with", backend)
 
     ckpts = sorted(output_dir.glob("checkpoint-*"))
     assert ckpts, f"trainer wrote no checkpoint-N under {output_dir}"
@@ -436,46 +463,90 @@ def test_gguf_export_unsloth(unsloth_gguf: Path) -> None:
     _assert_real_gguf(unsloth_gguf)
 
 
-def test_ollama_roundtrip(request: pytest.FixtureRequest) -> None:
-    """Register the exported GGUF with Ollama, generate a few tokens, remove it."""
+def _ollama_generate(name: str) -> dict[str, Any]:
+    body = json.dumps({
+        "model": name,
+        "prompt": "What is LoRA?",
+        "stream": False,
+        "options": {"num_predict": 8, "temperature": 0},
+    }).encode()
+    req = urllib.request.Request(
+        f"{_ollama_host()}/api/generate", data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=300) as r:  # noqa: S310 - local daemon
+        return dict(json.loads(r.read().decode("utf-8")))
+
+
+def _ollama_quantization(name: str) -> str:
+    req = urllib.request.Request(
+        f"{_ollama_host()}/api/show", data=json.dumps({"model": name}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 - local daemon
+        info = json.loads(r.read().decode("utf-8"))
+    return str(info.get("details", {}).get("quantization_level", ""))
+
+
+def test_default_q4_k_m_to_ollama(checkpoint: Path, workdir: Path) -> None:
+    """The README promise: `backprop export <ckpt> --format gguf --ollama` at the
+    default q4_k_m works with no Unsloth GGUF path and no compiled llama.cpp.
+
+    The llama.cpp source converter writes an f16 GGUF, and
+    `ollama create --quantize q4_K_M` quantizes it.
+    """
     if not _ollama_reachable():
         pytest.skip(
             f"Ollama daemon not reachable at {_ollama_host()} (or `ollama` not on "
             "PATH); start it with `ollama serve` to run the registration stage."
         )
-    gguf: Path | None = None
-    skipped: list[str] = []
-    for fixture_name in ("fallback_gguf", "unsloth_gguf"):
-        try:
-            gguf = request.getfixturevalue(fixture_name)
-            break
-        except pytest.skip.Exception as e:
-            skipped.append(f"{fixture_name}: {e}")
-    if gguf is None:
-        pytest.skip("no GGUF backend available to produce a model for Ollama; " + " | ".join(skipped))
-
-    from backpropagate.export import list_ollama_models, register_with_ollama, remove_ollama_model
+    script = _llama_cpp_convert_script()
+    if script is None:
+        pytest.skip(
+            "set BACKPROPAGATE_LLAMA_CPP_PATH to a llama.cpp source clone (the "
+            "converter; no compiled binaries needed) to run the Ollama stage."
+        )
+    from backpropagate.export import _find_llama_quantize, remove_ollama_model
 
     name = f"bp-golden-smoke-{uuid.uuid4().hex[:8]}"
+    out_dir = workdir / "gguf_ollama"
     try:
-        assert register_with_ollama(gguf, name) is True
-        listed = list_ollama_models()
-        assert any(m == name or m.startswith(f"{name}:") for m in listed), (
-            f"{name} not in `ollama list`: {listed}"
+        proc = _run_cli(
+            ["export", str(checkpoint), "--format", "gguf",  # --quantization defaults to q4_k_m
+             "--output", str(out_dir), "--ollama", "--ollama-name", name],
+            cwd=workdir,
         )
-        body = json.dumps({
-            "model": name,
-            "prompt": "What is LoRA?",
-            "stream": False,
-            "options": {"num_predict": 8, "temperature": 0},
-        }).encode()
-        req = urllib.request.Request(
-            f"{_ollama_host()}/api/generate", data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=300) as r:  # noqa: S310 - local daemon
-            reply = json.loads(r.read().decode("utf-8"))
+        out = _assert_cli_ok(proc, "backprop export --format gguf --ollama (default q4_k_m)")
+        if _find_llama_quantize(script) is None and "Unsloth: Merge" not in out:
+            assert "Ollama will quantize the f16 GGUF to q4_K_M" in out, out[-4000:]
+            _record_fact("q4_k_m route", "llama.cpp converter f16 -> ollama create --quantize q4_K_M")
+        assert _ollama_quantization(name).upper() == "Q4_K_M", _ollama_quantization(name)
+        reply = _ollama_generate(name)
         assert reply.get("done") is True, reply
         assert reply.get("eval_count", 0) > 0, f"Ollama generated no tokens: {reply}"
     finally:
         remove_ollama_model(name)
+
+
+def test_trainer_export_merged_in_memory(workdir: Path) -> None:
+    """trainer.export("merged") from a live QLoRA trainer yields a 16-bit model."""
+    trainer = _train_tiny(workdir / "inmem_merged")
+    result = trainer.export("merged", output_dir=str(workdir / "inmem_merged_out"))
+    assert trainer.model is None, "the trained model should be freed before the reload"
+    config = json.loads((Path(result.path) / "config.json").read_text(encoding="utf-8"))
+    assert "quantization_config" not in config, config.get("quantization_config")
+
+
+def test_trainer_export_gguf_in_memory(workdir: Path) -> None:
+    """trainer.export("gguf") from a live QLoRA trainer yields a real GGUF.
+
+    Before the fix the transformers path merged into the 4-bit base and the
+    converter refused it: "Quant method is not yet supported: 'bitsandbytes'".
+    """
+    if _llama_cpp_convert_script() is None:
+        pytest.skip("set BACKPROPAGATE_LLAMA_CPP_PATH to run the in-memory GGUF export.")
+    trainer = _train_tiny(workdir / "inmem_gguf")
+    result = trainer.export("gguf", quantization="q8_0",
+                            output_dir=str(workdir / "inmem_gguf_out"))
+    assert trainer.model is None
+    _assert_real_gguf(Path(result.path))

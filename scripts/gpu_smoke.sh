@@ -69,6 +69,21 @@ fi
 
 LOGDIR="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/gpu_smoke.$$")"
 mkdir -p "$LOGDIR"
+# Facts the smokes record for the receipt (e.g. which backend actually trained).
+export GPU_SMOKE_FACTS="$LOGDIR/facts.txt"
+: >"$GPU_SMOKE_FACTS"
+
+# Host-mutation check: installer processes present before vs. after each smoke.
+installer_pids() {
+    if command -v tasklist >/dev/null 2>&1; then
+        tasklist //FO CSV //NH 2>/dev/null | grep -iE '^"(winget|msiexec|AppInstallerCLI)\.exe"' \
+            | cut -d, -f2 | tr -d '"' | sort
+    else
+        pgrep -x 'apt-get|apt|dpkg|brew' 2>/dev/null | sort
+    fi
+}
+INSTALLERS_BEFORE="$(installer_pids)"
+NEW_INSTALLERS=""
 
 declare -a RESULTS=()
 FAILED=0
@@ -80,6 +95,8 @@ for smoke in "${SMOKES[@]}"; do
     "$PY" -m pytest "$smoke" -m "slow or integration" --timeout=0 -p no:cacheprovider \
         -q -rs >"$log" 2>&1
     rc=$?
+    new="$(comm -13 <(printf '%s\n' "$INSTALLERS_BEFORE") <(installer_pids) | grep -v '^$')"
+    [ -n "$new" ] && NEW_INSTALLERS="$NEW_INSTALLERS $name:$(echo "$new" | tr '\n' ',')"
     summary="$(grep -E '^=+ .*(passed|failed|skipped|error|no tests ran).* =+$' "$log" | tail -n 1 | sed -E 's/^=+ //; s/ =+$//')"
     if [ "$rc" -eq 0 ]; then
         if grep -Eq '(^|[^0-9])[0-9]+ passed' <<<"$summary"; then
@@ -136,6 +153,13 @@ echo "git           ${SHA}${DIRTY}"
 echo "gpu           ${GPU}"
 echo "${STACK}"
 echo "llama.cpp     ${BACKPROPAGATE_LLAMA_CPP_PATH:-unset}"
+[ -s "$GPU_SMOKE_FACTS" ] && sort -u "$GPU_SMOKE_FACTS"
+if [ -n "$NEW_INSTALLERS" ]; then
+    echo "installers    NEW installer processes appeared:$NEW_INSTALLERS"
+    FAILED=1
+else
+    echo "installers    none spawned (winget/msiexec PIDs unchanged across the run)"
+fi
 echo "---------------------------------------------------"
 for r in "${RESULTS[@]}"; do echo "$r"; done
 echo "---------------------------------------------------"

@@ -78,7 +78,7 @@ Backpropagate sizes the run to your card. These are **measured** numbers from 20
 | **14B** (Qwen2.5-14B) | QLoRA | **25.0 GiB** peak at 4096 context (28.1 GiB reserved). |
 | 24B (Mistral-Small-24B) | QLoRA | 26.5 GiB peak at 4096 context (29.6 GiB reserved). |
 | **32B** (Qwen2.5-32B) | QLoRA | **Just fits:** 28.8 GiB peak at 2048 context (30.7 GiB reserved, about 0.65 GiB to spare). |
-| 1.5B–3B | `mode="full"` (true full fine-tuning, on the GPU) | 1.5B: 6.7 GB. 3B: 12.6 GB at batch 4, 512 context, 0.63 s/step. |
+| 1.5B–3B | `mode="full"` (true full fine-tuning, on the GPU) | Trains. Peak VRAM not yet measured correctly: the optimizer state is paged memory that PyTorch's counters do not see, so it will be above the 6.7 GB (1.5B) and 12.6 GB (3B) they reported. |
 | **7B-class** (Qwen2.5-7B, 7.6B params) | `mode="full" --full-ft-offload` | **Trains:** 5.3 GiB VRAM, **30.8 GiB host RAM** (32.2 GiB while saving), **14.7 s/step**. Linux or WSL2 only. |
 
 Not re-measured in that session: 7B QLoRA, Llama-3.1-8B (gated repository, no token on the test machine), and pure-GPU full fine-tuning above 3B. Figures for those elsewhere in the docs are estimates.
@@ -89,8 +89,8 @@ Two things most single-GPU libraries send you elsewhere for, **24–32B QLoRA** 
 
 `--full-ft-offload` keeps weights and gradients in host RAM and streams them to the GPU (FSDP2 CPU offload). What it costs, measured:
 
-- **Host RAM:** about 3.7 GiB per billion parameters plus 10 GiB. The run is refused up front, with the numbers, if the machine cannot hold it. A 7.6B model does not fit under a 28 GB WSL2 memory cap; about 5B is the practical limit there.
-- **Speed:** 14.7 s/step at 7.6B and 5.1 s/step at 3B, against 0.63 s/step for 3B on the GPU. Use it only when the model does not fit without it.
+- **Host RAM:** the fit check asks for about 3.7 GiB per billion parameters plus 10 GiB, which is conservative (39 GiB at 7.6B against the 32.2 GiB measured). The run is refused up front, with the numbers, if the machine cannot hold it. A 7.6B model does not fit under a 28 GB WSL2 memory cap; about 5B is the practical limit there.
+- **Speed:** 14.7 s/step at 7.6B (batch 1) and 5.1 s/step at 3B (batch 4), against about 0.63 s/step for 3B on the GPU at batch 4. Use it only when the model does not fit without it. A faster version is planned.
 - **Optimizer:** Adafactor, not AdamW. Weights stay in bf16 and each update is written back with stochastic rounding; there is no fp32 copy.
 - **Quality:** on one 3B run (150 steps, held-out loss, one seed) it reached about 85% of the improvement that ordinary full fine-tuning got (2.45 → 1.93 against 2.45 → 1.84). One seed is not a benchmark.
 - **Scope:** plain supervised fine-tuning. No packing, no response-only masking, no intermediate checkpoints, no resume. Linux or WSL2 only (FSDP2 needs NCCL); on Windows-native it stops with `DEP_FSDP_UNAVAILABLE`.
@@ -100,7 +100,7 @@ A model that does not fit exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` and names
 
 ### Scales down to 16 GB
 
-The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA, and true full fine-tuning of a ~3B model (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) via `mode="full"`, which measured 12.6 GB at 3B. With `--full-ft-offload` the GPU holds far less: with VRAM capped on the test card, a 3B model trained under a 6 GiB cap and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps on a 32 GB card, not runs on real 8 GB hardware. The same code picks the batch size and ceiling that fit whatever card it detects.
+The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA, and true full fine-tuning of a ~3B model (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) via `mode="full"`, (its peak VRAM at 3B is being re-measured; the earlier 12.6 GB figure missed the optimizer state). With `--full-ft-offload` the GPU holds far less: with VRAM capped on the test card, a 3B model trained under a 6 GiB cap and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps on a 32 GB card, not runs on real 8 GB hardware. The same code picks the batch size and ceiling that fit whatever card it detects.
 
 2-bit quantization (AQLM / QuIP#) stays **out of scope** — a 2-bit base can't be cleanly merged back into full-precision weights, which breaks the mergeable-adapter → GGUF → Ollama export contract (the whole point of the pipeline). The headroom levers Backpropagate ships instead — QLoRA, `mode="full"`, `--full-ft-offload`, and the FP8 compute path (`--fp8`, Blackwell/Hopper) — all stay mergeable and exportable.
 

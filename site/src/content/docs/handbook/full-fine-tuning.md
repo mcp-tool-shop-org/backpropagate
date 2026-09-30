@@ -15,7 +15,7 @@ This page covers when full fine-tuning is worth it, both paths, and the measured
 ## TL;DR
 
 - **Default is `mode="lora"`.** For most instruction, persona and style work on modest datasets, LoRA applied to every layer is the better use of one card. See [the evidence](#lora-or-full-fine-tuning-the-evidence) — it is more mixed than "LoRA always matches".
-- **On the GPU, the ceiling is card-aware:** 16 GB → 4B, 24 GB → 5B, 32 GB → 6B. Those caps come from memory arithmetic; they have been *measured* only up to 3B (12.6 GB at 3B, batch 4, 512 tokens).
+- **On the GPU, the ceiling is card-aware:** 16 GB → 4B, 24 GB → 5B, 32 GB → 6B. Those caps come from memory arithmetic. Runs up to 3B are measured to train; their peak VRAM is being re-measured (see below).
 - **`--full-ft-offload` trains a 7.6B model on a 32 GB card** (*measured*: 5.3 GiB VRAM, 30.8 GiB host RAM, 14.7 s/step). The run is checked up front and refused, with the numbers, if the machine cannot hold it.
 - **`--full-ft-ceiling-billions B`** overrides the ceiling (and turns a failed offload fit check into a warning) when you know better.
 
@@ -83,8 +83,10 @@ Weights (2 B/param) + gradients (2 B/param) + 8-bit optimizer state (~2 B/param)
 |---|---|---|
 | 16 GB | 4B | — |
 | 24 GB | 5B | — |
-| 32 GB | 6B | 1.5B: 6.7 GB. 3B: 12.6 GB (batch 4, 512 tokens, about 0.63 s/step including startup) |
+| 32 GB | 6B | 1.5B and 3B train. PyTorch reported 6.7 GB and 12.6 GB, but that misses the optimizer state (see note). |
 | 48 GB+ | 10B | — |
+
+**Note on the measured figures.** `paged_adamw_8bit` keeps its state in CUDA managed memory, which bitsandbytes allocates outside PyTorch's allocator, so `torch.cuda.max_memory_allocated()` does not include it. The true peak for full fine-tuning on the GPU is higher than PyTorch reports, by up to about 2 bytes per parameter. System-wide measurements are planned.
 
 The ceiling bounds the parameter **count**. It does not promise a fit at every sequence length. It is checked when the `Trainer` is created (from the preset table or model id) and again after loading (from the actual parameter count). A model over the ceiling exits `2` with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`; the error names `--full-ft-offload` when offload would fit it, and LoRA / QLoRA when it would not.
 
@@ -94,22 +96,22 @@ The offload engine keeps each weight and its gradient in host RAM in bf16, and s
 
 ### Measured on an RTX 5090
 
-| Model | Host RAM peak | VRAM (allocated / reserved) | Speed |
-|---|---|---|---|
-| Qwen2.5-7B (7.6B) | 30.8 GiB training, 32.2 GiB with save + reload | 5.3 / 14.7 GiB | 14.7 s/step |
-| Qwen3-4B | 25.1 GiB with save + reload | — | 4.3 s/step |
-| SmolLM3-3B | — | 4.3 GiB at batch 4 | 5.1 s/step |
-| Qwen2.5-1.5B | — | — | 1.8 s/step |
+| Model | Batch | Host RAM peak | VRAM (allocated / reserved) | Speed |
+|---|---|---|---|---|
+| Qwen2.5-7B (7.6B) | 1 | 30.8 GiB training, 32.2 GiB with save + reload | 5.3 / 14.7 GiB | 14.7 s/step |
+| Qwen3-4B | 1 | 25.1 GiB with save + reload | — | 4.3 s/step |
+| SmolLM3-3B | 4 | — | 4.3 GiB | 5.1 s/step |
+| Qwen2.5-1.5B | 1 | — | — | 1.8 s/step |
 
-All at 512 tokens. At 2048 tokens the 7.6B step was still 14.7 s: the run is limited by moving weights over PCIe, not by compute.
+All at 512 tokens. The engine keeps everything in PyTorch-allocated memory, so these VRAM figures are complete. At 2048 tokens the 7.6B step was still 14.7 s: the run is limited by moving weights over PCIe, not by compute.
 
 With VRAM capped on the same card, a 3B model trained under a 6 GiB cap, and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps, not runs on real 8 GB hardware.
 
 ### What it costs
 
-- **Speed.** About 8× slower than training on the GPU at 3B (5.1 against 0.63 s/step). Use it only when the model does not fit without it.
+- **Speed.** About 8× slower than training on the GPU at 3B (5.1 against about 0.63 s/step, both at batch 4). Use it only when the model does not fit without it. The optimizer currently re-reads every weight and gradient from host RAM after the backward pass; folding it into the backward pass should cut the traffic by about half, and that work is planned.
 - **Optimizer: Adafactor, not AdamW.** It keeps no momentum and factors the second moment, so its state is a few MB even at 7B. The published evidence for Adafactor on LLM fine-tuning is thinner than for AdamW.
-- **No fp32 copy of the weights.** Weights stay in bf16, and each update is written back with **stochastic rounding**. Round-to-nearest drops most small updates at a full fine-tuning learning rate: in our runs only about 17% of each intended update survived it, and the run stopped learning. Stochastic rounding keeps all of it on average. The engine measures the surviving fraction on every step and records it with the run.
+- **No fp32 copy of the weights.** Weights stay in bf16, and each update is written back with **stochastic rounding**. Round-to-nearest drops most small updates at a full fine-tuning learning rate: in our runs only about 17% of each intended update survived it, and the run stopped learning. Stochastic rounding keeps all of it on average. The engine records the surviving fraction every step; with stochastic rounding it stays near 1 by construction, so it confirms the write-back works rather than measuring training health.
 - **Quality.** On one 3B run (Dolly-15k, 400 training examples, 150 held-out, 150 steps, one seed), held-out loss went from 2.45 to 1.93 with offload and to 1.84 with ordinary full fine-tuning on the GPU: about 85% of the improvement. The two paths use different optimizers, so this compares recipes, not just precision. One seed is not a benchmark.
 - **Scope.** Plain supervised fine-tuning over the whole sequence. No packing, no response-only masking, no intermediate checkpoints (it saves at the end), no resume. `method="sft"` only.
 - **Linux or WSL2 only.** FSDP2 needs NCCL, which Windows-native PyTorch does not have. On Windows-native it stops with `DEP_FSDP_UNAVAILABLE` before loading the model.
@@ -118,7 +120,7 @@ With VRAM capped on the same card, a 3B model trained under a 6 GiB cap, and 4B 
 
 Before loading any weights, the trainer works out what the run needs and compares it with what the machine has:
 
-- **Host RAM:** about **3.73 GiB per billion parameters + 10.1 GiB**, which covers training plus the save and reload at the end. It is compared with the RAM available when the run starts. Under WSL2 that is the VM's memory cap, not the machine's.
+- **Host RAM:** about **3.73 GiB per billion parameters + 10.1 GiB**, which covers training plus the save and reload at the end. It is deliberately conservative: at 7.6B it asks for 38.5 GiB, and the run peaked at 32.2 GiB. It is compared with the RAM available when the run starts. Under WSL2 that is the VM's memory cap, not the machine's.
 - **VRAM:** the largest layer and embedding in bf16, plus about 1.4 MiB per token of batch × sequence length, plus a margin.
 
 If either does not fit, the run stops with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`, showing required against available for both and the ways out: a smaller model, more RAM (or a higher WSL2 memory cap), a shorter sequence, or LoRA.

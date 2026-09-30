@@ -9,6 +9,30 @@ updates:
       python-deps:
         patterns:
           - "*"
+    # Caps move by hand, never by bot. pyproject.toml caps torch `<3`,
+    # transformers `<6` and trl `<0.28`, and says each cap moves "deliberately
+    # alongside the matching compat work, never on the resolver's own
+    # initiative" (CIDOCS-B-103, FC-01). A Dependabot range widening IS the
+    # resolver's own initiative, and CI cannot referee one. Measured 2026-09-23
+    # on trl:
+    #   - #169 (this block) widened `<0.28` to `<1.13` and went GREEN. Nothing
+    #     in its CI installed a newly admitted trl: pip resolved trl 0.23.0,
+    #     and the uv pilot ran the unchanged lock (0.24.0).
+    #   - #210 (the uv block) widened to `<1.14` and re-locked trl 1.13.0,
+    #     which no longer exports ORPOConfig / ORPOTrainer from `trl`. ORPO
+    #     has no trl.experimental fallback in trainer.py, so the ORPO path
+    #     raised its own TrainingError; 11 ORPO/SimPO tests failed. To admit
+    #     trl 1.13 the resolver also walked unsloth back a year (2026.6.8 ->
+    #     2025.7.2) and protobuf back to 3.20.3.
+    # So cap-crossing versions are ignored below; in-range updates still flow.
+    # Remove an entry in the same commit that raises its cap.
+    ignore:
+      - dependency-name: "trl"
+        versions: [">=0.28"]
+      - dependency-name: "transformers"
+        versions: [">=6"]
+      - dependency-name: "torch"
+        versions: [">=3"]
     labels:
       - "dependencies"
     commit-message:
@@ -31,6 +55,15 @@ updates:
       uv-deps:
         patterns:
           - "*"
+    # Same cap guard, same reason, as the `pip` block above: the uv updater
+    # rewrites the pyproject.toml ranges too (#210 carried the trl widening).
+    ignore:
+      - dependency-name: "trl"
+        versions: [">=0.28"]
+      - dependency-name: "transformers"
+        versions: [">=6"]
+      - dependency-name: "torch"
+        versions: [">=3"]
     labels:
       - "dependencies"
     commit-message:

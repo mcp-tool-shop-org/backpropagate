@@ -133,7 +133,17 @@ class TestSettingReachesLoaders:
 
         trust_setting(value)
         fast_lm = MagicMock()
-        fast_lm.from_pretrained.return_value = (MagicMock(), MagicMock())
+        # A real module tree, not a MagicMock: since #230 the trainer derives
+        # the "all-linear" target list from the loaded model's nn.Linear
+        # layers, and raises when it finds none.
+        import torch
+
+        class _Tiny(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.q_proj = torch.nn.Linear(4, 4)
+
+        fast_lm.from_pretrained.return_value = (_Tiny(), MagicMock())
         fast_lm.get_peft_model.return_value = MagicMock()
         with patch("torch.cuda.is_available", return_value=False), \
              patch.dict(feature_flags.FEATURES, {"unsloth": True}), \

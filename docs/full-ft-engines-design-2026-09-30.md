@@ -10,12 +10,75 @@
 
 | | |
 |---|---|
-| **Recommendation** | Build a **block-coordinate AdamW engine** first (one transformer block trains at a time, the rest stay frozen on the GPU). Add **host-to-GPU block swap** on top for cards where the 16-bit model does not fit in VRAM. Keep the FSDP2 engine as the "every weight, every step" option. |
+| **Recommendation** | **Revised after the first pod run (see Evidence).** Engine B is the 7B-on-24–32 GB option, not the base engine; standard full fine-tuning is better below 7B. It ships only if a longer code/math test shows it beats QLoRA. Engine C is on hold. |
 | **Why** | It is the best-evidenced design for quality (findings 1–3), it keeps real AdamW, it needs no host offload on a 24–32 GB card for a 7B–8B model, and it runs on native Windows. It removes the three caveats of the FSDP2 engine: Linux only, Adafactor, 14.6 s/step. |
 | **Actionable** | Findings 1, 2, 3, 6, 7, 9, 10, 11, 12 each change a design choice below. |
 | **Filler** | Zeroth-order methods (MeZO) and LISA/HiFT do not change the design; they are listed once under "considered". |
 | **Not proven by anyone** | Block-coordinate descent combined with block swap. No paper or trainer does it. It needs our own A/B runs (see the test plan). |
 | **Cost to find out** | One RunPod session, about 3 hours on a 5090 (about $3), for the phase-1 quality and memory evidence. |
+
+## Evidence — first pod run (2026-09-30, added after the design)
+
+Engine B was built (PR #237) and run on an RTX 5090 pod the same day. 150
+steps, Dolly-15k (400 train / 150 disjoint held-out), batch 4, 512 tokens,
+lr 2e-5, 3 seeds unless noted. Held-out loss, mean ± sd. The baseline
+"standard full FT" is the library's existing full fine-tuning on the GPU
+(paged 8-bit AdamW).
+
+| Model (untrained) | Arm | Held-out after | s/step | Peak allocated / reserved |
+|---|---|---|---|---|
+| 1.5B (2.420) | standard full FT | 1.877 ± 0.001 | 0.149 | 6.7 / 7.3 GiB |
+| 1.5B | engine B, K=50 | 1.994 ± 0.002 | 0.071 | 8.0 / 10.1 GiB |
+| 1.5B | engine B, K=5 | 1.912 ± 0.004 | 0.061 | 8.0 / 10.4 GiB |
+| 3B (2.455) | standard full FT | 1.837 ± 0.001 | 0.256 | 12.6 / 13.4 GiB |
+| 3B | engine B, K=50 | 2.047 ± 0.043 | 0.096 | 7.3 / 7.8 GiB |
+| 3B | engine B, K=5 | 2.015 ± 0.011 | 0.100 | 11.6 / 14.2 GiB |
+| 7.6B (2.761) | engine B, K=5, random order (1 seed) | 1.720 | 0.17 | 25.4 / 30.4 GiB |
+| 7.6B | QLoRA (1 seed) | 1.708 | 0.47 | 12.1 / 12.5 GiB |
+
+Under VRAM caps at 7.6B, batch 1: 24 GiB with embeddings trained runs out of
+memory when the embedding/head block activates (projected 24.4); 24 GiB with
+embeddings frozen fits at 18.0 / 18.6 GiB (projected 19.9); 16 GiB runs out of
+memory (projected). Every fit / no-fit projection was right; projections read
+7–20% high on allocated memory.
+
+**What this changes:**
+
+1. **Below 7B, engine B is the wrong tool.** It lost to standard full
+   fine-tuning on held-out loss at 1.5B and 3B by more than the seed spread,
+   and at 1.5B it used *more* memory (the embedding + head block sets the
+   peak). Standard full fine-tuning fits those sizes; use it. The design's
+   premise ("the best-evidenced design for quality", finding 1) did not hold
+   against a properly tuned full fine-tune on this data.
+2. **At 7B on a 24–32 GB card, engine B is the only full fine-tuning that is
+   fast.** 0.17 s/step on the GPU, Windows-native, no host RAM, against 14.7
+   s/step for engine A (FSDP2 offload, Linux only). Standard full fine-tuning
+   does not fit. On this short test it matched QLoRA's held-out loss (1.720
+   against 1.708) at about a third of QLoRA's step time and twice its VRAM.
+3. **K=5 beat K=50 everywhere** it was tested. 150 steps at K=50 visits only
+   3 of ~30 blocks. The paper's "K barely matters" finding was at much longer
+   runs; the default needs a longer test before it is chosen.
+4. **This held-out set barely separates arms.** One 3B layer trained alone
+   (K=200) reached 2.024, better than four blocks at K=50: 150 steps on Dolly
+   mostly measures format adaptation. Findings 1 and 4 (full fine-tuning
+   learns what LoRA cannot, on code and math) were not tested at all.
+5. **Stochastic write-back was never worse than round-to-nearest** (one seed,
+   360M and 3B). Keep it as the default; not yet a claim.
+6. **A real engine bug was found and fixed:** the block switch kept the last
+   parameter's gradient and Adam state alive, 3.2 GiB extra at the 7B
+   embedding switch (fixed in #237, with a regression test).
+
+**Revised recommendation.** Engine B ships as the 7B-on-24–32 GB option, not
+as the base engine: full fine-tuning at QLoRA-like speed on a card where
+standard full fine-tuning does not fit. It does not ship until a longer test
+on data where full fine-tuning is expected to matter (code or math, 1000+
+steps, a task metric, not only held-out loss) shows whether it beats QLoRA
+there. If it does not, it has no reason to exist next to QLoRA. Engine C
+(block swap) is on hold until then: it only extends engine B to smaller cards,
+and engine A already covers those.
+
+Receipts: PR #237 (`scripts/pod_block_engine.*`, stage JSON copied into the
+PR when it is updated).
 
 ## The three engines
 

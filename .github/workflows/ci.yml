@@ -69,6 +69,14 @@ permissions:
 
 jobs:
   test:
+    # Explicit name, spelled out to reproduce the auto-generated one exactly
+    # (`test (ubuntu-latest, 3.13)`). Branch protection requires those names.
+    # GitHub's default matrix name is built from the matrix values, and the
+    # `extras` key added by the no-unsloth include below could leak into it
+    # (`test (ubuntu-latest, 3.13, dev,ui,...)`), renaming a required check and
+    # leaving the old one "Expected -- Waiting for status" forever. Pinning the
+    # name makes that impossible whatever keys a future include adds.
+    name: test (${{ matrix.os }}, ${{ matrix.python-version }})
     # Multi-OS matrix: tests Linux on full Python sweep, plus a Windows smoke
     # cell on 3.11 to catch path/multiprocessing/xformers-disable regressions
     # on the one non-Linux platform the library actively supports (CLAUDE.md:
@@ -137,6 +145,33 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.11"
+          # THE ONE CELL THAT INSTALLS WITHOUT THE `unsloth` EXTRA.
+          #
+          # Every other cell (and every other job in this file) installs
+          # `[dev,full]`, and `full` includes `unsloth`, which holds trl at
+          # <=0.24.0. A plain `pip install backpropagate` has no such hold: it
+          # resolves a different trl (0.27.x today, 1.x once the cap lifts),
+          # and that is where a KTO `TypeError` lived undetected -- CI never
+          # installed the stack those users get, so the bug could only be
+          # found in scratch venvs.
+          #
+          # This entry has os + python-version identical to an ORIGINAL matrix
+          # combination, so GitHub MERGES `extras` into that existing cell
+          # instead of creating a new one. That is deliberate: no extra job
+          # (Actions spend was just cut ~60% in 1.7.1) and the check name stays
+          # `test (ubuntu-latest, 3.13)`, which branch protection keys on.
+          # Do not change os/python-version here without checking that.
+          #
+          # `extras` is `full` spelled out minus `unsloth`. pyproject defines
+          # `full = full-no-export + export` and `full-no-export = unsloth, ui,
+          # validation, monitoring, logging, security, fp8`, so a feature group
+          # added there must be added here too or this cell quietly tests less
+          # than its siblings. The install step asserts unsloth is really
+          # absent, so the cell cannot drift back into the stack it exists to
+          # avoid.
+          - os: ubuntu-latest
+            python-version: "3.13"
+            extras: "dev,ui,validation,monitoring,logging,security,fp8,export"
     env:
       # 'true' on the one leg whose coverage and test results go to Codecov,
       # on a pull request or a push to the default branch.
@@ -173,11 +208,27 @@ jobs:
           # drift into testing less than Linux. If you ever need llama_cpp
           # itself covered on Windows, install it from the project's prebuilt
           # wheel index rather than restoring the source build here.
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          #
+          # A matrix `extras` value overrides both branches (see the ubuntu /
+          # 3.13 include above): that cell installs `full` MINUS `unsloth`.
+          if [ -n "${MATRIX_EXTRAS}" ]; then
+            pip install -e ".[${MATRIX_EXTRAS}]"
+            # Fail loudly if unsloth arrived anyway (another extra started
+            # pulling it in): the cell would then test the stack every other
+            # cell already tests, and nobody would notice.
+            if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('unsloth') else 1)"; then
+              echo "::error::unsloth is installed in the no-unsloth cell (extras: ${MATRIX_EXTRAS}) -- this cell exists to test a plain install without it."
+              exit 1
+            fi
+            echo "::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
             pip install -e ".[dev,full-no-export]"
           else
             pip install -e ".[dev,full]"
           fi
+        env:
+          # Empty on every cell except the one that sets `extras`.
+          MATRIX_EXTRAS: ${{ matrix.extras }}
 
       - name: Set up Node for the Atlas check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
@@ -699,7 +750,11 @@ jobs:
   pip-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15, up from 10: the CRITICAL-floor step now retries the OSV scan (worst
+    # case 3 x 100s + 45s backoff), and the two pip-audit steps before it also
+    # call out. This still kills a genuinely hung job; it just no longer
+    # cancels one that is only riding out an OSV brownout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -783,14 +838,51 @@ jobs:
       # pip-audit has no native --severity flag, so we read its JSON
       # output (OSV service exposes a `severity` array on each vuln)
       # and fail if any entry includes a CRITICAL CVSS rating.
+      #
+      # A SCAN ERROR IS NOT A SCAN FINDING. This step used to run pip-audit
+      # with `|| true` and then json.load the report unconditionally. When
+      # api.osv.dev times out, pip-audit crashes before writing anything, the
+      # report file never exists, json.load raises FileNotFoundError, and this
+      # REQUIRED check went red for a third-party outage -- indistinguishable
+      # from a real CRITICAL and blocking every open PR until OSV recovered.
+      #
+      # So: (1) retry the scan, bounded (3 attempts, 15s then 30s backoff, each
+      # capped at 100s so a hung connection cannot eat the job timeout); a
+      # report only counts if it PARSES, since pip-audit exits 1 both for
+      # "found vulns" (report written) and for "crashed" (nothing written) and
+      # the exit code cannot tell them apart. (2) If no parseable report exists
+      # after the last attempt, say so in a ::warning:: and exit 0 -- the scan
+      # never ran, so there is nothing to gate on, and the annotation keeps the
+      # gap visible on the run. (3) If a report DOES exist, the CRITICAL check
+      # below is untouched: a real finding at the floor still exits 1.
       - name: pip-audit (CRITICAL floor)
         run: |
-          set -euo pipefail
-          pip-audit \
-            --vulnerability-service osv \
-            --format json \
-            --output pip-audit.json \
-            --strict || true
+          # No `set -e`: a failing pip-audit attempt is data here, not an abort.
+          set -uo pipefail
+          report_ok() {
+            [ -s pip-audit.json ] && python3 -c "import json; json.load(open('pip-audit.json'))" 2>/dev/null
+          }
+          for attempt in 1 2 3; do
+            rm -f pip-audit.json
+            # Exit status deliberately ignored (see above); report_ok decides.
+            timeout 100 pip-audit \
+              --vulnerability-service osv \
+              --format json \
+              --output pip-audit.json \
+              --strict || true
+            if report_ok; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              backoff=$((attempt * 15))
+              echo "pip-audit attempt ${attempt}/3 produced no usable report (OSV slow or unreachable?); retrying in ${backoff}s"
+              sleep "${backoff}"
+            fi
+          done
+          if ! report_ok; then
+            echo "::warning::pip-audit CRITICAL floor: scan could not run (OSV unavailable) after 3 attempts -- no report was produced, so this is a scan ERROR, not a finding. The floor was NOT evaluated on this run; re-run the job once api.osv.dev is reachable if the dependency set changed."
+            exit 0
+          fi
           python3 -c "
           import json, sys
           data = json.load(open('pip-audit.json'))

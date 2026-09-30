@@ -112,6 +112,7 @@ nul
 
 # Claude Code (Windows bug creates literal nul files)
 .claude/settings.local.json
+.claude/worktrees/
 
 # Unsloth runtime cache
 unsloth_compiled_cache/

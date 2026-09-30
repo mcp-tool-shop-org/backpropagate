@@ -28,6 +28,11 @@ What's mocked vs. real
 The result: every line of glue code between the stages runs for real, but
 the heavy ML / external-binary dependencies are stubbed. A regression in
 glue surfaces here; a regression in real PyTorch / Ollama does not.
+The GGUF this test writes is a stub, so it cannot catch export-chain bugs
+such as #132 or #133. The real chain (QLoRA 4-bit train, then
+``backprop export`` from a saved checkpoint, a real GGUF, and Ollama) is
+``tests/test_golden_path_smoke.py``, which runs on the GPU rig through
+``scripts/gpu_smoke.sh``.
 
 CI marking
 ----------

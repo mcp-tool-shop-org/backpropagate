@@ -39,13 +39,46 @@
     }
   ],
   "changes": {
-    "first": true
+    "fileCounts": {
+      "added": 4,
+      "changed": 12,
+      "moved": 0,
+      "parts": 5,
+      "removed": 0
+    },
+    "items": [
+      {
+        "kind": "door",
+        "sentence": "CI's push trigger now also names `codecov.yml`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "tests/test_mlx_smoke.py is now read by scripts/gpu_smoke.sh.",
+        "subjects": [
+          "tests/test_mlx_smoke.py",
+          "scripts/gpu_smoke.sh"
+        ]
+      },
+      {
+        "kind": "counts",
+        "sentence": "4 files added and 12 changed content, across 5 parts.",
+        "subjects": []
+      }
+    ],
+    "since": {
+      "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+      "generatedAt": "2026-09-23T14:58:25.620Z"
+    },
+    "unchanged": false
   },
   "changesTogether": [
     {
       "a": "backpropagate/cli.py",
       "b": "backpropagate/trainer.py",
-      "either": 53,
+      "either": 56,
       "partLabels": [
         "backpropagate",
         "backpropagate"
@@ -63,7 +96,7 @@
     "Window: 180 days; a pair counts from 10 shared commits."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+  "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb",
   "doors": [
     {
       "file": ".github/workflows/ci.yml",
@@ -84,7 +117,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 70
+          "files": 72
         },
         {
           "boundary": "scripts",
@@ -102,7 +135,7 @@
       "stages": [],
       "triggers": [
         "on a pull request",
-        "on a push to main touching 8 paths",
+        "on a push to main touching 9 paths",
         "or by hand"
       ]
     },
@@ -285,10 +318,10 @@
       ]
     }
   ],
-  "generatedAt": "2026-09-23T14:58:25.620Z",
+  "generatedAt": "2026-09-30T16:15:00.419Z",
   "limits": [
     "40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "6 import sites could not be resolved.",
+    "7 import sites could not be resolved.",
     "13 writes and 39 reads use paths built at run time and are not named here."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -303,9 +336,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 73,
+  "testFiles": 75,
   "testedBy": {
-    "backpropagate": 63,
+    "backpropagate": 64,
     "bin": 0,
     "scripts": 2
   },

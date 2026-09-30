@@ -73,7 +73,8 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. |
+| `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. A compiled `llama-quantize` is looked for in the same checkout (the root, `build/bin`, `build/bin/Release`), then on PATH. |
+| `BACKPROPAGATE_UNSLOTH_AUTO_INSTALL` | unset (off) | Set to `1` / `true` / `yes` / `on` to let Unsloth install system packages and build llama.cpp for its own GGUF export. Unsloth does this with `winget` on Windows (apt or brew elsewhere): CMake, compilers and OpenSSL, accepting their licence agreements. Off by default: `import backpropagate` sets `UNSLOTH_AUTO_INSTALL=0`, overriding any value already in the environment, and GGUF export uses the llama.cpp fallback when Unsloth has no built llama.cpp. |
 
 ## cloudflared tunnel (v1.3)
 
@@ -89,7 +90,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_MODEL__LOAD_IN_4BIT` | `true` | 4-bit quantization at load time (saves ~50% VRAM). |
 | `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` | `2048` | Maximum sequence length. |
 | `BACKPROPAGATE_MODEL__DTYPE` | unset (auto) | Force `bf16` / `fp16` / `fp32`. Auto-detects bf16 on Ampere+. |
-| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `true` | Whether to trust custom modeling code from HF Hub. |
+| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `false` | Whether to run custom Python code that a model's Hugging Face repository ships. Off by default since v1.7.2: a model that needs it fails with `CONFIG_TRUST_REMOTE_CODE_REQUIRED`. Set to `true` only for a repository you have read and trust. None of the curated presets need it. |
 
 ## LoRA
 

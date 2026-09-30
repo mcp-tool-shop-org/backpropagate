@@ -19,6 +19,18 @@ from backpropagate.checkpoints import (
     CheckpointStats,
 )
 
+# The CheckpointManager tests below do real, bounded filesystem work: every
+# register() re-reads and atomically rewrites the manifest (open + fsync +
+# replace under a file lock), 15 times per example, 50-100 examples per test.
+# Measured on a Windows dev box: ~0.25 s per example, 9-34 s per test across
+# three runs (the spread is antivirus and disk latency). A GitHub Windows
+# runner took test_prune_respects_policy_limits past the suite-wide
+# --timeout=60 on 2026-09-30 (run 36765937799) and failed a required check on
+# a docs-only PR. The suite-wide limit exists to catch hangs; these tests do
+# not hang, they are slow on Windows. Give the module an explicit ceiling
+# instead of cutting examples, which would trade coverage for speed.
+pytestmark = pytest.mark.timeout(300)
+
 # =============================================================================
 # STRATEGIES
 # =============================================================================

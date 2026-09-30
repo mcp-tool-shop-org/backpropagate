@@ -308,6 +308,23 @@ bp_settings.training.seed = args.seed
 bp_settings.training.logging_steps = 1
 bp_settings.training.save_steps = 1_000_000
 
+# No trainer checkpoints in these measurement runs: HF saves one at the last
+# step whatever save_steps is, and a 7B one (15 GB model + optimizer) filled the
+# pod's 40 GB container disk in the first stage-b attempt. Checkpoint/resume is
+# covered by the unit tests; save->reload here goes through Trainer.save().
+_orig_build_args = Trainer._build_training_args
+
+
+def _build_args_no_checkpoints(self, **kw):  # type: ignore[no-untyped-def]
+    cfg = _orig_build_args(self, **kw)
+    from transformers.trainer_utils import SaveStrategy
+
+    cfg.save_strategy = SaveStrategy.NO
+    return cfg
+
+
+Trainer._build_training_args = _build_args_no_checkpoints  # type: ignore[method-assign]
+
 tag = args.tag or f"run_{int(time.time())}"
 arm = ("qlora" if args.qlora else args.engine)
 rec: dict = {"mode": "train", "tag": tag, "arm": os.environ.get("ARM", arm), "model": args.model,
@@ -436,6 +453,9 @@ except Exception as exc:  # a capped run that does not fit is a result, not a cr
                                                         + [v["peak_alloc_gib"] for v in visit_peaks]), 3)
     rec["visit_peaks"] = visit_peaks
     rec["losses"] = losses
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    rec["s_per_step"] = round(statistics.median(gaps), 4) if gaps else None
+    rec["steps_completed"] = len(losses)
 finally:
     rec["wall_s"] = round(time.perf_counter() - t0, 1)
     shutil.rmtree(os.path.join(WORKDIR, tag), ignore_errors=True)

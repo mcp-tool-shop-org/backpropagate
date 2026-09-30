@@ -1456,6 +1456,14 @@ class TestTrainerSaveMerged:
 # LORA TESTS (Phase 3)
 # =============================================================================
 
+def _tiny_linear_model():
+    """A real module with one Linear. The Unsloth loader derives "all-linear"
+    from the loaded model's Linear layers, so a bare MagicMock yields none."""
+    import torch.nn as nn
+
+    return nn.Sequential(nn.Linear(2, 2))
+
+
 class TestLoRAAdapterApplied:
     """Tests for LoRA adapter application."""
 
@@ -1465,7 +1473,7 @@ class TestLoRAAdapterApplied:
         from backpropagate.trainer import Trainer
 
         mock_fast_lm = MagicMock()
-        mock_model = MagicMock()
+        mock_model = _tiny_linear_model()  # "all-linear" is derived from real Linears
         mock_tokenizer = MagicMock()
 
         # from_pretrained returns (model, tokenizer)
@@ -1485,7 +1493,52 @@ class TestLoRAAdapterApplied:
             # Verify get_peft_model was called (LoRA applied)
             mock_fast_lm.get_peft_model.assert_called_once()
 
-    def test_unsloth_gets_a_list_for_all_linear(self):
+    @staticmethod
+    def _fake_decoder(leaf_names):
+        """A tiny decoder-shaped module tree: 2 blocks of Linears + lm_head."""
+        import torch.nn as nn
+
+        class Block(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.self_attn, self.mlp = nn.Module(), nn.Module()
+                for n in leaf_names:
+                    owner = self.mlp if ("up" in n or "down" in n or "gate" in n) else self.self_attn
+                    setattr(owner, n, nn.Linear(4, 4))
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = nn.Module()
+                self.model.embed_tokens = nn.Embedding(8, 4)
+                self.model.layers = nn.ModuleList([Block(), Block()])
+                self.lm_head = nn.Linear(4, 8)
+
+            def get_output_embeddings(self):
+                return self.lm_head
+
+        return Model()
+
+    _LLAMA = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    _PHI = ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"]
+
+    def test_all_linear_derived_from_llama_style_model(self):
+        from backpropagate.trainer import _unsloth_target_modules
+
+        got = _unsloth_target_modules("all-linear", self._fake_decoder(self._LLAMA))
+        assert isinstance(got, list)
+        assert sorted(got) == sorted(self._LLAMA)
+        assert "lm_head" not in got
+
+    def test_all_linear_derived_from_phi_style_model(self):
+        """Phi-3/4 fuse projections; a fixed Llama list would cover only half."""
+        from backpropagate.trainer import _unsloth_target_modules
+
+        got = _unsloth_target_modules("all-linear", self._fake_decoder(self._PHI))
+        assert sorted(got) == sorted(self._PHI)
+        assert "lm_head" not in got
+
+    def test_unsloth_gets_the_derived_list(self):
         """Unsloth splits a target_modules string into characters.
 
         The default "all-linear" reached FastLanguageModel.get_peft_model as a
@@ -1495,26 +1548,39 @@ class TestLoRAAdapterApplied:
         from backpropagate import feature_flags
         from backpropagate.trainer import Trainer, _unsloth_target_modules
 
+        fake = self._fake_decoder(self._PHI)
         mock_fast_lm = MagicMock()
-        mock_model = MagicMock()
-        mock_fast_lm.from_pretrained.return_value = (mock_model, MagicMock())
-        mock_fast_lm.get_peft_model.return_value = mock_model
+        mock_fast_lm.from_pretrained.return_value = (fake, MagicMock())
+        mock_fast_lm.get_peft_model.return_value = fake
 
-        with patch("torch.cuda.is_available", return_value=False), \
-             patch.dict(feature_flags.FEATURES, {"unsloth": True}), \
-             patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}), \
-             patch("backpropagate.trainer.settings.lora.target_modules", "all-linear"):
+        with patch("torch.cuda.is_available", return_value=False),              patch.dict(feature_flags.FEATURES, {"unsloth": True}),              patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}),              patch("backpropagate.trainer.settings.lora.target_modules", "all-linear"):
             trainer = Trainer(use_unsloth=True)
             with patch("unsloth.FastLanguageModel", mock_fast_lm):
                 trainer._load_with_unsloth()
 
         tm = mock_fast_lm.get_peft_model.call_args.kwargs["target_modules"]
-        assert isinstance(tm, list)
-        assert tm == ["q_proj", "k_proj", "v_proj", "o_proj",
-                      "gate_proj", "up_proj", "down_proj"]
+        assert isinstance(tm, list) and sorted(tm) == sorted(self._PHI)
+        assert trainer.lora_adapted_modules == 0  # the mock attaches no lora_A
         # Other shapes: a single name is wrapped; a list passes through.
-        assert _unsloth_target_modules("q_proj") == ["q_proj"]
-        assert _unsloth_target_modules(["q_proj", "v_proj"]) == ["q_proj", "v_proj"]
+        assert _unsloth_target_modules("q_proj", fake) == ["q_proj"]
+        assert _unsloth_target_modules(["q_proj", "v_proj"], fake) == ["q_proj", "v_proj"]
+
+    def test_no_linear_layers_refuses_so_fallback_warns(self):
+        """An empty derived list must raise (-> WARNING fallback), not pass []."""
+        import torch.nn as nn
+
+        from backpropagate import feature_flags
+        from backpropagate.exceptions import ModelLoadError
+        from backpropagate.trainer import Trainer
+
+        mock_fast_lm = MagicMock()
+        mock_fast_lm.from_pretrained.return_value = (nn.Sequential(nn.ReLU()), MagicMock())
+
+        with patch("torch.cuda.is_available", return_value=False),              patch.dict(feature_flags.FEATURES, {"unsloth": True}),              patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}),              patch("backpropagate.trainer.settings.lora.target_modules", "all-linear"):
+            trainer = Trainer(use_unsloth=True)
+            with patch("unsloth.FastLanguageModel", mock_fast_lm),                  pytest.raises(ModelLoadError, match="matched no linear layers"):
+                trainer._load_with_unsloth()
+        mock_fast_lm.get_peft_model.assert_not_called()
 
     def test_lora_adapter_applied_with_transformers(self):
         """Verify LoRA layers added with transformers + PEFT."""
@@ -1625,7 +1691,7 @@ class TestUseRsloraWiring:
         from backpropagate.trainer import Trainer
 
         mock_fast_lm = MagicMock()
-        mock_model = MagicMock()
+        mock_model = _tiny_linear_model()  # "all-linear" is derived from real Linears
         mock_tokenizer = MagicMock()
         mock_fast_lm.from_pretrained.return_value = (mock_model, mock_tokenizer)
         mock_fast_lm.get_peft_model.return_value = mock_model

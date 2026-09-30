@@ -60,6 +60,8 @@ from .exceptions import (
     ModelLoadError,
     TrainingAbortedError,
     TrainingError,
+    TrustRemoteCodeRequiredError,
+    is_trust_remote_code_error,
 )
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
@@ -4082,11 +4084,12 @@ class Trainer:
             if self.use_unsloth:
                 try:
                     self._load_with_unsloth()
-                except (ImportError, RuntimeError):
+                except (ImportError, RuntimeError, TrustRemoteCodeRequiredError):
                     # Don't downgrade ImportError / RuntimeError — those are
                     # the "your env is wrong" / "CUDA is wrong" signals the
                     # surrounding except blocks rely on for accurate error
-                    # routing.
+                    # routing. A repo that needs trust_remote_code would fail
+                    # identically on the transformers path, so don't retry it.
                     raise
                 except Exception as unsloth_err:
                     if not self.unsloth_fallback:
@@ -4101,6 +4104,9 @@ class Trainer:
                     self._load_with_transformers()
             else:
                 self._load_with_transformers()
+        except TrustRemoteCodeRequiredError:
+            # Already structured (names the model + the exact opt-in).
+            raise
         except ImportError as e:
             # F-019: ImportError = missing/incompatible upstream package.
             # We keep the explicit "pip install" suggestion (more specific
@@ -4225,6 +4231,8 @@ class Trainer:
                 **from_pretrained_kwargs,
             )
         except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
             # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
             # for the actual weight download, so 401/403/404/connection
             # errors surface here too. Classify so the per-category hint
@@ -4403,20 +4411,26 @@ class Trainer:
                 "_label": f"transformers_from_pretrained:{self.model_name}",
             }
 
-        # Load model
-        self._model = _retry_hf_call(
-            AutoModelForCausalLM.from_pretrained,
-            self.model_name,
-            **model_load_kwargs,
-        )
-
-        # Load tokenizer
-        self._tokenizer = _retry_hf_call(
-            AutoTokenizer.from_pretrained,
-            self.model_name,
-            trust_remote_code=settings.model.trust_remote_code,
-            _label=f"tokenizer_from_pretrained:{self.model_name}",
-        )
+        # Load model + tokenizer. ``trust_remote_code`` is always an explicit
+        # bool (never None), so transformers never prompts on stdin; a repo
+        # that needs custom code while the setting is off surfaces as a
+        # structured CONFIG_TRUST_REMOTE_CODE_REQUIRED error.
+        try:
+            self._model = _retry_hf_call(
+                AutoModelForCausalLM.from_pretrained,
+                self.model_name,
+                **model_load_kwargs,
+            )
+            self._tokenizer = _retry_hf_call(
+                AutoTokenizer.from_pretrained,
+                self.model_name,
+                trust_remote_code=settings.model.trust_remote_code,
+                _label=f"tokenizer_from_pretrained:{self.model_name}",
+            )
+        except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
+            raise
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -6063,6 +6077,7 @@ class Trainer:
                 batch_size=self.batch_size,
                 max_seq_length=self.max_seq_length,
                 seed=settings.training.seed,
+                trust_remote_code=settings.model.trust_remote_code,
             )
             result = backend.run()
 

@@ -90,7 +90,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_MODEL__LOAD_IN_4BIT` | `true` | 4-bit quantization at load time (saves ~50% VRAM). |
 | `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` | `2048` | Maximum sequence length. |
 | `BACKPROPAGATE_MODEL__DTYPE` | unset (auto) | Force `bf16` / `fp16` / `fp32`. Auto-detects bf16 on Ampere+. |
-| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `true` | Whether to trust custom modeling code from HF Hub. |
+| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `false` | Whether to run custom Python code that a model's Hugging Face repository ships. Off by default since v1.7.2: a model that needs it fails with `CONFIG_TRUST_REMOTE_CODE_REQUIRED`. Set to `true` only for a repository you have read and trust. None of the curated presets need it. |
 
 ## LoRA
 

@@ -1682,9 +1682,12 @@ def cmd_export(args: argparse.Namespace) -> int:
             )
         elif args.format == "merged":
             # C-CLI-002 phase banner — merged export loads the full model.
-            from .trainer import load_model
+            # #132: the export loader applies the saved adapter once, onto a
+            # 16-bit base. The training loader (trainer.load_model) attached a
+            # second adapter on a 4-bit base, and the merge then crashed.
+            from .export import load_model_for_export
             _print_info("==> Loading model for merge (this may take 30s-3min)...")
-            model, tokenizer = load_model(str(model_path))
+            model, tokenizer = load_model_for_export(model_path)
             _print_info("==> Merging adapters and writing merged checkpoint...")
             result = export_merged(
                 model=model,
@@ -1696,9 +1699,9 @@ def cmd_export(args: argparse.Namespace) -> int:
         elif args.format == "gguf":
             # C-CLI-002 phase banner — GGUF export does model load AND
             # quantization (each 60-300s for 7B). Surface both phases.
-            from .trainer import load_model
+            from .export import load_model_for_export  # #132, see above
             _print_info("==> Loading model for GGUF export (this may take 30s-3min)...")
-            model, tokenizer = load_model(str(model_path))
+            model, tokenizer = load_model_for_export(model_path)
             _print_info(
                 f"==> Quantizing to {args.quantization} "
                 "(this may take several minutes for 7B models)..."

@@ -1485,6 +1485,37 @@ class TestLoRAAdapterApplied:
             # Verify get_peft_model was called (LoRA applied)
             mock_fast_lm.get_peft_model.assert_called_once()
 
+    def test_unsloth_gets_a_list_for_all_linear(self):
+        """Unsloth splits a target_modules string into characters.
+
+        The default "all-linear" reached FastLanguageModel.get_peft_model as a
+        str, which raised ``Target modules {'a','l','i','n','e','r','-'} not
+        found``. The trainer then fell back to transformers without saying so.
+        """
+        from backpropagate import feature_flags
+        from backpropagate.trainer import Trainer, _unsloth_target_modules
+
+        mock_fast_lm = MagicMock()
+        mock_model = MagicMock()
+        mock_fast_lm.from_pretrained.return_value = (mock_model, MagicMock())
+        mock_fast_lm.get_peft_model.return_value = mock_model
+
+        with patch("torch.cuda.is_available", return_value=False), \
+             patch.dict(feature_flags.FEATURES, {"unsloth": True}), \
+             patch.dict("sys.modules", {"unsloth": MagicMock(FastLanguageModel=mock_fast_lm)}), \
+             patch("backpropagate.trainer.settings.lora.target_modules", "all-linear"):
+            trainer = Trainer(use_unsloth=True)
+            with patch("unsloth.FastLanguageModel", mock_fast_lm):
+                trainer._load_with_unsloth()
+
+        tm = mock_fast_lm.get_peft_model.call_args.kwargs["target_modules"]
+        assert isinstance(tm, list)
+        assert tm == ["q_proj", "k_proj", "v_proj", "o_proj",
+                      "gate_proj", "up_proj", "down_proj"]
+        # Other shapes: a single name is wrapped; a list passes through.
+        assert _unsloth_target_modules("q_proj") == ["q_proj"]
+        assert _unsloth_target_modules(["q_proj", "v_proj"]) == ["q_proj", "v_proj"]
+
     def test_lora_adapter_applied_with_transformers(self):
         """Verify LoRA layers added with transformers + PEFT."""
         from backpropagate.trainer import Trainer

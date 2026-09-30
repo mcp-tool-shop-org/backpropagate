@@ -4246,7 +4246,7 @@ class Trainer:
         # the v1.3 kwargs.
         lora_kwargs: dict[str, Any] = {
             "r": self.lora_r,
-            "target_modules": settings.lora.target_modules,
+            "target_modules": _unsloth_target_modules(settings.lora.target_modules),
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
@@ -7094,6 +7094,31 @@ class Trainer:
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
+
+# The seven linear projections of a decoder block: what PEFT's "all-linear"
+# selects (lm_head excluded) and Unsloth's own get_peft_model default.
+_UNSLOTH_ALL_LINEAR = (
+    "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+)
+
+
+def _unsloth_target_modules(target_modules: Any) -> list[str]:
+    """Shape ``target_modules`` for ``FastLanguageModel.get_peft_model``.
+
+    Unsloth iterates target_modules as a list. Given PEFT's string shorthand
+    "all-linear", it split the string into characters and raised
+    ``Target modules {'a', 'l', 'i', 'n', 'e', 'r', '-'} not found``. The
+    trainer then fell back to transformers + PEFT without saying so, which
+    meant every default Unsloth run trained without Unsloth. Expand the
+    shorthand to the explicit projection list, and wrap any other single
+    string in a list.
+    """
+    if isinstance(target_modules, str):
+        if target_modules == "all-linear":
+            return list(_UNSLOTH_ALL_LINEAR)
+        return [target_modules]
+    return list(target_modules)
+
 
 def load_model(
     model_name: str | None = None,

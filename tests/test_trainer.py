@@ -4338,6 +4338,19 @@ class TestOrpoTrlImportGuard:
         ]
         assert trl_req.specifier == SpecifierSet(trainer_mod._TRL_SUPPORTED_SPEC)
 
+    def test_supported_spec_excludes_cp1252_broken_trl(self):
+        """#134: trl 1.1-1.5.x read bundled .jinja templates without an
+        encoding (UnicodeDecodeError under cp1252 on Windows); 1.6.0 fixed it."""
+        from packaging.specifiers import SpecifierSet
+
+        from backpropagate import trainer as trainer_mod
+
+        spec = SpecifierSet(trainer_mod._TRL_SUPPORTED_SPEC)
+        for bad in ("1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.5.1"):
+            assert bad not in spec, bad
+        for good in ("0.18.0", "0.24.0", "0.27.2", "1.0.0", "1.6.0", "1.13.0"):
+            assert good in spec, good
+
     def test_orpo_config_import_success_still_builds(self):
         """FC-01 must be inert when trl resolves: the existing mocked-trl path
         (the one all the other ORPO tests rely on) still builds a config.

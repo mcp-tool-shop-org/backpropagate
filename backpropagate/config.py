@@ -316,8 +316,11 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         max_seq_length: int = 2048
         # Data type for training
         dtype: str | None = None  # Auto-detect (bf16 on Ampere+)
-        # Trust remote code from HuggingFace
-        trust_remote_code: bool = True
+        # Execute custom Python shipped inside a HuggingFace model repo
+        # (``trust_remote_code`` in transformers). Default OFF: loading a repo
+        # that needs it raises CONFIG_TRUST_REMOTE_CODE_REQUIRED naming the
+        # opt-in (``BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true``).
+        trust_remote_code: bool = False
 
     class LoRAConfig(BaseSettings):
         """LoRA/QLoRA configuration.
@@ -1105,7 +1108,8 @@ else:
         load_in_4bit: bool = True
         max_seq_length: int = 2048
         dtype: str | None = None
-        trust_remote_code: bool = True
+        # Default OFF; parity with the pydantic branch above.
+        trust_remote_code: bool = False
 
     @dataclass
     class LoRAConfig:  # type: ignore[no-redef]

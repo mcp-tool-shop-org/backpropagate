@@ -34,6 +34,20 @@ huggingface-cli login   # paste a token from https://huggingface.co/settings/tok
 
 Or export `HF_TOKEN` in the environment. Then re-run. For typos in the model name, head to <https://huggingface.co/models?search=qwen> (or whichever family you want) and copy the exact `org/name` identifier.
 
+## "`CONFIG_TRUST_REMOTE_CODE_REQUIRED`" when loading a model
+
+**Symptom:** the load stops with `CONFIG_TRUST_REMOTE_CODE_REQUIRED` and names the model.
+
+**Why:** the model's Hugging Face repository ships its own Python modeling code. Loading the model would run that code on your machine. Since v1.7.2 Backpropagate does not do that unless you ask for it.
+
+**Fix:** read the repository's `.py` files on the Hub. If you trust them, opt in and run again:
+
+```bash
+BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true backprop train --data my_data.jsonl --model <org/name>
+```
+
+In Python, set `settings.model.trust_remote_code = True` before creating the `Trainer`. None of the curated presets need this.
+
 ## "Ollama not running" / connection refused on register
 
 **Symptom:** `DEP_OLLAMA_REGISTRATION_FAILED`, often with `connection refused localhost:11434`.

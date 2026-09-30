@@ -60,6 +60,8 @@ from .exceptions import (
     ModelLoadError,
     TrainingAbortedError,
     TrainingError,
+    TrustRemoteCodeRequiredError,
+    is_trust_remote_code_error,
 )
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
@@ -1596,7 +1598,11 @@ def _build_sft_config(
 # The working trl range, as pyproject.toml declares it. Every "install a
 # working trl" remedy below quotes this string, and a test holds it equal to
 # the pyproject requirement so the cap and the advice cannot drift apart.
-_TRL_SUPPORTED_SPEC = ">=0.18,<2"
+# trl 1.1-1.5.x are excluded (#134): those wheels call ``Path.read_text()`` on
+# bundled .jinja chat templates without an encoding, which fails under cp1252
+# on Windows; fixed upstream in trl 1.6.0. Drop the ``!=`` clauses when the
+# floor passes 1.6. (Anyone pinned inside the range can set ``PYTHONUTF8=1``.)
+_TRL_SUPPORTED_SPEC = ">=0.18,<2,!=1.1.*,!=1.2.*,!=1.3.*,!=1.4.*,!=1.5.*"
 
 
 def _config_declares(config_cls: Any, name: str) -> bool:
@@ -2269,6 +2275,10 @@ class Trainer:
         "memory_allocator",
         "cuda out of memory",
     )
+
+    # How many modules the LoRA adapter attached to, set by either loader.
+    # None until a model is loaded (and for mode='full').
+    lora_adapted_modules: int | None = None
 
     def __init__(
         self,
@@ -4074,11 +4084,12 @@ class Trainer:
             if self.use_unsloth:
                 try:
                     self._load_with_unsloth()
-                except (ImportError, RuntimeError):
+                except (ImportError, RuntimeError, TrustRemoteCodeRequiredError):
                     # Don't downgrade ImportError / RuntimeError — those are
                     # the "your env is wrong" / "CUDA is wrong" signals the
                     # surrounding except blocks rely on for accurate error
-                    # routing.
+                    # routing. A repo that needs trust_remote_code would fail
+                    # identically on the transformers path, so don't retry it.
                     raise
                 except Exception as unsloth_err:
                     if not self.unsloth_fallback:
@@ -4093,6 +4104,9 @@ class Trainer:
                     self._load_with_transformers()
             else:
                 self._load_with_transformers()
+        except TrustRemoteCodeRequiredError:
+            # Already structured (names the model + the exact opt-in).
+            raise
         except ImportError as e:
             # F-019: ImportError = missing/incompatible upstream package.
             # We keep the explicit "pip install" suggestion (more specific
@@ -4217,6 +4231,8 @@ class Trainer:
                 **from_pretrained_kwargs,
             )
         except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
             # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
             # for the actual weight download, so 401/403/404/connection
             # errors surface here too. Classify so the per-category hint
@@ -4244,9 +4260,21 @@ class Trainer:
         # passing it — keeps the call backward-compatible with older
         # Unsloth releases whose get_peft_model signature doesn't accept
         # the v1.3 kwargs.
+        target_modules = _unsloth_target_modules(
+            settings.lora.target_modules, self._model
+        )
+        if not target_modules:
+            # No linear layers found: refuse here so load_model's fallback to
+            # transformers + PEFT fires, with its WARNING naming this reason.
+            raise ModelLoadError(
+                self.model_name,
+                "Failed to apply LoRA: target_modules="
+                f"{settings.lora.target_modules!r} matched no linear layers in "
+                "the Unsloth-loaded model",
+            )
         lora_kwargs: dict[str, Any] = {
             "r": self.lora_r,
-            "target_modules": settings.lora.target_modules,
+            "target_modules": target_modules,
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
@@ -4288,6 +4316,12 @@ class Trainer:
                 f"Failed to apply LoRA: {e}",
                 cause_category=_classify_model_load_cause(e),
             ) from e
+        self.lora_adapted_modules = _count_lora_layers(self._model)
+        logger.info(
+            "Unsloth LoRA: target_modules=%s (from %r); %d modules adapted.",
+            target_modules, settings.lora.target_modules,
+            self.lora_adapted_modules,
+        )
 
     def _load_with_transformers(self) -> None:
         """Load model using standard transformers (+ PEFT for mode='lora').
@@ -4377,20 +4411,26 @@ class Trainer:
                 "_label": f"transformers_from_pretrained:{self.model_name}",
             }
 
-        # Load model
-        self._model = _retry_hf_call(
-            AutoModelForCausalLM.from_pretrained,
-            self.model_name,
-            **model_load_kwargs,
-        )
-
-        # Load tokenizer
-        self._tokenizer = _retry_hf_call(
-            AutoTokenizer.from_pretrained,
-            self.model_name,
-            trust_remote_code=settings.model.trust_remote_code,
-            _label=f"tokenizer_from_pretrained:{self.model_name}",
-        )
+        # Load model + tokenizer. ``trust_remote_code`` is always an explicit
+        # bool (never None), so transformers never prompts on stdin; a repo
+        # that needs custom code while the setting is off surfaces as a
+        # structured CONFIG_TRUST_REMOTE_CODE_REQUIRED error.
+        try:
+            self._model = _retry_hf_call(
+                AutoModelForCausalLM.from_pretrained,
+                self.model_name,
+                **model_load_kwargs,
+            )
+            self._tokenizer = _retry_hf_call(
+                AutoTokenizer.from_pretrained,
+                self.model_name,
+                trust_remote_code=settings.model.trust_remote_code,
+                _label=f"tokenizer_from_pretrained:{self.model_name}",
+            )
+        except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
+            raise
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -4470,6 +4510,11 @@ class Trainer:
             )
             lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
+        self.lora_adapted_modules = _count_lora_layers(self._model)
+        logger.info(
+            "PEFT LoRA: target_modules=%r; %d modules adapted.",
+            settings.lora.target_modules, self.lora_adapted_modules,
+        )
 
     def _build_trainer(
         self,
@@ -6032,6 +6077,7 @@ class Trainer:
                 batch_size=self.batch_size,
                 max_seq_length=self.max_seq_length,
                 seed=settings.training.seed,
+                trust_remote_code=settings.model.trust_remote_code,
             )
             result = backend.run()
 
@@ -6893,6 +6939,11 @@ class Trainer:
         Returns:
             ExportResult with path, size, and timing info
 
+        For "merged" and "gguf" with a LoRA adapter, the adapter is saved, the
+        trained model is freed, and the export reloads it onto a 16-bit base
+        (the same path as ``backprop export``). Afterwards the trainer holds no
+        model; call ``load_model()`` to continue.
+
         Example:
             >>> trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
             >>> trainer.train("data.jsonl", steps=100)
@@ -6923,6 +6974,15 @@ class Trainer:
         output_path = Path(output_dir or self.output_dir / format)
 
         format_lower = format.lower()
+
+        if format_lower in ("merged", "gguf"):
+            from .export import _is_peft_model
+
+            if _is_peft_model(self._model):
+                return self._export_via_reload(
+                    format_lower, output_path, quantization,
+                    push_to_hub=push_to_hub, repo_id=repo_id, **kwargs,
+                )
 
         if format_lower == "lora":
             result = export_lora(
@@ -6957,6 +7017,79 @@ class Trainer:
             raise ValueError(f"Unsupported format: {format}. Use 'lora', 'merged', or 'gguf'")
 
         return result
+
+    def _export_via_reload(
+        self,
+        format_lower: str,
+        output_path: Path,
+        quantization: str,
+        *,
+        push_to_hub: bool,
+        repo_id: str | None,
+        **kwargs: Any,
+    ) -> ExportResult:
+        """Merged / GGUF export of a trained adapter through the export loader.
+
+        The in-memory model sits on a bitsandbytes 4-bit base (QLoRA). Merging
+        into it produces quantized tensors that llama.cpp's converter rejects
+        ("Quant method is not yet supported: 'bitsandbytes'"). So: save the
+        adapter, free the trained model (it and the 16-bit base would not both
+        fit on a card sized for the 4-bit run), and export through
+        ``load_model_for_export``, the same path ``backprop export`` uses.
+
+        After this returns the trainer holds no model. Call ``load_model()``
+        (or train again) to continue.
+        """
+        import shutil
+        import tempfile
+
+        from .export import export_gguf, export_merged, load_model_for_export
+
+        base_dir = Path(self.output_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        adapter_dir = Path(tempfile.mkdtemp(prefix=".export_adapter_", dir=str(base_dir)))
+        try:
+            self._model.save_pretrained(str(adapter_dir))
+            self._tokenizer.save_pretrained(str(adapter_dir))
+            logger.info(
+                "export(%s): saved the adapter to %s and freed the trained model; "
+                "reloading onto a 16-bit base for the merge.",
+                format_lower, adapter_dir,
+            )
+            self._release_model()
+
+            model, tokenizer = load_model_for_export(adapter_dir)
+            if format_lower == "merged":
+                result = export_merged(
+                    model=model, tokenizer=tokenizer, output_dir=output_path,
+                    push_to_hub=push_to_hub, repo_id=repo_id, **kwargs,
+                )
+                logger.info(f"Exported merged model: {result.path}")
+            else:
+                result = export_gguf(
+                    model=model, tokenizer=tokenizer, output_dir=output_path,
+                    quantization=quantization, **kwargs,
+                )
+                logger.info(f"Exported GGUF ({quantization}): {result.path}")
+            del model, tokenizer
+            return result
+        finally:
+            gc.collect()
+            shutil.rmtree(adapter_dir, ignore_errors=True)
+
+    def _release_model(self) -> None:
+        """Drop the model, the inner trainer and their VRAM."""
+        self._trainer = None
+        self._model = None
+        self._is_loaded = False
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # nosec B110 - best-effort CUDA cache reclaim
+            pass
 
     def push_to_hub(self, repo_id: str, private: bool = True) -> None:
         """Push model to HuggingFace Hub."""
@@ -7094,6 +7227,77 @@ class Trainer:
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
+
+def _all_linear_leaf_names(model: Any) -> list[str]:
+    """Leaf names of the modules PEFT's "all-linear" would target in ``model``.
+
+    Follows PEFT's rule (``tuners_utils._maybe_include_all_linear_layers``):
+    every ``nn.Linear`` (which covers bitsandbytes ``Linear4bit``) and
+    transformers ``Conv1D``, minus the output embedding (lm_head). The rule is
+    reimplemented rather than imported because PEFT's helper is private and
+    its signature has changed across the PEFT versions we support. Names are
+    leaves (``q_proj``, ``qkv_proj``): Unsloth matches on those, and the set
+    depends on the architecture. Llama/Qwen/Mistral give the seven
+    q/k/v/o/gate/up/down projections; Phi-3/4 give qkv_proj, o_proj,
+    gate_up_proj and down_proj.
+    """
+    import torch
+
+    linear_types: tuple[type, ...]
+    try:
+        from transformers.pytorch_utils import Conv1D
+
+        linear_types = (torch.nn.Linear, Conv1D)
+    except Exception:  # noqa: BLE001 - Conv1D is optional (GPT-2-style models only)
+        linear_types = (torch.nn.Linear,)
+
+    excluded: set[int] = set()
+    get_output = getattr(model, "get_output_embeddings", None)
+    if callable(get_output):
+        try:
+            output_emb = get_output()
+        except Exception:  # noqa: BLE001 - models without a head
+            output_emb = None
+        if output_emb is not None:
+            excluded.add(id(output_emb))
+
+    names: set[str] = set()
+    for name, module in model.named_modules():
+        if not name or id(module) in excluded:
+            continue
+        if isinstance(module, linear_types):
+            names.add(name.rsplit(".", 1)[-1])
+    return sorted(names)
+
+
+def _unsloth_target_modules(target_modules: Any, model: Any) -> list[str]:
+    """Shape ``target_modules`` for ``FastLanguageModel.get_peft_model``.
+
+    Unsloth iterates target_modules as a list. Given PEFT's string shorthand
+    "all-linear", it split the string into characters and raised
+    ``Target modules {'a', 'l', 'i', 'n', 'e', 'r', '-'} not found``. The
+    trainer then fell back to transformers + PEFT without saying so, which
+    meant every default Unsloth run trained without Unsloth.
+
+    "all-linear" is expanded against the loaded model with PEFT's rule
+    (:func:`_all_linear_leaf_names`), so coverage matches what the transformers
+    path adapts on any architecture. Any other single string is wrapped in a
+    list, and lists pass through.
+    """
+    if isinstance(target_modules, str):
+        if target_modules.lower() == "all-linear":
+            return _all_linear_leaf_names(model)
+        return [target_modules]
+    return list(target_modules)
+
+
+def _count_lora_layers(model: Any) -> int:
+    """How many modules carry a LoRA adapter (a ``lora_A`` sub-module)."""
+    try:
+        return sum(1 for name, _ in model.named_modules() if name.endswith(".lora_A"))
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return 0
+
 
 def load_model(
     model_name: str | None = None,

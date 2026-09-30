@@ -6,6 +6,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backpropagate.export import _unsloth_gguf_ready as _ORIG_UNSLOTH_GGUF_READY
+
+
+@pytest.fixture(autouse=True)
+def _unsloth_gguf_ready_by_default():
+    """Treat Unsloth's llama.cpp build as present unless a test says otherwise.
+
+    export_gguf checks for a built llama.cpp under ~/.unsloth before taking the
+    Unsloth path. On a host with unsloth_zoo installed but no build (CI's
+    Windows cell), that check would otherwise reroute the mocked-Unsloth tests.
+    """
+    with patch("backpropagate.export._unsloth_gguf_ready", return_value=(True, "")):
+        yield
+
 
 class TestExportEnums:
     """Tests for export enums."""
@@ -891,7 +905,7 @@ class TestExportGgufModelNameSanitization:
         monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", str(fake_convert))
 
         def fake_subprocess(cmd, **kwargs):
-            # cmd == [python, script, merged, "--outfile", <gguf_path>, "--outtype", quant]
+            # cmd == [python, script, merged, "--outfile", <gguf_path>, "--outtype", quant, ...]
             outfile = Path(cmd[cmd.index("--outfile") + 1])
             outfile.parent.mkdir(parents=True, exist_ok=True)
             outfile.write_bytes(b"GGUF")
@@ -905,7 +919,7 @@ class TestExportGgufModelNameSanitization:
                 model=model,
                 tokenizer=tokenizer,
                 output_dir=temp_dir / "out",
-                quantization="q4_k_m",
+                quantization="q8_0",
                 model_name=model_name,
             )
 
@@ -923,8 +937,8 @@ class TestExportGgufModelNameSanitization:
         assert result.path.resolve().parent == out_dir
         assert result.path.exists()
         # The traversal target outside output_dir was NEVER created.
-        assert not (temp_dir / "evil-q4_k_m.gguf").exists()
-        assert not (temp_dir.parent / "evil-q4_k_m.gguf").exists()
+        assert not (temp_dir / "evil-q8_0.gguf").exists()
+        assert not (temp_dir.parent / "evil-q8_0.gguf").exists()
 
     def test_separator_model_name_reduced_to_leaf(
         self, monkeypatch, temp_dir, mock_peft_model, mock_tokenizer
@@ -936,7 +950,7 @@ class TestExportGgufModelNameSanitization:
             model_name="sub/dir/x",
         )
         assert result.path.resolve().parent == out_dir
-        assert result.path.name == "x-q4_k_m.gguf"
+        assert result.path.name == "x-q8_0.gguf"
         assert not (out_dir / "sub").exists()
 
     def test_clean_model_name_is_preserved(
@@ -948,8 +962,351 @@ class TestExportGgufModelNameSanitization:
             monkeypatch, temp_dir, mock_peft_model, mock_tokenizer,
             model_name="my-finetune",
         )
-        assert result.path.name == "my-finetune-q4_k_m.gguf"
+        assert result.path.name == "my-finetune-q8_0.gguf"
         assert result.path.resolve().parent == out_dir
+
+
+class TestLlamaCppFallbackContract:
+    """#133: argv and quantization contract of the llama.cpp fallback.
+
+    The real converter is exercised by tests/test_golden_path_smoke.py. These
+    tests pin the argv shape so a regression shows up in the fast lane.
+    """
+
+    @pytest.fixture
+    def stub_converter(self, monkeypatch, temp_dir):
+        fake = temp_dir / "convert_hf_to_gguf.py"
+        fake.write_text("# stub convert script")
+        monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", str(fake))
+        return fake
+
+    def test_k_quant_refused_before_merge(
+        self, stub_converter, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """convert_hf_to_gguf.py has no q4_k_m outtype, so refuse it before merging."""
+        from backpropagate import export as export_mod
+        from backpropagate.exceptions import GGUFExportError
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible") as run:
+            with pytest.raises(GGUFExportError, match="cannot produce 'q4_k_m'"):
+                export_mod.export_gguf(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "out",
+                    quantization="q4_k_m",
+                )
+        mock_peft_model.merge_and_unload.assert_not_called()
+        run.assert_not_called()
+        assert not (temp_dir / "out" / "merged_temp").exists()
+
+    def test_argv_uses_running_interpreter_and_names_the_model(
+        self, stub_converter, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """The child must be sys.executable (not PATH "python") and get --model-name."""
+        import sys
+
+        from backpropagate import export as export_mod
+
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"], seen["kwargs"] = cmd, kwargs
+            out = Path(cmd[cmd.index("--outfile") + 1])
+            out.write_bytes(b"GGUF")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run):
+            export_mod.export_gguf(
+                model=mock_peft_model,
+                tokenizer=mock_tokenizer,
+                output_dir=temp_dir / "out",
+                quantization="q8_0",
+                model_name="my-model",
+            )
+
+        cmd = seen["cmd"]
+        assert cmd[0] == sys.executable
+        assert cmd[1] == str(stub_converter)
+        assert cmd[cmd.index("--outtype") + 1] == "q8_0"
+        assert cmd[cmd.index("--model-name") + 1] == "my-model"
+        assert seen["kwargs"].get("encoding") == "utf-8"
+
+    def test_conversion_error_reports_stderr_tail(
+        self, stub_converter, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        """A traceback's actionable line is its last; the error must carry it."""
+        from backpropagate import export as export_mod
+        from backpropagate.exceptions import GGUFExportError
+
+        stderr = "Traceback (most recent call last):\n" + ("  frame\n" * 400) + (
+            "ModuleNotFoundError: No module named 'sentencepiece'\n"
+        )
+        err = subprocess.CalledProcessError(1, ["python"], stderr=stderr)
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=err):
+            with pytest.raises(GGUFExportError, match="sentencepiece"):
+                export_mod.export_gguf(
+                    model=mock_peft_model,
+                    tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "out",
+                    quantization="q8_0",
+                )
+
+
+class TestFallbackQuantization:
+    """Levels the converter cannot write: llama-quantize, Ollama, or refusal."""
+
+    @pytest.fixture
+    def llama_dir(self, monkeypatch, temp_dir):
+        root = temp_dir / "llama.cpp"
+        root.mkdir()
+        (root / "convert_hf_to_gguf.py").write_text("# stub convert script")
+        monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", str(root))
+        monkeypatch.setattr("backpropagate.export.shutil.which", lambda name: None)
+        return root
+
+    @staticmethod
+    def _fake_run(calls):
+        def run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if "--outfile" in cmd:  # converter
+                Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"GGUF f16")
+            else:  # llama-quantize <in> <out> <TYPE>
+                Path(cmd[2]).write_bytes(b"GGUF quantized")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return run
+
+    def _export(self, temp_dir, model, tokenizer, calls, **kw):
+        from backpropagate import export as export_mod
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible",
+                          side_effect=self._fake_run(calls)):
+            return export_mod.export_gguf(
+                model=model, tokenizer=tokenizer, output_dir=temp_dir / "out",
+                model_name="m", **kw,
+            )
+
+    def test_llama_quantize_used_when_found(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        import sys
+
+        exe = "llama-quantize.exe" if sys.platform == "win32" else "llama-quantize"
+        (llama_dir / "build" / "bin").mkdir(parents=True)
+        quantizer = llama_dir / "build" / "bin" / exe
+        quantizer.write_text("")
+        calls: list = []
+        result = self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                              quantization="q4_k_m")
+
+        convert, quantize = calls
+        assert convert[convert.index("--outtype") + 1] == "f16"
+        assert quantize[0] == str(quantizer)
+        assert quantize[-1] == "Q4_K_M"
+        assert result.path.name == "m-q4_k_m.gguf"
+        assert result.quantization == "q4_k_m"
+        assert result.deferred_quantization is None
+        assert not (temp_dir / "out" / "m-f16.gguf").exists()
+
+    def test_ollama_quantizes_when_no_llama_quantize(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        calls: list = []
+        result = self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                              quantization="q4_k_m", defer_quantization_to_ollama=True)
+
+        (convert,) = calls
+        assert convert[convert.index("--outtype") + 1] == "f16"
+        assert result.path.name == "m-f16.gguf"
+        assert result.quantization == "f16"
+        assert result.deferred_quantization == "q4_K_M"
+
+    def test_level_ollama_cannot_make_is_refused_before_merge(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        from backpropagate.exceptions import GGUFExportError
+
+        calls: list = []
+        with pytest.raises(GGUFExportError, match="cannot produce 'q5_k_m'"):
+            self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                         quantization="q5_k_m", defer_quantization_to_ollama=True)
+        assert calls == []
+        mock_peft_model.merge_and_unload.assert_not_called()
+
+    def test_register_passes_quantize_to_ollama(self, sample_gguf_path):
+        from backpropagate import export as export_mod
+
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(export_mod.shutil, "which", return_value="/usr/bin/ollama"), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run):
+            assert export_mod.register_with_ollama(sample_gguf_path, "m", quantize="q4_K_M")
+        assert seen["cmd"][-2:] == ["--quantize", "q4_K_M"]
+
+
+class TestUnslothGgufGate:
+    """With auto-install off and no llama.cpp build, skip Unsloth's GGUF path."""
+
+    def test_not_ready_skips_unsloth_and_falls_back(
+        self, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        from backpropagate import export as export_mod
+        from backpropagate.exceptions import GGUFExportError
+
+        with patch.object(export_mod, "_has_unsloth", return_value=True), \
+             patch.object(export_mod, "_unsloth_gguf_ready",
+                          return_value=(False, "no llama.cpp build")), \
+             patch.object(export_mod, "_is_peft_model", return_value=True):
+            with pytest.raises(GGUFExportError, match="GGUF export requires"):
+                export_mod.export_gguf(
+                    model=mock_peft_model, tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "gguf", quantization="q8_0",
+                )
+        mock_peft_model.save_pretrained_gguf.assert_not_called()
+
+    def test_ready_check_names_the_opt_in(self, monkeypatch):
+        import sys
+        import types
+
+        from backpropagate import export as export_mod
+
+        fake = types.ModuleType("unsloth_zoo.llama_cpp")
+        fake.LLAMA_CPP_DEFAULT_DIR = "/nowhere/llama.cpp"
+
+        def check(folder):
+            raise RuntimeError(f"llama.cpp folder '{folder}' does not exist")
+
+        fake.check_llama_cpp = check
+        monkeypatch.setitem(sys.modules, "unsloth_zoo", types.ModuleType("unsloth_zoo"))
+        monkeypatch.setitem(sys.modules, "unsloth_zoo.llama_cpp", fake)
+        monkeypatch.setenv("UNSLOTH_AUTO_INSTALL", "0")
+
+        # The autouse fixture patches the module attribute; call the original.
+        assert export_mod._unsloth_gguf_ready is not _ORIG_UNSLOTH_GGUF_READY
+        ready, why = _ORIG_UNSLOTH_GGUF_READY()
+        assert ready is False
+        assert "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1" in why
+        assert "/nowhere/llama.cpp" in why
+
+        monkeypatch.setenv("UNSLOTH_AUTO_INSTALL", "1")  # opted in: let Unsloth try
+        assert _ORIG_UNSLOTH_GGUF_READY() == (True, "")
+
+
+class TestTrainerExportReload:
+    """trainer.export("gguf"|"merged") goes through the export loader too."""
+
+    @pytest.mark.parametrize("fmt", ["gguf", "merged"])
+    def test_saves_adapter_frees_model_and_reloads(self, tmp_path, fmt):
+        from backpropagate.trainer import Trainer
+
+        trainer = Trainer.__new__(Trainer)
+        live = MagicMock(name="live-4bit-peft")
+        trainer._model, trainer._tokenizer = live, MagicMock(name="tok")
+        trainer._trainer = MagicMock(name="sft")
+        trainer._is_loaded = True
+        trainer.output_dir = tmp_path / "out"
+
+        reloaded, reloaded_tok = MagicMock(name="reloaded"), MagicMock(name="tok16")
+        seen: dict = {}
+
+        def fake_load(path):
+            seen["adapter_dir"] = Path(path)
+            seen["model_at_reload"] = trainer._model
+            return reloaded, reloaded_tok
+
+        result = MagicMock(path=tmp_path / "x")
+        target = "export_gguf" if fmt == "gguf" else "export_merged"
+        with patch("backpropagate.export._is_peft_model", return_value=True), \
+             patch("backpropagate.export.load_model_for_export", side_effect=fake_load), \
+             patch(f"backpropagate.export.{target}", return_value=result) as exporter:
+            out = trainer.export(fmt, quantization="q8_0")
+
+        assert out is result
+        live.save_pretrained.assert_called_once_with(str(seen["adapter_dir"]))
+        assert seen["model_at_reload"] is None  # freed before the 16-bit reload
+        assert exporter.call_args.kwargs["model"] is reloaded
+        assert trainer._model is None and trainer._is_loaded is False
+        assert not seen["adapter_dir"].exists()  # temp adapter cleaned up
+
+
+class TestLoadModelForExport:
+    """#132: exporting a saved checkpoint applies its adapter exactly once.
+
+    The old path reused the training loader. It loaded the adapter dir through
+    transformers' PEFT integration, then ``get_peft_model`` added a second
+    adapter on a 4-bit base, and ``merge_and_unload`` raised
+    ``UnboundLocalError: ... 'active_adapters'``.
+    """
+
+    def test_adapter_dir_loads_16bit_base_and_wraps_once(self, tmp_path):
+        import json
+
+        from backpropagate.export import load_model_for_export
+
+        ckpt = tmp_path / "checkpoint-2"
+        ckpt.mkdir()
+        (ckpt / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": "org/base-model"})
+        )
+        base, wrapped = MagicMock(name="base"), MagicMock(name="peft")
+        tokenizer = MagicMock(pad_token="<pad>")
+
+        with patch("backpropagate.export._has_unsloth", return_value=False), \
+             patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=base) as load, \
+             patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer), \
+             patch("peft.PeftModel.from_pretrained", return_value=wrapped) as attach, \
+             patch("peft.get_peft_model") as new_adapter:
+            model, tok = load_model_for_export(ckpt)
+
+        assert model is wrapped and tok is tokenizer
+        # The base comes from adapter_config, never the adapter dir itself.
+        assert load.call_count == 1
+        assert load.call_args.args[0] == "org/base-model"
+        # Merging into a bitsandbytes 4-bit base yields weights GGUF can't read.
+        assert "quantization_config" not in load.call_args.kwargs
+        attach.assert_called_once_with(base, str(ckpt))
+        new_adapter.assert_not_called()
+
+    def test_adapter_dir_without_base_is_a_merge_error(self, tmp_path):
+        from backpropagate.exceptions import MergeExportError
+        from backpropagate.export import load_model_for_export
+
+        ckpt = tmp_path / "adapter"
+        ckpt.mkdir()
+        (ckpt / "adapter_config.json").write_text("{}")
+        with pytest.raises(MergeExportError, match="names no base model"):
+            load_model_for_export(ckpt)
+
+    def test_full_model_dir_is_loaded_without_an_adapter(self, tmp_path):
+        from backpropagate.export import load_model_for_export
+
+        full = tmp_path / "full"
+        full.mkdir()
+        (full / "config.json").write_text("{}")
+        plain = MagicMock(name="plain")
+
+        with patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=plain) as load, \
+             patch("transformers.AutoTokenizer.from_pretrained", return_value=MagicMock()), \
+             patch("peft.PeftModel.from_pretrained") as attach, \
+             patch("peft.get_peft_model") as new_adapter:
+            model, _ = load_model_for_export(full)
+
+        assert model is plain
+        assert load.call_args.args[0] == str(full)
+        attach.assert_not_called()
+        new_adapter.assert_not_called()
 
 
 class TestExportResultSummary:
@@ -1069,7 +1426,7 @@ class TestSubprocessTimeout:
                     model=mock_peft_model,
                     tokenizer=mock_tokenizer,
                     output_dir=temp_dir / "gguf_timeout",
-                    quantization="q4_k_m",
+                    quantization="q8_0",
                 )
 
     def test_register_with_ollama_timeout(self, sample_gguf_path):

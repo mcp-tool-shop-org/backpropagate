@@ -848,3 +848,42 @@ class TestEndToEndLogRedaction:
         )
         assert "EXAMPLE-NOT-A-REAL-KEY" not in out
         assert "<REDACTED>" in out
+
+
+class TestStdlibFallbackAcceptsStructuredKwargs:
+    """Issue #135: without structlog, ``get_logger().info("evt", field=...)``
+    raised ``TypeError: Logger._log() got an unexpected keyword argument``
+    (the CLI's ``cli_run_id=`` call). The fallback must accept arbitrary fields."""
+
+    def _fallback_logger(self, name: str):
+        import backpropagate.logging_config as lc
+
+        with mock.patch.object(lc, "STRUCTLOG_AVAILABLE", False), \
+                mock.patch.object(lc, "_configured", True):
+            return lc.get_logger(name)
+
+    def test_cli_run_id_kwarg_does_not_raise_and_is_kept(self, caplog):
+        log = self._fallback_logger("backpropagate.cli")
+        with caplog.at_level(logging.INFO, logger="backpropagate.cli"):
+            log.info("train_invoked", cli_run_id="abc123", model="m", dataset="d")
+        assert len(caplog.records) == 1
+        msg = caplog.records[0].getMessage()
+        assert msg.startswith("train_invoked")
+        assert "cli_run_id=abc123" in msg and "model=m" in msg
+
+    def test_stdlib_reserved_kwargs_still_pass_through(self, caplog):
+        log = self._fallback_logger("backpropagate.cli")
+        with caplog.at_level(logging.WARNING, logger="backpropagate.cli"):
+            try:
+                raise ValueError("boom")
+            except ValueError:
+                log.warning("failed", exc_info=True, code="X")
+        rec = caplog.records[0]
+        assert rec.exc_info is not None
+        assert "code=X" in rec.getMessage()
+
+    def test_percent_args_still_work(self, caplog):
+        log = self._fallback_logger("backpropagate.cli")
+        with caplog.at_level(logging.INFO, logger="backpropagate.cli"):
+            log.info("hello %s", "world")
+        assert caplog.records[0].getMessage() == "hello world"

@@ -73,7 +73,8 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. |
+| `BACKPROPAGATE_LLAMA_CPP_PATH` | unset | Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to `convert_hf_to_gguf.py` directly or the llama.cpp directory containing it. Searched FIRST, before `shutil.which` / `~/llama.cpp` / `/usr/local/bin`. A compiled `llama-quantize` is looked for in the same checkout (the root, `build/bin`, `build/bin/Release`), then on PATH. |
+| `BACKPROPAGATE_UNSLOTH_AUTO_INSTALL` | unset (off) | Set to `1` / `true` / `yes` / `on` to let Unsloth install system packages and build llama.cpp for its own GGUF export. Unsloth does this with `winget` on Windows (apt or brew elsewhere): CMake, compilers and OpenSSL, accepting their licence agreements. Off by default: `import backpropagate` sets `UNSLOTH_AUTO_INSTALL=0`, overriding any value already in the environment, and GGUF export uses the llama.cpp fallback when Unsloth has no built llama.cpp. |
 
 ## cloudflared tunnel (v1.3)
 

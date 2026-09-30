@@ -541,7 +541,10 @@ class TestTrainerExport:
             trainer._tokenizer = MagicMock()
             trainer._is_loaded = True
 
-        with patch("backpropagate.export._is_peft_model", return_value=True):
+        # A PEFT model is re-exported through the export loader (16-bit base +
+        # adapter), not merged into the live 4-bit model (#132 / #133).
+        with patch("backpropagate.export._is_peft_model", return_value=True),              patch("backpropagate.export.load_model_for_export",
+                   return_value=(mock_model, MagicMock())):
             result = trainer.export(format="merged", output_dir=str(temp_dir / "merged"))
 
         assert result.format == ExportFormat.MERGED
@@ -2116,10 +2119,15 @@ class TestLoRAMergeAndUnload:
             trainer._tokenizer = MagicMock()
             trainer._is_loaded = True
 
-            with patch("backpropagate.export._is_peft_model", return_value=True):
+            reloaded = MagicMock()
+            reloaded.merge_and_unload.return_value = mock_merged_model
+            with patch("backpropagate.export._is_peft_model", return_value=True),                  patch("backpropagate.export.load_model_for_export",
+                       return_value=(reloaded, MagicMock())):
                 trainer.export(format="merged", output_dir=str(temp_dir / "merged"))
 
-            mock_model.merge_and_unload.assert_called_once()
+            # The merge runs on the reloaded 16-bit model, not the live one.
+            reloaded.merge_and_unload.assert_called_once()
+            mock_model.merge_and_unload.assert_not_called()
 
 
 # =============================================================================

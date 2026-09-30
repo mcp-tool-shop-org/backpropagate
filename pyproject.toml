@@ -103,7 +103,7 @@ logging = [
     "structlog>=24.1.0",  # Structured logging (2026 best practices)
 ]
 security = [
-    "PyJWT>=2.8.0",  # JWT authentication
+    "PyJWT>=2.14.0",  # JWT authentication (2.14.0 fixes CVE-2026-102268, critical)
     "cryptography>=42.0.0",  # Secure token generation
 ]
 # v1.5 T2.1: EXPERIMENTAL FP8 compute path (Blackwell/Hopper sm_90+) via

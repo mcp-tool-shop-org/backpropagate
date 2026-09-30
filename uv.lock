@@ -350,6 +350,7 @@ fp8 = [
 ]
 full = [
     { name = "cryptography" },
+    { name = "datasets" },
     { name = "fastapi" },
     { name = "llama-cpp-python" },
     { name = "psutil" },
@@ -358,12 +359,16 @@ full = [
     { name = "pyjwt" },
     { name = "reflex" },
     { name = "structlog" },
+    { name = "torch" },
     { name = "torchao" },
+    { name = "transformers" },
+    { name = "trl" },
     { name = "unsloth" },
     { name = "wandb" },
 ]
 full-no-export = [
     { name = "cryptography" },
+    { name = "datasets" },
     { name = "fastapi" },
     { name = "psutil" },
     { name = "pydantic" },
@@ -371,7 +376,10 @@ full-no-export = [
     { name = "pyjwt" },
     { name = "reflex" },
     { name = "structlog" },
+    { name = "torch" },
     { name = "torchao" },
+    { name = "transformers" },
+    { name = "trl" },
     { name = "unsloth" },
     { name = "wandb" },
 ]
@@ -387,12 +395,16 @@ monitoring = [
 ]
 production = [
     { name = "cryptography" },
+    { name = "datasets" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "reflex" },
     { name = "structlog" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
     { name = "unsloth" },
 ]
 security = [
@@ -400,8 +412,12 @@ security = [
     { name = "pyjwt" },
 ]
 standard = [
+    { name = "datasets" },
     { name = "fastapi" },
     { name = "reflex" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
     { name = "unsloth" },
 ]
 ui = [
@@ -409,6 +425,10 @@ ui = [
     { name = "reflex" },
 ]
 unsloth = [
+    { name = "datasets" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "trl" },
     { name = "unsloth" },
 ]
 validation = [
@@ -428,6 +448,7 @@ requires-dist = [
     { name = "bitsandbytes", specifier = ">=0.41.0" },
     { name = "cryptography", marker = "extra == 'security'", specifier = ">=42.0.0" },
     { name = "datasets", specifier = ">=2.19.0" },
+    { name = "datasets", marker = "extra == 'unsloth'", specifier = "<4.4.0" },
     { name = "fastapi", marker = "extra == 'ui'", specifier = ">=0.115" },
     { name = "filelock", specifier = ">=3.0.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
@@ -456,10 +477,13 @@ requires-dist = [
     { name = "structlog", marker = "extra == 'logging'", specifier = ">=24.1.0" },
     { name = "tenacity", specifier = ">=8.0.0" },
     { name = "torch", specifier = ">=2.0.0,<3" },
+    { name = "torch", marker = "extra == 'unsloth'", specifier = "<2.13" },
     { name = "torchao", marker = "extra == 'fp8'", specifier = ">=0.10.0" },
     { name = "transformers", specifier = ">=4.46.0,<6" },
+    { name = "transformers", marker = "extra == 'unsloth'", specifier = "<=5.5.0" },
     { name = "trl", specifier = ">=0.18.0,<0.28" },
-    { name = "unsloth", marker = "extra == 'unsloth'", specifier = ">=2024.1" },
+    { name = "trl", marker = "extra == 'unsloth'", specifier = "<=0.24.0" },
+    { name = "unsloth", marker = "extra == 'unsloth'", specifier = ">=2026.6.8" },
     { name = "wandb", marker = "extra == 'monitoring'", specifier = ">=0.15.0" },
 ]
 provides-extras = ["unsloth", "ui", "validation", "export", "monitoring", "logging", "security", "fp8", "mlx", "standard", "full-no-export", "full", "production", "dev"]

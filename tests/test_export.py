@@ -1059,6 +1059,103 @@ class TestLlamaCppFallbackContract:
                 )
 
 
+class TestFallbackQuantization:
+    """Levels the converter cannot write: llama-quantize, Ollama, or refusal."""
+
+    @pytest.fixture
+    def llama_dir(self, monkeypatch, temp_dir):
+        root = temp_dir / "llama.cpp"
+        root.mkdir()
+        (root / "convert_hf_to_gguf.py").write_text("# stub convert script")
+        monkeypatch.setenv("BACKPROPAGATE_LLAMA_CPP_PATH", str(root))
+        monkeypatch.setattr("backpropagate.export.shutil.which", lambda name: None)
+        return root
+
+    @staticmethod
+    def _fake_run(calls):
+        def run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if "--outfile" in cmd:  # converter
+                Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"GGUF f16")
+            else:  # llama-quantize <in> <out> <TYPE>
+                Path(cmd[2]).write_bytes(b"GGUF quantized")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return run
+
+    def _export(self, temp_dir, model, tokenizer, calls, **kw):
+        from backpropagate import export as export_mod
+
+        with patch.object(export_mod, "_has_unsloth", return_value=False), \
+             patch.object(export_mod, "_is_peft_model", return_value=True), \
+             patch.object(export_mod, "_run_subprocess_interruptible",
+                          side_effect=self._fake_run(calls)):
+            return export_mod.export_gguf(
+                model=model, tokenizer=tokenizer, output_dir=temp_dir / "out",
+                model_name="m", **kw,
+            )
+
+    def test_llama_quantize_used_when_found(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        import sys
+
+        exe = "llama-quantize.exe" if sys.platform == "win32" else "llama-quantize"
+        (llama_dir / "build" / "bin").mkdir(parents=True)
+        quantizer = llama_dir / "build" / "bin" / exe
+        quantizer.write_text("")
+        calls: list = []
+        result = self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                              quantization="q4_k_m")
+
+        convert, quantize = calls
+        assert convert[convert.index("--outtype") + 1] == "f16"
+        assert quantize[0] == str(quantizer)
+        assert quantize[-1] == "Q4_K_M"
+        assert result.path.name == "m-q4_k_m.gguf"
+        assert result.quantization == "q4_k_m"
+        assert result.deferred_quantization is None
+        assert not (temp_dir / "out" / "m-f16.gguf").exists()
+
+    def test_ollama_quantizes_when_no_llama_quantize(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        calls: list = []
+        result = self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                              quantization="q4_k_m", defer_quantization_to_ollama=True)
+
+        (convert,) = calls
+        assert convert[convert.index("--outtype") + 1] == "f16"
+        assert result.path.name == "m-f16.gguf"
+        assert result.quantization == "f16"
+        assert result.deferred_quantization == "q4_K_M"
+
+    def test_level_ollama_cannot_make_is_refused_before_merge(
+        self, llama_dir, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        from backpropagate.exceptions import GGUFExportError
+
+        calls: list = []
+        with pytest.raises(GGUFExportError, match="cannot produce 'q5_k_m'"):
+            self._export(temp_dir, mock_peft_model, mock_tokenizer, calls,
+                         quantization="q5_k_m", defer_quantization_to_ollama=True)
+        assert calls == []
+        mock_peft_model.merge_and_unload.assert_not_called()
+
+    def test_register_passes_quantize_to_ollama(self, sample_gguf_path):
+        from backpropagate import export as export_mod
+
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(export_mod.shutil, "which", return_value="/usr/bin/ollama"), \
+             patch.object(export_mod, "_run_subprocess_interruptible", side_effect=fake_run):
+            assert export_mod.register_with_ollama(sample_gguf_path, "m", quantize="q4_K_M")
+        assert seen["cmd"][-2:] == ["--quantize", "q4_K_M"]
+
+
 class TestUnslothGgufGate:
     """With auto-install off and no llama.cpp build, skip Unsloth's GGUF path."""
 

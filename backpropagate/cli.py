@@ -1713,6 +1713,9 @@ def cmd_export(args: argparse.Namespace) -> int:
                 quantization=args.quantization,
                 emit_model_card=emit_card,
                 output_root=output_dir.parent,
+                # #133: with --ollama, a level the llama.cpp fallback cannot
+                # write itself (q4_k_m) is left to `ollama create --quantize`.
+                defer_quantization_to_ollama=bool(args.ollama),
             )
         elif args.format == "ollama-adapter":
             # v1.5 T2.3 (adapter-native export, Wave 6b GLUE): register the
@@ -1778,7 +1781,12 @@ def cmd_export(args: argparse.Namespace) -> int:
                 "(blob copy + index; ~15s for 3B, 30s-2min for 7B)..."
             )
 
-            if register_with_ollama(result.path, ollama_name):
+            deferred = getattr(result, "deferred_quantization", None)
+            if isinstance(deferred, str) and deferred:
+                _print_info(f"==> Ollama will quantize the f16 GGUF to {deferred}.")
+            else:
+                deferred = None
+            if register_with_ollama(result.path, ollama_name, quantize=deferred):
                 _print_success(f"Registered with Ollama: {ollama_name}")
                 _print_info(f"Run with: ollama run {ollama_name}")
             else:
@@ -2071,7 +2079,7 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "BACKPROPAGATE_LLAMA_CPP_PATH",
             "",
             "path",
-            "Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to convert_hf_to_gguf.py directly or the llama.cpp directory containing it. Searched FIRST, before shutil.which / ~/llama.cpp / /usr/local/bin.",
+            "Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to convert_hf_to_gguf.py directly or the llama.cpp directory containing it. Searched FIRST, before shutil.which / ~/llama.cpp / /usr/local/bin. llama-quantize is looked up in the same places (and under build/bin).",
         ),
         (
             "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL",

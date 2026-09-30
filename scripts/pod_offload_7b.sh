@@ -298,15 +298,18 @@ import json, math, sys
 r = json.load(open(sys.argv[1])); r["git_sha"] = sys.argv[2]; ceil = float(sys.argv[3])
 checks = {
   "finite_losses": all(math.isfinite(x) for x in r["losses"]),
-  "loss_decreased": len(r["losses"]) >= 4 and sum(r["losses"][-3:]) / 3 < r["losses"][0] * 0.9,
-  # Stochastic rounding moves only SOME bf16 elements per step (unbiased in
-  # expectation), so "% of sampled elements changed" is well below 100 even when
-  # learning is healthy: measured 43-49 % after 20 steps at 1.5B-7.6B. Round-to-
-  # nearest, the failure this guards against, moved 3.0 % at step 1 and stalled.
-  # The 25 % bar was revised after the first 7B receipt (the original 50 % was a
-  # guess made before any SR data existed); loss-vs-fp32 parity is the real gate
-  # (scripts/offload_probe.py --precision-check).
-  "params_changed": (r.get("pct_params_changed_final") or 0) >= 25.0,
+  # Learning gate = the conjunction of two measured separations.
+  # (1) Updates survive bf16. At step 1, round-to-nearest bf16 changed 3.0 % of
+  #     params (SmolLM2-360M, scripts/offload_probe.py --optim af_nearest) and
+  #     1.5B round-to-nearest via BACKPROPAGATE_OFFLOAD_ROUNDING=nearest (receipt
+  #     ladder/q15b_nearest); stochastic rounding changed 7.0 % (360M, full LR)
+  #     and 14.8 / 19.0 / 16.4 % (Qwen2.5-1.5B / SmolLM3-3B / Qwen3-4B, step 1
+  #     at half LR under warmup). Floor 5 % sits between the regimes. The first
+  #     7B receipt (d291aa2) was NOT used to set it; that receipt failed its
+  #     original bar (final-changed >= 50 %, a pre-data guess) and is superseded.
+  # (2) Loss falls: mean of the last 3 losses < 50 % of the first.
+  "params_changed_step1": (r.get("pct_params_changed_step1") or 0) >= 5.0,
+  "loss_decreased": len(r["losses"]) >= 4 and sum(r["losses"][-3:]) / 3 < r["losses"][0] * 0.5,
   "rss_under_ceiling": r["peak_rss_total_gb"] < ceil,
   "vram_fits": r["peak_vram_reserved_gb"] < r["vram_total_gb"],
   "generated": bool(r.get("generation", "").strip()),

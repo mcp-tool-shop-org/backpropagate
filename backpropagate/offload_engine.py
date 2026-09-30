@@ -363,6 +363,11 @@ def _train_loop(
         lr=learning_rate,
         weight_decay=weight_decay,
         device=device,
+        # Diagnostic only: BACKPROPAGATE_OFFLOAD_ROUNDING=nearest reproduces the
+        # failure mode (bf16 round-to-nearest drops sub-ulp updates) so the gate
+        # in scripts/pod_offload_7b.sh can be checked against it on real models.
+        stochastic_rounding=os.environ.get("BACKPROPAGATE_OFFLOAD_ROUNDING", "stochastic").strip().lower()
+        != "nearest",
     )
     rows = _encode(dataset, tokenizer, max_seq_length)
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id

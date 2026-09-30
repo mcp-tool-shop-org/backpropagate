@@ -699,7 +699,11 @@ jobs:
   pip-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15, up from 10: the CRITICAL-floor step now retries the OSV scan (worst
+    # case 3 x 100s + 45s backoff), and the two pip-audit steps before it also
+    # call out. This still kills a genuinely hung job; it just no longer
+    # cancels one that is only riding out an OSV brownout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -792,14 +796,51 @@ jobs:
       # pip-audit has no native --severity flag, so we read its JSON
       # output (OSV service exposes a `severity` array on each vuln)
       # and fail if any entry includes a CRITICAL CVSS rating.
+      #
+      # A SCAN ERROR IS NOT A SCAN FINDING. This step used to run pip-audit
+      # with `|| true` and then json.load the report unconditionally. When
+      # api.osv.dev times out, pip-audit crashes before writing anything, the
+      # report file never exists, json.load raises FileNotFoundError, and this
+      # REQUIRED check went red for a third-party outage -- indistinguishable
+      # from a real CRITICAL and blocking every open PR until OSV recovered.
+      #
+      # So: (1) retry the scan, bounded (3 attempts, 15s then 30s backoff, each
+      # capped at 100s so a hung connection cannot eat the job timeout); a
+      # report only counts if it PARSES, since pip-audit exits 1 both for
+      # "found vulns" (report written) and for "crashed" (nothing written) and
+      # the exit code cannot tell them apart. (2) If no parseable report exists
+      # after the last attempt, say so in a ::warning:: and exit 0 -- the scan
+      # never ran, so there is nothing to gate on, and the annotation keeps the
+      # gap visible on the run. (3) If a report DOES exist, the CRITICAL check
+      # below is untouched: a real finding at the floor still exits 1.
       - name: pip-audit (CRITICAL floor)
         run: |
-          set -euo pipefail
-          pip-audit \
-            --vulnerability-service osv \
-            --format json \
-            --output pip-audit.json \
-            --strict || true
+          # No `set -e`: a failing pip-audit attempt is data here, not an abort.
+          set -uo pipefail
+          report_ok() {
+            [ -s pip-audit.json ] && python3 -c "import json; json.load(open('pip-audit.json'))" 2>/dev/null
+          }
+          for attempt in 1 2 3; do
+            rm -f pip-audit.json
+            # Exit status deliberately ignored (see above); report_ok decides.
+            timeout 100 pip-audit \
+              --vulnerability-service osv \
+              --format json \
+              --output pip-audit.json \
+              --strict || true
+            if report_ok; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              backoff=$((attempt * 15))
+              echo "pip-audit attempt ${attempt}/3 produced no usable report (OSV slow or unreachable?); retrying in ${backoff}s"
+              sleep "${backoff}"
+            fi
+          done
+          if ! report_ok; then
+            echo "::warning::pip-audit CRITICAL floor: scan could not run (OSV unavailable) after 3 attempts -- no report was produced, so this is a scan ERROR, not a finding. The floor was NOT evaluated on this run; re-run the job once api.osv.dev is reachable if the dependency set changed."
+            exit 0
+          fi
           python3 -c "
           import json, sys
           data = json.load(open('pip-audit.json'))

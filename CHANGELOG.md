@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`torch<2.13`, `transformers<=5.5.0`, `trl<=0.24.0`, `datasets<4.4.0`).
   `[standard]`, `[full]` and `[production]` installs resolve in under a
   minute to the stack the GPU smokes run.
+- **Training now uses every row of your dataset by default** (#241). The
+  default `max_samples` was 1000, so `trainer.train("data.jsonl")` and
+  `backprop train` trained on 1000 randomly chosen rows of any larger dataset
+  without saying so. The default is now `0` (all rows); `samples=N`,
+  `--samples N` and `BACKPROPAGATE_DATA__MAX_SAMPLES` still cap it, and a cap
+  that drops rows is now logged. Training length is still set by `steps`.
 - **trl 1.x is supported; the cap moves from `<0.28` to `<2`** (#216). ORPO
   falls back to `trl.experimental` where trl moved it, and only config fields
   the installed trl still declares are passed.

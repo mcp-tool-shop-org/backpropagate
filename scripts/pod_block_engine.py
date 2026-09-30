@@ -298,7 +298,15 @@ if args.mode == "base":
 
 # ------------------------------------------------------------------- train
 from backpropagate import block_engine as be  # noqa: E402
+from backpropagate.config import settings as bp_settings  # noqa: E402
 from backpropagate.trainer import Trainer, TrainingCallback  # noqa: E402
+
+# Without pydantic-settings installed the library's settings ignore the
+# BACKPROPAGATE_* env vars set above (measured on the pod: seed stayed 42), so
+# set the three knobs this driver depends on directly as well.
+bp_settings.training.seed = args.seed
+bp_settings.training.logging_steps = 1
+bp_settings.training.save_steps = 1_000_000
 
 tag = args.tag or f"run_{int(time.time())}"
 arm = ("qlora" if args.qlora else args.engine)
@@ -306,7 +314,9 @@ rec: dict = {"mode": "train", "tag": tag, "arm": os.environ.get("ARM", arm), "mo
              "engine": "qlora" if args.qlora else args.engine, "seed": args.seed, "steps": args.steps,
              "batch": args.batch, "seq": args.seq, "lr": args.lr, "k": args.k, "order": args.order,
              "writeback": args.writeback, "freeze_embeddings": args.freeze_embeddings,
-             "vram_cap_gib": args.vram_cap_gb or None, **env()}
+             "vram_cap_gib": args.vram_cap_gb or None, **env(),
+             "settings_seed": bp_settings.training.seed,
+             "settings_logging_steps": bp_settings.training.logging_steps}
 base_path = os.path.join(RUNS, f"base_{slug(args.model)}.json")
 if os.path.exists(base_path):
     with open(base_path) as fh:

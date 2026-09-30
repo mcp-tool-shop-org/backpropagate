@@ -10,7 +10,16 @@ The VRAM estimator answers the operator question "will this config OOM on my car
 - **`Trainer.estimate_vram(...)`** (v1.4 Python API) — returns a structured `VRAMEstimate` with the headline `total_gb` and a per-consumer breakdown.
 - **`backprop estimate-vram`** (v1.3 CLI) — prints a tier table mapping VRAM ranges to recommended batch sizes for the auto-detection path.
 
-Both surfaces are accurate within ~10-20% of empirical peak for well-known training configs. The estimator is a planning tool, not a guarantee — see [the limitations](#limitations) below.
+**The estimator is a rough guide, and it can be well off in both directions.** Checked against measured peaks on an RTX 5090 (2026-09-30, transformers path, batch 1 unless noted):
+
+| Config | Estimator | Measured peak (allocated / reserved) |
+|---|---|---|
+| Qwen2.5-14B QLoRA r=32, 4096 tokens | 14.0 GB | 25.0 / 28.1 GiB |
+| Mistral-Small-24B QLoRA r=32, 4096 tokens | 17.7 GB | 26.5 / 29.6 GiB |
+| Qwen2.5-32B QLoRA r=32, 2048 tokens | 22.1 GB | 28.8 / 30.7 GiB |
+| SmolLM3-3B full fine-tuning, batch 4, 512 tokens | 20.1 GB | 12.6 / 20.4 GiB |
+
+It **underestimates QLoRA on large models by 25–45%** and overestimated full fine-tuning at 3B by about 60%. The estimates above used each model's real hidden size and layer count; with the 7B-class defaults they are lower still. The QLoRA runs did not use Unsloth, which can lower memory, and each ran a full context window. Treat the estimate as a lower bound for QLoRA, and leave headroom. Recalibrating it against measured runs is planned. See [the limitations](#limitations) below.
 
 ## Python API: `Trainer.estimate_vram()`
 
@@ -94,16 +103,19 @@ A few canonical configurations on 16GB consumer cards (RTX 4080 / 5080 / 4070 Ti
 
 For the last row, the trainer's mode='full' gate fires at `Trainer.__init__` before the estimator gets a chance — see [full fine-tuning](/backpropagate/handbook/full-fine-tuning/).
 
-On a **32 GB** card (RTX 5090) the envelope opens up — and the offload path reports `host_ram_gb`:
+On a **32 GB** card (RTX 5090), **measured** peaks (not estimates), batch 1 at each preset's full context window:
 
-| Model | Config | GPU total | Host RAM (offload) |
+| Model | Config | GPU (allocated / reserved) | Host RAM |
 |-------|--------|-----------|--------------------|
-| Qwen 2.5 14B | QLoRA r=32, batch=2, seq=4096 | ~8.5 GB | — |
-| Qwen 2.5 32B | QLoRA r=32, seq=2048 | ~26 GB (just fits) | — |
-| Qwen 2.5 7B | `mode="full"` (pure-GPU, 7B > 6B ceiling) | refused → use `--full-ft-offload` | — |
-| Qwen 2.5 7B | `mode="full" --full-ft-offload` | ~1 GB working set + activations | ~39 GB |
+| Qwen 2.5 14B | QLoRA r=32, 4096 tokens | 25.0 / 28.1 GiB | — |
+| Mistral-Small 24B | QLoRA r=32, 4096 tokens | 26.5 / 29.6 GiB | — |
+| Qwen 2.5 32B | QLoRA r=32, 2048 tokens | 28.8 / 30.7 GiB (just fits) | — |
+| Qwen 2.5 7B | `mode="full"` on the GPU (7.6B > 6B ceiling) | refused → use `--full-ft-offload` | — |
+| Qwen 2.5 7B | `mode="full" --full-ft-offload`, 512 tokens | 5.3 / 14.7 GiB | 30.8 GiB training, 32.2 GiB with save |
 
-The recommended auto-batch is **6 at 32 GB** and **8 at 48 GB** (`backprop estimate-vram --vram-gb 32`).
+For the offload path, `estimate_vram(offload=True)` uses the same measured constants as the trainer's fit check and reports `host_ram_gb` (about 39 GB for 7.6B, which includes the save). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/#the-fit-check).
+
+The auto batch size resolves to 6 at 32 GB and 8 at 48 GB (`backprop estimate-vram --vram-gb 32`). The measured QLoRA peaks above were at batch 1. Batch 6 at those context lengths has not been measured and is unlikely to fit for 14B and larger; the trainer's OOM recovery halves the batch and retries, which costs time. Set `batch_size` explicitly for the 14B–32B presets.
 
 ## Limitations
 

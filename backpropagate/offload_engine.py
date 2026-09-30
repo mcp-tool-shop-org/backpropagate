@@ -509,7 +509,7 @@ def run_offload_training(
 ) -> dict[str, Any]:
     """Shard ``model``, train ``steps`` optimizer steps, and return losses + timing."""
     torch.manual_seed(seed)
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 — seeded training-data shuffle, not crypto
     device = torch.device("cuda", torch.cuda.current_device())
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = shard_for_cpu_offload(model, compute_dtype=compute_dtype)

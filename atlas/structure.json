@@ -48,7 +48,7 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "06aeeaed2726216a401cd56a64faa086ed47467e011039d9c86339d207edc46a",
+          "hash": "bd810a85edcbbf9971adedfacb9ac887d028bc7dbd8ee9bba2010760fb937cb8",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -131,7 +131,7 @@
           "path": "backpropagate/.gitignore"
         },
         {
-          "hash": "eca01d61a1d8120732e36b572e0d960cd547facee6754370a8e1aab9900a24b7",
+          "hash": "132896c4e6858686af3272280c5d925031ced93a1cbadb5b3a5f9c1d03431409",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
@@ -316,7 +316,7 @@
             "main",
             "write_launch_token_lock"
           ],
-          "hash": "109f1f550ac469377f522f273afebbc06e3e8ee5376db3e3b1287723a46e5cf0",
+          "hash": "b695dc5e7e5c507af9689c5c17939c828d99611bda166a0c329127dc843f2512",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -440,13 +440,15 @@
             "export_ollama_adapter",
             "list_adapter_shelf",
             "list_ollama_models",
+            "load_model_for_export",
             "push_to_hub",
             "register_with_ollama",
             "remove_ollama_model",
             "write_model_card"
           ],
-          "hash": "6e44a2f337da465fc5ba68bdd585ca939bbe973045f56f0853e5b7d230a76650",
+          "hash": "57df27a89b45fe88bca1256e68702dc0a53eeb59465e9a7b4d016d68ae00ad74",
           "importsFiles": [
+            "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/model_card.py"
           ],
@@ -592,7 +594,7 @@
             "load_dataset",
             "load_model"
           ],
-          "hash": "857f06ef3af3d10508c310f919da967001a3fb27b544f6fa2b26d8db477d7626",
+          "hash": "d099a53ef645ea4e07c131fb7c2e0c82020454f7b9621804a5eb2073ae254a93",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
@@ -1105,7 +1107,7 @@
       "name": "backpropagate",
       "origin": "authored",
       "role": "code",
-      "testedBy": 63,
+      "testedBy": 64,
       "unresolvedSites": 2
     },
     {
@@ -1308,6 +1310,10 @@
           "path": "WAVE_6A_TODO.md"
         },
         {
+          "hash": "a0e9bcffe5bb59ed97e391f242ddbef8f5c7bda79ddb638f03e7c59fb7255588",
+          "path": "codecov.yml"
+        },
+        {
           "hash": "0a734f59e252c78b35754de0e74d35eac612759a40222561f91b8d5ad89b8ca4",
           "path": "compose.yaml"
         },
@@ -1328,7 +1334,7 @@
           "path": "pyproject.toml"
         },
         {
-          "hash": "049b85f87ad649cd9659f522eb69aef5955b2e19142b4ee99fea4adcb2372056",
+          "hash": "005058cf98006df4c220b750f30261ff1d290d7d2effcac40f9b77fafee4608e",
           "path": "uv.lock"
         },
         {
@@ -1353,7 +1359,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "b0d43d5a940ce9c21fe5a5280ec21c8d73fee552a447d52ac894994cb8dd0e95",
+          "hash": "79da13d7f2339dac6a73309a43521c4266326b699eb2d34e747e8c9423ec7f85",
           "path": "scripts/README.md"
         },
         {
@@ -1537,6 +1543,10 @@
         {
           "hash": "5a654079e0eac8a4b75385e6e749044ac4891d4dda8e971f89e8f588ec002a26",
           "path": "scripts/doc-drift-allow.toml"
+        },
+        {
+          "hash": "e6b996acb3f1c83f92d26da73f4d0234695357c4dd4cb0aa073b6800c2451fe6",
+          "path": "scripts/gpu_smoke.sh"
         },
         {
           "entry": "main",
@@ -1984,7 +1994,7 @@
           "path": "tests/test_checkpoints.py"
         },
         {
-          "hash": "2e3dcc47170001bae3f361133f9fda4081a7a61f71d0a9a8c6f434f84929abb7",
+          "hash": "fc7ea5467b74ab567f512e2ecdd4a09c928fcee6e1b9950beb4e97403556b934",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -2013,7 +2023,7 @@
           "path": "tests/test_cli_data_eval.py"
         },
         {
-          "hash": "c1fbbf7ebe51fc066fdb72d441ed38e51bc1f3ab8e45528ff4517d6343637d88",
+          "hash": "c93cd1549cd7f2e81422d822556fc4c1dca1ec0717f5e148dbb5f051a12b3a2d",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/cli.py",
@@ -2089,7 +2099,7 @@
           "path": "tests/test_doc_drift.py"
         },
         {
-          "hash": "e5590cfb7a4b0bf1c4c81e177d0eda6a07ccae248085e49836f2eb218b5115cf",
+          "hash": "566489cc5800dddb6c3723525fa1c41e1e49dc5e685a4e38b17a9dc7a4ee0ee9",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/export.py",
@@ -2202,12 +2212,13 @@
           "path": "tests/test_exceptions.py"
         },
         {
-          "hash": "c67a5dd4d0e5d382efc4bbe96f21abccc61ee89db217c6744b2f16e292461c74",
+          "hash": "837d610e295ea650926472722de1ddf056d4f675bd94420157b871d7f51a8db6",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_export.py"
         },
@@ -2249,6 +2260,26 @@
             "backpropagate/checkpoints.py"
           ],
           "path": "tests/test_fuzz_checkpoints.py"
+        },
+        {
+          "exports": [
+            "checkpoint",
+            "fallback_gguf",
+            "test_default_q4_k_m_to_ollama",
+            "test_gguf_export_llama_cpp_fallback",
+            "test_gguf_export_unsloth",
+            "test_merged_export_from_checkpoint",
+            "test_trainer_export_gguf_in_memory",
+            "test_trainer_export_merged_in_memory",
+            "unsloth_gguf",
+            "workdir"
+          ],
+          "hash": "0f070dcd2d7ffaca8bd37af6653fdf4f467d31295bd5e5f4c23c7240179bfed3",
+          "importsFiles": [
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_golden_path_smoke.py"
         },
         {
           "hash": "deec6df608bb23bcea3a2aba6232742b0b3987aadf917f6d67f5a1a0de80a803",
@@ -2549,7 +2580,7 @@
           "exports": [
             "temp_dir"
           ],
-          "hash": "f2504940b13106c85bc79a1425e78726d6eea0bfbd52012f74f1779daabfda72",
+          "hash": "3f0a04f5fa0a8ef545f121d48c05fcc597b8dbac4756aa6238ca6f91baf47955",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -2598,6 +2629,15 @@
             "backpropagate/ui_theme.py"
           ],
           "path": "tests/test_ui_states.py"
+        },
+        {
+          "exports": [
+            "test_auto_install_is_off_before_unsloth_is_imported",
+            "test_existing_env_value_is_overridden",
+            "test_explicit_opt_in_is_honoured"
+          ],
+          "hash": "4f868c98d8bed87e89df4636aff7897308acbcab4196782f36cf7e88945a2938",
+          "path": "tests/test_unsloth_auto_install.py"
         },
         {
           "hash": "4263816a3c2e0646a0a9be44eb391cfbdce11de67730ba06c48b9ec07615ee6a",
@@ -2663,7 +2703,7 @@
       "origin": "authored",
       "role": "test",
       "testedBy": 0,
-      "unresolvedSites": 4
+      "unresolvedSites": 5
     }
   ],
   "doors": [
@@ -2697,7 +2737,7 @@
         {
           "job": "test",
           "step": "Run tests with coverage",
-          "text": "set -euo pipefail\nCOV_FLOOR=$(python -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])\")\necho \"Coverage floor (from pyproject.toml): ${COV_FLOOR}\"\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  # coverage.py's combine step picks up the per-worker .coverage.*\n  # files automatically when -n is set, so --cov + xdist coexist\n  # without extra wiring beyond the standard `coverage combine`\n  # pytest-cov already does at session teardown.\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=\"${COV_FLOOR}\" ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\"\n"
+          "text": "set -euo pipefail\nCOV_FLOOR=$(python -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])\")\necho \"Coverage floor (from pyproject.toml): ${COV_FLOOR}\"\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  # coverage.py's combine step picks up the per-worker .coverage.*\n  # files automatically when -n is set, so --cov + xdist coexist\n  # without extra wiring beyond the standard `coverage combine`\n  # pytest-cov already does at session teardown.\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=\"${COV_FLOOR}\" ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\" --junitxml=junit.xml\n"
         },
         {
           "job": "test",
@@ -2862,6 +2902,7 @@
       "name": "CI",
       "permissions": [
         "contents:read",
+        "id-token:write",
         "security-events:write"
       ],
       "pushes": false,
@@ -2879,7 +2920,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 70
+          "files": 72
         },
         {
           "boundary": "scripts",
@@ -2967,6 +3008,7 @@
             "Dockerfile",
             "atlas/**",
             "backpropagate/**",
+            "codecov.yml",
             "pyproject.toml",
             "requirements*.txt",
             "tests/**",
@@ -2979,6 +3021,7 @@
       ],
       "uses": [
         "actions/checkout",
+        "actions/download-artifact",
         "actions/setup-node",
         "actions/setup-python",
         "actions/upload-artifact",
@@ -3659,8 +3702,8 @@
     }
   ],
   "generatedFrom": {
-    "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
-    "tracked": 251
+    "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb",
+    "tracked": 255
   },
   "landings": [
     {
@@ -4458,6 +4501,17 @@
     {
       "readers": [
         {
+          "by": "scripts/gpu_smoke.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "tests/test_mlx_smoke.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": ".github/workflows/ci.yml"
         }
       ],
@@ -4479,6 +4533,6 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 73,
+  "testFiles": 75,
   "unassigned": []
 }

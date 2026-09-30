@@ -423,6 +423,9 @@ class MLXBackend:
     num_layers: int = _MLX_DEFAULT_NUM_LAYERS
     grad_checkpoint: bool = False
     seed: int = 42
+    # settings.model.trust_remote_code, forwarded to mlx_lm (which defaults to
+    # False). Only emitted when True so the default config/argv is unchanged.
+    trust_remote_code: bool = False
     # Forwarded into _run_subprocess_interruptible; overridable for tests.
     timeout: float = field(default=_DEFAULT_MLX_TIMEOUT)
 
@@ -449,7 +452,7 @@ class MLXBackend:
         this module does not attempt to force all-linear on mlx (mlx's
         target-module spec differs and is out of scope for this preview rail).
         """
-        return {
+        config: dict[str, Any] = {
             "model": self.model,
             "train": True,
             "fine_tune_type": "lora",
@@ -469,6 +472,9 @@ class MLXBackend:
                 "dropout": float(self.lora_dropout),
             },
         }
+        if self.trust_remote_code:
+            config["trust_remote_code"] = True
+        return config
 
     def write_config(self, path: str | Path) -> Path:
         """Write :meth:`build_config` to ``path`` as YAML. Returns the Path.
@@ -623,6 +629,8 @@ class MLXBackend:
             "--save-path",
             str(save),
         ]
+        if self.trust_remote_code:
+            argv.append("--trust-remote-code")
         if export_gguf:
             argv.append("--export-gguf")
             if gguf_path is not None:

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING (security default): `trust_remote_code` is now off.** Loading a
+  model no longer runs Python code from the model's Hugging Face repository
+  unless you opt in. Through v1.7.1 the default was on, and nothing in the
+  README, SECURITY.md or the env-vars page said so. A model that needs
+  remote code now fails with the new stable code
+  `CONFIG_TRUST_REMOTE_CODE_REQUIRED`, which names the model and the opt-in
+  (`BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true`, or
+  `settings.model.trust_remote_code = True`). None of the curated presets
+  need it. The eval loader, the perplexity filter and the MLX rail now read
+  the same setting; before, they ignored it.
+- **Unsloth can no longer install system software unasked.** On a machine
+  without a built llama.cpp, Unsloth's GGUF export runs `winget install`
+  (or apt / brew) for CMake, compilers and OpenSSL and accepts their licence
+  agreements. A plain `backprop export --format gguf` on a Windows
+  `[standard]` install did this. `import backpropagate` now sets
+  `UNSLOTH_AUTO_INSTALL=0`; the export uses the llama.cpp fallback instead
+  and says what is missing. `BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1` opts back
+  in.
 - **PyJWT 2.13.0 → 2.15.1 in `uv.lock`; the `[security]` floor rises to
   `>=2.14.0`.** CVE-2026-102268 (critical, fixed in 2.14.0) tripped Trivy's
   CRITICAL floor on `main` and on every open PR. The re-lock moved PyJWT
@@ -43,6 +61,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-locked trl 1.13.0 and broke ORPO: trl 1.x no longer exports
   `ORPOConfig`/`ORPOTrainer` from the top level, and ORPO has no
   `trl.experimental` fallback. Both were closed.
+
+### Fixed
+
+- **`backprop export --format gguf` and `--format merged` work again on QLoRA
+  checkpoints (#132).** Both failed with `UnboundLocalError: ... 'active_adapters'`
+  on any 4-bit QLoRA checkpoint, with or without Unsloth. The export reused
+  the training loader, which attached the adapter a second time onto a 4-bit
+  base. Export now has its own loader: the base in 16-bit, the adapter applied
+  once. `trainer.export("gguf")` and `trainer.export("merged")` go through the
+  same loader. They free the trained model first, so call `load_model()` again
+  to keep training afterwards.
+- **The default `q4_k_m` export to Ollama works without Unsloth and without a
+  compiled llama.cpp (#133).** The llama.cpp fallback could never produce
+  `q4_k_m`: the converter writes `f16` and `q8_0` but no k-quants. With
+  `--ollama` it now writes f16 and lets `ollama create --quantize q4_K_M`
+  quantize it. A compiled `llama-quantize` is used when one is found, which
+  also covers `q5_k_m`, `q4_0`, `q2_k` and bare `.gguf` files. A level that
+  neither can produce is refused before the merge, not after it.
+- **Three more llama.cpp fallback bugs (#133).** The converter ran under
+  whatever `python` was first on PATH, which on Windows is often a Python
+  without torch; it now runs under the interpreter backpropagate runs in. Its
+  UTF-8 output crashed the cp1252 pipe reader on Windows. The error message
+  kept the first 500 characters of the traceback and cut off the line that
+  said what went wrong.
 
 ## [1.7.1] - 2026-09-07
 

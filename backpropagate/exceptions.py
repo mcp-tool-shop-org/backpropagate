@@ -84,6 +84,8 @@ __all__ = [
     # Training
     "TrainingError",
     "ModelLoadError",
+    "TrustRemoteCodeRequiredError",
+    "is_trust_remote_code_error",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
     "OffloadDoesNotFitError",
@@ -327,6 +329,20 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "UI_OUTPUT_DIR_FORBIDDEN": {
         "description": "BACKPROPAGATE_UI__OUTPUT_DIR points at a forbidden base path (e.g., /etc, ~/.ssh).",
         "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
+        "retryable": "no",
+    },
+    "CONFIG_TRUST_REMOTE_CODE_REQUIRED": {
+        "description": (
+            "Loading this model would execute Python code shipped inside the "
+            "model repository (trust_remote_code), and trust_remote_code is "
+            "off (the default)."
+        ),
+        "default_hint": (
+            "Read the repository's code first. To opt in, set "
+            "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true in the environment "
+            "(or settings.model.trust_remote_code = True in Python), or pick "
+            "a model transformers supports natively."
+        ),
         "retryable": "no",
     },
     "DEP_MODEL_LOAD_FAILED": {
@@ -992,6 +1008,11 @@ class ModelLoadError(TrainingError):
     behave byte-identically to pre-Stage-C ModelLoadError.
     """
 
+    # Overridden by subclasses that carry their own stable code (see
+    # TrustRemoteCodeRequiredError).
+    _CODE = "DEP_MODEL_LOAD_FAILED"
+    _RETRYABLE = True
+
     def __init__(
         self,
         model_name: str,
@@ -1022,13 +1043,80 @@ class ModelLoadError(TrainingError):
             f"Failed to load model '{model_name}': {reason}",
             details=details,
             suggestion=effective_hint,
-            code="DEP_MODEL_LOAD_FAILED",
+            code=self._CODE,
             # Most ModelLoadError instances come from transient network
             # failures (HF Hub 503 / timeout). Callers may inspect
             # ``details['reason']`` or ``cause_category`` to decide whether
             # a retry is worth attempting (e.g. auth/not_found ⇒ don't retry).
-            retryable=True,
+            retryable=self._RETRYABLE,
         )
+
+
+class TrustRemoteCodeRequiredError(ModelLoadError):
+    """The model repo needs ``trust_remote_code`` and the setting is off.
+
+    Raised instead of a bare transformers ``ValueError`` when loading a model
+    whose repository ships custom modeling code (``auto_map`` in config.json)
+    while ``settings.model.trust_remote_code`` is False (the default).
+    Subclasses :class:`ModelLoadError` so existing handlers still
+    catch it; carries its own stable code ``CONFIG_TRUST_REMOTE_CODE_REQUIRED``
+    and is not retryable (only the operator can opt in).
+
+    The message names the model and says that loading it would execute code
+    from the model repository; the suggestion gives the exact opt-in.
+    """
+
+    _CODE = "CONFIG_TRUST_REMOTE_CODE_REQUIRED"
+    _RETRYABLE = False
+
+    def __init__(self, model_name: str):
+        import os
+
+        where = (
+            f"the files in {os.path.abspath(model_name)}"
+            if os.path.isdir(model_name)
+            else f"https://huggingface.co/{model_name}"
+        )
+        super().__init__(
+            model_name,
+            (
+                "loading it would execute Python code from the model "
+                "repository (custom modeling code), and trust_remote_code is "
+                "off (the default)"
+            ),
+            suggestion=(
+                f"Read the code first ({where}). To opt in, set "
+                "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true in the "
+                "environment (this also applies to the CLI, e.g. "
+                "`BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true backprop train ...`), "
+                "or in Python: `from backpropagate.config import settings; "
+                "settings.model.trust_remote_code = True` before creating the "
+                "Trainer. Otherwise pick a model transformers supports "
+                "natively."
+            ),
+        )
+
+
+def is_trust_remote_code_error(exc: BaseException) -> bool:
+    """True when ``exc`` (or its cause chain) is transformers' "needs
+    trust_remote_code" refusal.
+
+    transformers raises ``ValueError`` from ``resolve_trust_remote_code`` when
+    a repo has custom code and the caller passed ``trust_remote_code=False``
+    (4.46 .. 5.x word it differently but every variant names the
+    ``trust_remote_code`` argument). Backpropagate always passes an explicit
+    bool, so transformers never falls into its interactive
+    "Do you wish to run the custom code? [y/N]" prompt -- a non-interactive
+    run cannot hang on it. Unsloth may re-wrap the error, hence the chain walk.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ValueError) and "trust_remote_code" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 class FullFinetuneModelTooLargeError(TrainingError):

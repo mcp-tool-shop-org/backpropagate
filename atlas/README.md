@@ -1,15 +1,15 @@
 # backpropagate: how it works
 
-Mapped at 2026-09-30 from commit 90b1321.
+Mapped at 2026-09-30 from commit 765dca7.
 
 ## What this is
 
 11 parts. Work enters through 9 doors; the busiest is CI, which reaches 4 parts.
 
-## What changed since 2026-09-23 (34a7862)
+## What changed since 2026-09-30 (90b1321)
 
-- CI's push trigger now also names `codecov.yml`.
-- 31 files added, 1 removed and 20 changed content, across 6 parts.
+- tests/test_mlx_smoke.py is now read by scripts/gpu_smoke.sh.
+- 6 files added and 27 changed content, across 6 parts.
 
 ## What comes in
 
@@ -94,7 +94,7 @@ Read those in order to follow one pull request end to end.
 ## What this map cannot see
 
 - 41 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
-- 8 import sites could not be resolved.
+- 9 import sites could not be resolved.
 - 15 writes and 39 reads use paths built at run time and are not named here.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

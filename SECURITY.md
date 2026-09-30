@@ -50,5 +50,6 @@ When reporting, please include:
 - Never commit API keys or tokens
 - Validate training data sources
 - Keep dependencies updated
+- Model repositories can ship Python code. Backpropagate does not run it by default (`trust_remote_code` is off since v1.7.2); a model that needs it fails with `CONFIG_TRUST_REMOTE_CODE_REQUIRED`. Opt in with `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true` only for a repository whose code you have read. Through v1.7.1 the default was on.
 - When using `backprop ui`, do not pass `--share` without `--auth` (and on v1.1.x, do not pass either — see GHSA-f65r-h4g3-3h9h above; upgrade to v1.2.0). In v1.2.0+, `--share` without `--auth` hard-errors with `RUNTIME_UI_AUTH_NOT_ENFORCED`. For remote access without exposing the UI publicly, use SSH port-forwarding: `ssh -L 7860:localhost:7860 <training-host>` then open `http://localhost:7860` locally.
 - The UI sandboxes filesystem writes to a single base directory (`~/.backpropagate/ui-outputs` by default; override via `BACKPROPAGATE_UI__OUTPUT_DIR`). The override is denylist-validated — system / credential paths are refused with `[UI_OUTPUT_DIR_FORBIDDEN]`.

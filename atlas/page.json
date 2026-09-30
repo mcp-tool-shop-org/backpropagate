@@ -40,29 +40,30 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 31,
-      "changed": 20,
+      "added": 6,
+      "changed": 27,
       "moved": 0,
       "parts": 6,
-      "removed": 1
+      "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI's push trigger now also names `codecov.yml`.",
+        "kind": "landing",
+        "sentence": "tests/test_mlx_smoke.py is now read by scripts/gpu_smoke.sh.",
         "subjects": [
-          ".github/workflows/ci.yml"
+          "tests/test_mlx_smoke.py",
+          "scripts/gpu_smoke.sh"
         ]
       },
       {
         "kind": "counts",
-        "sentence": "31 files added, 1 removed and 20 changed content, across 6 parts.",
+        "sentence": "6 files added and 27 changed content, across 6 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
-      "generatedAt": "2026-09-23T14:58:25.620Z"
+      "commit": "90b1321bbabb87622c7d101bd4ad047ce5a814ce",
+      "generatedAt": "2026-09-30T17:32:43.276Z"
     },
     "unchanged": false
   },
@@ -88,7 +89,7 @@
     "Window: 180 days; a pair counts from 10 shared commits."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "90b1321bbabb87622c7d101bd4ad047ce5a814ce",
+  "commit": "765dca79a6859737c18522d33c65b3de985915f7",
   "doors": [
     {
       "file": ".github/workflows/ci.yml",
@@ -109,7 +110,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 75
+          "files": 79
         },
         {
           "boundary": "scripts",
@@ -310,10 +311,10 @@
       ]
     }
   ],
-  "generatedAt": "2026-09-30T17:32:43.276Z",
+  "generatedAt": "2026-09-30T19:52:47.388Z",
   "limits": [
     "41 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "8 import sites could not be resolved.",
+    "9 import sites could not be resolved.",
     "15 writes and 39 reads use paths built at run time and are not named here."
   ],
   "mainDoor": ".github/workflows/ci.yml",
@@ -328,9 +329,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 78,
+  "testFiles": 82,
   "testedBy": {
-    "backpropagate": 67,
+    "backpropagate": 70,
     "bin": 0,
     "scripts": 2
   },

@@ -424,8 +424,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 1,
-        "lines": 99,
+        "commits": 2,
+        "lines": 116,
         "path": "atlas/README.md"
       },
       {
@@ -434,18 +434,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 1,
-        "lines": 323,
+        "commits": 2,
+        "lines": 376,
         "path": "atlas/page.json"
       },
       {
-        "commits": 1,
-        "lines": 1650,
+        "commits": 2,
+        "lines": 2007,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 1,
-        "lines": 4484,
+        "commits": 2,
+        "lines": 4847,
         "path": "atlas/structure.json"
       },
       {
@@ -1144,8 +1144,8 @@
         "path": "site/src/content/docs/handbook/cli-reference.md"
       },
       {
-        "commits": 30,
-        "lines": 445,
+        "commits": 31,
+        "lines": 452,
         "path": "site/src/content/docs/handbook/env-vars.md"
       },
       {
@@ -1744,9 +1744,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-09-30T17:32:43.276Z",
+  "generatedAt": "2026-09-30T19:52:47.388Z",
   "generatedFrom": {
-    "commit": "90b1321bbabb87622c7d101bd4ad047ce5a814ce"
+    "commit": "765dca79a6859737c18522d33c65b3de985915f7"
   },
   "pairs": [
     {
@@ -1780,9 +1780,9 @@
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
       "b": "site/src/content/docs/handbook/env-vars.md",
-      "either": 19,
+      "either": 20,
       "shared": 13,
-      "strength": 0.684211
+      "strength": 0.65
     }
   ],
   "parameters": {
@@ -1794,15 +1794,15 @@
     "fallenShared": 3,
     "floor": "strong",
     "floorTrigger": null,
-    "headDate": "2026-09-30T13:32:04-04:00",
-    "inScopeFiles": 286,
+    "headDate": "2026-09-30T13:33:38-04:00",
+    "inScopeFiles": 300,
     "pinnedStart": null,
-    "qualifyingCommits": 177,
+    "qualifyingCommits": 179,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-03T17:32:04.000Z",
+    "since": "2026-04-03T17:33:38.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

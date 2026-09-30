@@ -182,7 +182,7 @@ class TestModelConfig:
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
         assert config.dtype is None
-        assert config.trust_remote_code is True
+        assert config.trust_remote_code is False
 
     def test_model_config_attributes(self):
         """Test ModelConfig has all expected attributes."""

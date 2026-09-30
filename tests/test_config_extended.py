@@ -188,7 +188,7 @@ class TestModelConfig:
         assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
-        assert config.trust_remote_code is True
+        assert config.trust_remote_code is False
 
     def test_model_config_dtype_default(self):
         """ModelConfig dtype defaults to None (auto-detect)."""

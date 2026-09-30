@@ -17,7 +17,7 @@
 
 # Fine-tune a 32B QLoRA — or a 7B end to end — on one GPU. Ship it to Ollama.
 
-Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–34B model on one 32 GB consumer card (RTX 5090); one flag — `--full-ft-offload` — full-fine-tunes a 7B-class model by spilling the optimizer state to host RAM. One more command exports to Ollama, then `ollama run` your finetune. Scales cleanly down to 16 GB. First-class on Windows.
+Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–32B model on one 32 GB consumer card (RTX 5090). One flag, `--full-ft-offload`, full-fine-tunes a 7B-class model by keeping its weights and gradients in host RAM (Linux or WSL2; slow, and measured below). One more command exports to Ollama, then `ollama run` your finetune. Scales down to 16 GB. First-class on Windows.
 
 ```python
 from backpropagate import Trainer
@@ -71,24 +71,36 @@ If you tried one of the libraries above and bounced off the config-file ceremony
 
 ## What you can fine-tune on one GPU
 
-Backpropagate sizes the run to your card. Here's the practical envelope on a **32 GB** consumer GPU (RTX 5090) with 64 GB host RAM — the rig it's tuned on:
+Backpropagate sizes the run to your card. These are **measured** numbers from 2026-09-30 on a 32 GB RTX 5090 (receipts: [`docs/receipts/2026-09-30-offload/`](docs/receipts/2026-09-30-offload/)). QLoRA peaks are at the preset's full context window with batch 1, which is the worst case for that preset; shorter examples use less.
 
-| Model size | Method | Status on a 32 GB card |
+| Model | Method | Measured on a 32 GB card |
 |---|---|---|
-| 7B (Qwen 2.5 7B / Llama-3.1-8B / Mistral 7B) | QLoRA | Comfortable — ~7–8 GB. Full sequence length, lots of headroom. |
-| **14B** (Qwen2.5-14B) | QLoRA | **The daily-driver sweet spot — ~8.5 GB** measured. rank/alpha 32, paged 8-bit AdamW, 4096 ctx. |
-| 24B (Mistral-Small-24B) | QLoRA | ~18 GB. Fits with headroom at 4096 ctx. |
-| **32B** (Qwen2.5-32B) | QLoRA | **Just fits — ~26 GB** at `max_len 2048` + paged 8-bit AdamW. Top of the envelope. |
-| ≤6B | `mode="full"` (true full fine-tuning) | Pure-GPU full FT — bf16 weights, no adapter. The card-aware ceiling is 6B on 32 GB. |
-| **7B-class** (Qwen 2.5 7B / Llama-3.1-8B / Mistral 7B) | `mode="full" --full-ft-offload` | **Full fine-tuning via FSDP2 CPU-offload** — spills params + optimizer to 64 GB host RAM. Slower (bandwidth-bound); Linux/WSL2. |
+| **14B** (Qwen2.5-14B) | QLoRA | **25.0 GiB** peak at 4096 context (28.1 GiB reserved). |
+| 24B (Mistral-Small-24B) | QLoRA | 26.5 GiB peak at 4096 context (29.6 GiB reserved). |
+| **32B** (Qwen2.5-32B) | QLoRA | **Just fits:** 28.8 GiB peak at 2048 context (30.7 GiB reserved, about 0.65 GiB to spare). |
+| 1.5B–3B | `mode="full"` (true full fine-tuning, on the GPU) | 1.5B: 6.7 GB. 3B: 12.6 GB at batch 4, 512 context, 0.63 s/step. |
+| **7B-class** (Qwen2.5-7B, 7.6B params) | `mode="full" --full-ft-offload` | **Trains:** 5.3 GiB VRAM, **30.8 GiB host RAM** (32.2 GiB while saving), **14.7 s/step**. Linux or WSL2 only. |
 
-Two things most single-GPU libraries send you elsewhere for — **24–34B QLoRA** and **single-card 7B-class full fine-tuning** — Backpropagate does on one consumer card, then exports the result straight to Ollama.
+Not re-measured in that session: 7B QLoRA, Llama-3.1-8B (gated repository, no token on the test machine), and pure-GPU full fine-tuning above 3B. Figures for those elsewhere in the docs are estimates.
 
-**The full-FT ceiling is card-aware.** It's derived from the 4-addend training-memory arithmetic (weights + gradients + optimizer + activations) against your *detected* VRAM: **16 GB → 4B, 24 GB → 5B, 32 GB → 6B** pure-GPU. `--full-ft-offload` lifts it to **7B-class** by spilling params + optimizer state into host RAM via FSDP2 `fully_shard` + `CPUOffloadPolicy` (slower, PCIe/CPU-bandwidth-bound; needs ~64 GB host RAM and an NCCL backend, i.e. Linux/WSL2). Override the ceiling explicitly with `--full-ft-ceiling-billions`. A model past even the offload ceiling exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`, naming the recovery (`--full-ft-offload`, or LoRA/QLoRA). See [the full fine-tuning handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/) for the VRAM math + the Biderman 2024 / Thinking Machines 2025 quality comparison.
+Two things most single-GPU libraries send you elsewhere for, **24–32B QLoRA** and **single-card 7B-class full fine-tuning**, Backpropagate does on one consumer card, then exports the result straight to Ollama.
+
+**Full fine-tuning has two paths.** Without offload, the model, its gradients and the optimizer state all sit on the GPU. The library caps model size by detected VRAM (**16 GB → 4B, 24 GB → 5B, 32 GB → 6B**); those caps come from memory arithmetic and are measured only up to 3B. Override with `--full-ft-ceiling-billions`.
+
+`--full-ft-offload` keeps weights and gradients in host RAM and streams them to the GPU (FSDP2 CPU offload). What it costs, measured:
+
+- **Host RAM:** about 3.7 GiB per billion parameters plus 10 GiB. The run is refused up front, with the numbers, if the machine cannot hold it. A 7.6B model does not fit under a 28 GB WSL2 memory cap; about 5B is the practical limit there.
+- **Speed:** 14.7 s/step at 7.6B and 5.1 s/step at 3B, against 0.63 s/step for 3B on the GPU. Use it only when the model does not fit without it.
+- **Optimizer:** Adafactor, not AdamW. Weights stay in bf16 and each update is written back with stochastic rounding; there is no fp32 copy.
+- **Quality:** on one 3B run (150 steps, held-out loss, one seed) it reached about 85% of the improvement that ordinary full fine-tuning got (2.45 → 1.93 against 2.45 → 1.84). One seed is not a benchmark.
+- **Scope:** plain supervised fine-tuning. No packing, no response-only masking, no intermediate checkpoints, no resume. Linux or WSL2 only (FSDP2 needs NCCL); on Windows-native it stops with `DEP_FSDP_UNAVAILABLE`.
+- **Not yet tested:** long runs, gradient accumulation above 1, and a physical 64 GB machine (the test machine had more RAM, with a 60 GiB limit enforced by the test).
+
+A model that does not fit exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` and names the way out. See [the full fine-tuning handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/full-fine-tuning/).
 
 ### Scales down to 16 GB
 
-The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA at ~7–8 GB, and true full fine-tuning of a genuine ~3B (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) inside 16 GB via `mode="full"` (bf16 weights + gradient checkpointing + paged 8-bit AdamW). The same code picks the batch size and full-FT ceiling that fit whatever card it detects — no flags to change between rigs.
+The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA, and true full fine-tuning of a ~3B model (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) via `mode="full"`, which measured 12.6 GB at 3B. With `--full-ft-offload` the GPU holds far less: with VRAM capped on the test card, a 3B model trained under a 6 GiB cap and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps on a 32 GB card, not runs on real 8 GB hardware. The same code picks the batch size and ceiling that fit whatever card it detects.
 
 2-bit quantization (AQLM / QuIP#) stays **out of scope** — a 2-bit base can't be cleanly merged back into full-precision weights, which breaks the mergeable-adapter → GGUF → Ollama export contract (the whole point of the pipeline). The headroom levers Backpropagate ships instead — QLoRA, `mode="full"`, `--full-ft-offload`, and the FP8 compute path (`--fp8`, Blackwell/Hopper) — all stay mergeable and exportable.
 
@@ -96,7 +108,7 @@ The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QL
 
 If your use case is below, you'll have a better time with a different library — Backpropagate is not the right pick and trying to make it work would cost more than just reaching for the right tool. Reading this section before you start saves the install-and-bounce cycle:
 
-- **Full-parameter fine-tuning past the offload ceiling (≈13B+)** — Backpropagate full-fine-tunes up to **~6B pure-GPU and ~7B-class via `--full-ft-offload`** on a 32 GB card (see [the envelope](#what-you-can-fine-tune-on-one-gpu)). A *true full* fine-tune of a 13B+ model is past that — it wants multi-GPU FSDP or a bigger card (reach for `transformers.Trainer` across multiple GPUs, or rent an A100/H100). Before spending that compute, though: recent research ([Biderman 2024](https://arxiv.org/abs/2405.09673), [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)) shows LoRA at correct configuration matches full fine-tuning quality on most post-training tasks (instruction-following, domain adaptation, persona/style) at ~67% of the compute — so QLoRA up to 34B, which Backpropagate does on one card, loses nothing for the work most operators actually want.
+- **Full-parameter fine-tuning of 13B+ models** — Backpropagate full-fine-tunes up to about 6B on a 32 GB GPU and a 7B-class model with `--full-ft-offload` (see [the envelope](#what-you-can-fine-tune-on-one-gpu)). A full fine-tune of a 13B+ model wants multi-GPU FSDP or a bigger card. Before spending that compute, weigh the evidence both ways. [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/) reports LoRA matching full fine-tuning when it is applied to every layer and the dataset fits the adapter's capacity, at about two-thirds of the compute per pass. [Biderman et al. 2024](https://arxiv.org/abs/2405.09673) found that in standard low-rank settings LoRA substantially underperforms full fine-tuning on code and math, while forgetting less. For instruction-following, persona and style work on modest datasets, QLoRA up to 32B is usually the better use of one card.
 - **Online RL — PPO / GRPO / RLVR** — Backpropagate does single-stage SFT plus reference-free preference tuning (ORPO in v1.5; SimPO + KTO in v1.6). What it does *not* do is online reinforcement learning — PPO, GRPO, or RLVR — which needs a reward model or a generation-and-scoring loop on top of the training step. For those, use TRL directly or LLaMA-Factory. (Reference-free preference tuning fits the single-stage envelope because there's no separate reference model to hold in memory; see the ORPO note under [Quick Start](#quick-start).)
 - **Multi-node training** — single GPU on one machine only. Multi-GPU on one machine works (via `accelerate launch`) but isn't officially supported.
 - **macOS training on the CUDA rail** — Apple Silicon doesn't have CUDA, so the CUDA path runs on a Linux or Windows box with an NVIDIA GPU. You can still run the trained model on a Mac via Ollama. An **experimental, unverified-preview** MLX rail (`--backend mlx`) trains a LoRA adapter natively on Apple Silicon — see [Apple Silicon (MLX)](#apple-silicon-mlx--unverified-preview). It is LoRA-SFT-only and **not dogfood-verified on real silicon** (no support), so for anything beyond a LoRA SFT (ORPO, full fine-tune, FP8, multi-run) you want the CUDA rail.
@@ -372,9 +384,9 @@ Nested keys use double underscore (`MODEL__NAME`, not `MODEL_NAME`). The full re
 | Llama 3.2 1B | ~6GB | Llama Community | For quick experiments on small cards. |
 | Mistral 7B | ~12GB | Apache 2.0 | Comparable to Qwen 7B, different chat template. |
 | Llama-3.1-8B | ~7-8GB (QLoRA) | Llama-3.1-Community | 8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license). |
-| **Qwen2.5-14B** | ~8.5GB (QLoRA) | Apache 2.0 | **The 32 GB daily-driver sweet spot** — rank/alpha 32, paged 8-bit AdamW, 4096 ctx. |
-| Mistral-Small-24B | ~18GB (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card with 4096-ctx headroom. |
-| **Qwen2.5-32B** | ~26GB (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope** — just fits at `max_len 2048` + paged 8-bit AdamW. |
+| **Qwen2.5-14B** | 25 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | **The 32 GB daily driver.** rank/alpha 32, 8-bit AdamW. The 4-bit weights alone are about 8.5 GB; a full 4096-token window needs the rest. |
+| Mistral-Small-24B | 26.5 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card. The 4-bit weights alone are about 18 GB. |
+| **Qwen2.5-32B** | 28.8 GiB peak at 2048 ctx (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope.** Just fits at `max_len 2048` with 8-bit AdamW. |
 
 Other models often work; the rows above are the curated presets — the 14B–32B tier is QLoRA-tuned for a 32 GB card (the measured envelope). Pass `--lora-preset=quality` (default) for rank-256 / all-linear targets per Biderman 2024 + Thinking Machines 2025, or `--lora-preset=fast` for the legacy rank-16 / q+v target if you need the v1.2.x footprint.
 

@@ -819,6 +819,74 @@ class GGUFQuantization(Enum):
     Q2_K = "q2_k"
 
 
+# #133: the ``--outtype`` values llama.cpp's convert_hf_to_gguf.py accepts,
+# restricted to members of GGUFQuantization. Everything else needs llama.cpp's
+# compiled llama-quantize binary.
+_LLAMA_CPP_CONVERT_OUTTYPES = frozenset({"f16", "q8_0"})
+
+# Levels `ollama create --quantize` can produce from an f16 GGUF. Measured on
+# Ollama 0.34: it accepts F32, F16, Q4_K_S, Q4_K_M and Q8_0 and rejects
+# Q5_K_M, Q4_0 and Q2_K. Only the levels the converter cannot write itself
+# are listed.
+_OLLAMA_QUANTIZE_LEVELS = {"q4_k_m": "q4_K_M"}
+
+# llama-quantize type names for GGUFQuantization values.
+_LLAMA_QUANTIZE_TYPES = {
+    "q5_k_m": "Q5_K_M",
+    "q4_k_m": "Q4_K_M",
+    "q4_0": "Q4_0",
+    "q2_k": "Q2_K",
+}
+
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _unsloth_gguf_ready() -> tuple[bool, str]:
+    """Whether Unsloth's save_pretrained_gguf can run without installing anything.
+
+    backpropagate sets UNSLOTH_AUTO_INSTALL=0 at import (see __init__). With
+    that, and with no llama.cpp built where Unsloth looks, Unsloth's GGUF path
+    can only fail, after a full 16-bit merge. Checking first skips straight to
+    the llama.cpp fallback and says why.
+    """
+    if os.environ.get("UNSLOTH_AUTO_INSTALL", "").strip().lower() in _TRUTHY:
+        return True, ""
+    try:
+        from unsloth_zoo.llama_cpp import LLAMA_CPP_DEFAULT_DIR, check_llama_cpp
+    except Exception:  # noqa: BLE001 - unknown unsloth_zoo layout: let Unsloth try
+        return True, ""
+    try:
+        check_llama_cpp(LLAMA_CPP_DEFAULT_DIR)
+    except Exception as e:  # noqa: BLE001 - any failure means "not built"
+        detail = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        return False, (
+            f"Unsloth's GGUF export needs a built llama.cpp (llama-quantize + "
+            f"converter) at {LLAMA_CPP_DEFAULT_DIR}, and none was found ({detail}). "
+            "backpropagate does not let Unsloth install system packages "
+            "(winget / apt / brew) to build one. Set "
+            "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1 to allow that, or build "
+            "llama.cpp there (or point UNSLOTH_LLAMA_CPP_PATH at a build)."
+        )
+    return True, ""
+
+
+def _find_llama_quantize(convert_script: Path) -> Path | None:
+    """Find llama.cpp's compiled llama-quantize, using the converter's discovery.
+
+    Looks next to the converter (its llama.cpp checkout: the root,
+    build/bin and build/bin/Release), then on PATH.
+    """
+    names = ["llama-quantize.exe", "llama-quantize"] if sys.platform == "win32" else ["llama-quantize"]
+    root = convert_script.parent
+    for d in (root, root / "build" / "bin", root / "build" / "bin" / "Release"):
+        for n in names:
+            candidate = d / n
+            if candidate.is_file():
+                return candidate
+    found = shutil.which("llama-quantize")
+    return Path(found) if found else None
+
+
 class ExportFormat(Enum):
     """Model export formats."""
 
@@ -843,6 +911,10 @@ class ExportResult:
     size_mb: float
     quantization: str | None = None  # For GGUF
     export_time_seconds: float = 0.0
+    # #133: set when export_gguf wrote an f16 GGUF and left the requested
+    # quantization to `ollama create --quantize` (the `--ollama` path without a
+    # compiled llama-quantize). register_with_ollama(quantize=...) applies it.
+    deferred_quantization: str | None = None
 
     def summary(self) -> str:
         """Human-readable summary of the export."""
@@ -1053,6 +1125,143 @@ def _has_unsloth() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _export_load_dtype() -> Any:
+    """16-bit dtype for an export-time load: bf16 where supported, else fp16 on
+    CUDA, fp32 on CPU."""
+    import torch
+
+    if torch.cuda.is_available():
+        if torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+    return torch.float32
+
+
+def load_model_for_export(model_path: str | Path) -> tuple[Any, Any]:
+    """Load a saved checkpoint for a merged / GGUF export (#132).
+
+    A training checkpoint (``output/checkpoint-N``) or a ``Trainer.save()``
+    directory holds a PEFT adapter, not a model. The export must apply that
+    adapter exactly ONCE, onto an UNQUANTIZED base, and must not attach a fresh
+    training adapter on top.
+
+    Before this loader, ``backprop export`` reused the training loader
+    (``trainer.load_model``). That loader handed the adapter directory to
+    ``AutoModelForCausalLM.from_pretrained`` (which loads the adapter through
+    transformers' PEFT integration), then called ``get_peft_model`` a second
+    time for a new training adapter, on a 4-bit base. ``merge_and_unload`` on
+    that double-wrapped model raised ``UnboundLocalError: ... 'active_adapters'``.
+    Even without the crash, a merge into a bitsandbytes 4-bit base yields
+    quantized tensors that llama.cpp's converter cannot read.
+
+    Load order:
+
+    * Adapter directory (``adapter_config.json`` present): with Unsloth
+      installed, ``FastLanguageModel.from_pretrained(<adapter dir>,
+      load_in_4bit=False)``, which returns a PEFT model that carries Unsloth's
+      ``save_pretrained_gguf``. If Unsloth is absent or fails, the base named
+      by ``base_model_name_or_path`` is loaded in 16-bit with transformers, and
+      the adapter is attached with ``PeftModel.from_pretrained``.
+    * Any other directory is treated as a full model and loaded in 16-bit as-is.
+      No adapter is attached.
+
+    Returns:
+        ``(model, tokenizer)``. The model is a ``PeftModel`` for adapter
+        directories.
+
+    Raises:
+        MergeExportError: If the adapter config is unreadable or names no base.
+    """
+    import json
+
+    path = Path(model_path)
+    adapter_config_path = path / "adapter_config.json"
+
+    from .config import settings
+
+    trust_remote_code = settings.model.trust_remote_code
+    dtype = _export_load_dtype()
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    def _device_kwargs() -> dict[str, Any]:
+        import torch
+
+        return {"device_map": "auto"} if torch.cuda.is_available() else {}
+
+    if not adapter_config_path.is_file():
+        logger.info("load_model_for_export: %s has no adapter_config.json; "
+                    "loading it as a full model in %s.", path, dtype)
+        model: Any = AutoModelForCausalLM.from_pretrained(
+            str(path), dtype=dtype, trust_remote_code=trust_remote_code,
+            **_device_kwargs(),
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(path), trust_remote_code=trust_remote_code
+        )
+        return model, tokenizer
+
+    try:
+        adapter_config = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise MergeExportError(
+            f"Cannot read adapter config {adapter_config_path}: {e}",
+            suggestion="Point the export at a complete adapter directory "
+                       "(adapter_config.json + adapter_model.safetensors).",
+        ) from e
+    base_name = adapter_config.get("base_model_name_or_path")
+    if not base_name:
+        raise MergeExportError(
+            f"{adapter_config_path} names no base model "
+            "(base_model_name_or_path is empty)",
+            suggestion="Set base_model_name_or_path in adapter_config.json to "
+                       "the model the adapter was trained from.",
+        )
+
+    if _has_unsloth():
+        try:
+            from unsloth import FastLanguageModel
+
+            model, tokenizer = FastLanguageModel.from_pretrained(
+                model_name=str(path),
+                load_in_4bit=False,
+                dtype=None,
+                trust_remote_code=trust_remote_code,
+            )
+            if _is_peft_model(model):
+                return model, tokenizer
+            logger.warning(
+                "load_model_for_export: Unsloth returned %s for adapter dir %s, "
+                "not a PEFT model; loading base + adapter with transformers.",
+                type(model).__name__, path,
+            )
+        except Exception as e:  # noqa: BLE001 - any Unsloth failure degrades
+            logger.warning(
+                "load_model_for_export: Unsloth could not load %s (%s: %s); "
+                "loading base + adapter with transformers.",
+                path, type(e).__name__, e,
+            )
+
+    from peft import PeftModel
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_name, dtype=dtype, trust_remote_code=trust_remote_code,
+        **_device_kwargs(),
+    )
+    model = PeftModel.from_pretrained(base_model, str(path))
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(path), trust_remote_code=trust_remote_code
+        )
+    except Exception:  # noqa: BLE001 - adapter dirs need not carry a tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_name, trust_remote_code=trust_remote_code
+        )
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
 
 
 def export_lora(
@@ -1319,12 +1528,16 @@ def export_gguf(
     run_id: str | None = None,
     base_model: str | None = None,
     output_root: str | Path | None = None,
+    defer_quantization_to_ollama: bool = False,
 ) -> ExportResult:
     """
     Export to GGUF format.
 
-    Uses Unsloth's save_pretrained_gguf if available (much faster).
-    Falls back to manual conversion via llama.cpp if needed.
+    Uses Unsloth's save_pretrained_gguf when Unsloth is installed and its
+    llama.cpp build is in place. Otherwise converts with llama.cpp's
+    convert_hf_to_gguf.py (the fallback), which writes f16 / q8_0 itself. Other
+    levels come from a compiled llama-quantize when one is found, or, with
+    ``defer_quantization_to_ollama``, from ``ollama create --quantize``.
 
     Args:
         model: Model to export (PeftModel or base model)
@@ -1332,6 +1545,11 @@ def export_gguf(
         output_dir: Directory to save GGUF file
         quantization: Quantization level (default: q4_k_m)
         model_name: Name for the output file (default: "model")
+        defer_quantization_to_ollama: The caller will register the GGUF with
+            Ollama. When the fallback cannot quantize to ``quantization``
+            itself and Ollama can, write an f16 GGUF and set
+            ``ExportResult.deferred_quantization`` for
+            ``register_with_ollama(quantize=...)``.
 
     Returns:
         ExportResult with path and size info
@@ -1413,7 +1631,13 @@ def export_gguf(
     # B-006: write into a sibling .partial directory so a mid-conversion
     # disk-full / crash doesn't leave a half-written .gguf file at the
     # final path. On success we move the produced .gguf into output_path.
-    if _has_unsloth():
+    use_unsloth_gguf = _has_unsloth()
+    if use_unsloth_gguf:
+        use_unsloth_gguf, not_ready = _unsloth_gguf_ready()
+        if not use_unsloth_gguf:
+            logger.warning("%s Using the llama.cpp fallback instead.", not_ready)
+            print(f"WARNING: {not_ready} Using the llama.cpp fallback instead.")
+    if use_unsloth_gguf:
         unsloth_partial = output_path / "_unsloth_partial"
         if unsloth_partial.exists():
             shutil.rmtree(unsloth_partial, ignore_errors=True)
@@ -1520,43 +1744,6 @@ def export_gguf(
             logger.warning(f"Unsloth GGUF export failed: {e}. Trying manual conversion...")
             print("WARNING: Unsloth GGUF export failed, falling back to llama.cpp conversion (slower)...")
 
-    # Manual conversion: merge first, then convert
-    # This requires llama.cpp's convert script
-    merged_path = output_path / "merged_temp"
-
-    try:
-        merged_path.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        raise GGUFExportError(
-            f"Failed to create temp directory for merge: {e}",
-            output_path=str(output_path),
-        ) from e
-
-    try:
-        # Merge if needed
-        if _is_peft_model(model):
-            merged_model = model.merge_and_unload()
-        else:
-            merged_model = model
-
-        # FP8 finding: an FP8-trained model merges to an f32 checkpoint at
-        # 4 B/param — double the bf16 the disk pre-flight (which ran above
-        # with multiplier=2.0 on a 2-B/param assumption) budgeted. Down-cast
-        # to bf16 before saving so the scratch merge + quantized GGUF fit the
-        # budgeted headroom instead of dying mid-conversion out of disk.
-        merged_model = _cast_merged_model_to_bf16(merged_model)
-
-        # Save in HF format
-        merged_model.save_pretrained(merged_path)
-        tokenizer.save_pretrained(merged_path)
-    except Exception as e:
-        # Clean up on failure
-        shutil.rmtree(merged_path, ignore_errors=True)
-        raise GGUFExportError(
-            f"Failed to prepare model for GGUF conversion: {e}",
-            output_path=str(output_path),
-        ) from e
-
     # Try to find llama.cpp convert script
     gguf_path = output_path / f"{model_name}-{quant_str}.gguf"
 
@@ -1608,51 +1795,7 @@ def export_gguf(
                 convert_script = path
                 break
 
-    if convert_script:
-        logger.warning(f"Using llama.cpp convert script: {convert_script}")
-        # Run conversion
-        cmd = [
-            "python",
-            str(convert_script),
-            str(merged_path),
-            "--outfile",
-            str(gguf_path),
-            "--outtype",
-            quant_str,
-        ]
-        try:
-            # BRIDGE-A-004: Popen-based runner so Ctrl+C during a 30-min
-            # quantization actually stops the child instead of leaving a
-            # zombie that holds VRAM + disk for the rest of the timeout.
-            result = _run_subprocess_interruptible(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=1800,
-            )
-        except subprocess.TimeoutExpired:
-            # Clean up on timeout
-            shutil.rmtree(merged_path, ignore_errors=True)
-            raise GGUFExportError(
-                "llama.cpp conversion timed out after 30 minutes",
-                output_path=str(output_path),
-                quantization=quant_str,
-                suggestion="The model may be too large for conversion, or llama.cpp may be stuck. Try a smaller model or check system resources."
-            )
-        except subprocess.CalledProcessError as e:
-            # Clean up on failure
-            shutil.rmtree(merged_path, ignore_errors=True)
-            error_output = e.stderr[:500] if e.stderr else "No error output"
-            raise GGUFExportError(
-                f"llama.cpp conversion failed (exit code {e.returncode}):\n{error_output}",
-                output_path=str(output_path),
-                quantization=quant_str,
-                suggestion="Check that llama.cpp is properly installed and up to date"
-            ) from e
-    else:
-        # Clean up and raise
-        shutil.rmtree(merged_path, ignore_errors=True)
+    if convert_script is None:
         # BRIDGE-B-014 (Stage C): enumerate every path the discovery probed
         # so the operator knows what to populate. The
         # BACKPROPAGATE_LLAMA_CPP_PATH escape hatch is named explicitly in
@@ -1677,11 +1820,172 @@ def export_gguf(
             )
         )
 
+    # #133: convert_hf_to_gguf.py writes only f16 / q8_0 (of our levels).
+    # Any other level is reached one of two ways: convert to f16, then
+    #   * quantize with a compiled llama-quantize, when one is found, or
+    #   * leave it to `ollama create --quantize`, when the caller registers
+    #     with Ollama and Ollama supports the level.
+    # Otherwise refuse here, before the merge, instead of letting the
+    # converter's argparse reject the outtype after minutes of work.
+    convert_outtype = quant_str
+    quantize_bin: Path | None = None
+    deferred_quantization: str | None = None
+    if quant_str not in _LLAMA_CPP_CONVERT_OUTTYPES:
+        quantize_bin = _find_llama_quantize(convert_script)
+        if quantize_bin is None:
+            if defer_quantization_to_ollama and quant_str in _OLLAMA_QUANTIZE_LEVELS:
+                deferred_quantization = _OLLAMA_QUANTIZE_LEVELS[quant_str]
+            else:
+                ollama_levels = sorted(_OLLAMA_QUANTIZE_LEVELS)
+                raise GGUFExportError(
+                    f"The llama.cpp fallback cannot produce {quant_str!r}: its "
+                    f"converter writes only {sorted(_LLAMA_CPP_CONVERT_OUTTYPES)} "
+                    "and no compiled llama-quantize was found",
+                    output_path=str(output_path),
+                    quantization=quant_str,
+                    suggestion=(
+                        "Re-run with --quantization q8_0 (or f16). Or build "
+                        "llama.cpp's llama-quantize in the llama.cpp checkout "
+                        "(build/bin) or put it on PATH. Or register with Ollama "
+                        f"(--ollama), which quantizes to {ollama_levels} itself."
+                    ),
+                )
+        convert_outtype = "f16"
+    convert_path = (
+        gguf_path if convert_outtype == quant_str
+        else output_path / f"{model_name}-f16.gguf"
+    )
+
+    # Manual conversion: merge, then convert (the converter was found above)
+    merged_path = output_path / "merged_temp"
+
+    try:
+        merged_path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise GGUFExportError(
+            f"Failed to create temp directory for merge: {e}",
+            output_path=str(output_path),
+        ) from e
+
+    try:
+        # Merge if needed
+        if _is_peft_model(model):
+            merged_model = model.merge_and_unload()
+        else:
+            merged_model = model
+
+        # FP8 finding: an FP8-trained model merges to an f32 checkpoint at
+        # 4 B/param — double the bf16 the disk pre-flight (which ran above
+        # with multiplier=2.0 on a 2-B/param assumption) budgeted. Down-cast
+        # to bf16 before saving so the scratch merge + quantized GGUF fit the
+        # budgeted headroom instead of dying mid-conversion out of disk.
+        merged_model = _cast_merged_model_to_bf16(merged_model)
+
+        # Save in HF format
+        merged_model.save_pretrained(merged_path)
+        tokenizer.save_pretrained(merged_path)
+    except Exception as e:
+        # Clean up on failure
+        shutil.rmtree(merged_path, ignore_errors=True)
+        raise GGUFExportError(
+            f"Failed to prepare model for GGUF conversion: {e}",
+            output_path=str(output_path),
+        ) from e
+
+    logger.warning(f"Using llama.cpp convert script: {convert_script}")
+    # Run conversion
+    cmd = [
+        sys.executable,  # the running interpreter, not whatever "python" is on PATH
+        str(convert_script),
+        str(merged_path),
+        "--outfile",
+        str(convert_path),
+        "--outtype",
+        convert_outtype,
+        # #133: without --model-name the converter derives general.name from
+        # the temp dir ("merged_temp"), title-cased. Name it after the export.
+        "--model-name",
+        model_name,
+    ]
+    try:
+        # BRIDGE-A-004: Popen-based runner so Ctrl+C during a 30-min
+        # quantization actually stops the child instead of leaving a
+        # zombie that holds VRAM + disk for the rest of the timeout.
+        result = _run_subprocess_interruptible(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            # The converter prints UTF-8 (chat templates, token text). The
+            # Windows locale codec (cp1252) cannot decode it, which crashed
+            # the pipe reader and lost stderr.
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+        )
+    except subprocess.TimeoutExpired:
+        # Clean up on timeout
+        shutil.rmtree(merged_path, ignore_errors=True)
+        raise GGUFExportError(
+            "llama.cpp conversion timed out after 30 minutes",
+            output_path=str(output_path),
+            quantization=quant_str,
+            suggestion="The model may be too large for conversion, or llama.cpp may be stuck. Try a smaller model or check system resources."
+        )
+    except subprocess.CalledProcessError as e:
+        # Clean up on failure
+        shutil.rmtree(merged_path, ignore_errors=True)
+        # The actionable line of a Python traceback is the LAST one (e.g.
+        # "ModuleNotFoundError: No module named 'sentencepiece'"), so keep the
+        # tail of stderr, not the head.
+        error_output = e.stderr[-1500:] if e.stderr else "No error output"
+        raise GGUFExportError(
+            f"llama.cpp conversion failed (exit code {e.returncode}):\n{error_output}",
+            output_path=str(output_path),
+            quantization=quant_str,
+            suggestion="Check that llama.cpp is properly installed and up to date"
+        ) from e
+
     # Clean up temp merged model
     try:
         shutil.rmtree(merged_path)
     except Exception as e:
         logger.warning(f"Failed to clean up temp directory {merged_path}: {e}")
+
+    if quantize_bin is not None:
+        q_cmd = [str(quantize_bin), str(convert_path), str(gguf_path),
+                 _LLAMA_QUANTIZE_TYPES[quant_str]]
+        logger.info("Quantizing with llama-quantize: %s", " ".join(q_cmd))
+        try:
+            _run_subprocess_interruptible(
+                q_cmd, check=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            raise GGUFExportError(
+                "llama-quantize timed out after 30 minutes",
+                output_path=str(output_path),
+                quantization=quant_str,
+            )
+        except subprocess.CalledProcessError as e:
+            tail = e.stderr[-1500:] if e.stderr else "No error output"
+            raise GGUFExportError(
+                f"llama-quantize failed (exit code {e.returncode}):\n{tail}",
+                output_path=str(output_path),
+                quantization=quant_str,
+                suggestion=f"The f16 GGUF is kept at {convert_path}.",
+            ) from e
+        try:
+            convert_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to remove intermediate {convert_path}: {e}")
+    elif deferred_quantization is not None:
+        gguf_path = convert_path
+        logger.warning(
+            "No llama-quantize found; wrote an f16 GGUF (%s). Ollama will "
+            "quantize it to %s at registration (ollama create --quantize).",
+            gguf_path, deferred_quantization,
+        )
 
     # Validate output
     if not gguf_path.exists():
@@ -1705,7 +2009,7 @@ def export_gguf(
         output_root=output_root,
         extra_card_fields={
             "export_format": "gguf",
-            "quantization": quant_str,
+            "quantization": "f16" if deferred_quantization else quant_str,
         },
     )
 
@@ -1713,8 +2017,9 @@ def export_gguf(
         format=ExportFormat.GGUF,
         path=gguf_path,
         size_mb=size_mb,
-        quantization=quant_str,
+        quantization="f16" if deferred_quantization else quant_str,
         export_time_seconds=export_time,
+        deferred_quantization=deferred_quantization,
     )
 
 
@@ -1829,6 +2134,7 @@ def register_with_ollama(
     gguf_path: str | Path,
     model_name: str,
     system_prompt: str | None = None,
+    quantize: str | None = None,
 ) -> bool:
     """
     Register GGUF with Ollama.
@@ -1839,6 +2145,9 @@ def register_with_ollama(
         gguf_path: Path to the GGUF file
         model_name: Name for the Ollama model
         system_prompt: Optional system prompt
+        quantize: Let Ollama quantize the (f16) GGUF to this level
+            (``ollama create --quantize``), e.g. ``q4_K_M``. Pass
+            ``ExportResult.deferred_quantization``.
 
     Returns:
         True if successful
@@ -1887,8 +2196,15 @@ def register_with_ollama(
     try:
         # BRIDGE-A-004: Popen-based runner so Ctrl+C actually propagates to
         # the ollama child instead of leaving a zombie quantization process.
+        create_cmd = ["ollama", "create", model_name, "-f", str(modelfile_path)]
+        if quantize:
+            if not re.fullmatch(r"[A-Za-z0-9_]{1,16}", quantize):
+                raise OllamaRegistrationError(
+                    model_name, f"Invalid quantization level {quantize!r}"
+                )
+            create_cmd += ["--quantize", quantize]
         result = _run_subprocess_interruptible(
-            ["ollama", "create", model_name, "-f", str(modelfile_path)],
+            create_cmd,
             capture_output=True,
             text=True,
             check=True,

@@ -283,7 +283,7 @@ class TestDataConfig:
         config = DataConfig()
         assert config.dataset_name == "HuggingFaceH4/ultrachat_200k"
         assert config.dataset_split == "train_sft"
-        assert config.max_samples == 1000
+        assert config.max_samples == 0  # 0 = all rows (1.7.2; was 1000)
         assert config.text_column == "text"
 
     def test_data_config_flags(self):

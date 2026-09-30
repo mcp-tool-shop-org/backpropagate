@@ -364,6 +364,20 @@ class TestStochasticRounding:
         nearest_err = (x.to(torch.bfloat16).double() - x.double()).abs().mean()
         assert (mean - x.double()).abs().mean() < nearest_err / 5
 
+    @pytest.mark.parametrize("x", [-(1.0 + 2.0**-10), -0.0123, 1.0 + 2.0**-10, 0.0123])
+    def test_unbiased_over_a_million_draws_both_signs(self, x):
+        """The bit-level add-and-mask rounds the magnitude (IEEE-754 is
+        sign-magnitude), so it is unbiased for negative values too."""
+        import math
+
+        t = torch.full((1_000_000,), x, dtype=torch.float32)
+        target = float(t[0])
+        r = be.stochastic_round_to_bf16(t, torch.Generator().manual_seed(0)).double()
+        ulp = 2.0 ** (math.floor(math.log2(abs(target))) - 7)
+        # one draw has sd <= ulp/2, so the mean of 1e6 has sd <= ulp/2000; allow 6 sd
+        assert abs(float(r.mean()) - target) <= 6 * ulp / 2000
+        assert abs(float(t.to(torch.bfloat16).double()[0]) - target) > 6 * ulp / 2000  # nearest is biased
+
     def test_sub_half_ulp_value(self):
         """1 + 2^-10 is below half a bf16 ulp above 1.0 (ulp = 2^-7):
         nearest always returns 1.0, stochastic returns 1 + 2^-7 one time in 8."""

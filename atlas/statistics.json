@@ -60,12 +60,12 @@
           "scripts"
         ]
       },
-      "cohesion": 0.314389,
+      "cohesion": 0.3222,
       "cohesionDropped": false,
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 78,
+      "qualifyingSourceCommits": 81,
       "rebaseline": null
     },
     {
@@ -147,7 +147,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 8,
+      "qualifyingSourceCommits": 12,
       "rebaseline": null
     },
     {
@@ -181,7 +181,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 62,
+      "qualifyingSourceCommits": 63,
       "rebaseline": null
     }
   ],
@@ -224,13 +224,13 @@
         "path": ".github/PULL_REQUEST_TEMPLATE.md"
       },
       {
-        "commits": 7,
-        "lines": 112,
+        "commits": 10,
+        "lines": 170,
         "path": ".github/dependabot.yml"
       },
       {
-        "commits": 59,
-        "lines": 3360,
+        "commits": 62,
+        "lines": 3553,
         "path": ".github/workflows/ci.yml"
       },
       {
@@ -284,8 +284,8 @@
         "path": ".github/workflows/scorecard.yml"
       },
       {
-        "commits": 4,
-        "lines": 10,
+        "commits": 5,
+        "lines": 11,
         "path": ".gitignore"
       },
       {
@@ -299,13 +299,13 @@
         "path": ".pre-commit-config.yaml"
       },
       {
-        "commits": 2,
-        "lines": 94,
+        "commits": 3,
+        "lines": 141,
         "path": ".trivyignore"
       },
       {
-        "commits": 58,
-        "lines": 1020,
+        "commits": 61,
+        "lines": 1089,
         "path": "CHANGELOG.md"
       },
       {
@@ -314,8 +314,8 @@
         "path": "CITATION.cff"
       },
       {
-        "commits": 20,
-        "lines": 234,
+        "commits": 21,
+        "lines": 247,
         "path": "CLAUDE.md"
       },
       {
@@ -424,8 +424,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 1,
-        "lines": 99,
+        "commits": 2,
+        "lines": 113,
         "path": "atlas/README.md"
       },
       {
@@ -434,18 +434,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 1,
-        "lines": 323,
+        "commits": 2,
+        "lines": 374,
         "path": "atlas/page.json"
       },
       {
-        "commits": 1,
-        "lines": 1650,
+        "commits": 2,
+        "lines": 1826,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 1,
-        "lines": 4484,
+        "commits": 2,
+        "lines": 4578,
         "path": "atlas/structure.json"
       },
       {
@@ -614,13 +614,18 @@
         "path": "backpropagate/assets/logo.png"
       },
       {
+        "commits": 2,
+        "lines": 1122,
+        "path": "backpropagate/block_engine.py"
+      },
+      {
         "commits": 28,
         "lines": 3856,
         "path": "backpropagate/checkpoints.py"
       },
       {
-        "commits": 69,
-        "lines": 21854,
+        "commits": 68,
+        "lines": 21931,
         "path": "backpropagate/cli.py"
       },
       {
@@ -649,8 +654,8 @@
         "path": "backpropagate/exceptions.py"
       },
       {
-        "commits": 35,
-        "lines": 4904,
+        "commits": 33,
+        "lines": 4868,
         "path": "backpropagate/export.py"
       },
       {
@@ -664,8 +669,8 @@
         "path": "backpropagate/gpu_safety.py"
       },
       {
-        "commits": 15,
-        "lines": 712,
+        "commits": 16,
+        "lines": 735,
         "path": "backpropagate/logging_config.py"
       },
       {
@@ -709,8 +714,8 @@
         "path": "backpropagate/theme_gradio_legacy.py"
       },
       {
-        "commits": 64,
-        "lines": 16434,
+        "commits": 68,
+        "lines": 17045,
         "path": "backpropagate/trainer.py"
       },
       {
@@ -904,14 +909,19 @@
         "path": "docs/assets/social-preview.svg"
       },
       {
-        "commits": 8,
-        "lines": 394,
+        "commits": 9,
+        "lines": 398,
         "path": "docs/ci-gates-triage-plan.md"
       },
       {
         "commits": 2,
         "lines": 18,
         "path": "docs/index.md"
+      },
+      {
+        "commits": 1,
+        "lines": 273,
+        "path": "docs/production-quality-plan-2026-09-30.md"
       },
       {
         "commits": 2,
@@ -939,8 +949,8 @@
         "path": "package.json"
       },
       {
-        "commits": 51,
-        "lines": 512,
+        "commits": 55,
+        "lines": 569,
         "path": "pyproject.toml"
       },
       {
@@ -964,7 +974,7 @@
         "path": "scripts/doc-drift-allow.toml"
       },
       {
-        "commits": 2,
+        "commits": 1,
         "lines": 173,
         "path": "scripts/gpu_smoke.sh"
       },
@@ -972,6 +982,16 @@
         "commits": 2,
         "lines": 386,
         "path": "scripts/nightly_train_smoke.py"
+      },
+      {
+        "commits": 4,
+        "lines": 473,
+        "path": "scripts/pod_block_engine.py"
+      },
+      {
+        "commits": 2,
+        "lines": 271,
+        "path": "scripts/pod_block_engine.sh"
       },
       {
         "commits": 4,
@@ -1024,8 +1044,8 @@
         "path": "site/src/content/docs/handbook/cli-reference.md"
       },
       {
-        "commits": 30,
-        "lines": 445,
+        "commits": 31,
+        "lines": 448,
         "path": "site/src/content/docs/handbook/env-vars.md"
       },
       {
@@ -1039,8 +1059,8 @@
         "path": "site/src/content/docs/handbook/estimate-vram.md"
       },
       {
-        "commits": 4,
-        "lines": 76,
+        "commits": 5,
+        "lines": 109,
         "path": "site/src/content/docs/handbook/export.md"
       },
       {
@@ -1194,14 +1214,24 @@
         "path": "tests/conftest.py"
       },
       {
-        "commits": 2,
-        "lines": 84,
+        "commits": 3,
+        "lines": 87,
         "path": "tests/helpers/__init__.py"
       },
       {
         "commits": 2,
         "lines": 400,
         "path": "tests/helpers/asgi.py"
+      },
+      {
+        "commits": 1,
+        "lines": 72,
+        "path": "tests/helpers/tiny_models.py"
+      },
+      {
+        "commits": 1,
+        "lines": 34,
+        "path": "tests/helpers/trl_paths.py"
       },
       {
         "commits": 2,
@@ -1222,6 +1252,16 @@
         "commits": 2,
         "lines": 1156,
         "path": "tests/test_auth_middleware_fuzz.py"
+      },
+      {
+        "commits": 2,
+        "lines": 589,
+        "path": "tests/test_block_engine.py"
+      },
+      {
+        "commits": 1,
+        "lines": 403,
+        "path": "tests/test_block_engine_trainer.py"
       },
       {
         "commits": 16,
@@ -1339,7 +1379,7 @@
         "path": "tests/test_exceptions.py"
       },
       {
-        "commits": 24,
+        "commits": 21,
         "lines": 4083,
         "path": "tests/test_export.py"
       },
@@ -1354,8 +1394,8 @@
         "path": "tests/test_fp8.py"
       },
       {
-        "commits": 5,
-        "lines": 794,
+        "commits": 6,
+        "lines": 802,
         "path": "tests/test_fp8_smoke.py"
       },
       {
@@ -1364,8 +1404,8 @@
         "path": "tests/test_fuzz_checkpoints.py"
       },
       {
-        "commits": 2,
-        "lines": 662,
+        "commits": 1,
+        "lines": 556,
         "path": "tests/test_golden_path_smoke.py"
       },
       {
@@ -1404,13 +1444,13 @@
         "path": "tests/test_integration.py"
       },
       {
-        "commits": 3,
-        "lines": 672,
+        "commits": 4,
+        "lines": 680,
         "path": "tests/test_kto_smoke.py"
       },
       {
-        "commits": 10,
-        "lines": 681,
+        "commits": 11,
+        "lines": 720,
         "path": "tests/test_logging_config.py"
       },
       {
@@ -1444,13 +1484,13 @@
         "path": "tests/test_multi_run_extended.py"
       },
       {
-        "commits": 5,
-        "lines": 1480,
+        "commits": 6,
+        "lines": 1567,
         "path": "tests/test_orpo.py"
       },
       {
-        "commits": 2,
-        "lines": 558,
+        "commits": 3,
+        "lines": 566,
         "path": "tests/test_orpo_smoke.py"
       },
       {
@@ -1494,8 +1534,8 @@
         "path": "tests/test_security_headers_middleware.py"
       },
       {
-        "commits": 3,
-        "lines": 699,
+        "commits": 4,
+        "lines": 707,
         "path": "tests/test_simpo_smoke.py"
       },
       {
@@ -1514,13 +1554,13 @@
         "path": "tests/test_theme_gradio_legacy.py"
       },
       {
-        "commits": 42,
-        "lines": 6597,
+        "commits": 45,
+        "lines": 6780,
         "path": "tests/test_trainer.py"
       },
       {
-        "commits": 3,
-        "lines": 2574,
+        "commits": 4,
+        "lines": 2751,
         "path": "tests/test_trainer_simpo_kto.py"
       },
       {
@@ -1594,8 +1634,8 @@
         "path": "ui_gradio_legacy.py}"
       },
       {
-        "commits": 19,
-        "lines": 14665,
+        "commits": 24,
+        "lines": 14709,
         "path": "uv.lock"
       },
       {
@@ -1609,17 +1649,17 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-09-30T16:15:00.419Z",
+  "generatedAt": "2026-09-30T18:55:15.739Z",
   "generatedFrom": {
-    "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb"
+    "commit": "28a7fc834c396d77f304d7eb1c4d7c63533fff24"
   },
   "pairs": [
     {
       "a": "backpropagate/cli.py",
       "b": "backpropagate/trainer.py",
-      "either": 56,
-      "shared": 28,
-      "strength": 0.5
+      "either": 57,
+      "shared": 30,
+      "strength": 0.526316
     },
     {
       "a": "backpropagate/exceptions.py",
@@ -1638,16 +1678,16 @@
     {
       "a": "backpropagate/trainer.py",
       "b": "tests/test_trainer.py",
-      "either": 41,
-      "shared": 23,
-      "strength": 0.560976
+      "either": 45,
+      "shared": 26,
+      "strength": 0.577778
     },
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
       "b": "site/src/content/docs/handbook/env-vars.md",
-      "either": 19,
+      "either": 20,
       "shared": 13,
-      "strength": 0.684211
+      "strength": 0.65
     }
   ],
   "parameters": {
@@ -1659,15 +1699,15 @@
     "fallenShared": 3,
     "floor": "strong",
     "floorTrigger": null,
-    "headDate": "2026-09-30T11:52:04-04:00",
-    "inScopeFiles": 260,
+    "headDate": "2026-09-30T14:48:38-04:00",
+    "inScopeFiles": 267,
     "pinnedStart": null,
-    "qualifyingCommits": 162,
+    "qualifyingCommits": 174,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-03T15:52:04.000Z",
+    "since": "2026-04-03T18:48:38.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

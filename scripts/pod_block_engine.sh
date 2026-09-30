@@ -27,12 +27,35 @@
 #   a2 one-pass  stage a again with K=5 (~one full pass over all blocks in 150
 #                steps; K=50 visits only 3 of ~30 blocks) (~25 min)
 #
+# Second run (after the first run's receipts in docs/receipts/2026-09-30-block-engine/
+# and the external review): default STAGES="smoke d e4b e14b"
+#   d    GSM8K (openai/gsm8k main, MIT), 1000 steps, batch 4, unpacked, seq from
+#        the tokenized-length check (512, or 768 if >1% of gold '####' lines
+#        would be cut). Primary metric: held-out loss on the 250 test answers;
+#        secondary: strict '####' accuracy (greedy), with per-item outputs for
+#        McNemar / paired bootstrap (scripts/pod_gsm8k_summary.py). Base
+#        accuracies first; the 3B model furthest from floor/ceiling is picked.
+#        Order (value first; the budget guard drops from the end):
+#          7B engine B K=5 s0, QLoRA s0, engine B K=5 s1 -> d2 for the 7B pair
+#          3B default / block_k5 / block_k50 / qlora, seeds 0 and 1
+#          7B GaLore (layerwise; non-layerwise once if layerwise fails)
+#          3B seed 2 (default, K5, K50), K5 at 5e-5 (2 seeds), Adafactor s0 -> d2 3B
+#          3B qlora s2, Adafactor s1
+#        Every run: NVML peak (10 Hz) next to torch max allocated / reserved,
+#        expandable_segments:True, per-step train loss, per-block visit log,
+#        first-batch mask/data-order hash, optimizer class + args, manifest.
+#   d2   (inside d) pairs whose pooled held-out-loss CI spans 0 at 1000 steps
+#        rerun at 2000 steps with the same seeds (d2_triggers.json)
+#   e4b  Qwen/Qwen3.5-4B: what the text-only loader loads vs the checkpoint
+#   e14b qwen2.5-14b at library defaults (batch auto), then with unsloth installed
+# STOP_AFTER_EPOCH: a run is skipped if its estimated end is past this unix time.
+#
 # Usage (on the pod):
 #   BRANCH=feat/block-coordinate-engine nohup bash pod_block_engine.sh > /dev/null 2>&1 &
 #   tail -f /workspace/block_engine/pod.log
 #
 # Knobs (env): BRANCH, REPO, WORK (default /workspace/block_engine),
-#   STAGES (default "smoke p a b c a2"), SEEDS (default "0 1 2"), STEPS (150),
+#   STAGES (default "smoke d e4b e14b"; first run: "smoke p a b c a2"), SEEDS (default "0 1 2"), STEPS (150),
 #   STEPS_C (150), FORCE_STAGE=<name> to re-run one stage's summary.
 #
 # Pod lessons carried over from pod_offload_7b.sh: pip needs
@@ -43,7 +66,7 @@ set -uo pipefail
 REPO="${REPO:-https://github.com/mcp-tool-shop-org/backpropagate.git}"
 BRANCH="${BRANCH:-feat/block-coordinate-engine}"
 WORK="${WORK:-/workspace/block_engine}"
-STAGES="${STAGES:-smoke p a b c a2}"
+STAGES="${STAGES:-smoke d e4b e14b}"
 SEEDS="${SEEDS:-0 1 2}"
 STEPS="${STEPS:-150}"
 STEPS_C="${STEPS_C:-150}"
@@ -58,6 +81,14 @@ S3="HuggingFaceTB/SmolLM3-3B"
 Q7="Qwen/Qwen2.5-7B-Instruct"
 S360="HuggingFaceTB/SmolLM2-360M-Instruct"
 S135="HuggingFaceTB/SmolLM2-135M-Instruct"
+Q3="Qwen/Qwen2.5-3B-Instruct"
+Q14="Qwen/Qwen2.5-14B-Instruct"
+Q35_4="Qwen/Qwen3.5-4B"
+D_STEPS="${D_STEPS:-1000}"
+D_SEQ="${D_SEQ:-512}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export POD_IMAGE="${POD_IMAGE:-runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404}"
+STOP_AFTER_EPOCH="${STOP_AFTER_EPOCH:-}"
 
 mkdir -p "$WORK/.done" "$WORK/runs" "$HF_HOME"
 LOG="$WORK/pod.log"
@@ -117,6 +148,9 @@ log "git sha $GIT_SHA"
 run() {  # run <tag> <arm> <driver args...>
   local tag="$1" arm="$2"; shift 2
   if [ -f "$WORK/runs/$tag.json" ]; then log "skip $tag (receipt exists)"; return 0; fi
+  if [ -n "$STOP_AFTER_EPOCH" ] && [ $(( $(date +%s) + ${EST:-0} )) -gt "$STOP_AFTER_EPOCH" ]; then
+    log "skip $tag (would end past STOP_AFTER_EPOCH, est ${EST:-0}s — budget)"; return 0
+  fi
   log "run $tag ($arm): $*"
   ARM="$arm" "$PY" "$DRIVER" train --out "$WORK" --tag "$tag" "$@" \
     || log "run $tag exited non-zero (receipt records why)"
@@ -130,6 +164,24 @@ base() {  # base <model>
 fetch() {  # fetch <model>
   "$PY" -c "from huggingface_hub import snapshot_download as s; s('$1', allow_patterns=['*.json','*.safetensors','*.txt','*.jinja','*.model','tokenizer*'])" \
     || die "download of $1 failed (re-run to resume)"
+}
+purge() {  # purge <model>: drop a model from the HF cache (blobs included) to free disk
+  "$PY" - "$1" <<'EOF' || log "purge $1 failed (non-fatal)"
+import sys
+from huggingface_hub import scan_cache_dir
+info = scan_cache_dir()
+revs = [r.commit_hash for repo in info.repos if repo.repo_id == sys.argv[1] for r in repo.revisions]
+if revs:
+    s = info.delete_revisions(*revs)
+    print(f"purge {sys.argv[1]}: freeing {s.expected_freed_size_str}")
+    s.execute()
+EOF
+}
+base_gsm() {  # base_gsm <model>
+  local f="$WORK/runs/base_gsm8k_${1//\//_}.json"
+  if [ -f "$f" ]; then return 0; fi
+  log "base (gsm8k) $1"
+  "$PY" "$DRIVER" base --out "$WORK" --dataset gsm8k --model "$1" || log "base $1: accuracy OUT OF BOUNDS (see receipt)"
 }
 summarize() {  # summarize <stage>
   "$PY" "$DRIVER" summarize --out "$WORK" --stage "$1"
@@ -246,6 +298,156 @@ if want a2 && ! is_done a2; then
     done
   done
   summarize a2 && done_mark a2
+fi
+
+# ---------------------------------------------------------------- d GSM8K
+# Arms. Every arm: library Trainer, unpacked, batch 4, gradient accumulation 1,
+# same seed -> same data order, full-sequence loss (no Unsloth response masking
+# anywhere; checked per arm by mask_check), the library's cosine schedule with
+# its 10 warmup steps. LR: each arm's library default unless named.
+arm_args() {  # arm_args <size> <arm> -> driver args
+  local M
+  if [ "$1" = 7b ]; then M="$Q7"; else M="$(cat "$WORK/d_pick.model")"; fi
+  case "$2" in
+    default)            echo "--model $M --engine default --lr-default" ;;
+    default_adafactor)  echo "--model $M --engine default --lr-default --optim adafactor" ;;
+    block_k5)           echo "--model $M --engine block --k 5 --lr-default" ;;
+    block_k50)          echo "--model $M --engine block --k 50 --lr-default" ;;
+    block_k5_lr5e-5)    echo "--model $M --engine block --k 5 --lr 5e-5" ;;
+    qlora)              echo "--model $M --qlora --lr-default" ;;
+    galore)             echo "--model $M --engine default --lr-default --ceiling 8 --galore galore_adamw_8bit_layerwise" ;;
+    galore_nonlayerwise) echo "--model $M --engine default --lr-default --ceiling 8 --galore galore_adamw_8bit" ;;
+  esac
+}
+# Rough wall-clock per 1000-step run incl. load + eval (s), for the budget guard.
+est() {
+  case "$1_$2" in
+    7b_block_k5) echo 420 ;; 7b_qlora) echo 900 ;; 7b_galore*) echo 1500 ;;
+    3b_default) echo 420 ;; 3b_default_adafactor) echo 400 ;; 3b_qlora) echo 660 ;;
+    *) echo 260 ;;
+  esac
+}
+darm() {  # darm <size> <arm> <seed> [steps] : one stage-d run
+  local size="$1" arm="$2" seed="$3" steps="${4:-$D_STEPS}" pre="d"
+  [ "$steps" = "$D_STEPS" ] || pre="d2"
+  local e; e="$(est "$size" "$arm")"; [ "$steps" = "$D_STEPS" ] || e=$((e * 17 / 10))
+  # shellcheck disable=SC2046
+  EST="$e" run "${pre}_${size}_${arm}_s${seed}" "$arm" $(arm_args "$size" "$arm") --seed "$seed" \
+      --dataset gsm8k --steps "$steps" --batch 4 --seq "$D_SEQ"
+}
+d2_from_triggers() {  # d2_from_triggers <size>: rerun triggered pairs at 2x steps
+  [ -f "$WORK/d2_triggers.json" ] || return 0
+  "$PY" - "$WORK/d2_triggers.json" "$1" > "$WORK/d2_todo_$1.txt" <<'EOF'
+import json, sys
+seen = set()
+for t in json.load(open(sys.argv[1])):
+    if t["size"] != sys.argv[2]:
+        continue
+    for arm in t["arms"]:
+        for s in t["seeds"][arm]:
+            if (arm, s) not in seen:
+                seen.add((arm, s))
+                print(arm, s)
+EOF
+  if [ -s "$WORK/d2_todo_$1.txt" ]; then log "d2 triggered at $1: $(tr '\n' ' ' < "$WORK/d2_todo_$1.txt")"; fi
+  while read -r arm s; do darm "$1" "$arm" "$s" $((D_STEPS * 2)); done < "$WORK/d2_todo_$1.txt"
+}
+dsum() { "$PY" "$SRC/scripts/pod_gsm8k_summary.py" --out "$WORK" --prefix "${1:-d}" || log "summary failed"; }
+
+if want d && ! is_done d; then
+  log "stage d: GSM8K, $D_STEPS steps (stop-after: ${STOP_AFTER_EPOCH:-none})"
+  "$PY" -m pip install --break-system-packages -q -c "$WORK/constraints.txt" nvidia-ml-py \
+    || log "nvidia-ml-py install failed: NVML peaks will be missing"
+  "$PY" -m pip install --break-system-packages -q --no-deps galore-torch \
+    || log "galore-torch install failed: the GaLore arm will record the error"
+  if [ ! -f "$WORK/prep_gsm8k.json" ]; then
+    "$PY" "$DRIVER" prep --out "$WORK" --dataset gsm8k || die "gsm8k prep failed"
+  fi
+  if [ ! -f "$WORK/d_pick.model" ]; then
+    for M in "$S3" "$Q3"; do fetch "$M"; base_gsm "$M"; done
+    # Pick the 3B model whose base accuracy is furthest from floor (0) and ceiling (1).
+    "$PY" - "$WORK" "$S3" "$Q3" <<'EOF' || die "3B pick failed"
+import json, os, sys
+work, cands = sys.argv[1], sys.argv[2:]
+acc = {}
+for m in cands:
+    f = os.path.join(work, "runs", "base_gsm8k_" + m.replace("/", "_") + ".json")
+    acc[m] = json.load(open(f))["acc_strict"]
+score = {m: min(a, 1 - a) for m, a in acc.items()}
+pick = max(cands, key=lambda m: (score[m], -acc[m]))
+rec = {"pick": pick, "base_acc_strict": acc, "distance_from_floor_or_ceiling": score,
+       "rule": "max over candidates of min(acc, 1 - acc); tie -> lower accuracy (more room)"}
+json.dump(rec, open(os.path.join(work, "d_pick.json"), "w"), indent=1)
+open(os.path.join(work, "d_pick.model"), "w").write(pick)
+print("3B pick:", json.dumps(rec))
+EOF
+    for M in "$S3" "$Q3"; do [ "$M" = "$(cat "$WORK/d_pick.model")" ] || purge "$M"; done
+  fi
+  fetch "$Q7"
+  base_gsm "$Q7"
+  # Sequence length from the tokenized answers (both tokenizers; the larger choice wins).
+  for M in "$(cat "$WORK/d_pick.model")" "$Q7"; do
+    [ -f "$WORK/runs/lengths_${M//\//_}.json" ] || "$PY" "$DRIVER" lengths --out "$WORK" --dataset gsm8k --model "$M"
+  done
+  D_SEQ="$("$PY" -c "import glob,json; print(max(json.load(open(f))['seq_choice'] for f in glob.glob('$WORK/runs/lengths_*.json')))")"
+  log "stage d: max_seq_length $D_SEQ (see runs/lengths_*.json)"
+
+  # 1. The decision pair first: 7B engine B K=5 (2 seeds) vs QLoRA (1 seed).
+  darm 7b block_k5 0; darm 7b qlora 0; darm 7b block_k5 1
+  dsum d; d2_from_triggers 7b
+  # 2. 3B core arms, seeds 0 and 1.
+  for S in 0 1; do for A in default block_k5 block_k50 qlora; do darm 3b "$A" "$S"; done; done
+  # 3. GaLore at 7B: layerwise first; non-layerwise once if layerwise failed.
+  darm 7b galore 0
+  if ! "$PY" -c "import json,sys; sys.exit(0 if json.load(open('$WORK/runs/d_7b_galore_s0.json')).get('status')=='ok' else 1)" 2>/dev/null \
+     && [ -f "$WORK/runs/d_7b_galore_s0.json" ]; then
+    darm 7b galore_nonlayerwise 0
+  fi
+  # 4. 3B seed 2 (core), the lr probe and the Adafactor control.
+  for A in default block_k5 block_k50; do darm 3b "$A" 2; done
+  darm 3b block_k5_lr5e-5 0; darm 3b block_k5_lr5e-5 1
+  darm 3b default_adafactor 0
+  dsum d; d2_from_triggers 3b
+  # 5. Lowest priority (dropped first by the budget guard).
+  darm 3b qlora 2
+  darm 3b default_adafactor 1
+  dsum d
+  [ -n "$(ls "$WORK"/runs/d2_*.json 2>/dev/null)" ] && dsum d2
+  done_mark d
+fi
+
+# ---------------------------------------------------------------- e4b qwen3.5-4b
+if want e4b && ! is_done e4b; then
+  log "stage e4b: Qwen/Qwen3.5-4B through the text-only loader"
+  if [ ! -f "$WORK/runs/e_qwen35_4b_inspect.json" ]; then
+    "$PY" "$DRIVER" inspect --out "$WORK" --tag e_qwen35_4b_inspect --model "$Q35_4" \
+      || log "inspect $Q35_4 failed"
+  fi
+  run e_qwen35_4b_qlora_defaults qlora_library_defaults --model "$Q35_4" --qlora --library-defaults \
+      --dataset gsm8k --steps 10 --no-eval
+  "$PY" -c "import json; r=json.load(open('$WORK/runs/e_qwen35_4b_inspect.json')); print('e4b:', {k: r.get(k) for k in ('loaded_class','loaded_params','loaded_vision_params','hub_safetensors_total','checkpoint_vision_tensors','peak_vram_alloc_gib_bf16_load')})" || true
+  purge "$Q35_4"
+  done_mark e4b
+fi
+
+# ---------------------------------------------------------------- e14b
+if want e14b && ! is_done e14b; then
+  log "stage e14b: qwen2.5-14b at library defaults (batch auto)"
+  for M in "$S3" "$Q3" "$Q7" "$S135" "$Q35_4"; do purge "$M"; done
+  fetch "$Q14"
+  run e_14b_defaults qlora_library_defaults --model "$Q14" --qlora --library-defaults \
+      --dataset gsm8k --steps 20 --no-eval
+  if [ ! -f "$WORK/runs/e_14b_defaults_unsloth.json" ] && \
+     { [ -z "$STOP_AFTER_EPOCH" ] || [ "$(date +%s)" -le "$STOP_AFTER_EPOCH" ]; }; then
+    log "installing the [unsloth] extra (torch pinned to the image)"
+    timeout 900 "$PY" -m pip install --break-system-packages -q -c "$WORK/constraints.txt" \
+      -e "$SRC[unsloth]" > "$WORK/unsloth_install.log" 2>&1 \
+      && "$PY" -c "import importlib.metadata as m; print('unsloth', m.version('unsloth'), 'transformers', m.version('transformers'), 'trl', m.version('trl'))" \
+      || log "unsloth install failed (see unsloth_install.log)"
+    run e_14b_defaults_unsloth qlora_library_defaults_unsloth --model "$Q14" --qlora \
+        --library-defaults --dataset gsm8k --steps 20 --no-eval
+  fi
+  done_mark e14b
 fi
 
 # ---------------------------------------------------------------- receipt

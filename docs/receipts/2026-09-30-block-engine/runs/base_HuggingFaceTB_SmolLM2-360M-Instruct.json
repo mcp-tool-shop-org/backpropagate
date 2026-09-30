@@ -1,0 +1,25 @@
+{
+ "mode": "base",
+ "model": "HuggingFaceTB/SmolLM2-360M-Instruct",
+ "heldout_loss": 2.3008,
+ "heldout_tokens": 19888,
+ "floor": 0.0,
+ "ceiling_ln_vocab": 10.8027,
+ "in_bounds": true,
+ "params": 361821120,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.36,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "209458d0ba164ef39890d8a9415beffdb352c56d",
+ "written": "2026-09-30T18:32:24Z"
+}

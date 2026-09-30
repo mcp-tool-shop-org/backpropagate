@@ -40,45 +40,30 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 4,
-      "changed": 12,
+      "added": 8,
+      "changed": 23,
       "moved": 0,
-      "parts": 5,
-      "removed": 0
+      "parts": 7,
+      "removed": 1
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI's push trigger now also names `codecov.yml`.",
-        "subjects": [
-          ".github/workflows/ci.yml"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "tests/test_mlx_smoke.py is now read by scripts/gpu_smoke.sh.",
-        "subjects": [
-          "tests/test_mlx_smoke.py",
-          "scripts/gpu_smoke.sh"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "4 files added and 12 changed content, across 5 parts.",
+        "sentence": "Nothing structural changed since 2026-09-30; 8 files added, 1 removed and 23 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
-      "generatedAt": "2026-09-23T14:58:25.620Z"
+      "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb",
+      "generatedAt": "2026-09-30T16:15:00.419Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [
     {
       "a": "backpropagate/cli.py",
       "b": "backpropagate/trainer.py",
-      "either": 56,
+      "either": 57,
       "partLabels": [
         "backpropagate",
         "backpropagate"
@@ -88,7 +73,7 @@
         "backpropagate"
       ],
       "relation": "inside",
-      "shared": 28
+      "shared": 30
     }
   ],
   "changesTogetherNote": [
@@ -96,7 +81,7 @@
     "Window: 180 days; a pair counts from 10 shared commits."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb",
+  "commit": "28a7fc834c396d77f304d7eb1c4d7c63533fff24",
   "doors": [
     {
       "file": ".github/workflows/ci.yml",
@@ -107,7 +92,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 51
+          "files": 52
         },
         {
           "boundary": "root",
@@ -117,7 +102,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 72
+          "files": 76
         },
         {
           "boundary": "scripts",
@@ -153,7 +138,7 @@
         {
           "boundary": "backpropagate",
           "depth": 1,
-          "files": 18
+          "files": 19
         }
       ],
       "runs": [
@@ -318,11 +303,11 @@
       ]
     }
   ],
-  "generatedAt": "2026-09-30T16:15:00.419Z",
+  "generatedAt": "2026-09-30T18:55:15.739Z",
   "limits": [
-    "40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "42 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "7 import sites could not be resolved.",
-    "13 writes and 39 reads use paths built at run time and are not named here."
+    "18 writes and 40 reads use paths built at run time and are not named here."
   ],
   "mainDoor": ".github/workflows/ci.yml",
   "parts": 11,
@@ -336,9 +321,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 75,
+  "testFiles": 79,
   "testedBy": {
-    "backpropagate": 64,
+    "backpropagate": 66,
     "bin": 0,
     "scripts": 2
   },

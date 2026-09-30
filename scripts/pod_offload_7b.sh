@@ -107,7 +107,8 @@ cat > "$RUNNER" <<'PYEOF'
 argv: model steps seq ceil_gb out_json [gate]
 env:  BP_TRAINER_KWARGS (JSON merged into Trainer(...)), OFFLOAD=0 for the pure-GPU
       full-FT path, VRAM_CAP_GB to emulate a smaller card
-      (torch.cuda.set_per_process_memory_fraction), WORK (save dir root).
+      (torch.cuda.set_per_process_memory_fraction), NO_SAVE=1 to skip the
+      save/reload/generate leg, WORK (save dir root).
 """
 import gc, json, math, os, sys, tempfile, threading, time
 import importlib.metadata as md
@@ -220,7 +221,9 @@ rec = {
     "pct_params_changed_step1": pct1.get("v"),
     "pct_params_changed_final": pct_changed(t._model, snap),
 }
-if gate:
+if os.environ.get("NO_SAVE") == "1" and not gate:
+    rec["peak_rss_total_gb"] = round(peak["rss"] / GB, 2)
+elif gate:
     rec["projected_7p6b_host_gb"] = round(7.6e9 * 2 * rec["host_param_B_per_param"] / GB + 8, 1)
 else:
     save_dir = os.path.join(os.environ.get("WORK", d), "saved_" + model_id.replace("/", "_"))

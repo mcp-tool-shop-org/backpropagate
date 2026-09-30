@@ -6641,6 +6641,8 @@ class Trainer:
             raise TrainingError(f"full_ft_offload training failed: {exc}") from exc
 
         self._model = result["model"]
+        # Kept for introspection (tests / receipts): the engine's optimizer.
+        self._offload_optimizer = result["optimizer"]
         losses = [x for x in result["losses"] if math.isfinite(x)]
         final_loss = result["losses"][-1] if result["losses"] else 0.0
         duration = time.time() - start

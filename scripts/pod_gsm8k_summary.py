@@ -161,7 +161,8 @@ for (size, arm), seeds in sorted(by_arm.items()):
         "optimizer_paged_state_gib": spread([r.get("optimizer_paged_state_gib") for r in rs]),
         "config": {k2: rs[0].get(k2) for k2 in ("steps", "batch", "seq", "packing_used", "lr_used",
                                                "optimizer_class", "optim_setting", "schedule", "k", "order",
-                                               "engine", "lora_r_used", "optimizer_defaults")},
+                                               "engine", "lora_r_used", "optimizer_defaults",
+                                               "s_per_step_measured_on", "vram_cap_gib")},
         "hit_max_new_tokens": [r.get("hit_max_new_tokens") for r in rs],
         "has_hash_answer": [r.get("has_hash_answer") for r in rs],
     }

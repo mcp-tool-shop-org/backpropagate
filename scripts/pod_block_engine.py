@@ -310,8 +310,36 @@ random.seed(args.seed)
 CUDA = torch.cuda.is_available()
 DEVICE = "cuda" if CUDA else "cpu"
 TOTAL_VRAM = torch.cuda.get_device_properties(0).total_memory if CUDA else 0
-if args.vram_cap_gb and CUDA:
-    torch.cuda.set_per_process_memory_fraction(min(1.0, args.vram_cap_gb * GIB / TOTAL_VRAM), 0)
+CARD = torch.cuda.get_device_name(0) if CUDA else "cpu (dry run)"
+# 5090 emulation on a bigger card (e.g. RTX PRO 6000 Blackwell, 96 GB): cap
+# every process at the 5090's usable total and make the library see a 5090-
+# sized device, so auto batch size, full-FT ceilings and optimizer choice
+# resolve exactly as on the 5090. NVML peaks are system-wide and ignore the
+# cap; torch reserved under the cap is the figure comparable to 5090 runs.
+RTX5090_USABLE_GIB = 31.36
+VRAM_CAP_GIB = args.vram_cap_gb or None
+EMULATED_5090 = False
+if CUDA and not args.vram_cap_gb and TOTAL_VRAM / GIB > 33.0:
+    VRAM_CAP_GIB = RTX5090_USABLE_GIB
+    EMULATED_5090 = True
+if CUDA and VRAM_CAP_GIB:
+    torch.cuda.set_per_process_memory_fraction(min(1.0, VRAM_CAP_GIB * GIB / TOTAL_VRAM), 0)
+if EMULATED_5090:
+    _real_props = torch.cuda.get_device_properties
+
+    class _CappedProps:
+        def __init__(self, props, total):  # type: ignore[no-untyped-def]
+            self._props, self.total_memory = props, total
+
+        def __getattr__(self, name):  # type: ignore[no-untyped-def]
+            return getattr(self._props, name)
+
+    def _capped_get_device_properties(device=None):  # type: ignore[no-untyped-def]
+        props = _real_props(0 if device is None else device)
+        return _CappedProps(props, int(RTX5090_USABLE_GIB * GIB))
+
+    torch.cuda.get_device_properties = _capped_get_device_properties  # type: ignore[assignment]
+SPEED_LABEL = f"measured on {CARD}" + (" (capped at 31.36 GiB to emulate an RTX 5090)" if EMULATED_5090 else "")
 
 
 class NvmlSampler:
@@ -415,6 +443,10 @@ def env() -> dict:
         "git_sha": args.git_sha, "image": os.environ.get("POD_IMAGE", "unknown"),
         "gpu": torch.cuda.get_device_name(0) if CUDA else "cpu (dry run)",
         "vram_total_gib": round(TOTAL_VRAM / GIB, 2), "cuda_runtime": torch.version.cuda,
+        "card": CARD, "card_total_gib": round(TOTAL_VRAM / GIB, 2), "vram_cap_gib": VRAM_CAP_GIB,
+        "emulated_rtx5090": EMULATED_5090,
+        "comparable_vram_figure": ("torch max reserved under the cap (NVML is system-wide and ignores it)"
+                                   if EMULATED_5090 else "NVML peak and torch max reserved"),
         "cuda_driver": getattr(NVML, "driver", None), "versions": versions(),
         "pytorch_cuda_alloc_conf": os.environ.get("PYTORCH_CUDA_ALLOC_CONF"),
     }, "gpu": torch.cuda.get_device_name(0) if CUDA else "cpu (dry run)",
@@ -703,7 +735,7 @@ rec: dict = {"mode": "train", "tag": tag, "arm": os.environ.get("ARM", arm), "mo
              "engine": "qlora" if args.qlora else args.engine, "seed": args.seed, "steps": args.steps,
              "batch": args.batch, "seq": args.seq, "lr": args.lr, "k": args.k, "order": args.order,
              "writeback": args.writeback, "freeze_embeddings": args.freeze_embeddings,
-             "vram_cap_gib": args.vram_cap_gb or None, **env(),
+             "vram_cap_gib": VRAM_CAP_GIB, **env(),
              "settings_seed": bp_settings.training.seed,
              "settings_logging_steps": bp_settings.training.logging_steps}
 rec["dataset"] = args.dataset
@@ -911,6 +943,7 @@ try:
     gaps = [b - a for a, b in zip(stamps, stamps[1:])]
     rec["s_per_step"] = round(statistics.median(gaps), 4) if gaps else None
     rec["s_per_step_source"] = "median gap between per-step log callbacks"
+    rec["s_per_step_measured_on"] = SPEED_LABEL
     rec["losses"] = losses or [round(x, 4) for x in run.loss_history]
     rec["final_loss"] = run.final_loss
     rec["engine_summary"] = run.metadata.get("block_engine")
@@ -977,6 +1010,7 @@ except Exception as exc:  # a capped run that does not fit is a result, not a cr
     gaps = [b - a for a, b in zip(stamps, stamps[1:])]
     rec["s_per_step"] = round(statistics.median(gaps), 4) if gaps else None
     rec["steps_completed"] = len(losses)
+    rec["s_per_step_measured_on"] = SPEED_LABEL
 finally:
     rec["wall_s"] = round(time.perf_counter() - t0, 1)
     rec.update(nvml_report())

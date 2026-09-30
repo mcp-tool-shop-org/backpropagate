@@ -69,6 +69,14 @@ permissions:
 
 jobs:
   test:
+    # Explicit name, spelled out to reproduce the auto-generated one exactly
+    # (`test (ubuntu-latest, 3.13)`). Branch protection requires those names.
+    # GitHub's default matrix name is built from the matrix values, and the
+    # `extras` key added by the no-unsloth include below could leak into it
+    # (`test (ubuntu-latest, 3.13, dev,ui,...)`), renaming a required check and
+    # leaving the old one "Expected -- Waiting for status" forever. Pinning the
+    # name makes that impossible whatever keys a future include adds.
+    name: test (${{ matrix.os }}, ${{ matrix.python-version }})
     # Multi-OS matrix: tests Linux on full Python sweep, plus a Windows smoke
     # cell on 3.11 to catch path/multiprocessing/xformers-disable regressions
     # on the one non-Linux platform the library actively supports (CLAUDE.md:
@@ -137,6 +145,33 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.11"
+          # THE ONE CELL THAT INSTALLS WITHOUT THE `unsloth` EXTRA.
+          #
+          # Every other cell (and every other job in this file) installs
+          # `[dev,full]`, and `full` includes `unsloth`, which holds trl at
+          # <=0.24.0. A plain `pip install backpropagate` has no such hold: it
+          # resolves a different trl (0.27.x today, 1.x once the cap lifts),
+          # and that is where a KTO `TypeError` lived undetected -- CI never
+          # installed the stack those users get, so the bug could only be
+          # found in scratch venvs.
+          #
+          # This entry has os + python-version identical to an ORIGINAL matrix
+          # combination, so GitHub MERGES `extras` into that existing cell
+          # instead of creating a new one. That is deliberate: no extra job
+          # (Actions spend was just cut ~60% in 1.7.1) and the check name stays
+          # `test (ubuntu-latest, 3.13)`, which branch protection keys on.
+          # Do not change os/python-version here without checking that.
+          #
+          # `extras` is `full` spelled out minus `unsloth`. pyproject defines
+          # `full = full-no-export + export` and `full-no-export = unsloth, ui,
+          # validation, monitoring, logging, security, fp8`, so a feature group
+          # added there must be added here too or this cell quietly tests less
+          # than its siblings. The install step asserts unsloth is really
+          # absent, so the cell cannot drift back into the stack it exists to
+          # avoid.
+          - os: ubuntu-latest
+            python-version: "3.13"
+            extras: "dev,ui,validation,monitoring,logging,security,fp8,export"
     env:
       # 'true' on the one leg whose coverage and test results go to Codecov,
       # on a pull request or a push to the default branch.
@@ -173,11 +208,27 @@ jobs:
           # drift into testing less than Linux. If you ever need llama_cpp
           # itself covered on Windows, install it from the project's prebuilt
           # wheel index rather than restoring the source build here.
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          #
+          # A matrix `extras` value overrides both branches (see the ubuntu /
+          # 3.13 include above): that cell installs `full` MINUS `unsloth`.
+          if [ -n "${MATRIX_EXTRAS}" ]; then
+            pip install -e ".[${MATRIX_EXTRAS}]"
+            # Fail loudly if unsloth arrived anyway (another extra started
+            # pulling it in): the cell would then test the stack every other
+            # cell already tests, and nobody would notice.
+            if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('unsloth') else 1)"; then
+              echo "::error::unsloth is installed in the no-unsloth cell (extras: ${MATRIX_EXTRAS}) -- this cell exists to test a plain install without it."
+              exit 1
+            fi
+            echo "::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
             pip install -e ".[dev,full-no-export]"
           else
             pip install -e ".[dev,full]"
           fi
+        env:
+          # Empty on every cell except the one that sets `extras`.
+          MATRIX_EXTRAS: ${{ matrix.extras }}
 
       - name: Set up Node for the Atlas check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'

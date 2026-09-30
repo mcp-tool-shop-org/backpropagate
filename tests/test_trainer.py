@@ -4092,10 +4092,11 @@ class TestRuntimeGpuOomOptionA:
 
 
 class TestOrpoTrlImportGuard:
-    """FC-01: the trl ORPO imports are guarded so a trl upgrade that relocates
-    ORPOTrainer / ORPOConfig (slated to move to ``trl.experimental``) raises a
-    structured TrainingError with a code + working-range remedy, NOT a bare
-    ImportError that dies with no code and no next step.
+    """FC-01: the trl ORPO imports are guarded. trl 0.29 moved ORPOTrainer /
+    ORPOConfig to ``trl.experimental.orpo``; the builders fall back to it, and
+    only when neither location has the symbol do they raise a structured
+    TrainingError with a code + working-range remedy, NOT a bare ImportError
+    that dies with no code and no next step.
     """
 
     _ORPO_CFG_BASE = {
@@ -4139,8 +4140,11 @@ class TestOrpoTrlImportGuard:
         from backpropagate.exceptions import TrainingError
 
         fake_trl = self._trl_without("ORPOConfig")
-        with patch.dict("sys.modules", {"trl": fake_trl}), \
-             patch("torch.cuda.is_available", return_value=False), \
+        # None in sys.modules makes the experimental fallback import fail too,
+        # whether or not an earlier test already imported the real module.
+        with patch.dict(
+            "sys.modules", {"trl": fake_trl, "trl.experimental.orpo": None}
+        ), patch("torch.cuda.is_available", return_value=False), \
              pytest.raises(TrainingError) as exc_info:
             trainer_mod._build_orpo_config(**self._ORPO_CFG_BASE)
 
@@ -4149,8 +4153,10 @@ class TestOrpoTrlImportGuard:
             "FC-01: the guarded ORPOConfig import must re-raise with a "
             f"catalog code, got code={err.code!r}."
         )
-        assert err.suggestion and "trl>=0.7.0,<0.28" in err.suggestion, (
-            "FC-01: the remedy must name a working trl version range; got "
+        assert err.suggestion and (
+            f"trl{trainer_mod._TRL_SUPPORTED_SPEC}" in err.suggestion
+        ), (
+            "FC-01: the remedy must name the supported trl range; got "
             f"suggestion={err.suggestion!r}."
         )
         # The original ImportError is preserved for the traceback chain.
@@ -4173,8 +4179,9 @@ class TestOrpoTrlImportGuard:
         trainer._is_loaded = True
 
         fake_trl = self._trl_without("ORPOTrainer")
-        with patch.dict("sys.modules", {"trl": fake_trl}), \
-             pytest.raises(TrainingError) as exc_info:
+        with patch.dict(
+            "sys.modules", {"trl": fake_trl, "trl.experimental.orpo": None}
+        ), pytest.raises(TrainingError) as exc_info:
             trainer._build_trainer(
                 training_args=MagicMock(),
                 train_dataset=MagicMock(),
@@ -4186,15 +4193,45 @@ class TestOrpoTrlImportGuard:
             "FC-01: the guarded ORPOTrainer import must re-raise with a "
             f"catalog code, got code={err.code!r}."
         )
-        # v1.6 C2: the preference-trainer import guard was unified across
-        # ORPO/SimPO/KTO with a top-level-then-experimental fallback. The
-        # suggested range is now the consistent 'trl>=0.18,<0.28' (the C6 dep
-        # floor that still admits CPO/KTO experimental + the <0.28 cap). A
+        # The preference-trainer guard is unified across ORPO/SimPO/KTO with a
+        # top-level-then-experimental fallback and one supported range. A
         # missing TOP-LEVEL symbol surfaces as AttributeError (getattr on the
-        # real module) which the guard now also catches — so __cause__ is an
+        # real module), which the guard also catches — so __cause__ is an
         # ImportError OR AttributeError.
-        assert err.suggestion and "trl>=0.18,<0.28" in err.suggestion
+        from backpropagate import trainer as trainer_mod
+
+        assert err.suggestion and (
+            f"trl{trainer_mod._TRL_SUPPORTED_SPEC}" in err.suggestion
+        )
         assert isinstance(err.__cause__, (ImportError, AttributeError))
+
+    def test_supported_spec_matches_pyproject(self):
+        """The range every remedy quotes IS pyproject's trl requirement.
+
+        ``_TRL_SUPPORTED_SPEC`` and the ``trl`` line in pyproject are one
+        decision written in two places; this holds them together so raising
+        the cap cannot leave the error messages advising the old range.
+        """
+        from pathlib import Path
+
+        from packaging.requirements import Requirement
+        from packaging.specifiers import SpecifierSet
+
+        from backpropagate import trainer as trainer_mod
+
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10 — pytest depends on tomli
+            import tomli as tomllib
+
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        deps = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+            "dependencies"
+        ]
+        (trl_req,) = [
+            Requirement(d) for d in deps if Requirement(d).name == "trl"
+        ]
+        assert trl_req.specifier == SpecifierSet(trainer_mod._TRL_SUPPORTED_SPEC)
 
     def test_orpo_config_import_success_still_builds(self):
         """FC-01 must be inert when trl resolves: the existing mocked-trl path

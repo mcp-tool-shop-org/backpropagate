@@ -41,6 +41,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.helpers.trl_paths import trl_patch_target
+
 # =============================================================================
 # Shared stubs / helpers
 # =============================================================================
@@ -495,6 +497,79 @@ class TestBuildCpoConfig:
                         trainer_mod._build_cpo_config(**_CPO_CFG_BASE)
         assert exc.value.code == "RUNTIME_TRAINING_FAILED"
 
+    def test_small_window_derives_nothing_when_config_lacks_field(self):
+        """trl >= 0.28's CPOConfig has no max_prompt_length: derive nothing.
+
+        The derivation exists to satisfy CPOTrainer's ``max_prompt_length <
+        max_length`` check, and that check left with the field. Passing the
+        derived value to a CPOConfig without the field was a TypeError before
+        the first step (measured on trl 1.13.0).
+        """
+        import dataclasses
+
+        from backpropagate import trainer as trainer_mod
+
+        captured: dict = {}
+
+        @dataclasses.dataclass
+        class _Trl028CPOConfig:  # the field layout of trl >= 0.28
+            max_length: int = 1024
+            max_completion_length: int | None = None
+
+            def __init__(self, **kwargs):  # @dataclass keeps a defined __init__
+                captured.update(kwargs)
+
+        with patch.dict(
+            "sys.modules", {"trl": MagicMock(CPOConfig=_Trl028CPOConfig)}
+        ), patch("torch.cuda.is_available", return_value=False):
+            trainer_mod._build_cpo_config(**{**_CPO_CFG_BASE, "max_seq_length": 128})
+
+        assert captured["max_length"] == 128
+        assert "max_prompt_length" not in captured
+
+    def test_explicit_max_prompt_length_refused_when_config_lacks_field(self):
+        """An explicit max_prompt_length the installed CPOConfig lacks errors."""
+        import dataclasses
+
+        from backpropagate import trainer as trainer_mod
+        from backpropagate.exceptions import TrainingError
+
+        @dataclasses.dataclass
+        class _Trl028CPOConfig:
+            max_length: int = 1024
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        with patch.dict(
+            "sys.modules", {"trl": MagicMock(CPOConfig=_Trl028CPOConfig)}
+        ), patch("torch.cuda.is_available", return_value=False), pytest.raises(
+            TrainingError
+        ) as exc:
+            trainer_mod._build_cpo_config(
+                **{**_CPO_CFG_BASE, "max_prompt_length": 32}
+            )
+        assert exc.value.code == "RUNTIME_TRAINING_FAILED"
+        assert "max_prompt_length" in str(exc.value)
+
+    def test_real_cpoconfig_small_window_constructs(self):
+        """The INSTALLED trl's CPOConfig accepts what the builder sends at 128.
+
+        128 tokens takes the derivation branch, so this is the check that the
+        builder's kwargs match whatever CPOConfig this environment really has.
+        """
+        pytest.importorskip("trl")
+        from backpropagate import trainer as trainer_mod
+
+        with patch("torch.cuda.is_available", return_value=False):
+            cfg = trainer_mod._build_cpo_config(
+                **{**_CPO_CFG_BASE, "max_seq_length": 128}
+            )
+
+        assert cfg.max_length == 128
+        assert cfg.loss_type == "simpo"
+        assert cfg.cpo_alpha == pytest.approx(0.0)
+
 
 class TestBuildKtoConfig:
     """v1.6 C2: _build_kto_config produces a KTOConfig with sequential KL."""
@@ -545,6 +620,76 @@ class TestBuildKtoConfig:
                         trainer_mod._build_kto_config(**_KTO_CFG_BASE)
         assert exc.value.code == "RUNTIME_TRAINING_FAILED"
 
+    def test_small_window_derives_nothing_when_config_lacks_field(self):
+        """KTOConfig without max_prompt_length (trl 0.27.2 on): derive nothing.
+
+        KTOConfig lost the field INSIDE the ``<0.28`` cap. Measured
+        2026-09-23 on trl 0.27.2: the derived value made KTOConfig.__init__
+        raise TypeError for every run with max_seq_length <= 512.
+        """
+        import dataclasses
+
+        from backpropagate import trainer as trainer_mod
+
+        captured: dict = {}
+
+        @dataclasses.dataclass
+        class _Trl027KTOConfig:  # the field layout of trl >= 0.27.2
+            max_length: int = 1024
+
+            def __init__(self, **kwargs):  # @dataclass keeps a defined __init__
+                captured.update(kwargs)
+
+        with patch.dict(
+            "sys.modules", {"trl": MagicMock(KTOConfig=_Trl027KTOConfig)}
+        ), patch("torch.cuda.is_available", return_value=False):
+            trainer_mod._build_kto_config(**{**_KTO_CFG_BASE, "max_seq_length": 128})
+
+        assert captured["max_length"] == 128
+        assert "max_prompt_length" not in captured
+
+    @pytest.mark.parametrize(
+        ("knob", "value"), [("max_prompt_length", 32), ("max_completion_length", 64)]
+    )
+    def test_explicit_knob_refused_when_config_lacks_field(self, knob, value):
+        """Both truncation knobs left KTOConfig; an explicit one is an error."""
+        import dataclasses
+
+        from backpropagate import trainer as trainer_mod
+        from backpropagate.exceptions import TrainingError
+
+        @dataclasses.dataclass
+        class _Trl027KTOConfig:
+            max_length: int = 1024
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        with patch.dict(
+            "sys.modules", {"trl": MagicMock(KTOConfig=_Trl027KTOConfig)}
+        ), patch("torch.cuda.is_available", return_value=False), pytest.raises(
+            TrainingError
+        ) as exc:
+            trainer_mod._build_kto_config(**{**_KTO_CFG_BASE, knob: value})
+        assert exc.value.code == "RUNTIME_TRAINING_FAILED"
+        assert knob in str(exc.value)
+
+    def test_real_ktoconfig_small_window_constructs(self):
+        """The INSTALLED trl's KTOConfig accepts what the builder sends at 128.
+
+        On trl 0.27.2 this was the TypeError above; it holds on every trl.
+        """
+        pytest.importorskip("trl")
+        from backpropagate import trainer as trainer_mod
+
+        with patch("torch.cuda.is_available", return_value=False):
+            cfg = trainer_mod._build_kto_config(
+                **{**_KTO_CFG_BASE, "max_seq_length": 128}
+            )
+
+        assert cfg.max_length == 128
+        assert cfg.beta == pytest.approx(_KTO_CFG_BASE["kto_beta"])
+
 
 # =============================================================================
 # train() objective dispatch — _build_trainer routing
@@ -561,8 +706,8 @@ class TestSimpoDispatch:
         cpo_inst = _mock_pref_instance()
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.CPOTrainer", return_value=cpo_inst
-        ) as m_cpo, patch("trl.SFTTrainer") as m_sft, patch("trl.CPOConfig"):
+            trl_patch_target("CPOTrainer"), return_value=cpo_inst
+        ) as m_cpo, patch("trl.SFTTrainer") as m_sft, patch(trl_patch_target("CPOConfig")):
             run = trainer.train("dummy", steps=5)
 
         assert m_cpo.called, "CPOTrainer should be constructed for method='simpo'."
@@ -578,8 +723,8 @@ class TestSimpoDispatch:
         mock_ds.__len__ = MagicMock(return_value=4)
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.CPOTrainer", return_value=_mock_pref_instance()
-        ), patch("trl.SFTTrainer"), patch("trl.CPOConfig"), patch.object(
+            trl_patch_target("CPOTrainer"), return_value=_mock_pref_instance()
+        ), patch("trl.SFTTrainer"), patch(trl_patch_target("CPOConfig")), patch.object(
             trainer_mod, "_apply_train_on_responses_only"
         ) as m_apply:
             trainer.train("dummy", steps=5)
@@ -596,8 +741,8 @@ class TestSimpoDispatch:
         mock_ds.__len__ = MagicMock(return_value=4)
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.CPOTrainer", return_value=_mock_pref_instance()
-        ), patch("trl.SFTTrainer"), patch("trl.CPOConfig"):
+            trl_patch_target("CPOTrainer"), return_value=_mock_pref_instance()
+        ), patch("trl.SFTTrainer"), patch(trl_patch_target("CPOConfig")):
             run = trainer.train("dummy", steps=5)
 
         hp = RunHistoryManager(str(temp_dir)).get_run(run.run_id).get(
@@ -616,8 +761,8 @@ class TestSimpoDispatch:
         script = _OOMScript(oom_count=1)
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch(
-            "trl.CPOTrainer", side_effect=script.factory
-        ), patch("trl.SFTTrainer") as m_sft, patch("trl.CPOConfig"):
+            trl_patch_target("CPOTrainer"), side_effect=script.factory
+        ), patch("trl.SFTTrainer") as m_sft, patch(trl_patch_target("CPOConfig")):
             trainer.train("dummy", steps=5)
 
         assert script.construct_calls >= 2, (
@@ -637,9 +782,9 @@ class TestKtoDispatch:
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch.object(
             trainer, "_auto_balance_kto_weights"
-        ), patch("trl.KTOTrainer", return_value=_mock_pref_instance()) as m_kto, patch(
+        ), patch(trl_patch_target("KTOTrainer"), return_value=_mock_pref_instance()) as m_kto, patch(
             "trl.SFTTrainer"
-        ) as m_sft, patch("trl.KTOConfig"):
+        ) as m_sft, patch(trl_patch_target("KTOConfig")):
             run = trainer.train("dummy", steps=5)
 
         assert m_kto.called, "KTOTrainer should be constructed for method='kto'."
@@ -654,9 +799,9 @@ class TestKtoDispatch:
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch.object(
             trainer, "_auto_balance_kto_weights"
-        ), patch("trl.KTOTrainer", return_value=_mock_pref_instance()) as m_kto, patch(
+        ), patch(trl_patch_target("KTOTrainer"), return_value=_mock_pref_instance()) as m_kto, patch(
             "trl.SFTTrainer"
-        ), patch("trl.KTOConfig"):
+        ), patch(trl_patch_target("KTOConfig")):
             trainer.train("dummy", steps=5)
 
         _, call_kwargs = m_kto.call_args
@@ -676,9 +821,9 @@ class TestKtoDispatch:
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch.object(
             trainer, "_auto_balance_kto_weights"
-        ), patch("trl.KTOTrainer", return_value=_mock_pref_instance()), patch(
+        ), patch(trl_patch_target("KTOTrainer"), return_value=_mock_pref_instance()), patch(
             "trl.SFTTrainer"
-        ), patch("trl.KTOConfig"):
+        ), patch(trl_patch_target("KTOConfig")):
             run = trainer.train("dummy", steps=5)
 
         hp = RunHistoryManager(str(temp_dir)).get_run(run.run_id).get(
@@ -696,9 +841,9 @@ class TestKtoDispatch:
 
         with patch.object(trainer, "_load_dataset", return_value=mock_ds), patch.object(
             trainer, "_auto_balance_kto_weights"
-        ), patch("trl.KTOTrainer", side_effect=script.factory), patch(
+        ), patch(trl_patch_target("KTOTrainer"), side_effect=script.factory), patch(
             "trl.SFTTrainer"
-        ) as m_sft, patch("trl.KTOConfig"):
+        ) as m_sft, patch(trl_patch_target("KTOConfig")):
             trainer.train("dummy", steps=5)
 
         assert script.construct_calls >= 2

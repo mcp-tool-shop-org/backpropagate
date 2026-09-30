@@ -1596,7 +1596,11 @@ def _build_sft_config(
 # The working trl range, as pyproject.toml declares it. Every "install a
 # working trl" remedy below quotes this string, and a test holds it equal to
 # the pyproject requirement so the cap and the advice cannot drift apart.
-_TRL_SUPPORTED_SPEC = ">=0.18,<2"
+# trl 1.1-1.5.x are excluded (#134): those wheels call ``Path.read_text()`` on
+# bundled .jinja chat templates without an encoding, which fails under cp1252
+# on Windows; fixed upstream in trl 1.6.0. Drop the ``!=`` clauses when the
+# floor passes 1.6. (Anyone pinned inside the range can set ``PYTHONUTF8=1``.)
+_TRL_SUPPORTED_SPEC = ">=0.18,<2,!=1.1.*,!=1.2.*,!=1.3.*,!=1.4.*,!=1.5.*"
 
 
 def _config_declares(config_cls: Any, name: str) -> bool:

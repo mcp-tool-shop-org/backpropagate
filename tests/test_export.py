@@ -1204,6 +1204,43 @@ class TestUnslothGgufGate:
         assert _ORIG_UNSLOTH_GGUF_READY() == (True, "")
 
 
+class TestTrainerExportReload:
+    """trainer.export("gguf"|"merged") goes through the export loader too."""
+
+    @pytest.mark.parametrize("fmt", ["gguf", "merged"])
+    def test_saves_adapter_frees_model_and_reloads(self, tmp_path, fmt):
+        from backpropagate.trainer import Trainer
+
+        trainer = Trainer.__new__(Trainer)
+        live = MagicMock(name="live-4bit-peft")
+        trainer._model, trainer._tokenizer = live, MagicMock(name="tok")
+        trainer._trainer = MagicMock(name="sft")
+        trainer._is_loaded = True
+        trainer.output_dir = tmp_path / "out"
+
+        reloaded, reloaded_tok = MagicMock(name="reloaded"), MagicMock(name="tok16")
+        seen: dict = {}
+
+        def fake_load(path):
+            seen["adapter_dir"] = Path(path)
+            seen["model_at_reload"] = trainer._model
+            return reloaded, reloaded_tok
+
+        result = MagicMock(path=tmp_path / "x")
+        target = "export_gguf" if fmt == "gguf" else "export_merged"
+        with patch("backpropagate.export._is_peft_model", return_value=True), \
+             patch("backpropagate.export.load_model_for_export", side_effect=fake_load), \
+             patch(f"backpropagate.export.{target}", return_value=result) as exporter:
+            out = trainer.export(fmt, quantization="q8_0")
+
+        assert out is result
+        live.save_pretrained.assert_called_once_with(str(seen["adapter_dir"]))
+        assert seen["model_at_reload"] is None  # freed before the 16-bit reload
+        assert exporter.call_args.kwargs["model"] is reloaded
+        assert trainer._model is None and trainer._is_loaded is False
+        assert not seen["adapter_dir"].exists()  # temp adapter cleaned up
+
+
 class TestLoadModelForExport:
     """#132: exporting a saved checkpoint applies its adapter exactly once.
 

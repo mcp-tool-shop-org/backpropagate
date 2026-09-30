@@ -6819,6 +6819,11 @@ class Trainer:
         Returns:
             ExportResult with path, size, and timing info
 
+        For "merged" and "gguf" with a LoRA adapter, the adapter is saved, the
+        trained model is freed, and the export reloads it onto a 16-bit base
+        (the same path as ``backprop export``). Afterwards the trainer holds no
+        model; call ``load_model()`` to continue.
+
         Example:
             >>> trainer = Trainer("unsloth/Qwen2.5-7B-Instruct-bnb-4bit")
             >>> trainer.train("data.jsonl", steps=100)
@@ -6849,6 +6854,15 @@ class Trainer:
         output_path = Path(output_dir or self.output_dir / format)
 
         format_lower = format.lower()
+
+        if format_lower in ("merged", "gguf"):
+            from .export import _is_peft_model
+
+            if _is_peft_model(self._model):
+                return self._export_via_reload(
+                    format_lower, output_path, quantization,
+                    push_to_hub=push_to_hub, repo_id=repo_id, **kwargs,
+                )
 
         if format_lower == "lora":
             result = export_lora(
@@ -6883,6 +6897,79 @@ class Trainer:
             raise ValueError(f"Unsupported format: {format}. Use 'lora', 'merged', or 'gguf'")
 
         return result
+
+    def _export_via_reload(
+        self,
+        format_lower: str,
+        output_path: Path,
+        quantization: str,
+        *,
+        push_to_hub: bool,
+        repo_id: str | None,
+        **kwargs: Any,
+    ) -> ExportResult:
+        """Merged / GGUF export of a trained adapter through the export loader.
+
+        The in-memory model sits on a bitsandbytes 4-bit base (QLoRA). Merging
+        into it produces quantized tensors that llama.cpp's converter rejects
+        ("Quant method is not yet supported: 'bitsandbytes'"). So: save the
+        adapter, free the trained model (it and the 16-bit base would not both
+        fit on a card sized for the 4-bit run), and export through
+        ``load_model_for_export``, the same path ``backprop export`` uses.
+
+        After this returns the trainer holds no model. Call ``load_model()``
+        (or train again) to continue.
+        """
+        import shutil
+        import tempfile
+
+        from .export import export_gguf, export_merged, load_model_for_export
+
+        base_dir = Path(self.output_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        adapter_dir = Path(tempfile.mkdtemp(prefix=".export_adapter_", dir=str(base_dir)))
+        try:
+            self._model.save_pretrained(str(adapter_dir))
+            self._tokenizer.save_pretrained(str(adapter_dir))
+            logger.info(
+                "export(%s): saved the adapter to %s and freed the trained model; "
+                "reloading onto a 16-bit base for the merge.",
+                format_lower, adapter_dir,
+            )
+            self._release_model()
+
+            model, tokenizer = load_model_for_export(adapter_dir)
+            if format_lower == "merged":
+                result = export_merged(
+                    model=model, tokenizer=tokenizer, output_dir=output_path,
+                    push_to_hub=push_to_hub, repo_id=repo_id, **kwargs,
+                )
+                logger.info(f"Exported merged model: {result.path}")
+            else:
+                result = export_gguf(
+                    model=model, tokenizer=tokenizer, output_dir=output_path,
+                    quantization=quantization, **kwargs,
+                )
+                logger.info(f"Exported GGUF ({quantization}): {result.path}")
+            del model, tokenizer
+            return result
+        finally:
+            gc.collect()
+            shutil.rmtree(adapter_dir, ignore_errors=True)
+
+    def _release_model(self) -> None:
+        """Drop the model, the inner trainer and their VRAM."""
+        self._trainer = None
+        self._model = None
+        self._is_loaded = False
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # nosec B110 - best-effort CUDA cache reclaim
+            pass
 
     def push_to_hub(self, repo_id: str, private: bool = True) -> None:
         """Push model to HuggingFace Hub."""

@@ -56,10 +56,35 @@ Backpropagate supports three export formats via `trainer.export(format=...)`:
 
 ## What GGUF export does
 
-1. Merges LoRA weights back into the base model
-2. Converts to GGUF format (via Unsloth if available, otherwise llama.cpp)
-3. Applies the chosen quantization level
-4. Optionally creates an Ollama Modelfile and registers the model
+1. Loads the base model in 16-bit and applies your adapter once
+2. Merges the LoRA weights into the base
+3. Converts to GGUF: through Unsloth when it has a built llama.cpp, otherwise through llama.cpp's `convert_hf_to_gguf.py`
+4. Applies the chosen quantization level
+5. Optionally creates an Ollama Modelfile and registers the model
+
+`trainer.export("gguf")` and `trainer.export("merged")` free the trained model before they reload it for export. Call `trainer.load_model()` again if you want to keep training afterwards.
+
+### The llama.cpp fallback
+
+Without Unsloth, or when Unsloth has no built llama.cpp, the export uses llama.cpp's converter script. It needs:
+
+- A llama.cpp **source checkout**. The `gguf` package from pip is not enough; `convert_hf_to_gguf.py` imports from the source tree. Clone it to `~/llama.cpp`, or point `BACKPROPAGATE_LLAMA_CPP_PATH` at the checkout or the script.
+- `sentencepiece` and `protobuf` installed in the same environment as backpropagate.
+
+The converter itself writes `f16` and `q8_0`. The k-quants come from one of two places:
+
+| You are exporting | How the quantization happens |
+|---|---|
+| `q4_k_m` to Ollama (`--ollama`), the default | The export writes f16 and `ollama create --quantize q4_K_M` quantizes it. Nothing to compile. |
+| `q5_k_m`, `q4_0`, `q2_k`, or `q4_k_m` as a bare `.gguf` file | A compiled `llama-quantize` is used if one is found in the llama.cpp checkout (the root, `build/bin`, `build/bin/Release`) or on PATH. |
+
+If neither can produce the level you asked for, the export stops before the merge and says which levels are available.
+
+### Unsloth and system packages
+
+Unsloth's own GGUF export builds llama.cpp on first use. To do that it installs system packages: `winget install` on Windows (apt or brew elsewhere) for CMake, compilers and OpenSSL, accepting their licence agreements. Backpropagate turns that off. With it off, the export falls back to the llama.cpp converter and tells you what is missing.
+
+To let Unsloth install and build, set `BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1`. See [environment variables](/backpropagate/handbook/env-vars/).
 
 ## Custom Modelfile
 

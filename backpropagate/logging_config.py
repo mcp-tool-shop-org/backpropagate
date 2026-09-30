@@ -502,6 +502,27 @@ def configure_logging(
     _configured = True
 
 
+_STDLIB_LOG_KWARGS = frozenset({"exc_info", "stack_info", "stacklevel", "extra"})
+
+
+class _StdlibStructuredLogger(logging.LoggerAdapter):  # type: ignore[type-arg]
+    """Give the structlog-less fallback the same call shape as structlog.
+
+    Call sites write ``get_logger(__name__).info("event", cli_run_id=..., model=...)``.
+    structlog accepts arbitrary keyword fields; a plain ``logging.Logger`` does not
+    and raises ``TypeError: Logger._log() got an unexpected keyword argument``
+    whenever the level is enabled. This adapter folds those fields into the message
+    as ``key=value`` pairs so they survive instead of being dropped by the callers'
+    best-effort ``try/except``. Issue #135.
+    """
+
+    def process(self, msg: Any, kwargs: Any) -> tuple[Any, Any]:
+        fields = {k: kwargs.pop(k) for k in list(kwargs) if k not in _STDLIB_LOG_KWARGS}
+        if fields:
+            msg = f"{msg} " + " ".join(f"{k}={v}" for k, v in fields.items())
+        return msg, kwargs
+
+
 def get_logger(name: str | None = None) -> Any:
     """
     Get a logger instance.
@@ -525,7 +546,7 @@ def get_logger(name: str | None = None) -> Any:
     if STRUCTLOG_AVAILABLE:
         return structlog.get_logger(name)
     else:
-        return logging.getLogger(name)
+        return _StdlibStructuredLogger(logging.getLogger(name), {})
 
 
 def get_standard_logger(name: str) -> logging.Logger:

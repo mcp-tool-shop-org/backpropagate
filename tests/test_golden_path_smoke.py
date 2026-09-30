@@ -360,7 +360,11 @@ def checkpoint(workdir: Path) -> Path:
         backend = "unsloth" if trainer.use_unsloth else "transformers (Unsloth installed; its load FAILED and fell back)"
     else:
         backend = "transformers (Unsloth not installed)"
-    _record_fact("trained with", backend)
+    # Coverage must be visible too: a backend that adapts fewer modules than
+    # PEFT's "all-linear" would is a silent quality loss.
+    adapted = sum(1 for n, _ in trainer.model.named_modules() if n.endswith(".lora_A"))
+    assert adapted > 0, "training attached no LoRA modules"
+    _record_fact("trained with", f"{backend}; {adapted} LoRA modules adapted")
 
     ckpts = sorted(output_dir.glob("checkpoint-*"))
     assert ckpts, f"trainer wrote no checkpoint-N under {output_dir}"

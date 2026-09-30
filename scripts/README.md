@@ -78,3 +78,14 @@ removes tests so those four surfaces track reality.
 
 Mutation-testing driver. Long-running — kicks off `mutmut run` against the
 core modules and writes the surviving-mutants report to stdout.
+
+## `gpu_smoke.sh`
+
+Runs every real-GPU smoke (`tests/test_*_smoke.py`; MLX only on Apple
+Silicon), each file in its own pytest process, and prints a receipt: date,
+git SHA, GPU, the resolved torch / transformers / trl / peft / unsloth /
+bitsandbytes versions, and PASS / FAIL / SKIP for each smoke with skip
+reasons. It exits non-zero if any smoke fails. Point `PYTHON` at the venv
+under test, and set `BACKPROPAGATE_LLAMA_CPP_PATH` to a llama.cpp clone to
+include the GGUF fallback stage. The script forces `UNSLOTH_AUTO_INSTALL=0` so
+a smoke run never installs system packages.

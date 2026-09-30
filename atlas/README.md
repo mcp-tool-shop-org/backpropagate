@@ -1,18 +1,20 @@
 # backpropagate: how it works
 
-Mapped at 2026-09-23 from commit 34a7862.
+Mapped at 2026-09-30 from commit 9bb2f01.
 
 ## What this is
 
 11 parts. Work enters through 9 doors; the busiest is CI, which reaches 4 parts.
 
-## What changed since the last map
+## What changed since 2026-09-23 (34a7862)
 
-This is the first map.
+- CI's push trigger now also names `codecov.yml`.
+- tests/test_mlx_smoke.py is now read by scripts/gpu_smoke.sh.
+- 4 files added and 12 changed content, across 5 parts.
 
 ## What comes in
 
-1. **CI.** On a pull request; on a push to main touching 8 paths; or by hand. Runs backpropagate/, tests/ and verify.sh.
+1. **CI.** On a pull request; on a push to main touching 9 paths; or by hand. Runs backpropagate/, tests/ and verify.sh.
 2. **Nightly Train Smoke.** On a schedule (`0 4 * * 1`), Monday at 04:00 UTC; or by hand. Runs scripts/nightly_train_smoke.py.
 3. **Doc Drift Check.** On a pull request; on a push to main touching 7 paths; or by hand. Runs scripts/check_doc_drift.py.
 4. **Mutation testing (mutmut).** By hand. Runs no file this map can see.
@@ -57,7 +59,7 @@ CI writes nothing this map can see.
 
 ## What tends to change together
 
-- **backpropagate/cli.py** and **backpropagate/trainer.py** changed together in 28 of 53 commits, inside the backpropagate part.
+- **backpropagate/cli.py** and **backpropagate/trainer.py** changed together in 28 of 56 commits, inside the backpropagate part.
 
 2 files changed together with their own tests, as expected.
 
@@ -93,7 +95,7 @@ Read those in order to follow one pull request end to end.
 ## What this map cannot see
 
 - 40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
-- 6 import sites could not be resolved.
+- 7 import sites could not be resolved.
 - 13 writes and 39 reads use paths built at run time and are not named here.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

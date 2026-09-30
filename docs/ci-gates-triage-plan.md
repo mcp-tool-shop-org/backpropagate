@@ -12,7 +12,9 @@
 >
 > [cl]: ../CHANGELOG.md
 
-**Status:** plan (not yet scheduled). File a tracking issue when picking this up.
+**Status:** executed in v1.2.0 (see the banner above). Kept as the
+methodology archive for future gate re-tightening; the text below is the
+original plan as written.
 **Why:** the v1.1.0 swarm's Stage B added four CI gate tightenings without first
 baselining what they'd block. Five hotfix PRs (#80 / #82 / #83 / #84 + the
 rollback in this file's parent commit) chased findings one-by-one until it

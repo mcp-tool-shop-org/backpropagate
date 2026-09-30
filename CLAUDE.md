@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject; v1.5.0 shipped on PyPI + npm + GitHub; v1.6.0 in preparation; full Ship Gate passing).
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject). **v1.7.1** shipped 2026-09-07 on PyPI + npm + GitHub; **v1.7.2 in preparation** (install-resolution + KTO `TypeError` fixes). Work plan: `docs/production-quality-plan-2026-09-30.md`.
 
 ## Architecture
 
@@ -25,12 +25,13 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 ## Key Notes
 
 - Headless-first; UI is opt-in via `pip install backpropagate[ui]`
-- Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[logging]`, `[security]`; bundles: `[standard]`, `[full]`, `[production]`
+- Modular extras: `[unsloth]`, `[ui]`, `[validation]`, `[export]`, `[monitoring]`, `[logging]`, `[security]`, `[fp8]`, `[mlx]` (Apple-only, unverified preview, kept out of `[full]`); bundles: `[standard]` (= unsloth + ui, the README install), `[full]`, `[full-no-export]`, `[production]`
 - First-class Windows support (pre-tokenization, xformers auto-disable on RTX 40/50, safe dataloader)
-- Tested on RTX 5080 (16GB VRAM)
-- ~3139 tests in tests/ (3139 passed + 8 skipped, 32 gpu/slow/integration deselected), 50% coverage floor (single source of truth: `[tool.coverage.report].fail_under = 50` in pyproject.toml; ci.yml reads it via tomllib so the two surfaces stay in lockstep)
-- Python 3.10 → 3.13 supported in CI; 3.10 is supported through at least v1.6 and reaches upstream EOL Oct 2026, scheduled for removal in the first release after that. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — UI + Windows + macOS smoke cells all run on 3.11)
-- All Ship Gate hard gates (A–D) checked 2026-02-27, scorecard 23/31 (14 SKIP with reasons), `shipcheck audit` passes 100%
+- Dev rig: **RTX 5090 (32 GB) + 64 GB RAM**, Windows 11. The repo is positioned 32 GB-first since v1.7 (scales down to 16 GB). FSDP2 offload (`--full-ft-offload`) needs NCCL → run it under WSL2, not Windows-native.
+- Real-GPU smokes (`tests/test_*_smoke.py`, integration-marked) run by hand on the rig, never in CI; CI's weekly train smoke is CPU-only. Mocked-green unit tests have repeatedly hidden real training-path bugs — every new training path needs one non-mocked smoke.
+- 3528 tests in tests/ (pinned 2026-09-30; `pytest --collect-only`), 50% coverage floor (single source of truth: `[tool.coverage.report].fail_under = 50` in pyproject.toml; ci.yml reads it via tomllib so the two surfaces stay in lockstep)
+- Python 3.10 → 3.13 supported in CI; 3.10 is supported through at least v1.6 and reaches upstream EOL Oct 2026, scheduled for removal in the first release after that. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — the UI and Windows cells run on 3.11; macOS cells were dropped in 1.7.1). Plan: 1.7.2 keeps 3.10, 1.8.0 (Nov 2026) drops it
+- Ship Gate hard gates (A–D) last checked 2026-02-27 (scorecard 23/31, 14 SKIP with reasons) — stale; re-run `shipcheck audit` after 1.7.2 ships
 
 ## User-facing docs surface
 

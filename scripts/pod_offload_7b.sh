@@ -299,7 +299,14 @@ r = json.load(open(sys.argv[1])); r["git_sha"] = sys.argv[2]; ceil = float(sys.a
 checks = {
   "finite_losses": all(math.isfinite(x) for x in r["losses"]),
   "loss_decreased": len(r["losses"]) >= 4 and sum(r["losses"][-3:]) / 3 < r["losses"][0] * 0.9,
-  "params_changed": (r.get("pct_params_changed_final") or 0) >= 50.0,
+  # Stochastic rounding moves only SOME bf16 elements per step (unbiased in
+  # expectation), so "% of sampled elements changed" is well below 100 even when
+  # learning is healthy: measured 43-49 % after 20 steps at 1.5B-7.6B. Round-to-
+  # nearest, the failure this guards against, moved 3.0 % at step 1 and stalled.
+  # The 25 % bar was revised after the first 7B receipt (the original 50 % was a
+  # guess made before any SR data existed); loss-vs-fp32 parity is the real gate
+  # (scripts/offload_probe.py --precision-check).
+  "params_changed": (r.get("pct_params_changed_final") or 0) >= 25.0,
   "rss_under_ceiling": r["peak_rss_total_gb"] < ceil,
   "vram_fits": r["peak_vram_reserved_gb"] < r["vram_total_gb"],
   "generated": bool(r.get("generation", "").strip()),

@@ -36,6 +36,7 @@ import shutil
 import statistics
 import sys
 import time
+import traceback
 
 ap = argparse.ArgumentParser()
 ap.add_argument("mode", choices=["prep", "base", "train", "summarize"])
@@ -56,6 +57,8 @@ ap.add_argument("--lr", type=float, default=2e-5)
 ap.add_argument("--vram-cap-gb", type=float, default=0.0, help="GiB; 0 = uncapped")
 ap.add_argument("--save-reload", action="store_true")
 ap.add_argument("--no-eval", action="store_true")
+ap.add_argument("--gen-inprocess", action="store_true",
+                help="generate from the trained in-memory model (no save/reload)")
 ap.add_argument("--stage", default=None, help="summarize: a | b | c | a2")
 ap.add_argument("--git-sha", default=os.environ.get("GIT_SHA", "unknown"))
 ap.add_argument("--n-train", type=int, default=400)
@@ -70,6 +73,10 @@ os.makedirs(RUNS, exist_ok=True)
 TRAIN = os.path.join(OUT, "train.jsonl")
 HELD = os.path.join(OUT, "heldout.jsonl")
 GIB = 2**30
+# Trainer output (its end-of-run checkpoint) and the save->reload copy can live
+# on fast local disk while receipts stay on the (network) volume.
+WORKDIR = os.environ.get("BP_WORK_DIR") or os.path.join(OUT, "work")
+SAVEDIR = os.environ.get("BP_SAVE_DIR") or WORKDIR
 
 
 def slug(model: str) -> str:
@@ -324,7 +331,7 @@ be.BlockCoordinateOptimizer._deactivate = _deactivate_with_peak  # type: ignore[
 
 kwargs: dict = {"model": args.model, "use_unsloth": False, "max_seq_length": args.seq, "batch_size": args.batch,
                     "gradient_accumulation": 1, "packing": False, "learning_rate": args.lr,
-                    "output_dir": os.path.join(OUT, "work", tag), "report_to": "none"}
+                    "output_dir": os.path.join(WORKDIR, tag), "report_to": "none"}
 if args.qlora:
     kwargs.update(mode="lora", learning_rate=2e-4 if args.lr == 2e-5 else args.lr)
 else:
@@ -361,6 +368,8 @@ try:
     t1 = time.perf_counter()
     run = t.train(TRAIN, steps=args.steps, callback=TrainingCallback(on_step=on_step))
     rec["train_s"] = round(time.perf_counter() - t1, 1)
+    # Drop the trainer's end-of-run checkpoint now: disk, not evidence.
+    shutil.rmtree(os.path.join(WORKDIR, tag), ignore_errors=True)
     rec["peak_vram_alloc_gib"] = round(max([peak_alloc()]
                                            + [v["peak_alloc_gib"] for v in visit_peaks]), 3)
     rec["peak_vram_reserved_gib"] = round(max([peak_reserved()]
@@ -372,12 +381,22 @@ try:
     rec["final_loss"] = run.final_loss
     rec["engine_summary"] = run.metadata.get("block_engine")
     rec["visit_peaks"] = visit_peaks
+    if args.gen_inprocess:
+        m, tok = t._model, t._tokenizer
+        m.eval()
+        ids = tok.apply_chat_template([{"role": "user", "content": "What is the capital of France?"}],
+                                      add_generation_prompt=True, return_tensors="pt")
+        ids = (ids["input_ids"] if hasattr(ids, "keys") else ids).to(next(m.parameters()).device)
+        with torch.no_grad():
+            out = m.generate(input_ids=ids, max_new_tokens=24, do_sample=False)
+        rec["generation"] = tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True)
+        rec["model_class"] = type(m).__name__
     if not args.no_eval:
         rec["heldout_after"] = heldout_loss(t._model, t._tokenizer)["loss"]
     if args.save_reload:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        save_dir = os.path.join(OUT, "work", f"saved_{tag}")
+        save_dir = os.path.join(SAVEDIR, f"saved_{tag}")
         saved = t.save(save_dir, run_id=run.run_id)
         del t, run
         gc.collect()
@@ -402,13 +421,14 @@ except Exception as exc:  # a capped run that does not fit is a result, not a cr
                                              "RUNTIME_OOM"))
     rec["status"] = "oom" if oom else "error"
     rec["error"] = msg[:2000]
+    rec["traceback_tail"] = traceback.format_exc()[-3000:]
     rec["peak_vram_alloc_gib_before_error"] = round(max([peak_alloc()]
                                                         + [v["peak_alloc_gib"] for v in visit_peaks]), 3)
     rec["visit_peaks"] = visit_peaks
     rec["losses"] = losses
 finally:
     rec["wall_s"] = round(time.perf_counter() - t0, 1)
-    shutil.rmtree(os.path.join(OUT, "work", tag), ignore_errors=True)
+    shutil.rmtree(os.path.join(WORKDIR, tag), ignore_errors=True)
 
 dump(os.path.join(RUNS, f"{tag}.json"), rec)
 # exit 0 for ok and for an OOM under a cap (a measured "does not fit"); 1 otherwise

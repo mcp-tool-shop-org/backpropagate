@@ -32,7 +32,7 @@
 #   tail -f /workspace/block_engine/pod.log
 #
 # Knobs (env): BRANCH, REPO, WORK (default /workspace/block_engine),
-#   STAGES (default "smoke a b c a2"), SEEDS (default "0 1 2"), STEPS (150),
+#   STAGES (default "smoke p a b c a2"), SEEDS (default "0 1 2"), STEPS (150),
 #   STEPS_C (150), FORCE_STAGE=<name> to re-run one stage's summary.
 #
 # Pod lessons carried over from pod_offload_7b.sh: pip needs
@@ -43,7 +43,7 @@ set -uo pipefail
 REPO="${REPO:-https://github.com/mcp-tool-shop-org/backpropagate.git}"
 BRANCH="${BRANCH:-feat/block-coordinate-engine}"
 WORK="${WORK:-/workspace/block_engine}"
-STAGES="${STAGES:-smoke a b c a2}"
+STAGES="${STAGES:-smoke p a b c a2}"
 SEEDS="${SEEDS:-0 1 2}"
 STEPS="${STEPS:-150}"
 STEPS_C="${STEPS_C:-150}"
@@ -158,6 +158,33 @@ print("smoke:", r.get("status"), r.get("losses", [])[:3], "->", r.get("losses", 
 sys.exit(0 if ok else 1)
 EOF
   done_mark smoke
+fi
+
+# ---------------------------------------------------------------- p preset check
+# The qwen3.5-4b preset ships Qwen/Qwen3.5-4B-Instruct (not on the Hub).
+# Qwen/Qwen3.5-4B exists but is tagged image-text-to-text: does the library's
+# text-only loader load it, train 5 LoRA steps and generate?
+if want p && ! is_done p; then
+  log "stage p: qwen3.5-4b preset check"
+  "$PY" - > "$WORK/runs/p_hub.json" <<'EOF' || true
+import json
+from huggingface_hub import model_info
+out = {}
+for rid in ("Qwen/Qwen3.5-4B-Instruct", "Qwen/Qwen3.5-4B"):
+    try:
+        mi = model_info(rid)
+        out[rid] = {"exists": True, "pipeline_tag": mi.pipeline_tag,
+                    "architectures": (mi.config or {}).get("architectures")}
+    except Exception as exc:  # noqa: BLE001
+        out[rid] = {"exists": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+print(json.dumps(out, indent=1))
+EOF
+  cat "$WORK/runs/p_hub.json"
+  run p_qwen35_4b_lora preset_qwen35_4b --model "Qwen/Qwen3.5-4B" --qlora --steps 5 --batch 2 \
+      --seq 256 --no-eval --gen-inprocess
+  "$PY" -c "import json; r=json.load(open('$WORK/runs/p_qwen35_4b_lora.json')); print('preset p:', r.get('status'), r.get('model_class'), repr(r.get('generation')), r.get('losses'), r.get('error', '')[:800])"
+  rm -rf "$HF_HOME/hub/models--Qwen--Qwen3.5-4B"  # free the container disk for 7B
+  done_mark p
 fi
 
 # ---------------------------------------------------------------- a quality

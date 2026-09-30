@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **PyJWT 2.13.0 → 2.15.1 in `uv.lock`; the `[security]` floor rises to
+  `>=2.14.0`.** CVE-2026-102268 (critical, fixed in 2.14.0) tripped Trivy's
+  CRITICAL floor on `main` and on every open PR. The re-lock moved PyJWT
+  only.
 - **20 Dependabot alerts fixed on 2026-09-23 (1 critical, 12 high, 7
   medium).** Each re-lock moved only its own package:
   - anyio 4.14.0 → 4.14.2 (#211): CVE-2026-63374 (critical) plus one high

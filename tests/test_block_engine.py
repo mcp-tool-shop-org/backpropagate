@@ -171,6 +171,30 @@ class TestSchedule:
         flat = [p for g in opt.param_groups for p in g["params"]]
         assert {id(p) for p in flat} == {id(p) for p in opt.block_params(1)}
 
+    def test_write_back_runs_with_the_old_state_unreferenced(self, monkeypatch):
+        """The switch happens inside step(); by the time the block is written
+        back, nothing may still hold its grads or Adam moments (on a 7B
+        vocab block that was ~8.7 GB of dead weight during write-back)."""
+        import gc
+        import weakref
+
+        m = tiny_llama(tied=False, layers=2)
+        opt = be.BlockCoordinateOptimizer(m, lr=1e-3, switch_block_every=2, block_order="ascending")
+        _train_steps(m, opt, 1)
+        refs = [weakref.ref(t) for p in opt.block_params(0) for t in
+                (opt.state[p]["exp_avg"], opt.state[p]["exp_avg_sq"])]
+        alive_at_writeback = []
+        orig = type(opt)._deactivate
+
+        def spy(self):
+            orig(self)
+            gc.collect()
+            alive_at_writeback.append(sum(r() is not None for r in refs))
+
+        monkeypatch.setattr(type(opt), "_deactivate", spy)
+        _train_steps(m, opt, 1, seed=3)  # K reached -> switch inside step()
+        assert alive_at_writeback == [0]
+
     @pytest.mark.parametrize("order", ["ascending", "descending", "random"])
     def test_orders_cover_every_block_each_epoch(self, order):
         m = tiny_llama(tied=False, layers=4)

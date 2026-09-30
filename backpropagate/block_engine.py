@@ -641,36 +641,14 @@ class BlockCoordinateOptimizer(Optimizer):
             raise TrainingError(
                 "block engine: step() after finalize().", code="RUNTIME_TRAINING_FAILED"
             )
+        # The per-parameter update lives in its own method so its locals (the
+        # last parameter's grad, moments and denominator) are released before
+        # a switch writes the block back. Measured on the pod: with the update
+        # inline in step(), a 7B head/embedding block's write-back ran with
+        # ~8.7 GB of those tensors still referenced by this frame.
         any_grad = False
         for group in self.param_groups:
-            lr = float(group["lr"])
-            beta1, beta2 = group["betas"]
-            eps = float(group["eps"])
-            wd = float(group["weight_decay"])
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                any_grad = True
-                st = self.state[p]
-                if not st:
-                    st["step"] = 0
-                    st["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
-                    st["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
-                st["step"] += 1
-                t = st["step"]
-                g = p.grad.float()
-                exp_avg, exp_avg_sq = st["exp_avg"], st["exp_avg_sq"]
-                # Decoupled weight decay, then Adam — torch.optim.AdamW's maths.
-                if wd != 0.0:
-                    p.mul_(1.0 - lr * wd)
-                exp_avg.lerp_(g, 1.0 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(g, g, value=1.0 - beta2)
-                denom = (exp_avg_sq.sqrt() / math.sqrt(1.0 - beta2**t)).add_(eps)
-                step_size = lr / (1.0 - beta1**t)
-                if p.dtype == torch.float32:
-                    p.addcdiv_(exp_avg, denom, value=-step_size)
-                else:  # upcast=False on a 16-bit model: update in storage dtype
-                    p.sub_(exp_avg.div(denom).mul_(step_size).to(p.dtype))
+            any_grad = self._update_group(group) or any_grad
         if not any_grad:
             blk = self.active_block
             raise TrainingError(
@@ -689,6 +667,39 @@ class BlockCoordinateOptimizer(Optimizer):
         if self._steps_in_block >= self.switch_block_every:
             self.switch()
         return loss
+
+    def _update_group(self, group: dict[str, Any]) -> bool:
+        """AdamW on one parameter group; True when any parameter had a grad."""
+        lr = float(group["lr"])
+        beta1, beta2 = group["betas"]
+        eps = float(group["eps"])
+        wd = float(group["weight_decay"])
+        seen = False
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            seen = True
+            st = self.state[p]
+            if not st:
+                st["step"] = 0
+                st["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
+                st["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
+            st["step"] += 1
+            t = st["step"]
+            g = p.grad.float()
+            exp_avg, exp_avg_sq = st["exp_avg"], st["exp_avg_sq"]
+            # Decoupled weight decay, then Adam — torch.optim.AdamW's maths.
+            if wd != 0.0:
+                p.mul_(1.0 - lr * wd)
+            exp_avg.lerp_(g, 1.0 - beta1)
+            exp_avg_sq.mul_(beta2).addcmul_(g, g, value=1.0 - beta2)
+            denom = (exp_avg_sq.sqrt() / math.sqrt(1.0 - beta2**t)).add_(eps)
+            step_size = lr / (1.0 - beta1**t)
+            if p.dtype == torch.float32:
+                p.addcdiv_(exp_avg, denom, value=-step_size)
+            else:  # upcast=False on a 16-bit model: update in storage dtype
+                p.sub_(exp_avg.div(denom).mul_(step_size).to(p.dtype))
+        return seen
 
     # -- checkpoint state -----------------------------------------------------------
     def state_dict(self) -> dict[str, Any]:  # type: ignore[override]

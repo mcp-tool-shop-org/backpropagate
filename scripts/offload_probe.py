@@ -347,6 +347,7 @@ for step in range(args.steps):
         grad_bytes = sum(g.numel() * g.element_size() for g in gl)
         receipt["grad_device"] = str(gl[0].device) if gl else None
         receipt["grad_dtype"] = str(gl[0].dtype) if gl else None
+        del gl  # holding step-0 grads here inflated every later RSS reading by 2 B/param
     opt.step()
     t3 = time.perf_counter(); r3 = psutil.Process().memory_info().rss
     opt.zero_grad(set_to_none=True)

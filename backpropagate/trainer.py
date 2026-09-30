@@ -874,6 +874,37 @@ def _ensure_fsdp_runtime() -> None:
     )
 
 
+def _gather_fsdp_full_state_dict(model: Any) -> dict[str, Any] | None:
+    """v1.7: full (unsharded, CPU) state dict for an FSDP2 model, else None.
+
+    Under ``full_ft_offload=True`` accelerate applies FSDP2 ``fully_shard`` in
+    place, so after training ``model.state_dict()`` holds CPU-offloaded
+    ``DTensor`` shards that ``save_pretrained`` / safetensors cannot serialize.
+    ``get_model_state_dict(full_state_dict=True, cpu_offload=True)`` gathers
+    plain tensors with the ORIGINAL parameter names (FSDP2 does not rename).
+    Returns None for any model that is not an ``FSDPModule`` (every non-offload
+    path), so callers keep their existing save call unchanged.
+    """
+    try:
+        from torch.distributed.fsdp import FSDPModule
+    except Exception:  # noqa: BLE001 — torch without FSDP2: cannot be sharded
+        return None
+    if not isinstance(model, FSDPModule):
+        return None
+    from torch.distributed.checkpoint.state_dict import (
+        StateDictOptions,
+        get_model_state_dict,
+    )
+
+    # FSDP2 swaps the model's class in place (it IS still the nn.Module), but
+    # the isinstance check narrowed the static type to FSDPModule.
+    sharded_module: Any = model
+    return get_model_state_dict(
+        sharded_module,
+        options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+    )
+
+
 # Default learning rate for mode='full'. Full fine-tuning literature
 # (Biderman 2024 / Thinking Machines 2025) recommends ~10x lower LR than
 # LoRA — typical LoRA default is 2e-4, so full FT default is 2e-5. The
@@ -1577,13 +1608,48 @@ def _build_sft_config(
         # TrainingArguments.gradient_checkpointing — the latter adds a redundant
         # AllGather in the backward pass (HF transformers#30404). Move the
         # checkpointing knob into the FSDP config so we don't double-wrap.
-        kwargs.pop("gradient_checkpointing", None)
+        # Set it to False EXPLICITLY — popping the key is not enough: TRL's
+        # SFTConfig defaults ``gradient_checkpointing=True`` (trl 0.2x), and
+        # transformers refuses FSDP activation_checkpointing + TrainingArguments
+        # gradient_checkpointing together (ValueError at trainer construction).
+        # Caught by tests/test_full_ft_offload_smoke.py on the first real run.
+        kwargs["gradient_checkpointing"] = False
         kwargs.pop("gradient_checkpointing_kwargs", None)
+        # bitsandbytes optimizers cannot step FSDP2 CPU-offloaded params: the
+        # params are DTensors living on the CPU, and bnb's update kernels have
+        # no DTensor sharding strategy (NotImplementedError: "Operator
+        # bitsandbytes.optimizer_update_32bit.default does not have a sharding
+        # strategy registered") and are CUDA-only besides. The full-FT default
+        # resolves to paged_adamw_8bit above, so without this every offload run
+        # crashed at the first optimizer.step(). Downgrade ANY bnb optimizer —
+        # an explicit operator pin included, since it physically cannot run
+        # here (same rule as the CPU-runner downgrade in _detect_optim_for_card)
+        # — to torch AdamW, which steps CPU DTensors natively. Caught by
+        # tests/test_full_ft_offload_smoke.py on the first real run.
+        if Trainer._is_bnb_8bit_optim(kwargs["optim"]):
+            logger.info(
+                "full_ft_offload: optim %r -> adamw_torch (bitsandbytes "
+                "optimizers cannot step FSDP2 CPU-offloaded DTensor params).",
+                kwargs["optim"],
+            )
+            kwargs["optim"] = "adamw_torch"
         kwargs["fsdp"] = "full_shard offload auto_wrap"
         kwargs["fsdp_config"] = {
             "fsdp_version": 2,
             "cpu_ram_efficient_loading": True,
             "activation_checkpointing": True,
+            # Intermediate/final HF checkpoints (checkpoint-N/) must NOT gather
+            # the full model + optimizer onto the GPU. With a single process,
+            # accelerate forces FULL_STATE_DICT gathers onto the card
+            # (offload_to_cpu is only enabled for num_processes > 1): measured
+            # on SmolLM2-360M the checkpoint save peaked at ~7.5 B/param of
+            # VRAM (fp32 params + both Adam moments) vs 0.39 GB during the
+            # training steps — i.e. a 7B run would OOM a 32 GB card at its
+            # first checkpoint. SHARDED_STATE_DICT writes the CPU-resident
+            # DTensor shards via torch.distributed.checkpoint with no gather.
+            # The final artifact is still a plain HF model: Trainer.save()
+            # gathers it to CPU (_gather_fsdp_full_state_dict).
+            "state_dict_type": "SHARDED_STATE_DICT",
         }
 
     return SFTConfig(**kwargs)
@@ -4259,7 +4325,16 @@ class Trainer:
             }
             # device_map='auto' only when CUDA is present (a CPU runner would
             # need accelerate and gain nothing).
-            if torch.cuda.is_available():
+            #
+            # v1.7 full_ft_offload: load on the CPU instead. accelerate's FSDP2
+            # prepare upcasts every trainable param to fp32 IN PLACE before
+            # fully_shard + CPUOffloadPolicy park the shards on the host; with
+            # the model GPU-resident that upcast allocates bf16 + fp32 copies of
+            # the WHOLE model on the card (~7.5 B/param peak measured on
+            # SmolLM2-135M/360M — ~50 GB for a 7B, i.e. an OOM on the 32 GB
+            # card the offload path exists for). Loading on CPU keeps the upcast
+            # in host RAM, which is where the offloaded state lives anyway.
+            if torch.cuda.is_available() and not self.full_ft_offload:
                 model_load_kwargs["device_map"] = "auto"
         elif self._load_in_4bit:
             # LoRA / QLoRA (default): 4-bit nf4 base + adapter. bitsandbytes
@@ -6669,7 +6744,18 @@ class Trainer:
                     save_method="merged_16bit",
                 )
             else:
-                self._model.save_pretrained(str(partial_path))
+                # v1.7 full_ft_offload: an FSDP2-sharded model's parameters are
+                # DTensors (CPU-offloaded shards); save_pretrained cannot
+                # serialize them ("Attempted to access the data pointer on an
+                # invalid python storage"). Gather a plain full state dict
+                # first. None for every non-FSDP model — unchanged path.
+                full_sd = _gather_fsdp_full_state_dict(self._model)
+                if full_sd is not None:
+                    self._model.save_pretrained(
+                        str(partial_path), state_dict=full_sd
+                    )
+                else:
+                    self._model.save_pretrained(str(partial_path))
                 self._tokenizer.save_pretrained(str(partial_path))
 
             # B-001: drop run_id into the checkpoint dir so an operator can

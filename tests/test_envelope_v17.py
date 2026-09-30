@@ -132,6 +132,79 @@ class TestDepFsdp:
 
 
 # ---------------------------------------------------------------------------
+# FSDP2 offload SFTConfig — CPU pins for the bugs the real-GPU smoke found
+# (tests/test_full_ft_offload_smoke.py is the end-to-end regression test; these
+# keep the config contract pinned in CI, where the smoke cannot run).
+# ---------------------------------------------------------------------------
+class TestOffloadSftConfig:
+    @staticmethod
+    def _build(**overrides):
+        from unittest.mock import patch
+
+        # Resolve trl's lazy SFTConfig BEFORE the CUDA mocks: importing it under
+        # a MagicMock device-props patch blows up inside trl's import.
+        import trl
+
+        _ = trl.SFTConfig
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.get_device_properties") as props, \
+             patch("torch.cuda.get_device_capability", return_value=(12, 0)), \
+             patch("trl.SFTConfig") as sft:
+            props.return_value.total_memory = 32 * 1024 ** 3
+            kwargs = {
+                "output_dir": "/tmp/out",
+                "per_device_train_batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "max_steps": 2,
+                "learning_rate": 2e-5,
+                "warmup_steps": 0,
+                "max_seq_length": 128,
+                "seed": 42,
+                "lr_scheduler_type": "cosine",
+                "logging_steps": 1,
+                "mode": "full",
+            }
+            kwargs.update(overrides)
+            t._build_sft_config(**kwargs)
+            return sft.call_args.kwargs
+
+    def test_offload_disables_trainingargs_gradient_checkpointing_explicitly(self):
+        """TRL's SFTConfig defaults gradient_checkpointing=True, so popping the
+        key re-enabled it and transformers refused the FSDP config."""
+        kw = self._build(full_ft_offload=True)
+        assert kw["gradient_checkpointing"] is False
+        assert "gradient_checkpointing_kwargs" not in kw
+        assert kw["fsdp_config"]["activation_checkpointing"] is True
+
+    @pytest.mark.parametrize("pinned", [None, "adamw_8bit", "paged_adamw_8bit"])
+    def test_offload_never_uses_a_bitsandbytes_optimizer(self, pinned):
+        """bnb optimizers cannot step CPU-offloaded DTensor params."""
+        kw = self._build(full_ft_offload=True, optim=pinned)
+        assert kw["optim"] == "adamw_torch"
+
+    def test_offload_honors_a_torch_optimizer_pin(self):
+        kw = self._build(full_ft_offload=True, optim="adamw_torch_fused")
+        assert kw["optim"] == "adamw_torch_fused"
+
+    def test_offload_checkpoints_are_sharded(self):
+        """A single-process FULL_STATE_DICT checkpoint gathers the whole model +
+        optimizer onto the GPU; SHARDED_STATE_DICT writes the CPU shards."""
+        kw = self._build(full_ft_offload=True)
+        assert kw["fsdp_config"]["state_dict_type"] == "SHARDED_STATE_DICT"
+
+    def test_pure_gpu_full_ft_unchanged(self):
+        kw = self._build(full_ft_offload=False)
+        assert kw["gradient_checkpointing"] is True
+        assert kw["optim"] == "paged_adamw_8bit"
+        assert "fsdp" not in kw
+
+    def test_gather_full_state_dict_is_noop_for_unsharded_models(self):
+        import torch
+
+        assert t._gather_fsdp_full_state_dict(torch.nn.Linear(2, 2)) is None
+
+
+# ---------------------------------------------------------------------------
 # 32/48 GB batch tiers
 # ---------------------------------------------------------------------------
 class TestBatchTiers:

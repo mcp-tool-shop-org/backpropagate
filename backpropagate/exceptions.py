@@ -86,6 +86,7 @@ __all__ = [
     "ModelLoadError",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
+    "OffloadDoesNotFitError",
     "MLXUnavailableError",
     "FsdpUnavailableError",
     "TrainingAbortedError",
@@ -475,13 +476,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
             "mode='full' was selected but the target model exceeds the "
             "card-aware full fine-tuning parameter ceiling. The pure-GPU "
             "ceiling is derived from detected VRAM (16GB->4B, 24GB->5B, "
-            "32GB->6B); FSDP2 CPU-offload (--full-ft-offload) lifts it "
-            "(32GB->~8B, enabling 7B-class full-FT into 64GB host RAM)."
+            "32GB->6B). With --full-ft-offload the gate is a measured fit "
+            "check instead: host RAM ~3.73 GiB per billion params + 10.1 GiB "
+            "(7.6B -> ~38.5 GiB), and VRAM for the embedding/head + 2 layers "
+            "+ activations at the requested seq length."
         ),
         "default_hint": (
             "If the model fits the FSDP2 CPU-offload ceiling, add "
             "--full-ft-offload (Python: full_ft_offload=True) to spill "
-            "params+optimizer into host RAM (slower, needs ~64GB RAM). "
+            "params into host RAM (slower; ~3.73 GiB of host RAM per "
+            "billion params + 10.1 GiB). "
             "Otherwise re-run with mode='lora' (the default) — LoRA/QLoRA "
             "fits 7B-34B on a 32GB card — or switch to a smaller model. "
             "See handbook/full-fine-tuning.md for the 4-addend VRAM math + "
@@ -1096,8 +1100,8 @@ class FullFinetuneModelTooLargeError(TrainingError):
                 f"~{offload_ceiling_billions:.1f}B with FSDP2 CPU-offload. "
                 f"Enable --full-ft-offload (Python: full_ft_offload=True) to "
                 f"spill params + optimizer state into host RAM and full-fine-tune "
-                f"this model (slower, PCIe/CPU-bandwidth-bound, needs ~64GB host "
-                f"RAM), OR re-run with mode='lora' (the default) for a LoRA adapter."
+                f"this model (slower, PCIe-bound; host RAM is checked at train time), "
+                f"OR re-run with mode='lora' (the default) for a LoRA adapter."
             )
         else:
             # Exceeds even the offload ceiling, or offload is already active:
@@ -1131,6 +1135,68 @@ class FullFinetuneModelTooLargeError(TrainingError):
             message,
             details=details,
             suggestion=suggestion,
+            code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
+            retryable=False,
+        )
+
+
+class OffloadDoesNotFitError(FullFinetuneModelTooLargeError):
+    """full_ft_offload=True requested, but the measured fit check says no.
+
+    The measured model lives in ``backpropagate.offload_engine`` (constants
+    cite the receipts in docs/receipts/2026-09-30-offload/). It compares:
+    host RAM needed (to train AND save/reload) against AVAILABLE host RAM, and
+    peak VRAM for one step at the requested seq x batch against the card.
+    Same ``code`` as its parent (RUNTIME_FULL_FT_MODEL_TOO_LARGE), so the CLI
+    exit-code mapper and the error-code catalogue need no change. The message
+    states required vs available for both, plus the remedies that apply.
+    """
+
+    def __init__(self, model_name: str, report: dict[str, Any]):
+        self.report = report
+        self.model_name = model_name
+        self.param_count_billions = report.get("params_billions")
+        self.ceiling_billions = float("nan")
+        self.offload_ceiling_billions = None
+        self.offload_recoverable = False
+        self.offload_active = True
+        lines = [
+            f"full_ft_offload: model {model_name!r} "
+            f"(~{report.get('params_billions')}B params) does not fit this machine."
+        ]
+        remedies = []
+        if not report.get("fits_host_ram", True):
+            lines.append(
+                f"Host RAM: needs ~{report['host_ram_required_gib']} GiB to train and "
+                f"save; {report['host_ram_available_gib']} GiB available "
+                f"(MemTotal {report['host_ram_total_gib']} GiB)."
+            )
+            remedies.append(
+                "free host RAM, add RAM, or under WSL2 raise the VM cap "
+                "(`memory=` in %UserProfile%\\.wslconfig, then `wsl --shutdown`)"
+            )
+        if not report.get("fits_vram", True):
+            lines.append(
+                f"VRAM: needs ~{report['vram_required_gib']} GiB at "
+                f"{report['tokens_per_step']} tokens/step; the card has "
+                f"{report['vram_total_gib']} GiB."
+            )
+            remedies.append("lower max_seq_length or batch_size")
+        remedies.append("pick a smaller model")
+        remedies.append(
+            "use mode='lora' (QLoRA fits 7B-32B on a 32 GB card)"
+        )
+        lines.append("Remedies: " + "; ".join(remedies) + ".")
+        lines.append(
+            "To override the check, pass --full-ft-ceiling-billions / "
+            "full_ft_ceiling_billions (you then own the OOM risk)."
+        )
+        message = " ".join(lines)
+        TrainingError.__init__(
+            self,
+            message,
+            details={"model_name": model_name, **report},
+            suggestion=None,
             code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
             retryable=False,
         )

@@ -222,6 +222,150 @@ class OffloadAdafactor(torch.optim.Optimizer):
         return loss
 
 
+
+# =============================================================================
+# Measured fit check (host RAM + VRAM) for full_ft_offload
+# =============================================================================
+# Every constant below cites the receipt it came from. Receipts are versioned in
+# docs/receipts/2026-09-30-offload/ (index in its README.md). All runs are on a
+# RunPod RTX 5090 (31.36 GiB), torch 2.8.0+cu128, transformers 5.17.0, seq 512,
+# batch 1, BACKPROPAGATE_OFFLOAD_PIN=register (the default), unless noted.
+#
+# Host RAM: peak RSS (GiB) vs params.
+#   q15b_offload_reg.json      Qwen2.5-1.5B            1.544B  train 8.13   with save+reload 10.89  (d291aa2)
+#   smollm3_offload_reg.json   SmolLM3-3B              3.075B  train 13.81  with save+reload 15.33  (d291aa2)
+#   qwen3_4b_offload_reg.json  Qwen3-4B-Instruct-2507  4.022B  train 19.16  with save+reload 25.07  (d291aa2)
+#   q7b_final_receipt.json     Qwen2.5-7B-Instruct     7.616B  train 30.78  with save+reload 32.18  (fc79bb9)
+# The least-squares slope of the training peak over those four points is 3.728
+# GiB per billion params (4.00 bytes/param: bf16 params + bf16 grads).
+_HOST_GIB_PER_BILLION_PARAMS = 3.728
+# The fixed term is the UPPER envelope, over the same four runs, of
+# (peak with save+reload) - slope * params. Qwen3-4B sets it at 10.07 GiB. It
+# covers CUDA and library overhead plus the save -> reload transient; rounded up.
+_HOST_FIXED_GIB = 10.1
+# VRAM: activations per token (seq x batch). Measured slopes:
+#   Qwen2.5-7B: q7b_final_receipt.json (5.25 GiB @ 512 tokens) ->
+#   q7b_seq2048.json (6.99 GiB @ 2048) = 1.16 MiB/token.
+#   SmolLM3-3B: smollm3_offload_reg.json (2.25 GiB @ 512) -> quality.jsonl
+#   offload row (4.28 GiB @ batch 4 x 512) = 1.35 MiB/token.
+# The larger slope, rounded up:
+_VRAM_MIB_PER_TOKEN = 1.40
+# Structural part: 2x the root unit (bf16 embedding + untied LM head, i.e.
+# unsharded params plus their grads) + 2 decoder layers (current + prefetch,
+# bf16). Structure + activations undershoots the measured allocated peak by at
+# most 0.74 GiB, at Qwen3-4B (qwen3_4b_offload_reg.json). Every anchor is
+# re-checked in tests/test_offload_fit.py. Margin, rounded up:
+_VRAM_MARGIN_GIB = 0.8
+# Optimizer-step working set: at most _MAX_CHUNK_NUMEL fp32 elements x ~6 live
+# tensors (g, u, w, old, rounded, cached g). Derived from the code, not a
+# receipt: 1.5 GiB.
+_VRAM_OPTIMIZER_WORKSET_GIB = 6 * 4 * _MAX_CHUNK_NUMEL / 2**30
+
+
+def offload_host_ram_required_gib(params: float) -> float:
+    """Peak host RSS (GiB) needed to train AND save/reload ``params`` with the engine."""
+    return _HOST_GIB_PER_BILLION_PARAMS * params / 1e9 + _HOST_FIXED_GIB
+
+
+def offload_param_ceiling_billions(host_available_gib: float) -> float:
+    """The largest model (billions of params) the measured host-RAM model admits."""
+    return max(0.0, (host_available_gib - _HOST_FIXED_GIB) / _HOST_GIB_PER_BILLION_PARAMS)
+
+
+def offload_vram_required_gib(root_unit_bytes: float, layer_bytes: float, tokens: int) -> float:
+    """Peak VRAM (GiB) for one step: max(fwd/bwd working set, optimizer chunk) + margin."""
+    fwd_bwd = (2 * root_unit_bytes + 2 * layer_bytes) / 2**30 + tokens * _VRAM_MIB_PER_TOKEN / 1024
+    return max(fwd_bwd, _VRAM_OPTIMIZER_WORKSET_GIB) + _VRAM_MARGIN_GIB
+
+
+def model_offload_shape(model: Any) -> tuple[int, int, int]:
+    """(params, root-unit bf16 bytes, largest decoder-layer bf16 bytes) of a model.
+
+    Works on a meta-device model (no memory), a loaded model, or a sharded one.
+    The root unit is the input embedding, plus the output head when the head is
+    not tied to the embedding.
+    """
+    params = sum(_local(p).numel() for p in model.parameters())
+    root = 0
+    emb = getattr(model, "get_input_embeddings", lambda: None)()
+    head = getattr(model, "get_output_embeddings", lambda: None)()
+    emb_w = getattr(emb, "weight", None)
+    head_w = getattr(head, "weight", None)
+    if emb_w is not None:
+        root += emb_w.numel() * 2
+    if head_w is not None and head_w is not emb_w:
+        root += head_w.numel() * 2
+    layer = max(
+        (sum(p.numel() for p in lyr.parameters()) * 2 for lyr in _decoder_layers(model)),
+        default=0,
+    )
+    return params, root, layer
+
+
+def detect_host_ram_gib() -> tuple[float | None, float | None]:
+    """(MemTotal, MemAvailable) in GiB, or (None, None).
+
+    Uses psutil when installed (an optional extra), else /proc/meminfo. The
+    offload path is Linux / WSL2 only, and /proc/meminfo always exists there.
+    Inside WSL2, MemTotal is the VM cap from .wslconfig, which is the budget
+    that matters.
+    """
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        return vm.total / 2**30, vm.available / 2**30
+    except Exception:  # noqa: BLE001, S110 — optional dep; fall through to /proc
+        pass  # nosec B110
+    try:
+        info: dict[str, float] = {}
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                key, _, rest = line.partition(":")
+                if key in ("MemTotal", "MemAvailable"):
+                    info[key] = int(rest.split()[0]) / 2**20  # kB -> GiB
+        return info.get("MemTotal"), info.get("MemAvailable")
+    except OSError:
+        return None, None
+
+
+def check_offload_fit(
+    *,
+    params: float,
+    root_unit_bytes: float | None,
+    layer_bytes: float | None,
+    tokens: int,
+    host_total_gib: float | None,
+    host_available_gib: float | None,
+    vram_total_gib: float | None,
+) -> dict[str, Any]:
+    """Measured fit check for ``full_ft_offload``; returns a report dict.
+
+    ``fits`` is False when a side is known and too small. An unknown side
+    (None) is not judged: the report shows None and the run proceeds.
+    """
+    ram_need = offload_host_ram_required_gib(params)
+    report: dict[str, Any] = {
+        "params_billions": round(params / 1e9, 3),
+        "host_ram_required_gib": round(ram_need, 1),
+        "host_ram_available_gib": None if host_available_gib is None else round(host_available_gib, 1),
+        "host_ram_total_gib": None if host_total_gib is None else round(host_total_gib, 1),
+        "vram_required_gib": None,
+        "vram_total_gib": None if vram_total_gib is None else round(vram_total_gib, 1),
+        "tokens_per_step": tokens,
+    }
+    ram_ok = host_available_gib is None or ram_need <= host_available_gib
+    vram_ok = True
+    if root_unit_bytes is not None and layer_bytes is not None:
+        vram_need = offload_vram_required_gib(root_unit_bytes, layer_bytes, tokens)
+        report["vram_required_gib"] = round(vram_need, 1)
+        vram_ok = vram_total_gib is None or vram_need <= vram_total_gib
+    report["fits_host_ram"] = ram_ok
+    report["fits_vram"] = vram_ok
+    report["fits"] = ram_ok and vram_ok
+    return report
+
+
 def _decoder_layers(model: Any) -> list[Any]:
     """The repeated transformer blocks to shard one-by-one (HF convention)."""
     names = set(getattr(model, "_no_split_modules", None) or [])
@@ -252,16 +396,34 @@ def _pin_mode() -> str:
 
 
 def register_host_params(model: Any) -> list[int]:
-    """Page-lock each param's CPU storage in place; returns the registered pointers."""
+    """Page-lock each param's CPU storage in place; returns the registered pointers.
+
+    A storage that cudaHostRegister refuses (overlapping pages from an earlier
+    registration, a driver limit) stays pageable. That is still correct, just
+    a slower H2D copy for that tensor. The count is logged at INFO so a silent
+    slowdown can be traced.
+    """
     cudart = torch.cuda.cudart()
     done: list[int] = []
+    seen: set[int] = set()
+    failed = 0
+    failed_bytes = 0
     for p in model.parameters():
         st = _local(p).untyped_storage()
         ptr = st.data_ptr()
-        if ptr in done or st.device.type != "cpu" or st.nbytes() == 0:
+        if ptr in seen or st.device.type != "cpu" or st.nbytes() == 0:
             continue
+        seen.add(ptr)
         if int(cudart.cudaHostRegister(ptr, st.nbytes(), 0)) == 0:
             done.append(ptr)
+        else:
+            failed += 1
+            failed_bytes += st.nbytes()
+    logger.info(
+        "full_ft_offload: page-locked %d param storages; %d could not be registered "
+        "and stay pageable (%.2f GiB, slower H2D for those tensors).",
+        len(done), failed, failed_bytes / 2**30,
+    )
     return done
 
 

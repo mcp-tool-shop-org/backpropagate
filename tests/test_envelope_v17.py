@@ -36,17 +36,25 @@ class TestFullFtCeilingAnchors:
     def test_pure_gpu_ceiling(self, vram, expected):
         assert t._full_ft_ceiling_for_vram(vram) == expected
 
+    # The v1.7 offload VRAM table (24 GB -> 7B, 32 GB -> 8B) is gone. It was
+    # never measured and never looked at host RAM. The offload ceiling now comes
+    # from AVAILABLE host RAM through the measured model; the full RAM + VRAM
+    # check is in tests/test_offload_fit.py.
     @pytest.mark.parametrize(
-        "vram,expected",
-        [(None, 4.0), (16, 4.0), (24, 7.0), (32, 8.0), (48, 16.0), (23.6, 7.0), (31.8, 8.0)],
+        "available_gib,expected",
+        [(64.0, 14.46), (28.0, 4.80), (10.0, 0.0)],
     )
-    def test_offload_ceiling(self, vram, expected):
-        assert t._full_ft_offload_ceiling_for_vram(vram) == expected
+    def test_offload_ceiling_from_host_ram(self, monkeypatch, available_gib, expected):
+        import backpropagate.offload_engine as oe
 
-    def test_offload_ceiling_strictly_higher_at_32gb(self):
-        # The whole point: offload lifts the 32 GB full-FT ceiling past 7B.
-        assert t._full_ft_offload_ceiling_for_vram(32) > t._full_ft_ceiling_for_vram(32)
-        assert t._full_ft_offload_ceiling_for_vram(32) >= 7.0
+        monkeypatch.setattr(oe, "detect_host_ram_gib", lambda: (available_gib, available_gib))
+        assert t._full_ft_offload_ceiling_billions() == pytest.approx(expected, abs=0.01)
+
+    def test_offload_ceiling_falls_back_when_ram_unknown(self, monkeypatch):
+        import backpropagate.offload_engine as oe
+
+        monkeypatch.setattr(oe, "detect_host_ram_gib", lambda: (None, None))
+        assert t._full_ft_offload_ceiling_billions() == t._FULL_FT_PARAM_CEILING_BILLIONS
 
 
 # ---------------------------------------------------------------------------
@@ -62,35 +70,38 @@ class TestCeilingGate:
             t._enforce_full_ft_param_ceiling(
                 self.SEVEN_B,
                 ceiling_billions=t._full_ft_ceiling_for_vram(32),
-                offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
+                offload_ceiling_billions=14.46,  # 64 GiB available (measured model)
                 full_ft_offload=False,
             )
         msg = str(ei.value)
         assert "--full-ft-offload" in msg
         assert ei.value.offload_recoverable is True
 
-    def test_7b_offload_32gb_approved(self):
-        """With offload on, 7B clears the 8B offload ceiling -> no raise."""
+    def test_offload_is_not_gated_by_a_param_table(self):
+        """With offload on, the param-count table no longer gates (effective
+        ceiling = inf); the measured fit check does (tests/test_offload_fit.py)."""
         t._enforce_full_ft_param_ceiling(
-            self.SEVEN_B,
-            ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-            offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
+            "meta-llama/Llama-3.1-70B-Instruct",
+            ceiling_billions=float("inf"),
+            offload_ceiling_billions=14.46,
             full_ft_offload=True,
         )
 
-    def test_70b_exceeds_even_offload_names_lora(self):
-        """A 70B model exceeds even the offload ceiling -> recovery is LoRA/QLoRA,
-        NOT --full-ft-offload."""
-        with pytest.raises(FullFinetuneModelTooLargeError) as ei:
-            t._enforce_full_ft_param_ceiling(
-                "meta-llama/Llama-3.1-70B-Instruct",
-                ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-                offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-                full_ft_offload=True,
-            )
-        msg = str(ei.value).lower()
-        assert "lora" in msg
-        assert ei.value.offload_recoverable is False
+    def test_70b_offload_fails_the_fit_check_naming_lora(self):
+        """A 70B model fails the measured host-RAM check even at 64 GiB; the
+        recovery names LoRA/QLoRA and not --full-ft-offload."""
+        from backpropagate.exceptions import OffloadDoesNotFitError
+        from backpropagate.offload_engine import check_offload_fit
+
+        report = check_offload_fit(
+            params=70.6e9, root_unit_bytes=None, layer_bytes=None, tokens=512,
+            host_total_gib=64.0, host_available_gib=64.0, vram_total_gib=31.4,
+        )
+        assert report["fits"] is False
+        err = OffloadDoesNotFitError("meta-llama/Llama-3.1-70B-Instruct", report)
+        assert "lora" in str(err).lower()
+        assert err.code == "RUNTIME_FULL_FT_MODEL_TOO_LARGE"
+        assert isinstance(err, FullFinetuneModelTooLargeError)
 
     def test_explicit_ceiling_override_allows_7b_without_offload(self):
         """--full-ft-ceiling-billions raises the ceiling so 7B passes pure-GPU."""

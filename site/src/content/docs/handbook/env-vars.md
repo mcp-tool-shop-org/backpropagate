@@ -134,6 +134,13 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_TRAINING__FP8` | `false` | **v1.5; verified on Blackwell in v1.6** — FP8 compute path on Blackwell (RTX 5090, sm_120) / Hopper (sm_90+) via torchao. Base projection weights in float8 (~1.4x throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge → GGUF → Ollama export still works. `mode='lora'` + `method='sft'` only; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Equivalent to `--fp8` on the CLI. |
 | `BACKPROPAGATE_TRAINING__BACKEND` | `auto` | **v1.5 T3.1 (experimental — Apple-Silicon rail BUILT-BUT-UNVERIFIED)** — the compute rail. One of `auto` / `cuda` / `mlx`. `auto` (default) routes to CUDA on an NVIDIA host and to the MLX (`mlx_lm.lora`) rail on an Apple-Silicon Mac with the `[mlx]` extra — existing CUDA rigs stay byte-identical. `cuda` forces the CUDA rail; `mlx` forces the Apple-Silicon rail. MLX is LoRA SFT only in v1.5 (`method='orpo'` / `mode='full'` / `fp8=True` / multi-run rejected with `CONFIG_INVALID_SETTING`). A forced `mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; if the resolved rail is `mlx` but `mlx_lm` is missing, the run raises `DEP_MLX_UNAVAILABLE` (`pip install 'backpropagate[mlx]'`). Equivalent to `--backend` on the CLI. The MLX rail is built + unit-tested (mocked), pending dogfood verification on real Apple Silicon. |
 
+## Full fine-tuning offload (`--full-ft-offload`)
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `BACKPROPAGATE_OFFLOAD_PIN` | `register` | How the offload engine page-locks host memory. `register` page-locks the parameter storage in place: no copy, exact size. `pinned` uses PyTorch's pinned allocator, which made steps 3-5x faster in our runs but rounds every block up to a power of two; at 7B that pushed host RAM past 60 GiB. `none` uses ordinary pageable memory: slowest, smallest. |
+| `BACKPROPAGATE_OFFLOAD_ROUNDING` | `stochastic` | Diagnostic only. The engine keeps weights in bf16 and writes each update back with stochastic rounding. `nearest` switches to round-to-nearest, which drops most small updates, so the run stops learning. It exists to test the engine's own safety check. Leave it at the default. |
+
 ## Data
 
 | Variable | Default | What it does |

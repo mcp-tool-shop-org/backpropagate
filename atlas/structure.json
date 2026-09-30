@@ -44,11 +44,11 @@
           "path": ".github/PULL_REQUEST_TEMPLATE.md"
         },
         {
-          "hash": "aec2c94e0c361964fe1b2f2fd9e7b3b47b228e9df71760b9e90ad4b23c592611",
+          "hash": "0f6cab3b5f912c780ed6c58e2420391667e314b71191531ac67682d6daf76e55",
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "06aeeaed2726216a401cd56a64faa086ed47467e011039d9c86339d207edc46a",
+          "hash": "c2341d575d019b3f6925a1d75d47df24f605cfe2f312f9d704e757e672b27541",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -316,7 +316,7 @@
             "main",
             "write_launch_token_lock"
           ],
-          "hash": "109f1f550ac469377f522f273afebbc06e3e8ee5376db3e3b1287723a46e5cf0",
+          "hash": "cc8c5fbdf3ca7e365ebe5daead94545fb631303df0819366fb79ce08df492b5c",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -427,7 +427,7 @@
           "exports": [
             "print_error_code_catalog"
           ],
-          "hash": "16feb4082961731157d56a3fa2cb63e2ec0b0a2b1f2608f12eee37471f3eb9bc",
+          "hash": "8b0d58a9a26c8372795db3c494ff58a07e6232916eb6fca5a19f0c4c46329e71",
           "path": "backpropagate/exceptions.py"
         },
         {
@@ -543,6 +543,23 @@
           "path": "backpropagate/multi_run.py"
         },
         {
+          "exports": [
+            "check_offload_fit",
+            "detect_host_ram_gib",
+            "model_offload_shape",
+            "offload_host_ram_required_gib",
+            "offload_param_ceiling_billions",
+            "offload_vram_required_gib",
+            "register_host_params",
+            "run_offload_training",
+            "shard_for_cpu_offload",
+            "stochastic_round_to_bf16_",
+            "unregister_host_params"
+          ],
+          "hash": "52468aab48ec1c25342edfdb2b713c7bf92870c0a4b4d5bf87adaf1ad7df9d64",
+          "path": "backpropagate/offload_engine.py"
+        },
+        {
           "hash": "4228cb0fdab261ef7c27609ae48ac4828197cb5666377ca16f2d6bbb7bbb1dd3",
           "importsFiles": [
             "backpropagate/ui_app/auth.py"
@@ -592,8 +609,9 @@
             "load_dataset",
             "load_model"
           ],
-          "hash": "857f06ef3af3d10508c310f919da967001a3fb27b544f6fa2b26d8db477d7626",
+          "hash": "38361c5eb0a14b030f800f5974443c5de0555db447e9a7866962ce4f0b8087ed",
           "importsFiles": [
+            "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/datasets.py",
@@ -603,14 +621,15 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/logging_config.py",
             "backpropagate/mlx_backend.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/offload_engine.py"
           ],
           "path": "backpropagate/trainer.py",
           "sequences": [
             {
               "calls": [
                 {
-                  "line": 447,
+                  "line": 448,
                   "name": "apply_chat_template",
                   "target": null
                 }
@@ -623,7 +642,29 @@
             {
               "calls": [
                 {
-                  "line": 824,
+                  "line": 756,
+                  "name": "detect_host_ram_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                },
+                {
+                  "line": 759,
+                  "name": "offload_param_ceiling_billions",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_full_ft_offload_ceiling_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 802,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -638,14 +679,14 @@
             {
               "calls": [
                 {
-                  "line": 948,
+                  "line": 945,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
                   }
                 },
                 {
-                  "line": 952,
+                  "line": 949,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -660,17 +701,17 @@
             {
               "calls": [
                 {
-                  "line": 1040,
+                  "line": 1037,
                   "name": "num_parameters",
                   "target": null
                 },
                 {
-                  "line": 1045,
+                  "line": 1042,
                   "name": "parameters",
                   "target": null
                 },
                 {
-                  "line": 948,
+                  "line": 945,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -678,7 +719,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 952,
+                  "line": 949,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -686,7 +727,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 1083,
+                  "line": 1080,
                   "name": "FullFinetuneModelTooLargeError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -701,7 +742,7 @@
             {
               "calls": [
                 {
-                  "line": 948,
+                  "line": 945,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -709,12 +750,19 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 952,
+                  "line": 949,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
                   },
                   "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1335,
+                  "name": "offload_host_ram_required_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
                 }
               ],
               "exported": true,
@@ -725,7 +773,22 @@
             {
               "calls": [
                 {
-                  "line": 1672,
+                  "line": 1677,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_require_config_field"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1772,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -740,7 +803,7 @@
             {
               "calls": [
                 {
-                  "line": 1814,
+                  "line": 1921,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -755,7 +818,7 @@
             {
               "calls": [
                 {
-                  "line": 1968,
+                  "line": 2086,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -770,7 +833,7 @@
             {
               "calls": [
                 {
-                  "line": 447,
+                  "line": 448,
                   "name": "apply_chat_template",
                   "target": null,
                   "via": "_detect_chat_markers"
@@ -1105,7 +1168,7 @@
       "name": "backpropagate",
       "origin": "authored",
       "role": "code",
-      "testedBy": 63,
+      "testedBy": 67,
       "unresolvedSites": 2
     },
     {
@@ -1150,12 +1213,96 @@
           "path": "docs/assets/social-preview.svg"
         },
         {
-          "hash": "763f4c190dd1a9bb3f13227fe559ecd9864604cd43019ed43322e63fb268261e",
+          "hash": "403498db7b1c60e09193c0482893a9b5e27222c7a9f725af7588fafbb0bec48c",
           "path": "docs/ci-gates-triage-plan.md"
         },
         {
           "hash": "b2f8bdb33ee09869a08bd064fcd972d9f13564b122335b9367c569de7ac0990e",
           "path": "docs/index.md"
+        },
+        {
+          "hash": "4f34aaaaa671936614bc1a3d53b9013bfa2d564f23854e78348677a84cf5914a",
+          "path": "docs/production-quality-plan-2026-09-30.md"
+        },
+        {
+          "hash": "e0c2188ae332b2c8a24fd368391dd60945bb861a95a1f48d1b701d7879b46097",
+          "path": "docs/receipts/2026-09-30-offload/README.md"
+        },
+        {
+          "hash": "3da0a6eb0cb98a343e34d5e7c5fec65b35f13966698c0b2b58ed6fa13fb707e6",
+          "path": "docs/receipts/2026-09-30-offload/q15b_nearest.json"
+        },
+        {
+          "hash": "e4247955f0638bc3b1ae57711fa20d30d1192a71df755e650ac00be0331dcb18",
+          "path": "docs/receipts/2026-09-30-offload/q15b_offload.json"
+        },
+        {
+          "hash": "b22af0eb23fc31aecbb4413c6be7f99b69334908b2879821d9081cf0122fa24e",
+          "path": "docs/receipts/2026-09-30-offload/q15b_offload_reg.json"
+        },
+        {
+          "hash": "e90f382f2b7d939f1e7b28e88ecd6ebc471fce8f9d7a4438f49d953166dc814f",
+          "path": "docs/receipts/2026-09-30-offload/q15b_puregpu.json"
+        },
+        {
+          "hash": "6495f1d1293f4f7a195855b430f616445a2e70a007167aebb6cd67bbbe8529aa",
+          "path": "docs/receipts/2026-09-30-offload/q15b_sr_retention.json"
+        },
+        {
+          "hash": "5fc210f0dc8136ac6fec179d3c3019cb7203d6fd21a268cf9d996d77737d14c5",
+          "path": "docs/receipts/2026-09-30-offload/q7b_cap12.json"
+        },
+        {
+          "hash": "3e5d7ac67b8b80c9ff1f240880fbabc73df9374523986c04333166fbee51a385",
+          "path": "docs/receipts/2026-09-30-offload/q7b_cap8.json"
+        },
+        {
+          "hash": "27d9f32cdad90b9fe635fcc7aec643a810e41ab1f596da4752b59414e2c0ab38",
+          "path": "docs/receipts/2026-09-30-offload/q7b_final_receipt.json"
+        },
+        {
+          "hash": "51d0bfd18964fd3fbe85a2da3163c767c886fa9c49315eb94d8f1fed054c126e",
+          "path": "docs/receipts/2026-09-30-offload/q7b_first_receipt_d291aa2.json"
+        },
+        {
+          "hash": "ded81a0067312baa6f78f5bd1ec6443f040f53f1e9ad0c5b0a92f739f40f2c36",
+          "path": "docs/receipts/2026-09-30-offload/q7b_seq2048.json"
+        },
+        {
+          "hash": "0a5cf1df808f81994a22aae71c4f6dcd2d934dc45a01ef9f4eee32c08b1d7142",
+          "path": "docs/receipts/2026-09-30-offload/quality.jsonl"
+        },
+        {
+          "hash": "36511d52bea18afa59c05ecba220009c02abb93e3dd44ebb9f4b177354202835",
+          "path": "docs/receipts/2026-09-30-offload/qwen3_4b_cap8.json"
+        },
+        {
+          "hash": "51b3b26143a2e7ed434ca1e17a8652d0eb26858bbab58a150fdc794e02fc1380",
+          "path": "docs/receipts/2026-09-30-offload/qwen3_4b_offload_reg.json"
+        },
+        {
+          "hash": "af726a4034d05fe4c270084b3ead4d21cd50746b3126e1668a07c3660db4caf8",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_cap6.json"
+        },
+        {
+          "hash": "f63d1278cf103491cdc5766e8f8a37b994db00d6eed06fd8a9e6a96ea3723723",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_cap8.json"
+        },
+        {
+          "hash": "2c7e464c875c0c5c3632f1a5b5483c772df5b528d3cb6cc59cb80b7e978d34fe",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_offload.json"
+        },
+        {
+          "hash": "c15f67bb1503eec12b14b4904a9fa3f2ab03a44eb9b74173faa16fe503b30407",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_offload_reg.json"
+        },
+        {
+          "hash": "3445bd99d8b645acd8600a6f056d511c077b8bc220d2d0506d3506903223eac4",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_pinned.json"
+        },
+        {
+          "hash": "bb0a9526af1e0bbdac6bec1839d5e1886cbf376c9dddfba5be45593e7be5dfc7",
+          "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
         }
       ],
       "globs": [
@@ -1200,7 +1347,7 @@
           "path": ".dockerignore"
         },
         {
-          "hash": "a24912644b45bc136d71e2f52b29b7ec9ac1878a886180b22ca901ccd4d0dceb",
+          "hash": "3865bae98cbea57ca176b5ee128a12d264174677c38a8bfa5e5703937f949225",
           "path": ".gitignore"
         },
         {
@@ -1216,11 +1363,7 @@
           "path": ".secrets.baseline"
         },
         {
-          "hash": "6266a26283b308a09864975f76352743acee47748608ad7a10ca106cb51e2780",
-          "path": ".trivyignore"
-        },
-        {
-          "hash": "d3dc0a594e03122b03f8e5ffb40e15731c15bc08488a228421e713900858e126",
+          "hash": "2bc9b8d5d2ad8d136a590cc84b5af1e104ab8f4d2e747d7209d0011096381193",
           "path": "CHANGELOG.md"
         },
         {
@@ -1228,7 +1371,7 @@
           "path": "CITATION.cff"
         },
         {
-          "hash": "0e8e2ddb5cd1bf546427e0f556d59135c583f76bc79e35c24c46bf1c6aacb9fc",
+          "hash": "41a7867240c90ff93a96f1fe19aac1ed54a03137810592a1f6ecebd2db7ac182",
           "path": "CLAUDE.md"
         },
         {
@@ -1308,6 +1451,10 @@
           "path": "WAVE_6A_TODO.md"
         },
         {
+          "hash": "a0e9bcffe5bb59ed97e391f242ddbef8f5c7bda79ddb638f03e7c59fb7255588",
+          "path": "codecov.yml"
+        },
+        {
           "hash": "0a734f59e252c78b35754de0e74d35eac612759a40222561f91b8d5ad89b8ca4",
           "path": "compose.yaml"
         },
@@ -1324,11 +1471,11 @@
           "path": "package.json"
         },
         {
-          "hash": "2f9f8eb5233fe33d9b2834156683236025c9cb471940c340047040df4907844b",
+          "hash": "3c5d98a7d049c0fe58f5629820d7ef7ab64241aa05ff9fc2b45006f573a1b487",
           "path": "pyproject.toml"
         },
         {
-          "hash": "049b85f87ad649cd9659f522eb69aef5955b2e19142b4ee99fea4adcb2372056",
+          "hash": "4cd5aafb104b25bc279d6340454c30dd1fe95ab331404a449251c9f0d0c62c64",
           "path": "uv.lock"
         },
         {
@@ -1348,9 +1495,12 @@
     },
     {
       "dynamicReads": 8,
-      "dynamicWrites": 1,
+      "dynamicWrites": 3,
       "entryPoints": [],
-      "externals": 0,
+      "externalNames": [
+        "datasets"
+      ],
+      "externals": 1,
       "files": [
         {
           "hash": "b0d43d5a940ce9c21fe5a5280ec21c8d73fee552a447d52ac894994cb8dd0e95",
@@ -1574,6 +1724,34 @@
               "name": "main"
             }
           ]
+        },
+        {
+          "exports": [
+            "local",
+            "mem_breakdown"
+          ],
+          "hash": "717808b12cb2c4097bc2ddce409a7332798ed60caad6079b43bc9b1fa41281d6",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
+          "path": "scripts/offload_probe.py"
+        },
+        {
+          "exports": [
+            "emit",
+            "heldout_loss",
+            "heldout_texts"
+          ],
+          "hash": "ff9c4e9717038a32ecf013bc15d87801487c470d28764e27f79036057be32bd6",
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "scripts/offload_quality.py"
+        },
+        {
+          "hash": "3030c89191c72227be12b70425660e27990153e0688115aaa342b109a3f7e576",
+          "path": "scripts/pod_offload_7b.sh"
         },
         {
           "hash": "02c692179957e185e513d69c486595f0fbcc01820e41a818231388eaba842266",
@@ -1820,7 +1998,7 @@
           "path": "tests/conftest.py"
         },
         {
-          "hash": "fc994b6954186b47be397c999b6d52a918919a008a5c6b0d5a463aefa7ec510c",
+          "hash": "0b860fe140165b6b458b807dc40e44fccc58838993ee12723af3fbbc67502d2b",
           "importsFiles": [
             "tests/helpers/callbacks.py"
           ],
@@ -1848,6 +2026,13 @@
           ],
           "hash": "4f58e5659863583cec8b8f322097274c028139b7e63ac6149f4bee7eda42daed",
           "path": "tests/helpers/callbacks.py"
+        },
+        {
+          "exports": [
+            "trl_patch_target"
+          ],
+          "hash": "79ce1dce8478fa25979a8bc141165a1531aa65f47a05b05209af0fdad203b740",
+          "path": "tests/helpers/trl_paths.py"
         },
         {
           "exports": [
@@ -2098,13 +2283,14 @@
           "path": "tests/test_e2e_chain.py"
         },
         {
-          "hash": "2da5059e7ad2dfa56eec6ffd398229c03307e4e874032dcf84b5059100505b0d",
+          "hash": "cc0e2d428c1399626e1b16055652cdfc1906b7dcf8795adb142fd2252db134c2",
           "importsFiles": [
             "backpropagate/cli.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
             "backpropagate/mlx_backend.py",
+            "backpropagate/offload_engine.py",
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_envelope_v17.py"
@@ -2233,11 +2419,23 @@
           "exports": [
             "test_fp8_end_to_end_trains_converts_and_merges"
           ],
-          "hash": "c27c6f630393460cf9f96af1db2deeb1a64cda44e97aa5f64b7a3166af832cb1",
+          "hash": "f0b8c4a479404494b9fe45838d660e074ebff7a74d4e4a0cf3871e8ddb17ff72",
           "importsFiles": [
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_fp8_smoke.py"
+        },
+        {
+          "exports": [
+            "test_full_ft_offload_trains_shards_offloads_and_saves",
+            "test_offload_fast_fails_without_nccl"
+          ],
+          "hash": "2b5a9355856a7d74b677cf9a5b6c5b5a91c273f356147a8a1b2f15a6682f1cfa",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_full_ft_offload_smoke.py"
         },
         {
           "exports": [
@@ -2302,7 +2500,7 @@
           "exports": [
             "test_kto_end_to_end_trains_and_saves_adapter"
           ],
-          "hash": "3f5f7f840caefac47c962242562057ff9d969e24030560c4e72d039c07b78167",
+          "hash": "431c1962316ba7f2f20ae328676bd40de724015494791eaf397ec7f7430c58a0",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/trainer.py"
@@ -2378,13 +2576,38 @@
           "path": "tests/test_multi_run_extended.py"
         },
         {
-          "hash": "ed141ed9657550d2abc9d0af7bf8b7f02231ee4f5ddb9e0bb325081f471be15d",
+          "exports": [
+            "test_trainer_routes_offload_to_the_direct_engine"
+          ],
+          "hash": "18d7e13468b7bd8b057e04cd02de530f35cbaf889ef3009d0e65293cf3d71346",
+          "importsFiles": [
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_offload_engine.py"
+        },
+        {
+          "exports": [
+            "fit",
+            "shape"
+          ],
+          "hash": "3673be15025ff522c5252a179ba20471fc3f7c4133b9d6b2d68d818bc19e94c6",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_offload_fit.py"
+        },
+        {
+          "hash": "e5a85417547267680057091533e151d9be7b66f791aa20f269a4affd71620bf9",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
-            "backpropagate/trainer.py"
+            "backpropagate/trainer.py",
+            "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_orpo.py"
         },
@@ -2392,12 +2615,23 @@
           "exports": [
             "test_orpo_end_to_end_trains_and_saves_adapter"
           ],
-          "hash": "81e76d5de413c4e8199f1ce67792e59fe1b43288ba51befb02f33451866ecbd2",
+          "hash": "29ceb363546c8e6d48e806bc5accd959e846ce5f648511fbd4355ba8a8b009e4",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_orpo_smoke.py"
+        },
+        {
+          "exports": [
+            "test_qlora_preset_fits_the_envelope"
+          ],
+          "hash": "df6d9e637ce2c6a17fcc2f6ff0b5fc0f40ed55c393dc4e00e120061d325fc8ea",
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_qlora_presets_smoke.py"
         },
         {
           "exports": [
@@ -2530,7 +2764,7 @@
           "exports": [
             "test_simpo_end_to_end_trains_and_saves_adapter"
           ],
-          "hash": "c183b013c7743a065d90e383e9ee1b762cf30ef89a01aa45e97b71422e3f962c",
+          "hash": "f91ca6d4fa22d3a559b9636d141104e1a7cb25ab2f49e66a440b2cc96b553a2a",
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/trainer.py"
@@ -2549,7 +2783,7 @@
           "exports": [
             "temp_dir"
           ],
-          "hash": "f2504940b13106c85bc79a1425e78726d6eea0bfbd52012f74f1779daabfda72",
+          "hash": "2a63dd09ee59b8b8fde6c4462c885c1285e138160d9d3c250a9e35899a63a7c6",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -2569,14 +2803,15 @@
           "exports": [
             "temp_dir"
           ],
-          "hash": "e8928ec86363becf7604bdf72de7594bc32287777e84ed86e235d9de79449d4c",
+          "hash": "0a266fb6137eca2a4c87a27e6eba642542b58572fa0a8069f4a2066d2825d9dd",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
-            "backpropagate/trainer.py"
+            "backpropagate/trainer.py",
+            "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_trainer_simpo_kto.py"
         },
@@ -2663,7 +2898,7 @@
       "origin": "authored",
       "role": "test",
       "testedBy": 0,
-      "unresolvedSites": 4
+      "unresolvedSites": 6
     }
   ],
   "doors": [
@@ -2672,7 +2907,7 @@
         {
           "job": "test",
           "step": "Install dependencies",
-          "text": "set -euo pipefail\npython -m pip install --upgrade pip\n# Windows takes the same feature surface MINUS `export`.\n# llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its\n# 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on\n# 2026-09-17 (+2.6 to +11.6), the single largest item in this cell and\n# the direct cause of two timeout cancellations.\n#\n# This costs no assertion. Nothing under test imports llama_cpp -- the\n# package's only reference is a `_has_module(\"llama_cpp\")` probe in\n# feature_flags.py that flips FEATURES[\"export\"], and no test asserts\n# that flag. tests/test_export.py exercises the GGUF path entirely\n# through enums and MagicMock, so it passes either way.\n#\n# pyproject defines `full = full-no-export + export`, so a feature\n# group added later reaches both lists and Windows cannot quietly\n# drift into testing less than Linux. If you ever need llama_cpp\n# itself covered on Windows, install it from the project's prebuilt\n# wheel index rather than restoring the source build here.\nif [ \"${{ runner.os }}\" = \"Windows\" ]; then\n  pip install -e \".[dev,full-no-export]\"\nelse\n  pip install -e \".[dev,full]\"\nfi\n"
+          "text": "set -euo pipefail\npython -m pip install --upgrade pip\n# Windows takes the same feature surface MINUS `export`.\n# llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its\n# 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on\n# 2026-09-17 (+2.6 to +11.6), the single largest item in this cell and\n# the direct cause of two timeout cancellations.\n#\n# This costs no assertion. Nothing under test imports llama_cpp -- the\n# package's only reference is a `_has_module(\"llama_cpp\")` probe in\n# feature_flags.py that flips FEATURES[\"export\"], and no test asserts\n# that flag. tests/test_export.py exercises the GGUF path entirely\n# through enums and MagicMock, so it passes either way.\n#\n# pyproject defines `full = full-no-export + export`, so a feature\n# group added later reaches both lists and Windows cannot quietly\n# drift into testing less than Linux. If you ever need llama_cpp\n# itself covered on Windows, install it from the project's prebuilt\n# wheel index rather than restoring the source build here.\n#\n# A matrix `extras` value overrides both branches (see the ubuntu /\n# 3.13 include above): that cell installs `full` MINUS `unsloth`.\nif [ -n \"${MATRIX_EXTRAS}\" ]; then\n  pip install -e \".[${MATRIX_EXTRAS}]\"\n  # Fail loudly if unsloth arrived anyway (another extra started\n  # pulling it in): the cell would then test the stack every other\n  # cell already tests, and nobody would notice.\n  if python -c \"import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('unsloth') else 1)\"; then\n    echo \"::error::unsloth is installed in the no-unsloth cell (extras: ${MATRIX_EXTRAS}) -- this cell exists to test a plain install without it.\"\n    exit 1\n  fi\n  echo \"::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')\"\nelif [ \"${{ runner.os }}\" = \"Windows\" ]; then\n  pip install -e \".[dev,full-no-export]\"\nelse\n  pip install -e \".[dev,full]\"\nfi\n"
         },
         {
           "job": "test",
@@ -2697,7 +2932,7 @@
         {
           "job": "test",
           "step": "Run tests with coverage",
-          "text": "set -euo pipefail\nCOV_FLOOR=$(python -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])\")\necho \"Coverage floor (from pyproject.toml): ${COV_FLOOR}\"\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  # coverage.py's combine step picks up the per-worker .coverage.*\n  # files automatically when -n is set, so --cov + xdist coexist\n  # without extra wiring beyond the standard `coverage combine`\n  # pytest-cov already does at session teardown.\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=\"${COV_FLOOR}\" ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\"\n"
+          "text": "set -euo pipefail\nCOV_FLOOR=$(python -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])\")\necho \"Coverage floor (from pyproject.toml): ${COV_FLOOR}\"\nPARALLEL_FLAGS=\"\"\nif [ \"${BACKPROPAGATE_PYTEST_PARALLEL}\" = \"1\" ]; then\n  # coverage.py's combine step picks up the per-worker .coverage.*\n  # files automatically when -n is set, so --cov + xdist coexist\n  # without extra wiring beyond the standard `coverage combine`\n  # pytest-cov already does at session teardown.\n  PARALLEL_FLAGS=\"-n auto --dist worksteal\"\n  echo \"::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)\"\nfi\npytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under=\"${COV_FLOOR}\" ${PARALLEL_FLAGS} -m \"not gpu and not slow and not integration\" --junitxml=junit.xml\n"
         },
         {
           "job": "test",
@@ -2772,12 +3007,12 @@
         {
           "job": "pip-audit",
           "step": "pip-audit (triaged-accept ACK + surface any new advisory)",
-          "text": "set -euo pipefail\necho \"Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855\"\n# --ignore-vuln matches the primary id OR any alias, so the GHSA form\n# suppresses the PYSEC/CVE-keyed diffusers + transformers entries.\npip-audit \\\n  --vulnerability-service osv \\\n  --ignore-vuln GHSA-7wx4-6vff-v64p \\\n  --ignore-vuln GHSA-98h9-4798-4q5v \\\n  --ignore-vuln GHSA-69w3-r845-3855 \\\n&& echo \"pip-audit (post-accept): no advisories outside the accepted set.\" \\\n|| echo \"::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)\"\n"
+          "text": "set -euo pipefail\necho \"Accepted-with-rationale: none (set emptied 2026-09-23 -- see CIDOCS-B-101 above)\"\n# To accept an ID: add `--ignore-vuln <GHSA-id> \\` to this command AND\n# its rationale + review-by date to the comment block above.\npip-audit \\\n  --vulnerability-service osv \\\n&& echo \"pip-audit: no known advisories.\" \\\n|| echo \"::warning::pip-audit reports advisories (above) that are not on the decision-on-record list in ci.yml. Triage: bump the dep in pyproject.toml + uv.lock, or accept the ID with --ignore-vuln plus a one-line rationale and review-by date in the CIDOCS-B-101 comment. New FIXABLE advisories are the signal.\"\n"
         },
         {
           "job": "pip-audit",
           "step": "pip-audit (CRITICAL floor)",
-          "text": "set -euo pipefail\npip-audit \\\n  --vulnerability-service osv \\\n  --format json \\\n  --output pip-audit.json \\\n  --strict || true\npython3 -c \"\nimport json, sys\ndata = json.load(open('pip-audit.json'))\ndeps = data.get('dependencies', data) if isinstance(data, dict) else data\ncritical = []\nfor pkg in deps:\n    for v in pkg.get('vulns', []) or []:\n        sevs = v.get('severity') or []\n        for s in sevs:\n            score = (s.get('score') or '').upper()\n            stype = (s.get('type') or '').upper()\n            # OSV severity: type CVSS_V3/CVSS_V4 + score like 'CVSS:3.1/AV:N/...'.\n            # Critical CVSS-v3 base score >= 9.0; the score string also often\n            # carries a 'CRITICAL' rating tag — match either.\n            if 'CRITICAL' in score:\n                critical.append(f\\\"{pkg.get('name')}: {v.get('id')} ({stype}={score})\\\")\nif critical:\n    print('::error::pip-audit CRITICAL severity findings — release-blocking. Bump the offending dep in pyproject.toml + uv.lock; the GitHub Security tab also lists each advisory with the patched-version link.')\n    for c in critical:\n        print('  -', c)\n    sys.exit(1)\nprint('pip-audit CRITICAL floor: OK (no CRITICAL findings)')\n\"\n"
+          "text": "# No `set -e`: a failing pip-audit attempt is data here, not an abort.\nset -uo pipefail\nreport_ok() {\n  [ -s pip-audit.json ] && python3 -c \"import json; json.load(open('pip-audit.json'))\" 2>/dev/null\n}\nfor attempt in 1 2 3; do\n  rm -f pip-audit.json\n  # Exit status deliberately ignored (see above); report_ok decides.\n  timeout 100 pip-audit \\\n    --vulnerability-service osv \\\n    --format json \\\n    --output pip-audit.json \\\n    --strict || true\n  if report_ok; then\n    break\n  fi\n  if [ \"${attempt}\" -lt 3 ]; then\n    backoff=$((attempt * 15))\n    echo \"pip-audit attempt ${attempt}/3 produced no usable report (OSV slow or unreachable?); retrying in ${backoff}s\"\n    sleep \"${backoff}\"\n  fi\ndone\nif ! report_ok; then\n  echo \"::warning::pip-audit CRITICAL floor: scan could not run (OSV unavailable) after 3 attempts -- no report was produced, so this is a scan ERROR, not a finding. The floor was NOT evaluated on this run; re-run the job once api.osv.dev is reachable if the dependency set changed.\"\n  exit 0\nfi\npython3 -c \"\nimport json, sys\ndata = json.load(open('pip-audit.json'))\ndeps = data.get('dependencies', data) if isinstance(data, dict) else data\ncritical = []\nfor pkg in deps:\n    for v in pkg.get('vulns', []) or []:\n        sevs = v.get('severity') or []\n        for s in sevs:\n            score = (s.get('score') or '').upper()\n            stype = (s.get('type') or '').upper()\n            # OSV severity: type CVSS_V3/CVSS_V4 + score like 'CVSS:3.1/AV:N/...'.\n            # Critical CVSS-v3 base score >= 9.0; the score string also often\n            # carries a 'CRITICAL' rating tag — match either.\n            if 'CRITICAL' in score:\n                critical.append(f\\\"{pkg.get('name')}: {v.get('id')} ({stype}={score})\\\")\nif critical:\n    print('::error::pip-audit CRITICAL severity findings — release-blocking. Bump the offending dep in pyproject.toml + uv.lock; the GitHub Security tab also lists each advisory with the patched-version link.')\n    for c in critical:\n        print('  -', c)\n    sys.exit(1)\nprint('pip-audit CRITICAL floor: OK (no CRITICAL findings)')\n\"\n"
         },
         {
           "job": "semgrep",
@@ -2839,10 +3074,6 @@
       "landings": [],
       "mentions": [
         {
-          "job": "pip-audit",
-          "path": ".trivyignore"
-        },
-        {
           "job": "bandit",
           "path": "pyproject.toml"
         },
@@ -2862,6 +3093,7 @@
       "name": "CI",
       "permissions": [
         "contents:read",
+        "id-token:write",
         "security-events:write"
       ],
       "pushes": false,
@@ -2869,7 +3101,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 51
+          "files": 52
         },
         {
           "boundary": "root",
@@ -2879,7 +3111,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 70
+          "files": 75
         },
         {
           "boundary": "scripts",
@@ -2967,6 +3199,7 @@
             "Dockerfile",
             "atlas/**",
             "backpropagate/**",
+            "codecov.yml",
             "pyproject.toml",
             "requirements*.txt",
             "tests/**",
@@ -2979,6 +3212,7 @@
       ],
       "uses": [
         "actions/checkout",
+        "actions/download-artifact",
         "actions/setup-node",
         "actions/setup-python",
         "actions/upload-artifact",
@@ -3198,7 +3432,7 @@
             "file": "backpropagate/__init__.py",
             "from": "scripts/nightly_train_smoke.py"
           },
-          "files": 18
+          "files": 19
         }
       ],
       "readers": [],
@@ -3659,8 +3893,8 @@
     }
   ],
   "generatedFrom": {
-    "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
-    "tracked": 251
+    "commit": "90b1321bbabb87622c7d101bd4ad047ce5a814ce",
+    "tracked": 281
   },
   "landings": [
     {
@@ -3692,15 +3926,6 @@
         }
       ],
       "target": ".secrets.baseline",
-      "writers": []
-    },
-    {
-      "readers": [
-        {
-          "by": ".github/workflows/ci.yml"
-        }
-      ],
-      "target": ".trivyignore",
       "writers": []
     },
     {
@@ -4479,6 +4704,6 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 73,
+  "testFiles": 78,
   "unassigned": []
 }

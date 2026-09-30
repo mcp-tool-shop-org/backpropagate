@@ -39,13 +39,38 @@
     }
   ],
   "changes": {
-    "first": true
+    "fileCounts": {
+      "added": 31,
+      "changed": 20,
+      "moved": 0,
+      "parts": 6,
+      "removed": 1
+    },
+    "items": [
+      {
+        "kind": "door",
+        "sentence": "CI's push trigger now also names `codecov.yml`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "counts",
+        "sentence": "31 files added, 1 removed and 20 changed content, across 6 parts.",
+        "subjects": []
+      }
+    ],
+    "since": {
+      "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+      "generatedAt": "2026-09-23T14:58:25.620Z"
+    },
+    "unchanged": false
   },
   "changesTogether": [
     {
       "a": "backpropagate/cli.py",
       "b": "backpropagate/trainer.py",
-      "either": 53,
+      "either": 58,
       "partLabels": [
         "backpropagate",
         "backpropagate"
@@ -55,7 +80,7 @@
         "backpropagate"
       ],
       "relation": "inside",
-      "shared": 28
+      "shared": 29
     }
   ],
   "changesTogetherNote": [
@@ -63,7 +88,7 @@
     "Window: 180 days; a pair counts from 10 shared commits."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "34a7862fc962c5608ff498579fe18889fb40effd",
+  "commit": "90b1321bbabb87622c7d101bd4ad047ce5a814ce",
   "doors": [
     {
       "file": ".github/workflows/ci.yml",
@@ -74,7 +99,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 51
+          "files": 52
         },
         {
           "boundary": "root",
@@ -84,7 +109,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 70
+          "files": 75
         },
         {
           "boundary": "scripts",
@@ -102,7 +127,7 @@
       "stages": [],
       "triggers": [
         "on a pull request",
-        "on a push to main touching 8 paths",
+        "on a push to main touching 9 paths",
         "or by hand"
       ]
     },
@@ -120,7 +145,7 @@
         {
           "boundary": "backpropagate",
           "depth": 1,
-          "files": 18
+          "files": 19
         }
       ],
       "runs": [
@@ -285,11 +310,11 @@
       ]
     }
   ],
-  "generatedAt": "2026-09-23T14:58:25.620Z",
+  "generatedAt": "2026-09-30T17:32:43.276Z",
   "limits": [
-    "40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "6 import sites could not be resolved.",
-    "13 writes and 39 reads use paths built at run time and are not named here."
+    "41 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "8 import sites could not be resolved.",
+    "15 writes and 39 reads use paths built at run time and are not named here."
   ],
   "mainDoor": ".github/workflows/ci.yml",
   "parts": 11,
@@ -303,9 +328,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 73,
+  "testFiles": 78,
   "testedBy": {
-    "backpropagate": 63,
+    "backpropagate": 67,
     "bin": 0,
     "scripts": 2
   },

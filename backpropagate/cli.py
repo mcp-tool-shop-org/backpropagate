@@ -794,6 +794,14 @@ def cmd_train(args: argparse.Namespace) -> int:
             # filter → forward-compatible / dropped on pre-v1.7 builds.
             "full_ft_ceiling_billions": getattr(args, "full_ft_ceiling_billions", None),
             "full_ft_offload": bool(getattr(args, "full_ft_offload", False)),
+            # Engine B: --full-ft-engine and its knobs thread to Trainer(...).
+            # The knobs are forwarded only with --full-ft-engine block (see
+            # _block_knob_keys below) so a default run passes nothing new.
+            "full_ft_engine": getattr(args, "full_ft_engine", "default"),
+            "switch_block_every": getattr(args, "switch_block_every", None),
+            "block_order": getattr(args, "block_order", None),
+            "block_writeback": getattr(args, "block_writeback", None),
+            "block_train_embeddings": not bool(getattr(args, "block_freeze_embeddings", False)),
             # v1.5 T1.2 (ORPO): --method / --orpo-beta thread to
             # Trainer(method=..., orpo_beta=...). Same introspection filter
             # contract — these are dropped until the trainer wave adds the
@@ -853,6 +861,18 @@ def cmd_train(args: argparse.Namespace) -> int:
             "kto_desirable_weight",
             "kto_undesirable_weight",
         }
+        # Engine B: forward nothing unless --full-ft-engine block, so the
+        # default run's Trainer(...) call is unchanged (and the knobs, which
+        # mean nothing without the engine, don't trip the stray-knob warning).
+        if wave6b_candidate_kwargs.get("full_ft_engine") != "block":
+            for _k in (
+                "full_ft_engine",
+                "switch_block_every",
+                "block_order",
+                "block_writeback",
+                "block_train_embeddings",
+            ):
+                wave6b_candidate_kwargs.pop(_k, None)
         wave6b_kwargs = {
             k: v for k, v in wave6b_candidate_kwargs.items()
             if (_trainer_sig_params is None or k in _trainer_sig_params)
@@ -7281,6 +7301,63 @@ Tips:
             "card (+~64GB host RAM). Slower (PCIe/CPU-bandwidth-bound) and "
             "requires a usable NCCL backend (Linux/WSL2 — NOT Windows-native; "
             "raises DEP_FSDP_UNAVAILABLE otherwise). mode='full' only."
+        ),
+    )
+    # Engine B (block-coordinate AdamW). Choices mirror
+    # backpropagate.block_engine (FULL_FT_ENGINES / BLOCK_ORDERS /
+    # BLOCK_WRITEBACK_MODES); a test holds them equal. Kept literal here so
+    # building the parser never imports torch.
+    train_parser.add_argument(
+        "--full-ft-engine",
+        choices=["default", "block"],
+        default="default",
+        help=(
+            "Full fine-tuning engine (mode='full', method='sft'). 'default' = "
+            "the standard pure-GPU path. 'block' = block-coordinate AdamW: "
+            "the whole model stays on the GPU in 16-bit and ONE block (a "
+            "transformer layer, the embeddings or the head) trains at a time, "
+            "so optimizer memory is one block's. Windows + Linux. Not "
+            "combinable with --full-ft-offload."
+        ),
+    )
+    train_parser.add_argument(
+        "--switch-block-every",
+        type=_positive_int,
+        default=50,
+        metavar="K",
+        help=(
+            "--full-ft-engine block: optimizer steps each block trains before "
+            "the next one takes over (counted in optimizer steps, so it "
+            "composes with gradient accumulation). Default: 50."
+        ),
+    )
+    train_parser.add_argument(
+        "--block-order",
+        choices=["random", "ascending", "descending"],
+        default="random",
+        help=(
+            "--full-ft-engine block: block visiting order. 'random' "
+            "(default) reshuffles all blocks every pass; 'ascending' goes "
+            "input to output; 'descending' output to input."
+        ),
+    )
+    train_parser.add_argument(
+        "--block-writeback",
+        choices=["stochastic", "nearest"],
+        default="stochastic",
+        help=(
+            "--full-ft-engine block: how the active block's fp32 weights are "
+            "rounded back to bf16 when it hands over. 'stochastic' (default) "
+            "is unbiased; 'nearest' is round-to-nearest."
+        ),
+    )
+    train_parser.add_argument(
+        "--block-freeze-embeddings",
+        action="store_true",
+        help=(
+            "--full-ft-engine block: never train the embeddings and the "
+            "output head (only transformer layers rotate). Lowers peak VRAM, "
+            "since the vocab matrix is the largest block."
         ),
     )
     # v1.5 T1.2 (ORPO) + v1.6 C4 (SimPO/KTO): --method selector + the

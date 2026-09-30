@@ -30,6 +30,7 @@ Features:
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import logging
 import os
@@ -1590,6 +1591,55 @@ def _build_sft_config(
 
 
 # =============================================================================
+# trl PREFERENCE-CONFIG COMPATIBILITY (ORPO / SimPO / KTO)
+# =============================================================================
+# The working trl range, as pyproject.toml declares it. Every "install a
+# working trl" remedy below quotes this string, and a test holds it equal to
+# the pyproject requirement so the cap and the advice cannot drift apart.
+_TRL_SUPPORTED_SPEC = ">=0.18,<2"
+
+
+def _config_declares(config_cls: Any, name: str) -> bool:
+    """True when the trl config class ``config_cls`` declares field ``name``.
+
+    trl drops config fields between releases, and each preference config
+    rejects an unknown keyword argument with a ``TypeError``. Checked against
+    the 0.24.0 / 0.27.2 / 0.28.0 / 1.13.0 wheels: ``max_prompt_length`` left
+    ORPOConfig and CPOConfig in 0.28, and it and ``max_completion_length`` were
+    both gone from KTOConfig by 0.27.2. Anything that is not a dataclass — the
+    capturing stubs the unit tests put in trl's place — is taken to accept the
+    field, so those tests keep seeing every kwarg.
+    """
+    try:
+        return name in {f.name for f in dataclasses.fields(config_cls)}
+    except TypeError:
+        return True
+
+
+def _require_config_field(
+    config_cls: Any, name: str, value: Any, *, objective: str
+) -> None:
+    """Refuse an explicitly requested knob the installed trl no longer has.
+
+    Silently dropping a truncation limit the caller asked for would change what
+    the run trains on, so an explicit value the config cannot take is an error.
+    Derived defaults are handled at their call sites instead: they are simply
+    not derived when the field is missing.
+    """
+    if _config_declares(config_cls, name):
+        return
+    raise TrainingError(
+        f"{name}={value!r} was requested for {objective}, but the installed "
+        f"trl's {config_cls.__name__} has no '{name}' field (trl removed it).",
+        suggestion=(
+            f"Leave {name} unset; the installed trl bounds the sequence with "
+            "max_length (max_seq_length). Or train with method='sft'."
+        ),
+        code="RUNTIME_TRAINING_FAILED",
+    )
+
+
+# =============================================================================
 # SHARED ORPOCONFIG BUILDER (v1.5 T1.2 — ORPO Wave 2)
 # =============================================================================
 # Mirror of :func:`_build_sft_config` for the reference-free ORPO objective.
@@ -1613,7 +1663,8 @@ def _build_sft_config(
 #     the operator's ``max_seq_length``) are ORPO-specific.
 #   * ``max_prompt_length`` / ``max_completion_length`` are optional ORPO
 #     truncation knobs — added only when not None so ORPOConfig's defaults
-#     govern otherwise.
+#     govern otherwise, and refused (not dropped) when the installed trl's
+#     ORPOConfig no longer has the field (see :func:`_config_declares`).
 
 
 def _build_orpo_config(
@@ -1658,30 +1709,33 @@ def _build_orpo_config(
     Returns:
         A configured ``ORPOConfig`` instance.
     """
-    # FC-01: guard the trl ORPO import. ORPOTrainer/ORPOConfig are slated to
-    # relocate to ``trl.experimental`` (see the comment in ``_build_trainer``),
-    # and pyproject pins ``trl`` with no upper bound, so a routine trl upgrade
-    # would make this top-level import die with a bare ImportError (no code,
-    # no remedy). Mirror the FP8 import discipline (search
-    # ``RUNTIME_FP8_UNSUPPORTED``): catch the ImportError and re-raise as a
-    # structured TrainingError that names the working trl range. SFT is
-    # unaffected (it imports SFTConfig/SFTTrainer separately).
+    # FC-01: resolve ORPOConfig wherever the installed trl keeps it. trl
+    # exported it at the top level through 0.28 and moved it to
+    # ``trl.experimental.orpo`` in 0.29 (CPO moved with it; KTO is still
+    # top-level in 1.13). Try the top level, fall back to the experimental
+    # module, and only when BOTH miss re-raise a structured TrainingError that
+    # names the working range — the FP8 import discipline (search
+    # ``RUNTIME_FP8_UNSUPPORTED``), and the same shape as the CPO / KTO guards
+    # below. SFT is unaffected (it imports SFTConfig/SFTTrainer separately).
     try:
         from trl import ORPOConfig
-    except ImportError as exc:
-        raise TrainingError(
-            "Could not import 'ORPOConfig' from trl — the ORPO objective is "
-            f"unavailable in the installed trl ({type(exc).__name__}: {exc}). "
-            "trl's ORPO API is migrating to trl.experimental, so a newer trl "
-            "may have moved or removed the top-level ORPOConfig symbol.",
-            suggestion=(
-                "Pin a trl version that still exposes top-level ORPOConfig / "
-                "ORPOTrainer: pip install 'trl>=0.7.0,<0.28'. Or train with "
-                "method='sft' (the default), which does not need ORPO."
-            ),
-            code="RUNTIME_TRAINING_FAILED",
-            cause=exc,
-        ) from exc
+    except ImportError:
+        try:
+            from trl.experimental.orpo import ORPOConfig  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise TrainingError(
+                "Could not import 'ORPOConfig' from trl (tried top-level "
+                "'trl.ORPOConfig' and 'trl.experimental.orpo.ORPOConfig') — "
+                "the ORPO objective is unavailable in the installed trl "
+                f"({type(exc).__name__}: {exc}).",
+                suggestion=(
+                    "Install a trl in the supported range: pip install "
+                    f"'trl{_TRL_SUPPORTED_SPEC}'. Or train with method='sft' "
+                    "(the default), which does not need ORPO."
+                ),
+                code="RUNTIME_TRAINING_FAILED",
+                cause=exc,
+            ) from exc
 
     # Reuse the exact detectors the SFT builder uses so the two configs
     # converge on the same card-specific resolution (single source of truth).
@@ -1721,8 +1775,17 @@ def _build_orpo_config(
     if weight_decay is not None:
         kwargs["weight_decay"] = weight_decay
     if max_prompt_length is not None:
+        _require_config_field(
+            ORPOConfig, "max_prompt_length", max_prompt_length, objective="ORPO"
+        )
         kwargs["max_prompt_length"] = max_prompt_length
     if max_completion_length is not None:
+        _require_config_field(
+            ORPOConfig,
+            "max_completion_length",
+            max_completion_length,
+            objective="ORPO",
+        )
         kwargs["max_completion_length"] = max_completion_length
 
     # Deliberately DO NOT pass ``packing`` (ORPOConfig has no such field and
@@ -1797,14 +1860,12 @@ def _build_cpo_config(
         A configured ``CPOConfig`` instance with ``loss_type='simpo'``.
     """
     # FC-01 discipline (mirrors _build_orpo_config): guard the trl CPO import.
-    # In the project's target trl (0.24) the working path is the TOP-LEVEL
-    # ``from trl import CPOConfig`` (verified in the venv 2026-06-20; the
-    # ``trl.experimental.cpo`` submodule does NOT exist in 0.24). The trl pin
-    # has no upper bound, and a future trl may relocate CPO to
-    # ``trl.experimental`` (as it is doing for several preference trainers), so
-    # we try the top-level symbol first and FALL BACK to the experimental path,
-    # re-raising a structured TrainingError (reusing RUNTIME_TRAINING_FAILED —
-    # the same code the ORPO/FP8 guards use) only when BOTH miss.
+    # trl exported CPOConfig at the top level through 0.28 (the
+    # ``trl.experimental.cpo`` submodule does not exist in 0.24) and moved it
+    # to ``trl.experimental.cpo`` in 0.29, so we try the top-level symbol first
+    # and FALL BACK to the experimental path, re-raising a structured
+    # TrainingError (reusing RUNTIME_TRAINING_FAILED — the same code the
+    # ORPO/FP8 guards use) only when BOTH miss.
     try:
         from trl import CPOConfig
     except ImportError:
@@ -1816,13 +1877,11 @@ def _build_cpo_config(
                 "'trl.CPOConfig' and 'trl.experimental.cpo.CPOConfig') — the "
                 "SimPO objective is unavailable in the installed trl "
                 f"({type(exc).__name__}: {exc}). SimPO is TRL's CPOTrainer with "
-                "loss_type='simpo'; a newer trl may have moved or removed the "
-                "CPOConfig symbol.",
+                "loss_type='simpo'.",
                 suggestion=(
-                    "Pin a trl version that exposes CPOConfig / CPOTrainer "
-                    "(top-level or trl.experimental.cpo): pip install "
-                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
-                    "default), which does not need SimPO."
+                    "Install a trl in the supported range: pip install "
+                    f"'trl{_TRL_SUPPORTED_SPEC}'. Or train with method='sft' "
+                    "(the default), which does not need SimPO."
                 ),
                 code="RUNTIME_TRAINING_FAILED",
                 cause=exc,
@@ -1864,6 +1923,12 @@ def _build_cpo_config(
     if weight_decay is not None:
         kwargs["weight_decay"] = weight_decay
     if max_completion_length is not None:
+        _require_config_field(
+            CPOConfig,
+            "max_completion_length",
+            max_completion_length,
+            objective="SimPO",
+        )
         kwargs["max_completion_length"] = max_completion_length
 
     # CPOTrainer enforces ``max_prompt_length < max_length`` at construction.
@@ -1876,9 +1941,16 @@ def _build_cpo_config(
     # when the 512 default would violate the invariant. This makes SimPO work
     # at any max_seq_length out of the box. (Surfaced by the non-mocked SimPO
     # smoke on the RTX 5090, 2026-06-20.)
+    #
+    # The invariant exists only while CPOConfig has the field. trl 0.28 removed
+    # ``max_prompt_length`` from CPOConfig, and passing it there is a TypeError
+    # before a single step, so on a newer trl nothing is derived.
     if max_prompt_length is not None:
+        _require_config_field(
+            CPOConfig, "max_prompt_length", max_prompt_length, objective="SimPO"
+        )
         kwargs["max_prompt_length"] = max_prompt_length
-    elif max_seq_length <= 512:
+    elif max_seq_length <= 512 and _config_declares(CPOConfig, "max_prompt_length"):
         derived = max(max_seq_length // 2, 16)
         kwargs["max_prompt_length"] = derived
         logger.debug(
@@ -1972,10 +2044,9 @@ def _build_kto_config(
                 f"({type(exc).__name__}: {exc}). A newer trl may have moved or "
                 "removed the KTOConfig symbol.",
                 suggestion=(
-                    "Pin a trl version that exposes KTOConfig / KTOTrainer "
-                    "(top-level or trl.experimental.kto): pip install "
-                    "'trl>=0.18,<0.28'. Or train with method='sft' (the "
-                    "default), which does not need KTO."
+                    "Install a trl in the supported range: pip install "
+                    f"'trl{_TRL_SUPPORTED_SPEC}'. Or train with method='sft' "
+                    "(the default), which does not need KTO."
                 ),
                 code="RUNTIME_TRAINING_FAILED",
                 cause=exc,
@@ -2018,6 +2089,12 @@ def _build_kto_config(
     if weight_decay is not None:
         kwargs["weight_decay"] = weight_decay
     if max_completion_length is not None:
+        _require_config_field(
+            KTOConfig,
+            "max_completion_length",
+            max_completion_length,
+            objective="KTO",
+        )
         kwargs["max_completion_length"] = max_completion_length
 
     # Same max_prompt_length guard as _build_cpo_config: KTOConfig's default
@@ -2025,9 +2102,18 @@ def _build_kto_config(
     # trips length invariants). Honor an explicit value; otherwise derive a
     # safe half-of-max_length value when the 512 default would exceed the
     # window. Keeps KTO consistent with SimPO at any max_seq_length.
+    #
+    # KTOConfig lost ``max_prompt_length`` (and ``max_completion_length``)
+    # earlier than CPO did: both are gone by trl 0.27.2 — inside the `<0.28`
+    # cap this builder shipped under — where the derived value made every
+    # short-window KTO run die in KTOConfig.__init__ with a TypeError. Derive
+    # only while the field exists.
     if max_prompt_length is not None:
+        _require_config_field(
+            KTOConfig, "max_prompt_length", max_prompt_length, objective="KTO"
+        )
         kwargs["max_prompt_length"] = max_prompt_length
-    elif max_seq_length <= 512:
+    elif max_seq_length <= 512 and _config_declares(KTOConfig, "max_prompt_length"):
         derived = max(max_seq_length // 2, 16)
         kwargs["max_prompt_length"] = derived
         logger.debug(
@@ -4419,28 +4505,28 @@ class Trainer:
         TRL 0.27+ uses ``processing_class`` (not ``tokenizer``) on all trainers.
         """
         if self.method in ("orpo", "simpo", "kto"):
-            # FC-01: guard the trl preference-trainer import (see
-            # _build_orpo_config / _build_cpo_config / _build_kto_config for the
-            # full rationale). The trl pin has no upper bound, so a routine
-            # upgrade could relocate these symbols; catch a bare ImportError and
-            # re-raise the same structured TrainingError shape as the config
-            # builders (code RUNTIME_TRAINING_FAILED + a working trl range). The
-            # narrow ``except ImportError`` keeps the existing
-            # ``patch("trl.<X>Trainer")`` test path intact — when the symbol
-            # resolves (real or mocked) the import succeeds and this guard is
-            # inert. In trl 0.24 ALL of ORPOTrainer/CPOTrainer/KTOTrainer are
-            # top-level (verified in the venv 2026-06-20); we try top-level
-            # first and fall back to trl.experimental for the SimPO/KTO future.
+            # FC-01: resolve the trl preference trainer wherever the installed
+            # trl keeps it (see _build_orpo_config / _build_cpo_config /
+            # _build_kto_config for the config side). trl exported all three at
+            # the top level through 0.28, moved ORPOTrainer and CPOTrainer to
+            # ``trl.experimental.orpo`` / ``.cpo`` in 0.29, and still exports
+            # KTOTrainer at the top level in 1.13. So: top level first, then
+            # the experimental module, and only when BOTH miss re-raise the
+            # config builders' TrainingError shape (RUNTIME_TRAINING_FAILED +
+            # the supported range). Tests patch through
+            # ``tests/helpers/trl_paths.trl_patch_target``, which resolves the
+            # same way, so a patched class (real location or experimental) is
+            # what this picks up.
             #
             # _trl_cls: the trainer class. _trl_name: the symbol name for the
-            # error message. _is_kto: KTO needs the no-ref_model handling below.
+            # error message.
             _trl_name = {
                 "orpo": "ORPOTrainer",
                 "simpo": "CPOTrainer",  # SimPO rides CPOTrainer + loss_type
                 "kto": "KTOTrainer",
             }[self.method]
             _experimental_mod = {
-                "orpo": None,  # ORPO has no experimental fallback path in 0.24
+                "orpo": "trl.experimental.orpo",
                 "simpo": "trl.experimental.cpo",
                 "kto": "trl.experimental.kto",
             }[self.method]
@@ -4449,31 +4535,19 @@ class Trainer:
 
                 _trl_cls = getattr(_trl_top, _trl_name)
             except (ImportError, AttributeError) as exc:
-                _trl_cls = None
-                if _experimental_mod is not None:
-                    try:
-                        _exp = __import__(
-                            _experimental_mod, fromlist=[_trl_name]
-                        )
-                        _trl_cls = getattr(_exp, _trl_name)
-                    except (ImportError, AttributeError):
-                        _trl_cls = None
-                if _trl_cls is None:
-                    _tried = f"top-level 'trl.{_trl_name}'" + (
-                        f" and '{_experimental_mod}.{_trl_name}'"
-                        if _experimental_mod
-                        else ""
-                    )
+                try:
+                    _exp = __import__(_experimental_mod, fromlist=[_trl_name])
+                    _trl_cls = getattr(_exp, _trl_name)
+                except (ImportError, AttributeError):
                     raise TrainingError(
                         f"Could not import '{_trl_name}' from trl (tried "
-                        f"{_tried}) — the {self.method.upper()} objective is "
-                        f"unavailable in the installed trl "
-                        f"({type(exc).__name__}: {exc}). trl's preference "
-                        "trainers are migrating to trl.experimental, so a newer "
-                        "trl may have moved or removed the symbol.",
+                        f"top-level 'trl.{_trl_name}' and "
+                        f"'{_experimental_mod}.{_trl_name}') — the "
+                        f"{self.method.upper()} objective is unavailable in the "
+                        f"installed trl ({type(exc).__name__}: {exc}).",
                         suggestion=(
-                            f"Pin a trl version that exposes {_trl_name}: pip "
-                            "install 'trl>=0.18,<0.28'. Or train with "
+                            "Install a trl in the supported range: pip install "
+                            f"'trl{_TRL_SUPPORTED_SPEC}'. Or train with "
                             "method='sft' (the default)."
                         ),
                         code="RUNTIME_TRAINING_FAILED",

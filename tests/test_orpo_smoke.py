@@ -89,10 +89,14 @@ def _model_is_reachable(model_id: str) -> bool:
     # Cache probe first — cheapest, and the offline-friendly path.
     try:
         from huggingface_hub import try_to_load_from_cache
-        from huggingface_hub.constants import _CACHED_NO_EXIST
 
         cached = try_to_load_from_cache(model_id, "config.json")
-        if isinstance(cached, str) and cached and cached is not _CACHED_NO_EXIST:
+        # A str is a cached path; None and the "known missing" sentinel are not
+        # strs. Do not import that sentinel: huggingface_hub 1.x (1.20 and 1.32
+        # checked) no longer exposes it at huggingface_hub.constants, and the
+        # ImportError dropped this probe through to the network one, so an
+        # OFFLINE run with the model cached skipped as unreachable.
+        if isinstance(cached, str) and cached:
             return True
     except Exception:
         pass

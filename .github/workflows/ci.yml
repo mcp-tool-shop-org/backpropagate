@@ -44,6 +44,8 @@ on:
       - 'requirements*.txt'
       - '.github/workflows/**'
       - 'atlas/**'
+      # Codecov reads its status and comment settings from this file.
+      - 'codecov.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -67,6 +69,14 @@ permissions:
 
 jobs:
   test:
+    # Explicit name, spelled out to reproduce the auto-generated one exactly
+    # (`test (ubuntu-latest, 3.13)`). Branch protection requires those names.
+    # GitHub's default matrix name is built from the matrix values, and the
+    # `extras` key added by the no-unsloth include below could leak into it
+    # (`test (ubuntu-latest, 3.13, dev,ui,...)`), renaming a required check and
+    # leaving the old one "Expected -- Waiting for status" forever. Pinning the
+    # name makes that impossible whatever keys a future include adds.
+    name: test (${{ matrix.os }}, ${{ matrix.python-version }})
     # Multi-OS matrix: tests Linux on full Python sweep, plus a Windows smoke
     # cell on 3.11 to catch path/multiprocessing/xformers-disable regressions
     # on the one non-Linux platform the library actively supports (CLAUDE.md:
@@ -135,6 +145,37 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.11"
+          # THE ONE CELL THAT INSTALLS WITHOUT THE `unsloth` EXTRA.
+          #
+          # Every other cell (and every other job in this file) installs
+          # `[dev,full]`, and `full` includes `unsloth`, which holds trl at
+          # <=0.24.0. A plain `pip install backpropagate` has no such hold: it
+          # resolves a different trl (0.27.x today, 1.x once the cap lifts),
+          # and that is where a KTO `TypeError` lived undetected -- CI never
+          # installed the stack those users get, so the bug could only be
+          # found in scratch venvs.
+          #
+          # This entry has os + python-version identical to an ORIGINAL matrix
+          # combination, so GitHub MERGES `extras` into that existing cell
+          # instead of creating a new one. That is deliberate: no extra job
+          # (Actions spend was just cut ~60% in 1.7.1) and the check name stays
+          # `test (ubuntu-latest, 3.13)`, which branch protection keys on.
+          # Do not change os/python-version here without checking that.
+          #
+          # `extras` is `full` spelled out minus `unsloth`. pyproject defines
+          # `full = full-no-export + export` and `full-no-export = unsloth, ui,
+          # validation, monitoring, logging, security, fp8`, so a feature group
+          # added there must be added here too or this cell quietly tests less
+          # than its siblings. The install step asserts unsloth is really
+          # absent, so the cell cannot drift back into the stack it exists to
+          # avoid.
+          - os: ubuntu-latest
+            python-version: "3.13"
+            extras: "dev,ui,validation,monitoring,logging,security,fp8,export"
+    env:
+      # 'true' on the one leg whose coverage and test results go to Codecov,
+      # on a pull request or a push to the default branch.
+      COVERAGE_LEG: ${{ matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest' && (github.event_name == 'pull_request' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -167,11 +208,27 @@ jobs:
           # drift into testing less than Linux. If you ever need llama_cpp
           # itself covered on Windows, install it from the project's prebuilt
           # wheel index rather than restoring the source build here.
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          #
+          # A matrix `extras` value overrides both branches (see the ubuntu /
+          # 3.13 include above): that cell installs `full` MINUS `unsloth`.
+          if [ -n "${MATRIX_EXTRAS}" ]; then
+            pip install -e ".[${MATRIX_EXTRAS}]"
+            # Fail loudly if unsloth arrived anyway (another extra started
+            # pulling it in): the cell would then test the stack every other
+            # cell already tests, and nobody would notice.
+            if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('unsloth') else 1)"; then
+              echo "::error::unsloth is installed in the no-unsloth cell (extras: ${MATRIX_EXTRAS}) -- this cell exists to test a plain install without it."
+              exit 1
+            fi
+            echo "::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
             pip install -e ".[dev,full-no-export]"
           else
             pip install -e ".[dev,full]"
           fi
+        env:
+          # Empty on every cell except the one that sets `extras`.
+          MATRIX_EXTRAS: ${{ matrix.extras }}
 
       - name: Set up Node for the Atlas check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
@@ -258,6 +315,7 @@ jobs:
           pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
 
       - name: Run tests with coverage
+        id: tests
         if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
         shell: bash
         env:
@@ -280,7 +338,33 @@ jobs:
             PARALLEL_FLAGS="-n auto --dist worksteal"
             echo "::notice::pytest-xdist enabled (BACKPROPAGATE_PYTEST_PARALLEL=1)"
           fi
-          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
+          pytest tests/ --cov=backpropagate --cov-report=xml --cov-fail-under="${COV_FLOOR}" ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration" --junitxml=junit.xml
+
+      # The codecov job below uploads what these two steps save; this job
+      # never holds an OIDC token. Coverage is saved when the tests passed,
+      # and test results whenever they ran, failures included, because a
+      # failing test is what that report exists to show. A save step with no
+      # file to save fails the job. overwrite lets a re-run of this job
+      # replace the artifact its earlier attempt saved.
+      - name: Save coverage for Codecov
+        if: ${{ env.COVERAGE_LEG == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-coverage
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
+
+      - name: Save test results for Codecov
+        if: ${{ !cancelled() && env.COVERAGE_LEG == 'true' && steps.tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-test-results
+          path: junit.xml
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
 
       - name: Run tests (Windows/macOS smoke)
         if: matrix.python-version == '3.11' && matrix.os != 'ubuntu-latest'
@@ -296,12 +380,67 @@ jobs:
           fi
           pytest tests/ -v --tb=short ${PARALLEL_FLAGS} -m "not gpu and not slow and not integration"
 
-      - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+  codecov:
+    # Uploads what the test job saved, from a job of its own, so the OIDC
+    # token that signs in to Codecov never exists beside the install and the
+    # tests. The checkout, which keeps no token, is there only so Codecov can
+    # match report paths to files: the job installs nothing and runs none of
+    # the repository's code. It runs whenever the test job ran, failures
+    # included, so failing tests still reach Codecov, and only on the events
+    # that collect coverage. A run the concurrency group cancels uploads
+    # nothing, and each run reads only its own artifacts.
+    needs: test
+    if: ${{ !cancelled() && needs.test.result != 'cancelled' && needs.test.result != 'skipped' && (github.event_name == 'pull_request' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
+
+      # Each artifact unpacks where the test job wrote its files. A pattern
+      # that matches nothing, unlike a name, does not fail: a failing test
+      # run saves test results and no coverage.
+      - name: Download coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codecov-coverage
+          path: .
+
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codecov-test-results
+          path: .
+
+      # After a passing test job both artifacts exist, so each upload runs,
+      # and fails the job if its files are missing; after a failing one each
+      # runs when its files arrived. Both sign in with OIDC, fail the job when
+      # Codecov refuses the report, and run the Codecov CLI at a fixed version
+      # rather than whichever is newest.
+      - name: Upload coverage to Codecov
+        if: ${{ needs.test.result == 'success' || hashFiles('coverage.xml') != '' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          version: v11.3.1
+          use_oidc: true
+          fail_ci_if_error: true
+          disable_search: true
           files: ./coverage.xml
-          fail_ci_if_error: false
+
+      - name: Upload test results to Codecov
+        if: ${{ needs.test.result == 'success' || hashFiles('junit.xml') != '' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          version: v11.3.1
+          use_oidc: true
+          fail_ci_if_error: true
+          report_type: test_results
+          disable_search: true
+          files: ./junit.xml
 
   # TESTSCI-A-009 (v1.4 Stage A) — exercise the pytest-xdist parallel path.
   #
@@ -611,7 +750,11 @@ jobs:
   pip-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15, up from 10: the CRITICAL-floor step now retries the OSV scan (worst
+    # case 3 x 100s + 45s backoff), and the two pip-audit steps before it also
+    # call out. This still kills a genuinely hung job; it just no longer
+    # cancels one that is only riding out an OSV brownout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -644,55 +787,46 @@ jobs:
         if: always()
         run: cat pip-audit-report.md || echo "No report generated"
 
-      # CIDOCS-B-101 — triaged HIGH/MED advisories: decision-on-record, not a
-      # silent gap.
+      # CIDOCS-B-101 — triaged advisories: decision-on-record, not a silent gap.
       #
       # The CRITICAL-only gate below is intentionally narrow (false-positive
-      # flood from the v1.1.x rollback). That left three real-but-unfixable
-      # advisories *silently* invisible — reported by the advisory step but
-      # called out nowhere as a conscious accept:
+      # flood from the v1.1.x rollback). So anything this project knowingly
+      # accepts below CRITICAL is named HERE, by ID, with a one-line rationale
+      # and a review-by date — a conscious accept, not a line lost in the
+      # advisory markdown. Adding an ID REQUIRES that rationale in the diff.
       #
-      #   - GHSA-7wx4-6vff-v64p (diffusers, trust_remote_code bypass) — HIGH
-      #   - GHSA-98h9-4798-4q5v (diffusers, trust_remote_code bypass) — HIGH
-      #   - GHSA-69w3-r845-3855 (transformers.Trainer, arbitrary code exec) — MED
+      # THE ACCEPTED SET IS EMPTY as of 2026-09-23. The three IDs carried since
+      # v1.1.x were re-triaged after their 2026-08-31 review-by date, against
+      # the versions uv.lock pins, and all three are fixed there:
+      #   - GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v (diffusers trust_remote_code
+      #     bypass, HIGH): affect diffusers <0.38.0. uv.lock has 0.38.0, which
+      #     became installable once safetensors 0.8.0 went GA.
+      #   - GHSA-69w3-r845-3855 (transformers.Trainer ACE, MED): affects
+      #     transformers <5.0.0rc3. uv.lock has 5.5.0.
       #
-      # Accepted because:
-      #   - diffusers (0.37.1 in uv.lock) is transitive via unsloth and is NOT
-      #     imported by any backpropagate/**/*.py — no reachable codepath into
-      #     the vulnerable remote-code-load functions. The fix (0.38.0) requires
-      #     safetensors>=0.8.0rc0 (a pre-release); per baseline-before-enforce
-      #     we don't enable pre-releases for a security bump. Closes when
-      #     safetensors 0.8.0 GA lands OR unsloth loosens its floor (see
-      #     CHANGELOG "Security" / SECURITY.md).
-      #   - transformers.Trainer ACE is held on the 5.0 major-version-compat
-      #     work the v1.5 dispatch scopes; the rc-only fix is excluded by the
-      #     same pre-release policy.
-      # review-by: 2026-08-31 (re-triage at the v1.5 dep-sweep — drop any ID
-      # whose upstream fix went GA). Adding an ID here REQUIRES a one-line
-      # rationale in the diff.
+      # Note what this job can see: it installs `.[dev]` only, so a package
+      # reachable only through an extra (the unsloth tree, reflex, wandb,
+      # llama-cpp-python) is never audited here. The full locked closure is
+      # the Trivy job's scan of uv.lock.
       #
       # Mechanism: pip-audit has no --ignore-unfixed, so a bare hard gate would
-      # re-flood on the documented transitive baseline (.trivyignore). Instead
-      # this step ACKs the three IDs (--ignore-vuln matches GHSA aliases) and
-      # emits a ::warning:: annotation listing whatever non-accepted advisories
-      # remain — so a NEW advisory shows up as a named CI annotation (reviewable)
-      # rather than being lost in the advisory markdown, while the documented
-      # transitive baseline doesn't turn the run red. CRITICAL still hard-fails
-      # in the next step. continue-on-error keeps this informational.
+      # go red on every unfixed advisory. Instead each accepted ID is passed as
+      # --ignore-vuln (it matches the primary id OR any alias, so the GHSA form
+      # also suppresses PYSEC/CVE-keyed entries), and whatever remains is
+      # emitted as a ::warning:: annotation — a NEW advisory shows up as a
+      # named, reviewable CI annotation. CRITICAL still hard-fails in the next
+      # step. continue-on-error keeps this informational.
       - name: pip-audit (triaged-accept ACK + surface any new advisory)
         continue-on-error: true
         run: |
           set -euo pipefail
-          echo "Accepted-with-rationale (review-by 2026-08-31): GHSA-7wx4-6vff-v64p, GHSA-98h9-4798-4q5v, GHSA-69w3-r845-3855"
-          # --ignore-vuln matches the primary id OR any alias, so the GHSA form
-          # suppresses the PYSEC/CVE-keyed diffusers + transformers entries.
+          echo "Accepted-with-rationale: none (set emptied 2026-09-23 -- see CIDOCS-B-101 above)"
+          # To accept an ID: add `--ignore-vuln <GHSA-id> \` to this command AND
+          # its rationale + review-by date to the comment block above.
           pip-audit \
             --vulnerability-service osv \
-            --ignore-vuln GHSA-7wx4-6vff-v64p \
-            --ignore-vuln GHSA-98h9-4798-4q5v \
-            --ignore-vuln GHSA-69w3-r845-3855 \
-          && echo "pip-audit (post-accept): no advisories outside the accepted set." \
-          || echo "::warning::pip-audit reports advisories OUTSIDE the triaged-accepted set (above). These are not yet on the decision-on-record list in ci.yml — triage: bump the dep in pyproject.toml + uv.lock, or add the ID here with a one-line rationale + review-by date. (Unfixed transitive CVEs in .trivyignore are expected here; new FIXABLE advisories are the signal.)"
+          && echo "pip-audit: no known advisories." \
+          || echo "::warning::pip-audit reports advisories (above) that are not on the decision-on-record list in ci.yml. Triage: bump the dep in pyproject.toml + uv.lock, or accept the ID with --ignore-vuln plus a one-line rationale and review-by date in the CIDOCS-B-101 comment. New FIXABLE advisories are the signal."
 
       # Gating step (v1.1.2): CRITICAL-only floor. Unfixed transitive
       # CVEs (huggingface-hub → requests → urllib3 etc.) at HIGH and
@@ -704,14 +838,51 @@ jobs:
       # pip-audit has no native --severity flag, so we read its JSON
       # output (OSV service exposes a `severity` array on each vuln)
       # and fail if any entry includes a CRITICAL CVSS rating.
+      #
+      # A SCAN ERROR IS NOT A SCAN FINDING. This step used to run pip-audit
+      # with `|| true` and then json.load the report unconditionally. When
+      # api.osv.dev times out, pip-audit crashes before writing anything, the
+      # report file never exists, json.load raises FileNotFoundError, and this
+      # REQUIRED check went red for a third-party outage -- indistinguishable
+      # from a real CRITICAL and blocking every open PR until OSV recovered.
+      #
+      # So: (1) retry the scan, bounded (3 attempts, 15s then 30s backoff, each
+      # capped at 100s so a hung connection cannot eat the job timeout); a
+      # report only counts if it PARSES, since pip-audit exits 1 both for
+      # "found vulns" (report written) and for "crashed" (nothing written) and
+      # the exit code cannot tell them apart. (2) If no parseable report exists
+      # after the last attempt, say so in a ::warning:: and exit 0 -- the scan
+      # never ran, so there is nothing to gate on, and the annotation keeps the
+      # gap visible on the run. (3) If a report DOES exist, the CRITICAL check
+      # below is untouched: a real finding at the floor still exits 1.
       - name: pip-audit (CRITICAL floor)
         run: |
-          set -euo pipefail
-          pip-audit \
-            --vulnerability-service osv \
-            --format json \
-            --output pip-audit.json \
-            --strict || true
+          # No `set -e`: a failing pip-audit attempt is data here, not an abort.
+          set -uo pipefail
+          report_ok() {
+            [ -s pip-audit.json ] && python3 -c "import json; json.load(open('pip-audit.json'))" 2>/dev/null
+          }
+          for attempt in 1 2 3; do
+            rm -f pip-audit.json
+            # Exit status deliberately ignored (see above); report_ok decides.
+            timeout 100 pip-audit \
+              --vulnerability-service osv \
+              --format json \
+              --output pip-audit.json \
+              --strict || true
+            if report_ok; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              backoff=$((attempt * 15))
+              echo "pip-audit attempt ${attempt}/3 produced no usable report (OSV slow or unreachable?); retrying in ${backoff}s"
+              sleep "${backoff}"
+            fi
+          done
+          if ! report_ok; then
+            echo "::warning::pip-audit CRITICAL floor: scan could not run (OSV unavailable) after 3 attempts -- no report was produced, so this is a scan ERROR, not a finding. The floor was NOT evaluated on this run; re-run the job once api.osv.dev is reachable if the dependency set changed."
+            exit 0
+          fi
           python3 -c "
           import json, sys
           data = json.load(open('pip-audit.json'))
@@ -803,13 +974,27 @@ jobs:
         # Trivy ran as ADVISORY (no exit-code gate) until the v1.1.x
         # dep-bump wave. Stage B's B-CT-006 added `exit-code: '1'` to gate
         # CI on findings, but the actual baseline turned out to be 30+
-        # transitive CVEs across uv.lock + site/package-lock.json — far
-        # beyond the 14 documented in .trivyignore. Per the
+        # transitive CVEs across uv.lock + site/package-lock.json. Per the
         # baseline-before-enforce doctrine (memory/feedback_baseline_
         # before_enforce.md), gating before triage is wrong. This step
         # stays advisory; findings still surface in the GitHub Security
         # tab via SARIF upload. The CRITICAL-only gate below provides
         # the real floor in v1.1.2.
+        #
+        # .trivyignore WAS RETIRED 2026-09-23 at zero live entries, per its
+        # own protocol. All 13 of its IDs (urllib3, python-multipart, pip,
+        # Pillow, idna, GitPython) are fixed at the versions uv.lock pins, and
+        # Trivy 0.70.0 (this action's default) reported none of them with the
+        # file removed — at any severity, fixed or unfixed.
+        #
+        # The protocol's second half — re-tighten this step to
+        # `exit-code: '1'` — waits on a clean baseline, and the baseline is not
+        # clean yet: ONE finding, transformers CVE-2026-9856 (HIGH, fixed in
+        # 5.10.0), which uv cannot install because every current unsloth caps
+        # `transformers<=5.5.0`. Gating now would redden every PR on a fix
+        # nobody can install. If an advisory ever has to be suppressed,
+        # recreate .trivyignore with a one-line rationale + review-by date
+        # per entry and pass it back to BOTH steps as `trivyignores:`.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
@@ -818,7 +1003,6 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: true
-          trivyignores: '.trivyignore'
         continue-on-error: true
 
       - name: Upload SARIF to GitHub Security
@@ -841,7 +1025,6 @@ jobs:
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
-          trivyignores: '.trivyignore'
           exit-code: '1'
 
   # secrets-scan-baseline-noop: a deliberately-empty placeholder so the

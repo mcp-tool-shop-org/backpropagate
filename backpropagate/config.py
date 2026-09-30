@@ -799,8 +799,9 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         # Dataset split
         dataset_split: str = "train_sft"
-        # Number of samples (0 = all)
-        max_samples: int = 1000
+        # Number of samples (0 = all). Default 0 since 1.7.2: it was 1000,
+        # which silently trained on 1000 random rows of any larger dataset.
+        max_samples: int = 0
         # Text column name
         text_column: str = "text"
         # Chat template format (chatml, llama, alpaca, sharegpt)
@@ -1435,7 +1436,7 @@ else:
     class DataConfig:  # type: ignore[no-redef]
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         dataset_split: str = "train_sft"
-        max_samples: int = 1000
+        max_samples: int = 0  # 0 = all rows (was 1000 before 1.7.2)
         text_column: str = "text"
         chat_format: str = "chatml"
         pre_tokenize: bool = True

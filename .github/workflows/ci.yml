@@ -238,7 +238,7 @@ jobs:
 
       - name: Atlas check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
-        run: npx --yes @dogfood-lab/atlas@1.14.0 check
+        run: npx --yes @dogfood-lab/atlas@1.24.0 check
 
       # RUFF AND MYPY RUN ON THE FLOOR CELL ONLY, and the condition is the fix
       # for a month of red CI -- not an optimization bolted onto a green build.

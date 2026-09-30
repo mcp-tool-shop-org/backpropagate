@@ -2270,6 +2270,10 @@ class Trainer:
         "cuda out of memory",
     )
 
+    # How many modules the LoRA adapter attached to, set by either loader.
+    # None until a model is loaded (and for mode='full').
+    lora_adapted_modules: int | None = None
+
     def __init__(
         self,
         model: str | None = None,
@@ -4244,9 +4248,21 @@ class Trainer:
         # passing it — keeps the call backward-compatible with older
         # Unsloth releases whose get_peft_model signature doesn't accept
         # the v1.3 kwargs.
+        target_modules = _unsloth_target_modules(
+            settings.lora.target_modules, self._model
+        )
+        if not target_modules:
+            # No linear layers found: refuse here so load_model's fallback to
+            # transformers + PEFT fires, with its WARNING naming this reason.
+            raise ModelLoadError(
+                self.model_name,
+                "Failed to apply LoRA: target_modules="
+                f"{settings.lora.target_modules!r} matched no linear layers in "
+                "the Unsloth-loaded model",
+            )
         lora_kwargs: dict[str, Any] = {
             "r": self.lora_r,
-            "target_modules": settings.lora.target_modules,
+            "target_modules": target_modules,
             "lora_alpha": self.lora_alpha,
             "lora_dropout": self.lora_dropout,
             "bias": "none",
@@ -4288,6 +4304,12 @@ class Trainer:
                 f"Failed to apply LoRA: {e}",
                 cause_category=_classify_model_load_cause(e),
             ) from e
+        self.lora_adapted_modules = _count_lora_layers(self._model)
+        logger.info(
+            "Unsloth LoRA: target_modules=%s (from %r); %d modules adapted.",
+            target_modules, settings.lora.target_modules,
+            self.lora_adapted_modules,
+        )
 
     def _load_with_transformers(self) -> None:
         """Load model using standard transformers (+ PEFT for mode='lora').
@@ -4470,6 +4492,11 @@ class Trainer:
             )
             lora_config = LoraConfig(**lora_kwargs)
         self._model = get_peft_model(self._model, lora_config)
+        self.lora_adapted_modules = _count_lora_layers(self._model)
+        logger.info(
+            "PEFT LoRA: target_modules=%r; %d modules adapted.",
+            settings.lora.target_modules, self.lora_adapted_modules,
+        )
 
     def _build_trainer(
         self,
@@ -7181,6 +7208,77 @@ class Trainer:
 # =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
+
+def _all_linear_leaf_names(model: Any) -> list[str]:
+    """Leaf names of the modules PEFT's "all-linear" would target in ``model``.
+
+    Follows PEFT's rule (``tuners_utils._maybe_include_all_linear_layers``):
+    every ``nn.Linear`` (which covers bitsandbytes ``Linear4bit``) and
+    transformers ``Conv1D``, minus the output embedding (lm_head). The rule is
+    reimplemented rather than imported because PEFT's helper is private and
+    its signature has changed across the PEFT versions we support. Names are
+    leaves (``q_proj``, ``qkv_proj``): Unsloth matches on those, and the set
+    depends on the architecture. Llama/Qwen/Mistral give the seven
+    q/k/v/o/gate/up/down projections; Phi-3/4 give qkv_proj, o_proj,
+    gate_up_proj and down_proj.
+    """
+    import torch
+
+    linear_types: tuple[type, ...]
+    try:
+        from transformers.pytorch_utils import Conv1D
+
+        linear_types = (torch.nn.Linear, Conv1D)
+    except Exception:  # noqa: BLE001 - Conv1D is optional (GPT-2-style models only)
+        linear_types = (torch.nn.Linear,)
+
+    excluded: set[int] = set()
+    get_output = getattr(model, "get_output_embeddings", None)
+    if callable(get_output):
+        try:
+            output_emb = get_output()
+        except Exception:  # noqa: BLE001 - models without a head
+            output_emb = None
+        if output_emb is not None:
+            excluded.add(id(output_emb))
+
+    names: set[str] = set()
+    for name, module in model.named_modules():
+        if not name or id(module) in excluded:
+            continue
+        if isinstance(module, linear_types):
+            names.add(name.rsplit(".", 1)[-1])
+    return sorted(names)
+
+
+def _unsloth_target_modules(target_modules: Any, model: Any) -> list[str]:
+    """Shape ``target_modules`` for ``FastLanguageModel.get_peft_model``.
+
+    Unsloth iterates target_modules as a list. Given PEFT's string shorthand
+    "all-linear", it split the string into characters and raised
+    ``Target modules {'a', 'l', 'i', 'n', 'e', 'r', '-'} not found``. The
+    trainer then fell back to transformers + PEFT without saying so, which
+    meant every default Unsloth run trained without Unsloth.
+
+    "all-linear" is expanded against the loaded model with PEFT's rule
+    (:func:`_all_linear_leaf_names`), so coverage matches what the transformers
+    path adapts on any architecture. Any other single string is wrapped in a
+    list, and lists pass through.
+    """
+    if isinstance(target_modules, str):
+        if target_modules.lower() == "all-linear":
+            return _all_linear_leaf_names(model)
+        return [target_modules]
+    return list(target_modules)
+
+
+def _count_lora_layers(model: Any) -> int:
+    """How many modules carry a LoRA adapter (a ``lora_A`` sub-module)."""
+    try:
+        return sum(1 for name, _ in model.named_modules() if name.endswith(".lora_A"))
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return 0
+
 
 def load_model(
     model_name: str | None = None,

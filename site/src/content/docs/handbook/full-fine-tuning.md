@@ -83,10 +83,10 @@ Weights (2 B/param) + gradients (2 B/param) + 8-bit optimizer state (~2 B/param)
 |---|---|---|
 | 16 GB | 4B | — |
 | 24 GB | 5B | — |
-| 32 GB | 6B | 1.5B and 3B train. PyTorch reported 6.7 GB and 12.6 GB, but that misses the optimizer state (see note). |
+| 32 GB | 6B | 3B: **22.0 GiB** system-wide (13.4 GiB PyTorch-reserved + 7.5 GiB paged optimizer state), batch 4, 512 tokens, 0.30 s/step |
 | 48 GB+ | 10B | — |
 
-**Note on the measured figures.** `paged_adamw_8bit` keeps its state in CUDA managed memory, which bitsandbytes allocates outside PyTorch's allocator, so `torch.cuda.max_memory_allocated()` does not include it. The true peak for full fine-tuning on the GPU is higher than PyTorch reports, by up to about 2 bytes per parameter. System-wide measurements are planned.
+**Note on the measured figures.** `paged_adamw_8bit` keeps its state in CUDA managed memory, which bitsandbytes allocates outside PyTorch's allocator, so `torch.cuda.max_memory_allocated()` does not include it. Measured with system-wide NVIDIA counters at 3B, the peak was 22.0 GiB against 13.4 GiB reported by PyTorch. Managed memory can spill to host RAM when the card fills, so the run may still work on a smaller card, more slowly; that has not been tested, and the ceilings in the table have not been re-derived from this measurement.
 
 The ceiling bounds the parameter **count**. It does not promise a fit at every sequence length. It is checked when the `Trainer` is created (from the preset table or model id) and again after loading (from the actual parameter count). A model over the ceiling exits `2` with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`; the error names `--full-ft-offload` when offload would fit it, and LoRA / QLoRA when it would not.
 

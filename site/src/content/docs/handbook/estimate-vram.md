@@ -17,9 +17,9 @@ The VRAM estimator answers the operator question "will this config OOM on my car
 | Qwen2.5-14B QLoRA r=32, 4096 tokens | 14.0 GB | 25.0 / 28.1 GiB |
 | Mistral-Small-24B QLoRA r=32, 4096 tokens | 17.7 GB | 26.5 / 29.6 GiB |
 | Qwen2.5-32B QLoRA r=32, 2048 tokens | 22.1 GB | 28.8 / 30.7 GiB |
-| SmolLM3-3B full fine-tuning, batch 4, 512 tokens | 20.1 GB | 12.6 / 20.4 GiB reported by PyTorch; excludes the paged optimizer state |
+| SmolLM3-3B full fine-tuning, batch 4, 512 tokens | 20.1 GB | 22.0 GiB system-wide (PyTorch alone reported 12.6 / 13.4) |
 
-It **underestimates QLoRA on large models by 25–45%**. The full fine-tuning row cannot be judged yet: that run used `paged_adamw_8bit`, whose state bitsandbytes keeps in CUDA managed memory that PyTorch's counters do not see, so the measured figure is too low by up to about 2 bytes per parameter. The estimates above used each model's real hidden size and layer count; with the 7B-class defaults they are lower still. The QLoRA runs did not use Unsloth, which can lower memory, and each ran a full context window. Treat the estimate as a lower bound for QLoRA, and leave headroom. Recalibrating it against measured runs is planned. See [the limitations](#limitations) below.
+It **underestimates QLoRA on large models by 25–45%**. For full fine-tuning it was close: 20.1 GB estimated against 22.0 GiB measured system-wide. PyTorch's own counters miss the paged optimizer state, which bitsandbytes keeps in CUDA managed memory, so they reported only 12.6 GiB. The estimates above used each model's real hidden size and layer count; with the 7B-class defaults they are lower still. The QLoRA runs did not use Unsloth, which can lower memory, and each ran a full context window. Treat the estimate as a lower bound for QLoRA, and leave headroom. Recalibrating it against measured runs is planned. See [the limitations](#limitations) below.
 
 ## Python API: `Trainer.estimate_vram()`
 

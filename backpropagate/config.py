@@ -1896,8 +1896,12 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     # ----- v1.3 BACKEND-9: Qwen-3.5-4B (Apache 2.0) -----
     "qwen3.5-4b": ModelPreset(
         name="qwen3.5-4b",
-        model_id="Qwen/Qwen3.5-4B-Instruct",
-        description="Qwen 3.5 4B Instruct — Apache-2.0 4B with native long context",
+        model_id="Qwen/Qwen3.5-4B",
+        description=(
+            "Qwen 3.5 4B — Apache-2.0 4B with native long context. The Hub "
+            "repo is tagged image-text-to-text; the trainer loads it text-only "
+            "(QLoRA peak 8.4 GiB measured, RTX 5090, 2026-09-30)."
+        ),
         license="Apache-2.0",
         recommended_lora_r=128,
         # Qwen 3.5 supports native long context out of the box; bump

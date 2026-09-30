@@ -100,6 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `qwen3.5-4b` preset could not load.** It pointed at
+  `Qwen/Qwen3.5-4B-Instruct`, which does not exist on the Hugging Face Hub.
+  It now points at `Qwen/Qwen3.5-4B`, which the trainer loads text-only;
+  on an RTX 5090 it trained 5 QLoRA steps at an 8.4 GiB peak and generated
+  coherent text. Whether the repository's vision weights are also loaded
+  has not been checked.
 - **KTO crashed on a plain `pip install`** (#216). trl 0.27 removed
   `max_prompt_length` from `KTOConfig`; passing it (any window of 512 tokens
   or less, or an explicit value) raised `TypeError`. Only fields the
@@ -162,14 +168,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
-- The `qwen3.5-4b` preset points at `Qwen/Qwen3.5-4B-Instruct`, which does not
-  exist on the Hugging Face Hub, so the preset cannot load.
 - On a 32 GB card the automatic batch size (6) is likely too large for the
   14B–32B QLoRA presets at their full context window; the OOM recovery halves
   it and retries. Set `batch_size` explicitly for those presets.
-- Peak VRAM for full fine-tuning on the GPU is under-reported: the paged
-  8-bit optimizer state is CUDA managed memory that PyTorch's counters do
-  not see. It is being re-measured with system-wide counters.
+- Full fine-tuning on the GPU uses more VRAM than PyTorch reports. The paged
+  8-bit optimizer state is CUDA managed memory that PyTorch's counters do not
+  see: at 3B, PyTorch reported 13.4 GiB reserved, and the system-wide peak
+  was 22.0 GiB (7.5 GiB of it paged optimizer state). Managed memory can
+  spill to host RAM when the card is full, so smaller cards may still run,
+  more slowly; that has not been tested. The card-aware ceilings
+  (16 GB → 4B, 24 GB → 5B, 32 GB → 6B) have not been re-derived.
 
 ### Internal
 

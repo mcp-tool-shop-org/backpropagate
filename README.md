@@ -28,7 +28,7 @@ trainer.export("gguf", quantization="q4_k_m")
 ```
 
 ```bash
-backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
+backprop export ./output --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 ollama run my-model
 ```
 
@@ -140,20 +140,38 @@ Lots of libraries train a model. Few of them get out of your way when you want t
 
 ## Quick Start
 
-The repo ships a tiny example dataset so the snippet from the top of this README runs on a clean install:
+From the command line, with a 5-conversation example dataset:
 
 ```bash
 pipx install "backpropagate[standard]"
+curl -LO https://raw.githubusercontent.com/mcp-tool-shop-org/backpropagate/main/examples/quickstart.jsonl
 
-python -c "
-from backpropagate import Trainer
-trainer = Trainer('Qwen/Qwen2.5-7B-Instruct')
-trainer.train('examples/quickstart.jsonl', steps=10)
-trainer.export('gguf', quantization='q4_k_m')
-"
+backprop train --data quickstart.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 10
+backprop generate ./output "What is Python?"      # did it learn anything?
+backprop export ./output --format gguf --quantization q4_k_m --ollama --ollama-name my-first-finetune
+ollama run my-first-finetune
 ```
 
-This trains a Qwen 2.5 7B adapter on 5 short ShareGPT-format conversations, then exports the result to GGUF. For your own data, format your JSONL one example per line:
+`backprop train` writes the adapter to `./output` (change it with `--output`). In Python the same thing is:
+
+```python
+from backpropagate import Trainer
+
+trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
+trainer.train("quickstart.jsonl", steps=10)
+trainer.export("gguf", quantization="q4_k_m")
+```
+
+Use a virtual environment with `pip install "backpropagate[standard]"` for the Python API; `pipx` installs the `backprop` command in its own environment, so `import backpropagate` will not find it.
+
+**What GGUF export needs.** The export merges your adapter into the base model and converts it with llama.cpp's converter script. You need either:
+
+- a llama.cpp **source checkout** (`git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp`) plus `pip install sentencepiece protobuf` in the same environment, or
+- Unsloth with its own llama.cpp already built.
+
+With `--ollama`, the `q4_k_m` quantization is done by `ollama create`, so nothing has to be compiled. Backpropagate never lets Unsloth install system packages to build llama.cpp for you; set `BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1` if you want that. Details: [export](https://mcp-tool-shop-org.github.io/backpropagate/handbook/export/).
+
+For your own data, format your JSONL one example per line:
 
 ```jsonl
 {"conversations": [{"from": "human", "value": "What is Python?"}, {"from": "gpt", "value": "A programming language."}]}
@@ -161,6 +179,19 @@ This trains a Qwen 2.5 7B adapter on 5 short ShareGPT-format conversations, then
 ```
 
 Alpaca (`instruction` / `output`), OpenAI chat (`messages`), and raw text formats also work — Backpropagate auto-detects the format.
+
+### The loop: check the data, train, evaluate, export
+
+```bash
+backprop data report my_data.jsonl                     # duplicates, length outliers, format problems
+backprop data split my_data.jsonl --heldout-ratio 0.1  # a held-out set the model never trains on
+backprop train --data my_data.train.jsonl --steps 200 --output ./run-a
+backprop eval <run-id> --heldout my_data.heldout.jsonl # held-out loss + sample generations
+backprop eval <run-b> --vs <run-a>                     # did the change help?
+backprop export ./run-a --format gguf --ollama --ollama-name my-model
+```
+
+Evaluation is judge-free by design: held-out loss plus deterministic task metrics (`normalized_exact_match`, `token_f1`, `contains`, `regex`, `pass_rate`). To use an LLM judge, run it over `backprop generate` output yourself. See [recipes](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/).
 
 ### Preference tuning (ORPO, SimPO, KTO)
 
@@ -342,7 +373,7 @@ Every Python API has a CLI mirror:
 ```bash
 backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 backprop multi-run --data my_data.jsonl --runs 5 --steps 100
-backprop export ./output/lora --format gguf --quantization q4_k_m --ollama --ollama-name my-model
+backprop export ./output --format gguf --quantization q4_k_m --ollama --ollama-name my-model
 backprop ui --port 7862
 backprop info                          # environment + version snapshot
 backprop list-runs                     # past training runs

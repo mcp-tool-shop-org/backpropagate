@@ -481,7 +481,7 @@ requires-dist = [
     { name = "torchao", marker = "extra == 'fp8'", specifier = ">=0.10.0" },
     { name = "transformers", specifier = ">=4.46.0,<6" },
     { name = "transformers", marker = "extra == 'unsloth'", specifier = "<=5.5.0" },
-    { name = "trl", specifier = ">=0.18.0,<0.28" },
+    { name = "trl", specifier = ">=0.18.0,<2" },
     { name = "trl", marker = "extra == 'unsloth'", specifier = "<=0.24.0" },
     { name = "unsloth", marker = "extra == 'unsloth'", specifier = ">=2026.6.8" },
     { name = "wandb", marker = "extra == 'monitoring'", specifier = ">=0.15.0" },

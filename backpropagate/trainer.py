@@ -6565,6 +6565,12 @@ class Trainer:
         # Limit samples. Method-agnostic: preference Datasets are ordinary
         # datasets.Dataset objects, so shuffle/select apply identically.
         if max_samples > 0 and len(ds) > max_samples:
+            # Say so: before 1.7.2 a default cap of 1000 dropped rows silently.
+            logger.info(
+                "Using %d of %d dataset rows (max_samples=%d; set samples=0 or "
+                "BACKPROPAGATE_DATA__MAX_SAMPLES=0 to use all).",
+                max_samples, len(ds), max_samples,
+            )
             if settings.data.shuffle:
                 ds = ds.shuffle(seed=settings.training.seed)
             ds = ds.select(range(max_samples))

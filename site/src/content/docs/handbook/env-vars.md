@@ -147,7 +147,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 |----------|---------|--------------|
 | `BACKPROPAGATE_DATA__DATASET_NAME` | `HuggingFaceH4/ultrachat_200k` | Default HF dataset when none is passed. |
 | `BACKPROPAGATE_DATA__DATASET_SPLIT` | `train_sft` | Which split to load. |
-| `BACKPROPAGATE_DATA__MAX_SAMPLES` | `1000` | Cap dataset to N samples (`0` = all). |
+| `BACKPROPAGATE_DATA__MAX_SAMPLES` | `0` | Cap the training set to N randomly chosen rows. `0` (the default) uses every row. Before v1.7.2 the default was `1000`, which silently dropped the rest of any larger dataset. |
 | `BACKPROPAGATE_DATA__TEXT_COLUMN` | `text` | Column name for raw-text datasets. |
 | `BACKPROPAGATE_DATA__CHAT_FORMAT` | `chatml` | Chat template (`chatml` / `llama` / `alpaca` / `sharegpt`). |
 | `BACKPROPAGATE_DATA__PRE_TOKENIZE` | `true` | Pre-tokenize before training (Windows-safe). |

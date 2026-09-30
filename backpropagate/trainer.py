@@ -6658,6 +6658,7 @@ class Trainer:
                 "engine": "fsdp2-direct",
                 "optimizer": "adafactor-factored-sr",
                 "step_times": result["step_times"],
+                "update_retention": result.get("update_retention", []),
             },
         )
         self._training_runs.append(run)

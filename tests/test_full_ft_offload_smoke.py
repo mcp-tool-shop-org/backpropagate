@@ -4,9 +4,11 @@ v1.7's lead claim is single-card 7B-class *full* fine-tuning via
 ``Trainer(mode="full", full_ft_offload=True)`` / ``--full-ft-offload``: FSDP2
 ``fully_shard`` + ``CPUOffloadPolicy`` + activation checkpointing + bf16, with a
 single-process NCCL group auto-initialized so a bare ``python`` run works (no
-``torchrun`` / ``accelerate launch``). ``tests/test_envelope_v17.py`` pins the
-arithmetic and the gating with mocks; THIS file is the "the bytes actually flow
-through real torch.distributed / accelerate / trl" proof on a real GPU.
+``torchrun`` / ``accelerate launch``). Since feat/offload-7b the path runs the
+direct-FSDP2 engine (``backpropagate.offload_engine``): bf16 host params, and a
+factored Adafactor stepped on the GPU with stochastic rounding.
+``tests/test_offload_engine.py`` pins the math on CPU; THIS file is the "the
+bytes actually flow through real torch.distributed" proof on a real GPU.
 
 It trains a tiny model (SmolLM2-135M-Instruct) for 2 steps and asserts:
 
@@ -14,8 +16,8 @@ It trains a tiny model (SmolLM2-135M-Instruct) for 2 steps and asserts:
    world size 1, no ``torchrun`` environment.
 2. FSDP2 sharding was actually applied (root + per-block ``FSDPModule``s, params
    are ``DTensor``) and CPU offload actually engaged: the sharded parameters
-   AND the optimizer state live on the CPU after training — not just "no
-   exception was raised".
+   live on the CPU, stay bf16 (no fp32 upcast), and the optimizer keeps ~no
+   state on the host — not just "no exception was raised".
 3. The final loss is finite.
 4. ``Trainer.save()`` writes a full-weight checkpoint (not a LoRA adapter) that
    loads back with ``AutoModelForCausalLM.from_pretrained``, differs from the

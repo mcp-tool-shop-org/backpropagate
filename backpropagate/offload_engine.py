@@ -103,19 +103,39 @@ class OffloadAdafactor(torch.optim.Optimizer):
         self.clip_threshold = clip_threshold
         self.stochastic_rounding = stochastic_rounding
         self.device = torch.device(device) if device is not None else torch.device("cuda")
+        self.last_update_retention: float | None = None
+        self._kept = torch.zeros((), dtype=torch.float64)
+        self._intended = torch.zeros((), dtype=torch.float64)
 
-    def _write_back(self, host: torch.Tensor, new_fp32: torch.Tensor) -> None:
-        if host.dtype == torch.bfloat16 and self.stochastic_rounding:
+    def _write_back(self, host: torch.Tensor, new_fp32: torch.Tensor, old_fp32: torch.Tensor) -> None:
+        """Round ``new_fp32`` into ``host`` and account how much of the update survived.
+
+        ``update_retention`` = sum(actual_delta * sign(intended)) / sum(|intended|):
+        ~1.0 means the applied bf16 update equals the fp32 update in expectation.
+        Round-to-nearest drops sub-ulp updates, and the ratio falls well below 1.
+        """
+        if host.dtype == torch.bfloat16:
             tmp = torch.empty_like(new_fp32, dtype=torch.bfloat16)
-            stochastic_round_to_bf16_(tmp, new_fp32)
+            if self.stochastic_rounding:
+                stochastic_round_to_bf16_(tmp, new_fp32)
+            else:
+                tmp.copy_(new_fp32)
+            intended = new_fp32 - old_fp32
+            self._kept += ((tmp.float() - old_fp32) * intended.sign()).sum()
+            self._intended += intended.abs().sum()
             host.copy_(tmp)
         else:
             host.copy_(new_fp32)
+            delta = (new_fp32 - old_fp32).abs().sum()
+            self._kept += delta
+            self._intended += delta
 
     @torch.no_grad()
     def step(self, closure: Callable[[], Any] | None = None) -> Any:  # type: ignore[override]
         loss = closure() if closure is not None else None
         dev = self.device
+        self._kept = torch.zeros((), dtype=torch.float64, device=dev)
+        self._intended = torch.zeros((), dtype=torch.float64, device=dev)
         for group in self.param_groups:
             lr, wd = group["lr"], group["weight_decay"]
             for p in group["params"]:
@@ -140,10 +160,11 @@ class OffloadAdafactor(torch.optim.Optimizer):
                     u = g / st["v"].sqrt()
                     u.div_(max(1.0, float(u.pow(2).mean().sqrt()) / self.clip_threshold))
                     w = w_host.to(dev, non_blocking=True).float()
+                    old = w.clone()
                     if wd:
                         w.mul_(1.0 - lr * wd)
                     w.sub_(u, alpha=lr)
-                    self._write_back(w_host, w)
+                    self._write_back(w_host, w, old)
                     continue
 
                 rows = w_host.shape[0]
@@ -191,10 +212,13 @@ class OffloadAdafactor(torch.optim.Optimizer):
                 for a, b in spans:
                     u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
                     w = w2d_host[a:b].to(dev, non_blocking=True).float()
+                    old = w.clone()
                     if wd:
                         w.mul_(1.0 - lr * wd)
                     w.sub_(u, alpha=scale)
-                    self._write_back(w2d_host[a:b], w)
+                    self._write_back(w2d_host[a:b], w, old)
+        intended = float(self._intended)
+        self.last_update_retention = float(self._kept) / intended if intended > 0 else 1.0
         return loss
 
 
@@ -393,6 +417,7 @@ def _train_loop(
     model.train()
     losses: list[float] = []
     step_times: list[float] = []
+    retention: list[float] = []
     samples = 0
     t_start = time.perf_counter()
     for step in range(steps):
@@ -407,6 +432,7 @@ def _train_loop(
             total += float(out.loss.detach()) / gradient_accumulation
             samples += ids.shape[0]
         optimizer.step()
+        retention.append(round(optimizer.last_update_retention or 0.0, 4))
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize(device)
         step_times.append(time.perf_counter() - t0)
@@ -421,6 +447,7 @@ def _train_loop(
         "model": model,
         "losses": losses,
         "step_times": step_times,
+        "update_retention": retention,
         "samples_seen": samples,
         "duration_seconds": time.perf_counter() - t_start,
         "optimizer": optimizer,

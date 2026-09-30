@@ -219,6 +219,7 @@ rec = {
     "s_per_step": round(sum(step_times[1:]) / max(1, len(step_times) - 1), 3) if len(step_times) > 1 else None,
     "losses": losses, "final_loss": run.final_loss,
     "pct_params_changed_step1": pct1.get("v"),
+    "update_retention": run.metadata.get("update_retention"),
     "pct_params_changed_final": pct_changed(t._model, snap),
 }
 if os.environ.get("NO_SAVE") == "1" and not gate:
@@ -298,17 +299,18 @@ import json, math, sys
 r = json.load(open(sys.argv[1])); r["git_sha"] = sys.argv[2]; ceil = float(sys.argv[3])
 checks = {
   "finite_losses": all(math.isfinite(x) for x in r["losses"]),
-  # Learning gate = the conjunction of two measured separations.
-  # (1) Updates survive bf16. At step 1, round-to-nearest bf16 changed 3.0 % of
-  #     params (SmolLM2-360M, scripts/offload_probe.py --optim af_nearest) and
-  #     1.5B round-to-nearest via BACKPROPAGATE_OFFLOAD_ROUNDING=nearest (receipt
-  #     ladder/q15b_nearest); stochastic rounding changed 7.0 % (360M, full LR)
-  #     and 14.8 / 19.0 / 16.4 % (Qwen2.5-1.5B / SmolLM3-3B / Qwen3-4B, step 1
-  #     at half LR under warmup). Floor 5 % sits between the regimes. The first
-  #     7B receipt (d291aa2) was NOT used to set it; that receipt failed its
-  #     original bar (final-changed >= 50 %, a pre-data guess) and is superseded.
+  # Learning gate = the conjunction of two checks.
+  # (1) bf16 updates survive: the optimizer's update_retention at step 1, i.e.
+  #     sum(applied_delta * sign(fp32_delta)) / sum(|fp32_delta|), must be >= 0.9.
+  #     Stochastic rounding is unbiased (expected 1.0). Round-to-nearest drops
+  #     sub-ulp updates: < 0.7 in tests/test_offload_engine.py, and measured on
+  #     Qwen2.5-1.5B via BACKPROPAGATE_OFFLOAD_ROUNDING=nearest (ladder/q15b_nearest).
+  #     "% params changed" is reported but NOT gated. It does not separate the
+  #     regimes across models: nearest moved 3.0 % at 360M but 8.4 % at 1.5B, where
+  #     stochastic moved 14.8 %. The first 7B receipt (d291aa2) failed its original
+  #     bar (final-changed >= 50 %, a pre-data guess) and is superseded.
   # (2) Loss falls: mean of the last 3 losses < 50 % of the first.
-  "params_changed_step1": (r.get("pct_params_changed_step1") or 0) >= 5.0,
+  "update_retention_step1": bool(r.get("update_retention")) and r["update_retention"][0] >= 0.9,
   "loss_decreased": len(r["losses"]) >= 4 and sum(r["losses"][-3:]) / 3 < r["losses"][0] * 0.5,
   "rss_under_ceiling": r["peak_rss_total_gb"] < ceil,
   "vram_fits": r["peak_vram_reserved_gb"] < r["vram_total_gb"],

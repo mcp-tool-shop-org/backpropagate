@@ -63,6 +63,22 @@ class TestOffloadAdafactor:
         assert kept_sr == pytest.approx(1.0, abs=0.05), kept_sr
         assert kept_nearest < 0.7, kept_nearest
 
+    def test_update_retention_separates_rounding_modes(self):
+        """The optimizer's own per-step metric: ~1.0 under stochastic rounding,
+        far below 1 under round-to-nearest (the gate in pod_offload_7b.sh)."""
+        torch.manual_seed(0)
+        w0 = (torch.randn(512, 512) * 0.02).to(torch.bfloat16)
+        g = torch.randn(512, 512).to(torch.bfloat16)
+        out = {}
+        for sr in (True, False):
+            p = torch.nn.Parameter(w0.clone())
+            p.grad = g.clone()
+            opt = _opt([p], lr=2e-5, stochastic_rounding=sr)
+            opt.step()
+            out[sr] = opt.last_update_retention
+        assert out[True] == pytest.approx(1.0, abs=0.05), out
+        assert out[False] < 0.7, out
+
     def test_update_direction_descends(self):
         p = torch.nn.Parameter(torch.zeros(8, 4))
         p.grad = torch.ones(8, 4)

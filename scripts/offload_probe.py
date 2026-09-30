@@ -50,6 +50,8 @@ ap.add_argument("--batch", type=int, default=2)
 ap.add_argument("--precision-check", action="store_true")
 ap.add_argument("--no-pin", action="store_true")
 ap.add_argument("--opt-device", default="cpu")
+ap.add_argument("--malloc-trim", action="store_true")
+ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--no-ckpt", action="store_true")
 ap.add_argument("--tag", default="")
 args = ap.parse_args()
@@ -89,7 +91,7 @@ ROWS = [
 ]
 
 receipt: dict = {"tag": args.tag, "model": args.model, "engine": args.engine, "dtype": args.dtype,
-                 "optim": args.optim, "opt_device": args.opt_device, "malloc": os.environ.get("LD_PRELOAD", "") or os.environ.get("MALLOC_ARENA_MAX", ""), "lr": args.lr, "steps": args.steps, "seq": args.seq, "batch": args.batch}
+                 "optim": args.optim, "malloc_trim": args.malloc_trim, "threads": torch.get_num_threads(), "opt_device": args.opt_device, "malloc": os.environ.get("LD_PRELOAD", "") or os.environ.get("MALLOC_ARENA_MAX", ""), "lr": args.lr, "steps": args.steps, "seq": args.seq, "batch": args.batch}
 
 # --------------------------------------------------------------------------- hf
 if args.engine == "hf":
@@ -141,7 +143,12 @@ torch.cuda.set_device(0)
 rss0 = psutil.Process().memory_info().rss
 receipt["rss_after_cuda_init_gb"] = round(rss0 / GB, 3)
 
+torch.manual_seed(args.seed)
 pdtype = torch.bfloat16 if args.dtype == "bf16" else torch.float32
+_libc = None
+if args.malloc_trim:
+    import ctypes
+    _libc = ctypes.CDLL("libc.so.6")
 tok = AutoTokenizer.from_pretrained(args.model)
 if tok.pad_token is None:
     tok.pad_token = tok.eos_token
@@ -281,7 +288,7 @@ if args.precision_check:
 
 torch.cuda.reset_peak_memory_stats()
 mon.reset_phase()
-losses, times, grad_bytes, phases = [], [], None, []
+losses, times, grad_bytes, phases, rss_steps = [], [], None, [], []
 model.train()
 for step in range(args.steps):
     i = step % nb
@@ -302,6 +309,9 @@ for step in range(args.steps):
     opt.zero_grad(set_to_none=True)
     torch.cuda.synchronize()
     times.append(time.perf_counter() - t0)
+    if _libc is not None:
+        _libc.malloc_trim(0)
+    rss_steps.append(round(psutil.Process().memory_info().rss / GB, 2))
     phases.append({"fwd_s": round(t1 - t0, 2), "bwd_s": round(t2 - t1, 2), "opt_s": round(t3 - t2, 2),
                    "rss_fwd": round(r1 / GB, 2), "rss_bwd": round(r2 / GB, 2), "rss_opt": round(r3 / GB, 2)})
     losses.append(round(out.loss.item(), 4))
@@ -322,6 +332,7 @@ param_bytes = sum(local(p).numel() * local(p).element_size() for p in params)
 receipt.update(
     losses=losses,
     phases=phases[:3],
+    rss_per_step=rss_steps,
     s_per_step=round(sum(times[1:]) / max(1, len(times) - 1), 3),
     host_param_B_per_param=round(param_bytes / n, 3),
     host_grad_B_per_param=round((grad_bytes or 0) / n, 3),

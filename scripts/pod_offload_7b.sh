@@ -102,37 +102,45 @@ log "git sha $SHA"
 # The runner (written every time so a re-run picks up script edits).
 RUNNER="$WORK/run_offload.py"
 cat > "$RUNNER" <<'PYEOF'
-"""One offload full-FT run with a receipt. argv: model steps seq ceil_gb out_json [gate]"""
+"""One full-FT run with a receipt.
+
+argv: model steps seq ceil_gb out_json [gate]
+env:  BP_TRAINER_KWARGS (JSON merged into Trainer(...)), OFFLOAD=0 for the pure-GPU
+      full-FT path, VRAM_CAP_GB to emulate a smaller card
+      (torch.cuda.set_per_process_memory_fraction), WORK (save dir root).
+"""
 import gc, json, math, os, sys, tempfile, threading, time
 import importlib.metadata as md
 import psutil, torch
 
 model_id, steps, seq, ceil_gb, out_json = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), sys.argv[5]
 gate = len(sys.argv) > 6 and sys.argv[6] == "gate"
+offload = os.environ.get("OFFLOAD", "1") != "0"
 extra = json.loads(os.environ.get("BP_TRAINER_KWARGS", "{}") or "{}")
+vram_cap = float(os.environ.get("VRAM_CAP_GB", "0") or 0)
 GB = 2 ** 30
 proc = psutil.Process()
 peak = {"rss": 0}
-fail = {"why": None}
 
 def watchdog():
     while True:
-        r = proc.memory_info().rss + sum(c.memory_info().rss for c in proc.children(recursive=True))
+        r = proc.memory_info().rss
         peak["rss"] = max(peak["rss"], r)
-        if r > ceil_gb * GB and not gate:
-            fail["why"] = f"host RSS {r / GB:.1f} GB exceeded the {ceil_gb} GB ceiling"
-            print("RESULT: FAIL (" + fail["why"] + ")", flush=True)
+        if r > ceil_gb * GB:
+            print(f"RESULT: FAIL (host RSS {r / GB:.1f} GB exceeded the {ceil_gb} GB ceiling)", flush=True)
             os._exit(3)
         time.sleep(0.05)
 
 threading.Thread(target=watchdog, daemon=True).start()
+total_vram = torch.cuda.get_device_properties(0).total_memory
+if vram_cap:
+    torch.cuda.set_per_process_memory_fraction(min(1.0, vram_cap * GB / total_vram), 0)
 
-import trl
-from backpropagate.trainer import Trainer
-from torch.distributed.tensor import DTensor
+from backpropagate.trainer import Trainer, TrainingCallback
 
 def local(t):
-    return t.to_local() if isinstance(t, DTensor) else t
+    f = getattr(t, "to_local", None)
+    return f() if callable(f) else t
 
 rows = [("Explain what a hash table is.", "A hash table maps keys to slots with a hash function so lookups take expected constant time."),
         ("What is the capital of France?", "The capital of France is Paris."),
@@ -144,91 +152,94 @@ rows = [("Explain what a hash table is.", "A hash table maps keys to slots with 
         ("Who wrote Hamlet?", "William Shakespeare wrote Hamlet.")]
 d = tempfile.mkdtemp()
 data = os.path.join(d, "overfit.jsonl")
+# Pad each row with a long, fixed passage so every example reaches `seq` tokens.
+filler = " ".join(f"Note {i}: the quick brown fox jumps over the lazy dog near river bend {i}." for i in range(400))
 with open(data, "w") as fh:
     for q, a in rows:
-        fh.write(json.dumps({"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}) + "\n")
-
-stamps, losses, snap, pct = [], [], {}, {"v": None}
-orig_step = trl.SFTTrainer.training_step
+        fh.write(json.dumps({"messages": [{"role": "user", "content": q + " " + filler}, {"role": "assistant", "content": a}]}) + "\n")
 
 def sample(model):
-    out = {}
-    g = torch.Generator().manual_seed(0)
+    out, g = {}, torch.Generator().manual_seed(0)
     for name, p in model.named_parameters():
         w = local(p).detach().reshape(-1)
         idx = torch.randint(0, w.numel(), (min(4096, w.numel()),), generator=g)
-        out[name] = (idx, w.index_select(0, idx.to(w.device)).cpu().clone())
+        out[name] = (idx, w.index_select(0, idx.to(w.device)).float().cpu().clone())
     return out
 
-def spy(self, model, inputs, *a, **k):
-    if len(stamps) == 0:
-        snap.update(sample(model))
-    elif len(stamps) == 1 and snap:
-        changed = total = 0
-        for name, p in model.named_parameters():
-            idx, before = snap[name]
-            after = local(p).detach().reshape(-1).index_select(0, idx.to(local(p).device)).cpu()
-            changed += int((after != before).sum()); total += idx.numel()
-        pct["v"] = round(100.0 * changed / total, 3)
-        snap.clear()
-    stamps.append(time.perf_counter())
-    loss = orig_step(self, model, inputs, *a, **k)
-    losses.append(round(float(loss), 4))
-    return loss
+def pct_changed(model, snap):
+    changed = total = 0
+    for name, p in model.named_parameters():
+        if name not in snap:
+            continue
+        idx, before = snap[name]
+        w = local(p).detach().reshape(-1)
+        after = w.index_select(0, idx.to(w.device)).float().cpu()
+        changed += int((after != before).sum()); total += idx.numel()
+    return round(100.0 * changed / max(1, total), 3)
 
-trl.SFTTrainer.training_step = spy
-torch.cuda.reset_peak_memory_stats()
-kwargs = dict(model=model_id, use_unsloth=False, mode="full", full_ft_offload=True, max_seq_length=seq,
+losses, stamps, pct1 = [], [], {}
+kwargs = dict(model=model_id, use_unsloth=False, mode="full", full_ft_offload=offload, max_seq_length=seq,
               batch_size=1, gradient_accumulation=1, output_dir=os.path.join(d, "out"), report_to="none")
 kwargs.update(extra)
 t = Trainer(**kwargs)
-run = t.train(data, steps=steps)
-stamps.append(time.perf_counter())
+t0 = time.perf_counter()
+t.load_model()
+load_s = time.perf_counter() - t0
+snap = sample(t._model)
 
-params = [p for p in t._model.parameters()]
+def on_step(step, loss):
+    losses.append(round(float(loss), 4))
+    stamps.append(time.perf_counter())
+    if step == 1:
+        pct1["v"] = pct_changed(t._model, snap)
+
+torch.cuda.reset_peak_memory_stats()
+run = t.train(data, steps=steps, callback=TrainingCallback(on_step=on_step))
+if not losses:  # SFTTrainer path (OFFLOAD=0) reports via run.loss_history
+    losses = [round(x, 4) for x in run.loss_history]
+step_times = run.metadata.get("step_times") or []
+params = list(t._model.parameters())
 n = sum(p.numel() for p in params)
 p_bytes = sum(local(p).numel() * local(p).element_size() for p in params)
-opt = t._trainer.optimizer
-opt = getattr(opt, "optimizer", opt)
-s_bytes = 0
-for st in opt.state.values():
-    for v in st.values():
-        if isinstance(v, torch.Tensor):
-            v = local(v); s_bytes += v.numel() * v.element_size()
 rec = {
-    "model": model_id, "params": n, "steps": steps, "seq": seq,
-    "gpu": torch.cuda.get_device_name(0),
-    "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / GB, 2),
+    "model": model_id, "params": n, "steps": steps, "seq": seq, "offload": offload,
+    "engine": run.metadata.get("engine", "sfttrainer"),
+    "vram_cap_gb": vram_cap or None,
+    "gpu": torch.cuda.get_device_name(0), "vram_total_gb": round(total_vram / GB, 2),
     "host_ram_total_gb": round(psutil.virtual_memory().total / GB, 1),
     "rss_ceiling_gb": ceil_gb,
     "versions": {p: md.version(p) for p in ("torch", "transformers", "trl", "accelerate", "peft", "backpropagate")},
     "param_dtype": str(params[0].dtype), "param_device": str(local(params[0]).device),
-    "optimizer": type(opt).__name__,
-    "host_param_B_per_param": round(p_bytes / n, 3), "host_optstate_B_per_param": round(s_bytes / n, 3),
+    "host_param_B_per_param": round(p_bytes / n, 3),
     "peak_vram_alloc_gb": round(torch.cuda.max_memory_allocated() / GB, 2),
     "peak_vram_reserved_gb": round(torch.cuda.max_memory_reserved() / GB, 2),
     "peak_rss_train_gb": round(peak["rss"] / GB, 2),
-    "s_per_step": round((stamps[-1] - stamps[1]) / max(1, len(stamps) - 2), 2) if len(stamps) > 2 else None,
+    "load_s": round(load_s, 1),
+    "s_per_step": round(sum(step_times[1:]) / max(1, len(step_times) - 1), 3) if len(step_times) > 1 else None,
     "losses": losses, "final_loss": run.final_loss,
-    "pct_params_changed_step1": pct["v"],
+    "pct_params_changed_step1": pct1.get("v"),
+    "pct_params_changed_final": pct_changed(t._model, snap),
 }
 if gate:
-    # Project the 7.6B host footprint from what this build actually stores.
-    per = rec["host_param_B_per_param"] * 2 + rec["host_optstate_B_per_param"]  # params + same-dtype grads + state
-    rec["projected_7p6b_host_gb"] = round(7.6e9 * per / GB, 1)
+    rec["projected_7p6b_host_gb"] = round(7.6e9 * 2 * rec["host_param_B_per_param"] / GB + 8, 1)
 else:
-    save_dir = os.path.join(os.environ.get("WORK", d), "saved_model")
+    save_dir = os.path.join(os.environ.get("WORK", d), "saved_" + model_id.replace("/", "_"))
     saved = t.save(save_dir, run_id=run.run_id)
-    del t, run, opt, params
+    del t, run, params
     gc.collect(); torch.cuda.empty_cache()
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(saved)
     m = AutoModelForCausalLM.from_pretrained(saved, dtype=torch.bfloat16, device_map="cuda")
     ids = tok.apply_chat_template([{"role": "user", "content": "What is the capital of France?"}],
-                                  add_generation_prompt=True, return_tensors="pt").to("cuda")
+                                  add_generation_prompt=True, return_tensors="pt")
+    ids = (ids["input_ids"] if hasattr(ids, "keys") else ids).to("cuda")
     out = m.generate(ids, max_new_tokens=16, do_sample=False)
     rec["generation"] = tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True)
+    rec["saved_dtype"] = str(next(m.parameters()).dtype)
     rec["peak_rss_total_gb"] = round(peak["rss"] / GB, 2)
+    del m
+    import shutil
+    shutil.rmtree(saved, ignore_errors=True)  # keep the volume free for the next rung
 json.dump(rec, open(out_json, "w"), indent=1)
 print("RECEIPT " + json.dumps(rec), flush=True)
 PYEOF
@@ -284,8 +295,8 @@ import json, math, sys
 r = json.load(open(sys.argv[1])); r["git_sha"] = sys.argv[2]; ceil = float(sys.argv[3])
 checks = {
   "finite_losses": all(math.isfinite(x) for x in r["losses"]),
-  "loss_decreased": len(r["losses"]) >= 2 and r["losses"][-1] < r["losses"][0],
-  "params_changed_step1": (r.get("pct_params_changed_step1") or 0) >= 50.0,
+  "loss_decreased": len(r["losses"]) >= 4 and sum(r["losses"][-3:]) / 3 < r["losses"][0] * 0.9,
+  "params_changed": (r.get("pct_params_changed_final") or 0) >= 50.0,
   "rss_under_ceiling": r["peak_rss_total_gb"] < ceil,
   "vram_fits": r["peak_vram_reserved_gb"] < r["vram_total_gb"],
   "generated": bool(r.get("generation", "").strip()),

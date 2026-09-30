@@ -5018,6 +5018,16 @@ class Trainer:
         if self.method == "kto":
             self._auto_balance_kto_weights(train_dataset)
 
+        # full_ft_offload: the direct-FSDP2 engine (backpropagate.offload_engine)
+        # replaces the SFTTrainer + TrainingArguments(fsdp=...) route. That route
+        # upcast params to fp32 and used AdamW, ~16 host B/param (113 GB at 7.6B).
+        # The engine keeps bf16 params and steps a factored Adafactor on the GPU
+        # with stochastic rounding, for ~4 host B/param.
+        if self.mode == "full" and self.full_ft_offload:
+            return self._train_full_offload(
+                train_dataset, dataset=dataset, steps=steps, callback=callback
+            )
+
         # Pre-tokenize for Windows safety.
         #
         # Stage C BACKEND-B-009: log the OS-conditional decision once so a
@@ -6550,6 +6560,123 @@ class Trainer:
             raise DatasetError(f"Tokenization failed: {e}") from e
 
         return tokenized
+
+    def _train_full_offload(
+        self,
+        train_dataset: Any,
+        *,
+        dataset: Any,
+        steps: int | None,
+        callback: TrainingCallback | None,
+    ) -> TrainingRun:
+        """Run the direct-FSDP2 CPU-offload full fine-tune (see offload_engine)."""
+        import math
+        import time
+        import uuid
+
+        from . import offload_engine
+
+        run_id = uuid.uuid4().hex
+        total_steps = steps or settings.training.max_steps
+        batch = self.batch_size if isinstance(self.batch_size, int) else 1
+        run_history = RunHistoryManager(str(self.output_dir))
+        try:
+            run_history.record_run_started(
+                run_id=run_id,
+                model_name=self.model_name,
+                dataset_info=dataset if isinstance(dataset, str) else type(dataset).__name__,
+                hyperparameters={
+                    "mode": "full",
+                    "full_ft_offload": True,
+                    "engine": "fsdp2-direct",
+                    "optimizer": "adafactor-factored-sr",
+                    "learning_rate": self.learning_rate,
+                    "batch_size": batch,
+                    "gradient_accumulation": self.gradient_accumulation,
+                    "max_seq_length": self.max_seq_length,
+                    "max_steps": total_steps,
+                    "seed": settings.training.seed,
+                    "method": self.method,
+                },
+                session_kind="single_run",
+                checkpoint_path=str(self.output_dir),
+            )
+        except Exception as hist_err:  # noqa: BLE001 — history is best-effort
+            logger.warning(f"RunHistoryManager.record_run_started failed: {hist_err}")
+
+        start = time.time()
+        try:
+            result = offload_engine.run_offload_training(
+                self._model,
+                self._tokenizer,
+                train_dataset,
+                steps=total_steps,
+                batch_size=batch,
+                gradient_accumulation=max(1, int(self.gradient_accumulation or 1)),
+                learning_rate=self.learning_rate,
+                max_seq_length=self.max_seq_length,
+                warmup_steps=min(settings.training.warmup_steps, max(0, total_steps // 10)),
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                weight_decay=settings.training.weight_decay or 0.0,
+                seed=settings.training.seed,
+                on_step=(callback.on_step if callback and callback.on_step else None),
+            )
+        except Exception as exc:
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                    loss_history=[],
+                    duration_seconds=time.time() - start,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # nosec B110 — history is best-effort
+            if callback and callback.on_error:
+                try:
+                    callback.on_error(exc)
+                except Exception as cb_err:  # noqa: BLE001
+                    logger.warning(f"on_error callback raised error: {cb_err}")
+            if isinstance(exc, BackpropagateError):
+                raise
+            raise TrainingError(f"full_ft_offload training failed: {exc}") from exc
+
+        self._model = result["model"]
+        losses = [x for x in result["losses"] if math.isfinite(x)]
+        final_loss = result["losses"][-1] if result["losses"] else 0.0
+        duration = time.time() - start
+        run = TrainingRun(
+            run_id=run_id,
+            steps=total_steps,
+            final_loss=final_loss,
+            loss_history=losses,
+            duration_seconds=duration,
+            samples_seen=result["samples_seen"],
+            output_path=str(self.output_dir),
+            metadata={
+                "engine": "fsdp2-direct",
+                "optimizer": "adafactor-factored-sr",
+                "step_times": result["step_times"],
+            },
+        )
+        self._training_runs.append(run)
+        self._has_trained = True
+        try:
+            run_history.record_run_completed(
+                run_id=run_id,
+                final_loss=final_loss,
+                loss_history=losses,
+                steps=total_steps,
+                duration_seconds=duration,
+                checkpoint_path=str(self.output_dir),
+            )
+        except Exception as hist_err:  # noqa: BLE001
+            logger.warning(f"RunHistoryManager.record_run_completed failed: {hist_err}")
+        if callback and callback.on_complete:
+            try:
+                callback.on_complete(run)
+            except Exception as cb_err:  # noqa: BLE001
+                logger.warning(f"on_complete callback raised error: {cb_err}")
+        return run
 
     def save(
         self,

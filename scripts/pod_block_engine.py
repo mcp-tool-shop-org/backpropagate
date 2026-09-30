@@ -924,7 +924,17 @@ try:
     reset_peaks()
     nvml_mark("train")
     t1 = time.perf_counter()
-    run = t.train(TRAIN, steps=args.steps, callback=TrainingCallback(on_step=on_step))
+    # The library caps the training set at settings.data.max_samples (default
+    # 1000) unless samples= is passed. Found on the GSM8K pod run: 1000 steps x
+    # batch 4 then meant 4 epochs over the first 1000 rows, not 0.53 epoch over
+    # 7,473. Pass the full row count explicitly and record what was used.
+    with open(TRAIN) as fh:
+        n_rows = sum(1 for line in fh if line.strip())
+    rec["train_rows_available"] = n_rows
+    rec["train_samples_used"] = n_rows if args.dataset == "gsm8k" else min(n_rows, bp_settings.data.max_samples)
+    rec["epochs_seen"] = round(args.steps * args.batch / rec["train_samples_used"], 3)
+    run = t.train(TRAIN, steps=args.steps, samples=n_rows if args.dataset == "gsm8k" else None,
+                  callback=TrainingCallback(on_step=on_step))
     nvml_mark("after_train")
     rec["torch_max_allocated_train_gib"] = round(peak_alloc(), 3)
     rec["torch_max_reserved_train_gib"] = round(peak_reserved(), 3)

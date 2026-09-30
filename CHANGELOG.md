@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING (security default): `trust_remote_code` is now off.** Loading a
+  model no longer runs Python code from the model's Hugging Face repository
+  unless you opt in. Through v1.7.1 the default was on, and nothing in the
+  README, SECURITY.md or the env-vars page said so. A model that needs
+  remote code now fails with the new stable code
+  `CONFIG_TRUST_REMOTE_CODE_REQUIRED`, which names the model and the opt-in
+  (`BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true`, or
+  `settings.model.trust_remote_code = True`). None of the curated presets
+  need it. The eval loader, the perplexity filter and the MLX rail now read
+  the same setting; before, they ignored it.
 - **PyJWT 2.13.0 → 2.15.1 in `uv.lock`; the `[security]` floor rises to
   `>=2.14.0`.** CVE-2026-102268 (critical, fixed in 2.14.0) tripped Trivy's
   CRITICAL floor on `main` and on every open PR. The re-lock moved PyJWT

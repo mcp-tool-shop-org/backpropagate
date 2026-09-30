@@ -6,6 +6,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backpropagate.export import _unsloth_gguf_ready as _ORIG_UNSLOTH_GGUF_READY
+
+
+@pytest.fixture(autouse=True)
+def _unsloth_gguf_ready_by_default():
+    """Treat Unsloth's llama.cpp build as present unless a test says otherwise.
+
+    export_gguf checks for a built llama.cpp under ~/.unsloth before taking the
+    Unsloth path. On a host with unsloth_zoo installed but no build (CI's
+    Windows cell), that check would otherwise reroute the mocked-Unsloth tests.
+    """
+    with patch("backpropagate.export._unsloth_gguf_ready", return_value=(True, "")):
+        yield
+
 
 class TestExportEnums:
     """Tests for export enums."""
@@ -1043,6 +1057,54 @@ class TestLlamaCppFallbackContract:
                     output_dir=temp_dir / "out",
                     quantization="q8_0",
                 )
+
+
+class TestUnslothGgufGate:
+    """With auto-install off and no llama.cpp build, skip Unsloth's GGUF path."""
+
+    def test_not_ready_skips_unsloth_and_falls_back(
+        self, temp_dir, mock_peft_model, mock_tokenizer
+    ):
+        from backpropagate import export as export_mod
+        from backpropagate.exceptions import GGUFExportError
+
+        with patch.object(export_mod, "_has_unsloth", return_value=True), \
+             patch.object(export_mod, "_unsloth_gguf_ready",
+                          return_value=(False, "no llama.cpp build")), \
+             patch.object(export_mod, "_is_peft_model", return_value=True):
+            with pytest.raises(GGUFExportError, match="GGUF export requires"):
+                export_mod.export_gguf(
+                    model=mock_peft_model, tokenizer=mock_tokenizer,
+                    output_dir=temp_dir / "gguf", quantization="q8_0",
+                )
+        mock_peft_model.save_pretrained_gguf.assert_not_called()
+
+    def test_ready_check_names_the_opt_in(self, monkeypatch):
+        import sys
+        import types
+
+        from backpropagate import export as export_mod
+
+        fake = types.ModuleType("unsloth_zoo.llama_cpp")
+        fake.LLAMA_CPP_DEFAULT_DIR = "/nowhere/llama.cpp"
+
+        def check(folder):
+            raise RuntimeError(f"llama.cpp folder '{folder}' does not exist")
+
+        fake.check_llama_cpp = check
+        monkeypatch.setitem(sys.modules, "unsloth_zoo", types.ModuleType("unsloth_zoo"))
+        monkeypatch.setitem(sys.modules, "unsloth_zoo.llama_cpp", fake)
+        monkeypatch.setenv("UNSLOTH_AUTO_INSTALL", "0")
+
+        # The autouse fixture patches the module attribute; call the original.
+        assert export_mod._unsloth_gguf_ready is not _ORIG_UNSLOTH_GGUF_READY
+        ready, why = _ORIG_UNSLOTH_GGUF_READY()
+        assert ready is False
+        assert "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1" in why
+        assert "/nowhere/llama.cpp" in why
+
+        monkeypatch.setenv("UNSLOTH_AUTO_INSTALL", "1")  # opted in: let Unsloth try
+        assert _ORIG_UNSLOTH_GGUF_READY() == (True, "")
 
 
 class TestLoadModelForExport:

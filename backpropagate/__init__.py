@@ -45,7 +45,22 @@ Usage:
     #     from backpropagate.cli import cmd_ui
 """
 
-from typing import Any
+import os as _os
+
+# No dependency may install system software unasked. Unsloth's GGUF export
+# otherwise runs `winget install` (Windows) or apt / brew for CMake, compilers
+# and OpenSSL, and accepts their licence agreements. Unsloth reads
+# UNSLOTH_AUTO_INSTALL when it attempts the install, not at import, so setting
+# it here covers every path that reaches Unsloth: training, export, the CLI and
+# the library. BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1 is the explicit opt-in.
+_os.environ["UNSLOTH_AUTO_INSTALL"] = (
+    "1"
+    if _os.environ.get("BACKPROPAGATE_UNSLOTH_AUTO_INSTALL", "").strip().lower()
+    in ("1", "true", "yes", "on")
+    else "0"
+)
+
+from typing import Any  # noqa: E402
 
 # Exceptions (custom error hierarchy)
 from .exceptions import (

@@ -824,6 +824,38 @@ class GGUFQuantization(Enum):
 # compiled llama-quantize binary.
 _LLAMA_CPP_CONVERT_OUTTYPES = frozenset({"f16", "q8_0"})
 
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _unsloth_gguf_ready() -> tuple[bool, str]:
+    """Whether Unsloth's save_pretrained_gguf can run without installing anything.
+
+    backpropagate sets UNSLOTH_AUTO_INSTALL=0 at import (see __init__). With
+    that, and with no llama.cpp built where Unsloth looks, Unsloth's GGUF path
+    can only fail, after a full 16-bit merge. Checking first skips straight to
+    the llama.cpp fallback and says why.
+    """
+    if os.environ.get("UNSLOTH_AUTO_INSTALL", "").strip().lower() in _TRUTHY:
+        return True, ""
+    try:
+        from unsloth_zoo.llama_cpp import LLAMA_CPP_DEFAULT_DIR, check_llama_cpp
+    except Exception:  # noqa: BLE001 - unknown unsloth_zoo layout: let Unsloth try
+        return True, ""
+    try:
+        check_llama_cpp(LLAMA_CPP_DEFAULT_DIR)
+    except Exception as e:  # noqa: BLE001 - any failure means "not built"
+        detail = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        return False, (
+            f"Unsloth's GGUF export needs a built llama.cpp (llama-quantize + "
+            f"converter) at {LLAMA_CPP_DEFAULT_DIR}, and none was found ({detail}). "
+            "backpropagate does not let Unsloth install system packages "
+            "(winget / apt / brew) to build one. Set "
+            "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL=1 to allow that, or build "
+            "llama.cpp there (or point UNSLOTH_LLAMA_CPP_PATH at a build)."
+        )
+    return True, ""
+
+
 
 class ExportFormat(Enum):
     """Model export formats."""
@@ -1556,7 +1588,13 @@ def export_gguf(
     # B-006: write into a sibling .partial directory so a mid-conversion
     # disk-full / crash doesn't leave a half-written .gguf file at the
     # final path. On success we move the produced .gguf into output_path.
-    if _has_unsloth():
+    use_unsloth_gguf = _has_unsloth()
+    if use_unsloth_gguf:
+        use_unsloth_gguf, not_ready = _unsloth_gguf_ready()
+        if not use_unsloth_gguf:
+            logger.warning("%s Using the llama.cpp fallback instead.", not_ready)
+            print(f"WARNING: {not_ready} Using the llama.cpp fallback instead.")
+    if use_unsloth_gguf:
         unsloth_partial = output_path / "_unsloth_partial"
         if unsloth_partial.exists():
             shutil.rmtree(unsloth_partial, ignore_errors=True)

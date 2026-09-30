@@ -2074,6 +2074,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "Operator escape hatch for non-standard llama.cpp install locations used by `backprop export --format gguf`. Accepts either the path to convert_hf_to_gguf.py directly or the llama.cpp directory containing it. Searched FIRST, before shutil.which / ~/llama.cpp / /usr/local/bin.",
         ),
         (
+            "BACKPROPAGATE_UNSLOTH_AUTO_INSTALL",
+            "0",
+            "bool",
+            "Opt in to Unsloth installing system packages (winget / apt / brew: CMake, compilers, OpenSSL) and building llama.cpp for its GGUF export. Off by default: importing backpropagate sets UNSLOTH_AUTO_INSTALL=0 unless this is '1' / 'true' / 'yes' / 'on'. With it off and no llama.cpp built under ~/.unsloth, GGUF export uses backpropagate's llama.cpp fallback.",
+        ),
+        (
             "BACKPROPAGATE_CLOUDFLARED_TIMEOUT",
             "30",
             "int",

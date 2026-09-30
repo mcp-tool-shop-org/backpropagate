@@ -1302,7 +1302,7 @@ class TestCmdExportExecution:
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 
-        with patch("backpropagate.trainer.load_model", return_value=(mock_model, mock_tokenizer)), \
+        with patch("backpropagate.export.load_model_for_export", return_value=(mock_model, mock_tokenizer)), \
              patch("backpropagate.export.export_merged", return_value=mock_result):
             args = argparse.Namespace(
                 model_path=str(model_path),
@@ -1340,7 +1340,7 @@ class TestCmdExportExecution:
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 
-        with patch("backpropagate.trainer.load_model", return_value=(mock_model, mock_tokenizer)), \
+        with patch("backpropagate.export.load_model_for_export", return_value=(mock_model, mock_tokenizer)), \
              patch("backpropagate.export.export_gguf", return_value=mock_result):
             args = argparse.Namespace(
                 model_path=str(model_path),
@@ -1379,7 +1379,7 @@ class TestCmdExportExecution:
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 
-        with patch("backpropagate.trainer.load_model", return_value=(mock_model, mock_tokenizer)), \
+        with patch("backpropagate.export.load_model_for_export", return_value=(mock_model, mock_tokenizer)), \
              patch("backpropagate.export.export_gguf", return_value=mock_result), \
              patch("backpropagate.export.register_with_ollama", return_value=True):
             args = argparse.Namespace(
@@ -1420,7 +1420,7 @@ class TestCmdExportExecution:
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 
-        with patch("backpropagate.trainer.load_model", return_value=(mock_model, mock_tokenizer)), \
+        with patch("backpropagate.export.load_model_for_export", return_value=(mock_model, mock_tokenizer)), \
              patch("backpropagate.export.export_gguf", return_value=mock_result), \
              patch("backpropagate.export.register_with_ollama", return_value=False):
             args = argparse.Namespace(

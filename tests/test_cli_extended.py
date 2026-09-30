@@ -653,7 +653,7 @@ class TestCmdExportErrorHandling:
 
         with patch("backpropagate.export.export_gguf", return_value=mock_result), \
              patch("backpropagate.export.register_with_ollama", return_value=False), \
-             patch("backpropagate.trainer.load_model", return_value=(MagicMock(), MagicMock())):
+             patch("backpropagate.export.load_model_for_export", return_value=(MagicMock(), MagicMock())):
             args = argparse.Namespace(
                 model_path=str(model_dir),
                 format="gguf",
@@ -685,7 +685,7 @@ class TestCmdExportErrorHandling:
 
         with patch("backpropagate.export.export_gguf", return_value=mock_result), \
              patch("backpropagate.export.register_with_ollama", return_value=True), \
-             patch("backpropagate.trainer.load_model", return_value=(MagicMock(), MagicMock())):
+             patch("backpropagate.export.load_model_for_export", return_value=(MagicMock(), MagicMock())):
             args = argparse.Namespace(
                 model_path=str(model_dir),
                 format="gguf",
@@ -2178,7 +2178,7 @@ class TestExportFormats:
         mock_result.export_time_seconds = 60.0
 
         with patch("backpropagate.export.export_merged", return_value=mock_result), \
-             patch("backpropagate.trainer.load_model", return_value=(MagicMock(), MagicMock())):
+             patch("backpropagate.export.load_model_for_export", return_value=(MagicMock(), MagicMock())):
             args = argparse.Namespace(
                 model_path=str(model_dir),
                 format="merged",
@@ -2207,7 +2207,7 @@ class TestExportFormats:
         mock_result.export_time_seconds = 120.0
 
         with patch("backpropagate.export.export_gguf", return_value=mock_result), \
-             patch("backpropagate.trainer.load_model", return_value=(MagicMock(), MagicMock())):
+             patch("backpropagate.export.load_model_for_export", return_value=(MagicMock(), MagicMock())):
             args = argparse.Namespace(
                 model_path=str(model_dir),
                 format="gguf",

@@ -7137,13 +7137,13 @@ def _all_linear_leaf_names(model: Any) -> list[str]:
     """
     import torch
 
-    linear_types: tuple[type, ...] = (torch.nn.Linear,)
+    linear_types: tuple[type, ...]
     try:
         from transformers.pytorch_utils import Conv1D
 
         linear_types = (torch.nn.Linear, Conv1D)
     except Exception:  # noqa: BLE001 - Conv1D is optional (GPT-2-style models only)
-        pass
+        linear_types = (torch.nn.Linear,)
 
     excluded: set[int] = set()
     get_output = getattr(model, "get_output_embeddings", None)

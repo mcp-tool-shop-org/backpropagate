@@ -187,7 +187,7 @@ NAME_VOCAB = (
 )  # fmt: skip
 
 
-def check_sanitized(name: str, strict: bool = False) -> None:
+def check_sanitized(name: str) -> None:
     out = sanitize_filename(name)
 
     assert out, "empty file name"
@@ -195,15 +195,12 @@ def check_sanitized(name: str, strict: bool = False) -> None:
     assert not _has_control(out)
 
     assert out not in (".", ".."), f"sanitize_filename({name!r}) returned {out!r}"
-    if len(out) > 255:
-        # Known finding F3: an over-long extension makes the slice negative.
-        assert not strict, f"sanitize_filename returned {len(out)} chars"
-        assert len(Path(out).suffix) > 255
+    assert len(out) <= 255, f"sanitize_filename returned {len(out)} chars"
 
 
-def check_sanitize_filename(p: Provider, strict: bool = False) -> None:
+def check_sanitize_filename(p: Provider) -> None:
     name = p.tokens(NAME_VOCAB, 8, ("", "", ".")) + (p.text(8) if p.bool() else "")
-    check_sanitized(name, strict=strict)
+    check_sanitized(name)
 
 
 # --------------------------------------------------------------------------
@@ -257,7 +254,7 @@ def check_paths(data: bytes, strict: bool = False) -> None:
     elif mode == 1:
         check_safe_path_no_base(p, strict=strict)
     elif mode == 2:
-        check_sanitize_filename(p, strict=strict)
+        check_sanitize_filename(p)
     else:
         check_forbidden_output_base(p)
 

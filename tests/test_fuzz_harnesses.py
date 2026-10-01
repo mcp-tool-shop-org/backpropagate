@@ -192,12 +192,6 @@ class TestKnownFindings:
         with pytest.raises(exc_type):
             check(data, strict=True)
 
-    @pytest.mark.xfail(strict=True, reason="F3: sanitize_filename can exceed its 255 char limit")
-    def test_f3_sanitize_filename_honours_its_length_limit(self):
-        from backpropagate.ui_security import sanitize_filename
-
-        assert len(sanitize_filename("x." + "a" * 300)) <= 255
-
     @pytest.mark.xfail(strict=True, reason="F4: NaN slips through validate_numeric_input bounds")
     def test_f4_validate_numeric_input_rejects_nan_against_a_range(self):
         from backpropagate.exceptions import UserInputError
@@ -300,6 +294,30 @@ class TestFixedFindings:
 
         assert sanitize_filename(name) not in {".", ".."}
         assert sanitize_filename("\x01..\x01") == "unnamed_file"
+
+
+    def test_f3_sanitize_filename_honours_its_length_limit(self):
+        from backpropagate.ui_security import sanitize_filename
+
+        out = sanitize_filename("x." + "a" * 300)  # the reproducer: a 301-char "extension"
+        assert 0 < len(out) <= 255
+        assert len(sanitize_filename("." + "b" * 400 + "." + "c" * 400)) <= 255
+
+    @pytest.mark.parametrize("ext", [".jsonl", ".safetensors", ".gz"])
+    def test_f3_a_long_name_keeps_its_extension(self, ext):
+        from backpropagate.ui_security import sanitize_filename
+
+        out = sanitize_filename("n" * 400 + ext)
+        assert len(out) == 255
+        assert out.endswith(ext)
+        assert out.startswith("nnnn")
+
+    def test_f3_truncation_does_not_leave_a_trailing_dot_or_space(self):
+        from backpropagate.ui_security import sanitize_filename
+
+        out = sanitize_filename("a" + "." * 400 + "b")
+        assert len(out) <= 255
+        assert not out.endswith((".", " "))
 
 
 class TestPlumbing:

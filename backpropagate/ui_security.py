@@ -913,10 +913,13 @@ def sanitize_filename(filename: str) -> str:
 
     # Limit length
     if len(name) > 255:
-        # Keep extension
+        # Keep a real extension; a "suffix" too long to be one (it would leave
+        # no room for the base, or push the name past the limit through a
+        # negative slice) is truncated like the rest of the name.
         ext = Path(name).suffix
-        base = name[:255 - len(ext)]
-        name = base + ext
+        if len(ext) > 32:
+            ext = ""
+        name = name[:255 - len(ext)].rstrip(". ") + ext
 
     return name or "unnamed_file"
 

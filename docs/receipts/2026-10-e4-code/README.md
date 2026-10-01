@@ -145,6 +145,8 @@ The first five bullets are the pre-registration as given, **verbatim**.
 - **Ship rule:** engine B leaves experimental only if it beats QLoRA at 7B under the same rule. GaLore is reported with the same comparisons; adopting it is the Director's call.
 - **Budget guard:** pod caps are $4.00 (3B stage) and $4.50 (7B stage) at ~$0.90/h.
 
+**Amendment, Director, 2026-10-01, before any run:** the 3B stage cap is **$4.80** (paid from the contingency line; the $20 total is unchanged). The 7B cap stays $4.50 and is re-set after the 3B stage from its measured timings. The Director also accepted the dataset-provenance residual (see "Residual provenance risk" above).
+
 ### How the verbatim text is computed (`scripts/e4_lib.py`, pure functions with tests)
 
 Where the text left a choice, this is the choice. These interpretations are part of the
@@ -207,10 +209,10 @@ The shorter, fit-filtered texts do not change the step counts, so training time 
 
 | Stage | All planned runs | Setup (install, model download, prep, base eval) | Total at $0.90/h | Cap | What the guard admits |
 |---|---|---|---|---|---|
-| 3B (9 runs) | 4.65 h | about 0.25 h | **4.9 h, $4.4** | $4.00 | default x3, qlora x2; **engine B x3 and qlora s2 dropped** |
+| 3B (9 runs) | 4.65 h | about 0.25 h | **4.9 h, $4.4** | $4.80 | all 9 runs if the estimates hold (the guard checks each run against the time actually elapsed; the last engine B run has about 15 min of slack) |
 | 7B (5 runs) | 4.71 h | about 0.35 h | **5.1 h, $4.6** | $4.50 | block_k5 x2, qlora x2; **GaLore dropped** |
 
-**The full pre-registered plan does not fit the caps.** Options for the lead (none is applied):
+**Superseded by the 2026-10-01 amendment (3B cap $4.80); kept as written.** At the original caps the full plan did not fit. Options for the lead were:
 (a) a higher cap (the plan needs about $4.4 for 3B and $4.6 for 7B before the guard's 10%
 margin and 10-minute reserve; env `E4_BUDGET_USD_3B` / `_7B`; the caps above are unchanged here and
 are the Director's to change); (b) run 2 seeds first (`E4_SEEDS_3B="0 1"`, about $3.1) and add seed 2 and engine B only

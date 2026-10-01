@@ -17,7 +17,7 @@ Pre-registration: docs/receipts/2026-10-e4-code/README.md. Budget guard: ``e4_li
 drop order is the reverse of ``e4_lib.plan_for`` (also in the README).
 
 Env: E4_STEPS (5000), E4_BATCH (4), E4_SEQ (512), E4_SEEDS_3B ("0 1 2"), E4_SEEDS_7B ("0 1"),
-E4_MODEL_3B / E4_MODEL_7B, E4_BUDGET_USD_3B (4.00) / _7B (4.50), E4_RATE_USD_H (0.90),
+E4_MODEL_3B / E4_MODEL_7B, E4_BUDGET_USD_3B (4.80) / _7B (4.50), E4_RATE_USD_H (0.90),
 E4_START_EPOCH (when the pod's billing began; default: first command of the stage),
 E4_RESERVE_S (600), E4_N_EVAL (500), E4_MAX_NEW_TOKENS (512).
 """
@@ -40,7 +40,7 @@ DRIVER = os.path.join(HERE, "pod_block_engine.py")
 SUMMARY = os.path.join(HERE, "pod_e4_summary.py")
 
 MODELS = {"3b": "Qwen/Qwen2.5-3B", "7b": "Qwen/Qwen2.5-7B"}
-CAPS_USD = {"3b": 4.00, "7b": 4.50}
+CAPS_USD = {"3b": 4.80, "7b": 4.50}  # 3B raised from 4.00 by the Director, 2026-10-01
 ARM_ARGS = {  # the stage-d arms: each arm at the library's own learning rate
     "default": ["--engine", "default", "--lr-default"],
     "qlora": ["--qlora", "--lr-default"],

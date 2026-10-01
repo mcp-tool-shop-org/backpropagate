@@ -4,7 +4,7 @@
 
 Headless LLM fine-tuning library with smart defaults, Windows support, and one-click GGUF export to Ollama. Train a 7B model with 3 lines of Python; ship to Ollama with one more.
 
-Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject). **v1.7.1** shipped 2026-09-07 on PyPI + npm + GitHub; **v1.7.2 in preparation** (install-resolution + KTO `TypeError` fixes). Work plan: `docs/production-quality-plan-2026-09-30.md`.
+Status: **stable / production** (Development Status :: 5 — Production/Stable in pyproject). **v1.8.0** shipped 2026-10-01 on PyPI + npm + GitHub (experimental block engine, security and correctness fixes, coverage 98.5%). Experiment plan: `docs/handoff-2026-09-30-full-ft-experiments.md` §4a.
 
 ## Architecture
 
@@ -30,8 +30,8 @@ Status: **stable / production** (Development Status :: 5 — Production/Stable i
 - Dev rig: **RTX 5090 (32 GB) + 64 GB RAM**, Windows 11. The repo is positioned 32 GB-first since v1.7 (scales down to 16 GB). FSDP2 offload (`--full-ft-offload`) needs NCCL → run it under WSL2, not Windows-native.
 - Real-GPU smokes (`tests/test_*_smoke.py`, integration-marked) run by hand on the rig, never in CI; CI's weekly train smoke is CPU-only. Mocked-green unit tests have repeatedly hidden real training-path bugs — every new training path needs one non-mocked smoke.
 - 7145 tests in tests/ (pinned 2026-10-01; `pytest --collect-only`), 90% coverage floor (single source of truth: `[tool.coverage.report].fail_under = 90` in pyproject.toml; ci.yml reads it via tomllib so the two surfaces stay in lockstep)
-- Python 3.10 → 3.13 supported in CI; 3.10 is supported through at least v1.6 and reaches upstream EOL Oct 2026, scheduled for removal in the first release after that. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — the UI and Windows cells run on 3.11; macOS cells were dropped in 1.7.1). Plan: 1.7.2 keeps 3.10, 1.8.0 (Nov 2026) drops it
-- Ship Gate hard gates (A–D) last checked 2026-02-27 (scorecard 23/31, 14 SKIP with reasons) — stale; re-run `shipcheck audit` after 1.7.2 ships
+- Python 3.10 → 3.13 supported in CI; 3.10 is supported through at least v1.6 and reaches upstream EOL Oct 2026, scheduled for removal in the first release after that. Prefer 3.11 / 3.12 for new installs (3.11 is the most-tested floor — the UI and Windows cells run on 3.11; macOS cells were dropped in 1.7.1). Plan: 1.8.0 keeps 3.10; the first release after its Oct 2026 EOL drops it
+- Ship Gate hard gates (A–D) last checked 2026-02-27 (scorecard 23/31, 14 SKIP with reasons) — stale; re-run `shipcheck audit` after 1.8.0 ships
 
 ## User-facing docs surface
 

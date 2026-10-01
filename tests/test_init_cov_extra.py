@@ -105,9 +105,13 @@ class TestVersionFallback:
 
 
 class TestDeprecatedUiAttrs:
-    def test_launch_shim_warns_then_raises_import_error(self):
-        with pytest.warns(DeprecationWarning, match="removed in v1.1.0"):
-            with pytest.raises(ImportError, match="backprop ui --port 7862"):
+    def test_removed_launch_is_an_attribute_error_with_the_cli_hint(self):
+        """The v1.8 cut: no DeprecationWarning grace any more, a plain AttributeError."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # no DeprecationWarning is emitted
+            with pytest.raises(AttributeError, match="backprop ui --port 7862"):
                 backpropagate.launch  # noqa: B018
 
     def test_unknown_attribute_is_a_plain_attribute_error(self):

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-01
+
 ### Added
 
 - **Experimental: block-coordinate full fine-tuning** (`--full-ft-engine block`,
@@ -40,9 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the name (PYSEC-2026-3929), so a crafted Hub repository could make a
   tokenizer save write outside your output directory. unsloth's version caps
   keep transformers at 5.5.0, so backpropagate checks the names itself.
-- Lockfile: gitpython 3.2.0, virtualenv 21.14.1 and accelerate 1.15.0 clear
-  9 advisories. Six more are documented as not affecting backpropagate in
-  `osv-scanner.toml`, each with its reason and an expiry date.
+- Lockfile: gitpython 3.2.0, virtualenv 21.14.1, accelerate 1.15.0 and torch
+  2.12.1 clear 10 advisories. Five more are documented as not affecting
+  backpropagate in `osv-scanner.toml` (and the one Trivy reports, in
+  `.trivyignore`), each with its reason and an expiry date.
+- **Supply chain.** Every CI install is hash-pinned (project dependencies from
+  `uv.lock`, tools from `requirements/*.txt`), except three deliberately
+  unpinned jobs that test what a fresh `pip install` gets. Releases now attach
+  the wheel, the sdist and SLSA build provenance to the GitHub Release; the
+  1.5.0 – 1.7.2 releases carry their PyPI Sigstore signatures.
+- `safe_torch_load` raises a clear `ImportError` for a `.safetensors` file when
+  `safetensors` is missing, instead of handing it to `torch.load`, which cannot
+  read that format.
+- Web UI path inputs refuse NUL bytes explicitly (Python 3.13 on Windows
+  resolved them instead of failing).
 
 ### Fixed
 
@@ -98,6 +111,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - path redaction hides Windows user names that contain spaces;
   - deeply nested JSON gives `INPUT_DATASET_PARSE_FAILED` from the streaming
     loader instead of `RecursionError`.
+
+### Removed
+
+- **The Gradio-era names `backpropagate.launch`, `create_backpropagate_theme`,
+  `get_theme_info` and `get_css` now raise `AttributeError`.** They were
+  removed in v1.1.0 and kept raising `ImportError` with a `DeprecationWarning`
+  as a grace period; every release since said the grace would end in v1.8. The
+  message still names the replacement (`backprop ui --port 7862`, or the
+  `backpropagate.ui_theme` tokens). Code that caught `ImportError` around these
+  names should catch `AttributeError`.
+
+### Changed
+
+- The lock (what CI and `uv sync` install) moves to torch 2.12.1, unsloth
+  2026.9.12 and torchvision 0.27.1, the newest set unsloth's own caps allow. A
+  plain `pip install` was already resolving these.
+- Python 3.10 is still supported in 1.8.0. It reaches end of life upstream in
+  October 2026; its removal moves to the first release after that.
+
+### Internal
+
+- Test suite 3,528 → 7,145 tests; line + branch coverage 72% → 98.5%, and the
+  CI floor rises from 50% to 90%. The new tests check behaviour and run real
+  tiny models on CPU where they can; they found most of the bugs above.
+- Atheris fuzz harnesses for dataset parsing, path sandboxing, UI input and
+  config parsing (`fuzz/`, run with the dispatch-only `fuzz.yml`).
+- Windows CI caps the CPU instruction set torch dispatches to (some hosted VMs
+  advertise features their OS does not enable, which crashed a bf16 test).
 
 ## [1.7.2] - 2026-09-30
 

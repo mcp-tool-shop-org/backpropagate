@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9 advisories. Six more are documented as not affecting backpropagate in
   `osv-scanner.toml`, each with its reason and an expiry date.
 
+### Fixed
+
+- **`backprop multi-run --method orpo|simpo|kto` is refused instead of
+  silently ignored.** The multi-run backend trains SFT only and takes no
+  `method`, so the CLI dropped the flag and every run trained SFT. It now
+  exits with an error that points at `backprop train --method ...`.
+- `backprop runs --json` no longer crashes on a loss value too large for a
+  float in a hand-edited or corrupted run history.
+
 ## [1.7.2] - 2026-09-30
 
 ### Security

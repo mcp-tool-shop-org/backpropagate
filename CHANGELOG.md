@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9 advisories. Six more are documented as not affecting backpropagate in
   `osv-scanner.toml`, each with its reason and an expiry date.
 
+### Fixed
+
+- **Windows: multi-run auto-resume no longer sends Ctrl+C.** The check for
+  whether an earlier run's process is still alive used `os.kill(pid, 0)`. On
+  Windows signal 0 is `CTRL_C_EVENT`, so the check sent a Ctrl+C console
+  event instead of probing, which can interrupt processes on the same console.
+  Windows now asks the OS for the process's state (`OpenProcess` +
+  `GetExitCodeProcess`) and sends nothing.
+
 ## [1.7.2] - 2026-09-30
 
 ### Security

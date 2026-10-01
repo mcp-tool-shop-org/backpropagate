@@ -78,6 +78,13 @@ class TestParseInterrupt:
 
 
 class TestLoggingFlags:
+    @pytest.fixture(autouse=True)
+    def _logging_already_configured(self, monkeypatch):
+        """The fakes below replace configure_logging, which is what sets ``_configured``.
+        Without this, a later get_logger() configures again (force=False) and the
+        tests pass or fail depending on whether an earlier test configured logging."""
+        monkeypatch.setattr("backpropagate.logging_config._configured", True)
+
     def test_root_flags_overwrite_env_and_configure_logging(self, monkeypatch, capsys):
         seen = {}
 

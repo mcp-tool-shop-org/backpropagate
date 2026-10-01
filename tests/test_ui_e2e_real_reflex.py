@@ -10,8 +10,8 @@ it build and serve the real app, and talks to it over real sockets.
 
 CPU only: nothing here imports torch or touches the GPU. It does need the ``[ui]``
 extra, node/bun (Reflex fetches bun itself) and a first-start production build
-(about a minute; later starts reuse ``backpropagate/.web``). That is why it is
-marked ``integration`` and excluded from the fast suite; run it by hand::
+(about a minute; later starts reuse the per-user UI working directory's
+``.web`` build, v1.8.2+). That is why it is marked ``integration`` and excluded from the fast suite; run it by hand::
 
     pytest tests/test_ui_e2e_real_reflex.py -m integration -p no:cacheprovider --timeout=900
 
@@ -143,6 +143,10 @@ class _UiLaunch:
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_ROOT), env.get("PYTHONPATH", "")]))
         env["XDG_RUNTIME_DIR"] = str(self.run_dir)  # keeps the lock file out of the real profile
+        # v1.8.2 routes Reflex's cwd to a per-user workdir; pin it under
+        # tmp_path so the real run stays hermetic (stub rxconfig + the .web
+        # build tree land here instead of the user profile).
+        env["BACKPROPAGATE_UI_WORKDIR"] = str(self.run_dir / "ui-workdir")
         cmd = [sys.executable, "-c", _BOOT, "ui", "--port", str(port), *extra_args]
         kwargs: dict[str, object] = {}
         if os.name == "nt":

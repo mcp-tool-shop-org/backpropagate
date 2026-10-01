@@ -148,7 +148,15 @@ class TestAuthFile:
         monkeypatch.setattr(cli, "os", PosixOs())
         monkeypatch.setattr(Path, "stat", lambda self, **k: SimpleNamespace(st_mode=0o100644))
         monkeypatch.setattr(Path, "exists", lambda self: True)
-        monkeypatch.setattr(Path, "read_text", lambda self, **k: "alice:pw")
+        # Only the credential file may come back as "alice:pw" — other paths
+        # (the rxconfig stub template read that cmd_ui now performs, v1.8.2)
+        # must hit the real read_text.
+        orig_read_text = Path.read_text
+        monkeypatch.setattr(
+            Path,
+            "read_text",
+            lambda self, **k: "alice:pw" if self.name == "creds" else orig_read_text(self, **k),
+        )
         monkeypatch.setattr(cli, "write_launch_token_lock", lambda port, payload: tmp_path / "lock")
         monkeypatch.setattr(Path, "unlink", lambda self, **k: None)
         assert cli.cmd_ui(parse(["ui", "--auth-file", "creds"])) == cli.EXIT_OK
@@ -438,3 +446,29 @@ class TestLaunchOutcomes:
         args.verbose = True
         assert cli.cmd_ui(args) == cli.EXIT_RUNTIME_ERROR
         assert "Traceback" in capsys.readouterr().err
+
+
+class TestUiWorkdir:
+    """v1.8.2: Reflex runs from the per-user UI workdir, not the package dir.
+
+    The conftest autouse fixture pins BACKPROPAGATE_UI_WORKDIR to
+    ``tmp_path / "ui-workdir"``; the default-resolution naming is covered in
+    tests/test_ui_workdir.py.
+    """
+
+    def test_reflex_runs_from_per_user_workdir(self, ui, tmp_path):
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
+        cwd = Path(ui["run"][0].cwd)
+        assert cwd == tmp_path / "ui-workdir"
+        assert cwd != Path(cli.__file__).resolve().parent
+        stub = (cwd / "rxconfig.py").read_text(encoding="utf-8")
+        assert 'app_module_import="backpropagate.ui_app.app"' in stub
+
+    def test_workdir_failure_falls_back_to_package_dir(self, ui, monkeypatch, capsys):
+        def boom(*a, **k):
+            raise OSError("profile locked")
+
+        monkeypatch.setattr("backpropagate.ui_workdir.ensure_ui_workdir", boom)
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
+        assert ui["run"][0].cwd == str(Path(cli.__file__).resolve().parent)
+        assert "running Reflex from the package directory" in capsys.readouterr().out

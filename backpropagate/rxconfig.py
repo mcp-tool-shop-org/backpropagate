@@ -16,6 +16,25 @@ import os
 
 import reflex as rx
 
+
+def _any_ui_auth_env() -> bool:
+    """True when ANY auth credential env var is set for the UI.
+
+    The CLI hands the subprocess a scrypt verifier (``..._AUTH_VERIFIER``) or a
+    per-launch token (``..._LAUNCH_TOKEN``); direct-Reflex users may still set
+    the legacy plaintext ``..._AUTH``. All three mean "the operator expects
+    authentication", so all three arm the refuse-to-start guards below.
+    """
+    return any(
+        os.environ.get(name)
+        for name in (
+            "BACKPROPAGATE_UI_AUTH",
+            "BACKPROPAGATE_UI_AUTH_VERIFIER",
+            "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+        )
+    )
+
+
 # FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h defense-in-depth (layer 4 of 4):
 # rxconfig.py is the first module Reflex imports when ``reflex run`` is
 # invoked from the package directory. Some invocations may bypass app.py's
@@ -40,7 +59,7 @@ except Exception as _exc:  # noqa: BLE001 — broken module is broken module
     try:
         from backpropagate.ui_app.auth import ENFORCEMENT_AVAILABLE  # type: ignore[no-redef]
     except Exception as _exc2:  # noqa: BLE001
-        if os.environ.get("BACKPROPAGATE_UI_AUTH"):
+        if _any_ui_auth_env():
             raise RuntimeError(
                 "FRONTEND-B-001 / FRONTEND-B-003 / GHSA-f65r-h4g3-3h9h: "
                 "BACKPROPAGATE_UI_AUTH is set, but the auth middleware module "
@@ -61,7 +80,7 @@ except Exception as _exc:  # noqa: BLE001 — broken module is broken module
         # gate that ensures we only reach this code for the loopback case).
         ENFORCEMENT_AVAILABLE = False
 
-if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
+if not ENFORCEMENT_AVAILABLE and _any_ui_auth_env():
     raise RuntimeError(
         "FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h: BACKPROPAGATE_UI_AUTH is set, "
         "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False - the "

@@ -40,12 +40,14 @@ Usage:
     )
 """
 
+import base64
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -113,6 +115,13 @@ __all__ = [
     "safe_markdown_fence",
     "sanitize_error_for_user",
     "validate_auth_shape",
+    # Salted password verifiers (scrypt) for the UI auth hand-off
+    "SCRYPT_N",
+    "SCRYPT_R",
+    "SCRYPT_P",
+    "hash_password",
+    "verify_password",
+    "is_valid_verifier",
 ]
 
 logger = logging.getLogger(__name__)
@@ -1405,7 +1414,12 @@ def get_auth_badge_context(env: dict[str, str] | None = None) -> AuthBadgeContex
         An ``AuthBadgeContext`` with the 6 fields the badge component reads.
     """
     env = env if env is not None else dict(os.environ)
-    auth_creds = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
+    # The CLI hands the UI subprocess a scrypt verifier + the (non-secret)
+    # username; a developer running Reflex directly may still set the legacy
+    # plaintext ``BACKPROPAGATE_UI_AUTH``. Either one means "basic auth".
+    legacy_creds = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
+    auth_verifier = env.get("BACKPROPAGATE_UI_AUTH_VERIFIER", "").strip()
+    auth_creds = auth_verifier or legacy_creds
     share_host = env.get("BACKPROPAGATE_UI_SHARE_HOST", "").strip()
     host_bind = env.get("BACKPROPAGATE_UI_HOST_BIND", "").strip().lower()
     launch_token = env.get("BACKPROPAGATE_UI_LAUNCH_TOKEN", "").strip()
@@ -1425,8 +1439,10 @@ def get_auth_badge_context(env: dict[str, str] | None = None) -> AuthBadgeContex
 
     # Extract the username half of BACKPROPAGATE_UI_AUTH (NEVER the password).
     auth_user = ""
-    if auth_creds and ":" in auth_creds:
-        auth_user = auth_creds.split(":", 1)[0]
+    if auth_verifier:
+        auth_user = env.get("BACKPROPAGATE_UI_AUTH_USER", "").strip()
+    elif legacy_creds and ":" in legacy_creds:
+        auth_user = legacy_creds.split(":", 1)[0]
 
     # Map (auth_creds, share_host, host_bind, launch_token) → posture.
     # Order mirrors AuthMode resolution; the badge layers on the LAN /
@@ -3088,6 +3104,124 @@ def validate_auth_shape(auth: Any) -> None:
         suggestion=accepted_shapes_hint,
         details={"shape": type(auth).__name__},
     )
+
+
+# =============================================================================
+# PASSWORD VERIFIERS (salted scrypt)
+# =============================================================================
+#
+# ``backprop ui --auth user:pass`` must never hand the plaintext password to
+# the Reflex subprocess (env vars are readable by same-user processes and
+# inherited by children) nor write it to disk. The CLI derives a salted,
+# iterated scrypt verifier once and passes only that. The middleware checks a
+# Basic-auth attempt by re-deriving with the stored salt + parameters and
+# comparing in constant time. OpenSSF "passing" ``crypto_password_storage``
+# asks for exactly this: an iterated, salted hash (scrypt / argon2 / bcrypt /
+# PBKDF2), not a plain or unsalted digest.
+#
+# Wire format (one ASCII string, ``$``-separated, standard base64 fields):
+#
+#     scrypt$<n>$<r>$<p>$<salt_b64>$<hash_b64>
+#
+# Cost: n=2**14, r=8, p=1 (the hashlib / OWASP-minimum interactive profile,
+# 16 MiB of memory and roughly 50 ms on a desktop CPU), 16-byte random salt,
+# 32-byte derived key. The cost parameters are carried IN the string, so the
+# defaults can be raised later without breaking verifiers already issued.
+
+SCRYPT_N = 2**14
+SCRYPT_R = 8
+SCRYPT_P = 1
+_SCRYPT_SALT_BYTES = 16
+_SCRYPT_DKLEN = 32
+# Bounds applied when PARSING a verifier, so a corrupt / hostile string cannot
+# make the middleware allocate gigabytes or spin for minutes per request.
+_SCRYPT_MAX_N = 2**20
+_SCRYPT_MAX_R = 32
+_SCRYPT_MAX_P = 16
+
+
+def _scrypt_derive(password: str, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
+    # hashlib.scrypt's default maxmem (32 MiB) is too tight for larger n * r;
+    # size it to the actual need (128 * n * r bytes) plus headroom.
+    maxmem = 128 * n * r * 2 + 1024 * 1024
+    return hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=n,
+        r=r,
+        p=p,
+        dklen=dklen,
+        maxmem=maxmem,
+    )
+
+
+def hash_password(
+    password: str,
+    *,
+    n: int = SCRYPT_N,
+    r: int = SCRYPT_R,
+    p: int = SCRYPT_P,
+) -> str:
+    """Return a salted scrypt verifier string for ``password``.
+
+    A fresh random 16-byte salt is drawn on every call, so hashing the same
+    password twice yields two different verifiers that both verify.
+    """
+    salt = secrets.token_bytes(_SCRYPT_SALT_BYTES)
+    digest = _scrypt_derive(password, salt, n, r, p, _SCRYPT_DKLEN)
+    return "$".join(
+        (
+            "scrypt",
+            str(n),
+            str(r),
+            str(p),
+            base64.b64encode(salt).decode("ascii"),
+            base64.b64encode(digest).decode("ascii"),
+        )
+    )
+
+
+def _parse_verifier(verifier: str) -> tuple[int, int, int, bytes, bytes] | None:
+    """Parse a verifier string; ``None`` when malformed or out of bounds."""
+    if not isinstance(verifier, str):
+        return None
+    parts = verifier.strip().split("$")
+    if len(parts) != 6 or parts[0] != "scrypt":
+        return None
+    try:
+        n, r, p = int(parts[1]), int(parts[2]), int(parts[3])
+        salt = base64.b64decode(parts[4], validate=True)
+        digest = base64.b64decode(parts[5], validate=True)
+    except ValueError:
+        return None
+    if n < 2 or n & (n - 1) or n > _SCRYPT_MAX_N:
+        return None
+    if not (1 <= r <= _SCRYPT_MAX_R and 1 <= p <= _SCRYPT_MAX_P):
+        return None
+    if not salt or not digest:
+        return None
+    return n, r, p, salt, digest
+
+
+def is_valid_verifier(verifier: str) -> bool:
+    """True when ``verifier`` parses as a well-formed scrypt verifier string."""
+    return _parse_verifier(verifier) is not None
+
+
+def verify_password(password: str, verifier: str) -> bool:
+    """Constant-time check of ``password`` against a scrypt ``verifier``.
+
+    Fails closed: a malformed verifier verifies nothing.
+    """
+    parsed = _parse_verifier(verifier)
+    if parsed is None:
+        return False
+    n, r, p, salt, expected = parsed
+    try:
+        actual = _scrypt_derive(password, salt, n, r, p, len(expected))
+    except (ValueError, MemoryError):
+        return False
+    return hmac.compare_digest(actual, expected)
 
 
 # Internal alias preserved for any code that imported the leading-underscore

@@ -58,6 +58,25 @@ from .pages.run_detail import run_detail_page
 from .pages.runs import runs_page
 from .pages.train import train_page
 
+
+def _any_ui_auth_env() -> bool:
+    """True when ANY auth credential env var is set for the UI.
+
+    The CLI hands the subprocess a scrypt verifier (``..._AUTH_VERIFIER``) or a
+    per-launch token (``..._LAUNCH_TOKEN``); direct-Reflex users may still set
+    the legacy plaintext ``..._AUTH``. All three mean "the operator expects
+    authentication", so all three arm the refuse-to-start guard below.
+    """
+    return any(
+        os.environ.get(name)
+        for name in (
+            "BACKPROPAGATE_UI_AUTH",
+            "BACKPROPAGATE_UI_AUTH_VERIFIER",
+            "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+        )
+    )
+
+
 # FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h defense-in-depth (layer 3 of 4):
 # cli.py:cmd_ui refuses --auth/--share when ENFORCEMENT_AVAILABLE is False, but
 # that check is bypassed if a user runs ``python -m reflex run`` or ``reflex
@@ -71,7 +90,7 @@ from .pages.train import train_page
 # ENFORCEMENT_AVAILABLE is True and this guard is inert — the real FastAPI
 # middleware wired below via rx.App(api_transformer=basic_auth_transformer)
 # enforces the credential on every HTTP route and the /_event WS upgrade.
-if not ENFORCEMENT_AVAILABLE and os.environ.get("BACKPROPAGATE_UI_AUTH"):
+if not ENFORCEMENT_AVAILABLE and _any_ui_auth_env():
     raise RuntimeError(
         "FRONTEND-B-001 / GHSA-f65r-h4g3-3h9h: BACKPROPAGATE_UI_AUTH is set, "
         "but backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE is False — the "

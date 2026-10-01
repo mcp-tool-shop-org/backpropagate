@@ -10176,7 +10176,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 72,
+      "testedBy": 73,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -10828,6 +10828,22 @@
         {
           "hash": "bb0a9526af1e0bbdac6bec1839d5e1886cbf376c9dddfba5be45593e7be5dfc7",
           "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
+        },
+        {
+          "hash": "2ea1681933dcc47b7c78adee5ee1407d8c547af238b88054766c6ae58cd617f6",
+          "path": "docs/receipts/2026-10-e4-code/README.md"
+        },
+        {
+          "hash": "8e26c48add1328ecd1716587e802da467fa3d918a1bcf2e7bbaa74bfbc15a75f",
+          "path": "docs/receipts/2026-10-e4-code/licence_evidence.json"
+        },
+        {
+          "hash": "db243373b412db7612d1818a269fd152006525a6e5fe05011265ea1791ae703f",
+          "path": "docs/receipts/2026-10-e4-code/pre/lengths_code_Qwen_Qwen2.5-3B.json"
+        },
+        {
+          "hash": "8ae9baaaeff5ebbd7f753657b999e304646c3085bfde40b24e185c847142bf78",
+          "path": "docs/receipts/2026-10-e4-code/pre/prep_code.json"
         }
       ],
       "globs": [
@@ -11023,10 +11039,10 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 3,
+      "dynamicReads": 6,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 2,
+      "dynamicWrites": 6,
       "entryPoints": [],
       "externalNames": [
         "datasets"
@@ -11253,6 +11269,113 @@
           "path": "scripts/doc-drift-allow.toml"
         },
         {
+          "exports": [
+            "beats",
+            "build_dataset",
+            "build_user_prompt",
+            "chatml_text",
+            "code_blocks",
+            "content_hash",
+            "ensure_exec_allowed",
+            "estimate_run_s",
+            "eval_meta",
+            "exec_supported",
+            "extract_code",
+            "interface_hint",
+            "item_arrays",
+            "majority_correct",
+            "mcnemar_exact",
+            "normalize_text",
+            "not_executed",
+            "pair_stats",
+            "paired_bootstrap",
+            "plan_for",
+            "precheck_verdict",
+            "premise_verdict",
+            "prepare_row",
+            "run_candidate",
+            "run_many",
+            "selftest",
+            "ship_verdict",
+            "slug",
+            "split_pool",
+            "spread",
+            "summarize_outcomes",
+            "synthetic_rows",
+            "to_messages",
+            "walk_plan",
+            "wilson"
+          ],
+          "failurePaths": [
+            {
+              "in": "_parses",
+              "kind": "except",
+              "line": 100
+            },
+            {
+              "in": "_json_list",
+              "kind": "except",
+              "line": 129
+            },
+            {
+              "in": "interface_hint",
+              "kind": "except",
+              "line": 151
+            },
+            {
+              "in": "prepare_row",
+              "kind": "except",
+              "line": 195
+            },
+            {
+              "in": "exec_supported",
+              "kind": "except",
+              "line": 348
+            },
+            {
+              "in": "ensure_exec_allowed",
+              "kind": "raise",
+              "line": 356
+            },
+            {
+              "in": "ensure_exec_allowed",
+              "kind": "raise",
+              "line": 358
+            },
+            {
+              "in": "run_candidate",
+              "kind": "except",
+              "line": 444
+            },
+            {
+              "in": "run_candidate",
+              "kind": "except",
+              "line": 457
+            },
+            {
+              "in": "pair_stats",
+              "kind": "raise",
+              "line": 598
+            },
+            {
+              "in": "pair_stats",
+              "kind": "raise",
+              "line": 600
+            },
+            {
+              "in": "plan_for",
+              "kind": "raise",
+              "line": 706
+            },
+            {
+              "kind": "except",
+              "line": 797
+            }
+          ],
+          "hash": "994e13c8a7c8e5721ebd7a998ae69824b1c1b900842b4c439c94054d450d1142",
+          "path": "scripts/e4_lib.py"
+        },
+        {
           "hash": "4f5c5453dc32e4637bd3715de0f1ffc6e00797e9ab768299519f3295fe955901",
           "path": "scripts/gpu_smoke.sh"
         },
@@ -11349,13 +11472,17 @@
         },
         {
           "exports": [
+            "answer_loss_items",
+            "code_eval",
             "describe_optimizer",
             "dump",
             "env",
+            "greedy_generate",
             "gsm_eval",
             "gsm_number",
             "heldout_loss",
             "heldout_texts",
+            "hub_info",
             "load_runs",
             "mask_check",
             "nvml_mark",
@@ -11365,6 +11492,7 @@
             "peak_reserved",
             "reset_peaks",
             "slug",
+            "split_prompts",
             "spread",
             "versions",
             "visit_log",
@@ -11373,83 +11501,101 @@
           ],
           "failurePaths": [
             {
+              "in": "hub_info",
+              "kind": "except",
+              "line": 167
+            },
+            {
               "kind": "raise",
-              "line": 142
+              "line": 216
+            },
+            {
+              "kind": "raise",
+              "line": 230
             },
             {
               "in": "gsm_number",
               "kind": "except",
-              "line": 148
+              "line": 236
             },
             {
               "kind": "raise",
-              "line": 187
+              "line": 275
             },
             {
               "kind": "raise",
-              "line": 213
+              "line": 301
             },
             {
               "kind": "raise",
-              "line": 293
+              "line": 381
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 372
+              "line": 460
             },
             {
               "in": "_loop",
               "kind": "except",
-              "line": 387
+              "line": 475
             },
             {
               "in": "versions",
               "kind": "except",
-              "line": 436
+              "line": 524
             },
             {
               "kind": "raise",
-              "line": 632
+              "line": 814
+            },
+            {
+              "kind": "raise",
+              "line": 849
             },
             {
               "kind": "except",
-              "line": 651
+              "line": 868
             },
             {
               "kind": "raise",
-              "line": 664
+              "line": 881
             },
             {
               "kind": "raise",
-              "line": 681
+              "line": 903
             },
             {
               "kind": "raise",
-              "line": 695
+              "line": 920
+            },
+            {
+              "kind": "raise",
+              "line": 934
             },
             {
               "in": "describe_optimizer",
               "kind": "except",
-              "line": 826
+              "line": 1066
             },
             {
               "in": "describe_optimizer",
               "kind": "except",
-              "line": 837
+              "line": 1077
             },
             {
               "in": "training_step",
               "kind": "except",
-              "line": 874
+              "line": 1114
             },
             {
               "kind": "except",
-              "line": 1008
+              "line": 1249
             }
           ],
-          "hash": "28ea06ffa7dcfb14ec54e13cd2ed82b8b1b6093e8917c35c26ef1c20fd377bff",
+          "hash": "f80c84198ca2f119a7d755197a7b580926fe5434d147aec309f48585bb7a2153",
           "importOrder": [
+            "scripts/e4_lib.py",
             "backpropagate/datasets.py",
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
@@ -11461,13 +11607,64 @@
             "backpropagate/block_engine.py",
             "backpropagate/config.py",
             "backpropagate/datasets.py",
-            "backpropagate/trainer.py"
+            "backpropagate/trainer.py",
+            "scripts/e4_lib.py"
           ],
           "path": "scripts/pod_block_engine.py"
         },
         {
           "hash": "1266a16fed293361c1a16db247555b9902454a49dd0d2a235ac18880ab682d18",
           "path": "scripts/pod_block_engine.sh"
+        },
+        {
+          "exports": [
+            "cmd_dry_run",
+            "cmd_gate",
+            "cmd_precheck",
+            "cmd_prep",
+            "cmd_run",
+            "cmd_stage",
+            "driver",
+            "fetch",
+            "log",
+            "main",
+            "make_cfg",
+            "purge_other_models",
+            "read_json",
+            "run_py",
+            "train_args",
+            "write_budget",
+            "write_json"
+          ],
+          "hash": "e7b11fc8601fb8e25ee042e0a86e9eaea3e11e80e659a111cfda056512b1bc85",
+          "importsFiles": [
+            "scripts/e4_lib.py"
+          ],
+          "path": "scripts/pod_e4.py"
+        },
+        {
+          "hash": "eeba0b2bc7d3c9360a5672bd2f8bfca8b957a08c3219dbc536fbbf15ec0c1562",
+          "path": "scripts/pod_e4.sh"
+        },
+        {
+          "exports": [
+            "load_items",
+            "load_runs",
+            "main",
+            "summarize_stage"
+          ],
+          "failurePaths": [
+            {
+              "in": "summarize_stage",
+              "kind": "except",
+              "line": 131
+            }
+          ],
+          "hash": "ac1f6c9dcbb8f78e45f0a72cbbcbbec316fcfa74740b9ac431287060c478fca8",
+          "importsFiles": [
+            "scripts/e4_lib.py"
+          ],
+          "path": "scripts/pod_e4_summary.py"
         },
         {
           "exports": [
@@ -11539,11 +11736,19 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 15,
+          "reads": 18,
           "where": [
             "caller"
           ],
-          "writes": 15
+          "writes": 19
+        },
+        {
+          "reads": 1,
+          "where": [
+            "caller",
+            "cwd:dolly"
+          ],
+          "writes": 0
         },
         {
           "reads": 0,
@@ -11553,13 +11758,13 @@
           "writes": 1
         }
       ],
-      "outsideReads": 15,
-      "outsideWrites": 16,
+      "outsideReads": 19,
+      "outsideWrites": 20,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 2,
+      "testedBy": 3,
       "unresolvedSites": 0
     },
     {
@@ -12236,6 +12441,35 @@
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_e2e_chain.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "items",
+            "pair",
+            "populate",
+            "raw_row",
+            "records",
+            "test_driver_exposes_the_code_dataset_and_the_exec_flag",
+            "write_run"
+          ],
+          "hash": "feeec1ad439bb85d2e30f6352a57f1a576d46ff4b89562c235056575ea10ad5a",
+          "importOrder": [
+            "scripts/e4_lib.py",
+            "scripts/pod_e4.py",
+            "scripts/pod_e4_summary.py",
+            "backpropagate/datasets.py"
+          ],
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "scripts/e4_lib.py",
+            "scripts/pod_e4.py",
+            "scripts/pod_e4_summary.py"
+          ],
+          "names": [
+            "scripts/pod_block_engine.py"
+          ],
+          "path": "tests/test_e4_harness.py",
           "testFramework": "pytest"
         },
         {
@@ -13872,7 +14106,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 82
+          "files": 83
         },
         {
           "boundary": "scripts",
@@ -13881,7 +14115,7 @@
             "file": "scripts/check_doc_drift.py",
             "from": "tests/test_check_doc_drift.py"
           },
-          "files": 1
+          "files": 4
         }
       ],
       "readers": [],
@@ -13961,7 +14195,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 83,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -13969,7 +14203,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 82,
+          "files": 83,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -13977,28 +14211,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 83,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 83,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 83,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 83,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -15483,8 +15717,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
-    "tracked": 421
+    "commit": "b6c93e6546878766d702a9062e63448d8a2b3ef5",
+    "tracked": 430
   },
   "landings": [
     {
@@ -15959,6 +16193,46 @@
     {
       "readers": [
         {
+          "by": "scripts/pod_e4.py",
+          "call": "literal",
+          "confidence": "ast"
+        },
+        {
+          "by": "tests/test_e4_harness.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/pod_block_engine.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_e4_harness.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/pod_block_engine.sh",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/pod_e4.py",
+          "call": "literal",
+          "confidence": "ast"
+        }
+      ],
+      "target": "scripts/pod_e4_summary.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": "site/astro.config.mjs",
           "call": "content-collection",
           "confidence": "ast"
@@ -16017,6 +16291,11 @@
           "by": "pyproject.toml",
           "call": "configuration",
           "confidence": "config"
+        },
+        {
+          "by": "scripts/e4_lib.py",
+          "call": "get",
+          "confidence": "ast"
         },
         {
           "by": "scripts/preflight.sh",
@@ -16084,7 +16363,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 85,
+  "testFiles": 86,
   "unassigned": [],
   "unseen": [
     {

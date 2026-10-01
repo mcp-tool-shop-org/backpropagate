@@ -34,9 +34,14 @@ def seed_runs(output_dir, entries: list[dict]) -> None:
 
 
 def last_json(text: str) -> Any:
-    """Return the last top-level JSON object found in ``text`` (skips log noise)."""
+    """Return the CLI JSON payload found in ``text``.
+
+    Structured log lines can also render as JSON on stdout, so prefer the last
+    top-level object carrying ``schema_version`` and fall back to the last object.
+    """
     decoder = json.JSONDecoder()
-    idx, found = 0, None
+    idx = 0
+    objs: list[Any] = []
     while idx < len(text):
         brace = text.find("{", idx)
         if brace == -1:
@@ -46,7 +51,9 @@ def last_json(text: str) -> Any:
         except json.JSONDecodeError:
             idx = brace + 1
             continue
-        found, idx = obj, end
-    if found is None:
+        objs.append(obj)
+        idx = end
+    if not objs:
         raise AssertionError(f"no JSON object in: {text!r}")
-    return found
+    versioned = [o for o in objs if isinstance(o, dict) and "schema_version" in o]
+    return (versioned or objs)[-1]

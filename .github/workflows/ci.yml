@@ -1077,6 +1077,9 @@ jobs:
         # tab via SARIF upload. The CRITICAL-only gate below provides
         # the real floor in v1.1.2.
         #
+        # .trivyignore was RECREATED 2026-10-01 with one entry, CVE-2026-9856
+        # (transformers, mitigated in code by security.check_chat_template_names;
+        # see .trivyignore and osv-scanner.toml). Earlier history:
         # .trivyignore WAS RETIRED 2026-09-23 at zero live entries, per its
         # own protocol. All 13 of its IDs (urllib3, python-multipart, pip,
         # Pillow, idna, GitPython) are fixed at the versions uv.lock pins, and
@@ -1099,6 +1102,7 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
         continue-on-error: true
 
       - name: Upload SARIF to GitHub Security
@@ -1121,6 +1125,7 @@ jobs:
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
           exit-code: '1'
 
   # secrets-scan-baseline-noop: a deliberately-empty placeholder so the

@@ -858,6 +858,12 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         host: str = "127.0.0.1"  # Localhost only for security
         share: bool = False
         auto_open: bool = True
+        # BACKPROPAGATE_UI__OUTPUT_DIR: the UI sandbox base for every write.
+        # The value is read and denylist-validated by
+        # ui_security.get_ui_output_dir(); it is declared here so that setting
+        # the documented variable does not make Settings() reject it as an
+        # unknown input (extra_forbidden), which crashed every command.
+        output_dir: str = "~/.backpropagate/ui-outputs"
 
     class WindowsConfig(BaseSettings):
         """Windows-specific settings (auto-applied on Windows)."""
@@ -1457,6 +1463,7 @@ else:
         host: str = "127.0.0.1"
         share: bool = False
         auto_open: bool = True
+        output_dir: str = "~/.backpropagate/ui-outputs"
 
     @_env_dataclass("BACKPROPAGATE_WINDOWS__")
     class WindowsConfig:  # type: ignore[no-redef]

@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fuzz_common import STRICT, Provider, instrument, main, scratch_dir
+from fuzz_common import Provider, instrument, main, scratch_dir
 
 with instrument(__name__ == "__main__"):
     from backpropagate.datasets import (
@@ -101,22 +101,23 @@ def _try(fn: Any) -> tuple[Any, Exception | None]:
         return None, exc
 
 
-def _check_failure(expected: str, exc: Exception, streaming: bool, strict: bool = False) -> None:
+def _check_failure(expected: str, exc: Exception, streaming: bool) -> None:
     if expected == PARSE_ERROR:
         assert isinstance(exc, DatasetParseError), f"expected DatasetParseError, got {exc!r}"
     elif expected == WRAPPED:
-        # Known finding F9: RecursionError is tolerated only on the streaming path, which does not
-        # wrap it (observation recorded in the PR; the loader path does wrap).
-        tolerated = streaming and not strict and isinstance(exc, RecursionError)
-        assert isinstance(exc, ValueError) or tolerated, (
-            f"expected ValueError, got {exc!r}"
-        )
+        # The loader wraps whatever json raised into a plain ValueError. The
+        # streaming loader leaves a non-recursion ValueError alone and turns a
+        # RecursionError (JSON nested too deeply) into a DatasetParseError.
+        if streaming and isinstance(exc, DatasetParseError):
+            assert isinstance(exc.__cause__, RecursionError), f"unexpected {exc!r}"
+            return
+        assert isinstance(exc, ValueError), f"expected ValueError, got {exc!r}"
         assert not isinstance(exc, BackpropagateError)
     else:  # UNDECODABLE
         assert isinstance(exc, ValueError), f"expected ValueError, got {exc!r}"
 
 
-def check_dataset_files(data: bytes, strict: bool = False) -> None:
+def check_dataset_files(data: bytes) -> None:
     p = Provider(data)
     suffix = p.pick(SUFFIXES)
     raw = p.rest()
@@ -149,14 +150,14 @@ def check_dataset_files(data: bytes, strict: bool = False) -> None:
     rows, exc = _try(lambda: list(StreamingDatasetLoader(str(path))))
     if isinstance(expected, str):
         assert exc is not None, f"streaming loaded a file the loader rejected ({expected})"
-        _check_failure(expected, exc, streaming=True, strict=strict)
+        _check_failure(expected, exc, streaming=True)
     else:
         assert exc is None, f"streaming failed on a file the loader accepts: {exc!r}"
         assert rows == expected, "streaming rows differ from the loader's rows"
 
 
 def TestOneInput(data: bytes) -> None:
-    check_dataset_files(data, strict=STRICT)
+    check_dataset_files(data)
 
 
 if __name__ == "__main__":

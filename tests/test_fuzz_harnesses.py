@@ -197,15 +197,6 @@ class TestKnownFindings:
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
 
-    @pytest.mark.xfail(raises=RecursionError, strict=True, reason="F9: streaming loader leaks RecursionError")
-    def test_f9_streaming_loader_wraps_deeply_nested_json(self, tmp_path):
-        from backpropagate.datasets import StreamingDatasetLoader
-
-        path = tmp_path / "deep.jsonl"
-        path.write_text("[" * 20000 + "]" * 20000 + "\n", encoding="utf-8")
-        with pytest.raises(ValueError):
-            list(StreamingDatasetLoader(str(path)))
-
 
 class TestFixedFindings:
     """Regression tests for bugs the fuzzers found and that are now fixed."""
@@ -411,6 +402,43 @@ class TestFixedFindings:
         assert _redact_paths("failed to open /home/alice because it is gone") == (
             "failed to open <redacted-path> because it is gone"
         )
+
+
+    @pytest.mark.parametrize("name", ["deep.jsonl", "deep.json", "deep.dat"])
+    def test_f9_streaming_loader_raises_the_structured_error_on_deeply_nested_json(
+        self, tmp_path, name
+    ):
+        from backpropagate.datasets import StreamingDatasetLoader
+        from backpropagate.exceptions import DatasetParseError
+
+        path = tmp_path / name
+        path.write_text("[" * 20000 + "]" * 20000 + "\n", encoding="utf-8")
+        with pytest.raises(DatasetParseError) as info:
+            list(StreamingDatasetLoader(str(path)))
+        assert info.value.code == "INPUT_DATASET_PARSE_FAILED"
+        assert isinstance(info.value.__cause__, RecursionError)
+        assert str(path) in str(info.value.details.get("path", ""))
+
+    def test_f9_the_error_names_the_line_of_a_deep_jsonl_row(self, tmp_path):
+        from backpropagate.datasets import StreamingDatasetLoader
+        from backpropagate.exceptions import DatasetParseError
+
+        path = tmp_path / "rows.jsonl"
+        path.write_text('{"text": "ok"}\n' + "[" * 20000 + "\n", encoding="utf-8")
+        loader = StreamingDatasetLoader(str(path))
+        it = iter(loader)
+        assert next(it) == {"text": "ok"}
+        with pytest.raises(DatasetParseError) as info:
+            next(it)
+        assert info.value.line_number == 2
+
+    def test_f9_the_non_streaming_loader_still_wraps_it(self, tmp_path):
+        from backpropagate.datasets import DatasetLoader
+
+        path = tmp_path / "deep.jsonl"
+        path.write_text("[" * 20000 + "]" * 20000 + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Failed to load dataset"):
+            DatasetLoader(path)
 
 
 class TestPlumbing:

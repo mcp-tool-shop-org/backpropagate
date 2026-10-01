@@ -3576,6 +3576,26 @@ class DatasetLoader:
 # STREAMING DATASET LOADER
 # =============================================================================
 
+def _nesting_parse_error(path: Path, line_number: int | None = None) -> DatasetParseError:
+    """The structured error for JSON nested too deeply for ``json`` to parse.
+
+    ``json.loads`` raises ``RecursionError`` (not ``JSONDecodeError``) on a
+    document of ~1000+ nested brackets; a stream must surface that as the same
+    ``DatasetParseError`` as any other unparseable input, not leak the raw
+    exception.
+    """
+    return DatasetParseError(
+        f"{path} contains JSON nested too deeply to parse",
+        path=str(path),
+        line_number=line_number,
+        suggestion=(
+            "A dataset row should be a flat-ish object (messages / text "
+            "fields). Deeply nested brackets usually mean a corrupt or "
+            "hostile file — inspect the line named in the error."
+        ),
+    )
+
+
 class StreamingDatasetLoader:
     """
     Streaming dataset loader for large files.
@@ -3709,6 +3729,8 @@ class StreamingDatasetLoader:
                 total_lines += 1
                 try:
                     sample = json.loads(line)
+                except RecursionError as e:
+                    raise _nesting_parse_error(path, line_number=line_num) from e
                 except json.JSONDecodeError as e:
                     skipped_lines += 1
                     if skipped_lines <= _VERBOSE_WARN_CEILING:
@@ -3763,6 +3785,8 @@ class StreamingDatasetLoader:
         with open(path, encoding="utf-8") as f:
             try:
                 data = json.load(f)
+            except RecursionError as e:
+                raise _nesting_parse_error(path) from e
             except json.JSONDecodeError as e:
                 raise DatasetParseError(
                     f"Failed to parse {path} as JSON: {e.msg}",

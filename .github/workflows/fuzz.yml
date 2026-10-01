@@ -8,7 +8,6 @@ name: Fuzz
 # no business running on every change). Run it with:
 #
 #   gh workflow run fuzz.yml --ref <branch> -f seconds=120 -f runs=300000
-#   gh workflow run fuzz.yml --ref <branch> -f strict=true   # fail on the known, unfixed findings
 #
 # The property code itself runs on every platform on every PR through
 # tests/test_fuzz_harnesses.py (no Atheris needed); this workflow is the part that
@@ -30,10 +29,6 @@ on:
         description: "Wall-clock budget per harness, in seconds"
         type: string
         default: "120"
-      strict:
-        description: "Disable the known-finding tolerances (the run then fails on the unfixed bugs)"
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -65,13 +60,11 @@ jobs:
         env:
           RUNS: ${{ inputs.runs }}
           SECONDS_PER_HARNESS: ${{ inputs.seconds }}
-          STRICT: ${{ inputs.strict }}
         run: |
           set -u
           for v in "$RUNS" "$SECONDS_PER_HARNESS"; do
             case "$v" in ''|*[!0-9]*) echo "::error::runs and seconds must be whole numbers"; exit 2 ;; esac
           done
-          if [ "$STRICT" = "true" ]; then export BP_FUZZ_STRICT=1; fi
 
           mkdir -p crashes logs
           failed=0

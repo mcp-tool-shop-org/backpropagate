@@ -36,7 +36,7 @@ import re
 import sys
 from typing import Any
 
-from fuzz_common import STRICT, Provider, instrument, main, scratch_dir
+from fuzz_common import Provider, instrument, main, scratch_dir
 
 with instrument(__name__ == "__main__"):
     from backpropagate.exceptions import BackpropagateError, UserInputError
@@ -98,25 +98,21 @@ NUMERIC_TEXT = ("0", "1", "-1", "0.5", "1e3", "1e308", "1e999", "-1e999", "nan",
                 "-inf", "1_0", " 5 ", "0x10", "\u0663", "", "1" * 400)  # fmt: skip
 
 
-def check_numeric(value: Any, lo: float | None, hi: float | None, strict: bool = False) -> None:
+def check_numeric(value: Any, lo: float | None, hi: float | None) -> None:
     try:
         out = validate_numeric_input(value, "n", min_value=lo, max_value=hi, allow_none=False)
     except UserInputError:
         return
 
     assert isinstance(out, float)
-    if math.isnan(out):
-        # Known finding F4: NaN compares False against both bounds, so it
-        # slips through any min/max range.
-        assert not strict, f"NaN accepted for {value!r} with bounds ({lo}, {hi})"
-        return
+    assert math.isfinite(out), f"{out!r} accepted for {value!r} with bounds ({lo}, {hi})"
     if lo is not None:
         assert out >= lo
     if hi is not None:
         assert out <= hi
 
 
-def check_numeric_input(p: Provider, strict: bool = False) -> None:
+def check_numeric_input(p: Provider) -> None:
     kind = p.int_in_range(0, 3)
     if kind == 0:
         value: Any = p.pick(NUMERIC_TEXT)
@@ -128,7 +124,7 @@ def check_numeric_input(p: Provider, strict: bool = False) -> None:
         value = p.pick((None, [], {}, object(), True, b"1"))
     lo = p.pick((None, 0.0, -1.0, 1e-9))
     hi = p.pick((None, 1.0, 100.0, 1e308))
-    check_numeric(value, lo, hi, strict=strict)
+    check_numeric(value, lo, hi)
 
 
 # --------------------------------------------------------------------------
@@ -289,13 +285,13 @@ def check_error_sanitizing(p: Provider) -> None:
 # --------------------------------------------------------------------------
 
 
-def check_ui_input(data: bytes, strict: bool = False) -> None:
+def check_ui_input(data: bytes) -> None:
     p = Provider(data)
     mode = p.int_in_range(0, 6)
     if mode == 0:
         check_string_input(p)
     elif mode == 1:
-        check_numeric_input(p, strict=strict)
+        check_numeric_input(p)
     elif mode == 2:
         check_auth_shape(p)
     elif mode == 3:
@@ -309,7 +305,7 @@ def check_ui_input(data: bytes, strict: bool = False) -> None:
 
 
 def TestOneInput(data: bytes) -> None:
-    check_ui_input(data, strict=STRICT)
+    check_ui_input(data)
 
 
 if __name__ == "__main__":

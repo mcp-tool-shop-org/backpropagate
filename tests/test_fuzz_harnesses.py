@@ -14,12 +14,8 @@ The tests are in four groups:
   and check that the harness notices (a property check that cannot fail is not a
   check);
 * ``TestFixedFindings`` -- regression tests for the bugs the fuzzers found
-  (F1-F9), each with its exact reproducer;
-* ``TestKnownFindings`` -- the one finding still open on this branch, the NaN
-  half of F4 in ``validate_numeric_input`` (fixed by #253). It is pinned by a
-  ``strict`` xfail test (so the day #253 lands the test XPASSes loudly and the
-  marker must be removed) and by a seed in the corpus that the harness
-  tolerates by default and rejects under ``strict=True``;
+  (F1-F9), each with its exact reproducer. The harnesses tolerate none of them,
+  so a harness failure means a new finding;
 * ``TestPlumbing`` -- the import guard, the byte provider, and the workflow and
   requirements-file contracts (manual dispatch only, SHA-pinned actions,
   hash-pinned install).
@@ -170,39 +166,18 @@ class TestHarnessesHaveTeeth:
         assert first_failure(check, corpus_and_random("dataset_files", 200)) is not None
 
 
-# Seeds that reproduce a known finding: (target, file, exception under strict=True)
-STRICT_SEEDS = [
-    ("ui_input", "finding_f4_nan.seed", AssertionError),
-]
+class TestFixedFindings:
+    """Regression tests for bugs the fuzzers found and that are now fixed."""
 
-
-class TestKnownFindings:
-    """The finding still open on this branch: NaN through ``validate_numeric_input``.
-
-    It is fixed by #253, not here. When that lands, the xfail test XPASSes
-    (strict) -- delete this class and ``STRICT_SEEDS``, the tolerance in
-    ``fuzz_ui_input`` (``strict`` branch) and the ``strict`` plumbing with it.
-    """
-
-    @pytest.mark.parametrize(("target", "name", "exc_type"), STRICT_SEEDS)
-    def test_strict_mode_rejects_the_reproducer_seed(self, target, name, exc_type):
-        _, check = load(target)
-        data = (CORPUS / target / name).read_bytes()
-        check(data, strict=False)  # tolerated by default, so fuzzing can go on
-        with pytest.raises(exc_type):
-            check(data, strict=True)
-
-    @pytest.mark.xfail(strict=True, reason="F4: NaN slips through validate_numeric_input bounds")
     def test_f4_validate_numeric_input_rejects_nan_against_a_range(self):
+        # Fixed by #253 (kept here so the reproducer stays with the other findings).
         from backpropagate.exceptions import UserInputError
         from backpropagate.ui_security import validate_numeric_input
 
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
-
-
-class TestFixedFindings:
-    """Regression tests for bugs the fuzzers found and that are now fixed."""
+        with pytest.raises(UserInputError):
+            validate_numeric_input("inf", "learning_rate", min_value=0.0)
 
     @pytest.mark.parametrize("role", [["user"], {"a": 1}, 7, None, "robot"])
     def test_f1_openai_role_that_is_not_a_known_string_is_a_validation_error(self, role):

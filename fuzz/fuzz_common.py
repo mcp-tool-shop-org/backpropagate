@@ -21,15 +21,11 @@ Seeds in ``fuzz/corpus/<target>/`` are raw bytes in each harness's own encoding
 
 Known findings
 --------------
-Fuzzing found nine bugs (F1-F9). All are fixed in the library and pinned by
-regression tests in ``tests/test_fuzz_harnesses.py::TestFixedFindings``, except
-the NaN half of F4: ``validate_numeric_input`` accepting NaN inside a min/max
-range, which is fixed by #253. Until that lands, ``fuzz_ui_input`` steps around
-it with a ``strict`` switch: with ``strict=False`` (what the fuzzer and the
-corpus tests use) NaN is tolerated so a run can go on and find *new* bugs; with
-``strict=True`` (``BP_FUZZ_STRICT=1``, or the ``strict`` input of the fuzz
-workflow) the property is enforced and the reproducer fails. Once #253 is in,
-delete that tolerance, the ``strict`` plumbing and ``STRICT_SEEDS`` together.
+Fuzzing found nine bugs (F1-F9). All are fixed in the library, the harnesses
+tolerate none of them, and each has a regression test with its reproducer in
+``tests/test_fuzz_harnesses.py::TestFixedFindings``. The corpus keeps the
+inputs that found them (``finding_*.seed``) as seeds. A harness failure now
+means a new finding.
 """
 
 from __future__ import annotations
@@ -49,10 +45,6 @@ FUZZ_DIR = Path(__file__).resolve().parent
 # Fuzz the checked-out source tree, not whatever happens to be installed.
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-# BP_FUZZ_STRICT=1 turns the known-finding tolerances off, so the fuzzer (or a
-# regression test) fails on the bugs listed in the PR that added this directory.
-STRICT = os.environ.get("BP_FUZZ_STRICT") == "1"
 
 try:  # Atheris ships Linux wheels only; stay importable everywhere else.
     import atheris

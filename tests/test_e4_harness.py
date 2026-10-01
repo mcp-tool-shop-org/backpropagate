@@ -193,6 +193,90 @@ class TestSplit:
         assert len(ev) == 5 and len(tr) == 15
 
 
+class TestFitFilter:
+    """Rows that do not fit --seq are dropped (never truncated), before the eval split is drawn."""
+
+    def long_rows(self, n_short=40, n_long=15):
+        rows = [raw_row(i) for i in range(n_short)]
+        for i in range(n_long):
+            j = 1000 + i
+            doc = "padding " * 200
+            rows.append(raw_row(j, output=f'```python\ndef double_{j}(x):\n    """{doc}"""\n    return 2 * x\n```'))
+        return rows
+
+    @staticmethod
+    def words(rec):  # a stand-in tokenizer: one token per whitespace-separated word
+        return len(E4.chatml_text(rec).split())
+
+    def test_boundary_and_reserve(self):
+        recs = records(3)
+        n = self.words(recs[0])
+        kept, dropped = E4.fit_filter(list(recs), self.words, max_tokens=n + E4.FIT_RESERVE_TOKENS)
+        assert len(kept) == 3 and dropped == 0
+        kept, dropped = E4.fit_filter(list(recs), self.words, max_tokens=n + E4.FIT_RESERVE_TOKENS - 1)
+        assert kept == [] and dropped == 3
+
+    def test_filter_runs_before_the_eval_split_and_nothing_long_survives_in_either_pool(self):
+        rows = self.long_rows()
+        limit = 120
+        ev, tr, rep = E4.build_dataset(rows, n_eval=10, length_fn=self.words, max_tokens=limit)
+        assert rep["fit_filter"]["dropped_from_pool"] == 15
+        assert rep["fit_filter"]["valid_before_filter"] == 55
+        assert all(self.words(r) + E4.FIT_RESERVE_TOKENS <= limit for r in ev + tr)
+        assert len(ev) == 10 and len(ev) + len(tr) + rep["train_removed_overlap_with_eval"] \
+            + rep["train_removed_internal_duplicates"] == 40
+        fit = rep["fit_filter"]
+        assert fit["unfiltered_split_would_have_dropped_from_eval"] \
+            + fit["unfiltered_split_would_have_dropped_from_train"] == 15
+
+    def test_without_a_length_function_nothing_is_filtered(self):
+        _, _, rep = E4.build_dataset(self.long_rows(), n_eval=10)
+        assert rep["fit_filter"] is None
+
+    def test_records_get_their_token_count(self):
+        ev, tr, _ = E4.build_dataset(self.long_rows(), n_eval=5, length_fn=self.words, max_tokens=120)
+        assert all(r["n_tokens"] == self.words(r) for r in ev + tr)
+
+    def test_split_is_deterministic_after_filtering(self):
+        a = E4.build_dataset(self.long_rows(), n_eval=10, length_fn=self.words, max_tokens=120)
+        b = E4.build_dataset(self.long_rows(), n_eval=10, length_fn=self.words, max_tokens=120)
+        assert [r["id"] for r in a[0]] == [r["id"] for r in b[0]]
+        assert [r["id"] for r in a[1]] == [r["id"] for r in b[1]]
+
+
+class TestShards:
+    def loader(self, calls):
+        shards = {"s0": [raw_row(i) for i in range(30)], "s1": [raw_row(100 + i) for i in range(30)]}
+
+        def load(name):
+            calls.append(name)
+            return shards[name]
+
+        return load
+
+    def test_one_shard_is_enough_when_the_train_pool_is_large_enough(self):
+        calls: list[str] = []
+        ev, tr, rep = E4.build_with_shards(self.loader(calls), ("s0", "s1"), min_train=20, n_eval=5)
+        assert calls == ["s0"] and rep["shards_used"] == ["s0"] and rep["enough_for_one_epoch"] is True
+        assert len(tr) == 25 and len(ev) == 5
+
+    def test_second_shard_is_added_when_train_is_short(self):
+        calls: list[str] = []
+        ev, tr, rep = E4.build_with_shards(self.loader(calls), ("s0", "s1"), min_train=40, n_eval=5)
+        assert calls == ["s0", "s1"] and rep["shards_used"] == ["s0", "s1"]
+        assert len(tr) == 55 and rep["enough_for_one_epoch"] is True
+
+    def test_reports_when_even_every_shard_is_not_enough(self):
+        calls: list[str] = []
+        _, tr, rep = E4.build_with_shards(self.loader(calls), ("s0", "s1"), min_train=500, n_eval=5)
+        assert rep["shards_used"] == ["s0", "s1"] and rep["enough_for_one_epoch"] is False
+        assert len(tr) == 55
+
+    def test_the_real_shards_are_pinned_to_one_revision(self):
+        assert len(E4.DATASET_SHARDS) == 2 and E4.DATASET_SHARDS[0] == E4.DATASET_SHARD
+        assert len(E4.DATASET_REVISION) == 40
+
+
 class TestFormats:
     def test_messages_and_chatml_text_agree_with_the_library_loader(self, tmp_path):
         pytest.importorskip("datasets")

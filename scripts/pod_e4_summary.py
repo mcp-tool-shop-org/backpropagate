@@ -89,8 +89,6 @@ def summarize_stage(out: str, size: str, n_boot: int = 10000, model: str | None 
             "pass_at_1_pooled": round(k / n, 4) if n else None, "pass_at_1_pooled_wilson95": E4.wilson(k, n),
             "outcomes_total": dict(sorted(outcome_totals.items())),
             "heldout_answer_loss": E4.spread([r.get("heldout_after") for r in rs]),
-            "heldout_answer_loss_long": E4.spread([(r.get("answer_loss_long") or {}).get("answer_loss")
-                                                   for r in rs]),
             "base_pass_at_1": rs[0].get("pass_at_1_before"), "base_answer_loss": rs[0].get("heldout_before"),
             "s_per_step": E4.spread([r.get("s_per_step") for r in rs]),
             "wall_s": E4.spread([r.get("wall_s") for r in rs]),

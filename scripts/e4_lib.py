@@ -44,7 +44,11 @@ from typing import Any
 DATASET_ID = "nvidia/OpenCodeInstruct"
 # Pinned: the Hub sha the licence evidence in the receipt README was read at.
 DATASET_REVISION = "8f3ba5bafe4d6e8db46082cf7ae6741bc370604d"
-DATASET_SHARD = "data/train-00000-of-00050.parquet"
+DATASET_SHARDS = ("data/train-00000-of-00050.parquet", "data/train-00001-of-00050.parquet")
+DATASET_SHARD = DATASET_SHARDS[0]
+# A row whose full training text does not fit --seq is dropped (never truncated). TRL appends the
+# tokenizer's eos token to a text that does not end with it, so one token is kept in reserve.
+FIT_RESERVE_TOKENS = 1
 DEFAULT_N_EVAL = 500
 SPLIT_SEED = 0
 
@@ -284,9 +288,29 @@ def split_pool(records: list[dict], *, seed: int = SPLIT_SEED, n_eval: int = DEF
     return eval_rows, train, report
 
 
-def build_dataset(raw_rows: list[dict], *, seed: int = SPLIT_SEED, n_eval: int = DEFAULT_N_EVAL
+def fit_filter(records: list[dict], length_fn: Callable[[dict], int], max_tokens: int,
+               reserve: int = FIT_RESERVE_TOKENS) -> tuple[list[dict], int]:
+    """Keep records whose full training text (prompt + interface hint + solution, as tokenized for
+    training, ``length_fn``) plus ``reserve`` tokens fits in ``max_tokens``; returns (kept, dropped)."""
+    kept = []
+    for r in records:
+        n = length_fn(r)
+        r["n_tokens"] = n
+        if n + reserve <= max_tokens:
+            kept.append(r)
+    return kept, len(records) - len(kept)
+
+
+def build_dataset(raw_rows: list[dict], *, seed: int = SPLIT_SEED, n_eval: int = DEFAULT_N_EVAL,
+                  length_fn: Callable[[dict], int] | None = None, max_tokens: int | None = None
                   ) -> tuple[list[dict], list[dict], dict]:
-    """Raw rows -> (eval records, train records, report with every drop counted)."""
+    """Raw rows -> (eval records, train records, report with every drop counted).
+
+    With ``length_fn`` and ``max_tokens`` the fit filter runs on the valid pool BEFORE the eval
+    split is drawn, so no training example and no eval loss is ever truncated. The report also
+    says how many of the dropped rows an unfiltered split (same seed) would have put in eval and
+    in train, for reference; the split actually used is drawn from the filtered pool.
+    """
     kept: list[dict] = []
     rejects: dict[str, int] = {}
     for raw in raw_rows:
@@ -295,10 +319,48 @@ def build_dataset(raw_rows: list[dict], *, seed: int = SPLIT_SEED, n_eval: int =
             rejects[why or "unknown"] = rejects.get(why or "unknown", 0) + 1
         else:
             kept.append(rec)
+    fit_report = None
+    if length_fn is not None and max_tokens is not None:
+        kept, dropped = fit_filter_with_attribution(kept, length_fn, max_tokens, seed, n_eval)
+        fit_report = dropped
     eval_rows, train_rows, rep = split_pool(kept, seed=seed, n_eval=n_eval)
     rep.update({"raw_rows": len(raw_rows), "rejected": dict(sorted(rejects.items())),
-                "valid_after_filters": len(kept)})
+                "valid_after_filters": len(kept), "fit_filter": fit_report})
     return eval_rows, train_rows, rep
+
+
+def fit_filter_with_attribution(valid: list[dict], length_fn: Callable[[dict], int], max_tokens: int,
+                                seed: int, n_eval: int) -> tuple[list[dict], dict]:
+    """``fit_filter`` plus a report that says how many dropped rows an unfiltered split (same seed)
+    would have put in eval and in train (for reference; the split used is drawn afterwards)."""
+    for r in valid:
+        r["n_tokens"] = length_fn(r)
+    pre_eval, pre_train, _ = split_pool(valid, seed=seed, n_eval=n_eval)
+    kept, dropped = fit_filter(valid, lambda r: r["n_tokens"], max_tokens)
+
+    def over(rs: list[dict]) -> int:
+        return sum(1 for r in rs if r["n_tokens"] + FIT_RESERVE_TOKENS > max_tokens)
+
+    return kept, {"max_tokens": max_tokens, "reserve_tokens": FIT_RESERVE_TOKENS,
+                  "valid_before_filter": len(valid), "dropped_from_pool": dropped,
+                  "unfiltered_split_would_have_dropped_from_eval": over(pre_eval),
+                  "unfiltered_split_would_have_dropped_from_train": over(pre_train),
+                  "rule": "row dropped when tokens(prompt + hint + solution) + reserve > max_tokens"}
+
+
+def build_with_shards(load_shard: Callable[[str], list[dict]], shards: tuple[str, ...], *,
+                      min_train: int, **kw) -> tuple[list[dict], list[dict], dict]:
+    """Build from the first shard; while fewer than ``min_train`` train rows remain, add the next
+    shard (same pinned revision) and rebuild, so 5000 x 4 examples never repeat."""
+    rows: list[dict] = []
+    for i, shard in enumerate(shards):
+        rows += load_shard(shard)
+        ev, tr, rep = build_dataset(rows, **kw)
+        if len(tr) >= min_train or i == len(shards) - 1:
+            rep.update({"shards_used": list(shards[: i + 1]), "min_train_required": min_train,
+                        "enough_for_one_epoch": len(tr) >= min_train})
+            return ev, tr, rep
+    raise ValueError("no shards given")
 
 
 def to_messages(rec: dict) -> dict:

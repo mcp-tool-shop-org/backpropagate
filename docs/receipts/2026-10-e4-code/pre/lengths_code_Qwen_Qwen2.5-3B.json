@@ -29,6 +29,9 @@
  "mode": "lengths",
  "dataset": "code",
  "model": "Qwen/Qwen2.5-3B",
+ "seq": 512,
+ "batch": 4,
+ "steps": 5000,
  "gpu": "cpu (dry run)",
  "vram_total_gib": 0.0,
  "cuda": "12.8",
@@ -47,50 +50,36 @@
  },
  "git_sha": "unknown",
  "train": {
-  "n": 29156,
-  "full_p50": 420,
-  "full_p90": 693,
-  "full_p99": 1056,
-  "full_max": 1811,
-  "answer_p50": 179,
-  "answer_p99": 617,
-  "answer_max": 1200,
-  "frac_text_over_512": 0.2897,
-  "frac_text_over_768": 0.0627,
-  "frac_text_over_1024": 0.0126,
-  "real_tokens_per_example": {
-   "512": 416.0,
-   "768": 454.5,
-   "1024": 462.6
-  }
+  "n": 20535,
+  "full_p50": 374,
+  "full_p90": 475,
+  "full_p99": 507,
+  "full_max": 511,
+  "answer_p50": 154,
+  "answer_p99": 289,
+  "answer_max": 355,
+  "mean_tokens_per_example": 376.7,
+  "frac_text_over_seq": 0.0,
+  "frac_text_plus_eos_over_seq": 0.0
  },
  "eval": {
   "n": 500,
-  "full_p50": 406,
-  "full_p90": 692,
-  "full_p99": 1031,
-  "full_max": 1432,
-  "answer_p50": 173,
-  "answer_p99": 601,
-  "answer_max": 658,
-  "frac_text_over_512": 0.272,
-  "frac_text_over_768": 0.082,
-  "frac_text_over_1024": 0.01,
-  "real_tokens_per_example": {
-   "512": 411.0,
-   "768": 447.8,
-   "1024": 457.2
-  }
+  "full_p50": 372,
+  "full_p90": 466,
+  "full_p99": 507,
+  "full_max": 511,
+  "answer_p50": 155,
+  "answer_p99": 272,
+  "answer_max": 318,
+  "mean_tokens_per_example": 372.9,
+  "frac_text_over_seq": 0.0,
+  "frac_text_plus_eos_over_seq": 0.0
  },
- "truncated_fraction_at_512": 0.2897,
- "rule": "a reference solution is truncated when its prompt + solution exceed --seq tokens; if more than 5% are truncated at 512, PROPOSE batch 2 x 1024 (not applied)",
- "proposal": {
-  "batch": 2,
-  "seq": 1024
- },
- "real_tokens_per_step": {
-  "4x512": 1664,
-  "2x1024": 925
- },
- "written": "2026-10-01T01:59:36Z"
+ "truncated_fraction_at_seq": 0.0,
+ "fit_filter_ok": true,
+ "real_tokens_per_step": 1507,
+ "real_tokens_over_run": 7535000,
+ "token_slots_over_run": 10240000,
+ "epochs": 0.974,
+ "written": "2026-10-01T02:13:15Z"
 }

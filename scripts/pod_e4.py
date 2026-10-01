@@ -19,7 +19,7 @@ drop order is the reverse of ``e4_lib.plan_for`` (also in the README).
 Env: E4_STEPS (5000), E4_BATCH (4), E4_SEQ (512), E4_SEEDS_3B ("0 1 2"), E4_SEEDS_7B ("0 1"),
 E4_MODEL_3B / E4_MODEL_7B, E4_BUDGET_USD_3B (4.00) / _7B (4.50), E4_RATE_USD_H (0.90),
 E4_START_EPOCH (when the pod's billing began; default: first command of the stage),
-E4_RESERVE_S (600), E4_N_EVAL (500), E4_MAX_NEW_TOKENS (768).
+E4_RESERVE_S (600), E4_N_EVAL (500), E4_MAX_NEW_TOKENS (512).
 """
 
 from __future__ import annotations
@@ -66,7 +66,6 @@ class Cfg:
     reserve_s: float
     n_eval: int
     max_new_tokens: int
-    eval_seq_long: int = 1024
     eval_batch: int = 50
     dry_run: bool = False
     synthetic_train: int = 32
@@ -108,7 +107,7 @@ def run_py(script: str, args: list[str], env_extra: dict | None = None) -> int:
 
 def driver(cfg: Cfg, mode: str, extra: list[str], env_extra: dict | None = None) -> int:
     base = [mode, "--out", cfg.out, "--dataset", "code", "--max-new-tokens", str(cfg.max_new_tokens),
-            "--eval-seq-long", str(cfg.eval_seq_long), "--eval-batch", str(cfg.eval_batch)]
+            "--eval-batch", str(cfg.eval_batch)]
     if not cfg.dry_run:
         base.append("--allow-exec")  # model-generated code runs only on the pod
     return run_py(DRIVER, base + extra, env_extra)
@@ -125,11 +124,11 @@ def make_cfg(size: str, ns: argparse.Namespace, out: str | None = None) -> Cfg:
         seeds=seeds, cap_usd=float(env.get(f"E4_BUDGET_USD_{size.upper()}", CAPS_USD[size])),
         rate_usd_h=float(env.get("E4_RATE_USD_H", 0.90)), reserve_s=float(env.get("E4_RESERVE_S", 600)),
         n_eval=int(env.get("E4_N_EVAL", E4.DEFAULT_N_EVAL)),
-        max_new_tokens=int(env.get("E4_MAX_NEW_TOKENS", 768)), dry_run=dry,
+        max_new_tokens=int(env.get("E4_MAX_NEW_TOKENS", 512)), dry_run=dry,
         load_s=60.0 if size == "3b" else 120.0)
     if dry:
         cfg.model = getattr(ns, "model", None) or "HuggingFaceTB/SmolLM2-135M"
-        cfg.steps, cfg.batch, cfg.seq, cfg.eval_seq_long = 3, 2, 256, 512
+        cfg.steps, cfg.batch, cfg.seq = 3, 2, 256
         cfg.seeds, cfg.n_eval, cfg.max_new_tokens, cfg.eval_batch = (0, 1), 8, 48, 8
     os.makedirs(cfg.runs, exist_ok=True)
     cfg.start_epoch = _start_epoch(cfg)
@@ -176,7 +175,10 @@ def purge_other_models(keep: str) -> None:
 
 def cmd_prep(cfg: Cfg) -> int:
     if not os.path.exists(os.path.join(cfg.out, "prep_code.json")):
-        extra = ["--n-eval", str(cfg.n_eval)]
+        if fetch(cfg.model, weights=False) != 0:  # tokenizer only: the fit filter tokenizes every row
+            return 2
+        extra = ["--n-eval", str(cfg.n_eval), "--model", cfg.model, "--seq", str(cfg.seq),
+                 "--min-train", str(cfg.steps * cfg.batch)]
         if cfg.dry_run:
             extra += ["--synthetic", "--n-train", str(cfg.synthetic_train)]
         rc = driver(cfg, "prep", extra)
@@ -187,10 +189,15 @@ def cmd_prep(cfg: Cfg) -> int:
     if not os.path.exists(lengths):
         if fetch(cfg.model, weights=False) != 0:  # tokenizer only
             return 2
-        driver(cfg, "lengths", ["--model", cfg.model, "--seq", str(cfg.seq)])
+        rc = driver(cfg, "lengths", ["--model", cfg.model, "--seq", str(cfg.seq), "--batch", str(cfg.batch),
+                                     "--steps", str(cfg.steps)])
+        if rc != 0:  # andon: some text would still be cut at --seq
+            log("lengths check failed: the fit filter left texts over --seq")
+            return 2
     rec = read_json(lengths)
     if rec:
-        log(f"truncated at {cfg.seq}: {rec.get('truncated_fraction_at_512')} (proposal: {rec.get('proposal')})")
+        log(f"truncated at {cfg.seq}: {rec.get('truncated_fraction_at_seq')}; real tokens over the run "
+            f"{rec.get('real_tokens_over_run')}, epochs {rec.get('epochs')}")
     return 0
 
 

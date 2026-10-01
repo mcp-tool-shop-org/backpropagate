@@ -108,8 +108,8 @@ ap.add_argument("--exec-timeout", type=float, default=10.0, help="code: seconds 
 ap.add_argument("--exec-workers", type=int, default=8, help="code: parallel sandboxes")
 ap.add_argument("--eval-seq", type=int, default=0,
                 help="code: max tokens per sequence for the primary held-out loss (0 = --seq, as in stage d)")
-ap.add_argument("--eval-seq-long", type=int, default=1024,
-                help="code: also record the held-out loss at this length when it exceeds --seq (0 = off)")
+ap.add_argument("--min-train", type=int, default=20000,
+                help="prep (code): add the next dataset shard until this many train rows remain")
 args = ap.parse_args()
 
 OUT = args.out
@@ -172,22 +172,36 @@ def hub_info(repo_id: str, kind: str) -> dict:
 if args.mode == "prep" and args.dataset == "code":
     import hashlib
 
+    from transformers import AutoTokenizer
+
+    # Fit filter: a row whose full training text does not fit --seq tokens is dropped from the pool
+    # before the eval split is drawn (never truncated). Tokenizer only; weights are not loaded.
+    prep_tok = AutoTokenizer.from_pretrained(args.model)
+
+    def text_len(rec: dict) -> int:
+        return len(prep_tok(E4.chatml_text(rec), add_special_tokens=False)["input_ids"])
+
     if args.synthetic:
         raw_rows = E4.synthetic_rows(args.n_train + args.n_eval + 4)
         source = {"dataset": "synthetic (dry run)"}
+        eval_recs, train_recs, report = E4.build_dataset(
+            raw_rows, seed=E4.SPLIT_SEED, n_eval=args.n_eval, length_fn=text_len, max_tokens=args.seq)
+        train_recs = train_recs[: args.n_train]
+        report["n_train"] = len(train_recs)
     else:
         import pyarrow.parquet as pq
         from huggingface_hub import hf_hub_download
 
-        shard = hf_hub_download(E4.DATASET_ID, E4.DATASET_SHARD, repo_type="dataset",
-                                revision=E4.DATASET_REVISION)
-        raw_rows = pq.read_table(shard).to_pylist()
-        source = {"dataset": E4.DATASET_ID, "revision": E4.DATASET_REVISION, "shard": E4.DATASET_SHARD,
-                  "hub_now": hub_info(E4.DATASET_ID, "dataset")}
-    eval_recs, train_recs, report = E4.build_dataset(raw_rows, seed=E4.SPLIT_SEED, n_eval=args.n_eval)
-    if args.synthetic:
-        train_recs = train_recs[: args.n_train]
-        report["n_train"] = len(train_recs)
+        def load_shard(name: str) -> list[dict]:
+            path = hf_hub_download(E4.DATASET_ID, name, repo_type="dataset", revision=E4.DATASET_REVISION)
+            return pq.read_table(path).to_pylist()
+
+        eval_recs, train_recs, report = E4.build_with_shards(
+            load_shard, E4.DATASET_SHARDS, min_train=args.min_train, seed=E4.SPLIT_SEED,
+            n_eval=args.n_eval, length_fn=text_len, max_tokens=args.seq)
+        source = {"dataset": E4.DATASET_ID, "revision": E4.DATASET_REVISION,
+                  "shards_used": report["shards_used"], "hub_now": hub_info(E4.DATASET_ID, "dataset")}
+    source["tokenizer"] = args.model
     with open(TRAIN, "w") as fh:
         for r in train_recs:
             fh.write(json.dumps(E4.to_messages(r)) + "\n")
@@ -713,12 +727,6 @@ def code_eval(model, tok) -> dict:
     prompts, answers = split_prompts(texts)
     total, count, item_loss, prefix_mismatch = answer_loss_items(
         model, tok, prompts, answers, args.eval_seq or args.seq, dev)
-    long_len = args.eval_seq_long if args.eval_seq_long > (args.eval_seq or args.seq) else 0
-    long_loss = None
-    if long_len:  # secondary: the loss with the tail of long references included
-        tot2, cnt2, _, _ = answer_loss_items(model, tok, prompts, answers, long_len, dev)
-        long_loss = {"max_len": long_len, "answer_loss": round(tot2 / cnt2, 4) if cnt2 else None,
-                     "answer_tokens": cnt2}
     t_loss = time.perf_counter()
     outs, hit_limit = greedy_generate(model, tok, prompts, dev, args.max_new_tokens)
     t_gen = time.perf_counter()
@@ -739,7 +747,6 @@ def code_eval(model, tok) -> dict:
         model.train()
     return {
         "answer_loss": round(total / count, 4) if count else None, "answer_tokens": count,
-        "answer_loss_max_len": args.eval_seq or args.seq, "answer_loss_long": long_loss,
         "pass_at_1": summ["pass_at_1"] if summ["executed"] else None, "executed": summ["executed"],
         "acc_strict": summ["pass_at_1"] if summ["executed"] else None,  # alias: shared receipt keys
         "outcomes": summ["outcomes"], "passed": summ["passed"],
@@ -772,15 +779,15 @@ def write_items(tag: str, ev: dict) -> str:
 
 
 if args.mode == "lengths" and args.dataset == "code":
-    # E4: how much of the code task fits in --seq? Reports the truncated fraction at 512 / 768 /
-    # 1024, the real (non-padding) tokens per step for the candidate batch x seq shapes, and the
-    # reference-answer lengths that set max_new_tokens.
+    # E4: confirm the fit filter worked (no training or eval text is cut at --seq) and report the
+    # real (non-padding) tokens per step, real tokens over the run, and epochs. Tokenizer only.
     from transformers import AutoTokenizer
 
     from backpropagate.datasets import DatasetLoader
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    rec = {"mode": "lengths", "dataset": "code", "model": args.model, **env()}
+    rec = {"mode": "lengths", "dataset": "code", "model": args.model, "seq": args.seq, "batch": args.batch,
+           "steps": args.steps, **env()}
     for name, path in (("train", TRAIN), ("eval", HELD)):
         texts = list(DatasetLoader(path, validate=False).to_hf_dataset()["text"])
         full, ans = [], []
@@ -794,24 +801,20 @@ if args.mode == "lengths" and args.dataset == "code":
             xs = sorted(xs)
             return xs[min(len(xs) - 1, int(q * len(xs)))]
 
-        ent = {"n": len(full), "full_p50": pct(0.5, full), "full_p90": pct(0.9, full),
-               "full_p99": pct(0.99, full), "full_max": max(full), "answer_p50": pct(0.5, ans),
-               "answer_p99": pct(0.99, ans), "answer_max": max(ans)}
-        for lim in (512, 768, 1024):
-            ent[f"frac_text_over_{lim}"] = round(sum(f > lim for f in full) / len(full), 4)
-        ent["real_tokens_per_example"] = {str(lim): round(sum(min(f, lim) for f in full) / len(full), 1)
-                                          for lim in (512, 768, 1024)}
-        rec[name] = ent
-    t512 = rec["train"]["frac_text_over_512"]
-    rec["truncated_fraction_at_512"] = t512
-    rec["rule"] = ("a reference solution is truncated when its prompt + solution exceed --seq tokens; "
-                   "if more than 5% are truncated at 512, PROPOSE batch 2 x 1024 (not applied)")
-    rec["proposal"] = {"batch": 2, "seq": 1024} if t512 > 0.05 else None
-    rec["real_tokens_per_step"] = {
-        "4x512": round(4 * rec["train"]["real_tokens_per_example"]["512"]),
-        "2x1024": round(2 * rec["train"]["real_tokens_per_example"]["1024"])}
+        rec[name] = {"n": len(full), "full_p50": pct(0.5, full), "full_p90": pct(0.9, full),
+                     "full_p99": pct(0.99, full), "full_max": max(full), "answer_p50": pct(0.5, ans),
+                     "answer_p99": pct(0.99, ans), "answer_max": max(ans),
+                     "mean_tokens_per_example": round(sum(full) / len(full), 1),
+                     "frac_text_over_seq": round(sum(f > args.seq for f in full) / len(full), 4),
+                     "frac_text_plus_eos_over_seq": round(sum(f + 1 > args.seq for f in full) / len(full), 4)}
+    rec["truncated_fraction_at_seq"] = rec["train"]["frac_text_plus_eos_over_seq"]
+    rec["fit_filter_ok"] = rec["truncated_fraction_at_seq"] == 0.0 and rec["eval"]["frac_text_plus_eos_over_seq"] == 0.0
+    rec["real_tokens_per_step"] = round(args.batch * rec["train"]["mean_tokens_per_example"])
+    rec["real_tokens_over_run"] = rec["real_tokens_per_step"] * args.steps
+    rec["token_slots_over_run"] = args.batch * args.seq * args.steps
+    rec["epochs"] = round(args.steps * args.batch / rec["train"]["n"], 3)
     dump(os.path.join(RUNS, f"lengths_code_{slug(args.model)}.json"), rec)
-    raise SystemExit(0)
+    raise SystemExit(0 if rec["fit_filter_ok"] else 1)
 
 
 if args.mode == "lengths":

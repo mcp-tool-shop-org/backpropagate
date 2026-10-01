@@ -14,7 +14,7 @@ has a future. Background and the earlier test: `docs/handoff-2026-09-30-full-ft-
 | Stage d problem | E4 change |
 |---|---|
 | `Qwen2.5-*-Instruct` were already tuned on this kind of data; training made every arm worse than the untrained model | **Base** checkpoints: `Qwen/Qwen2.5-3B` and `Qwen/Qwen2.5-7B` (Biderman et al. 2024, arXiv:2405.09673, also used base models) |
-| About 2M tokens per arm (1000 steps x 4 x 512), far below where Biderman's full-FT-vs-LoRA gap appeared | **5000 steps x batch 4 x 512 tokens** (10.24M token slots, about 8.3M real tokens, see below), same lr / schedule / optimizer per arm as stage d |
+| About 2M tokens per arm (1000 steps x 4 x 512), far below where Biderman's full-FT-vs-LoRA gap appeared | **5000 steps x batch 4 x 512 tokens** (10.24M token slots, about 7.5M real tokens, see below), same lr / schedule / optimizer per arm as stage d |
 | Task the models had effectively seen | A code task whose data was created after Qwen2.5 was released, evaluated on held-out problems from the same source |
 
 ## Step zero: dataset licence check (done 2026-09-30, every claim read on the Hub)
@@ -53,16 +53,16 @@ the 3B weights it produces must not ship.
 ## Evaluation design
 
 Primary metric: **held-out loss on the reference solutions, answer tokens only** (prompt tokens
-masked), token-weighted over the 500 eval problems, truncated at `--seq` tokens exactly like
-training, as in stage d. Also recorded as a secondary field: the same loss with sequences up to
-1024 tokens (`answer_loss_long`), because 27% of eval texts exceed 512 tokens.
+masked), token-weighted over the 500 eval problems, as in stage d. No eval text is truncated:
+the fit filter (below) removes every problem whose full text does not fit 512 tokens, so the
+loss covers each reference solution to its end.
 
 Secondary metric: **pass@1 with greedy decoding, executed against the problem's unit tests.** A
 generation passes when the first Python code block of the reply passes every unit test of its
 problem (the dataset provides about 10 per problem; rows where the reference solution itself
 fails any of them are excluded, so a failure is the model's, not a broken test).
-Generation: prompt ends at `<|im_start|>assistant\n`, up to 768 new tokens (reference answers
-reach 658 tokens, p99 601), stop on `<|im_end|>` / eos. A generation that hits the limit is
+Generation: prompt ends at `<|im_start|>assistant\n`, up to 512 new tokens (eval reference answers
+reach 318 tokens, p99 272), stop on `<|im_end|>` / eos. A generation that hits the limit is
 usually unparseable and counts as a failure; the count is recorded (`hit_max_new_tokens`).
 
 Why this eval set rather than HumanEval / MBPP: OpenCodeInstruct was created January-March 2025
@@ -81,7 +81,15 @@ solution, and a one-line instruction to reply with one Python code block. Same f
 training and evaluation; rows whose tests call nothing the reference defines are dropped (232 of
 100,000).
 
-### The data (`pre/prep_code.json`, produced by the same driver the pod runs; shard 00000 of 00050)
+### The data (`pre/prep_code.json`, produced by the same driver the pod runs; shard 00000 of 00050 only)
+
+**Lead decision 2026-10-01, before any run: fit-filter at 512 (rows over 512 tokens dropped from train and eval), 4 x 512 kept.**
+Before the eval split is drawn, every row whose full training text (prompt + interface hint +
+solution, as tokenized with the Qwen2.5 tokenizer, plus one token held back for the end-of-text
+token that TRL appends) does not fit 512 tokens is dropped. Nothing is truncated: no training
+example loses its tail and no eval loss is computed on a cut answer. The cost is stated, not
+hidden: the data is biased toward shorter problems and solutions, identically in every arm, and
+the results say nothing about long-solution tasks.
 
 | Step | Rows |
 |---|---|
@@ -89,34 +97,42 @@ training and evaluation; rows whose tests call nothing the reference defines are
 | Dropped: `domain == algorithmic` | 9,129 |
 | Dropped: reference not passing every generated test (`average_test_score < 1`) | 60,519 |
 | Dropped: tests call nothing the reference defines | 232 |
-| Valid pool | 30,120 |
-| Eval split (seed 0, shuffled) | 500 |
-| Train candidates removed: overlap with eval by normalised hash | **27** (1 by prompt, 26 by solution) |
-| Train candidates removed: repeats within train | 437 |
-| **Train** | **29,156** |
+| Valid pool before the fit filter | 30,120 |
+| **Dropped by the fit filter (full text + 1 over 512 tokens)** | **8,635** (28.7%) |
+| Valid pool after the fit filter | 21,485 |
+| Eval split (seed 0, shuffled, drawn after the filter) | 500 |
+| Train candidates removed: overlap with eval by normalised hash | **49** (23 by prompt, 28 by solution) |
+| Train candidates removed: repeats within train | 401 |
+| **Train** | **20,535** |
+
+For reference, an unfiltered split with the same seed would have put 137 of the 500 eval problems
+(27.4%) and 8,489 train candidates over the limit; the split actually used is drawn from the
+filtered pool, so eval and train both contain only rows that fit. Shard 00001 (same pinned
+revision) is added automatically only if fewer than 5000 x 4 = 20,000 train rows remain; shard
+00000 alone leaves 20,535, so **only shard 00000 is used**.
 
 Dedupe key: SHA-256 of the lower-cased, whitespace-collapsed question text, and separately of the
-reference code block. 5000 steps x batch 4 = 20,000 examples, so training is 0.69 of an epoch with
-no repeated example, in the same order for every arm with the same seed.
+reference code block. 5000 steps x batch 4 = 20,000 examples = **0.974 of an epoch**, no repeated
+example, in the same order for every arm with the same seed.
 
-### Token budget and truncation (`pre/lengths_code_Qwen_Qwen2.5-3B.json`, tokenizer only; Qwen2.5 3B and 7B share one vocabulary)
+### Token budget (`pre/lengths_code_Qwen_Qwen2.5-3B.json`, tokenizer only; Qwen2.5 3B and 7B share one vocabulary)
 
-| | 4 x 512 (default) | 2 x 1024 (proposed alternative) | 4 x 768 (extra option) |
-|---|---|---|---|
-| Train examples cut (prompt + solution over the limit) | **29.0%** | 1.3% | 6.3% |
-| Real (non-padding) tokens per step | 1,664 | 925 | about 1,818 |
-| Real tokens at 5000 steps | **8.3M** | 4.6M | about 9.1M |
-| Steps to reach 8.3M real tokens | 5000 | about 9000 | about 4600 |
-| Measured s/step (stage d) | yes | no | no |
+| Pool | Rows | Mean tokens | p50 | p99 | Max | Over 512 (+1 for eos) |
+|---|---|---|---|---|---|---|
+| Train | 20,535 | 376.7 | 374 | 507 | 511 | **0%** |
+| Eval | 500 | 372.9 | 372 | 507 | 511 | **0%** |
 
-The pre-registration says: if more than about 5% of reference solutions are truncated, propose
-batch 2 x 1024 rather than choosing it silently. **29% are truncated at 512, so this is the
-proposal, and it is not applied: the defaults stay 5000 x 4 x 512**, pending the lead's decision.
-Two things the lead should weigh. (1) Truncation is identical in every arm, so the comparison is
-fair, but about 29% of examples never show the model the end of their solution, and the primary
-loss is truncated the same way. (2) 2 x 1024 at 5000 steps trains on only 55% as many real tokens
-as 4 x 512 and its step time is unmeasured; the 7B stage is fixed at 4 x 512 anyway (engine B
-peaks at 30.0 GiB NVML at that shape, no context scaling). Override with `E4_BATCH` / `E4_SEQ`.
+| Per arm, 4 x 512 | |
+|---|---|
+| Token slots over the run (5000 x 4 x 512) | 10.24M |
+| Real (non-padding) tokens per step | 1,507 |
+| **Real tokens over 5000 steps** | **7.5M** |
+| Epochs | 0.974 |
+| Measured s/step | stage d (same shape) |
+
+The `lengths` step of the driver re-measures the written files and exits non-zero if any text
+would be cut, so a broken filter stops the run before it costs anything. Override with `E4_BATCH`
+/ `E4_SEQ` (the filter follows `E4_SEQ`; a different shape needs a fresh prep).
 
 ## Pre-registered gates
 
@@ -184,18 +200,20 @@ QLoRA; GaLore costs the most and its adoption is a separate decision.
 ### Estimated pod time and cost (from stage d's measured s/step; eval times are estimates, no code eval has run yet)
 
 Training only: 3B default 26.4 min, QLoRA 36.2 min, engine B 12.0 min per run of 5000 steps; 7B
-engine B 18.3 min, QLoRA 44.5 min, GaLore 105.9 min. Eval is estimated at 4.5 min (full FT /
-engine B at 3B), 9 min (QLoRA at 3B), 7 and 14 min at 7B (generation of 500 answers of up to 768
+engine B 18.3 min, QLoRA 44.5 min, GaLore 105.9 min. Eval is estimated at 3.5 min (full FT /
+engine B at 3B), 7 min (QLoRA at 3B), 5.5 and 11 min at 7B (generation of 500 answers of up to 512
 tokens plus the sandboxed tests; QLoRA is slower because its adapter is not merged, as in stage d).
+The shorter, fit-filtered texts do not change the step counts, so training time is as before.
 
 | Stage | All planned runs | Setup (install, model download, prep, base eval) | Total at $0.90/h | Cap | What the guard admits |
 |---|---|---|---|---|---|
-| 3B (9 runs) | 4.85 h | about 0.25 h | **5.1 h, $4.6** | $4.00 | default x3, qlora x2; **engine B x3 and qlora s2 dropped** |
-| 7B (5 runs) | 4.88 h | about 0.35 h | **5.2 h, $4.7** | $4.50 | block_k5 x2, qlora x2; **GaLore dropped** |
+| 3B (9 runs) | 4.65 h | about 0.25 h | **4.9 h, $4.4** | $4.00 | default x3, qlora x2; **engine B x3 and qlora s2 dropped** |
+| 7B (5 runs) | 4.71 h | about 0.35 h | **5.1 h, $4.6** | $4.50 | block_k5 x2, qlora x2; **GaLore dropped** |
 
 **The full pre-registered plan does not fit the caps.** Options for the lead (none is applied):
-(a) raise the 3B cap to about $4.80 and the 7B cap to about $5.30 (env `E4_BUDGET_USD_3B` /
-`_7B`); (b) run 2 seeds first (`E4_SEEDS_3B="0 1"`, about $3.1) and add seed 2 and engine B only
+(a) a higher cap (the plan needs about $4.4 for 3B and $4.6 for 7B before the guard's 10%
+margin and 10-minute reserve; env `E4_BUDGET_USD_3B` / `_7B`; the caps above are unchanged here and
+are the Director's to change); (b) run 2 seeds first (`E4_SEEDS_3B="0 1"`, about $3.1) and add seed 2 and engine B only
 if the gate is borderline (stages resume: a run with a receipt is skipped); (c) accept the
 guard's drops (the premise gate still has 3 vs 2 seeds). The numbers are in the table because the
 brief asked for them; they come from `scripts/e4_lib.py` (`estimate_run_s`, `walk_plan`).
@@ -246,7 +264,8 @@ process-level isolation for a throwaway pod, not a security boundary against a h
   student; it is not a public benchmark number.
 - The interface hint makes tests passable but also tells the model the signature; every arm gets
   the same help.
-- 29% of training examples are truncated at 512 tokens (see the proposal above).
+- The fit filter at 512 tokens drops 28.7% of the valid pool and so biases the data toward shorter
+  problems and solutions (same in every arm); nothing is truncated.
 - The QLoRA arm generates through the unmerged adapter on a 4-bit base, as in stage d.
 - Qwen2.5-3B is research-licensed; its derived weights are not for release.
 - One dataset shard (30K valid rows) is used; training sees 20,000 of them once.
@@ -259,7 +278,7 @@ process-level isolation for a throwaway pod, not a security boundary against a h
 | ANDON_AUTHORITY | 3 | Sandbox self-test aborts `setup`; a failed pre-check exits 4 and `stage` refuses to train without it; a non-PASS premise verdict blocks the 7B stage; tests cover each gate. |
 | NAMED_COMPENSATORS | 2 | Table below; the pod is created and deleted by the lead only. |
 | DECOMPOSE_BY_SECRETS | 2 | Pure decision logic (`e4_lib.py`) is separate from GPU work (`pod_block_engine.py`), orchestration (`pod_e4.py`) and statistics (`pod_e4_summary.py`). |
-| UNCERTAINTY_GATED_HUMANS | 2 | The lead decides the truncation proposal, the caps and the residual provenance question before the pod exists; a mixed gate result is reported, not auto-resolved. |
+| UNCERTAINTY_GATED_HUMANS | 2 | The lead decided the truncation question (fit-filter at 512, 2026-10-01); the caps and the residual provenance question are decided before the pod exists; a mixed gate result is reported, not auto-resolved. |
 | EXTERNAL_VERIFIER | n/a | Not specialized work in the sense of the standing rule; licence terms were read from the Hub and papers directly. |
 
 | Irreversible action | Undo | State after | Owner |
@@ -274,7 +293,7 @@ process-level isolation for a throwaway pod, not a security boundary against a h
 |---|---|
 | `licence_evidence.json` | Licence strings, Hub shas, card URLs, generator statements for the candidates and models |
 | `pre/prep_code.json` | The dataset split report, produced by the pod driver locally (no GPU), file hashes, eval ids |
-| `pre/lengths_code_Qwen_Qwen2.5-3B.json` | Tokenizer-only length and truncation statistics |
+| `pre/lengths_code_Qwen_Qwen2.5-3B.json` | Tokenizer-only length statistics after the fit filter, tokens per step, epochs |
 | `precheck_*.json`, `runs/`, `stage_e4_*.json`, `budget_*.json` | Added after the run |
 | `scripts/e4_lib.py` | Dataset prep, sandbox, statistics, decision rules, budget guard |
 | `scripts/pod_block_engine.py` | Driver; `--dataset code` adds prep, lengths, base and train with the code eval |

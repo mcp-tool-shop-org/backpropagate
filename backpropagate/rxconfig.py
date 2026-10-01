@@ -140,6 +140,10 @@ config = rx.Config(
     # app definition lives in ``ui_app/app.py`` (more readable / standard).
     app_module_import="ui_app.app",
     db_url=None,
+    # Reflex sends usage telemetry to PostHog by default (a "run-prod" event,
+    # an installation id, OS and CPU details on every `reflex run`).
+    # backpropagate ships no telemetry (Ship Gate A), so it is off.
+    telemetry_enabled=False,
     backend_only=False,
     cors_allowed_origins=_DEFAULT_CORS_ALLOWED_ORIGINS,
 )

@@ -134,3 +134,7 @@ site/dist/
 .web/
 .states/
 reflex.lock/
+uploaded_files/
+
+# compose.yaml UI credential (user:password); never commit
+ui-auth.txt

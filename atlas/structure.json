@@ -72,7 +72,7 @@
           "path": ".github/workflows/fuzz.yml"
         },
         {
-          "hash": "aff309948fd34d80a0bb162c8a4a55fbc91f57fa34c164ff1ac57782a49db48a",
+          "hash": "c34f93be357ffe4c6cc8aa36f1ad7c70e21b751a013a939565efdecd87cfc020",
           "path": ".github/workflows/mutmut.yml"
         },
         {
@@ -1082,112 +1082,112 @@
             {
               "in": "_find_port_in_use",
               "kind": "except",
-              "line": 3109
+              "line": 3105
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3183
+              "line": 3180
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3197
+              "line": 3194
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3207
+              "line": 3204
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3222
+              "line": 3219
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3254
+              "line": 3251
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3272
+              "line": 3269
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3276
+              "line": 3273
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3277
+              "line": 3274
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3284
+              "line": 3281
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3296
+              "line": 3293
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3297
+              "line": 3294
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3318
+              "line": 3315
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3336
+              "line": 3333
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3365
+              "line": 3362
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3387
+              "line": 3384
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3395
+              "line": 3392
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3430
+              "line": 3427
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3503
+              "line": 3499
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3518
+              "line": 3514
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3548
+              "line": 3544
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3625
+              "line": 3624
             },
             {
               "in": "cmd_ui",
@@ -1715,7 +1715,7 @@
               "line": 9670
             }
           ],
-          "hash": "3f54389d95273ade13d0071b2608b46ecce6be3bd2c1babc1d6f9860bc929377",
+          "hash": "a828eef6e65a02ceb3c4a88695c588513609f78038b225d4d218a3983b6b1d1d",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -2131,7 +2131,7 @@
               "calls": [
                 {
                   "branch": "auth_file and args.auth",
-                  "line": 3222,
+                  "line": 3219,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2139,14 +2139,14 @@
                 },
                 {
                   "branch": "not auth_file_path.exists()",
-                  "line": 3254,
+                  "line": 3251,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 3277,
+                  "line": 3274,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2154,14 +2154,14 @@
                 },
                 {
                   "branch": "not auth_text",
-                  "line": 3284,
+                  "line": 3281,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 3297,
+                  "line": 3294,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2169,7 +2169,7 @@
                 },
                 {
                   "branch": "args.share and args.auth is None",
-                  "line": 3318,
+                  "line": 3315,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2177,7 +2177,7 @@
                 },
                 {
                   "branch": "requested_host is not None and requested_host not in _LOOPB…",
-                  "line": 3336,
+                  "line": 3333,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2185,14 +2185,14 @@
                 },
                 {
                   "branch": "args.auth is not None and not ENFORCEMENT_AVAILABLE",
-                  "line": 3365,
+                  "line": 3362,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 3394,
+                  "line": 3391,
                   "name": "validate_auth_shape",
                   "target": {
                     "file": "backpropagate/ui_security.py"
@@ -2200,14 +2200,14 @@
                 },
                 {
                   "branch": "_busy_port is not None",
-                  "line": 3430,
+                  "line": 3427,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 3472,
+                  "line": 3468,
                   "name": "hash_password",
                   "target": {
                     "file": "backpropagate/ui_security.py"
@@ -3920,7 +3920,7 @@
               "line": 4347
             }
           ],
-          "hash": "60f58ab405c5538b6084b7890d5ff971392f5a01becf05b09b792c8d9ac5e279",
+          "hash": "4d7880afe1922a86226bae7ef90ee9d7e5a3085a3b541d858c3758ffc36e12e0",
           "importsFiles": [
             "backpropagate/config.py",
             "backpropagate/exceptions.py"
@@ -4708,7 +4708,7 @@
             "is_trust_remote_code_error",
             "print_error_code_catalog"
           ],
-          "hash": "1ae46d1bb351d8221a6956abc90c6ca3b253aa04918ae0fde0529ee4b1340e59",
+          "hash": "032642756bc187746d4bdf48ddad5bd65149cecf78013c6882efbfa60c1044fe",
           "path": "backpropagate/exceptions.py"
         },
         {
@@ -7392,22 +7392,22 @@
           "failurePaths": [
             {
               "kind": "except",
-              "line": 58
+              "line": 60
             },
             {
               "kind": "except",
-              "line": 61
-            },
-            {
-              "kind": "raise",
               "line": 63
             },
             {
               "kind": "raise",
-              "line": 84
+              "line": 65
+            },
+            {
+              "kind": "raise",
+              "line": 86
             }
           ],
-          "hash": "d9d0749cf41b1f016b00adfc03d8cd39f709a5952a95e431d77c384c8e7bf4dd",
+          "hash": "2e55289712ef4735c81658bd747b2540999c33fba6df3e06e00ba6fb751dc27e",
           "importsFiles": [
             "backpropagate/ui_app/auth.py"
           ],
@@ -9184,7 +9184,7 @@
               "line": 94
             }
           ],
-          "hash": "edb449304411ee6cb9f2989ff3ac6578038dd988da283ca8218ce42042666cc3",
+          "hash": "af277f0fb5b611c6eff61c2a3d7bdc94553c579061750c85f64420c6b9bb36d6",
           "importOrder": [
             "backpropagate/ui_theme.py",
             "backpropagate/ui_app/auth.py",
@@ -10337,7 +10337,7 @@
           "path": "backpropagate/ui_state.py"
         },
         {
-          "hash": "0a7f691cd43d719a88cdf440027e7c75786a24665bcf3f06b2b607fca145ed1f",
+          "hash": "51a1dcd932f01040ea17c3093bf9cbbc5f7075bb4c913694a51ae771a5861760",
           "path": "backpropagate/ui_theme.py"
         }
       ],
@@ -10386,7 +10386,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 138,
+      "testedBy": 139,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -11038,6 +11038,10 @@
         {
           "hash": "bb0a9526af1e0bbdac6bec1839d5e1886cbf376c9dddfba5be45593e7be5dfc7",
           "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
+        },
+        {
+          "hash": "4be636dfed098344b2e287fa8f7a0cc742a0a7c667aad45f8623c69304625151",
+          "path": "docs/ui-e2e-check-2026-10-01.md"
         }
       ],
       "globs": [
@@ -12204,11 +12208,11 @@
       "externals": 0,
       "files": [
         {
-          "hash": "ac42164bedd0215395f059933f5838a04f2a1a77d7793cfa4818d3c0ed09f517",
+          "hash": "ed4144c1757b278ac49a6ba98d9fa10515b6fa9e0b6f06c4892e0c2be8a6f223",
           "path": ".dockerignore"
         },
         {
-          "hash": "7081d2bbd70daa97e92057d49fee76a4759b4987318ad5de92fb83902504b147",
+          "hash": "9ac8ba5fce8e868c5ae3c55a2caeca8c66f9501a573372490baca351a5b7e77e",
           "path": ".gitignore"
         },
         {
@@ -12228,7 +12232,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "122882950c058c22f4216fd1f3669d643634d26f83486c7cca18ddbe2e3b3d25",
+          "hash": "b580529c03e98a46497c8079d72e41cf20b53dda7e3903dec345fa275fa14fca",
           "path": "CHANGELOG.md"
         },
         {
@@ -12244,11 +12248,11 @@
           "path": "CODE_OF_CONDUCT.md"
         },
         {
-          "hash": "3f5a7c9d2bdf16b181921b4013260f99a8dedc4f9f1f412acdf8de2c94357434",
+          "hash": "b58e555cae2381152d26740c65e40f989e1943da88c67bcc185841a01a1f6ced",
           "path": "CONTRIBUTING.md"
         },
         {
-          "hash": "f083db07c6109dc4e7e5e6a16a8dab9529bd42be0738a3d74f4e1d81b36e05d5",
+          "hash": "890c5e2a81c1d3d9ca06f68b6a4bd9173da47ede943ffb118c070cbd226dce4a",
           "path": "Dockerfile"
         },
         {
@@ -12280,7 +12284,7 @@
           "path": "README.ja.md"
         },
         {
-          "hash": "bbdef86537ac5f92d8982f6a90752ee4a297f9764cf1a8eb3f7f913e975bf3bc",
+          "hash": "953128afecce11f0b2c6fa9cd7e17073ec549550da977e74a20e1053982d1662",
           "path": "README.md"
         },
         {
@@ -12296,7 +12300,7 @@
           "path": "ROADMAP.md"
         },
         {
-          "hash": "2c5ee2e291dd3c94751cc4f7b9a1cc7845eca5a815e646093ccd6731d5bcd6fc",
+          "hash": "2fcf185dd5b50d40587f1c079a6f5dfeae3f697b613d6ca11796a553425a4985",
           "path": "SECURITY.md"
         },
         {
@@ -12320,7 +12324,7 @@
           "path": "codecov.yml"
         },
         {
-          "hash": "468987c0ea583fcd15b34762d7937a6a461f94dd2c6113765edb8c8c30189bea",
+          "hash": "76437a089363501f380aa421cab904079c46728dc8fd23e5202a365c1cbd51a4",
           "path": "compose.yaml"
         },
         {
@@ -12332,7 +12336,7 @@
           "path": "logo.png"
         },
         {
-          "hash": "270e28861bd0ab58b9ca2fef1cbb9a20e40ea5e510e1ea3d025887d01263c394",
+          "hash": "033014680454eef76a5f5588fcec7887b47b30b10792d2f02f49106c2f88af34",
           "path": "osv-scanner.toml"
         },
         {
@@ -12936,15 +12940,15 @@
           "path": "site/src/content/docs/handbook/beginners.md"
         },
         {
-          "hash": "db0c3f8bcdfe9a68f4fc9dc8c46ca57632e9b1cc2f077f1ed7462fb5816d4bd3",
+          "hash": "0e299b4b517e32bc208a27d594af6310ada4bbb5d51fc21adbe3cefea1c8c4e2",
           "path": "site/src/content/docs/handbook/cli-reference.md"
         },
         {
-          "hash": "50e63a6405465d0225b7735a9b90d7c6796a706a46e4782665a38634884aa255",
+          "hash": "efea90826b7a6d66adf349bccab00cbc8f2be148dc6e07b90094bc02245fe2d8",
           "path": "site/src/content/docs/handbook/env-vars.md"
         },
         {
-          "hash": "2a87a12fd8ce82ea269fa2bfce3a4d8ec9878c7fc8871fbcffc9509749989fff",
+          "hash": "9a8948e86315419508edb519640db9f3ea04e53346968531c82267b8d22418f8",
           "path": "site/src/content/docs/handbook/error-codes.md"
         },
         {
@@ -12968,7 +12972,7 @@
           "path": "site/src/content/docs/handbook/index.md"
         },
         {
-          "hash": "4b421013773685357e5714a4c664ceec0b0a3f623e2c03c1b1258f491b028cff",
+          "hash": "477a0724cf91d8bda614a16f65ba1bc5bddbd5ab11cf4d54e7f5dbcd8bd9f80d",
           "path": "site/src/content/docs/handbook/migrations.md"
         },
         {
@@ -12976,15 +12980,15 @@
           "path": "site/src/content/docs/handbook/preference-tuning.md"
         },
         {
-          "hash": "cf477a3fbed8f749dc74acf36484196695540ec55814e69916c95793e6cd1aff",
+          "hash": "6a7cb9a8ef37509d0b4e76a04985a22d218be30b93a9ab91d8d270ee319e2287",
           "path": "site/src/content/docs/handbook/recipes.md"
         },
         {
-          "hash": "06fbf8bdc24d39db26c84cb4d072bc170338f1cad67a8f6a06f6955a209b6234",
+          "hash": "3eab2f0fee6beb9024d8fe6807542d2108b3af17962b6029e357a5806cc9267b",
           "path": "site/src/content/docs/handbook/reference.md"
         },
         {
-          "hash": "f9b037dfe2c0aea33c0c8c65c44e2702fe178538419826d385723a806cb0a622",
+          "hash": "b6050bcfce3cca979d4162504dcc1d9885977b0f4ce8d4ee6c479d9098deaeac",
           "path": "site/src/content/docs/handbook/security.md"
         },
         {
@@ -12996,7 +13000,7 @@
           "path": "site/src/content/docs/handbook/troubleshooting-cuda.md"
         },
         {
-          "hash": "82bb56f7ee303524e82e9e1db212f33bb3662ddf3a193b0363dd66119f01d747",
+          "hash": "04d89f7d1bd92f0d930ce242d8258f8535701037c00109d45d0915ce8a1ef62e",
           "path": "site/src/content/docs/handbook/troubleshooting.md"
         },
         {
@@ -13496,7 +13500,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "8e55d57fa46d1e7b95d38ab871dda1ee9451571ec55542f0540dca95f990d860",
+          "hash": "8157ba99d2a09efdeb3d00ac80f3a9b0bf7689300604c6879ff67a3149b1365a",
           "importOrder": [
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
@@ -13680,7 +13684,7 @@
           "exports": [
             "ui"
           ],
-          "hash": "99ef3b80d181d427aca2ae784afd0a3d71f83167d1ecb174f44a36896f92b116",
+          "hash": "093fa8466efcd645ede8ee363a486aa7bd42200cc2ff9f207a9edb7ab9acee81",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/cli.py",
@@ -13737,7 +13741,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "701e7f813321e82fb87b5379be062589c88cd89e9481821b3fa3c5e66c1611cf",
+          "hash": "5b37085b860cda78bda09190bc6fa62319240013ab325598c2c43d7daf01ea2c",
           "importOrder": [
             "tests/helpers/ui_auth.py",
             "backpropagate/__init__.py",
@@ -15452,7 +15456,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "9afdc1a01f7390e0778659eb1b0aa07c160f703c4381668e80d1bae80fa29b50",
+          "hash": "d5a547b4bb2f38887304546e122fcfd0989865b2c9304ee0f27c83bf08f2b89e",
           "importOrder": [
             "backpropagate/ui_app/components/sparkline.py",
             "backpropagate/ui_app/components/vram_bar.py",
@@ -15603,6 +15607,18 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "auth_ui",
+            "default_ui"
+          ],
+          "hash": "aa7ddc3dd3180f0c200f9c6770a500d8770e820a793cf988184fe262f0db497e",
+          "importsFiles": [
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_ui_e2e_real_reflex.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "e30383315bd0118080b555dee86552ff59ff504c279a411cd22754eebb12f199",
           "importOrder": [
             "backpropagate/ui_security.py",
@@ -15616,7 +15632,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "93101fe1abe66780c8d32370e1088f44033bbdd858f153ddb9d26fc7589e05d7",
+          "hash": "8d5ccb7d8280ac6a4542837bd7585db53f0877b6882a77f780b1ad25426e0613",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_theme.py",
@@ -16542,7 +16558,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 148
+          "files": 149
         },
         {
           "boundary": "fuzz",
@@ -16710,7 +16726,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 148,
+          "files": 149,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -16718,7 +16734,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 148,
+          "files": 149,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -16726,28 +16742,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 148,
+          "files": 149,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 148,
+          "files": 149,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 148,
+          "files": 149,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 148,
+          "files": 149,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -17056,20 +17072,12 @@
           "dir": "",
           "job": "mutmut",
           "programs": [
-            "gh"
-          ],
-          "step": "Ensure required labels exist"
-        },
-        {
-          "dir": "",
-          "job": "mutmut",
-          "programs": [
+            "cat",
             "date",
             "echo",
-            "gh",
             "git"
           ],
-          "step": "Update baseline (if changed)"
+          "step": "Report a baseline change (proposed by a person, not pushed)"
         }
       ],
       "elsewhere": [],
@@ -17118,13 +17126,9 @@
       ],
       "name": "Mutation testing (mutmut)",
       "permissions": [
-        "contents:read",
-        "contents:write",
-        "issues:write",
-        "pull-requests:write"
+        "contents:read"
       ],
       "pushes": false,
-      "pushesForReview": true,
       "reach": [
         {
           "boundary": "scripts",
@@ -17141,22 +17145,18 @@
         }
       ],
       "runsCount": 1,
-      "secrets": [
-        "GITHUB_TOKEN"
-      ],
+      "secrets": [],
       "sends": {
         "deploysPages": false,
         "dispatchesTo": [],
         "opensIssues": false,
         "opensIssuesOnFailure": false,
-        "opensPullRequests": true,
+        "opensPullRequests": false,
         "publishes": false,
         "publishesTo": [],
         "releases": false
       },
-      "stages": [
-        ".github/mutmut-baseline.txt"
-      ],
+      "stages": [],
       "triggers": [
         {
           "event": "workflow_dispatch"
@@ -17167,7 +17167,7 @@
         "actions/setup-python",
         "actions/upload-artifact"
       ],
-      "usesWorkflowToken": true
+      "usesWorkflowToken": false
     },
     {
       "checksCount": 0,
@@ -18530,8 +18530,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "f1eaf8a56c2f1b01e9669ef5d5297d43eba455b4",
-    "tracked": 706
+    "commit": "2db7f1062aeaf851bcfe9b6ff4d6b385c82ed011",
+    "tracked": 708
   },
   "landings": [
     {
@@ -19261,7 +19261,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 151,
+  "testFiles": 152,
   "unassigned": [],
   "unseen": [
     {

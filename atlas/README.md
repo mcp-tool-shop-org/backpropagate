@@ -1,14 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit f1eaf8a by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit 2db7f10 by Atlas 1.24.0.
 
 ## What this is
 
-13 parts, mostly Python (216 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+13 parts, mostly Python (217 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (9d35807)
+## What changed since 2026-10-01 (f1eaf8a)
 
-Nothing structural changed since 2026-10-01; 2 files added and 28 changed content.
+Nothing structural changed since 2026-10-01; 2 files added and 29 changed content.
 
 ## What comes in
 
@@ -48,7 +48,7 @@ CI writes nothing this map can see.
 
 **Doc Drift Check** runs scripts/check_doc_drift.py.
 
-**Mutation testing (mutmut)** runs scripts/ci_install_locked.sh, commits .github/mutmut-baseline.txt and pushes to a branch for review, never to main, and opens a pull request.
+**Mutation testing (mutmut)** runs scripts/ci_install_locked.sh.
 
 **Pages deploy** runs site/astro.config.mjs and site/src/, and deploys the site.
 
@@ -79,7 +79,7 @@ No two source files, other than a file and its own test, changed together often 
 
 2 files changed together with their own tests, as expected.
 
-Window: 180 days; a pair counts from 10 shared commits, since 22 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
+Window: 180 days; a pair counts from 10 shared commits, since 23 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
 
 ## What no test touches
 

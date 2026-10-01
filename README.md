@@ -54,7 +54,7 @@ pipx install "backpropagate[standard]"   # adds Unsloth (2x faster training) + t
 pipx install "backpropagate[full]"       # adds everything: unsloth, ui, monitoring, export, etc.
 ```
 
-Prefer Docker? `docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest` works too. Images ship for both `linux/amd64` and `linux/arm64`, so Apple Silicon and ARM Linux operators get a native image. A canonical `compose.yaml` for "UI in a container" lives at the repo root — `docker compose up` brings the web UI up on `http://localhost:7860` with a persistent `~/.backpropagate` volume mount.
+Prefer Docker? `docker pull ghcr.io/mcp-tool-shop-org/backpropagate:latest` works too. Images ship for both `linux/amd64` and `linux/arm64`, so Apple Silicon and ARM Linux operators get a native image. A canonical `compose.yaml` for "UI in a container" lives at the repo root: put `user:password` in a `ui-auth.txt` next to it, run `docker compose up`, and sign in at `http://127.0.0.1:7860` (the first start builds the frontend, which takes a minute or two). Run history persists in `~/.backpropagate`.
 
 ## Where Backpropagate sits in the space
 

@@ -18,3 +18,10 @@ checkpoints/
 *.md
 !README.md
 !LICENSE
+ui-auth.txt
+# Reflex build output from a local `backprop ui` run; never bake it in
+**/.web/
+**/.states/
+**/reflex.lock/
+**/uploaded_files/
+backpropagate/requirements.txt

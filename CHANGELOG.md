@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The SSH port-forwarding examples in the README and handbook forwarded port
   7860 while `backprop ui` listens on 7862; they now use 7862 and the banner
   URL.
+- **`docker compose up` starts the web UI.** It never could: `compose.yaml`
+  ran `ui --host 0.0.0.0` without `--auth`, which `backprop ui` refuses, and
+  the image had no Reflex in it. The image now carries the `[ui]` extra and a
+  pinned, checksum-verified bun (the JavaScript runtime Reflex builds the
+  frontend with; Reflex would otherwise fetch it at start-up through
+  `curl | bash`), plus writable build directories for the non-root user.
+  `compose.yaml` passes `--auth-file` from a Compose secret, `ui-auth.txt`,
+  and keeps the port loopback-only. Its old advice to set
+  `BACKPROPAGATE_UI_AUTH` did nothing, since `backprop ui` ignores ambient
+  credentials.
 
 ### Security
 
@@ -43,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was the SHA-256 of `user:pass`, so a captured cookie could be brute-forced
   offline for the password. The key is now random per process; sessions end
   when the UI restarts.
+- **The web UI no longer sends usage telemetry.** Reflex reports to PostHog
+  by default, and `backprop ui` left that on: every launch sent a `run-prod`
+  event with an installation id, OS and CPU details and version numbers.
+  `rxconfig.py` now sets `telemetry_enabled=False`.
 - The `--auth` error hints suggested `BACKPROPAGATE_UI_AUTH=user:pass` to keep
   a password out of shell history, but `backprop ui` deliberately ignores that
   variable, so following the hint launched without the credential. They now

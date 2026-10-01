@@ -25,6 +25,13 @@ next to it, to separate format failures from arithmetic). Every arm sees the
 same prompt: the library's ChatML text (DatasetLoader), user turn = question +
 GSM_INSTRUCTION, generation prompted with ``<|im_start|>assistant\n``.
 
+``--dataset code`` (experiment E4, scripts/pod_e4.py) switches prep/lengths/base/train to
+nvidia/OpenCodeInstruct (CC BY-4.0; ``scripts/e4_lib.py``): train on the filtered,
+deduplicated split; evaluate on held-out problems with two metrics, held-out loss on the
+reference answer tokens (primary) and pass@1 of greedy generations executed against the
+problems' unit tests (secondary). Model-generated code only ever runs under
+``--allow-exec`` on Linux (the pod); without it the items are recorded as not executed.
+
 Data: databricks/databricks-dolly-15k (CC BY-SA 3.0), context folded into the
 user turn, fixed-seed shuffle — the same split as the offload quality check on
 feat/offload-7b (scripts/offload_quality.py). Held-out loss is token-weighted
@@ -49,6 +56,9 @@ import sys
 import time
 import traceback
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import e4_lib as E4  # noqa: E402  (pure helpers: code-task prep, sandboxed executor, gates)
+
 ap = argparse.ArgumentParser()
 ap.add_argument("mode", choices=["prep", "base", "train", "summarize", "inspect", "lengths"])
 ap.add_argument("--out", required=True)
@@ -67,7 +77,7 @@ ap.add_argument("--seq", type=int, default=512)
 ap.add_argument("--lr", type=float, default=2e-5)
 ap.add_argument("--lr-default", action="store_true",
                 help="pass no learning_rate: each arm uses the library's documented default")
-ap.add_argument("--dataset", choices=["dolly", "gsm8k"], default="dolly")
+ap.add_argument("--dataset", choices=["dolly", "gsm8k", "code"], default="dolly")
 ap.add_argument("--eval-batch", type=int, default=50)
 ap.add_argument("--max-new-tokens", type=int, default=400)
 ap.add_argument("--n-test", type=int, default=250)
@@ -89,6 +99,17 @@ ap.add_argument("--n-train", type=int, default=400)
 ap.add_argument("--n-heldout", type=int, default=150)
 ap.add_argument("--synthetic", action="store_true",
                 help="prep: write a tiny synthetic split instead of downloading dolly (driver dry run)")
+ap.add_argument("--n-eval", type=int, default=E4.DEFAULT_N_EVAL,
+                help="prep (code): number of held-out problems")
+ap.add_argument("--allow-exec", action="store_true",
+                help="code: execute generated code (pass@1) in the resource-limited sandbox. Refused on "
+                     "Windows; without it items are recorded as not executed (CPU dry run)")
+ap.add_argument("--exec-timeout", type=float, default=10.0, help="code: seconds per candidate")
+ap.add_argument("--exec-workers", type=int, default=8, help="code: parallel sandboxes")
+ap.add_argument("--eval-seq", type=int, default=0,
+                help="code: max tokens per sequence for the primary held-out loss (0 = --seq, as in stage d)")
+ap.add_argument("--eval-seq-long", type=int, default=1024,
+                help="code: also record the held-out loss at this length when it exceeds --seq (0 = off)")
 args = ap.parse_args()
 
 OUT = args.out
@@ -102,6 +123,10 @@ if args.dataset == "gsm8k":
     HELD = os.path.join(OUT, "gsm8k_test.jsonl")
 GSM_INSTRUCTION = ("Solve the math word problem. Show your reasoning step by step, then give the "
                    "final numeric answer on its own last line in the form '#### <number>'.")
+if args.dataset == "code":
+    TRAIN = os.path.join(OUT, "code_train.jsonl")
+    HELD = os.path.join(OUT, "code_eval.jsonl")
+    GOLD = os.path.join(OUT, "code_eval_meta.json")
 ASSISTANT_MARKER = "<|im_start|>assistant\n"
 GIB = 2**30
 # Trainer output (its end-of-run checkpoint) and the save->reload copy can live
@@ -111,7 +136,9 @@ SAVEDIR = os.environ.get("BP_SAVE_DIR") or WORKDIR
 
 
 def slug(model: str) -> str:
-    """File-name form of a model id ("Qwen/Qwen2.5-7B" -> "Qwen_Qwen2.5-7B")."""
+    """File-name form of a model id ("Qwen/Qwen2.5-7B" -> "Qwen_Qwen2.5-7B"); a local dir -> its name."""
+    if os.path.isdir(model):
+        model = os.path.basename(os.path.normpath(model))
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in model)
 
 
@@ -126,7 +153,68 @@ def dump(path: str, rec: dict) -> None:
     print("RECEIPT " + json.dumps(rec), flush=True)
 
 
+def hub_info(repo_id: str, kind: str) -> dict:
+    """Licence / sha as the Hub reports them right now (recorded in the receipt)."""
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        info = api.dataset_info(repo_id) if kind == "dataset" else api.model_info(repo_id)
+        card = info.card_data.to_dict() if getattr(info, "card_data", None) else {}
+        return {"repo": repo_id, "kind": kind, "sha": info.sha, "license": card.get("license"),
+                "license_name": card.get("license_name"), "last_modified": str(info.last_modified),
+                "checked": time.strftime("%Y-%m-%d", time.gmtime())}
+    except Exception as exc:  # noqa: BLE001 - a Hub outage must not kill a run; the error is recorded
+        return {"repo": repo_id, "kind": kind, "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+
 # --------------------------------------------------------------------- prep
+if args.mode == "prep" and args.dataset == "code":
+    import hashlib
+
+    if args.synthetic:
+        raw_rows = E4.synthetic_rows(args.n_train + args.n_eval + 4)
+        source = {"dataset": "synthetic (dry run)"}
+    else:
+        import pyarrow.parquet as pq
+        from huggingface_hub import hf_hub_download
+
+        shard = hf_hub_download(E4.DATASET_ID, E4.DATASET_SHARD, repo_type="dataset",
+                                revision=E4.DATASET_REVISION)
+        raw_rows = pq.read_table(shard).to_pylist()
+        source = {"dataset": E4.DATASET_ID, "revision": E4.DATASET_REVISION, "shard": E4.DATASET_SHARD,
+                  "hub_now": hub_info(E4.DATASET_ID, "dataset")}
+    eval_recs, train_recs, report = E4.build_dataset(raw_rows, seed=E4.SPLIT_SEED, n_eval=args.n_eval)
+    if args.synthetic:
+        train_recs = train_recs[: args.n_train]
+        report["n_train"] = len(train_recs)
+    with open(TRAIN, "w") as fh:
+        for r in train_recs:
+            fh.write(json.dumps(E4.to_messages(r)) + "\n")
+    with open(HELD, "w") as fh:
+        for r in eval_recs:
+            fh.write(json.dumps(E4.to_messages(r)) + "\n")
+    with open(GOLD, "w") as fh:
+        json.dump([E4.eval_meta(r, i) for i, r in enumerate(eval_recs)], fh)
+    sha = {}
+    for f in (TRAIN, HELD, GOLD):
+        with open(f, "rb") as fh:
+            sha[os.path.basename(f)] = hashlib.sha256(fh.read()).hexdigest()[:16]
+    dump(os.path.join(OUT, "prep_code.json"), {
+        "mode": "prep", **source, "license": "CC BY 4.0 (dataset card)", "split": report,
+        "files_sha256_16": sha, "eval_ids": [r["id"] for r in eval_recs],
+        "prompt_format": {
+            "text": "library ChatML via DatasetLoader: <|im_start|>user\\n{question}\\n\\nYour solution must "
+                    "define this interface:\\n```python\\n{signatures}\\n```\\nReply with ...<|im_end|>"
+                    "\\n<|im_start|>assistant\\n{reference solution}<|im_end|>",
+            "interface_hint": "signatures of the top-level names in the reference that the unit tests call",
+            "generation": "greedy, prompt ends at '<|im_start|>assistant\\n', stop on <|im_end|>/eos",
+            "pass": "the first python code block of the reply passes every unit test of the problem",
+        },
+        "filters": ["domain == generic", "average_test_score == 1.0 and every test status pass",
+                    "reference parses, tests parse, tests call something the reference defines"]})
+    raise SystemExit(0)
+
 if args.mode == "prep" and args.synthetic:
     # CPU dry run of this driver (no download): same file shapes, fake text.
     words = ["the", "cat", "sat", "on", "the", "mat", "and", "the", "dog", "ran", "to", "the", "park"]
@@ -507,31 +595,27 @@ def _same(a: float | None, b: float | None) -> bool:
     return a is not None and b is not None and abs(a - b) < 1e-6
 
 
-@torch.no_grad()
-def gsm_eval(model, tok) -> dict:
-    """Answer-token held-out loss + greedy-generation accuracy on the test sample."""
-    t_start = time.perf_counter()
-    was_training = model.training
-    model.eval()
-    dev = next(model.parameters()).device
-    texts = heldout_texts()
-    with open(GOLD) as fh:
-        gold = json.load(fh)
-    qids = list(range(len(gold)))
-    _prep = os.path.join(OUT, "prep_gsm8k.json")
-    if os.path.exists(_prep):
-        with open(_prep) as fh:
-            qids = json.load(fh).get("test_indices", qids)
+def split_prompts(texts: list[str]) -> tuple[list[str], list[str]]:
+    """ChatML text -> (prompt up to and including the assistant marker, answer)."""
     prompts, answers = [], []
     for text in texts:
         i = text.rindex(ASSISTANT_MARKER) + len(ASSISTANT_MARKER)
         prompts.append(text[:i])
         answers.append(text[i:])
+    return prompts, answers
+
+
+@torch.no_grad()
+def answer_loss_items(model, tok, prompts: list[str], answers: list[str], max_len: int, dev):
+    """Per-item answer-token loss (prompt tokens masked); token-weighted total.
+
+    Returns (total_loss_sum, token_count, [(loss_sum, tokens)] per item, prefix_mismatch).
+    """
     total, count, prefix_mismatch = 0.0, 0, 0
     item_loss: list[tuple[float, int]] = []
     for pr, an in zip(prompts, answers):
         pi = tok(pr, add_special_tokens=False)["input_ids"]
-        fi = tok(pr + an, add_special_tokens=False, truncation=True, max_length=args.seq)["input_ids"]
+        fi = tok(pr + an, add_special_tokens=False, truncation=True, max_length=max_len)["input_ids"]
         prefix_mismatch += int(fi[: len(pi)] != pi)
         ids = torch.tensor([fi], device=dev)
         labels = ids.clone()
@@ -544,6 +628,15 @@ def gsm_eval(model, tok) -> dict:
         total += float(out.loss) * n
         count += n
         item_loss.append((float(out.loss) * n, n))
+    return total, count, item_loss, prefix_mismatch
+
+
+@torch.no_grad()
+def greedy_generate(model, tok, prompts: list[str], dev, max_new_tokens: int) -> tuple[list[str], int]:
+    """Batched greedy decoding (left padding, shortest prompts first); stops on eos / <|im_end|>.
+
+    Returns (outputs in prompt order, number of generations that hit the token limit).
+    """
     side = tok.padding_side
     tok.padding_side = "left"
     if tok.pad_token is None:
@@ -559,13 +652,34 @@ def gsm_eval(model, tok) -> dict:
         idx = order[s0: s0 + args.eval_batch]
         enc = tok([prompts[i] for i in idx], return_tensors="pt", padding=True,
                   add_special_tokens=False).to(dev)
-        gen = model.generate(**enc, max_new_tokens=args.max_new_tokens, do_sample=False,
+        gen = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
                              eos_token_id=stop, pad_token_id=tok.pad_token_id, use_cache=True)
         new = gen[:, enc["input_ids"].shape[1]:]
         for j, i in enumerate(idx):
             outs[i] = tok.decode(new[j], skip_special_tokens=True)
             hit_limit += int(not any(int(t) in stop for t in new[j]))
     tok.padding_side = side
+    return outs, hit_limit
+
+
+@torch.no_grad()
+def gsm_eval(model, tok) -> dict:
+    """Answer-token held-out loss + greedy-generation accuracy on the test sample."""
+    t_start = time.perf_counter()
+    was_training = model.training
+    model.eval()
+    dev = next(model.parameters()).device
+    texts = heldout_texts()
+    with open(GOLD) as fh:
+        gold = json.load(fh)
+    qids = list(range(len(gold)))
+    _prep = os.path.join(OUT, "prep_gsm8k.json")
+    if os.path.exists(_prep):
+        with open(_prep) as fh:
+            qids = json.load(fh).get("test_indices", qids)
+    prompts, answers = split_prompts(texts)
+    total, count, item_loss, prefix_mismatch = answer_loss_items(model, tok, prompts, answers, args.seq, dev)
+    outs, hit_limit = greedy_generate(model, tok, prompts, dev, args.max_new_tokens)
     strict = [_same(_extract_strict(o), g) for o, g in zip(outs, gold)]
     items = [{"qid": qids[i], "gold": gold[i], "generated": outs[i], "parsed": _extract_strict(outs[i]),
               "correct": strict[i], "answer_loss_sum": round(item_loss[i][0], 6),
@@ -586,15 +700,118 @@ def gsm_eval(model, tok) -> dict:
     }
 
 
+@torch.no_grad()
+def code_eval(model, tok) -> dict:
+    """E4: answer-token held-out loss + pass@1 of greedy generations run against the unit tests."""
+    t_start = time.perf_counter()
+    was_training = model.training
+    model.eval()
+    dev = next(model.parameters()).device
+    texts = heldout_texts()
+    with open(GOLD) as fh:
+        meta = json.load(fh)
+    prompts, answers = split_prompts(texts)
+    total, count, item_loss, prefix_mismatch = answer_loss_items(
+        model, tok, prompts, answers, args.eval_seq or args.seq, dev)
+    long_len = args.eval_seq_long if args.eval_seq_long > (args.eval_seq or args.seq) else 0
+    long_loss = None
+    if long_len:  # secondary: the loss with the tail of long references included
+        tot2, cnt2, _, _ = answer_loss_items(model, tok, prompts, answers, long_len, dev)
+        long_loss = {"max_len": long_len, "answer_loss": round(tot2 / cnt2, 4) if cnt2 else None,
+                     "answer_tokens": cnt2}
+    t_loss = time.perf_counter()
+    outs, hit_limit = greedy_generate(model, tok, prompts, dev, args.max_new_tokens)
+    t_gen = time.perf_counter()
+    jobs = [(E4.extract_code(o), m["tests"]) for o, m in zip(outs, meta)]
+    if args.allow_exec:
+        results = E4.run_many(jobs, allow_exec=True, workers=args.exec_workers,
+                              timeout_s=args.exec_timeout)
+    else:
+        results = [E4.not_executed(t) for _, t in jobs]
+    t_exec = time.perf_counter()
+    summ = E4.summarize_outcomes(results)
+    items = [{"qid": meta[i]["qid"], "id": meta[i]["id"], "correct": results[i]["outcome"] == "pass",
+              "outcome": results[i]["outcome"], "tests_passed": results[i]["tests_passed"],
+              "tests_total": results[i]["tests_total"], "detail": results[i]["detail"],
+              "generated": outs[i], "answer_loss_sum": round(item_loss[i][0], 6),
+              "answer_tokens": item_loss[i][1]} for i in range(len(outs))]
+    if was_training:
+        model.train()
+    return {
+        "answer_loss": round(total / count, 4) if count else None, "answer_tokens": count,
+        "answer_loss_max_len": args.eval_seq or args.seq, "answer_loss_long": long_loss,
+        "pass_at_1": summ["pass_at_1"] if summ["executed"] else None, "executed": summ["executed"],
+        "acc_strict": summ["pass_at_1"] if summ["executed"] else None,  # alias: shared receipt keys
+        "outcomes": summ["outcomes"], "passed": summ["passed"],
+        "hit_max_new_tokens": hit_limit, "prefix_mismatch": prefix_mismatch,
+        "n": len(outs), "eval_s": round(t_exec - t_start, 1),
+        "eval_s_split": {"loss": round(t_loss - t_start, 1), "generate": round(t_gen - t_loss, 1),
+                         "execute": round(t_exec - t_gen, 1)},
+        "samples": [{"output": outs[i][:600], "outcome": results[i]["outcome"]} for i in range(3)],
+        "items": items, "template_example_prompt": prompts[0],
+    }
+
+
 def write_items(tag: str, ev: dict) -> str:
-    """Per-item outputs for the paired tests: runs/items/<tag>.jsonl."""
+    """Per-item outputs for the paired tests: runs/items/<tag>.jsonl (.jsonl.gz for code)."""
     d = os.path.join(RUNS, "items")
     os.makedirs(d, exist_ok=True)
+    if args.dataset == "code":
+        import gzip
+
+        path = os.path.join(d, f"{tag}.jsonl.gz")
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            for it in ev["items"]:
+                fh.write(json.dumps(it) + "\n")
+        return os.path.relpath(path, OUT)
     path = os.path.join(d, f"{tag}.jsonl")
     with open(path, "w") as fh:
         for it in ev["items"]:
             fh.write(json.dumps(it) + "\n")
     return os.path.relpath(path, OUT)
+
+
+if args.mode == "lengths" and args.dataset == "code":
+    # E4: how much of the code task fits in --seq? Reports the truncated fraction at 512 / 768 /
+    # 1024, the real (non-padding) tokens per step for the candidate batch x seq shapes, and the
+    # reference-answer lengths that set max_new_tokens.
+    from transformers import AutoTokenizer
+
+    from backpropagate.datasets import DatasetLoader
+
+    tok = AutoTokenizer.from_pretrained(args.model)
+    rec = {"mode": "lengths", "dataset": "code", "model": args.model, **env()}
+    for name, path in (("train", TRAIN), ("eval", HELD)):
+        texts = list(DatasetLoader(path, validate=False).to_hf_dataset()["text"])
+        full, ans = [], []
+        for t_ in texts:
+            i = t_.rindex(ASSISTANT_MARKER) + len(ASSISTANT_MARKER)
+            fl = len(tok(t_, add_special_tokens=False)["input_ids"])
+            full.append(fl)
+            ans.append(fl - len(tok(t_[:i], add_special_tokens=False)["input_ids"]))
+
+        def pct(q: float, xs: list[int]) -> int:
+            xs = sorted(xs)
+            return xs[min(len(xs) - 1, int(q * len(xs)))]
+
+        ent = {"n": len(full), "full_p50": pct(0.5, full), "full_p90": pct(0.9, full),
+               "full_p99": pct(0.99, full), "full_max": max(full), "answer_p50": pct(0.5, ans),
+               "answer_p99": pct(0.99, ans), "answer_max": max(ans)}
+        for lim in (512, 768, 1024):
+            ent[f"frac_text_over_{lim}"] = round(sum(f > lim for f in full) / len(full), 4)
+        ent["real_tokens_per_example"] = {str(lim): round(sum(min(f, lim) for f in full) / len(full), 1)
+                                          for lim in (512, 768, 1024)}
+        rec[name] = ent
+    t512 = rec["train"]["frac_text_over_512"]
+    rec["truncated_fraction_at_512"] = t512
+    rec["rule"] = ("a reference solution is truncated when its prompt + solution exceed --seq tokens; "
+                   "if more than 5% are truncated at 512, PROPOSE batch 2 x 1024 (not applied)")
+    rec["proposal"] = {"batch": 2, "seq": 1024} if t512 > 0.05 else None
+    rec["real_tokens_per_step"] = {
+        "4x512": round(4 * rec["train"]["real_tokens_per_example"]["512"]),
+        "2x1024": round(2 * rec["train"]["real_tokens_per_example"]["1024"])}
+    dump(os.path.join(RUNS, f"lengths_code_{slug(args.model)}.json"), rec)
+    raise SystemExit(0)
 
 
 if args.mode == "lengths":
@@ -662,6 +879,28 @@ if args.mode == "inspect":
     rec.update(nvml_report())
     dump(os.path.join(RUNS, f"{args.tag or 'inspect_' + slug(args.model)}.json"), rec)
     raise SystemExit(0)
+
+
+if args.mode == "base" and args.dataset == "code":
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(args.model)
+    m = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16, device_map=DEVICE)
+    ev = code_eval(m, tok)
+    ev["items_file"] = write_items(f"base_code_{args.tag or slug(args.model)}", ev)
+    ev.pop("items")
+    if ev["executed"]:
+        pre = E4.precheck_verdict(ev["pass_at_1"], ev["answer_loss"])
+    else:  # CPU dry run: nothing was executed, so the abort gate cannot be judged
+        pre = {"ok": True, "verdict": "SKIPPED", "reasons": ["dry run: generated code not executed"]}
+    rec = {"mode": "base", "dataset": "code", "model": args.model, "heldout_loss": ev["answer_loss"],
+           **ev, "precheck": pre, "in_bounds": pre["ok"],
+           "acc_wilson95": E4.wilson(round((ev["pass_at_1"] or 0) * ev["n"]), ev["n"]),
+           "hub_model": hub_info(args.model, "model") if not os.path.isdir(args.model) else None,
+           **env(), **nvml_report()}
+    dump(os.path.join(RUNS, f"base_code_{args.tag or slug(args.model)}.json"), rec)
+    print("PRECHECK " + json.dumps(pre), flush=True)
+    raise SystemExit(0 if pre["ok"] else 1)
 
 
 if args.mode == "base" and args.dataset == "gsm8k":
@@ -739,12 +978,13 @@ rec: dict = {"mode": "train", "tag": tag, "arm": os.environ.get("ARM", arm), "mo
              "settings_seed": bp_settings.training.seed,
              "settings_logging_steps": bp_settings.training.logging_steps}
 rec["dataset"] = args.dataset
-base_path = os.path.join(RUNS, f"base_{'gsm8k_' if args.dataset == 'gsm8k' else ''}{slug(args.model)}.json")
+base_path = os.path.join(RUNS, f"base_{ {'gsm8k': 'gsm8k_', 'code': 'code_'}.get(args.dataset, '') }{slug(args.model)}.json")
 if os.path.exists(base_path):
     with open(base_path) as fh:
         _b = json.load(fh)
     rec["heldout_before"] = _b["heldout_loss"]
     rec["acc_before"] = _b.get("acc_strict")
+    rec["pass_at_1_before"] = _b.get("pass_at_1")
 
 # Per-block-visit peak VRAM: wrap the engine's deactivate (the end of a visit).
 visit_peaks: list[dict] = []
@@ -931,9 +1171,10 @@ try:
     with open(TRAIN) as fh:
         n_rows = sum(1 for line in fh if line.strip())
     rec["train_rows_available"] = n_rows
-    rec["train_samples_used"] = n_rows if args.dataset == "gsm8k" else min(n_rows, bp_settings.data.max_samples)
+    all_rows = args.dataset in ("gsm8k", "code")
+    rec["train_samples_used"] = n_rows if all_rows else min(n_rows, bp_settings.data.max_samples)
     rec["epochs_seen"] = round(args.steps * args.batch / rec["train_samples_used"], 3)
-    run = t.train(TRAIN, steps=args.steps, samples=n_rows if args.dataset == "gsm8k" else None,
+    run = t.train(TRAIN, steps=args.steps, samples=n_rows if all_rows else None,
                   callback=TrainingCallback(on_step=on_step))
     nvml_mark("after_train")
     rec["torch_max_allocated_train_gib"] = round(peak_alloc(), 3)
@@ -969,18 +1210,18 @@ try:
             out = m.generate(input_ids=ids, max_new_tokens=24, do_sample=False)
         rec["generation"] = tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True)
         rec["model_class"] = type(m).__name__
-    if not args.no_eval and args.dataset == "gsm8k":
+    if not args.no_eval and all_rows:
         # Free the trainer (optimizer state) before generating.
         t._trainer = None
         gc.collect()
         if CUDA:
             torch.cuda.empty_cache()
         nvml_mark("eval")
-        ev = gsm_eval(t._model, t._tokenizer)
+        ev = (code_eval if args.dataset == "code" else gsm_eval)(t._model, t._tokenizer)
         rec["items_file"] = write_items(tag, ev)
         ev.pop("items")
         rec.update({k: v for k, v in ev.items() if k != "answer_loss"})
-        rec["acc_wilson95"] = wilson(ev["acc_strict"], ev["n"])
+        rec["acc_wilson95"] = wilson(ev["acc_strict"] or 0.0, ev["n"])
         rec["heldout_after"] = ev["answer_loss"]
     elif not args.no_eval:
         rec["heldout_after"] = heldout_loss(t._model, t._tokenizer)["loss"]

@@ -1,14 +1,21 @@
 """Rate-limit ASGI middleware — V1_3_BRIEF P0 item 6.
 
-Per-IP sliding-window rate limit. Wired BEFORE ``basic_auth_transformer`` in
-the ASGI chain so brute-force attempts can't exhaust the HMAC budget — the
-429 fires before any auth work begins.
+Per-IP sliding-window limit on FAILED auth attempts. Wired BEFORE
+``basic_auth_transformer`` in the ASGI chain so an IP that is already over the
+limit is refused (429) before any auth work begins — no scrypt / HMAC budget
+spent on it.
 
-Defaults (per remote IP):
+What counts (since 1.8.2): responses the auth layer REJECTS — HTTP 401, 403
+and 421, and WebSocket closes 4401 / 4403 / 4404 sent before accept. Traffic
+from an authenticated browser never counts. Until 1.8.1 every request
+counted, and once ``backprop ui`` served the compiled frontend on its single
+port (1.8.1) a page load's dozens of asset GETs tripped the cap within one
+or two reloads, which rendered the UI with broken icons.
 
-- HTTP requests: 100 req/min
-- WebSocket upgrades: 10 upgrades/min  (lower because each accepted WS holds
-  a backend connection until cookie expires; cheap to flood without a cap)
+Defaults (per remote IP, rolling 60 s):
+
+- HTTP: 100 rejected requests/min
+- WebSocket: 10 rejected upgrades/min
 
 Override via env vars:
 
@@ -62,6 +69,12 @@ _WS_ENV = "BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN"
 # for application use; 4429 reads as "HTTP 429 equivalent over WS" and is
 # unused by Reflex and by ``ui_app/auth.py``'s 4401/4403/4404 codes.
 _WS_CLOSE_CODE_RATE_LIMIT = 4429
+
+# Rejections that count toward the limit: the auth layer's refusals
+# (``ui_app/auth.py``): 401 bad/missing credentials, 403 forbidden origin,
+# 421 foreign Host header, and the matching pre-accept WebSocket closes.
+_COUNTED_HTTP_STATUSES = frozenset({401, 403, 421})
+_COUNTED_WS_CLOSE_CODES = frozenset({4401, 4403, 4404})
 
 
 def _resolve_cap(env_var: str, default: int, env: dict[str, str]) -> int:
@@ -129,6 +142,28 @@ class _SlidingWindow:
             while len(q) > max(cap * 2, 16):
                 q.popleft()
             return len(q) > cap
+
+    def is_over(self, ip: str, now: float, cap: int) -> bool:
+        """True if the IP already has ``cap`` or more events in the window.
+
+        Read-only apart from pruning expired entries: used as the cheap
+        pre-check that refuses a request BEFORE auth work starts. ``cap=0``
+        and an empty IP never block (same contract as ``record_and_check``).
+        """
+        if cap <= 0 or not ip:
+            return False
+        cutoff = now - _WINDOW_SECONDS
+        with self._lock:
+            q = self._events.get(ip)
+            if not q:
+                return False
+            while q and q[0] < cutoff:
+                q.popleft()
+            return len(q) >= cap
+
+    def record(self, ip: str, now: float, cap: int) -> None:
+        """Count one event (a rejected auth attempt) for ``ip``."""
+        self.record_and_check(ip, now, cap)
 
     def prune_idle_ips(self, now: float) -> None:
         """Drop IPs with no events inside the window.
@@ -251,8 +286,7 @@ def rate_limit_middleware(asgi_app: Callable) -> Callable:
         now = time.monotonic()
 
         if scope_type == "http":
-            over = _HTTP_WINDOW.record_and_check(ip, now, http_cap)
-            if over:
+            if _HTTP_WINDOW.is_over(ip, now, http_cap):
                 logger.warning(
                     "rate_limit: HTTP cap exceeded for %s (cap=%d/min, path=%s)",
                     ip or "<unknown>", http_cap, path,
@@ -266,9 +300,21 @@ def rate_limit_middleware(asgi_app: Callable) -> Callable:
                 await send({"type": "http.response.body", "body": body})
                 _maybe_prune(now)
                 return
+
+            async def counting_send(message: dict) -> None:
+                # Count the request only if the auth layer rejected it.
+                if (
+                    message.get("type") == "http.response.start"
+                    and int(message.get("status", 0)) in _COUNTED_HTTP_STATUSES
+                ):
+                    _HTTP_WINDOW.record(ip, time.monotonic(), http_cap)
+                await send(message)
+
+            _maybe_prune(now)
+            await asgi_app(scope, receive, counting_send)
+            return
         elif scope_type == "websocket":
-            over = _WS_WINDOW.record_and_check(ip, now, ws_cap)
-            if over:
+            if _WS_WINDOW.is_over(ip, now, ws_cap):
                 logger.warning(
                     "rate_limit: WS cap exceeded for %s (cap=%d/min, path=%s)",
                     ip or "<unknown>", ws_cap, path,
@@ -284,6 +330,24 @@ def rate_limit_middleware(asgi_app: Callable) -> Callable:
                 })
                 _maybe_prune(now)
                 return
+
+            async def counting_ws_send(message: dict) -> None:
+                # Count the upgrade only if the auth layer rejected it: a
+                # pre-accept close with an auth code, or an HTTP-style denial.
+                kind = message.get("type")
+                if (
+                    kind == "websocket.close"
+                    and int(message.get("code", 0)) in _COUNTED_WS_CLOSE_CODES
+                ) or (
+                    kind == "websocket.http.response.start"
+                    and int(message.get("status", 0)) in _COUNTED_HTTP_STATUSES
+                ):
+                    _WS_WINDOW.record(ip, time.monotonic(), ws_cap)
+                await send(message)
+
+            _maybe_prune(now)
+            await asgi_app(scope, receive, counting_ws_send)
+            return
 
         _maybe_prune(now)
         await asgi_app(scope, receive, send)

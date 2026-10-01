@@ -170,3 +170,45 @@ class TestTemplateDrift:
         monkeypatch.setenv(WORKDIR_ENV_VAR, str(tmp_path / "wd"))
         with pytest.raises(RuntimeError, match="anchor"):
             ensure_ui_workdir(fake_pkg)
+
+
+class TestUiAssets:
+    """The UI's images (logo, icons) must reach the working directory.
+
+    Regression (1.8.2 dev): once Reflex ran from the per-user workdir, the
+    package's ``assets/`` stayed behind, so every ``/logo.png`` and
+    ``/icons/*.svg`` request was a 404 and the UI showed broken images.
+    """
+
+    def test_default_workdir_gets_the_real_assets(self, default_env):
+        wd = ensure_ui_workdir(PACKAGE_DIR, version="9.9.9")
+        shipped = sorted(p.relative_to(PACKAGE_DIR / "assets") for p in (PACKAGE_DIR / "assets").rglob("*") if p.is_file())
+        copied = sorted(p.relative_to(wd / "assets") for p in (wd / "assets").rglob("*") if p.is_file())
+        assert shipped, "the package should ship UI assets"
+        assert copied == shipped
+        assert (wd / "assets" / "logo.png").read_bytes() == (PACKAGE_DIR / "assets" / "logo.png").read_bytes()
+
+    def test_override_workdir_gets_assets(self, monkeypatch, tmp_path):
+        target = tmp_path / "custom-ui"
+        monkeypatch.setenv(WORKDIR_ENV_VAR, str(target))
+        wd = ensure_ui_workdir(PACKAGE_DIR, version="9.9.9")
+        assert (wd / "assets" / "logo.png").is_file()
+
+    def test_changed_asset_is_refreshed_and_unchanged_is_left(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        (pkg / "assets" / "icons").mkdir(parents=True)
+        (pkg / "assets" / "logo.png").write_bytes(b"v1")
+        (pkg / "assets" / "icons" / "a.svg").write_bytes(b"<svg/>")
+        wd = tmp_path / "wd"
+        ui_workdir.sync_ui_assets(pkg, wd)
+        assert (wd / "assets" / "logo.png").read_bytes() == b"v1"
+        before = (wd / "assets" / "icons" / "a.svg").stat().st_mtime_ns
+
+        (pkg / "assets" / "logo.png").write_bytes(b"version-two")
+        ui_workdir.sync_ui_assets(pkg, wd)
+        assert (wd / "assets" / "logo.png").read_bytes() == b"version-two"
+        assert (wd / "assets" / "icons" / "a.svg").stat().st_mtime_ns == before
+
+    def test_package_without_assets_is_fine(self, tmp_path):
+        ui_workdir.sync_ui_assets(tmp_path / "no-assets-pkg", tmp_path / "wd")
+        assert not (tmp_path / "wd" / "assets").exists()

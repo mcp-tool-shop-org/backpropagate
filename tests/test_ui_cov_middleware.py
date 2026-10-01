@@ -30,6 +30,16 @@ async def _recording_app(scope, receive, send):
 _recording_app.calls = []
 
 
+async def _rejecting_app(scope, receive, send):
+    """Inner app that rejects like the auth layer (401 / pre-accept 4401)."""
+    _recording_app.calls.append(scope.get("type"))
+    if scope["type"] == "http":
+        await send({"type": "http.response.start", "status": 401, "headers": []})
+        await send({"type": "http.response.body", "body": b"no"})
+    elif scope["type"] == "websocket":
+        await send({"type": "websocket.close", "code": 4401})
+
+
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
     _recording_app.calls.clear()
@@ -416,19 +426,20 @@ class TestRateLimitMiddleware:
 
     async def test_http_over_cap_gets_429_and_inner_app_not_reached(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "2")
-        mw = rl.rate_limit_middleware(_recording_app)
+        mw = rl.rate_limit_middleware(_rejecting_app)
         statuses = [(await _call(mw, _http("/runs")))[0]["status"] for _ in range(4)]
-        assert statuses == [200, 200, 429, 429]
+        assert statuses == [401, 401, 429, 429]
         assert _recording_app.calls == ["http", "http"]
         sent = await _call(mw, _http("/runs"))
         assert dict(sent[0]["headers"])[b"retry-after"] == b"60"
 
     async def test_limit_is_per_ip(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "1")
-        mw = rl.rate_limit_middleware(_recording_app)
-        assert (await _call(mw, _http(client=("1.1.1.1", 1))))[0]["status"] == 200
+        mw = rl.rate_limit_middleware(_rejecting_app)
+        ok = rl.rate_limit_middleware(_recording_app)
+        assert (await _call(mw, _http(client=("1.1.1.1", 1))))[0]["status"] == 401
         assert (await _call(mw, _http(client=("1.1.1.1", 1))))[0]["status"] == 429
-        assert (await _call(mw, _http(client=("2.2.2.2", 1))))[0]["status"] == 200
+        assert (await _call(ok, _http(client=("2.2.2.2", 1))))[0]["status"] == 200
 
     async def test_unknown_client_is_never_rejected(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "1")
@@ -439,10 +450,10 @@ class TestRateLimitMiddleware:
 
     async def test_ws_over_cap_closes_pre_accept_with_4429(self, monkeypatch):
         monkeypatch.setenv(rl._WS_ENV, "1")
-        mw = rl.rate_limit_middleware(_recording_app)
+        mw = rl.rate_limit_middleware(_rejecting_app)
         scope = {"type": "websocket", "path": "/_event", "client": ("3.3.3.3", 9)}
         first = await _call(mw, scope)
-        assert first == []  # inner app (recording) sent nothing for a ws scope
+        assert first == [{"type": "websocket.close", "code": 4401}]  # auth's rejection
         second = await _call(mw, scope)
         assert second == [{"type": "websocket.close", "code": rl._WS_CLOSE_CODE_RATE_LIMIT,
                            "reason": "rate_limit_exceeded"}]
@@ -452,8 +463,9 @@ class TestRateLimitMiddleware:
     async def test_http_and_ws_budgets_are_separate(self, monkeypatch):
         monkeypatch.setenv(rl._HTTP_ENV, "1")
         monkeypatch.setenv(rl._WS_ENV, "1")
+        reject = rl.rate_limit_middleware(_rejecting_app)
         mw = rl.rate_limit_middleware(_recording_app)
-        await _call(mw, _http())
+        await _call(reject, _http())
         assert (await _call(mw, _http()))[0]["status"] == 429
         ws = {"type": "websocket", "path": "/_event", "client": ("10.0.0.1", 1)}
         assert await _call(mw, ws) == []  # first ws upgrade still allowed

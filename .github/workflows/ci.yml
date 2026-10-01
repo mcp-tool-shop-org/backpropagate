@@ -63,9 +63,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Read-only by default. The three SAST jobs that upload SARIF (bandit,
+# semgrep, trivy) grant themselves security-events: write; nothing else needs it.
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   test:
@@ -671,6 +672,9 @@ jobs:
     name: Bandit SAST
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write  # upload-sarif
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -920,6 +924,9 @@ jobs:
     name: Semgrep SAST
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write  # upload-sarif
     container:
       # Pinned to specific Semgrep release + multi-arch manifest-list digest.
       # Refresh via: curl -s https://hub.docker.com/v2/repositories/semgrep/semgrep/tags/<version>
@@ -967,6 +974,9 @@ jobs:
     name: Trivy Vulnerability Scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write  # upload-sarif
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

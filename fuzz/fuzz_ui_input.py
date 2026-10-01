@@ -270,8 +270,12 @@ def check_error_sanitizing(p: Provider) -> None:
         assert len(message) - len("INPUT_VALIDATION_FAILED: ") <= max_length
         if suggestion is not None:
             assert len(suggestion) <= max_length
+        # The truncation marker is not part of the redacted text: "/home/'" is
+        # left alone (no name follows the slash) and cutting it to "/home/…"
+        # would otherwise look like a path to the pattern, though nothing leaks.
+        shown = message.removesuffix("…")
         for pattern in _PATH_REDACTION_PATTERNS:
-            assert not pattern.search(message)
+            assert not pattern.search(shown), f"unredacted path in {message!r}"
     else:
         marker = "ZZsecretZZ" + body
         message, suggestion = sanitize_error_for_user(ValueError(marker), "uploading")

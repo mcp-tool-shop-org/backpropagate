@@ -31,7 +31,7 @@ import json
 import sys
 from typing import Any
 
-from fuzz_common import STRICT, Provider, instrument, main
+from fuzz_common import Provider, instrument, main
 
 with instrument(__name__ == "__main__"):
     from backpropagate.datasets import (
@@ -52,10 +52,6 @@ ROLE_MAP = FormatConverter.ROLE_MAP_SHAREGPT
 OPENAI_ROLES = ("system", "user", "assistant", "function", "tool")
 
 
-def _has_lone_surrogate(rows: list[dict[str, str]]) -> bool:
-    return any(0xD800 <= ord(ch) <= 0xDFFF for row in rows for ch in row["text"])
-
-
 def decode_rows(raw: bytes) -> list[Any]:
     """Parse ``raw`` as JSON if possible, else treat it as one raw-text row."""
     text = raw.decode("utf-8", errors="replace")
@@ -71,7 +67,7 @@ def decode_rows(raw: bytes) -> list[Any]:
 # --------------------------------------------------------------------------
 
 
-def check_rows(rows: list[Any], strict: bool = False) -> None:
+def check_rows(rows: list[Any]) -> None:
     fmts = []
     for row in rows:
         fmt = detect_format(row)
@@ -112,19 +108,12 @@ def check_rows(rows: list[Any], strict: bool = False) -> None:
     assert converted == per_row, "batch conversion differs from per-row conversion"
 
     # -- dedupe / quality filter accounting ---------------------------------
-    try:
-        unique, removed = deduplicate_exact(list(converted))
-    except UnicodeEncodeError:
-        # Known finding F6: a lone surrogate (valid in JSON as "\ud800") cannot
-        # be UTF-8 encoded by the hashing step.
-        if strict or not _has_lone_surrogate(converted):
-            raise
-    else:
-        assert len(unique) + removed == len(converted)
-        texts = [u["text"] for u in unique]
-        assert len(set(texts)) == len(texts), "deduplicate_exact left a duplicate"
-        assert texts == list(dict.fromkeys(c["text"] for c in converted)), "order or content lost"
-        assert deduplicate_exact(list(unique))[1] == 0, "deduplicate_exact is not idempotent"
+    unique, removed = deduplicate_exact(list(converted))
+    assert len(unique) + removed == len(converted)
+    texts = [u["text"] for u in unique]
+    assert len(set(texts)) == len(texts), "deduplicate_exact left a duplicate"
+    assert texts == list(dict.fromkeys(c["text"] for c in converted)), "order or content lost"
+    assert deduplicate_exact(list(unique))[1] == 0, "deduplicate_exact is not idempotent"
 
     kept, stats = filter_by_quality(
         list(converted),
@@ -256,7 +245,7 @@ def check_roundtrip(p: Provider) -> None:
 # --------------------------------------------------------------------------
 
 
-def check_datasets(data: bytes, strict: bool = False) -> None:
+def check_datasets(data: bytes) -> None:
     p = Provider(data)
     mode = p.int_in_range(0, 3)
     if mode == 0:
@@ -264,11 +253,11 @@ def check_datasets(data: bytes, strict: bool = False) -> None:
     elif mode == 1:
         check_ngrams_and_split(p)
     else:
-        check_rows(decode_rows(p.rest()), strict=strict)
+        check_rows(decode_rows(p.rest()))
 
 
 def TestOneInput(data: bytes) -> None:
-    check_datasets(data, strict=STRICT)
+    check_datasets(data)
 
 
 if __name__ == "__main__":

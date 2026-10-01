@@ -1888,13 +1888,16 @@ def deduplicate_exact(
     # two distinct texts and silently drop a real row. A SHA-1 of the UTF-8
     # bytes is exact (collision-resistant for de-dup purposes) and identical
     # across runs/processes. Not used for security — only equality keying.
+    # "surrogatepass" keeps a lone surrogate (valid JSON, e.g. "\ud800", common
+    # in scraped data) encodable; the mapping stays injective, so dedupe is
+    # still exact.
     seen: set[str] = set()
     unique = []
 
     for sample in samples:
         text = _get_text_content(sample, key)
         text_hash = hashlib.sha1(
-            text.encode("utf-8"), usedforsecurity=False
+            text.encode("utf-8", "surrogatepass"), usedforsecurity=False
         ).hexdigest()
 
         if text_hash not in seen:

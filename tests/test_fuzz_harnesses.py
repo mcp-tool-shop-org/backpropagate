@@ -170,7 +170,6 @@ class TestHarnessesHaveTeeth:
 
 # Seeds that reproduce a known finding: (target, file, exception under strict=True)
 STRICT_SEEDS = [
-    ("datasets", "finding_f6_lone_surrogate.seed", UnicodeEncodeError),
     ("ui_input", "finding_f4_nan.seed", AssertionError),
 ]
 
@@ -197,14 +196,6 @@ class TestKnownFindings:
 
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
-
-    @pytest.mark.xfail(raises=UnicodeEncodeError, strict=True, reason="F6: lone surrogate breaks dedupe")
-    def test_f6_deduplicate_exact_survives_a_lone_surrogate(self):
-        from backpropagate.datasets import deduplicate_exact
-
-        rows = [{"text": "\ud800 broken"}, {"text": "fine"}]
-        unique, removed = deduplicate_exact(rows)
-        assert len(unique) + removed == 2
 
     @pytest.mark.xfail(
         sys.version_info < (3, 13),
@@ -341,6 +332,29 @@ class TestFixedFindings:
         from backpropagate.ui_security import validate_numeric_input
 
         assert validate_numeric_input(10**300, "n") == 1e300
+
+
+    def test_f6_deduplicate_exact_survives_a_lone_surrogate(self):
+        from backpropagate.datasets import deduplicate_exact
+
+        rows = [{"text": "\ud800 broken"}, {"text": "fine"}]
+        unique, removed = deduplicate_exact(rows)
+        assert unique == rows
+        assert removed == 0
+
+    def test_f6_dedupe_stays_exact_around_surrogates(self):
+        from backpropagate.datasets import deduplicate_exact
+
+        rows = [
+            {"text": "\ud800"},
+            {"text": "\ud800"},  # an exact duplicate: removed
+            {"text": "\udc00"},  # a different lone surrogate: kept
+            {"text": "�"},  # the replacement character a lossy encode would produce: kept
+            {"text": "?"},
+        ]
+        unique, removed = deduplicate_exact(rows)
+        assert removed == 1
+        assert [r["text"] for r in unique] == ["\ud800", "\udc00", "�", "?"]
 
 
 class TestPlumbing:

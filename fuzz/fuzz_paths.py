@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -135,9 +136,13 @@ def check_safe_path_with_base(p: Provider) -> None:
 
     if POSIX:
         # Exact differential oracle: accepted <=> realpath lands inside base.
-        assert accepted == _inside(cand, base), (
-            f"{cand!r}: safe_path accepted={accepted} but oracle says "
-            f"inside={_inside(cand, base)}"
+        # Repeated slashes are collapsed first, as pathlib does before safe_path
+        # resolves: on CPython 3.12 ``os.path.realpath`` mishandles "loop//..",
+        # a symlink loop followed by an empty component, returning "/sub" for
+        # "<base>/loop_a//../sub" where the single-slash spelling is right.
+        oracle = _inside(re.sub(r"/{2,}", "/", cand), base)
+        assert accepted == oracle, (
+            f"{cand!r}: safe_path accepted={accepted} but oracle says inside={oracle}"
         )
 
 

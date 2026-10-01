@@ -342,6 +342,12 @@ class TestOllamaRegister:
         assert seen["path"].name == "a.gguf" and seen["name"] == "a"
         assert "Registered with Ollama: a" in out and "ollama run a" in out
 
+    def test_directory_with_single_gguf_has_no_warning(self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "only.gguf").write_bytes(b"x")
+        monkeypatch.setattr("backpropagate.export.register_with_ollama", lambda path, name: True)
+        assert cli.cmd_ollama_register(parse(["ollama", "register", str(tmp_path)])) == cli.EXIT_OK
+        assert "Multiple GGUF files" not in capsys.readouterr().out
+
     def test_explicit_name(self, tmp_path, monkeypatch):
         g = tmp_path / "model.gguf"
         g.write_bytes(b"x")

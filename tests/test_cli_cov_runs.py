@@ -99,6 +99,13 @@ class TestRuns:
         out = capsys.readouterr().out
         assert "No training runs recorded." in out and "(Filter: status=completed)" in out
 
+    def test_empty_history_without_filter(self, tmp_path, capsys):
+        empty = tmp_path / "e"
+        empty.mkdir()
+        assert cli.cmd_runs(parse(["runs", "--output", str(empty)])) == cli.EXIT_OK
+        out = capsys.readouterr().out
+        assert "No training runs recorded." in out and "(Filter" not in out
+
     def test_human_listing(self, out_dir, capsys):
         assert cli.cmd_runs(parse(["runs", "--output", str(out_dir)])) == cli.EXIT_OK
         out = capsys.readouterr().out
@@ -201,6 +208,17 @@ class TestDiffRuns:
         assert rows["hp.extra"]["run_a"] is None  # field only present on run b
         assert payload["changed_count"] == sum(1 for r in payload["diff"] if r["changed"])
         assert payload["run_a"]["run_id"] == "aaaaaaaa-1111"
+
+    def test_non_dict_hyperparameters_are_ignored(self, tmp_path, capsys):
+        seed_runs(tmp_path, [
+            {"run_id": "odd-1111", "hyperparameters": "not-a-dict", "final_loss": 1.0},
+            {"run_id": "odd-2222", "hyperparameters": {"lora_r": 4}, "final_loss": 2.0},
+        ])
+        args = parse(["diff-runs", "odd-1111", "odd-2222", "--output", str(tmp_path), "--format", "json"])
+        assert cli.cmd_diff_runs(args) == cli.EXIT_OK
+        rows = {r["field"]: r for r in last_json(capsys.readouterr().out)["diff"]}
+        assert rows["hp.lora_r"]["run_a"] is None and rows["hp.lora_r"]["run_b"] == 4
+        assert rows["final_loss"]["changed"] is True
 
     def test_table(self, out_dir, capsys):
         args = parse(["diff-runs", "aaaaaaaa", "bbbbbbbb", "--output", str(out_dir)])

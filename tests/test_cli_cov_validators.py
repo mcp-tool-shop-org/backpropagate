@@ -136,6 +136,27 @@ class TestAuthCredential:
             cli._auth_credential("alice:pw\nx")
 
 
+class TestSupportsColorPosix:
+    def test_posix_tty_enables_color(self, monkeypatch):
+        """On a POSIX-style tty with no NO_COLOR / FORCE_COLOR, colour is on (os.name faked for cli only)."""
+
+        class PosixOs:
+            name = "posix"
+
+            def __init__(self):
+                import os
+
+                self.environ = {k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "FORCE_COLOR")}
+
+        class Tty:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(cli, "os", PosixOs())
+        monkeypatch.setattr(cli.sys, "stdout", Tty())
+        assert cli._supports_color() is True
+
+
 class TestPrintHelpers:
     def test_print_structured_error_with_code_and_run_id(self, capsys):
         exc = BackpropagateError("boom", details={"run_id": "abc123"})

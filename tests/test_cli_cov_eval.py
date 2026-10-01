@@ -167,6 +167,14 @@ class TestEvalSingle:
         assert "contains: 1.0000" in out and "(+/-" not in out.split("contains:")[1].splitlines()[0]
         assert "Scored over: 4 held-out reference items" in out
 
+    def test_task_metrics_without_eval_n_omit_scored_over(self, out_dir, monkeypatch, capsys):
+        result = EvalResult(run_id="run-aaaa-0001", model_name="tiny", held_out_loss=0.5, perplexity=1.6,
+                            task_metrics={"contains": 0.75}, eval_n=0)
+        monkeypatch.setattr("backpropagate.eval.evaluate_run", lambda run_id, **kw: result)
+        assert cli.cmd_eval(parse(_argv(out_dir))) == cli.EXIT_OK
+        out = capsys.readouterr().out
+        assert "contains: 0.7500" in out and "Scored over" not in out
+
     def test_json(self, out_dir, evaluate, capsys):
         assert cli.cmd_eval(parse(_argv(out_dir, "--json"))) == cli.EXIT_OK
         payload = last_json(capsys.readouterr().out)

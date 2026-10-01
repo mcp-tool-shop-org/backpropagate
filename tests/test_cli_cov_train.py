@@ -349,6 +349,23 @@ class TestCmdMultiRun:
         assert cli.cmd_multi_run(parse(["multi-run", "--data", "d"])) == cli.EXIT_OK
         assert seen["ok"]
 
+    def test_multi_trainer_without_var_keyword_only_gets_accepted_kwargs(self, monkeypatch):
+        """Candidate kwargs the installed MultiRunTrainer does not accept are filtered, not passed."""
+        seen = {}
+
+        class Strict:
+            def __init__(self, model, config, on_run_complete, resume_from=None):
+                seen["ok"] = True
+
+            def run(self, data):
+                return SimpleNamespace(total_runs=1, final_loss=0.1, total_duration_seconds=1.0,
+                                       final_checkpoint_path="ckpt", failed_runs=0)
+
+        monkeypatch.setattr("backpropagate.multi_run.MultiRunTrainer", Strict)
+        argv = ["multi-run", "--data", "d", "--method", "orpo", "--simpo-beta", "2.5"]
+        assert cli.cmd_multi_run(parse(argv)) == cli.EXIT_OK  # a TypeError here would mean nothing was filtered
+        assert seen["ok"]
+
     def test_var_keyword_multi_trainer_receives_non_config_kwargs(self, monkeypatch):
         seen: dict = {}
 

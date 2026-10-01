@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental: block-coordinate full fine-tuning** (`--full-ft-engine block`,
+  #237). One block trains at a time with AdamW while the rest stay frozen on
+  the GPU, so a 7B model full-fine-tunes on a 32 GB card without offload, on
+  Windows too, inside the normal training loop. On a GSM8K test it lost to
+  QLoRA at 7B on held-out loss (+0.052, 95% CI 0.044–0.060) and needs 30 GiB
+  against QLoRA's 14; it is shipped as experimental so it can be tested on
+  more tasks. QLoRA remains the recommendation for 7B. New flags:
+  `--switch-block-every`, `--block-order`, `--block-writeback`,
+  `--block-freeze-embeddings`. Receipts: `docs/receipts/2026-09-30-gsm8k/`.
+
 ## [1.7.2] - 2026-09-30
 
 ### Security

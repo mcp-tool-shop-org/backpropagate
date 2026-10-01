@@ -24,6 +24,7 @@ scan, per 2026-05-22 verification). The setters route through module-level
 
 from __future__ import annotations
 
+import math
 import re
 import tempfile
 from pathlib import Path
@@ -278,7 +279,9 @@ def _coerce_int(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
+        # nan / +-inf cannot become an int (int() raises ValueError /
+        # OverflowError inside the event handler) - treat as a parse failure.
+        return int(value) if math.isfinite(value) else None
     if isinstance(value, str):
         s = value.strip()
         if not s:
@@ -287,25 +290,35 @@ def _coerce_int(value: object) -> int | None:
             return int(s)
         except ValueError:
             try:
-                return int(float(s))
+                f = float(s)
             except ValueError:
                 return None
+            # "inf" / "1e999" parse as floats but are not usable integers.
+            return int(f) if math.isfinite(f) else None
     return None
 
 
 def _coerce_float(value: object) -> float | None:
+    """Best-effort ``float`` cast; ``None`` if unparseable or NaN.
+
+    NaN is rejected because it compares False against every bound, so it would
+    sail through ``_clamp_float`` and be stored. ``+-inf`` is kept: the clamp
+    turns it into the nearest bound.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
-        return float(value)
+        f = float(value)
+        return None if math.isnan(f) else f
     if isinstance(value, str):
         s = value.strip()
         if not s:
             return None
         try:
-            return float(s)
+            f = float(s)
         except ValueError:
             return None
+        return None if math.isnan(f) else f
     return None
 
 
@@ -1800,8 +1813,15 @@ class RunsState(rx.State):
                     "run_id": run_id,
                     "run_id_short": short_id,
                     "started_at": started,
-                    "model": str(raw.get("model") or "-"),
-                    "dataset": str(raw.get("dataset") or "-"),
+                    # RunHistoryManager stores ``model_name`` / ``dataset_info``
+                    # (the CLI's list-runs maps them to short keys itself); fall
+                    # back to the short keys for older / hand-built entries. The
+                    # dataset is usually an absolute path, so redact it before it
+                    # enters this client-serialized var (as RunDetailState does).
+                    "model": str(raw.get("model_name") or raw.get("model") or "-"),
+                    "dataset": _redact_action(
+                        str(raw.get("dataset_info") or raw.get("dataset") or "-")
+                    ),
                     "status": str(raw.get("status") or "-"),
                     "duration": duration_str,
                     "final_loss": final_loss_str,
@@ -1812,14 +1832,15 @@ class RunsState(rx.State):
             self.loading = False
 
     # Canonical status set. Mirrors the values RunHistoryManager.list_runs
-    # accepts; the dropdown in pages/runs.py renders the same set. Update
-    # both surfaces together when adding a new status.
+    # accepts (``VALID_STATUSES``: running / completed / failed - it raises
+    # ValueError for anything else, so offering e.g. "interrupted" here made
+    # that dropdown choice always error); the dropdown in pages/runs.py renders
+    # the same set. Update both surfaces together when adding a new status.
     _STATUS_FILTER_VALUES: tuple[str, ...] = (
         "",
         "running",
         "completed",
         "failed",
-        "interrupted",
     )
 
     @rx.event

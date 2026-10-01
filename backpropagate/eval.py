@@ -461,8 +461,15 @@ def _kill_process_tree(proc: subprocess.Popen[bytes]) -> None:
     as ITS child, so killing only ``proc`` would leave the runaway code looping.
     """
     if sys.platform == "win32":
-        taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
-        subprocess.run(  # nosec B603 — fixed absolute path to the system taskkill; argv is our own child's pid
+        # The System32 path comes from the OS (GetSystemDirectoryW), not from
+        # the environment, so nothing outside this process can swap the binary.
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(260)
+        length = ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260)
+        system_dir = buf.value if 0 < length < 260 else r"C:\Windows\System32"
+        taskkill = os.path.join(system_dir, "taskkill.exe")
+        subprocess.run(  # nosec B603 — absolute path to the system taskkill; argv is our own child's pid
             [taskkill, "/F", "/T", "/PID", str(proc.pid)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

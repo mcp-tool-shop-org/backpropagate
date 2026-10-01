@@ -20,8 +20,9 @@
   [`docs/full-ft-engines-design-2026-09-30.md`](full-ft-engines-design-2026-09-30.md).
 - External review (Kimi K3, run by hand by the Director) and the lead's
   assessment: [`docs/consult/`](consult/).
-- No pods are running. RunPod spend on 2026-09-30: about **$5.60**
-  (budget given: $10 for experiments).
+- No pods are running. RunPod spend on 2026-09-30: about **$5.60**.
+  The experiment budget was raised from $10 to **$20** by the Director on
+  2026-09-30; $14.40 remains. How it is allocated: section 4a.
 
 ## 2. The three engines for full fine-tuning
 
@@ -190,6 +191,54 @@ receipt README **before** the run; do not tune toward it.
 - Llama-3.1-8B preset smoke: gated repo; needs an HF token on the pod.
 - Engine B: K default (50 vs 5 only differed by 0.0035 nats at 1000 steps);
   `--block-freeze-embeddings` quality cost.
+
+## 4a. Plan of record for the $20 budget (2026-09-30)
+
+Kimi K3 drafted a plan for the raised budget. The lead's review corrected
+it, and the Director gave the go on the corrected version. Changes from
+section 4:
+
+- **E4 uses base models**: `Qwen/Qwen2.5-3B` and `Qwen/Qwen2.5-7B`, not
+  `-Instruct`. The Instruct models were already tuned on this kind of data,
+  which is the main reason training made every GSM8K arm worse (section 3.3).
+- **E4 trains on more tokens**: 5000 steps × batch 4 × 512 (about 10M
+  tokens per arm, against about 2M in stage d). At 2M tokens, "full FT did not
+  beat QLoRA" would be as inconclusive as GSM8K was.
+- **E4 arms are cut to fund the tokens.** At 3B: standard full FT, QLoRA
+  r=256, engine B K=5, 3 seeds each. At 7B, only if the 3B premise holds:
+  engine B and QLoRA × 2 seeds, GaLore × 1 seed. The 3B lr 5e-5 probe already
+  ran in stage d (accuracy 0.606, the worst block arm). The 7B probe is not
+  justified: engine B's loss was 0.052 nats *worse* than QLoRA there, with the
+  whole CI on that side.
+- **E3 needs disk**: the 14B / 24B / 32B presets are bf16 repos quantized on
+  load, about 140 GB of downloads together. Create pod C with
+  `RUNPOD_CONTAINER_DISK_GB=200`, or delete each model after measuring it.
+- **E3 is a correctness fix, not a release blocker**: `oom_recovery` is on by
+  default and halves the batch on an OOM, so an over-large auto-batch costs
+  retries, not a crash.
+- **GaLore is not the presumed winner.** Its 7B accuracy lead rests on a
+  metric that mostly measured format; it had the worst held-out loss (0.589),
+  from one seed.
+
+| Line | Contents | Cap |
+|---|---|---|
+| Pod A, stage 3B | E4: base-model pre-check, then 3 arms × 3 seeds at 5000 steps | $4.00 |
+| Pod A, stage 7B | E4, only if the 3B premise gate passes | $4.50 |
+| Pod C | E1 validation (20 steps), E3 sweep (200 GB disk), Llama-3.1-8B smoke | $2.00 |
+| Pod B | E2 ceilings on 16 GB and 24 GB cards | $2.00 |
+| Contingency | broken hosts, re-runs, capacity retries | $1.90 |
+| **Total** | | **$14.40** |
+
+Prices assume about $0.90/h for a 5090; confirm against the RunPod bill.
+E5, its Kahan contingency and an engine A 7B harness run get no money
+upfront. They run only on money that comes back, most likely from the 7B E4
+stage being cancelled when the 3B premise fails (about $4.50). Spend beyond
+$20 needs the Director's word.
+
+Builds (CPU, in worktrees, by agents): **W1** is E1's code (trace, fused
+optimizer step, pinned arena, prefetch) and unblocks pod C. **W3** is the E4
+harness and unblocks pod A. W2 (the E3 sweep script) and the receipt
+templates follow.
 
 ## 5. How to run an experiment (the procedure that worked)
 

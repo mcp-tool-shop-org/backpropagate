@@ -95,7 +95,7 @@ def destroy_world() -> None:
     _STATE["initialized"] = False
 
 
-def tiny_llama(seed: int = 0, layers: int = 2, dtype: torch.dtype = torch.bfloat16) -> Any:
+def tiny_llama(seed: int = 0, layers: int = 2, dtype: torch.dtype = torch.bfloat16, tie: bool = False) -> Any:
     """A 2-layer Llama small enough to train a few steps on CPU inside the test timeout."""
     from transformers import LlamaConfig, LlamaForCausalLM
 
@@ -103,7 +103,7 @@ def tiny_llama(seed: int = 0, layers: int = 2, dtype: torch.dtype = torch.bfloat
     cfg = LlamaConfig(
         vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=layers,
         num_attention_heads=4, num_key_value_heads=4, max_position_embeddings=64,
-        tie_word_embeddings=False,
+        tie_word_embeddings=tie,
     )
     return LlamaForCausalLM(cfg).to(dtype)
 

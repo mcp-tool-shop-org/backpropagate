@@ -270,8 +270,8 @@ def fsdp_world():
     offload_cpu.destroy_world()
 
 
-def _fsdp_run(*, fused, steps=4, ga=1, trace=False, monkeypatch=None):
-    model = oe.shard_for_cpu_offload(offload_cpu.tiny_llama(), mesh=offload_cpu.cpu_mesh())
+def _fsdp_run(*, fused, steps=4, ga=1, tie=False):
+    model = oe.shard_for_cpu_offload(offload_cpu.tiny_llama(tie=tie), mesh=offload_cpu.cpu_mesh())
     out = oe._train_loop(
         model, offload_cpu.ToyTokenizer(), offload_cpu.toy_dataset(), steps=steps, batch_size=2,
         gradient_accumulation=ga, learning_rate=1e-3, max_seq_length=32, warmup_steps=0,
@@ -296,6 +296,16 @@ class TestFusedOnRealFsdp2:
             assert torch.equal(pa.to_local(), pb.to_local()), name
         # and the run did learn something
         assert fused["losses"][-1] != fused["losses"][0]
+
+    def test_tied_embeddings_are_stepped_once_after_both_gradients_arrive(self, fsdp_world):
+        """Qwen2.5-1.5B ties the embedding and the head: one parameter, two gradient sources."""
+        base = _fsdp_run(fused=False, tie=True)
+        fused = _fsdp_run(fused=True, tie=True)
+        n_params = len(list(base["model"].parameters()))
+        assert fused["fused_params"] == [n_params] * 4
+        assert fused["losses"] == base["losses"]
+        for (name, pa), (_, pb) in zip(base["model"].named_parameters(), fused["model"].named_parameters()):
+            assert torch.equal(pa.to_local(), pb.to_local()), name
 
     def test_no_gradient_is_copied_to_the_host_when_fused(self, fsdp_world, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_OFFLOAD_TRACE", "1")

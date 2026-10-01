@@ -1237,16 +1237,6 @@ class MultiRunTrainer:
         logger.info(f"Checkpoint manager initialized: keep_best={checkpoint_policy.keep_best_n}, "
                     f"max_total={checkpoint_policy.max_total}, auto_prune={checkpoint_policy.auto_prune}")
 
-        # F-002: if we're resuming, rehydrate the start index + checkpoint
-        # path from the persisted state. This MUST happen after the
-        # checkpoint manager is initialised so the manifest has been loaded.
-        if resume_run_id is not None:
-            if not self._restore_session_state(checkpoint_dir, resume_run_id):
-                # Couldn't rehydrate — fall back to a fresh session for this
-                # run_id (the existing history record gets re-used; we just
-                # don't skip any run indices).
-                self._resume_start_run_idx = 1
-
         # Initialize SLAO merger if using SLAO mode.
         # F-015: thread MultiRunConfig.adaptive_scaling + layer_scaling through
         # to SLAOConfig.use_adaptive_scaling + use_layer_scaling so the
@@ -1275,6 +1265,21 @@ class MultiRunTrainer:
                     dare_seed=self.config.dare_seed,
                 ),
             )
+
+        # The merger MUST exist before _restore_session_state() runs: that
+        # method rehydrates the persisted accumulator INTO ``self._slao_merger``
+        # and is a silent no-op while it is still None. (Building the merger
+        # after the restore dropped the accumulated SLAO state on every resumed
+        # session, so the first resumed merge re-seeded from scratch.)
+        # F-002: if we're resuming, rehydrate the start index + checkpoint
+        # path from the persisted state. This MUST happen after the
+        # checkpoint manager is initialised so the manifest has been loaded.
+        if resume_run_id is not None:
+            if not self._restore_session_state(checkpoint_dir, resume_run_id):
+                # Couldn't rehydrate — fall back to a fresh session for this
+                # run_id (the existing history record gets re-used; we just
+                # don't skip any run indices).
+                self._resume_start_run_idx = 1
 
         # Pre-flight GPU check
         if not self._preflight_gpu_check():

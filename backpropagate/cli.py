@@ -2121,6 +2121,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "full_ft_offload diagnostic: 'nearest' switches the bf16 write-back from stochastic rounding to round-to-nearest, which drops sub-ulp updates (update retention 0.17 measured). For reproducing the failure mode only; never for training.",
         ),
         (
+            "BACKPROPAGATE_OFFLOAD_TRACE",
+            "0",
+            "str",
+            "full_ft_offload diagnostic: '1' times each leg of a step (forward and backward, the FSDP2 parameter gather and gradient copy, the optimizer's host-to-device copies and write-back) with CUDA events and counts the bytes per leg; 'profile' adds a torch.profiler summary of one step. The result is returned under 'trace' by run_offload_training. Off by default, with no overhead.",
+        ),
+        (
             "BACKPROPAGATE_CLOUDFLARED_TIMEOUT",
             "30",
             "int",

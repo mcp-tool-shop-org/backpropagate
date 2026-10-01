@@ -34,6 +34,7 @@ Trade-offs that callers and docs must state:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -44,7 +45,12 @@ from typing import Any
 
 import torch
 
+from .offload_trace import LegTrace, install_fsdp_probes, profile_step, trace_mode
+
 logger = logging.getLogger(__name__)
+
+# What a timing leg is when tracing is off: one shared, empty context manager.
+_NO_LEG = contextlib.nullcontext()
 
 # Rows of a 2-D parameter processed per optimizer chunk on the GPU. Bounds the
 # transient fp32 working set of the step (a 7B embedding is 545M elements).
@@ -104,8 +110,21 @@ class OffloadAdafactor(torch.optim.Optimizer):
         self.stochastic_rounding = stochastic_rounding
         self.device = torch.device(device) if device is not None else torch.device("cuda")
         self.last_update_retention: float | None = None
+        self.trace: LegTrace | None = None  # set by the train loop when tracing
         self._kept = torch.zeros((), dtype=torch.float64)
         self._intended = torch.zeros((), dtype=torch.float64)
+
+    def _leg(self, name: str, nbytes: int = 0) -> Any:
+        """A timing context for ``name`` when tracing, else an empty one."""
+        return self.trace.leg(name, nbytes) if self.trace is not None else _NO_LEG
+
+    def _fetch(self, src: torch.Tensor) -> torch.Tensor:
+        """``src`` on the optimizer's device: a non-blocking copy, or ``src`` if it is already there."""
+        dev = self.device
+        if src.device.type == dev.type and (dev.index is None or src.device.index == dev.index):
+            return src
+        with self._leg("opt_h2d", src.numel() * src.element_size()):
+            return src.to(dev, non_blocking=True)
 
     def _write_back(self, host: torch.Tensor, new_fp32: torch.Tensor, old_fp32: torch.Tensor) -> None:
         """Round ``new_fp32`` into ``host`` and account how much of the update survived.
@@ -123,9 +142,11 @@ class OffloadAdafactor(torch.optim.Optimizer):
             intended = new_fp32 - old_fp32
             self._kept += ((tmp.float() - old_fp32) * intended.sign()).sum()
             self._intended += intended.abs().sum()
-            host.copy_(tmp)
+            with self._leg("opt_writeback_d2h", tmp.numel() * tmp.element_size()):
+                host.copy_(tmp)
         else:
-            host.copy_(new_fp32)
+            with self._leg("opt_writeback_d2h", new_fp32.numel() * new_fp32.element_size()):
+                host.copy_(new_fp32)
             delta = (new_fp32 - old_fp32).abs().sum()
             self._kept += delta
             self._intended += delta
@@ -141,86 +162,96 @@ class OffloadAdafactor(torch.optim.Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                w_host = _local(p)
-                g_host = _local(p.grad)
-                st = self.state[p]
-                if not st:
-                    st["step"] = 0
-                    if w_host.dim() >= 2:
-                        st["row"] = torch.zeros(w_host.shape[0], dtype=torch.float32, device=dev)
-                        st["col"] = torch.zeros(w_host[0].numel(), dtype=torch.float32, device=dev)
-                    else:
-                        st["v"] = torch.zeros(w_host.shape, dtype=torch.float32, device=dev)
-                st["step"] += 1
-                beta2 = 1.0 - st["step"] ** self.beta2_decay
-
-                if w_host.dim() < 2:
-                    g = g_host.to(dev, non_blocking=True).float()
-                    st["v"].mul_(beta2).add_(g * g + self.eps, alpha=1.0 - beta2)
-                    u = g / st["v"].sqrt()
-                    u.div_(max(1.0, float(u.pow(2).mean().sqrt()) / self.clip_threshold))
-                    w = w_host.to(dev, non_blocking=True).float()
-                    old = w.clone()
-                    if wd:
-                        w.mul_(1.0 - lr * wd)
-                    w.sub_(u, alpha=lr)
-                    self._write_back(w_host, w, old)
-                    continue
-
-                rows = w_host.shape[0]
-                g2d_host = g_host.reshape(rows, -1)
-                w2d_host = w_host.view(rows, -1)  # a VIEW: writes must land in the param
-                cols = g2d_host.shape[1]
-                chunk = max(1, _MAX_CHUNK_NUMEL // max(1, cols))
-                spans = [(i, min(rows, i + chunk)) for i in range(0, rows, chunk)]
-                cached: dict[str, torch.Tensor] = {}  # single-chunk params keep g on the device
-
-                def _g(
-                    a: int,
-                    b: int,
-                    src: torch.Tensor = g2d_host,
-                    single: bool = len(spans) == 1,
-                    cache: dict[str, torch.Tensor] = cached,
-                ) -> torch.Tensor:
-                    if single:
-                        if "g" not in cache:
-                            cache["g"] = src[a:b].to(dev, non_blocking=True).float()
-                        return cache["g"]
-                    return src[a:b].to(dev, non_blocking=True).float()
-
-                # Pass 1: row / column means of g^2 -> factored second moment.
-                col_sum = torch.zeros(cols, dtype=torch.float32, device=dev)
-                row_mean = torch.empty(rows, dtype=torch.float32, device=dev)
-                for a, b in spans:
-                    g2 = _g(a, b).pow(2).add_(self.eps)
-                    row_mean[a:b] = g2.mean(dim=1)
-                    col_sum.add_(g2.sum(dim=0))
-                st["row"].mul_(beta2).add_(row_mean, alpha=1.0 - beta2)
-                st["col"].mul_(beta2).add_(col_sum / rows, alpha=1.0 - beta2)
-                row_norm = st["row"] / st["row"].mean()
-                col_rsqrt = st["col"].rsqrt()
-
-                # Pass 2: RMS of the update, for clipping.
-                sumsq = torch.zeros((), dtype=torch.float32, device=dev)
-                for a, b in spans:
-                    u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
-                    sumsq.add_(u.pow(2).sum())
-                rms = float((sumsq / (rows * cols)).sqrt())
-                scale = lr / max(1.0, rms / self.clip_threshold)
-
-                # Pass 3: apply and write back.
-                for a, b in spans:
-                    u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
-                    w = w2d_host[a:b].to(dev, non_blocking=True).float()
-                    old = w.clone()
-                    if wd:
-                        w.mul_(1.0 - lr * wd)
-                    w.sub_(u, alpha=scale)
-                    self._write_back(w2d_host[a:b], w, old)
+                with self._leg("opt_total"):
+                    self._update_param(p, lr, wd, _local(p), _local(p.grad))
         intended = float(self._intended)
         self.last_update_retention = float(self._kept) / intended if intended > 0 else 1.0
         return loss
 
+    def _update_param(
+        self,
+        p: torch.Tensor,
+        lr: float,
+        wd: float,
+        w_host: torch.Tensor,
+        g_host: torch.Tensor,
+    ) -> None:
+        """One Adafactor update of ``p``: grad ``g_host`` in, new weights into ``w_host``."""
+        dev = self.device
+        st = self.state[p]
+        if not st:
+            st["step"] = 0
+            if w_host.dim() >= 2:
+                st["row"] = torch.zeros(w_host.shape[0], dtype=torch.float32, device=dev)
+                st["col"] = torch.zeros(w_host[0].numel(), dtype=torch.float32, device=dev)
+            else:
+                st["v"] = torch.zeros(w_host.shape, dtype=torch.float32, device=dev)
+        st["step"] += 1
+        beta2 = 1.0 - st["step"] ** self.beta2_decay
+
+        if w_host.dim() < 2:
+            g = self._fetch(g_host).float()
+            st["v"].mul_(beta2).add_(g * g + self.eps, alpha=1.0 - beta2)
+            u = g / st["v"].sqrt()
+            u.div_(max(1.0, float(u.pow(2).mean().sqrt()) / self.clip_threshold))
+            w = self._fetch(w_host).float()
+            old = w.clone()
+            if wd:
+                w.mul_(1.0 - lr * wd)
+            w.sub_(u, alpha=lr)
+            self._write_back(w_host, w, old)
+            return
+
+        rows = w_host.shape[0]
+        g2d_host = g_host.reshape(rows, -1)
+        w2d_host = w_host.view(rows, -1)  # a VIEW: writes must land in the param
+        cols = g2d_host.shape[1]
+        chunk = max(1, _MAX_CHUNK_NUMEL // max(1, cols))
+        spans = [(i, min(rows, i + chunk)) for i in range(0, rows, chunk)]
+        cached: dict[str, torch.Tensor] = {}  # single-chunk params keep g on the device
+
+        def _g(
+            a: int,
+            b: int,
+            src: torch.Tensor = g2d_host,
+            single: bool = len(spans) == 1,
+            cache: dict[str, torch.Tensor] = cached,
+        ) -> torch.Tensor:
+            if single:
+                if "g" not in cache:
+                    cache["g"] = self._fetch(src[a:b]).float()
+                return cache["g"]
+            return self._fetch(src[a:b]).float()
+
+        # Pass 1: row / column means of g^2 -> factored second moment.
+        col_sum = torch.zeros(cols, dtype=torch.float32, device=dev)
+        row_mean = torch.empty(rows, dtype=torch.float32, device=dev)
+        for a, b in spans:
+            g2 = _g(a, b).pow(2).add_(self.eps)
+            row_mean[a:b] = g2.mean(dim=1)
+            col_sum.add_(g2.sum(dim=0))
+        st["row"].mul_(beta2).add_(row_mean, alpha=1.0 - beta2)
+        st["col"].mul_(beta2).add_(col_sum / rows, alpha=1.0 - beta2)
+        row_norm = st["row"] / st["row"].mean()
+        col_rsqrt = st["col"].rsqrt()
+
+        # Pass 2: RMS of the update, for clipping.
+        sumsq = torch.zeros((), dtype=torch.float32, device=dev)
+        for a, b in spans:
+            u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
+            sumsq.add_(u.pow(2).sum())
+        rms = float((sumsq / (rows * cols)).sqrt())
+        scale = lr / max(1.0, rms / self.clip_threshold)
+
+        # Pass 3: apply and write back.
+        for a, b in spans:
+            u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
+            w = self._fetch(w2d_host[a:b]).float()
+            old = w.clone()
+            if wd:
+                w.mul_(1.0 - lr * wd)
+            w.sub_(u, alpha=scale)
+            self._write_back(w2d_host[a:b], w, old)
 
 
 # =============================================================================
@@ -433,11 +464,12 @@ def unregister_host_params(ptrs: list[int]) -> None:
         cudart.cudaHostUnregister(ptr)
 
 
-def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16) -> Any:
+def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16, mesh: Any = None) -> Any:
     """Apply FSDP2 ``fully_shard`` + CPU offload in place, keeping param dtype.
 
     Enables activation checkpointing (non-reentrant) first. Returns ``model``,
-    which is now an ``FSDPModule`` whose sharded params live on the CPU.
+    which is now an ``FSDPModule`` whose sharded params live on the CPU. ``mesh`` is
+    FSDP2's device mesh; None takes the default (CUDA), and tests pass a CPU mesh.
     """
     from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 
@@ -452,8 +484,8 @@ def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat1
     if not layers:
         raise RuntimeError("full_ft_offload: could not find the model's decoder-layer ModuleList to shard.")
     for layer in layers:
-        fully_shard(layer, mp_policy=mp, offload_policy=off)
-    fully_shard(model, mp_policy=mp, offload_policy=off)
+        fully_shard(layer, mesh=mesh, mp_policy=mp, offload_policy=off)
+    fully_shard(model, mesh=mesh, mp_policy=mp, offload_policy=off)
     return model
 
 
@@ -476,6 +508,16 @@ def _encode(dataset: Any, tokenizer: Any, max_seq_length: int) -> list[list[int]
     if not rows:
         raise ValueError("full_ft_offload: the dataset produced no trainable rows.")
     return rows
+
+
+def _no_leg(name: str, nbytes: int = 0) -> Any:  # noqa: ARG001 — same signature as LegTrace.leg
+    return _NO_LEG
+
+
+def _sync(device: torch.device) -> None:
+    """Wait for the device's queued work (a no-op off CUDA, so the loop runs in CPU tests)."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def _lr_factor(step: int, total: int, warmup: int, kind: str) -> float:
@@ -576,36 +618,57 @@ def _train_loop(
         labels = ids.masked_fill(mask == 0, -100)
         return ids.to(device), mask.to(device), labels.to(device)
 
+    mode = trace_mode()
+    trace = LegTrace(device) if mode != "off" else None
+    undo_probes = install_fsdp_probes(trace) if trace is not None else None
+    optimizer.trace = trace
+    leg = trace.leg if trace is not None else _no_leg
+    profile_at = min(1, steps - 1)  # the second step: lazy init stays out of the profile
+
     model.train()
     losses: list[float] = []
     step_times: list[float] = []
     retention: list[float] = []
     samples = 0
     t_start = time.perf_counter()
-    for step in range(steps):
-        t0 = time.perf_counter()
-        for group in optimizer.param_groups:
-            group["lr"] = learning_rate * _lr_factor(step, steps, warmup_steps, lr_scheduler_type)
-        total = 0.0
-        for _ in range(gradient_accumulation):
-            ids, mask, labels = next_batch()
-            out = model(input_ids=ids, attention_mask=mask, labels=labels)
-            (out.loss / gradient_accumulation).backward()
-            total += float(out.loss.detach()) / gradient_accumulation
-            samples += ids.shape[0]
-        optimizer.step()
-        retention.append(round(optimizer.last_update_retention or 0.0, 4))
-        optimizer.zero_grad(set_to_none=True)
-        torch.cuda.synchronize(device)
-        step_times.append(time.perf_counter() - t0)
-        losses.append(total)
-        logger.info("full_ft_offload step %d/%d loss=%.4f (%.2fs)", step + 1, steps, total, step_times[-1])
-        if on_step is not None:
-            try:
-                on_step(step + 1, total)
-            except Exception as cb_err:  # noqa: BLE001 — callback isolation contract
-                logger.warning("on_step callback raised: %s", cb_err)
-    return {
+    try:
+        for step in range(steps):
+            t0 = time.perf_counter()
+            for group in optimizer.param_groups:
+                group["lr"] = learning_rate * _lr_factor(step, steps, warmup_steps, lr_scheduler_type)
+            total = 0.0
+            profiling = trace is not None and mode == "profile" and step == profile_at
+            with profile_step(trace) if profiling and trace is not None else _NO_LEG:
+                for _ in range(gradient_accumulation):
+                    ids, mask, labels = next_batch()
+                    with leg("forward"):
+                        out = model(input_ids=ids, attention_mask=mask, labels=labels)
+                    with leg("backward"):
+                        (out.loss / gradient_accumulation).backward()
+                    total += float(out.loss.detach()) / gradient_accumulation
+                    samples += ids.shape[0]
+                with leg("optimizer_step"):
+                    optimizer.step()
+                retention.append(round(optimizer.last_update_retention or 0.0, 4))
+                optimizer.zero_grad(set_to_none=True)
+                _sync(device)
+            step_times.append(time.perf_counter() - t0)
+            losses.append(total)
+            if trace is not None:
+                trace.end_step(step, step_times[-1] * 1e3)
+                if profiling and trace.profile is not None:
+                    trace.profile["step"] = step
+            logger.info("full_ft_offload step %d/%d loss=%.4f (%.2fs)", step + 1, steps, total, step_times[-1])
+            if on_step is not None:
+                try:
+                    on_step(step + 1, total)
+                except Exception as cb_err:  # noqa: BLE001 — callback isolation contract
+                    logger.warning("on_step callback raised: %s", cb_err)
+    finally:
+        if undo_probes is not None:
+            undo_probes()
+        optimizer.trace = None
+    result: dict[str, Any] = {
         "model": model,
         "losses": losses,
         "step_times": step_times,
@@ -614,3 +677,6 @@ def _train_loop(
         "duration_seconds": time.perf_counter() - t_start,
         "optimizer": optimizer,
     }
+    if trace is not None:
+        result["trace"] = trace.summary({"pin": _pin_mode(), "trace_mode": mode})
+    return result

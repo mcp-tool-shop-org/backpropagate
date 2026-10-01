@@ -20,6 +20,7 @@ import pytest
 from backpropagate import cli
 from backpropagate.exceptions import BackpropagateError, UserInputError
 from tests.helpers.cli_cov_support import parse
+from tests.helpers.ui_auth import assert_child_env_has_verifier
 
 
 class _ExplodingLogger:
@@ -118,16 +119,16 @@ class TestAuthFile:
         args = parse(["ui", "--port", "7900", "--auth-file", self._file(tmp_path, " alice:s3cret \n")])
         assert cli.cmd_ui(args) == cli.EXIT_OK
         run = ui["run"][0]
-        assert run.env["BACKPROPAGATE_UI_AUTH"] == "alice:s3cret"
+        assert_child_env_has_verifier(run.env, "alice", "s3cret")
         assert run.env["BACKPROPAGATE_UI_PORT"] == "7900"
         assert run.env["BACKPROPAGATE_UI_HOST_BIND"] == "127.0.0.1"
         assert run.cmd[-2:] == ["--backend-host", "127.0.0.1"]
         assert "--frontend-port" in run.cmd and "7900" in run.cmd and "7901" in run.cmd
         out = capsys.readouterr().out
-        assert "Auth lock-file:" in out
+        assert "lock-file" not in out  # credentials are never persisted, so no lock file
         assert "inline" not in out  # the --auth-file path never prints the inline-credential warning
-        assert ui["locks_during"] == ["session-7900.lock"]
-        assert list(ui["lock_dir"].glob("session-*.lock")) == []  # removed after exit
+        assert ui["locks_during"] == []
+        assert list(ui["lock_dir"].glob("session-*.lock")) == []
 
     def test_wide_posix_mode_warns(self, tmp_path, monkeypatch, ui, capsys):
         """On POSIX a group/other-readable credential file triggers a warning (Windows stat reports 0o666)."""
@@ -173,7 +174,7 @@ class TestAuthFile:
         monkeypatch.setattr(cli, "write_launch_token_lock", lambda port, payload: tmp_path / "lock")
         monkeypatch.setattr(Path, "unlink", lambda self, **k: None)
         assert cli.cmd_ui(parse(["ui", "--auth-file", path])) == cli.EXIT_OK
-        assert ui["run"][0].env["BACKPROPAGATE_UI_AUTH"] == "alice:pw"
+        assert_child_env_has_verifier(ui["run"][0].env, "alice", "pw")
 
 
 class TestGates:
@@ -216,9 +217,14 @@ class TestGates:
 
     def test_ambient_auth_env_is_stripped_without_flag(self, ui, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "ambient:bypass")
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH_VERIFIER", "scrypt$ambient")
+        monkeypatch.setenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", "ambient-token")
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
-        assert "BACKPROPAGATE_UI_AUTH" not in ui["run"][0].env
-        assert ui["locks_during"] == []  # nothing persisted for an unauthenticated launch
+        env = ui["run"][0].env
+        assert "BACKPROPAGATE_UI_AUTH" not in env
+        assert "BACKPROPAGATE_UI_AUTH_VERIFIER" not in env
+        assert env["BACKPROPAGATE_UI_LAUNCH_TOKEN"] != "ambient-token"  # a fresh per-launch token
+        assert ui["locks_during"] == ["session-7862.lock"]  # the token lock file, not a credential
 
     def test_rxconfig_missing(self, ui, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(cli, "__file__", str(tmp_path / "pkg" / "cli.py"))
@@ -331,7 +337,7 @@ class TestLaunchOutcomes:
             raise OSError("disk full")
 
         monkeypatch.setattr(cli, "write_launch_token_lock", boom)
-        assert cli.cmd_ui(parse(["ui", "--auth", "u:p"])) == cli.EXIT_OK
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
         out = capsys.readouterr().out
         assert "Could not write launch lock-file (disk full)" in out
         assert len(ui["run"]) == 1

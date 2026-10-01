@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.helpers.ui_auth import assert_child_env_has_verifier
+
 # =============================================================================
 # COLOR SUPPORT DETECTION TESTS
 # =============================================================================
@@ -905,7 +907,7 @@ class TestCmdUI:
             assert result == EXIT_OK
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "testuser:testpass"
+            assert_child_env_has_verifier(call_env, "testuser", "testpass")
             # Bind address is communicated to the middleware via env.
             assert call_env.get("BACKPROPAGATE_UI_HOST_BIND") == "127.0.0.1"
 
@@ -934,7 +936,7 @@ class TestCmdUI:
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
             # Split on first colon: user="user", password="pass:with:colons"
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "user:pass:with:colons"
+            assert_child_env_has_verifier(call_env, "user", "pass:with:colons")
 
     def test_launch_success(self, capsys):
         """Successful UI launch via subprocess (no --auth, no --share).
@@ -1002,7 +1004,7 @@ class TestCmdUI:
             assert result == EXIT_OK
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "user:pass"
+            assert_child_env_has_verifier(call_env, "user", "pass")
 
     def test_cmd_ui_share_without_auth_still_refuses(self):
         """--share without --auth still hard-errors post-Wave-6.
@@ -1205,7 +1207,7 @@ class TestCmdUI:
             assert result == EXIT_OK
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:secret123"
+            assert_child_env_has_verifier(call_env, "alice", "secret123")
             # Wave 6a cloudflared wiring exports the parsed tunnel host
             # (was an empty-string placeholder pre-v1.3).
             assert call_env.get("BACKPROPAGATE_UI_SHARE_HOST") == "abc.trycloudflare.com"  # hostname only, not URL
@@ -1947,14 +1949,8 @@ class TestCmdUiEnforcementFlipped:
             # subprocess.run is called as run(cmd, env=..., cwd=...).
             kwargs = mock_run.call_args.kwargs
             child_env = kwargs.get("env", {})
-            assert child_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2", (
-                "When ENFORCEMENT_AVAILABLE flips True, --auth must export "
-                "BACKPROPAGATE_UI_AUTH to the Reflex subprocess so the "
-                "middleware can read it. Got env={!r}".format(
-                    {k: v for k, v in child_env.items()
-                     if k.startswith("BACKPROPAGATE_")}
-                )
-            )
+            # The middleware gets a salted scrypt verifier (never the plaintext).
+            assert_child_env_has_verifier(child_env, "alice", "hunter2")
 
     def test_share_still_refuses_even_when_enforcement_available(self, monkeypatch):
         """--share is gated independently of ENFORCEMENT_AVAILABLE.
@@ -2026,7 +2022,7 @@ class TestCmdUiEnforcementFlipped:
             assert result == EXIT_OK
             mock_run.assert_called_once()
             call_env = mock_run.call_args.kwargs.get("env", {})
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2"
+            assert_child_env_has_verifier(call_env, "alice", "hunter2")
             assert call_env.get("BACKPROPAGATE_UI_SHARE_HOST") == "abc.trycloudflare.com"  # hostname only, not URL
 
 

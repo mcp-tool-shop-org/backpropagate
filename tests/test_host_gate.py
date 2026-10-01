@@ -28,6 +28,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.helpers.ui_auth import assert_child_env_has_verifier
+
 
 def _make_subprocess_result(returncode: int = 0):
     """A subprocess.CompletedProcess-shaped mock for cmd_ui's check."""
@@ -137,10 +139,9 @@ class TestHostNonLoopbackRefuseToStart:
                 "subprocess so the auth middleware knows which Host header "
                 "is legitimate (DNS-rebinding allowlist)."
             )
-            assert call_env.get("BACKPROPAGATE_UI_AUTH") == "alice:hunter2", (
-                "BACKPROPAGATE_UI_AUTH must propagate to the subprocess so "
-                "the middleware can enforce per-request auth."
-            )
+            # The middleware enforces per-request auth from a salted scrypt
+            # verifier; the plaintext password never reaches the subprocess.
+            assert_child_env_has_verifier(call_env, "alice", "hunter2")
 
     @pytest.mark.parametrize(
         "loopback_host",

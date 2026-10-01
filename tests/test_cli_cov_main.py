@@ -23,7 +23,10 @@ def _isolate_env(monkeypatch):
     """main() writes BACKPROPAGATE_LOG_* env vars; make monkeypatch restore them."""
     for var in ("BACKPROPAGATE_LOG_LEVEL", "BACKPROPAGATE_LOG_JSON", "BACKPROPAGATE_LOG_FILE",
                 "BACKPROPAGATE_DEBUG"):
-        monkeypatch.delenv(var, raising=False)
+        # setenv-then-delenv (not a bare delenv) so monkeypatch records "absent" as the original
+        # state and removes whatever main() writes into os.environ when the test ends.
+        monkeypatch.setenv(var, "")
+        monkeypatch.delenv(var)
 
 
 def _raising_config(monkeypatch, exc):

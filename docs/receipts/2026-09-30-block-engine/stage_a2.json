@@ -1,0 +1,148 @@
+{
+ "mode": "summarize",
+ "stage": "a2",
+ "git_sha": "209458d0ba164ef39890d8a9415beffdb352c56d",
+ "table": {
+  "Qwen/Qwen2.5-1.5B-Instruct|block_k5": {
+   "seeds": [
+    0,
+    1,
+    2
+   ],
+   "status": [
+    "ok"
+   ],
+   "heldout_after": {
+    "n": 3,
+    "mean": 1.9119,
+    "sd": 0.0035,
+    "min": 1.9089,
+    "max": 1.9157
+   },
+   "heldout_before": 2.4195,
+   "delta": {
+    "n": 3,
+    "mean": -0.5076,
+    "sd": 0.0035,
+    "min": -0.5106,
+    "max": -0.5038
+   },
+   "s_per_step": {
+    "n": 3,
+    "mean": 0.0613,
+    "sd": 0.0006,
+    "min": 0.0606,
+    "max": 0.0618
+   },
+   "peak_alloc_gib": {
+    "n": 3,
+    "mean": 7.9523,
+    "sd": 0.0422,
+    "min": 7.905,
+    "max": 7.986
+   },
+   "peak_reserved_gib": {
+    "n": 3,
+    "mean": 10.2337,
+    "sd": 0.1399,
+    "min": 10.088,
+    "max": 10.367
+   },
+   "projected_total_gb": 10.724,
+   "block_visits": [
+    31
+   ]
+  },
+  "HuggingFaceTB/SmolLM3-3B|block_k5": {
+   "seeds": [
+    0,
+    1,
+    2
+   ],
+   "status": [
+    "ok"
+   ],
+   "heldout_after": {
+    "n": 3,
+    "mean": 2.0149,
+    "sd": 0.0109,
+    "min": 2.0032,
+    "max": 2.0249
+   },
+   "heldout_before": 2.4546,
+   "delta": {
+    "n": 3,
+    "mean": -0.4397,
+    "sd": 0.0109,
+    "min": -0.4514,
+    "max": -0.4297
+   },
+   "s_per_step": {
+    "n": 3,
+    "mean": 0.0994,
+    "sd": 0.0015,
+    "min": 0.0977,
+    "max": 0.1003
+   },
+   "peak_alloc_gib": {
+    "n": 3,
+    "mean": 11.5223,
+    "sd": 0.038,
+    "min": 11.497,
+    "max": 11.566
+   },
+   "peak_reserved_gib": {
+    "n": 3,
+    "mean": 14.1743,
+    "sd": 0.0536,
+    "min": 14.123,
+    "max": 14.23
+   },
+   "projected_total_gb": 14.189,
+   "block_visits": [
+    31
+   ]
+  }
+ },
+ "bases": {
+  "HuggingFaceTB/SmolLM2-360M-Instruct": {
+   "heldout_loss": 2.3008,
+   "ceiling_ln_vocab": 10.8027,
+   "in_bounds": true
+  },
+  "HuggingFaceTB/SmolLM3-3B": {
+   "heldout_loss": 2.4546,
+   "ceiling_ln_vocab": 11.7618,
+   "in_bounds": true
+  },
+  "Qwen/Qwen2.5-1.5B-Instruct": {
+   "heldout_loss": 2.4195,
+   "ceiling_ln_vocab": 11.9312,
+   "in_bounds": true
+  },
+  "Qwen/Qwen2.5-7B-Instruct": {
+   "heldout_loss": 2.761,
+   "ceiling_ln_vocab": 11.9321,
+   "in_bounds": true
+  }
+ },
+ "checks": {
+  "base_in_bounds:HuggingFaceTB/SmolLM2-360M-Instruct": true,
+  "base_in_bounds:HuggingFaceTB/SmolLM3-3B": true,
+  "base_in_bounds:Qwen/Qwen2.5-1.5B-Instruct": true,
+  "base_in_bounds:Qwen/Qwen2.5-7B-Instruct": true,
+  "completed:a2_qwen2_5-1_5b-instruct_block_s0": true,
+  "finite:a2_qwen2_5-1_5b-instruct_block_s0": true,
+  "completed:a2_qwen2_5-1_5b-instruct_block_s1": true,
+  "finite:a2_qwen2_5-1_5b-instruct_block_s1": true,
+  "completed:a2_qwen2_5-1_5b-instruct_block_s2": true,
+  "finite:a2_qwen2_5-1_5b-instruct_block_s2": true,
+  "completed:a2_smollm3-3b_block_s0": true,
+  "finite:a2_smollm3-3b_block_s0": true,
+  "completed:a2_smollm3-3b_block_s1": true,
+  "finite:a2_smollm3-3b_block_s1": true,
+  "completed:a2_smollm3-3b_block_s2": true,
+  "finite:a2_smollm3-3b_block_s2": true
+ },
+ "written": "2026-09-30T18:39:04Z"
+}

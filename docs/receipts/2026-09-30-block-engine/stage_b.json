@@ -1,0 +1,239 @@
+{
+ "mode": "summarize",
+ "stage": "b",
+ "git_sha": "ddc666ae44cfbb6ad16727b3b9d788fb72fc737a",
+ "table": {
+  "Qwen/Qwen2.5-7B-Instruct|block_cap16_frozen_embed": {
+   "seeds": [
+    0
+   ],
+   "status": [
+    "oom"
+   ],
+   "heldout_after": {
+    "n": 0
+   },
+   "heldout_before": null,
+   "delta": {
+    "n": 0
+   },
+   "s_per_step": {
+    "n": 0
+   },
+   "peak_alloc_gib": {
+    "n": 0
+   },
+   "peak_reserved_gib": {
+    "n": 0
+   },
+   "projected_total_gb": null,
+   "block_visits": []
+  },
+  "Qwen/Qwen2.5-7B-Instruct|block_cap24": {
+   "seeds": [
+    0
+   ],
+   "status": [
+    "oom"
+   ],
+   "heldout_after": {
+    "n": 0
+   },
+   "heldout_before": null,
+   "delta": {
+    "n": 0
+   },
+   "s_per_step": {
+    "n": 0
+   },
+   "peak_alloc_gib": {
+    "n": 0
+   },
+   "peak_reserved_gib": {
+    "n": 0
+   },
+   "projected_total_gb": null,
+   "block_visits": []
+  },
+  "Qwen/Qwen2.5-7B-Instruct|block_cap24_frozen_embed": {
+   "seeds": [
+    0
+   ],
+   "status": [
+    "ok"
+   ],
+   "heldout_after": {
+    "n": 0
+   },
+   "heldout_before": 2.761,
+   "delta": {
+    "n": 0
+   },
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.0447,
+    "sd": 0.0,
+    "min": 0.0447,
+    "max": 0.0447
+   },
+   "peak_alloc_gib": {
+    "n": 1,
+    "mean": 18.015,
+    "sd": 0.0,
+    "min": 18.015,
+    "max": 18.015
+   },
+   "peak_reserved_gib": {
+    "n": 1,
+    "mean": 18.582,
+    "sd": 0.0,
+    "min": 18.582,
+    "max": 18.582
+   },
+   "projected_total_gb": 21.382,
+   "block_visits": [
+    4
+   ]
+  },
+  "Qwen/Qwen2.5-7B-Instruct|block_uncapped": {
+   "seeds": [
+    0
+   ],
+   "status": [
+    "ok"
+   ],
+   "heldout_after": {
+    "n": 1,
+    "mean": 2.0119,
+    "sd": 0.0,
+    "min": 2.0119,
+    "max": 2.0119
+   },
+   "heldout_before": 2.761,
+   "delta": {
+    "n": 1,
+    "mean": -0.7491,
+    "sd": 0.0,
+    "min": -0.7491,
+    "max": -0.7491
+   },
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.1345,
+    "sd": 0.0,
+    "min": 0.1345,
+    "max": 0.1345
+   },
+   "peak_alloc_gib": {
+    "n": 1,
+    "mean": 25.443,
+    "sd": 0.0,
+    "min": 25.443,
+    "max": 25.443
+   },
+   "peak_reserved_gib": {
+    "n": 1,
+    "mean": 28.43,
+    "sd": 0.0,
+    "min": 28.43,
+    "max": 28.43
+   },
+   "projected_total_gb": 29.3,
+   "block_visits": [
+    4
+   ]
+  },
+  "Qwen/Qwen2.5-7B-Instruct|qlora": {
+   "seeds": [
+    0
+   ],
+   "status": [
+    "ok"
+   ],
+   "heldout_after": {
+    "n": 1,
+    "mean": 1.7075,
+    "sd": 0.0,
+    "min": 1.7075,
+    "max": 1.7075
+   },
+   "heldout_before": 2.761,
+   "delta": {
+    "n": 1,
+    "mean": -1.0535,
+    "sd": 0.0,
+    "min": -1.0535,
+    "max": -1.0535
+   },
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.4702,
+    "sd": 0.0,
+    "min": 0.4702,
+    "max": 0.4702
+   },
+   "peak_alloc_gib": {
+    "n": 1,
+    "mean": 12.079,
+    "sd": 0.0,
+    "min": 12.079,
+    "max": 12.079
+   },
+   "peak_reserved_gib": {
+    "n": 1,
+    "mean": 12.48,
+    "sd": 0.0,
+    "min": 12.48,
+    "max": 12.48
+   },
+   "projected_total_gb": null,
+   "block_visits": [
+    null
+   ]
+  },
+  "cap|block_cap24": {
+   "fits": false
+  },
+  "cap|block_cap24_frozen_embed": {
+   "fits": true
+  },
+  "cap|block_cap16_frozen_embed": {
+   "fits": false
+  }
+ },
+ "bases": {
+  "HuggingFaceTB/SmolLM2-360M-Instruct": {
+   "heldout_loss": 2.3008,
+   "ceiling_ln_vocab": 10.8027,
+   "in_bounds": true
+  },
+  "HuggingFaceTB/SmolLM3-3B": {
+   "heldout_loss": 2.4546,
+   "ceiling_ln_vocab": 11.7618,
+   "in_bounds": true
+  },
+  "Qwen/Qwen2.5-1.5B-Instruct": {
+   "heldout_loss": 2.4195,
+   "ceiling_ln_vocab": 11.9312,
+   "in_bounds": true
+  },
+  "Qwen/Qwen2.5-7B-Instruct": {
+   "heldout_loss": 2.761,
+   "ceiling_ln_vocab": 11.9321,
+   "in_bounds": true
+  }
+ },
+ "checks": {
+  "base_in_bounds:HuggingFaceTB/SmolLM2-360M-Instruct": true,
+  "base_in_bounds:HuggingFaceTB/SmolLM3-3B": true,
+  "base_in_bounds:Qwen/Qwen2.5-1.5B-Instruct": true,
+  "base_in_bounds:Qwen/Qwen2.5-7B-Instruct": true,
+  "b1_completed": true,
+  "b1_two_switches": true,
+  "b1_loss_finite": true,
+  "b1_generated": true,
+  "b1_saved_bf16": true,
+  "qlora_completed": true
+ },
+ "written": "2026-09-30T18:40:20Z"
+}

@@ -1,0 +1,365 @@
+{
+ "manifest": {
+  "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+  "image": "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "vram_total_gib": 31.37,
+  "cuda_runtime": "12.8",
+  "card": "NVIDIA GeForce RTX 5090",
+  "card_total_gib": 31.37,
+  "vram_cap_gib": null,
+  "emulated_rtx5090": false,
+  "comparable_vram_figure": "NVML peak and torch max reserved",
+  "cuda_driver": null,
+  "versions": {
+   "torch": "2.8.0+cu128",
+   "transformers": "5.18.0",
+   "trl": "1.14.1",
+   "accelerate": "1.15.0",
+   "peft": "0.21.1",
+   "bitsandbytes": "0.50.2",
+   "galore-torch": null,
+   "nvidia-ml-py": null,
+   "unsloth": null,
+   "datasets": "5.0.1",
+   "backpropagate": "1.7.1"
+  },
+  "pytorch_cuda_alloc_conf": "expandable_segments:True"
+ },
+ "mode": "train",
+ "tag": "smoke_block",
+ "arm": "smoke",
+ "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+ "engine": "block",
+ "seed": 0,
+ "steps": 20,
+ "batch": 4,
+ "seq": 256,
+ "lr": 2e-05,
+ "k": 5,
+ "order": "ascending",
+ "writeback": "stochastic",
+ "freeze_embeddings": false,
+ "vram_cap_gib": null,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.37,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "galore-torch": null,
+  "nvidia-ml-py": null,
+  "unsloth": null,
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+ "settings_seed": 0,
+ "settings_logging_steps": 1,
+ "dataset": "dolly",
+ "trainer_kwargs": {
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "use_unsloth": false,
+  "max_seq_length": 256,
+  "batch_size": 4,
+  "gradient_accumulation": 1,
+  "packing": false,
+  "learning_rate": 2e-05,
+  "report_to": "none",
+  "mode": "full",
+  "full_ft_engine": "block",
+  "switch_block_every": 5,
+  "block_order": "ascending",
+  "block_writeback": "stochastic",
+  "block_train_embeddings": true
+ },
+ "lr_used": 2e-05,
+ "batch_resolved": 4,
+ "max_seq_length_used": 256,
+ "packing_used": false,
+ "use_unsloth_used": false,
+ "optim_setting": "adamw_8bit",
+ "schedule": {
+  "lr_scheduler_type": "cosine",
+  "warmup_steps": 10,
+  "weight_decay": 0.01,
+  "gradient_accumulation": 1
+ },
+ "lora_r_used": null,
+ "load_s": 1.5,
+ "params": 134515008,
+ "fit_projection": {
+  "params_billions": 0.134515008,
+  "num_blocks": 31,
+  "max_block_billions": 0.028312128,
+  "seq_len": 256,
+  "batch_size": 4,
+  "paper_formula_gb": 0.338,
+  "weights_gb": 0.269,
+  "active_block_gb": 0.396,
+  "activations_gb": 0.055,
+  "logits_gb": 0.503,
+  "overhead_gb": 0.122,
+  "total_gb": 1.347,
+  "status": "projection \u2014 not measured",
+  "notes": []
+ },
+ "partition": {
+  "num_blocks": 31,
+  "layer_list": "model.layers",
+  "tied_embeddings": true,
+  "max_block": "embed+head",
+  "max_block_params": 28312128,
+  "total_params": 134515008,
+  "frozen_params": 0,
+  "blocks": [
+   "embed+head",
+   "model.layers.0",
+   "model.layers.1",
+   "model.layers.2",
+   "model.layers.3",
+   "model.layers.4",
+   "model.layers.5",
+   "model.layers.6",
+   "model.layers.7",
+   "model.layers.8",
+   "model.layers.9",
+   "model.layers.10",
+   "model.layers.11",
+   "model.layers.12",
+   "model.layers.13",
+   "model.layers.14",
+   "model.layers.15",
+   "model.layers.16",
+   "model.layers.17",
+   "model.layers.18",
+   "model.layers.19",
+   "model.layers.20",
+   "model.layers.21",
+   "model.layers.22",
+   "model.layers.23",
+   "model.layers.24",
+   "model.layers.25",
+   "model.layers.26",
+   "model.layers.27",
+   "model.layers.28",
+   "model.layers.29"
+  ]
+ },
+ "torch_max_allocated_train_gib": 0.276,
+ "torch_max_reserved_train_gib": 1.023,
+ "optimizer_class": "backpropagate.block_engine.BlockCoordinateOptimizer",
+ "optimizer_defaults": {
+  "lr": 2e-05,
+  "betas": "(0.9, 0.999)",
+  "eps": 1e-08,
+  "weight_decay": 0.01
+ },
+ "optimizer_state_gib": 0.0,
+ "optimizer_paged_state_gib": 0.0,
+ "lr_scheduler_class": "LambdaLR",
+ "max_grad_norm": 1.0,
+ "mask_check": {
+  "input_tokens": 1024,
+  "loss_tokens": 809,
+  "input_sha256": "424a3964fad9aba9",
+  "mask_sha256": "d26aaef34dbb4f9a",
+  "shape": [
+   4,
+   256
+  ],
+  "second_batch_input_sha256": "6e00af5cf09b60b3"
+ },
+ "train_s": 4.9,
+ "time_to_first_step_s": 2.2,
+ "oom_retries": 0,
+ "effective_batch_size": 4,
+ "peak_vram_alloc_gib": 0.951,
+ "peak_vram_reserved_gib": 1.023,
+ "s_per_step": 0.1405,
+ "s_per_step_source": "median gap between per-step log callbacks",
+ "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+ "losses": [
+  2.6648,
+  2.5553,
+  2.6498,
+  2.7965,
+  2.4885,
+  2.5251,
+  3.0365,
+  2.8552,
+  2.5477,
+  2.666,
+  2.8835,
+  2.7135,
+  2.6897,
+  2.8033,
+  2.4161,
+  2.2018,
+  2.07,
+  3.1021,
+  2.6363,
+  3.0566,
+  3.0566
+ ],
+ "final_loss": 2.6679156899452208,
+ "engine_summary": {
+  "num_blocks": 31,
+  "layer_list": "model.layers",
+  "tied_embeddings": true,
+  "max_block": "embed+head",
+  "max_block_params": 28312128,
+  "total_params": 134515008,
+  "frozen_params": 0,
+  "engine": "block",
+  "switch_block_every": 5,
+  "block_order": "ascending",
+  "block_writeback": "stochastic",
+  "upcast_active_block_fp32": true,
+  "optimizer_steps": 20,
+  "block_visits": 5,
+  "switches": [
+   {
+    "block": "embed+head",
+    "index": 0,
+    "visit": 0,
+    "steps": 5,
+    "at_global_step": 5,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.0",
+    "index": 1,
+    "visit": 1,
+    "steps": 5,
+    "at_global_step": 10,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.1",
+    "index": 2,
+    "visit": 2,
+    "steps": 5,
+    "at_global_step": 15,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.2",
+    "index": 3,
+    "visit": 3,
+    "steps": 5,
+    "at_global_step": 20,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.3",
+    "index": 4,
+    "visit": 4,
+    "steps": 0,
+    "at_global_step": 20,
+    "writeback": "stochastic"
+   }
+  ]
+ },
+ "visit_peaks": [
+  {
+   "block": "embed+head",
+   "params": 28312128,
+   "steps": 5,
+   "peak_alloc_gib": 0.951,
+   "peak_reserved_gib": 1.02
+  },
+  {
+   "block": "model.layers.0",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.636,
+   "peak_reserved_gib": 1.02
+  },
+  {
+   "block": "model.layers.1",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.53,
+   "peak_reserved_gib": 1.023
+  },
+  {
+   "block": "model.layers.2",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.529,
+   "peak_reserved_gib": 1.023
+  },
+  {
+   "block": "model.layers.3",
+   "params": 3540096,
+   "steps": 0,
+   "peak_alloc_gib": 0.313,
+   "peak_reserved_gib": 1.023
+  }
+ ],
+ "visit_log": [
+  {
+   "block": "embed+head",
+   "steps": [
+    1,
+    5
+   ],
+   "loss_entry": 2.6648,
+   "loss_exit": 2.4885,
+   "peak_alloc_gib": 0.951,
+   "peak_reserved_gib": 1.02
+  },
+  {
+   "block": "model.layers.0",
+   "steps": [
+    6,
+    10
+   ],
+   "loss_entry": 2.5251,
+   "loss_exit": 2.666,
+   "peak_alloc_gib": 0.636,
+   "peak_reserved_gib": 1.02
+  },
+  {
+   "block": "model.layers.1",
+   "steps": [
+    11,
+    15
+   ],
+   "loss_entry": 2.8835,
+   "loss_exit": 2.4161,
+   "peak_alloc_gib": 0.53,
+   "peak_reserved_gib": 1.023
+  },
+  {
+   "block": "model.layers.2",
+   "steps": [
+    16,
+    20
+   ],
+   "loss_entry": 2.2018,
+   "loss_exit": 3.0566,
+   "peak_alloc_gib": 0.529,
+   "peak_reserved_gib": 1.023
+  },
+  {
+   "block": "model.layers.3",
+   "steps": null,
+   "loss_entry": 3.0566,
+   "loss_exit": null,
+   "peak_alloc_gib": 0.313,
+   "peak_reserved_gib": 1.023
+  }
+ ],
+ "heldout_after": 2.6525,
+ "status": "ok",
+ "wall_s": 8.8,
+ "nvml": "unavailable",
+ "nvml_error": "ModuleNotFoundError: No module named 'pynvml'",
+ "written": "2026-09-30T19:58:24Z"
+}

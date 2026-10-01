@@ -761,6 +761,52 @@ def _full_ft_offload_ceiling_billions() -> float:
     return offload_param_ceiling_billions(available)
 
 
+# Engine B (block-coordinate AdamW, ``full_ft_engine='block'``): the whole
+# 16-bit model stays on the GPU (2 B/param) and only the active block carries
+# fp32 weights + fp32 gradient + fp32 AdamW moments (+14 B/param of that
+# block). The largest block sets the peak: with the embeddings and an untied
+# head trained as blocks that is the vocab matrix (~7% of a 7-8B model), so
+# ~2M + 14 x 0.07M ~= 3.0 B/param; with them frozen (BAdam's default) a layer
+# (~3%), ~2.4 B/param. Tiers leave ~1.5 GB for activations/logits and ~8%
+# headroom. PROJECTIONS from the formula (block_engine.estimate_block_engine_vram),
+# not yet measured — the RunPod evidence run replaces them with measured
+# anchors, as the pure-GPU and offload tables above were.
+_FULL_FT_BLOCK_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    (48.0, 12.0),
+    (32.0, 8.0),
+    (24.0, 6.0),
+    (0.0, 4.0),
+)
+_FULL_FT_BLOCK_FROZEN_EMBED_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
+    (48.0, 16.0),
+    (32.0, 11.0),
+    (24.0, 8.0),
+    (0.0, 5.0),
+)
+
+
+def _full_ft_block_ceiling_for_vram(
+    vram_gb: float | None, *, train_embeddings: bool = True
+) -> float:
+    """Full-FT parameter ceiling (billions) under Engine B (projection).
+
+        train_embeddings=True:  <=16 -> 4.0, 24 -> 6.0, 32 -> 8.0, >=48 -> 12.0
+        train_embeddings=False: <=16 -> 5.0, 24 -> 8.0, 32 -> 11.0, >=48 -> 16.0
+        None (VRAM unknown)  -> the 4.0B fallback constant.
+    """
+    if vram_gb is None:
+        return _FULL_FT_PARAM_CEILING_BILLIONS
+    tiers = (
+        _FULL_FT_BLOCK_VRAM_CEILING_TIERS
+        if train_embeddings
+        else _FULL_FT_BLOCK_FROZEN_EMBED_VRAM_CEILING_TIERS
+    )
+    for threshold, ceiling in tiers:
+        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
+            return ceiling
+    return _FULL_FT_PARAM_CEILING_BILLIONS
+
+
 def _detect_total_vram_gb() -> float | None:
     """v1.7: total VRAM of the primary CUDA device in GB, or None.
 
@@ -2514,6 +2560,24 @@ class Trainer:
         # MLX rail (out of scope for v1.5). Named EXACTLY ``backend`` so the CLI
         # introspection filter threads ``--backend`` through (GLUE owns the flag).
         backend: str | None = None,
+        # Engine B — block-coordinate AdamW full fine-tuning (design:
+        # docs/full-ft-engines-design-2026-09-30.md; Luo, Yu, Li 2024 BAdam,
+        # arXiv:2404.02827). ``full_ft_engine`` (None ⇒ "default", the standard
+        # pure-GPU path; "block" opts in) — mode='full' + method='sft' only,
+        # not combinable with full_ft_offload. One block (a transformer layer,
+        # the embeddings, or the head) trains for ``switch_block_every``
+        # optimizer steps (default 50) with fp32 AdamW while the rest stay
+        # frozen in 16-bit; ``block_order`` (default "random" reshuffling),
+        # ``block_writeback`` (default "stochastic" rounding to bf16;
+        # "nearest" for the A/B), ``block_train_embeddings`` (default True;
+        # False freezes embeddings + head as BAdam does). All None ⇒ defaults.
+        # Appended at the end of the signature so positional callers are
+        # unaffected; named to match the CLI introspection filter.
+        full_ft_engine: str | None = None,
+        switch_block_every: int | None = None,
+        block_order: str | None = None,
+        block_writeback: str | None = None,
+        block_train_embeddings: bool | None = None,
     ) -> None:
         # Use settings as defaults, override with provided values
         # NOTE: Use `is not None` checks instead of falsy `or` to allow
@@ -2721,6 +2785,13 @@ class Trainer:
                     "preference objectives require mode='lora'."
                 ),
             )
+        self._resolve_full_ft_engine(
+            full_ft_engine=full_ft_engine,
+            switch_block_every=switch_block_every,
+            block_order=block_order,
+            block_writeback=block_writeback,
+            block_train_embeddings=block_train_embeddings,
+        )
         # v1.5 T1.2 (ORPO Wave 2): the ORPO odds-ratio loss weight. Kwarg-
         # authoritative, falling back to ``settings.training.orpo_beta``
         # (default 0.1). Ignored unless method='orpo'.
@@ -3569,6 +3640,122 @@ class Trainer:
             )
         return 2  # Safe default
 
+    def _resolve_full_ft_engine(
+        self,
+        *,
+        full_ft_engine: str | None,
+        switch_block_every: int | None,
+        block_order: str | None,
+        block_writeback: str | None,
+        block_train_embeddings: bool | None,
+    ) -> None:
+        """Resolve + gate the full fine-tuning engine selection (Engine B).
+
+        Runs after ``self.mode`` / ``self.method`` / ``self.full_ft_offload``
+        resolve and BEFORE the preference-objective + mode='full' guards, so an
+        engine request gets the engine-specific error. ``"default"`` (or None)
+        leaves every existing path untouched.
+        """
+        self._block_engine: Any = None
+        engine = "default" if full_ft_engine is None else full_ft_engine
+        if engine not in ("default", "block"):
+            raise InvalidSettingError(
+                setting_name="full_ft_engine",
+                value=full_ft_engine,
+                expected="one of {'default', 'block'}",
+                suggestion=(
+                    "Omit it (or pass 'default') for the standard full "
+                    "fine-tuning path; pass 'block' for block-coordinate AdamW "
+                    "(one transformer block trains at a time)."
+                ),
+            )
+        self.full_ft_engine = engine
+        self.switch_block_every = switch_block_every
+        self.block_order = block_order
+        self.block_writeback = block_writeback
+        self.block_train_embeddings = block_train_embeddings
+        if engine != "block":
+            knobs = {
+                "switch_block_every": switch_block_every,
+                "block_order": block_order,
+                "block_writeback": block_writeback,
+                "block_train_embeddings": block_train_embeddings,
+            }
+            stray = sorted(k for k, v in knobs.items() if v is not None)
+            if stray:
+                logger.warning(
+                    "%s only apply with full_ft_engine='block'; ignoring them for "
+                    "this run.", ", ".join(stray),
+                )
+            return
+
+        if self.method != "sft":
+            raise InvalidSettingError(
+                setting_name="method+full_ft_engine",
+                value={"method": self.method, "full_ft_engine": "block"},
+                expected="method='sft' with full_ft_engine='block'",
+                suggestion=(
+                    "The block-coordinate engine is validated for supervised "
+                    "fine-tuning only (BAdam's evidence is SFT). Use "
+                    "method='sft', or run ORPO/SimPO/KTO with mode='lora'."
+                ),
+            )
+        if self.full_ft_offload:
+            raise InvalidSettingError(
+                setting_name="full_ft_offload+full_ft_engine",
+                value={"full_ft_offload": True, "full_ft_engine": "block"},
+                expected="at most one of full_ft_offload=True / full_ft_engine='block'",
+                suggestion=(
+                    "They are alternative full fine-tuning engines. Pick "
+                    "--full-ft-engine block (whole model on the GPU, one block "
+                    "trains at a time, Windows + Linux) OR --full-ft-offload "
+                    "(FSDP2 CPU offload, every weight every step, Linux/WSL2)."
+                ),
+            )
+        if self.mode != "full":
+            raise InvalidSettingError(
+                setting_name="full_ft_engine",
+                value="block",
+                expected="mode='full'",
+                suggestion=(
+                    "full_ft_engine selects how a FULL fine-tune runs. Pass "
+                    "mode='full' with it, or drop it for LoRA."
+                ),
+            )
+        from .block_engine import (
+            DEFAULT_BLOCK_ORDER,
+            DEFAULT_BLOCK_WRITEBACK,
+            DEFAULT_SWITCH_BLOCK_EVERY,
+            validate_block_engine_settings,
+        )
+
+        self.switch_block_every = (
+            DEFAULT_SWITCH_BLOCK_EVERY if switch_block_every is None else switch_block_every
+        )
+        self.block_order = DEFAULT_BLOCK_ORDER if block_order is None else block_order
+        self.block_writeback = (
+            DEFAULT_BLOCK_WRITEBACK if block_writeback is None else block_writeback
+        )
+        self.block_train_embeddings = (
+            True if block_train_embeddings is None else bool(block_train_embeddings)
+        )
+        validate_block_engine_settings(
+            switch_block_every=self.switch_block_every,
+            block_order=self.block_order,
+            block_writeback=self.block_writeback,
+        )
+        if self.use_unsloth:
+            # The fp32 active block has been validated on the transformers
+            # modeling code (tests/test_block_engine.py); Unsloth's fused
+            # kernels have not been. Same forcing pattern as the FP8 path.
+            logger.warning(
+                "full_ft_engine='block': using the transformers backend "
+                "(use_unsloth disabled for this run). Consequence: "
+                "train_on_responses_only masking, an Unsloth utility here, is "
+                "off — loss covers the whole conversation."
+            )
+            self.use_unsloth = False
+
     def _resolve_full_ft_ceilings(self) -> tuple[float, float]:
         """v1.7: resolve ``(effective_ceiling, offload_ceiling)`` in billions for
         the mode='full' gate.
@@ -3576,7 +3763,9 @@ class Trainer:
         Resolution order for the effective ceiling: an explicit
         ``full_ft_ceiling_billions`` override wins; else it is derived from
         detected VRAM — the FSDP2 CPU-offload ceiling when ``full_ft_offload`` is
-        on, the pure-GPU ceiling otherwise. The offload ceiling is ALWAYS
+        on, the Engine B ceiling when ``full_ft_engine='block'``
+        (:func:`_full_ft_block_ceiling_for_vram`, a projection), the pure-GPU
+        ceiling otherwise. The offload ceiling is ALWAYS
         returned so :class:`FullFinetuneModelTooLargeError` can be contrastive
         about ``--full-ft-offload`` even when offload is off.
         """
@@ -3590,6 +3779,10 @@ class Trainer:
             # construction (RAM, from the estimated param count) and again in
             # train() (RAM + VRAM, from the model's real shape).
             effective = float("inf")
+        elif getattr(self, "full_ft_engine", "default") == "block":
+            effective = _full_ft_block_ceiling_for_vram(
+                vram, train_embeddings=bool(getattr(self, "block_train_embeddings", True))
+            )
         else:
             effective = _full_ft_ceiling_for_vram(vram)
         return effective, offload_ceiling
@@ -4776,6 +4969,49 @@ class Trainer:
             )
         from trl import SFTTrainer
 
+        if getattr(self, "full_ft_engine", "default") == "block":
+            # Engine B: the block-coordinate optimizer rides the stock
+            # SFTTrainer loop through ``optimizers=`` (the trainer builds its LR
+            # scheduler on it) plus a callback. Both the first attempt and the
+            # OOM retry come through here: a previous engine is finalized first
+            # (active block written back to 16-bit) so the retry starts from a
+            # consistent model.
+            from .block_engine import (
+                DEFAULT_BLOCK_ORDER,
+                DEFAULT_BLOCK_WRITEBACK,
+                DEFAULT_SWITCH_BLOCK_EVERY,
+                build_for_sft_trainer,
+            )
+
+            self._finalize_block_engine()
+            # (Resolved to concrete values in _resolve_full_ft_engine; the
+            # fallbacks only narrow the Optional types.)
+            optimizer, engine_cb = build_for_sft_trainer(
+                self._model,
+                training_args,
+                switch_block_every=(
+                    self.switch_block_every
+                    if self.switch_block_every is not None
+                    else DEFAULT_SWITCH_BLOCK_EVERY
+                ),
+                block_order=self.block_order or DEFAULT_BLOCK_ORDER,
+                block_writeback=self.block_writeback or DEFAULT_BLOCK_WRITEBACK,
+                include_embeddings=self.block_train_embeddings is not False,
+            )
+            self._block_engine = optimizer
+            logger.info(
+                "full_ft_engine='block': %s",
+                {k: v for k, v in optimizer.engine_summary().items() if k != "switches"},
+            )
+            return SFTTrainer(
+                model=self._model,
+                processing_class=self._tokenizer,
+                train_dataset=train_dataset,
+                args=training_args,
+                callbacks=[*(callbacks or []), engine_cb],
+                optimizers=(optimizer, None),
+            )
+
         return SFTTrainer(
             model=self._model,
             processing_class=self._tokenizer,
@@ -4783,6 +5019,15 @@ class Trainer:
             args=training_args,
             callbacks=callbacks,
         )
+
+    def _finalize_block_engine(self) -> None:
+        """Write Engine B's active block back and restore requires_grad.
+
+        No-op when the engine is off or already finalized.
+        """
+        engine = getattr(self, "_block_engine", None)
+        if engine is not None:
+            engine.finalize()
 
     def _build_training_args(
         self,
@@ -4904,7 +5149,9 @@ class Trainer:
             # resolved instance attributes (per-invocation kwarg OR settings
             # fallback) through to the helper.
             packing=self.packing,
-            optim=self.optim,
+            # Engine B supplies its own AdamW (fp32, active block only); name it
+            # in the config so the recorded optim is not a paged-8-bit claim.
+            optim="adamw_torch" if getattr(self, "full_ft_engine", "default") == "block" else self.optim,
             # v1.4 BACKEND-F-008 (Wave 6b features): thread the constructor-
             # resolved training mode (``"lora"`` default | ``"full"``).
             mode=self.mode,
@@ -5499,6 +5746,19 @@ class Trainer:
         # train_on_responses_only. Absent when the mode is disabled.
         if resolved_response_markers is not None:
             hyperparameters["response_markers"] = list(resolved_response_markers)
+        # Engine B provenance. Only written when the engine is on, so the
+        # default path's run-history record is unchanged.
+        if getattr(self, "full_ft_engine", "default") == "block":
+            hyperparameters.update(
+                {
+                    "mode": self.mode,
+                    "full_ft_engine": "block",
+                    "switch_block_every": self.switch_block_every,
+                    "block_order": self.block_order,
+                    "block_writeback": self.block_writeback,
+                    "block_train_embeddings": self.block_train_embeddings,
+                }
+            )
         try:
             if run_id_for_resume:
                 # F-002 resume: flip status back to "running" without
@@ -5914,6 +6174,10 @@ class Trainer:
                     "effective_gradient_accumulation": self.gradient_accumulation,
                 },
             )
+            _engine = getattr(self, "_block_engine", None)
+            if _engine is not None:
+                _engine.finalize()
+                run.metadata["block_engine"] = _engine.engine_summary()
 
             self._training_runs.append(run)
 
@@ -6102,6 +6366,11 @@ class Trainer:
             # mutated them.
             self.batch_size = _orig_batch_size
             self.gradient_accumulation = _orig_gradient_accumulation
+            # Engine B: whatever the exit path, write the active block back to
+            # the storage dtype and restore requires_grad, so the model is a
+            # plain 16-bit model for save()/export (idempotent — the engine's
+            # on_train_end callback normally did this already).
+            self._finalize_block_engine()
             # B-001: emit run_ended with status and release the context-var
             # binding so the thread doesn't carry our run_id into the next
             # caller. We deliberately do this in `finally` so the log line

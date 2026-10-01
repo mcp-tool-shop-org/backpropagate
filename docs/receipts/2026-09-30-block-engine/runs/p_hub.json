@@ -1,0 +1,13 @@
+{
+ "Qwen/Qwen3.5-4B-Instruct": {
+  "exists": false,
+  "error": "RepositoryNotFoundError: 401 Client Error. (Request ID: Root=1-6abd52b2-23b6fbcb2cfd064c312e68b8;50f97618-1044-4bc2-a888-47d1dd591424)\n\nRepository Not Found for url: https://huggingface.co/api/models/Qwen/Qwen3.5-4B-Instruct.\nPlease make sure you specified the correct `repo_id` and `repo_type`.\nIf you are trying to access a"
+ },
+ "Qwen/Qwen3.5-4B": {
+  "exists": true,
+  "pipeline_tag": "image-text-to-text",
+  "architectures": [
+   "Qwen3_5ForConditionalGeneration"
+  ]
+ }
+}

@@ -145,6 +145,29 @@ The constants come from four runs between 1.5B and 7.6B. Above 7.6B the formula 
 
 Long runs, gradient accumulation above 1, a physical 64 GB machine (the test machine had more RAM, with a 60 GiB limit enforced by the test), and anything above 7.6B.
 
+## Experimental: block-coordinate engine
+
+`--full-ft-engine block` (Python: `full_ft_engine="block"`) is **experimental**. It trains one block at a time with AdamW (a transformer layer, or the embeddings and output head) for K optimizer steps, then moves to the next. The other blocks stay frozen on the GPU in bf16, and the active block is held in fp32 while it trains. The idea comes from BAdam ([Luo et al. 2024](https://arxiv.org/abs/2404.02827)).
+
+What it is good for: it fits a 7B model on a 32 GB card **without offload**, runs on Windows, and works inside the normal training loop, so packing, checkpoints, resume and gradient accumulation all work.
+
+What the tests found (RTX 5090, 2026-09-30, receipts in [`docs/receipts/2026-09-30-gsm8k/`](https://github.com/mcp-tool-shop-org/backpropagate/tree/main/docs/receipts/2026-09-30-gsm8k)). GSM8K, 1000 steps over all 7,473 training rows, batch 4, held-out answer loss (lower is better) on 250 test questions:
+
+| Model | Arm | Held-out loss | Accuracy | s/step | Peak VRAM (system-wide) |
+|---|---|---|---|---|---|
+| Qwen2.5-7B | QLoRA r=256 | **0.513** | 0.696 | 0.51 | 13.8 GiB |
+| Qwen2.5-7B | block engine, K=5 (2 seeds) | 0.565 | 0.734 | 0.21 | 30.0 GiB |
+| SmolLM3-3B | full fine-tuning on the GPU (3 seeds) | 0.539 | 0.643 | 0.30 | 22.0 GiB |
+| SmolLM3-3B | block engine, K=50 (3 seeds) | 0.546 | 0.663 | 0.14 | 15.3 GiB |
+| SmolLM3-3B | QLoRA r=256 (2 seeds) | **0.522** | 0.578 | 0.41 | 8.3 GiB |
+
+- **At 7B it lost to QLoRA** on held-out loss by 0.052 (95% CI 0.044–0.060). The accuracy difference was not statistically significant. It also needs 30 GiB of a 32 GB card, against QLoRA's 14 GiB.
+- At 3B it came within 0.01 of full fine-tuning on the GPU, at about half the step time.
+- On this task every fine-tuned arm scored below the untrained models on lenient accuracy; the accuracy gains mostly reflect learning the answer format. A task where full fine-tuning is expected to help (code, large datasets) has not been tested.
+- With embeddings trained, 7B needs a 32 GB card; with `--block-freeze-embeddings` it fit under a 24 GiB cap.
+
+**Use QLoRA for 7B unless you are experimenting.** The engine is included so its trade-offs can be tested on more tasks.
+
 ## LoRA or full fine-tuning: the evidence
 
 - **[Biderman et al. 2024, "LoRA Learns Less and Forgets Less"](https://arxiv.org/abs/2405.09673).** In standard low-rank settings, LoRA substantially underperforms full fine-tuning on programming and mathematics. It forgets less of the base model's abilities outside the target domain, more than weight decay or dropout do. Full fine-tuning learns perturbations of 10–100× higher rank than typical LoRA.

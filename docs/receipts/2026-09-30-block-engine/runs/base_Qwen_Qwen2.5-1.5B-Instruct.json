@@ -1,0 +1,25 @@
+{
+ "mode": "base",
+ "model": "Qwen/Qwen2.5-1.5B-Instruct",
+ "heldout_loss": 2.4195,
+ "heldout_tokens": 19350,
+ "floor": 0.0,
+ "ceiling_ln_vocab": 11.9312,
+ "in_bounds": true,
+ "params": 1543714304,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.36,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "498ec1a9bdfaa77e050b3e22ddee3bd95e793455",
+ "written": "2026-09-30T18:20:16Z"
+}

@@ -1,0 +1,12 @@
+{
+ "pick": "Qwen/Qwen2.5-3B-Instruct",
+ "base_acc_strict": {
+  "HuggingFaceTB/SmolLM3-3B": 0.124,
+  "Qwen/Qwen2.5-3B-Instruct": 0.596
+ },
+ "distance_from_floor_or_ceiling": {
+  "HuggingFaceTB/SmolLM3-3B": 0.124,
+  "Qwen/Qwen2.5-3B-Instruct": 0.404
+ },
+ "rule": "max over candidates of min(acc, 1 - acc); tie -> lower accuracy (more room)"
+}

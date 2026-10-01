@@ -170,27 +170,6 @@ class Provider:
         return "".join(out)
 
 
-def has_unhashable_role(rows: Any) -> bool:
-    """True if any OpenAI-style message carries an unhashable ``role`` value.
-
-    Known finding F1: ``_validate_openai`` tests ``msg["role"] not in
-    valid_roles`` (a ``set``), which raises ``TypeError`` for a JSON list or
-    object. See ``tests/test_fuzz_harnesses.py::TestKnownFindings``.
-    """
-    if not isinstance(rows, list):
-        rows = [rows]
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        msgs = row.get("messages")
-        if not isinstance(msgs, list):
-            continue
-        for msg in msgs:
-            if isinstance(msg, dict) and isinstance(msg.get("role"), (list, dict)):
-                return True
-    return False
-
-
 _SCRATCH: Path | None = None
 
 

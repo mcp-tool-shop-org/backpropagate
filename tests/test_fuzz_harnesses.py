@@ -171,9 +171,7 @@ class TestHarnessesHaveTeeth:
 # Seeds that reproduce a known finding: (target, file, exception under strict=True)
 STRICT_SEEDS = [
     ("paths", "finding_f2_dots_in_controls.seed", AssertionError),
-    ("datasets", "finding_f1_unhashable_role.seed", TypeError),
     ("datasets", "finding_f6_lone_surrogate.seed", UnicodeEncodeError),
-    ("dataset_files", "finding_f1.jsonl", TypeError),
     ("ui_input", "finding_f4_nan.seed", AssertionError),
     ("config", "finding_f4b_orpo_beta.seed", AssertionError),
     ("config", "finding_f4b_simpo_gamma.seed", AssertionError),
@@ -194,12 +192,6 @@ class TestKnownFindings:
         check(data, strict=False)  # tolerated by default, so fuzzing can go on
         with pytest.raises(exc_type):
             check(data, strict=True)
-
-    @pytest.mark.xfail(raises=TypeError, strict=True, reason="F1: unhashable role crashes validation")
-    def test_f1_validate_dataset_survives_an_unhashable_role(self):
-        from backpropagate.datasets import validate_dataset
-
-        validate_dataset([{"messages": [{"role": ["user"], "content": "x"}]}])
 
     @pytest.mark.xfail(strict=True, reason="F2: sanitize_filename can return '..' or '.'")
     def test_f2_sanitize_filename_never_returns_a_dot_component(self):
@@ -285,6 +277,26 @@ class TestKnownFindings:
         path.write_text("[" * 20000 + "]" * 20000 + "\n", encoding="utf-8")
         with pytest.raises(ValueError):
             list(StreamingDatasetLoader(str(path)))
+
+
+class TestFixedFindings:
+    """Regression tests for bugs the fuzzers found and that are now fixed."""
+
+    @pytest.mark.parametrize("role", [["user"], {"a": 1}, 7, None, "robot"])
+    def test_f1_openai_role_that_is_not_a_known_string_is_a_validation_error(self, role):
+        from backpropagate.datasets import validate_dataset
+
+        result = validate_dataset([{"messages": [{"role": role, "content": "x"}]}])
+        # An unknown role is reported as a warning (same as a string like "robot").
+        assert [w.error_type for w in result.warnings] == ["invalid_role"]
+
+    def test_f1_dataset_loader_reports_an_unhashable_role_instead_of_crashing(self, tmp_path):
+        from backpropagate.datasets import DatasetLoader
+
+        path = tmp_path / "bad_role.jsonl"
+        path.write_text('{"messages": [{"role": ["user"], "content": "x"}]}\n', encoding="utf-8")
+        loader = DatasetLoader(path)
+        assert loader.validation_result.warnings[0].error_type == "invalid_role"
 
 
 class TestPlumbing:

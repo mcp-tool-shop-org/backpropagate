@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fuzz_common import STRICT, Provider, has_unhashable_role, instrument, main, scratch_dir
+from fuzz_common import STRICT, Provider, instrument, main, scratch_dir
 
 with instrument(__name__ == "__main__"):
     from backpropagate.datasets import (
@@ -142,14 +142,8 @@ def check_dataset_files(data: bytes, strict: bool = False) -> None:
             assert set(item) == {"text"} and isinstance(item["text"], str)
 
         # The default constructor also validates; that step must not crash.
-        try:
-            checked = DatasetLoader(path)
-        except TypeError:
-            # Known finding F1 (unhashable ``role`` in an OpenAI message).
-            if strict or not has_unhashable_role(expected):
-                raise
-        else:
-            assert checked.validation_result.total_rows == len(expected)
+        checked = DatasetLoader(path)
+        assert checked.validation_result.total_rows == len(expected)
 
     # -- StreamingDatasetLoader ---------------------------------------------
     rows, exc = _try(lambda: list(StreamingDatasetLoader(str(path))))

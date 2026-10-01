@@ -1289,7 +1289,9 @@ def _validate_openai(sample: dict, row_index: int) -> list[ValidationError]:
                 error_type="missing_field",
                 message="Missing 'role' field",
             ))
-        elif msg["role"] not in valid_roles:
+        elif not isinstance(msg["role"], str) or msg["role"] not in valid_roles:
+            # A non-string role (a JSON list or object) is unhashable, so the
+            # set-membership test would raise TypeError; report it instead.
             errors.append(ValidationError(
                 row_index=row_index,
                 field=f"messages[{i}].role",

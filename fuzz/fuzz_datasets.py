@@ -31,7 +31,7 @@ import json
 import sys
 from typing import Any
 
-from fuzz_common import STRICT, Provider, has_unhashable_role, instrument, main
+from fuzz_common import STRICT, Provider, instrument, main
 
 with instrument(__name__ == "__main__"):
     from backpropagate.datasets import (
@@ -82,23 +82,16 @@ def check_rows(rows: list[Any], strict: bool = False) -> None:
         fmts.append(fmt)
 
     # -- validation: must report problems, never crash on them --------------
-    try:
-        result = validate_dataset(rows)
-    except TypeError:
-        # Known finding F1 (unhashable ``role``); see fuzz_common.has_unhashable_role.
-        if strict or not has_unhashable_role(rows):
-            raise
-        result = None
-    if result is not None:
-        assert result.total_rows == len(rows)
-        assert 0 <= result.valid_rows <= result.total_rows
-        assert isinstance(result.format_detected, DatasetFormat)
-        assert result.is_valid == (len(result.errors) == 0)
-        if rows:
-            assert result.format_detected == fmts[0]
-        for err in [*result.errors, *result.warnings]:
-            assert isinstance(err.error_type, str)
-            assert 0 <= err.row_index < max(len(rows), 1), "error points outside the dataset"
+    result = validate_dataset(rows)
+    assert result.total_rows == len(rows)
+    assert 0 <= result.valid_rows <= result.total_rows
+    assert isinstance(result.format_detected, DatasetFormat)
+    assert result.is_valid == (len(result.errors) == 0)
+    if rows:
+        assert result.format_detected == fmts[0]
+    for err in [*result.errors, *result.warnings]:
+        assert isinstance(err.error_type, str)
+        assert 0 <= err.row_index < max(len(rows), 1), "error points outside the dataset"
 
     # -- conversion: never raises, drops what it cannot convert --------------
     converted = convert_to_chatml(rows)

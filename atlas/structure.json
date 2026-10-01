@@ -7603,7 +7603,8 @@
           "exports": [
             "estimate_vram",
             "load_dataset",
-            "load_model"
+            "load_model",
+            "vram_addends"
           ],
           "failurePaths": [
             {
@@ -7769,925 +7770,925 @@
             {
               "in": "_build_sft_config",
               "kind": "raise",
-              "line": 1536
+              "line": 1689
             },
             {
               "in": "_config_declares",
               "kind": "except",
-              "line": 1713
+              "line": 1866
             },
             {
               "in": "_require_config_field",
               "kind": "raise",
-              "line": 1729
+              "line": 1882
             },
             {
               "in": "_build_orpo_config",
               "kind": "except",
-              "line": 1820
-            },
-            {
-              "in": "_build_orpo_config",
-              "kind": "except",
-              "line": 1823
-            },
-            {
-              "in": "_build_orpo_config",
-              "kind": "raise",
-              "line": 1824
-            },
-            {
-              "in": "_build_cpo_config",
-              "kind": "except",
-              "line": 1969
-            },
-            {
-              "in": "_build_cpo_config",
-              "kind": "except",
-              "line": 1972
-            },
-            {
-              "in": "_build_cpo_config",
-              "kind": "raise",
               "line": 1973
             },
             {
-              "in": "_build_kto_config",
+              "in": "_build_orpo_config",
               "kind": "except",
-              "line": 2134
+              "line": 1976
             },
             {
-              "in": "_build_kto_config",
-              "kind": "except",
-              "line": 2137
-            },
-            {
-              "in": "_build_kto_config",
+              "in": "_build_orpo_config",
               "kind": "raise",
-              "line": 2138
+              "line": 1977
             },
             {
-              "in": "_apply_train_on_responses_only",
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 2122
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 2125
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "raise",
+              "line": 2126
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2287
+            },
+            {
+              "in": "_build_kto_config",
               "kind": "except",
               "line": 2290
             },
             {
+              "in": "_build_kto_config",
+              "kind": "raise",
+              "line": 2291
+            },
+            {
               "in": "_apply_train_on_responses_only",
               "kind": "except",
-              "line": 2293
+              "line": 2443
+            },
+            {
+              "in": "_apply_train_on_responses_only",
+              "kind": "except",
+              "line": 2446
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2609
+              "line": 2762
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2619
+              "line": 2772
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2626
+              "line": 2779
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2636
+              "line": 2789
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2643
+              "line": 2796
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2650
+              "line": 2803
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2657
+              "line": 2810
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2730
+              "line": 2883
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2775
+              "line": 2928
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2811
+              "line": 2964
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2839
+              "line": 2992
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2898
+              "line": 3051
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3011
+              "line": 3164
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3023
+              "line": 3176
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3038
+              "line": 3191
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3219
+              "line": 3372
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3233
+              "line": 3386
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3254
+              "line": 3407
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3353
+              "line": 3506
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3375
+              "line": 3528
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3391
+              "line": 3544
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3405
+              "line": 3558
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3416
+              "line": 3569
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 3507
+              "line": 3660
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3626
+              "line": 3779
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3631
+              "line": 3784
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3636
+              "line": 3789
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3662
+              "line": 3815
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3693
+              "line": 3846
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3704
+              "line": 3857
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3716
+              "line": 3869
             },
             {
               "in": "_enforce_offload_fit",
               "kind": "raise",
-              "line": 3826
+              "line": 3979
             },
             {
               "in": "_enforce_offload_fit_for_model",
               "kind": "except",
-              "line": 3852
+              "line": 4005
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3961
+              "line": 4114
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3986
+              "line": 4139
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4038
+              "line": 4191
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4056
+              "line": 4209
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4064
+              "line": 4217
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4150
+              "line": 4303
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "raise",
-              "line": 4152
+              "line": 4305
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4185
+              "line": 4338
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4204
+              "line": 4357
             },
             {
               "in": "_detect_optimal_dtype",
               "kind": "except",
-              "line": 4276
+              "line": 4429
             },
             {
               "in": "load_model",
               "kind": "except",
-              "line": 4411
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4417
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4418
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4420
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4431
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4433
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4434
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4440
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4446
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4449
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4459
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4464
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4469
-            },
-            {
-              "in": "_load_with_unsloth",
-              "kind": "except",
-              "line": 4557
-            },
-            {
-              "in": "_load_with_unsloth",
-              "kind": "raise",
-              "line": 4559
-            },
-            {
-              "in": "_load_with_unsloth",
-              "kind": "raise",
               "line": 4565
             },
             {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4571
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4572
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4574
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4585
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4587
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4588
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4594
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4600
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4603
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4613
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4618
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4623
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4711
+            },
+            {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4593
-            },
-            {
-              "in": "_load_with_unsloth",
-              "kind": "except",
-              "line": 4633
+              "line": 4713
             },
             {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4638
+              "line": 4719
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4747
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4787
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4792
             },
             {
               "in": "_load_with_transformers",
               "kind": "except",
-              "line": 4763
+              "line": 4917
             },
             {
               "in": "_load_with_transformers",
               "kind": "raise",
-              "line": 4765
-            },
-            {
-              "in": "_load_with_transformers",
-              "kind": "raise",
-              "line": 4766
-            },
-            {
-              "in": "_load_with_transformers",
-              "kind": "except",
-              "line": 4828
-            },
-            {
-              "in": "_build_trainer",
-              "kind": "except",
-              "line": 4915
-            },
-            {
-              "in": "_build_trainer",
-              "kind": "except",
               "line": 4919
             },
             {
-              "in": "_build_trainer",
+              "in": "_load_with_transformers",
               "kind": "raise",
               "line": 4920
             },
             {
+              "in": "_load_with_transformers",
+              "kind": "except",
+              "line": 4982
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 5069
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 5073
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "raise",
+              "line": 5074
+            },
+            {
               "in": "_auto_balance_kto_weights",
               "kind": "except",
-              "line": 5254
+              "line": 5408
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5398
+              "line": 5552
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5404
+              "line": 5558
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5550
+              "line": 5704
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5577
+              "line": 5731
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5599
+              "line": 5753
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5606
+              "line": 5760
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5607
+              "line": 5761
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5777
+              "line": 5931
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5867
+              "line": 6021
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5868
+              "line": 6022
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5869
+              "line": 6023
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5878
+              "line": 6032
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5946
+              "line": 6100
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5966
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 5968
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6012
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6074
-            },
-            {
-              "in": "_finite_loss",
-              "kind": "except",
               "line": 6120
             },
             {
               "in": "train",
-              "kind": "except",
-              "line": 6152
+              "kind": "raise",
+              "line": 6122
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6196
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6212
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6233
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6240
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6250
+              "line": 6166
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6254
+              "line": 6228
+            },
+            {
+              "in": "_finite_loss",
+              "kind": "except",
+              "line": 6274
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6258
+              "line": 6306
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6267
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6272
+              "line": 6350
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6273
+              "line": 6366
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6282
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6293
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6309
+              "line": 6387
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6325
+              "line": 6394
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6334
+              "line": 6404
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6345
+              "line": 6408
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6412
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6421
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6426
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6427
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6436
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6447
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6463
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6479
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6488
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6499
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6459
+              "line": 6613
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6543
+              "line": 6697
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6568
+              "line": 6722
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6574
+              "line": 6728
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6584
+              "line": 6738
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6591
+              "line": 6745
             },
             {
               "in": "_train_with_mlx",
               "kind": "raise",
-              "line": 6593
+              "line": 6747
             },
             {
               "in": "_require_preference_columns",
               "kind": "raise",
-              "line": 6686
+              "line": 6840
             },
             {
               "in": "_require_kto_columns",
               "kind": "raise",
-              "line": 6699
+              "line": 6853
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6754
+              "line": 6908
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6755
+              "line": 6909
             },
             {
               "in": "_load_dataset",
-              "kind": "except",
-              "line": 6800
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6801
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6820
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6824
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6828
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6829
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6830
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6831
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6832
-            },
-            {
-              "in": "_token_counter",
-              "kind": "except",
-              "line": 6915
-            },
-            {
-              "in": "_filter_reasoning_traces",
-              "kind": "except",
-              "line": 6933
-            },
-            {
-              "in": "_filter_reasoning_traces",
               "kind": "except",
               "line": 6954
             },
             {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6955
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6974
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6978
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6982
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6983
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6984
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6985
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6986
+            },
+            {
+              "in": "_token_counter",
+              "kind": "except",
+              "line": 7069
+            },
+            {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6965
+              "line": 7087
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 7108
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 7119
             },
             {
               "in": "tokenize_fn",
               "kind": "except",
-              "line": 7004
+              "line": 7158
             },
             {
               "in": "tokenize_fn",
               "kind": "raise",
-              "line": 7005
+              "line": 7159
             },
             {
               "in": "_pre_tokenize",
               "kind": "except",
-              "line": 7018
+              "line": 7172
             },
             {
               "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 7019
+              "line": 7173
             },
             {
               "in": "_pre_tokenize",
               "kind": "except",
-              "line": 7020
+              "line": 7174
             },
             {
               "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 7021
+              "line": 7175
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7065
+              "line": 7219
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7085
+              "line": 7239
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7093
+              "line": 7247
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7098
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "raise",
-              "line": 7101
+              "line": 7252
             },
             {
               "in": "_train_full_offload",
               "kind": "raise",
-              "line": 7102
+              "line": 7255
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7256
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7136
+              "line": 7290
             },
             {
               "in": "_train_full_offload",
-              "kind": "except",
-              "line": 7141
-            },
-            {
-              "in": "save",
-              "kind": "raise",
-              "line": 7224
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7267
-            },
-            {
-              "in": "save",
-              "kind": "raise",
-              "line": 7268
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7272
-            },
-            {
-              "in": "save",
-              "kind": "raise",
-              "line": 7273
-            },
-            {
-              "in": "save",
               "kind": "except",
               "line": 7295
             },
             {
               "in": "save",
+              "kind": "raise",
+              "line": 7378
+            },
+            {
+              "in": "save",
               "kind": "except",
-              "line": 7302
+              "line": 7421
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7303
+              "line": 7422
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7358
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7383
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7393
+              "line": 7426
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7399
+              "line": 7427
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7403
+              "line": 7449
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7456
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7404
+              "line": 7457
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7405
+              "line": 7512
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7537
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7547
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7406
+              "line": 7553
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7462
+              "line": 7557
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7558
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7559
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7560
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7616
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7520
+              "line": 7674
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7574
+              "line": 7728
             },
             {
               "in": "_release_model",
               "kind": "except",
-              "line": 7648
+              "line": 7802
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 7658
+              "line": 7812
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7739
+              "line": 7893
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7753
+              "line": 7907
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7808
+              "line": 7962
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7816
+              "line": 7970
             },
             {
               "in": "_count_lora_layers",
               "kind": "except",
-              "line": 7855
+              "line": 8009
             },
             {
               "in": "__getattr__",
               "kind": "raise",
-              "line": 7922
+              "line": 8076
             }
           ],
-          "hash": "a609a78a69a74567aab504b0b27df3f67d829722e5739d2e05c495d4131e0a9f",
+          "hash": "9fae792ba61e3ee1a86b2c11613318e70d95b78d7b3f889ebbaa8397c8c66230",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
@@ -8861,7 +8862,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 1383,
+                  "line": 1535,
                   "name": "offload_host_ram_required_gib",
                   "target": {
                     "file": "backpropagate/offload_engine.py"
@@ -8876,7 +8877,7 @@
             {
               "calls": [
                 {
-                  "line": 1729,
+                  "line": 1882,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8891,7 +8892,7 @@
             {
               "calls": [
                 {
-                  "line": 1824,
+                  "line": 1977,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8906,7 +8907,7 @@
             {
               "calls": [
                 {
-                  "line": 1973,
+                  "line": 2126,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8921,7 +8922,7 @@
             {
               "calls": [
                 {
-                  "line": 2138,
+                  "line": 2291,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8950,7 +8951,7 @@
             {
               "calls": [
                 {
-                  "line": 7822,
+                  "line": 7976,
                   "name": "named_modules",
                   "target": null
                 }
@@ -8964,7 +8965,7 @@
               "calls": [
                 {
                   "branch": "target_modules.lower() == \"all-linear\"",
-                  "line": 7822,
+                  "line": 7976,
                   "name": "named_modules",
                   "target": null,
                   "via": "_all_linear_leaf_names"
@@ -8978,7 +8979,7 @@
             {
               "calls": [
                 {
-                  "line": 7854,
+                  "line": 8008,
                   "name": "named_modules",
                   "target": null
                 }
@@ -10176,7 +10177,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 72,
+      "testedBy": 75,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -10250,7 +10251,7 @@
           "path": "docs/full-ft-engines-design-2026-09-30.md"
         },
         {
-          "hash": "73688cbe2e64077bd0e17371aa30960e995eaf2253cade4b383dce6bf021b7bb",
+          "hash": "c1229a72c764957ca120059407d7275b8ceecc7749ff722a485d4907574dbd88",
           "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
         },
         {
@@ -10828,6 +10829,54 @@
         {
           "hash": "bb0a9526af1e0bbdac6bec1839d5e1886cbf376c9dddfba5be45593e7be5dfc7",
           "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
+        },
+        {
+          "hash": "cbd419b80d4df14fd5203693f7aa4b6215716cf77ec9502554811d02d021aa8c",
+          "path": "docs/receipts/2026-10-e3-vram/README.md"
+        },
+        {
+          "hash": "0cbbb93483b7e21c6a82c950e6bb302f1b2ca9e8e188eaf4e23e52f460cf12ee",
+          "path": "docs/receipts/2026-10-e3-vram/arch/llama-3.1-8b.json"
+        },
+        {
+          "hash": "311a1f5a72dca94b501d5fde99a075e837a9bb8bf8bb7902f3522973f4b17eb8",
+          "path": "docs/receipts/2026-10-e3-vram/arch/mistral-7b.json"
+        },
+        {
+          "hash": "d06ad23baf3d37dbfc30c82f68224ffaf41c312b203a5404174c17a0a4d37a21",
+          "path": "docs/receipts/2026-10-e3-vram/arch/mistral-small-24b.json"
+        },
+        {
+          "hash": "e05a7d67ed072d67dc67e20d3f6b8d669e261455dff4c74179984242ec7a854d",
+          "path": "docs/receipts/2026-10-e3-vram/arch/phi-4-mini-3.8b.json"
+        },
+        {
+          "hash": "cdf75a01d75597b84e123dba71b34887376c44d9f91617e2fc3bb9fae29c5cd7",
+          "path": "docs/receipts/2026-10-e3-vram/arch/qwen2.5-14b.json"
+        },
+        {
+          "hash": "180340d77e60d652c3ad919e6d77a7a8b26b41beade57cbf18c3f6f1d13b1c16",
+          "path": "docs/receipts/2026-10-e3-vram/arch/qwen2.5-32b.json"
+        },
+        {
+          "hash": "046397b2389af60b97582e43dc2aca0c051b4649051925910fbd3d9246775c32",
+          "path": "docs/receipts/2026-10-e3-vram/arch/qwen2.5-3b.json"
+        },
+        {
+          "hash": "16c61fa86604fa280033996a1212e3062b56043f037bbc66b8e725ec8e1e33fb",
+          "path": "docs/receipts/2026-10-e3-vram/arch/qwen2.5-7b.json"
+        },
+        {
+          "hash": "7d72c11db626aed4abafcb0100bfafb712f7c0bd3296037f8b124bb4c2983253",
+          "path": "docs/receipts/2026-10-e3-vram/arch/qwen3.5-4b.json"
+        },
+        {
+          "hash": "0589760b26e26ca91223ee649a4b4d4c93b8d63e9f403d346fee1052df805c40",
+          "path": "docs/receipts/2026-10-e3-vram/arch/smollm3-3b.json"
+        },
+        {
+          "hash": "c522a53c8dd5377eea97902daad08f73712ff696181041946941b44dcaaa600e",
+          "path": "docs/receipts/2026-10-e3-vram/cpu/qwen3.5-4b_meta.json"
         }
       ],
       "globs": [
@@ -11023,10 +11072,10 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 3,
+      "dynamicReads": 6,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 2,
+      "dynamicWrites": 9,
       "entryPoints": [],
       "externalNames": [
         "datasets"
@@ -11253,6 +11302,109 @@
           "path": "scripts/doc-drift-allow.toml"
         },
         {
+          "exports": [
+            "build_points",
+            "drop_order",
+            "estimate_download_seconds",
+            "estimate_point_seconds",
+            "estimate_total_seconds",
+            "fetch_arch",
+            "finite",
+            "hf_secrets",
+            "load_presets",
+            "plan_budget",
+            "point_tag",
+            "read_json",
+            "repo_params_b",
+            "runtime_guard",
+            "scrub",
+            "size_class",
+            "tier_of",
+            "write_json"
+          ],
+          "failurePaths": [
+            {
+              "in": "load_presets",
+              "kind": "raise",
+              "line": 95
+            },
+            {
+              "in": "fetch_arch",
+              "kind": "except",
+              "line": 368
+            },
+            {
+              "in": "fetch_arch",
+              "kind": "except",
+              "line": 382
+            }
+          ],
+          "hash": "3a9e5388faf287f22b655dfcc3b6842680d76f3d6ab6f802bc2452a3645d2bfd",
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "scripts/e3_lib.py"
+        },
+        {
+          "exports": [
+            "main"
+          ],
+          "failurePaths": [
+            {
+              "in": "main",
+              "kind": "except",
+              "line": 93
+            },
+            {
+              "in": "main",
+              "kind": "except",
+              "line": 101
+            }
+          ],
+          "hash": "bd0e52e6faa82a893301b126ac1087244d831e2d57e25e0a28968a54777a7580",
+          "importOrder": [
+            "scripts/e3_lib.py",
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/trainer.py",
+            "scripts/e3_lib.py"
+          ],
+          "path": "scripts/e3_meta_device_check.py"
+        },
+        {
+          "exports": [
+            "choose_batch",
+            "coefficients_from",
+            "design",
+            "evaluate",
+            "fit",
+            "load_receipts",
+            "lomo",
+            "main",
+            "nnls_relative",
+            "predict",
+            "rel",
+            "render",
+            "run",
+            "to_obs",
+            "top_up"
+          ],
+          "hash": "0777591438facf5bab4188f2d8278816089c00da0fea735e2db65d3f11801817",
+          "importOrder": [
+            "scripts/e3_lib.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/trainer.py",
+            "scripts/e3_lib.py"
+          ],
+          "path": "scripts/e3_refit.py"
+        },
+        {
           "hash": "4f5c5453dc32e4637bd3715de0f1ffc6e00797e9ab768299519f3295fe955901",
           "path": "scripts/gpu_smoke.sh"
         },
@@ -11471,6 +11623,180 @@
         },
         {
           "exports": [
+            "arch_path",
+            "build_parser",
+            "build_summary",
+            "build_synthetic_model",
+            "cmd_arch",
+            "cmd_plan",
+            "cmd_point",
+            "cmd_run",
+            "cmd_summarize",
+            "describe_optimizer",
+            "ensure_arch",
+            "fetch_repo",
+            "fs_type",
+            "git_sha",
+            "gpu_used_mib",
+            "hf_access",
+            "is_oom",
+            "load_receipts",
+            "main",
+            "measure_point",
+            "package_versions",
+            "plan_report",
+            "preflight",
+            "print_summary",
+            "purge_repo",
+            "receipt_is_final",
+            "run_child",
+            "select_grid",
+            "skipped_receipt",
+            "synthetic_rows",
+            "wait_gpu_free",
+            "write_receipt"
+          ],
+          "failurePaths": [
+            {
+              "in": "select_grid",
+              "kind": "raise",
+              "line": 161
+            },
+            {
+              "in": "cmd_arch",
+              "kind": "except",
+              "line": 244
+            },
+            {
+              "in": "__init__",
+              "kind": "except",
+              "line": 279
+            },
+            {
+              "in": "_loop",
+              "kind": "except",
+              "line": 296
+            },
+            {
+              "in": "package_versions",
+              "kind": "except",
+              "line": 326
+            },
+            {
+              "in": "git_sha",
+              "kind": "except",
+              "line": 338
+            },
+            {
+              "in": "describe_optimizer",
+              "kind": "except",
+              "line": 422
+            },
+            {
+              "in": "measure_point",
+              "kind": "raise",
+              "line": 434
+            },
+            {
+              "in": "rss_gib",
+              "kind": "except",
+              "line": 517
+            },
+            {
+              "in": "measure_point",
+              "kind": "except",
+              "line": 608
+            },
+            {
+              "in": "measure_point",
+              "kind": "except",
+              "line": 638
+            },
+            {
+              "in": "_sh",
+              "kind": "except",
+              "line": 713
+            },
+            {
+              "in": "gpu_used_mib",
+              "kind": "except",
+              "line": 723
+            },
+            {
+              "in": "fs_type",
+              "kind": "except",
+              "line": 740
+            },
+            {
+              "in": "preflight",
+              "kind": "except",
+              "line": 787
+            },
+            {
+              "in": "preflight",
+              "kind": "raise",
+              "line": 797
+            },
+            {
+              "in": "hf_access",
+              "kind": "except",
+              "line": 805
+            },
+            {
+              "in": "hf_access",
+              "kind": "except",
+              "line": 810
+            },
+            {
+              "in": "work",
+              "kind": "except",
+              "line": 855
+            },
+            {
+              "in": "finish",
+              "kind": "except",
+              "line": 871
+            },
+            {
+              "in": "run_child",
+              "kind": "except",
+              "line": 892
+            },
+            {
+              "in": "run_child",
+              "kind": "except",
+              "line": 901
+            },
+            {
+              "in": "receipt_is_final",
+              "kind": "except",
+              "line": 936
+            },
+            {
+              "in": "cmd_summarize",
+              "kind": "except",
+              "line": 1129
+            }
+          ],
+          "hash": "4b3cea138195475f938ccc88ed99d7752ea73894ddbb8acbf147b87d1fcaaa07",
+          "importOrder": [
+            "scripts/e3_lib.py",
+            "backpropagate/trainer.py",
+            "backpropagate/config.py"
+          ],
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/trainer.py",
+            "scripts/e3_lib.py"
+          ],
+          "path": "scripts/pod_e3_sweep.py"
+        },
+        {
+          "hash": "954675ef894c8b61b4add4f79db5ea90c1622b34b1d53f324171ca8affdccbf7",
+          "path": "scripts/pod_e3_sweep.sh"
+        },
+        {
+          "exports": [
             "arrays",
             "boot",
             "items",
@@ -11509,14 +11835,14 @@
           "failurePaths": [
             {
               "kind": "raise",
-              "line": 48
+              "line": 53
             }
           ],
-          "hash": "f47df04c97d86d703f7b17cd9c23faa9bd4c3250806e69d4e988a06a13a4943a",
+          "hash": "3b8a33bdc34652476ea887a6d78dd79c7c4af5cf187672c19dd0e849fdf3532d",
           "path": "scripts/runpod/deadman.py"
         },
         {
-          "hash": "6b4d0ebd52e21c9239faffa050a7b1b97e550865d29ea7b240c145711053e11a",
+          "hash": "79b776417a60473553bdc0fba2aca5383958bb82c1f1af8e4d3ff6028d47c3ef",
           "path": "scripts/runpod/pod.sh"
         },
         {
@@ -11539,11 +11865,19 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 15,
+          "reads": 19,
           "where": [
             "caller"
           ],
-          "writes": 15
+          "writes": 21
+        },
+        {
+          "reads": 0,
+          "where": [
+            "caller",
+            "home:.cache/"
+          ],
+          "writes": 1
         },
         {
           "reads": 0,
@@ -11553,13 +11887,13 @@
           "writes": 1
         }
       ],
-      "outsideReads": 15,
-      "outsideWrites": 16,
+      "outsideReads": 19,
+      "outsideWrites": 23,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 2,
+      "testedBy": 4,
       "unresolvedSites": 0
     },
     {
@@ -12236,6 +12570,79 @@
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_e2e_chain.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "make_receipts",
+            "test_choose_batch_picks_the_largest_that_fits_the_headroom",
+            "test_dry_run_receipts_are_refused_unless_allowed",
+            "test_fit_recovers_a_known_structure",
+            "test_g1_fails_when_one_point_is_far_off",
+            "test_g2_fails_when_the_chosen_batch_ooms",
+            "test_g2_fails_when_the_default_batch_was_never_measured",
+            "test_leave_one_model_out_is_reported_for_a_dozen_presets",
+            "test_margin_scales_the_proposal",
+            "test_passes_the_gate_on_data_the_structure_can_explain",
+            "test_points_without_an_architecture_are_excluded_not_guessed",
+            "test_render_and_main_write_the_result",
+            "test_the_nnls_solution_is_nonnegative_and_exact_when_the_model_is",
+            "test_the_proposal_is_not_written_into_the_library",
+            "test_too_few_points_is_insufficient_data_and_exit_2",
+            "test_unsloth_factors_are_recovered"
+          ],
+          "hash": "112aa0486d7105b38ad69825b8c13414548dc46f7410a80531cd21ccf8d20fb7",
+          "importOrder": [
+            "scripts/e3_lib.py",
+            "scripts/e3_refit.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/trainer.py",
+            "scripts/e3_lib.py",
+            "scripts/e3_refit.py"
+          ],
+          "path": "tests/test_e3_refit.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "grid",
+            "presets",
+            "test_a_big_budget_drops_nothing",
+            "test_a_tiny_budget_drops_tier_zero_only_last",
+            "test_a_zero_budget_runs_nothing_and_says_so",
+            "test_drop_order_protects_tier_zero_last_and_drops_unsloth_first",
+            "test_each_point_runs_at_the_presets_own_window",
+            "test_every_point_has_a_tier_and_tiers_partition_the_grid",
+            "test_every_preset_is_swept_small_to_large",
+            "test_fetch_arch_reads_a_local_config_on_the_meta_device",
+            "test_only_ok_and_oom_receipts_are_final",
+            "test_oom_detection_matches_the_trainers_error_text",
+            "test_plan_json_cli",
+            "test_receipts_never_contain_the_token",
+            "test_runtime_guard_drops_by_drop_order_when_over_budget",
+            "test_scrub_removes_the_token_and_token_shapes",
+            "test_synthetic_dry_run_end_to_end",
+            "test_the_full_grid_estimate_is_hours_not_minutes",
+            "test_the_grid_is_presets_x_batches_x_unsloth",
+            "test_the_planner_drops_in_drop_order_and_fits",
+            "test_tier_zero_is_the_large_presets_at_batch_1_and_6"
+          ],
+          "hash": "1504bc609cf25fc9235f36c6648efcac4976114ce9f1e3d295d8d570d6faf11b",
+          "importOrder": [
+            "scripts/e3_lib.py",
+            "scripts/pod_e3_sweep.py",
+            "backpropagate/config.py",
+            "scripts/e3_refit.py"
+          ],
+          "importsFiles": [
+            "backpropagate/config.py",
+            "scripts/e3_lib.py",
+            "scripts/e3_refit.py",
+            "scripts/pod_e3_sweep.py"
+          ],
+          "path": "tests/test_e3_sweep.py",
           "testFramework": "pytest"
         },
         {
@@ -13073,6 +13480,35 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "test_a_custom_table_scales_each_addend_and_adds_the_fixed_term",
+            "test_estimate_param_count_still_resolves_the_presets",
+            "test_grid_is_not_trivially_small",
+            "test_offload_model_ignores_the_coefficients",
+            "test_raw_addends_are_the_unscaled_components",
+            "test_shipped_coefficients_are_the_identity_table",
+            "test_table_driven_estimate_equals_legacy_on_the_whole_grid",
+            "test_the_table_names_every_addend_once",
+            "test_total_is_exactly_the_sum_of_the_components",
+            "test_unsloth_factors_apply_only_when_unsloth_is_on",
+            "test_use_unsloth_with_default_coefficients_changes_nothing",
+            "test_vramestimate_shape_is_unchanged"
+          ],
+          "hash": "3b9e6245dd8c065dfcf9263eca31ac18fc3b04c891da4265b5e29885d8a6b193",
+          "importOrder": [
+            "backpropagate/config.py",
+            "backpropagate/trainer.py",
+            "backpropagate/offload_engine.py"
+          ],
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "tests/test_vram_estimate_table.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "ed36c421ea6fcd4c7bacfc17f3b47b1c48dbdfcc8f9bbcbca3bbd5c5f60aefc5",
           "importOrder": [
             "backpropagate/export.py",
@@ -13872,7 +14308,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 82
+          "files": 85
         },
         {
           "boundary": "scripts",
@@ -13881,7 +14317,7 @@
             "file": "scripts/check_doc_drift.py",
             "from": "tests/test_check_doc_drift.py"
           },
-          "files": 1
+          "files": 4
         }
       ],
       "readers": [],
@@ -13961,7 +14397,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 85,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -13969,7 +14405,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 82,
+          "files": 85,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -13977,28 +14413,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 85,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 85,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 85,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 85,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -15483,8 +15919,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
-    "tracked": 421
+    "commit": "5ce25b54dec69ae2f51c675cfd95a942bf98fd31",
+    "tracked": 441
   },
   "landings": [
     {
@@ -15561,6 +15997,11 @@
         {
           "by": "scripts/check_doc_drift.py",
           "call": "read_text",
+          "confidence": "ast"
+        },
+        {
+          "by": "scripts/e3_meta_device_check.py",
+          "call": "literal",
           "confidence": "ast"
         },
         {
@@ -15770,6 +16211,17 @@
     {
       "readers": [
         {
+          "by": "docs/receipts/2026-10-e3-vram/README.md",
+          "call": "--receipts",
+          "confidence": "text"
+        }
+      ],
+      "target": "docs/receipts/2026-10-e3-vram",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": "README.es.md",
           "call": "raw-url",
           "confidence": "text",
@@ -15959,6 +16411,29 @@
     {
       "readers": [
         {
+          "by": "scripts/e3_refit.py",
+          "call": "literal",
+          "confidence": "ast"
+        }
+      ],
+      "target": "scripts/e3_refit.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_e3_sweep.py",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "scripts/pod_e3_sweep.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": "site/astro.config.mjs",
           "call": "content-collection",
           "confidence": "ast"
@@ -16062,6 +16537,17 @@
     {
       "readers": [
         {
+          "by": "scripts/pod_e3_sweep.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "tests/test_qlora_presets_smoke.py",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": ".github/workflows/ci.yml",
           "confidence": "config"
         }
@@ -16084,7 +16570,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 85,
+  "testFiles": 88,
   "unassigned": [],
   "unseen": [
     {

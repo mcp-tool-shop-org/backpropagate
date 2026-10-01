@@ -1216,6 +1216,183 @@ class VRAMEstimate:
         )
 
 
+@dataclass(frozen=True)
+class VRAMCoefficients:
+    """E3: the tunable constants of :func:`estimate_vram`, as one table.
+
+    :func:`estimate_vram` is a sum of addends. Each addend is a *raw* quantity
+    computed from the architecture and the batch shape (see
+    :func:`vram_addends`), multiplied by one scale from this table; the
+    framework overhead is a fraction of the subtotal plus ``fixed_overhead_gb``.
+
+    The defaults reproduce the pre-E3 estimator exactly (every scale 1.0, the
+    new ``embedding`` and ``logits`` addends and ``fixed_overhead_gb`` at 0.0,
+    the Unsloth factors at 1.0). They are NOT fitted values. A refit
+    (``scripts/e3_refit.py``) proposes new numbers from pod receipts; the
+    library's defaults change only in a later, separate PR that cites those
+    receipts.
+
+    Attributes:
+        weights_scale: scale on the base-model weights addend.
+        lora_adapter_scale: scale on the LoRA adapter weights addend.
+        optimizer_state_scale: scale on gradient + optimizer-state addend.
+        activations_scale: scale on the activations addend.
+        kv_cache_scale: scale on the transient KV-cache addend.
+        embedding_scale: scale on the embedding addend (raw = one bf16
+            ``vocab * hidden`` table; the nf4 base leaves the embedding, and an
+            untied head, in bf16, which the 0.5 byte/param weights line does
+            not see). 0.0 = not modelled. Reported inside ``model_weights_gb``.
+        logits_scale: scale on the logits addend (raw = one fp32 logits
+            tensor, ``tokens * vocab * 4`` bytes; the scale is therefore the
+            number of such copies alive at the peak). 0.0 = not modelled.
+        fixed_overhead_gb: constant added after the fractional overhead (CUDA
+            context, cuBLAS workspaces, allocator slack that does not scale
+            with the model).
+        unsloth_activations_factor: multiplies the activations addend when
+            Unsloth is on.
+        unsloth_logits_factor: multiplies the logits addend when Unsloth is
+            on (Unsloth's fused cross-entropy avoids materialising logits).
+    """
+
+    weights_scale: float = 1.0
+    lora_adapter_scale: float = 1.0
+    optimizer_state_scale: float = 1.0
+    activations_scale: float = 1.0
+    kv_cache_scale: float = 1.0
+    embedding_scale: float = 0.0
+    logits_scale: float = 0.0
+    fixed_overhead_gb: float = 0.0
+    unsloth_activations_factor: float = 1.0
+    unsloth_logits_factor: float = 1.0
+
+    def as_dict(self) -> dict[str, float]:
+        """The table as a plain dict (field order preserved)."""
+        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
+
+
+#: The shipped coefficients (identity: reproduces the pre-E3 estimator).
+DEFAULT_VRAM_COEFFICIENTS = VRAMCoefficients()
+
+#: (addend name, scale field, Unsloth-factor field or None). The order here is
+#: the order the addends are summed in, which keeps floating-point results
+#: identical to the pre-E3 implementation.
+_VRAM_ADDEND_TABLE: tuple[tuple[str, str, str | None], ...] = (
+    ("weights", "weights_scale", None),
+    ("lora_adapter", "lora_adapter_scale", None),
+    ("optimizer_state", "optimizer_state_scale", None),
+    ("activations", "activations_scale", "unsloth_activations_factor"),
+    ("kv_cache", "kv_cache_scale", None),
+    ("embedding", "embedding_scale", None),
+    ("logits", "logits_scale", "unsloth_logits_factor"),
+)
+
+
+def vram_addends(
+    *,
+    params: float,
+    mode: str = "lora",
+    lora_r: int = 16,
+    batch_size: int = 1,
+    max_seq_length: int = 2048,
+    bytes_per_param: int = 2,
+    quantize_base: bool = True,
+    hidden_dim: int = 4096,
+    num_layers: int = 32,
+    num_heads: int = 32,
+    vocab_size: int = 152064,
+) -> dict[str, float]:
+    """E3: the raw (unscaled) VRAM addends of :func:`estimate_vram`, in GiB.
+
+    Keys are the names in ``_VRAM_ADDEND_TABLE``: ``weights``, ``lora_adapter``,
+    ``optimizer_state``, ``activations``, ``kv_cache``, ``embedding``,
+    ``logits``. ``params``
+    is the raw parameter count (not billions). The standard (non-offload)
+    model only; the offload model is measured separately and is not table
+    driven. Nothing here is fitted: each line is the pre-E3 formula, kept in
+    the same order of floating-point operations.
+    """
+    bytes_to_gb = 1.0 / (1024 ** 3)
+
+    # 1. Model weights. nf4 base when quantize_base=True (the trainer default
+    #    with load_in_4bit=True); otherwise bytes_per_param.
+    if quantize_base:
+        weights_gb = (params * 0.5) * bytes_to_gb
+    else:
+        weights_gb = (params * bytes_per_param) * bytes_to_gb
+
+    # 2. LoRA adapter: ~7 modules per layer (q, k, v, o, gate, up, down),
+    #    rank * (in + out) each, in bf16/fp16 even when the base is nf4.
+    if mode == "lora":
+        lora_modules_per_layer = 7
+        lora_adapter_gb = (
+            lora_r
+            * (hidden_dim + hidden_dim)  # in + out (typically same)
+            * num_layers
+            * lora_modules_per_layer
+            * bytes_per_param
+        ) * bytes_to_gb
+    else:
+        lora_adapter_gb = 0.0
+
+    # 3. Gradient + optimizer state. paged 8-bit Adam: 2 buffers * 1 byte +
+    #    gradient (bytes_per_param) per trainable parameter.
+    trainable_params: float
+    if mode == "lora":
+        trainable_params = lora_r * (hidden_dim + hidden_dim) * num_layers * 7
+    else:
+        trainable_params = params
+    optimizer_state_gb = (
+        trainable_params * (2 * 1 + bytes_per_param)
+    ) * bytes_to_gb
+
+    # 4. Activations. With gradient checkpointing the activation memory scales
+    #    as sqrt(num_layers) instead of linearly (mode='full' enables it by
+    #    default; mode='lora' inherits settings.lora.use_gradient_checkpointing).
+    activation_layer_factor = (
+        max(1.0, num_layers ** 0.5) if mode == "full"
+        else float(num_layers)
+    )
+    activations_gb = (
+        batch_size
+        * max_seq_length
+        * hidden_dim
+        * activation_layer_factor
+        * bytes_per_param
+        * 2  # forward + backward
+    ) * bytes_to_gb
+
+    # 5. KV cache. Training rarely keeps the full cache, but transformers
+    #    allocates it transiently during forward; 0.25 approximates that share.
+    head_dim = hidden_dim // max(1, num_heads)
+    kv_cache_gb = (
+        batch_size
+        * max_seq_length
+        * num_heads
+        * head_dim
+        * num_layers
+        * 2  # k + v
+        * bytes_per_param
+        * 0.25  # Training amortization factor — full cache not retained
+    ) * bytes_to_gb
+
+    # 6. Embedding (E3, new; scale 0.0 by default). One bf16 vocab x hidden
+    #    table; bitsandbytes keeps it (and an untied lm_head) out of nf4.
+    embedding_gb = (vocab_size * hidden_dim * 2) * bytes_to_gb
+
+    # 7. Logits (E3, new; scale 0.0 by default). One fp32 logits tensor.
+    logits_gb = (batch_size * max_seq_length * vocab_size * 4) * bytes_to_gb
+
+    return {
+        "weights": weights_gb,
+        "lora_adapter": lora_adapter_gb,
+        "optimizer_state": optimizer_state_gb,
+        "activations": activations_gb,
+        "kv_cache": kv_cache_gb,
+        "embedding": embedding_gb,
+        "logits": logits_gb,
+    }
+
+
 def estimate_vram(
     model: str,
     *,
@@ -1233,7 +1410,9 @@ def estimate_vram(
     overhead_fraction: float = 0.15,
     param_count_billions: float | None = None,
     offload: bool = False,
-    vocab_size: int = 152064,  # offload VRAM model only; Qwen2.5-class default
+    vocab_size: int = 152064,  # offload VRAM model + the (default-off) logits addend; Qwen2.5-class default
+    use_unsloth: bool = False,
+    coefficients: VRAMCoefficients | None = None,
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1241,6 +1420,10 @@ def estimate_vram(
     ask "will this config OOM?" instead of finding out at first OOM. The
     math is back-of-envelope (15% overhead margin); accuracy is within
     ~10-20% of empirical peak for well-known training configs.
+
+    E3: the estimate is a table-driven sum of addends (:func:`vram_addends`
+    scaled by :class:`VRAMCoefficients`). With the default coefficients the
+    output is identical to the pre-E3 estimator for every input.
 
     Args:
         model: Model identifier — preset name or HF id. Used to estimate
@@ -1264,11 +1447,17 @@ def estimate_vram(
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
+        use_unsloth: Whether Unsloth is on. Only matters when the
+            coefficients carry non-identity Unsloth factors (the shipped
+            ones do not).
+        coefficients: The addend scales. None = the shipped
+            :data:`DEFAULT_VRAM_COEFFICIENTS`.
 
     Returns:
         :class:`VRAMEstimate` carrying the headline number + breakdown.
     """
     notes: list[str] = []
+    coeff = DEFAULT_VRAM_COEFFICIENTS if coefficients is None else coefficients
 
     if param_count_billions is None:
         param_count_billions = _estimate_param_count_billions(model)
@@ -1282,91 +1471,54 @@ def estimate_vram(
         )
 
     params = param_count_billions * 1e9
-    bytes_to_gb = 1.0 / (1024 ** 3)
 
-    # 1. Model weights. nf4 base when quantize_base=True (the trainer
-    #    default with load_in_4bit=True); otherwise use bytes_per_param.
-    if quantize_base:
-        # nf4: 0.5 bytes per param. The LoRA adapter (if mode='lora')
-        # still lives in bf16 — that's the lora_adapter_gb line.
-        model_weights_gb = (params * 0.5) * bytes_to_gb
-        notes.append("base model quantized to nf4 (0.5 bytes/param)")
-    else:
-        model_weights_gb = (params * bytes_per_param) * bytes_to_gb
-
-    # 2. LoRA adapter. Per-layer cost = rank * (in_dim + out_dim) * 2 (A + B).
-    #    Modern PEFT applies LoRA to ~7 modules per layer (q, k, v, o, gate,
-    #    up, down for Llama/Qwen-style architectures). Approximate with a
-    #    7-module-per-layer constant.
-    if mode == "lora":
-        lora_modules_per_layer = 7
-        lora_adapter_gb = (
-            lora_r
-            * (hidden_dim + hidden_dim)  # in + out (typically same)
-            * num_layers
-            * lora_modules_per_layer
-            * bytes_per_param  # adapters in bf16/fp16 even when base is nf4
-        ) * bytes_to_gb
-    else:
-        lora_adapter_gb = 0.0
-
-    # 3. Optimizer state. paged_adamw_8bit (the trainer default on consumer
-    #    cards) stores 2 momentum buffers per trainable param at 1 byte each.
-    #    Full FT trains the whole model; LoRA only trains the adapter (rank
-    #    * (in + out) * num_layers * 7 modules).
-    trainable_params: float
-    if mode == "lora":
-        trainable_params = lora_r * (hidden_dim + hidden_dim) * num_layers * 7
-    else:
-        trainable_params = params
-    # paged 8-bit Adam: 2 buffers * 1 byte + gradient (bytes_per_param)
-    optimizer_state_gb = (
-        trainable_params * (2 * 1 + bytes_per_param)
-    ) * bytes_to_gb
-
-    # 4. Activations. With gradient checkpointing the activation memory
-    #    scales as sqrt(num_layers) instead of linearly. Mode='full'
-    #    enables gradient_checkpointing=True by default; mode='lora'
-    #    inherits the setting from settings.lora.use_gradient_checkpointing.
-    activation_layer_factor = (
-        max(1.0, num_layers ** 0.5) if mode == "full"
-        else float(num_layers)
+    raw = vram_addends(
+        params=params,
+        mode=mode,
+        lora_r=lora_r,
+        batch_size=batch_size,
+        max_seq_length=max_seq_length,
+        bytes_per_param=bytes_per_param,
+        quantize_base=quantize_base,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        vocab_size=vocab_size,
     )
-    activations_gb = (
-        batch_size
-        * max_seq_length
-        * hidden_dim
-        * activation_layer_factor
-        * bytes_per_param
-        * 2  # forward + backward
-    ) * bytes_to_gb
+    scaled: dict[str, float] = {}
+    for name, scale_field, unsloth_field in _VRAM_ADDEND_TABLE:
+        scale = getattr(coeff, scale_field)
+        if use_unsloth and unsloth_field is not None:
+            scale = scale * getattr(coeff, unsloth_field)
+        scaled[name] = raw[name] * scale
+
+    # The embedding addend is reported inside the weights line, the logits
+    # addend inside the activations line (the VRAMEstimate shape is unchanged);
+    # both are 0.0 under the default table.
+    model_weights_gb = scaled["weights"] + scaled["embedding"]
+    lora_adapter_gb = scaled["lora_adapter"]
+    optimizer_state_gb = scaled["optimizer_state"]
+    activations_gb = scaled["activations"] + scaled["logits"]
+    kv_cache_gb = scaled["kv_cache"]
+    fixed_overhead_gb = coeff.fixed_overhead_gb
+
+    if quantize_base:
+        notes.append("base model quantized to nf4 (0.5 bytes/param)")
     if mode == "full":
         notes.append(
             "mode='full' assumes gradient_checkpointing=True (sqrt(L) "
             "activation memory)"
         )
-
-    # 5. KV cache. batch * seq_len * num_heads * head_dim * num_layers * 2 (k+v)
-    #    bytes_per_param-sized. Training rarely keeps the full KV cache (it's
-    #    primarily an inference cost) but transformers libraries allocate it
-    #    transiently during forward; the constant approximates that share.
-    head_dim = hidden_dim // max(1, num_heads)
-    kv_cache_gb = (
-        batch_size
-        * max_seq_length
-        * num_heads
-        * head_dim
-        * num_layers
-        * 2  # k + v
-        * bytes_per_param
-        * 0.25  # Training amortization factor — full cache not retained
-    ) * bytes_to_gb
+    if coeff != DEFAULT_VRAM_COEFFICIENTS:
+        notes.append("non-default VRAMCoefficients applied (E3 refit proposal)")
 
     # 6. v1.7 FSDP2 CPU-offload (mode='full', full_ft_offload=True). Params +
     #    gradients + optimizer state spill into host RAM; the GPU keeps only the
     #    active working set + activations + overhead. Offload full-FT does NOT
     #    quantize the base — host weights are bf16 (2 bytes/param). host_ram_gb
     #    captures the host-resident estimate; the GPU lines shrink accordingly.
+    #    Measured model, not table driven: the coefficients do not apply.
+    bytes_to_gb = 1.0 / (1024 ** 3)
     host_ram_gb = 0.0
     if offload and mode == "full":
         # Measured model (backpropagate.offload_engine; the receipts are cited
@@ -1389,6 +1541,7 @@ def estimate_vram(
         activations_gb = batch_size * max_seq_length * _VRAM_MIB_PER_TOKEN / 1024
         kv_cache_gb = 0.0
         overhead_fraction = 0.0
+        fixed_overhead_gb = 0.0
         lora_adapter_gb = 0.0
         model_weights_gb += _VRAM_MARGIN_GIB
         notes.append(
@@ -1404,7 +1557,7 @@ def estimate_vram(
         + activations_gb
         + kv_cache_gb
     )
-    overhead_gb = subtotal * overhead_fraction
+    overhead_gb = subtotal * overhead_fraction + fixed_overhead_gb
     total_gb = subtotal + overhead_gb
 
     return VRAMEstimate(
@@ -4358,6 +4511,7 @@ class Trainer:
             num_heads=num_heads,
             overhead_fraction=overhead_fraction,
             param_count_billions=param_count_billions,
+            use_unsloth=self.use_unsloth,
         )
 
     # RSI-01: removed dead ``_cleanup_vram`` (gc.collect() + empty_cache()).

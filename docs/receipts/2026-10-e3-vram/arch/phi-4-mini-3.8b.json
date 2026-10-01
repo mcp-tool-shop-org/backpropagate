@@ -1,0 +1,23 @@
+{
+ "model_id": "microsoft/Phi-4-mini-instruct",
+ "model_type": "phi3",
+ "architectures": [
+  "Phi3ForCausalLM"
+ ],
+ "loaded_class": "Phi3ForCausalLM",
+ "hidden_size": 3072,
+ "num_hidden_layers": 32,
+ "num_attention_heads": 24,
+ "num_key_value_heads": 8,
+ "intermediate_size": 8192,
+ "head_dim": 128,
+ "vocab_size": 200064,
+ "tie_word_embeddings": true,
+ "full_attention_layers": null,
+ "linear_attention_layers": null,
+ "text_params": 3836021760,
+ "text_params_b": 3.83602176,
+ "vision_params_in_text_class": 0,
+ "composite_params_incl_vision": null,
+ "preset": "phi-4-mini-3.8b"
+}

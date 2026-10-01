@@ -1,0 +1,71 @@
+{
+ "model": "Qwen/Qwen3.5-4B",
+ "preset": "qwen3.5-4b",
+ "transformers": "5.5.0",
+ "torch": "2.10.0+cu128",
+ "device": "meta (no weights, no GPU)",
+ "text_only": {
+  "class": "Qwen3_5ForCausalLM",
+  "config_class": "Qwen3_5TextConfig",
+  "tensors": 426,
+  "params": 4205751296,
+  "params_b": 4.2058,
+  "vision_params": 0,
+  "tied_embeddings": true
+ },
+ "composite": {
+  "params": 4539265536,
+  "by_prefix": {
+   "model.visual": 333514240,
+   "model.language_model": 4205751296
+  },
+  "vision_params": 333514240
+ },
+ "hub": {
+  "pipeline_tag": "image-text-to-text",
+  "safetensors_total": 4659865088,
+  "by_dtype": {
+   "BF16": 4659861248,
+   "F32": 3840
+  }
+ },
+ "checkpoint_index": {
+  "tensors": 738,
+  "by_prefix": {
+   "model.language_model": 426,
+   "mtp.layers": 11,
+   "model.visual": 297,
+   "mtp.fc": 1,
+   "mtp.norm": 1,
+   "mtp.pre_fc_norm_embedding": 1,
+   "mtp.pre_fc_norm_hidden": 1
+  },
+  "language_model_tensors": 426,
+  "visual_tensors": 297,
+  "mtp_tensors": 15
+ },
+ "model_card_stated": [
+  "- Number of Parameters: 4B"
+ ],
+ "reconciliation": {
+  "hub_total_minus_composite": 120599552,
+  "hub_total_minus_text_only": 454113792,
+  "note": "the Hub total counts every tensor in the checkpoint: language model + vision tower + MTP head"
+ },
+ "library_param_count_billions_name_derived": 4.0,
+ "architecture": {
+  "hidden_size": 2560,
+  "num_hidden_layers": 32,
+  "num_attention_heads": 16,
+  "num_key_value_heads": 4,
+  "vocab_size": 248320,
+  "full_attention_layers": 8,
+  "linear_attention_layers": 24
+ },
+ "answer": {
+  "does_the_transformers_path_load_the_vision_tower": false,
+  "why": "Trainer._load_with_transformers calls AutoModelForCausalLM.from_pretrained, whose mapping resolves the composite Qwen3_5Config to Qwen3_5ForCausalLM on the text config: 426 tensors, 0 vision parameters; the checkpoint's 297 visual tensors and 15 MTP tensors are not instantiated (they are still downloaded: they live in the same shards).",
+  "uses_AutoModelForCausalLM_in_source": true,
+  "unsloth_path": "NOT measured here; source reading only. Unsloth 2026.5.8 has no 'qwen3_5' entry anywhere in its package (grep), so Qwen3.5 would take the generic path, where unsloth/models/loader.py sets `is_vlm = ... hasattr(model_config, 'vision_config')` and picks AutoModelForVision2Seq, which would instantiate the vision tower. The sweep records `vision_tensors_loaded` and `model_class` for every Unsloth-on point; that is the measurement."
+ }
+}

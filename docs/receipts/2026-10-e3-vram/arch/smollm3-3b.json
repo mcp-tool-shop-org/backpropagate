@@ -1,0 +1,23 @@
+{
+ "model_id": "HuggingFaceTB/SmolLM3-3B",
+ "model_type": "smollm3",
+ "architectures": [
+  "SmolLM3ForCausalLM"
+ ],
+ "loaded_class": "SmolLM3ForCausalLM",
+ "hidden_size": 2048,
+ "num_hidden_layers": 36,
+ "num_attention_heads": 16,
+ "num_key_value_heads": 4,
+ "intermediate_size": 11008,
+ "head_dim": 128,
+ "vocab_size": 128256,
+ "tie_word_embeddings": true,
+ "full_attention_layers": 36,
+ "linear_attention_layers": 0,
+ "text_params": 3075098624,
+ "text_params_b": 3.075098624,
+ "vision_params_in_text_class": 0,
+ "composite_params_incl_vision": null,
+ "preset": "smollm3-3b"
+}

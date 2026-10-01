@@ -7127,6 +7127,11 @@ class Trainer:
                 "optimizer": "adafactor-factored-sr",
                 "step_times": result["step_times"],
                 "update_retention": result.get("update_retention", []),
+                # E1 speed switches and the optional per-leg trace (see offload_trace).
+                "fused": result.get("fused"),
+                "fused_params": result.get("fused_params"),
+                "prefetch": result.get("prefetch"),
+                "trace": result.get("trace"),
             },
         )
         self._training_runs.append(run)

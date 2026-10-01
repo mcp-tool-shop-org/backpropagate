@@ -196,3 +196,29 @@ class TestTrainLoopTrace:
         assert profile["step"] == 1
         assert set(profile) >= {"memcpy", "kernel_ms_total", "kernel_top", "fsdp_ranges_cpu_ms"}
         assert any(name.startswith("FSDP::") for name in profile["fsdp_ranges_cpu_ms"])
+
+
+def test_trainer_carries_the_trace_and_switches_into_run_metadata(monkeypatch, tmp_path):
+    """A pod receipt reads these from TrainingRun.metadata."""
+    import json
+
+    import backpropagate.trainer as t
+
+    data = tmp_path / "d.jsonl"
+    data.write_text(json.dumps({"text": "hello world"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(t, "_ensure_fsdp_runtime", lambda: None)
+    trainer = t.Trainer(model="HuggingFaceTB/SmolLM2-135M-Instruct", use_unsloth=False,
+                        mode="full", full_ft_offload=True, output_dir=str(tmp_path / "o"),
+                        report_to="none")
+    monkeypatch.setattr(trainer, "load_model", lambda: setattr(trainer, "_is_loaded", True))
+    monkeypatch.setattr(trainer, "_load_dataset", lambda *a, **k: ["row"])
+    monkeypatch.setattr(oe, "run_offload_training", lambda model, tok, ds, **kw: {
+        "model": model, "losses": [2.0, 1.5], "step_times": [0.1, 0.1], "samples_seen": 2,
+        "duration_seconds": 0.2, "optimizer": None, "fused": True, "fused_params": [5, 5],
+        "prefetch": 2, "trace": {"mode": "legs", "mean_ms": {"backward": 1.0}},
+    })
+    monkeypatch.setattr(t.Trainer, "_build_trainer", lambda *a, **k: pytest.fail("SFTTrainer built"))
+    run = trainer.train(str(data), steps=2)
+    assert run.metadata["fused"] is True and run.metadata["fused_params"] == [5, 5]
+    assert run.metadata["prefetch"] == 2
+    assert run.metadata["trace"]["mean_ms"] == {"backward": 1.0}

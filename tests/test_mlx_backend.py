@@ -674,6 +674,13 @@ class TestNoMlxImport:
         finally:
             if original is not None:
                 sys.modules["backpropagate.mlx_backend"] = original
+                # The fresh import also rebound the PACKAGE attribute, which is
+                # what mock.patch("backpropagate.mlx_backend.X") resolves through
+                # (sys.modules is what `from .mlx_backend import X` reads). Left
+                # unrestored, later patches land on the throwaway module.
+                import backpropagate
+
+                backpropagate.mlx_backend = original  # type: ignore[attr-defined]
 
     def test_module_source_has_no_mlx_lm_import_statement(self):
         """Static guard: no ACTUAL ``import mlx_lm`` / ``from mlx_lm`` statement.

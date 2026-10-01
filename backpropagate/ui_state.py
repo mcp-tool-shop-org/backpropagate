@@ -106,6 +106,11 @@ def _validate_ui_path(value: str) -> tuple[str, str]:
     if not value or not value.strip():
         return "", ""
     candidate = value.strip()
+    # A NUL byte can never be part of a legitimate path. Some platform / Python
+    # combinations (e.g. Windows, 3.13) resolve it without raising, so refuse it
+    # explicitly instead of relying on ``Path.resolve`` to.
+    if "\x00" in candidate:
+        return "", "Invalid path: contains a NUL byte."
     try:
         from .security import safe_path
         from .ui_security import get_ui_output_dir

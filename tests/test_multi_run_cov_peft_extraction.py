@@ -15,6 +15,12 @@ from backpropagate.multi_run import MultiRunTrainer
 from tests.test_multi_run_cov_support import N_A, N_B, FakeInnerTrainer, build_peft_llama
 
 
+@pytest.fixture(autouse=True)
+def _no_cuda(monkeypatch):
+    """CPU-only and deterministic, whatever GPU the dev rig has."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+
 class TestLoraExtractionOnRealPeftModel:
     """Regression for the bug fixed alongside these tests: with transformers>=5 a
     ``peft.get_peft_model`` model *has* a ``get_adapter_state_dict`` attribute (the

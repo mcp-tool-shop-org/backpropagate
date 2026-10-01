@@ -10361,7 +10361,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 85,
+      "testedBy": 136,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -12211,7 +12211,7 @@
           "path": "CITATION.cff"
         },
         {
-          "hash": "0b2c4f19884a528fa076e962bac4c02b35805e3a78679e699ff68b7fa12c41aa",
+          "hash": "51e53822be9ecc4e660148df41ba4a9c150bb2fcd7539eaef463b66f4c730c2c",
           "path": "CLAUDE.md"
         },
         {
@@ -12315,7 +12315,7 @@
           "path": "package.json"
         },
         {
-          "hash": "c52d807f640ae11315b66a3a22c01ed398b1d430db1a8fba36d5e4bf349ef1e6",
+          "hash": "1794e744a59becebbf7a61fab0e4e95d65a6bf1ea56da4924fdaa65c9dda4eab",
           "path": "pyproject.toml"
         },
         {
@@ -13035,10 +13035,10 @@
       "externalNames": [
         "datasets"
       ],
-      "externals": 32,
+      "externals": 44,
       "files": [
         {
-          "hash": "eaa4490147761bbd9e45e666bc239b39a02b8f0b4ee6d9f9b3fe766db71aa57a",
+          "hash": "5baf09664fd3caf81e6df5958cade8361d777197dd84dc9924b2c8d36691057d",
           "path": "tests/COVERAGE_ROADMAP.md"
         },
         {
@@ -13046,7 +13046,7 @@
           "path": "tests/EVENT_HANDLER_ROADMAP.md"
         },
         {
-          "hash": "7267f1cd602cd7cda773e9febe82822bf4db925e8178be8f5f3a819bb55d1482",
+          "hash": "a0c1360e25898f6c3bbad1fb72e5668625de3de49a68d9d0692d2368e49c2daa",
           "path": "tests/README.md"
         },
         {
@@ -13151,6 +13151,26 @@
           ],
           "hash": "111cafb3a3827153c58e914ac43d7e37a0e732cf42fc2cc9101e98ea7ac694a8",
           "path": "tests/helpers/callbacks.py"
+        },
+        {
+          "exports": [
+            "last_json",
+            "parse",
+            "run",
+            "seed_runs"
+          ],
+          "hash": "3e31335192742a796e71869f91ce3582b5cea28716c3c3ad846808f55a79a7d7",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/cli.py"
+          ],
+          "path": "tests/helpers/cli_cov_support.py"
         },
         {
           "exports": [
@@ -13304,6 +13324,17 @@
           "testFramework": "pytest"
         },
         {
+          "hash": "53e20fdae2c8796acb00677b1ae12f8b7ce952210610913fb958aeb819767030",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_block_engine_cov_extra.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "b893d8fc0522f9f20875152857c40a7d83131ee5c5749cc82dacaed8c521e906",
           "importOrder": [
             "backpropagate/__init__.py",
@@ -13396,6 +13427,40 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "fail_replace",
+            "hist",
+            "iso",
+            "on_disk",
+            "test_run_history_roundtrip_survives_new_instance"
+          ],
+          "hash": "4a1786f3f2ab60e447898473c59df3ae5de2826e12c7762b8dfa01fae79351dc",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "path": "tests/test_checkpoints_cov_history.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fail_replace",
+            "make_ckpt",
+            "manifest_on_disk",
+            "mgr",
+            "seed",
+            "set_sizes",
+            "write_manifest"
+          ],
+          "hash": "908849b4e4ded214555a0842c9326d8cef6d12eaff54173e46289fdb7e942b26",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "path": "tests/test_checkpoints_cov_manager.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "6d8749ff1c8b0e3253d4f4847123d8755b3e5ef23d9cea66f9a600d9796ee038",
           "importOrder": [
             "backpropagate/cli.py",
@@ -13421,6 +13486,205 @@
             "backpropagate/cli.py"
           ],
           "path": "tests/test_cli_banner.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "clean",
+            "duplicated"
+          ],
+          "hash": "93f0881f6c0438dd57b608113996a0ade57bab0b1bc0504f940093b22ab3dbf3",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_data.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "evaluate",
+            "out_dir"
+          ],
+          "hash": "e994b0f86984fbb675416ca3698124a3dc0b20a2a163bc27ae48f53d7afc50ca",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/eval.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_eval.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "adapter"
+          ],
+          "hash": "00a148b9e4a5557b6de9d718886f8a20206b63ed5bf24c45d3fc6e4f42e80fcb",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_export.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "tiny_adapter"
+          ],
+          "hash": "504484fff2e27707612787187f0073cc181b21fb9772b6c202fbb92f89ee0dd8",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/cli_cov_support.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_cli_cov_gen_vram_ollama.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "3098c85c0d5f3d42edf37ef02aa88621f9c3a230319c3be571aaf058475fe0dd",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "tests/helpers/cli_cov_support.py",
+            "backpropagate/feature_flags.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/feature_flags.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_info.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "6c1631a0c72a2175962ee325ee90299c70b1beba2db85a97347b92a0128abae6",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_cli_cov_main.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fakes",
+            "hist"
+          ],
+          "hash": "7416fa7bb14cbb067da015b67cd16b4e6b0b9ed4f3b15a5ad94c2ee75190b380",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_replay.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fake_trainers",
+            "history",
+            "push_env"
+          ],
+          "hash": "57635473ae37a9c8edf89270ec30df17379f392f569ee3bab0e9c5132dd39b46",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_resume_push.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "out_dir"
+          ],
+          "hash": "47bda4032ee6b8a58bec526ca4a40a7d38e68b38d9e44350254af61ce3f89ce7",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_runs.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "patch_multi",
+            "patch_trainer"
+          ],
+          "hash": "2de286266137e6e47445785ffb2441d0df451056193124f625a673d041850519",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_train.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "ui"
+          ],
+          "hash": "9948122fb3afffddd8b8a7ad3201bf8b1e279842470e74549ad88d615414e38c",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "names": [
+            "backpropagate/rxconfig.py"
+          ],
+          "path": "tests/test_cli_cov_ui.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "6a8c213fc191c1a859be867a8a8234a0863cefc9cdad3b1a180fc943a463e9ea",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py"
+          ],
+          "path": "tests/test_cli_cov_ui_support.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "7d3dd776967a15f13007300ad251c56129219d3361e60097150533748c90a1f6",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "tests/helpers/cli_cov_support.py"
+          ],
+          "path": "tests/test_cli_cov_validate.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "fe35133633cf95b9d24ffd54dd7a0faec95441a9a03c2d4e31ad181a4345993b",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_cli_cov_validators.py",
           "testFramework": "pytest"
         },
         {
@@ -13479,6 +13743,27 @@
             "backpropagate/exceptions.py"
           ],
           "path": "tests/test_config.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "broken_structured_logging",
+            "fb",
+            "isolated_env",
+            "recorder"
+          ],
+          "hash": "e66b9dd12d7aef16cc663fbf28fbdc3b5f622813386f59068f2e8966670f694a",
+          "importOrder": [
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/__init__.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_config_cov_extra.py",
           "testFramework": "pytest"
         },
         {
@@ -13555,6 +13840,36 @@
             "backpropagate/exceptions.py"
           ],
           "path": "tests/test_datasets.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fake_datasketch"
+          ],
+          "hash": "967a5bfac6b0970b4f85c772cf0667fb7733682cc361ae7b78af46ca505e5cc8",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "path": "tests/test_datasets_cov_core.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "cpu_only",
+            "fake_datasketch",
+            "tiny_ppl_dir"
+          ],
+          "hash": "247297a480e4b791d7d1b79be017818c11b0fcc681d3428faf9acb8d6fb09b89",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "tests/test_datasets_cov_core.py"
+          ],
+          "path": "tests/test_datasets_cov_loaders.py",
           "testFramework": "pytest"
         },
         {
@@ -13689,6 +14004,28 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "assets",
+            "stub_run",
+            "stubbed"
+          ],
+          "hash": "2158f78fa4f82c3e052dee16d9326e3edc3bd7ec38851ec767b1541c5e7ea787",
+          "importOrder": [
+            "backpropagate/eval.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_eval_cov_extra.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "3d24c0b48a00d988f71993f2c028ccea562abc020923cf70bf46b52053a34000",
           "importOrder": [
             "backpropagate/checkpoints.py",
@@ -13741,6 +14078,21 @@
           "testFramework": "pytest"
         },
         {
+          "hash": "6c8a3fae4c036f3f43d2ffcc198ec38ad81eb3c7aff13b1dd2f3295f10fc934a",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/security.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py"
+          ],
+          "path": "tests/test_exceptions_cov_extra.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "91260c4bff210463de79bcd01f5bbc40d82be16af2ab573f3d8e34d24fb7bac5",
           "importOrder": [
             "backpropagate/export.py",
@@ -13757,6 +14109,77 @@
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_export.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "clean_hf_env",
+            "fake_popen",
+            "hub",
+            "no_auto_install"
+          ],
+          "hash": "a504aac66e16cfbe6c843dfe1d941fb783fa51369ae85a8f36726d8a68c6830e",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/export.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_export_cov_helpers.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "llama_cpp",
+            "make_peft",
+            "runner",
+            "saved_base",
+            "test_export_result_summary_lines",
+            "test_get_dir_size_of_file_and_directory",
+            "unsloth_ready"
+          ],
+          "hash": "c7d9b96a5913d9969edc2008ca7cde9c76003bd5d61e5060fcd3e8df5bd8f47c",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/export.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_export_cov_models.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "create",
+            "ollama_absent",
+            "ollama_present"
+          ],
+          "hash": "e8c009822be97ce9b256a2bf8a7e6ebbdbbe8d377fefcd35d92959d9f9312c63",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/export.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py"
+          ],
+          "path": "tests/test_export_cov_ollama.py",
           "testFramework": "pytest"
         },
         {
@@ -13802,6 +14225,18 @@
             "backpropagate/feature_flags.py"
           ],
           "path": "tests/test_feature_flags_cov_deferral.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "pristine_features"
+          ],
+          "hash": "0d0bbbac8f53d87edee6fcbdb0c5c06e24208673a97ab4ecad4a3fc923e82407",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/feature_flags.py"
+          ],
+          "path": "tests/test_feature_flags_cov_extra.py",
           "testFramework": "pytest"
         },
         {
@@ -13869,7 +14304,7 @@
             "load",
             "random_inputs"
           ],
-          "hash": "204e7cca839764f9a33a0179e3aad86014735a07837bc9371d59451bd9e2cc3a",
+          "hash": "138f64a6122a7d920525287fb74d3993f0145a64ab06d1260571829104005701",
           "importOrder": [
             "fuzz/fuzz_config.py",
             "fuzz/fuzz_dataset_files.py",
@@ -13938,6 +14373,20 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "fake_cuda",
+            "install_nvml",
+            "make_fake_pynvml"
+          ],
+          "hash": "175e088d3ed9a263d7cb2df071a944728b360b7a13a2b99785f76b7334337ec2",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/gpu_safety.py"
+          ],
+          "path": "tests/test_gpu_safety_cov_nvml.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "00d21805db2eb3b3b8b414282edce58e41a667a8906aa32865c21762c93cc603",
           "importsFiles": [
             "backpropagate/cli.py",
@@ -13955,6 +14404,14 @@
             "backpropagate/slao.py"
           ],
           "path": "tests/test_hypothesis_slao.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "6c2237dfb7c153d70afbb72277738ccd0f4aa9daf45948c0e1a13949f1127869",
+          "importsFiles": [
+            "backpropagate/__init__.py"
+          ],
+          "path": "tests/test_init_cov_extra.py",
           "testFramework": "pytest"
         },
         {
@@ -14084,6 +14541,21 @@
           "path": "tests/test_model_card.py"
         },
         {
+          "hash": "3807a79527063268f5a6021109f390c8135a4a80bb915e42db221a9e932650e1",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/model_card.py",
+            "backpropagate/checkpoints.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/model_card.py"
+          ],
+          "path": "tests/test_model_card_cov_extra.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "78d91656bacb7a382b3819e84c299f2e88b6e6e5fe2e7a9da7d3cd4da9a50c32",
           "importOrder": [
             "backpropagate/exceptions.py",
@@ -14112,7 +14584,89 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "3d1c5c1f06e93ce06c24e03b6b43f8c50af3073488f6c8acbcf751ded1062a3a",
+          "hash": "181c60bf0eda49857a964d09ec4d722313856dc217b126a3829a589a9130b411",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/eval.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_data_eval.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "6483f649f56d600d16f71136e3ba8440ff3543b789f94ab741bb19382ae8ff12",
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_execute.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "c1f1c386306af6ba3bf84b73fa362aea75b92ef040fb9d81df9207502c0f3512",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/gpu_safety.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py"
+          ],
+          "path": "tests/test_multi_run_cov_gpu.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "65254e21bc00d3fd5be1bd045e0d5808f98ebc24904c481503daae2ac70ad1b5",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/slao.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_multi_run_cov_helpers.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "8540631cdd375f96aaee5aa5a0b5f211eb62843733ddd765df991bbe163de5c2",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "tests/helpers/tiny_models.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_model_io.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "1063f569f5ee42c28db9fde1ce6e2d5deb31d7087930421383dd6596bc31f1ec",
           "importsFiles": [
             "backpropagate/multi_run.py",
             "tests/test_multi_run_cov_support.py"
@@ -14124,7 +14678,7 @@
           "exports": [
             "env"
           ],
-          "hash": "eef85a0373c7936a9163e4b8df26f626c2d35cb5c55f50c4e51f7af60355bb8b",
+          "hash": "492ba58c2dcb24477055bf31ce725533741a56283e67fb17ce729efd407a2f92",
           "importOrder": [
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
@@ -14140,6 +14694,21 @@
             "tests/test_multi_run_cov_support.py"
           ],
           "path": "tests/test_multi_run_cov_resume.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "env"
+          ],
+          "hash": "985ccab4938406a4a7ebdc9bfb10619ed0f43002d7528e0dc183b66a5aa3be9c",
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_run.py",
           "testFramework": "pytest"
         },
         {
@@ -14446,6 +15015,24 @@
           "testFramework": "pytest"
         },
         {
+          "hash": "9389ce4b9b0574fb930e1354ce2b3ce93d2c363e45dd32e0a76a1940e8107269",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_slao_cov_merger.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "96ad26a533b51f45307800eafd9b37e46b6cdd2e96fef1035e318bcb0399a6c1",
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/slao.py"
+          ],
+          "path": "tests/test_slao_cov_strategies.py",
+          "testFramework": "pytest"
+        },
+        {
           "exports": [
             "temp_dir"
           ],
@@ -14481,6 +15068,146 @@
         },
         {
           "exports": [
+            "engine_result",
+            "failing_validation",
+            "make",
+            "offload_trainer",
+            "saved_ok",
+            "saver",
+            "think",
+            "write_jsonl"
+          ],
+          "hash": "8c8eddfc5540c781735a8608e12cca99afd32968bed1c333d0c1d7011c0b2dd6",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/multi_run.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_trainer_cov_data_io.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "apple",
+            "chat_jsonl",
+            "fake_unsloth_chat",
+            "mlx_result",
+            "mlx_trainer",
+            "real_trainer",
+            "tiny_dir"
+          ],
+          "hash": "4d7ff6e0878d09c1e06229457ed41c14bcbdad38b05cadcde91f2461fb8c60cd",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/mlx_backend.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_trainer_cov_edges.py",
+          "testFramework": "unittest"
+        },
+        {
+          "exports": [
+            "fsdp_env",
+            "hf_error",
+            "requests_http_error"
+          ],
+          "hash": "79044e2040121a59f28694ae90aa50844ae2d408f9c5496f1390acb648b8444d",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/config.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_trainer_cov_helpers.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "make"
+          ],
+          "hash": "288489b15b8ba98b1f81b7a8c23eb642eafdc7c35eb0655ba48ba18fc2c0a20b",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/config.py",
+            "backpropagate/offload_engine.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_trainer_cov_init.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fake_unsloth",
+            "lora_make",
+            "make",
+            "tiny_dir"
+          ],
+          "hash": "556039f2fc53bdb89cd02f437ef6b3dea7355df7c79ec5bcd3f006cc70e055e4",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "tests/test_trainer_cov_init.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py",
+            "tests/test_trainer_cov_init.py"
+          ],
+          "path": "tests/test_trainer_cov_load.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
             "test_non_modelload_unsloth_failures_are_still_wrapped_and_classified",
             "test_peft_application_failure_keeps_its_version_category",
             "test_resolve_resume_checkpoint_prefers_a_checkpoint_itself_then_newest_child",
@@ -14504,6 +15231,34 @@
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_regressions.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "chat_jsonl",
+            "history",
+            "make",
+            "oom",
+            "tiny_dir"
+          ],
+          "hash": "c6bfa8243106a1ca04c41677fe23e5f5834a7bb6c6bf455ec09d63ff314fcdad",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/gpu_safety.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_trainer_cov_train.py",
           "testFramework": "pytest"
         },
         {
@@ -14561,6 +15316,124 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "test_close_codes_are_distinct_application_codes"
+          ],
+          "hash": "e61a076bc8dfd3713cb8299fc382974760b9328762fe73a2ed83565dcfa5d277",
+          "importsFiles": [
+            "backpropagate/ui_app/__init__.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_ui_cov_auth.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "lc_nostructlog",
+            "restore_root_logging"
+          ],
+          "hash": "bd2b6188c01e8b766c68d6c809c6615f98ed7b1d73f7ba600aa8b46a626371d7",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/logging_config.py"
+          ],
+          "path": "tests/test_ui_cov_logging.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "cba4896e6049a270b08ebb09b8a4f6528480a0c8f299542cf22d3f5717e282cd",
+          "importOrder": [
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_app/middleware/healthz.py",
+            "backpropagate/ui_app/middleware/rate_limit.py",
+            "backpropagate/ui_app/middleware/request_logging.py",
+            "backpropagate/__init__.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/logging_config.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_app/middleware/healthz.py",
+            "backpropagate/ui_app/middleware/rate_limit.py",
+            "backpropagate/ui_app/middleware/request_logging.py"
+          ],
+          "path": "tests/test_ui_cov_middleware.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "b58d7f10e927ad5cdedef59344162e71289f26f4d175e09ea633d134de730ae5",
+          "importOrder": [
+            "backpropagate/ui_app/components/sparkline.py",
+            "backpropagate/ui_app/components/vram_bar.py",
+            "backpropagate/ui_app/components/gpu_ring.py",
+            "backpropagate/ui_app/components/status_pill.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/ui_app/components/event_log.py",
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_app/components/loss_chart.py",
+            "backpropagate/ui_app/components/recovery_banner.py",
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/app.py",
+            "backpropagate/ui_app/__init__.py",
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_theme.py",
+            "backpropagate/__init__.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_app/__init__.py",
+            "backpropagate/ui_app/app.py",
+            "backpropagate/ui_app/auth.py",
+            "backpropagate/ui_app/chrome.py",
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/event_log.py",
+            "backpropagate/ui_app/components/gpu_ring.py",
+            "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_app/components/loss_chart.py",
+            "backpropagate/ui_app/components/recovery_banner.py",
+            "backpropagate/ui_app/components/sparkline.py",
+            "backpropagate/ui_app/components/status_pill.py",
+            "backpropagate/ui_app/components/vram_bar.py",
+            "backpropagate/ui_app/middleware/__init__.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/ui_theme.py"
+          ],
+          "names": [
+            "backpropagate/rxconfig.py"
+          ],
+          "path": "tests/test_ui_cov_pages.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "fake_home",
+            "fresh_session_manager",
+            "test_env_snapshot_is_restored_between_tests",
+            "test_module_all_names_exist"
+          ],
+          "hash": "24becb5efe332310e61c2e501dca2b86b09d6ad0ba4aaf2c67db6292e79a1006",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/ui_security.py"
+          ],
+          "path": "tests/test_ui_cov_security.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "6a19184b8da35b8743e5f4bbe4153e6078646450e137caf373bdb73c2f369b71",
           "importOrder": [
             "backpropagate/__init__.py",
@@ -14593,6 +15466,53 @@
             "backpropagate/ui_state.py"
           ],
           "path": "tests/test_ui_cov_state_bugs.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "push_recorder",
+            "sandbox"
+          ],
+          "hash": "8335414d3b242f30e62d39556d4f2c55f5977552eec4cf1c105b492a8f717f55",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/export.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "tests/test_ui_cov_state_forms.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "sandbox"
+          ],
+          "hash": "f414080283356ca080f615aac14848729102d5dca6f7f704405d1dfc11a1f519",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/datasets.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "tests/test_ui_cov_state_runs.py",
           "testFramework": "pytest"
         },
         {
@@ -14765,7 +15685,7 @@
           "why": "dynamic"
         }
       ],
-      "unresolvedSites": 7
+      "unresolvedSites": 13
     }
   ],
   "doors": [
@@ -15535,7 +16455,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 95
+          "files": 146
         },
         {
           "boundary": "fuzz",
@@ -15703,7 +16623,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 95,
+          "files": 146,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -15711,7 +16631,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 95,
+          "files": 146,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -15719,28 +16639,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 95,
+          "files": 146,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 95,
+          "files": 146,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 95,
+          "files": 146,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 95,
+          "files": 146,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -17523,8 +18443,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "f95f10803379eee5711bca30d607b5792ee9eeb0",
-    "tracked": 653
+    "commit": "9d35807a7524916906dc57748edc3b698d324139",
+    "tracked": 704
   },
   "landings": [
     {
@@ -17634,6 +18554,12 @@
           "by": "scripts/check_doc_drift.py",
           "call": "read_text",
           "confidence": "ast"
+        },
+        {
+          "by": "tests/test_export_cov_helpers.py",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
         },
         {
           "by": "tests/test_model_card.py",
@@ -18248,7 +19174,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 98,
+  "testFiles": 149,
   "unassigned": [],
   "unseen": [
     {

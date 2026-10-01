@@ -71,7 +71,7 @@ stdout interleaving. Set the env var if you want CI-like timing locally.
 pytest --cov=backpropagate --cov-report=html -q
 ```
 
-Floor is `fail_under = 50` (single source of truth: `[tool.coverage.report]`
+Floor is `fail_under = 90` (single source of truth: `[tool.coverage.report]`
 in `pyproject.toml`; ci.yml reads it via `tomllib` for lockstep).
 
 ---

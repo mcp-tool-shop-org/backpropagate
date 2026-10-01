@@ -70,7 +70,7 @@
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 100,
+      "qualifyingSourceCommits": 99,
       "rebaseline": null
     },
     {
@@ -136,7 +136,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "fuzz",
-      "qualifyingSourceCommits": 13,
+      "qualifyingSourceCommits": 0,
       "rebaseline": null
     },
     {
@@ -220,7 +220,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 85,
+      "qualifyingSourceCommits": 132,
       "rebaseline": null
     }
   ],
@@ -288,11 +288,6 @@
         "path": ".github/workflows/doc-drift.yml"
       },
       {
-        "commits": 2,
-        "lines": 121,
-        "path": ".github/workflows/fuzz.yml"
-      },
-      {
         "commits": 17,
         "lines": 412,
         "path": ".github/workflows/mutmut.yml"
@@ -358,8 +353,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 72,
-        "lines": 1394,
+        "commits": 71,
+        "lines": 1370,
         "path": "CHANGELOG.md"
       },
       {
@@ -368,8 +363,8 @@
         "path": "CITATION.cff"
       },
       {
-        "commits": 21,
-        "lines": 247,
+        "commits": 22,
+        "lines": 249,
         "path": "CLAUDE.md"
       },
       {
@@ -478,28 +473,28 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 11,
-        "lines": 517,
+        "commits": 10,
+        "lines": 473,
         "path": "atlas/README.md"
       },
       {
-        "commits": 2,
-        "lines": 54,
+        "commits": 1,
+        "lines": 46,
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 11,
-        "lines": 2093,
+        "commits": 10,
+        "lines": 1990,
         "path": "atlas/page.json"
       },
       {
-        "commits": 11,
-        "lines": 9020,
+        "commits": 10,
+        "lines": 6587,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 11,
-        "lines": 40734,
+        "commits": 10,
+        "lines": 40106,
         "path": "atlas/structure.json"
       },
       {
@@ -683,8 +678,8 @@
         "path": "backpropagate/cli.py"
       },
       {
-        "commits": 41,
-        "lines": 4336,
+        "commits": 40,
+        "lines": 4324,
         "path": "backpropagate/config.py"
       },
       {
@@ -693,8 +688,8 @@
         "path": "backpropagate/dataset_report.py"
       },
       {
-        "commits": 38,
-        "lines": 5078,
+        "commits": 36,
+        "lines": 5064,
         "path": "backpropagate/datasets.py"
       },
       {
@@ -708,13 +703,13 @@
         "path": "backpropagate/exceptions.py"
       },
       {
-        "commits": 36,
-        "lines": 4938,
+        "commits": 37,
+        "lines": 4971,
         "path": "backpropagate/export.py"
       },
       {
-        "commits": 23,
-        "lines": 1037,
+        "commits": 24,
+        "lines": 1047,
         "path": "backpropagate/feature_flags.py"
       },
       {
@@ -738,8 +733,8 @@
         "path": "backpropagate/model_card.py"
       },
       {
-        "commits": 59,
-        "lines": 8706,
+        "commits": 61,
+        "lines": 8751,
         "path": "backpropagate/multi_run.py"
       },
       {
@@ -753,8 +748,8 @@
         "path": "backpropagate/rxconfig.py"
       },
       {
-        "commits": 16,
-        "lines": 492,
+        "commits": 14,
+        "lines": 435,
         "path": "backpropagate/security.py"
       },
       {
@@ -773,8 +768,8 @@
         "path": "backpropagate/theme_gradio_legacy.py"
       },
       {
-        "commits": 74,
-        "lines": 17635,
+        "commits": 77,
+        "lines": 17686,
         "path": "backpropagate/trainer.py"
       },
       {
@@ -913,8 +908,8 @@
         "path": "backpropagate/ui_app/pages/run_detail.py"
       },
       {
-        "commits": 19,
-        "lines": 1215,
+        "commits": 20,
+        "lines": 1216,
         "path": "backpropagate/ui_app/pages/runs.py"
       },
       {
@@ -928,13 +923,13 @@
         "path": "backpropagate/ui_gradio_legacy.py"
       },
       {
-        "commits": 41,
-        "lines": 5040,
+        "commits": 38,
+        "lines": 5073,
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 36,
-        "lines": 7020,
+        "commits": 37,
+        "lines": 7059,
         "path": "backpropagate/ui_state.py"
       },
       {
@@ -1718,996 +1713,6 @@
         "path": "examples/quickstart.jsonl"
       },
       {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/.gitattributes"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-28b83cc0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-34cce324.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-3f545fbc.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-4e9b6d09.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-5d902957.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-65d6a132.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-6d786427.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-765a93e5.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-7e15bb5c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-9344b533.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-ac3b4dbc.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-ae9c2e36.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-b7bf202f.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-bc68f0c0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-c62947bc.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-ce76a38c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-d8d2814a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-de6ae08d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-deedffb9.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-e34b6199.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-f52b691f.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-f790c907.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/cov-fb317701.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/finding_f4b_kto_desirable_weight.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/finding_f4b_orpo_beta.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/finding_f4b_simpo_gamma.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/invalid_backend.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/invalid_method.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_DataConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_LoRAConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_ModelConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_MultiRunSettings.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_SecurityConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_TrainingConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/section_UIConfig.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/config/ui_security_env.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/all_bad.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/array.json"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/bad_utf8.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/bigint_line.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/bom.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/crlf_blank.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/deep_nesting.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/empty.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/finding_f1.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/invalid.json"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/mixed_bad_lines.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/object.json"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/ok.jsonl"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/paragraphs.txt"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/single.md"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/dataset_files/unknown_ext.dat"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/finding_f1_unhashable_role.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/finding_f6_lone_surrogate.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/notjson.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/roundtrip_0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/roundtrip_1.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/roundtrip_2.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/roundtrip_3.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/roundtrip_4.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_alpaca.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_chatml.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_empty.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_kto.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_mixed.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_openai.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_openai_function.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_preference.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/rows_sharegpt.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/datasets/split_ngrams.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_backslash.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_inside.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_loop.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_nul.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_symlink_in.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_symlink_out.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_traversal.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/base_unicode_dots.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-042dc451.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-05836b62.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-05a79f06.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-109ffb2c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-125f3af0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-267563fd.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-3ac09d54.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-46e4409a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-4f5d7b0e.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-5333c70a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-5d1be7e9.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-62901032.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-7c14c4a0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-7f761f6a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-948c70ab.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-958e445c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-97b8a6e3.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-b10e0f26.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-b25ce80c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-b3a44633.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-b8eee14c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-b8f4970d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-c5d68608.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-eacc13fc.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-f2c1d516.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/cov-f8a3104b.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/finding_f2_dots_in_controls.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_dotdot_ssh.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_etc.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_etc_dotdot.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_ok_work.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_proc_self_root.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_ssh.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/forb_symlink_ssh.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/must_exist_name_too_long.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/name_control_mix.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/name_plain.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/name_separators.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/nobase_dotdot_abs.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/nobase_dotdot_rel.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/nobase_plain.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/paths/oracle_loop_double_slash.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-0873dd44.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-0a1b3a3e.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-0ad052dd.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-0ed1dfff.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-176e373d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-19b67cd6.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-1b341f22.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-1cea2b09.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-1d1386ce.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-2248035a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-2436b390.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-261bc930.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-26f597a8.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-2aebdeb7.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-2d0134ed.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-2e760400.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-34739748.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-362882d1.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-3c59c55e.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-42bb48f7.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-4fd2dfe6.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-52acd09c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-54110161.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-5ba93c9d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-5d6020d3.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-6218a144.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-67308c81.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-6dd4ac18.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-6e8d9840.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-772c8bbb.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-7a9bcabf.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-7f66dff2.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-84f1519b.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-8c74383d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-8d883f15.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-8e6d3a4d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-918edff5.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-9359a193.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-93be2cca.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-93cdc93f.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-97704be2.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-9842926a.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-a48e37e5.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-a68c368f.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-aec155ee.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-b3d30a8e.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-b4791206.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-b7fff48b.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-be5d119d.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-c4dd3c8c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-c4ea21bb.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-c8a6f2b1.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-ca782708.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-cb0c3b06.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-d90a3efe.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-de736e80.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-df9e7e9f.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-e0d8276c.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-e9cf12a2.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-efc92681.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-f5e99144.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/cov-fe735997.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/finding_f4_nan.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode0.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode1.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode2.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode3.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode4.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode5.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/mode6.seed"
-      },
-      {
-        "commits": 1,
-        "lines": 0,
-        "path": "fuzz/corpus/ui_input/redaction_truncated_to_slash_home.seed"
-      },
-      {
-        "commits": 4,
-        "lines": 290,
-        "path": "fuzz/fuzz_common.py"
-      },
-      {
-        "commits": 2,
-        "lines": 202,
-        "path": "fuzz/fuzz_config.py"
-      },
-      {
-        "commits": 3,
-        "lines": 204,
-        "path": "fuzz/fuzz_dataset_files.py"
-      },
-      {
-        "commits": 3,
-        "lines": 344,
-        "path": "fuzz/fuzz_datasets.py"
-      },
-      {
-        "commits": 5,
-        "lines": 340,
-        "path": "fuzz/fuzz_paths.py"
-      },
-      {
-        "commits": 5,
-        "lines": 350,
-        "path": "fuzz/fuzz_ui_input.py"
-      },
-      {
         "commits": 2,
         "lines": 38,
         "path": "helpers/callbacks.py}"
@@ -2733,8 +1738,8 @@
         "path": "package.json"
       },
       {
-        "commits": 56,
-        "lines": 571,
+        "commits": 57,
+        "lines": 573,
         "path": "pyproject.toml"
       },
       {
@@ -2771,16 +1776,6 @@
         "commits": 2,
         "lines": 102,
         "path": "requirements/compile.sh"
-      },
-      {
-        "commits": 1,
-        "lines": 13,
-        "path": "requirements/fuzz.in"
-      },
-      {
-        "commits": 1,
-        "lines": 172,
-        "path": "requirements/fuzz.txt"
       },
       {
         "commits": 2,
@@ -3088,8 +2083,8 @@
         "path": "test_verify_multirun.py"
       },
       {
-        "commits": 6,
-        "lines": 674,
+        "commits": 7,
+        "lines": 679,
         "path": "tests/COVERAGE_ROADMAP.md"
       },
       {
@@ -3098,8 +2093,8 @@
         "path": "tests/EVENT_HANDLER_ROADMAP.md"
       },
       {
-        "commits": 2,
-        "lines": 718,
+        "commits": 3,
+        "lines": 720,
         "path": "tests/README.md"
       },
       {
@@ -3116,6 +2111,11 @@
         "commits": 2,
         "lines": 400,
         "path": "tests/helpers/asgi.py"
+      },
+      {
+        "commits": 4,
+        "lines": 128,
+        "path": "tests/helpers/cli_cov_support.py"
       },
       {
         "commits": 1,
@@ -3153,6 +2153,11 @@
         "path": "tests/test_block_engine.py"
       },
       {
+        "commits": 3,
+        "lines": 492,
+        "path": "tests/test_block_engine_cov_extra.py"
+      },
+      {
         "commits": 1,
         "lines": 403,
         "path": "tests/test_block_engine_trainer.py"
@@ -3178,6 +2183,16 @@
         "path": "tests/test_checkpoints.py"
       },
       {
+        "commits": 2,
+        "lines": 1018,
+        "path": "tests/test_checkpoints_cov_history.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1558,
+        "path": "tests/test_checkpoints_cov_manager.py"
+      },
+      {
         "commits": 33,
         "lines": 4160,
         "path": "tests/test_cli.py"
@@ -3186,6 +2201,76 @@
         "commits": 2,
         "lines": 574,
         "path": "tests/test_cli_banner.py"
+      },
+      {
+        "commits": 2,
+        "lines": 484,
+        "path": "tests/test_cli_cov_data.py"
+      },
+      {
+        "commits": 3,
+        "lines": 480,
+        "path": "tests/test_cli_cov_eval.py"
+      },
+      {
+        "commits": 2,
+        "lines": 864,
+        "path": "tests/test_cli_cov_export.py"
+      },
+      {
+        "commits": 3,
+        "lines": 970,
+        "path": "tests/test_cli_cov_gen_vram_ollama.py"
+      },
+      {
+        "commits": 2,
+        "lines": 562,
+        "path": "tests/test_cli_cov_info.py"
+      },
+      {
+        "commits": 3,
+        "lines": 584,
+        "path": "tests/test_cli_cov_main.py"
+      },
+      {
+        "commits": 2,
+        "lines": 726,
+        "path": "tests/test_cli_cov_replay.py"
+      },
+      {
+        "commits": 2,
+        "lines": 680,
+        "path": "tests/test_cli_cov_resume_push.py"
+      },
+      {
+        "commits": 3,
+        "lines": 464,
+        "path": "tests/test_cli_cov_runs.py"
+      },
+      {
+        "commits": 5,
+        "lines": 880,
+        "path": "tests/test_cli_cov_train.py"
+      },
+      {
+        "commits": 2,
+        "lines": 828,
+        "path": "tests/test_cli_cov_ui.py"
+      },
+      {
+        "commits": 3,
+        "lines": 772,
+        "path": "tests/test_cli_cov_ui_support.py"
+      },
+      {
+        "commits": 2,
+        "lines": 396,
+        "path": "tests/test_cli_cov_validate.py"
+      },
+      {
+        "commits": 3,
+        "lines": 446,
+        "path": "tests/test_cli_cov_validators.py"
       },
       {
         "commits": 5,
@@ -3206,6 +2291,11 @@
         "commits": 22,
         "lines": 2509,
         "path": "tests/test_config.py"
+      },
+      {
+        "commits": 2,
+        "lines": 998,
+        "path": "tests/test_config_cov_extra.py"
       },
       {
         "commits": 1,
@@ -3239,7 +2329,17 @@
       },
       {
         "commits": 2,
-        "lines": 110,
+        "lines": 2058,
+        "path": "tests/test_datasets_cov_core.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1978,
+        "path": "tests/test_datasets_cov_loaders.py"
+      },
+      {
+        "commits": 3,
+        "lines": 165,
         "path": "tests/test_datasets_cov_regression.py"
       },
       {
@@ -3273,6 +2373,11 @@
         "path": "tests/test_eval.py"
       },
       {
+        "commits": 2,
+        "lines": 1254,
+        "path": "tests/test_eval_cov_extra.py"
+      },
+      {
         "commits": 4,
         "lines": 1038,
         "path": "tests/test_eval_gate_roundtrip.py"
@@ -3293,13 +2398,33 @@
         "path": "tests/test_exceptions.py"
       },
       {
+        "commits": 2,
+        "lines": 460,
+        "path": "tests/test_exceptions_cov_extra.py"
+      },
+      {
         "commits": 21,
         "lines": 4083,
         "path": "tests/test_export.py"
       },
       {
         "commits": 2,
-        "lines": 96,
+        "lines": 2098,
+        "path": "tests/test_export_cov_helpers.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1924,
+        "path": "tests/test_export_cov_models.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1278,
+        "path": "tests/test_export_cov_ollama.py"
+      },
+      {
+        "commits": 3,
+        "lines": 144,
         "path": "tests/test_export_cov_regression.py"
       },
       {
@@ -3308,9 +2433,14 @@
         "path": "tests/test_feature_flags.py"
       },
       {
-        "commits": 2,
-        "lines": 268,
+        "commits": 3,
+        "lines": 402,
         "path": "tests/test_feature_flags_cov_deferral.py"
+      },
+      {
+        "commits": 2,
+        "lines": 668,
+        "path": "tests/test_feature_flags_cov_extra.py"
       },
       {
         "commits": 6,
@@ -3333,11 +2463,6 @@
         "path": "tests/test_fuzz_checkpoints.py"
       },
       {
-        "commits": 13,
-        "lines": 772,
-        "path": "tests/test_fuzz_harnesses.py"
-      },
-      {
         "commits": 1,
         "lines": 556,
         "path": "tests/test_golden_path_smoke.py"
@@ -3346,6 +2471,11 @@
         "commits": 11,
         "lines": 544,
         "path": "tests/test_gpu_safety.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1380,
+        "path": "tests/test_gpu_safety_cov_nvml.py"
       },
       {
         "commits": 2,
@@ -3363,6 +2493,11 @@
         "path": "tests/test_hypothesis_slao.py"
       },
       {
+        "commits": 2,
+        "lines": 244,
+        "path": "tests/test_init_cov_extra.py"
+      },
+      {
         "commits": 7,
         "lines": 271,
         "path": "tests/test_init_imports.py"
@@ -3373,8 +2508,8 @@
         "path": "tests/test_init_lazy_loading.py"
       },
       {
-        "commits": 14,
-        "lines": 822,
+        "commits": 15,
+        "lines": 829,
         "path": "tests/test_integration.py"
       },
       {
@@ -3408,23 +2543,58 @@
         "path": "tests/test_model_card.py"
       },
       {
+        "commits": 2,
+        "lines": 424,
+        "path": "tests/test_model_card_cov_extra.py"
+      },
+      {
         "commits": 31,
         "lines": 7468,
         "path": "tests/test_multi_run.py"
       },
       {
+        "commits": 3,
+        "lines": 908,
+        "path": "tests/test_multi_run_cov_data_eval.py"
+      },
+      {
+        "commits": 4,
+        "lines": 1473,
+        "path": "tests/test_multi_run_cov_execute.py"
+      },
+      {
         "commits": 2,
-        "lines": 106,
+        "lines": 350,
+        "path": "tests/test_multi_run_cov_gpu.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1200,
+        "path": "tests/test_multi_run_cov_helpers.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1022,
+        "path": "tests/test_multi_run_cov_model_io.py"
+      },
+      {
+        "commits": 4,
+        "lines": 171,
         "path": "tests/test_multi_run_cov_peft_extraction.py"
       },
       {
-        "commits": 2,
-        "lines": 450,
+        "commits": 4,
+        "lines": 687,
         "path": "tests/test_multi_run_cov_resume.py"
       },
       {
-        "commits": 2,
-        "lines": 592,
+        "commits": 3,
+        "lines": 860,
+        "path": "tests/test_multi_run_cov_run.py"
+      },
+      {
+        "commits": 4,
+        "lines": 888,
         "path": "tests/test_multi_run_cov_support.py"
       },
       {
@@ -3513,6 +2683,16 @@
         "path": "tests/test_slao.py"
       },
       {
+        "commits": 2,
+        "lines": 1136,
+        "path": "tests/test_slao_cov_merger.py"
+      },
+      {
+        "commits": 2,
+        "lines": 718,
+        "path": "tests/test_slao_cov_strategies.py"
+      },
+      {
         "commits": 3,
         "lines": 32,
         "path": "tests/test_theme.py"
@@ -3529,8 +2709,38 @@
       },
       {
         "commits": 2,
-        "lines": 332,
+        "lines": 1774,
+        "path": "tests/test_trainer_cov_data_io.py"
+      },
+      {
+        "commits": 2,
+        "lines": 758,
+        "path": "tests/test_trainer_cov_edges.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1546,
+        "path": "tests/test_trainer_cov_helpers.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1328,
+        "path": "tests/test_trainer_cov_init.py"
+      },
+      {
+        "commits": 2,
+        "lines": 920,
+        "path": "tests/test_trainer_cov_load.py"
+      },
+      {
+        "commits": 4,
+        "lines": 500,
         "path": "tests/test_trainer_cov_regressions.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1148,
+        "path": "tests/test_trainer_cov_train.py"
       },
       {
         "commits": 4,
@@ -3549,13 +2759,48 @@
       },
       {
         "commits": 2,
-        "lines": 346,
-        "path": "tests/test_ui_cov_security_bugs.py"
+        "lines": 1202,
+        "path": "tests/test_ui_cov_auth.py"
       },
       {
         "commits": 2,
-        "lines": 308,
+        "lines": 574,
+        "path": "tests/test_ui_cov_logging.py"
+      },
+      {
+        "commits": 2,
+        "lines": 974,
+        "path": "tests/test_ui_cov_middleware.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1764,
+        "path": "tests/test_ui_cov_pages.py"
+      },
+      {
+        "commits": 2,
+        "lines": 2696,
+        "path": "tests/test_ui_cov_security.py"
+      },
+      {
+        "commits": 3,
+        "lines": 519,
+        "path": "tests/test_ui_cov_security_bugs.py"
+      },
+      {
+        "commits": 3,
+        "lines": 462,
         "path": "tests/test_ui_cov_state_bugs.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1918,
+        "path": "tests/test_ui_cov_state_forms.py"
+      },
+      {
+        "commits": 3,
+        "lines": 2356,
+        "path": "tests/test_ui_cov_state_runs.py"
       },
       {
         "commits": 9,
@@ -3638,9 +2883,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T06:04:33.554Z",
+  "generatedAt": "2026-10-01T06:30:06.085Z",
   "generatedFrom": {
-    "commit": "f95f10803379eee5711bca30d607b5792ee9eeb0"
+    "commit": "9d35807a7524916906dc57748edc3b698d324139"
   },
   "pairs": [
     {
@@ -3798,18 +3043,11 @@
       "strength": 0.545455
     },
     {
-      "a": "backpropagate/multi_run.py",
-      "b": "tests/test_multi_run.py",
-      "either": 36,
-      "shared": 18,
-      "strength": 0.5
-    },
-    {
       "a": "backpropagate/trainer.py",
       "b": "tests/test_trainer.py",
-      "either": 49,
+      "either": 51,
       "shared": 26,
-      "strength": 0.530612
+      "strength": 0.509804
     },
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
@@ -3829,16 +3067,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-01T02:04:05-04:00",
-    "inScopeFiles": 658,
+    "headDate": "2026-10-01T02:18:11-04:00",
+    "inScopeFiles": 717,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 206,
+    "qualifyingCommits": 250,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-04T06:04:05.000Z",
+    "since": "2026-04-04T06:18:11.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -3854,7 +3092,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 22,
+    "sourceFilesReachingStrongFloor": 21,
     "strength": 0.5,
     "windowDays": 180
   },

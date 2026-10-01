@@ -71,10 +71,10 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 216,
-      "changed": 26,
+      "added": 205,
+      "changed": 7,
       "moved": 13,
-      "parts": 7,
+      "parts": 6,
       "removed": 0
     },
     "items": [
@@ -134,25 +134,25 @@
       },
       {
         "kind": "counts",
-        "sentence": "216 files added, 13 moved and 26 changed content, across 7 parts.",
+        "sentence": "205 files added, 13 moved and 7 changed content, across 6 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "3037ef09a23ee2fb47dd6a50cc2dff7ea0058502",
-      "generatedAt": "2026-10-01T02:54:12.387Z"
+      "commit": "9bf15fd7a8dc5d2e0047968403079f23ba124690",
+      "generatedAt": "2026-10-01T06:12:29.884Z"
     },
     "unchanged": false
   },
   "changesTogether": [],
   "changesTogetherNote": [
-    "2 files changed together with their own tests, as expected.",
-    "Window: 180 days; a pair counts from 10 shared commits, since 22 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
+    "1 file changed together with its own test, as expected.",
+    "Window: 180 days; a pair counts from 10 shared commits, since 21 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
-  "changesTogetherWithTests": 2,
-  "commit": "f95f10803379eee5711bca30d607b5792ee9eeb0",
+  "changesTogetherWithTests": 1,
+  "commit": "9d35807a7524916906dc57748edc3b698d324139",
   "defaultBranch": "main",
-  "derived": "13 parts, mostly Python (163 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "13 parts, mostly Python (214 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -197,7 +197,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 95
+          "files": 146
         },
         {
           "boundary": "fuzz",
@@ -618,10 +618,10 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T06:04:33.554Z",
+  "generatedAt": "2026-10-01T06:30:06.085Z",
   "limits": [
-    "44 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.",
+    "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.",
     "8 writes and 10 reads use paths built at run time and are not named here.",
     "31 writes and 64 reads go to a path their caller passes, not to this repository.",
     "3 writes go to a temporary directory, not to this repository.",
@@ -676,9 +676,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 98,
+  "testFiles": 149,
   "testedBy": {
-    "backpropagate": 85,
+    "backpropagate": 136,
     "bin": 0,
     "scripts": 2
   },

@@ -418,12 +418,14 @@ def safe_torch_load(
     if path.suffix == ".safetensors":
         try:
             from safetensors.torch import load_file
-            logger.debug(f"Loading safetensors file: {path}")
-            return load_file(str(path))
-        except ImportError:
-            logger.warning(
-                "safetensors not installed. Install with: pip install safetensors"
-            )
+        except ImportError as exc:
+            # No torch.load fallback: a .safetensors file is not a pickle, so it
+            # could never load that way (newer torch refuses the suffix outright).
+            raise ImportError(
+                f"Loading {path.name} needs the safetensors package: pip install safetensors"
+            ) from exc
+        logger.debug(f"Loading safetensors file: {path}")
+        return load_file(str(path))
 
     # Fall back to torch.load with security enabled
     logger.debug(f"Loading PyTorch file with weights_only={weights_only}: {path}")

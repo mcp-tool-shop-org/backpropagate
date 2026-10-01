@@ -1,6 +1,6 @@
 """Coverage tests for ``cmd_ui`` in cli.py.
 
-Mocked (real boundaries): ``subprocess.run`` (the Reflex dev server child),
+Mocked (real boundaries): ``cli._run_reflex`` (the Reflex server child),
 ``_spawn_cloudflared_tunnel`` (network tunnel; the helper itself is covered in
 ``test_cli_cov_ui_support.py``) and the port pre-flight (``_find_port_in_use``,
 also covered for real in that file). Real: argument parsing, the auth-file
@@ -46,7 +46,7 @@ def ui(tmp_path, monkeypatch):
         calls["locks_during"] = sorted(p.name for p in lock_dir.glob("session-*.lock")) if lock_dir.exists() else []
         return SimpleNamespace(returncode=calls.get("returncode", 0))
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_run_reflex", fake_run)
     calls["lock_dir"] = tmp_path / "xdg" / "backpropagate"
     return calls
 
@@ -371,7 +371,7 @@ class TestLaunchOutcomes:
         def interrupted(cmd, env=None, cwd=None):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli.subprocess, "run", interrupted)
+        monkeypatch.setattr(cli, "_run_reflex", interrupted)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
         assert "UI stopped" in capsys.readouterr().out
 
@@ -381,14 +381,14 @@ class TestLaunchOutcomes:
         def interrupted(cmd, env=None, cwd=None):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli.subprocess, "run", interrupted)
+        monkeypatch.setattr(cli, "_run_reflex", interrupted)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
 
     def test_interpreter_missing(self, ui, monkeypatch, capsys):
         def missing(cmd, env=None, cwd=None):
             raise FileNotFoundError("python")
 
-        monkeypatch.setattr(cli.subprocess, "run", missing)
+        monkeypatch.setattr(cli, "_run_reflex", missing)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
         captured = capsys.readouterr()
         assert "interpreter not found" in captured.err
@@ -400,14 +400,14 @@ class TestLaunchOutcomes:
         def missing(cmd, env=None, cwd=None):
             raise FileNotFoundError("python")
 
-        monkeypatch.setattr(cli.subprocess, "run", missing)
+        monkeypatch.setattr(cli, "_run_reflex", missing)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
 
     def test_user_input_error_from_launch(self, ui, monkeypatch, capsys):
         def bad(cmd, env=None, cwd=None):
             raise UserInputError("bad flag", hint="fix the flag")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
         captured = capsys.readouterr()
         assert "bad flag" in captured.err and "Suggestion: fix the flag" in captured.out
@@ -417,7 +417,7 @@ class TestLaunchOutcomes:
         def bad(cmd, env=None, cwd=None):
             raise BackpropagateError("reflex exploded", suggestion="reinstall")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         args = parse(["ui"])
         args.verbose = verbose
         assert cli.cmd_ui(args) == cli.EXIT_RUNTIME_ERROR
@@ -428,7 +428,7 @@ class TestLaunchOutcomes:
         def bad(cmd, env=None, cwd=None):
             raise RuntimeError("Authorization: Bearer abcdef1234567890")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_RUNTIME_ERROR
         captured = capsys.readouterr()
         assert "abcdef1234567890" not in captured.err

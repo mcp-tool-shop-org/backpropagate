@@ -82,7 +82,7 @@ def launch(tmp_path, monkeypatch, capsys):
             }
             return SimpleNamespace(returncode=0)
 
-        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        monkeypatch.setattr(cli, "_run_reflex", fake_run)
         assert cli.cmd_ui(parse(["ui", *argv])) == cli.EXIT_OK
         out = capsys.readouterr()
         return SimpleNamespace(

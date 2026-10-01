@@ -3119,6 +3119,116 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     return None
 
 
+# How long ``backprop ui`` waits for the Reflex tree to exit on its own after
+# Ctrl+C before it kills the whole tree, and how often it polls the child.
+_UI_STOP_GRACE_SECONDS = 10.0
+_UI_POLL_SECONDS = 0.5
+
+
+def _kill_process_tree(proc: "subprocess.Popen[Any]") -> None:
+    """Hard-kill ``proc`` and every process it spawned (best effort, never raises).
+
+    Reflex starts a granian/uvicorn server (and, in dev mode, a frontend
+    server) as grandchildren, so killing only the direct child leaves a server
+    bound to the port.
+
+    Windows: ``taskkill /F /T``, with the System32 path taken from
+    ``GetSystemDirectoryW`` (the Win32 API) rather than from ``SYSTEMROOT``,
+    which a caller's environment could point at an attacker-chosen directory.
+    POSIX: kill the child's process group when it has its own, otherwise the
+    child and (when ``psutil`` is installed) its descendants.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            buf = ctypes.create_unicode_buffer(260)
+            length = ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260)  # type: ignore[attr-defined,unused-ignore]
+            taskkill = os.path.join(buf.value, "taskkill.exe") if length else "taskkill"
+            subprocess.run(  # nosec B603 - fixed argv, absolute System32 path, pid is an int
+                [taskkill, "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        else:
+            import signal as _signal
+
+            own_group = os.getpgid(proc.pid) != os.getpgid(0)
+            if own_group:
+                os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+            else:
+                try:
+                    import psutil
+
+                    for child in psutil.Process(proc.pid).children(recursive=True):
+                        try:
+                            child.kill()
+                        except psutil.Error:
+                            pass
+                except ImportError:
+                    pass
+    except Exception:  # noqa: BLE001 - last-resort cleanup must not raise  # nosec B110
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_reflex(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+) -> "subprocess.CompletedProcess[Any]":
+    """Run the Reflex server and return when it exits; Ctrl+C-safe on Windows.
+
+    ``subprocess.run`` waits with ``WaitForSingleObject(INFINITE)`` on
+    Windows, which a console Ctrl+C / Ctrl+Break cannot interrupt: the CLI only
+    saw its ``KeyboardInterrupt`` once Reflex had exited, so a Reflex whose
+    shutdown hung (intermittent) left ``backprop ui`` unstoppable. Poll with a
+    short timeout instead so the interrupt is delivered promptly.
+
+    On ``KeyboardInterrupt`` the Reflex tree got the same Ctrl+C (it shares the
+    console), so it is given ``_UI_STOP_GRACE_SECONDS`` to exit by itself; if it
+    has not, the whole tree is killed. A second Ctrl+C during the grace period
+    skips the wait. The ``KeyboardInterrupt`` is re-raised once the tree is down.
+    """
+    import time
+
+    proc = subprocess.Popen(cmd, env=env, cwd=cwd)  # nosec B603 - cmd is internally constructed
+    try:
+        while True:
+            try:
+                returncode = proc.wait(timeout=_UI_POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                continue
+            return subprocess.CompletedProcess(cmd, returncode)
+    except KeyboardInterrupt:
+        try:
+            deadline = time.monotonic() + _UI_STOP_GRACE_SECONDS
+            while proc.poll() is None and time.monotonic() < deadline:
+                try:
+                    proc.wait(timeout=_UI_POLL_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+        except KeyboardInterrupt:
+            pass  # second Ctrl+C: stop waiting, go straight to the kill
+        if proc.poll() is None:
+            _kill_process_tree(proc)
+            try:
+                proc.wait(timeout=10)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                pass
+        raise
+    except BaseException:
+        # Anything else (SystemExit, an unexpected error): never orphan the server.
+        if proc.poll() is None:
+            _kill_process_tree(proc)
+        raise
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     """
     Execute the ui command to launch the Reflex web interface.
@@ -3349,7 +3459,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # (auth.py import error). What it does NOT catch: a runtime regression
     # where FastAPI middleware imports cleanly but raises AttributeError at
     # request time. Adding a Popen + probe loop is a moderate refactor that
-    # requires reworking the subprocess.run call site to a non-blocking
+    # requires reworking the _run_reflex call site to a non-blocking
     # Popen with a healthcheck thread. Tracked as the v1.4 followup
     # "BRIDGE-V14-UI-PROBE" so the auth contract assertion catches both
     # the import-time + runtime layers (same defensive depth that caught
@@ -3626,7 +3736,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     # BRIDGE-B (Stage C auth-polish): Jupyter-pattern startup banner.
     # Printed AFTER the refuse-to-start gates have fired (lines above)
-    # and BEFORE the subprocess.run call so the operator sees it the
+    # and BEFORE the _run_reflex call so the operator sees it the
     # moment the launch is decided. Suppressed by BACKPROPAGATE_UI_QUIET=1.
     _print_ui_startup_banner(
         bound_host=backend_host,
@@ -3664,7 +3774,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             )
         except Exception:  # noqa: BLE001  # nosec B110
             pass
-        result = subprocess.run(cmd, env=env, cwd=str(package_dir))  # nosec B603 — cmd is internally constructed
+        result = _run_reflex(cmd, env=env, cwd=str(package_dir))
         _duration = _time.monotonic() - _ui_start_ts
         try:
             _ui_logger.info(

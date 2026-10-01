@@ -670,7 +670,10 @@ class TestEnforceFullFtCeiling:
 def fsdp_env(monkeypatch):
     """Isolate the env vars ``_ensure_fsdp_runtime`` seeds via ``setdefault``."""
     for k in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE", "LOCAL_RANK"):
-        monkeypatch.delenv(k, raising=False)
+        # setenv-then-delenv makes monkeypatch remember "was unset", so values the
+        # function seeds via os.environ.setdefault are removed again at teardown.
+        monkeypatch.setenv(k, "")
+        monkeypatch.delenv(k)
 
 
 class TestEnsureFsdpRuntime:

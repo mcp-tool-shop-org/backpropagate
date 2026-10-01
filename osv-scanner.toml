@@ -21,11 +21,6 @@ ignoreUntil = 2027-01-01
 reason = "torch.jit.script memory corruption (CVE-2025-3000), local attack via the code passed to torch.jit.script. backpropagate never calls torch.jit.script; nothing it runs scripts user-supplied code. Fixed in torch 2.13, above unsloth's torch<2.13 cap."
 
 [[IgnoredVulns]]
-id = "PYSEC-2026-139"
-ignoreUntil = 2027-01-01
-reason = "torch pt2 loading handler deserialization (CVE-2026-4538), local attack via a crafted .pt2 archive. backpropagate never loads .pt2 archives (no torch.export.load); it loads safetensors, and .pt files only with weights_only=True (security.safe_torch_load; the multi_run adapter fallback). No fixed release."
-
-[[IgnoredVulns]]
 id = "PYSEC-2026-3929"
 ignoreUntil = 2027-01-01
 reason = "transformers < 5.10 save_pretrained writes named chat templates to paths taken from the tokenizer config (CVE-2026-9856). Reachable in principle, because backpropagate saves tokenizers it loaded from the Hub, and mitigated in backpropagate: security.check_chat_template_names refuses path-like template names right after every tokenizer load that can be saved (Trainer load paths, export.load_model_for_export), raising INPUT_UNSAFE_CHAT_TEMPLATE before any save. tests/test_chat_template_guard.py shows both the escape on the installed transformers and the refusal. Fixed in transformers 5.10, above unsloth's transformers<=5.5.0 cap."

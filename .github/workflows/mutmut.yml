@@ -79,11 +79,10 @@ jobs:
 
       - name: Install backpropagate (dev extras)
         run: |
-          python -m pip install --upgrade pip
-          # Install the package + dev extras (mutmut, pytest, hypothesis,
-          # etc). The smoke-test fast path skips the heavy [ui]/[unsloth]
-          # extras to keep wheel resolution fast.
-          pip install -e ".[dev,validation,logging,security]"
+          # The package + dev extras (mutmut, pytest, hypothesis, etc), from
+          # uv.lock with every package hash-checked. The smoke-test fast path
+          # skips the heavy [ui]/[unsloth] extras to keep the install small.
+          bash scripts/ci_install_locked.sh dev validation logging security
 
       - name: Show mutmut version
         run: mutmut --version

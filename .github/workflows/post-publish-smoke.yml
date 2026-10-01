@@ -93,6 +93,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # NOT HASH-PINNED, ON PURPOSE. This job's whole point is to install
+          # what PyPI actually serves for the version just published, the way a
+          # user's `pip install backpropagate==X` does -- a fresh resolve of its
+          # dependencies across 2 OSes x 4 Pythons. Pinning it to a lock would
+          # test the lock, not the release. OpenSSF Scorecard flags this line
+          # under Pinned-Dependencies; that deduction is accepted.
+          #
           # PyPI's CDN can lag the publish by a few minutes — retry up to
           # five times with 30s backoff before declaring the install dead.
           for attempt in 1 2 3 4 5; do

@@ -13,7 +13,6 @@ checkpoints/
 *.bin
 *.pt
 *.pth
-uv.lock
 .pre-commit-config.yaml
 .secrets.baseline
 *.md

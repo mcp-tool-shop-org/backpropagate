@@ -7,18 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
-  transformers 5 gives every model a `get_adapter_state_dict` method that
-  raises "No adapter loaded" for an adapter attached with PEFT, and the
-  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
-  now read from the model's parameters when that call fails. Found by new
-  tests on a real tiny PEFT model.
-- **Resuming a multi-run session keeps the SLAO merge state.** The session
-  restore ran before the SLAO merger existed, so a resumed session dropped
-  its saved merge accumulator and started merging again from its first run.
-
 ### Added
 
 - **Experimental: block-coordinate full fine-tuning** (`--full-ft-engine block`,
@@ -33,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`ui_security.SecureSessionHandler`: one CSRF slot per session, and logout
+  now revokes.** It keyed CSRF tokens and its session registry on the first 32
+  characters of the access token. Every HS256 JWT starts with the same encoded
+  header, so all users shared one CSRF slot (one user's CSRF token validated
+  another's request), and `logout()` revoked nothing. Sessions are now keyed by
+  a SHA-256 of the whole token, and a token is honoured only while its session
+  is registered. The class is a public helper; the bundled web UI does not use
+  it.
+- `CSRFProtection.validate_token` returns invalid for a non-ASCII or non-string
+  token instead of raising `TypeError`.
+- `FileValidator.validate()` given a `pathlib.Path` now runs the size cap and
+  magic-byte checks (it looked up the bare file name and skipped them).
+- `validate_numeric_input` and the UI's numeric fields reject NaN and infinity.
 - **Tokenizers with path-like chat template names are refused at load**
   (new stable code `INPUT_UNSAFE_CHAT_TEMPLATE`). transformers before 5.10
   saves each named chat template to a file named after it without checking
@@ -45,6 +46,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
+  transformers 5 gives every model a `get_adapter_state_dict` method that
+  raises "No adapter loaded" for an adapter attached with PEFT, and the
+  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
+  now read from the model's parameters when that call fails. Found by new
+  tests on a real tiny PEFT model.
+- **Resuming a multi-run session keeps the SLAO merge state.** The session
+  restore ran before the SLAO merger existed, so a resumed session dropped
+  its saved merge accumulator and started merging again from its first run.
+- Web UI `/runs`: the Model and Dataset columns showed "-" for every run (they
+  read field names the run store does not write); the dataset path is shown
+  redacted. The "Interrupted" filter, which the store rejects, is removed.
+- **`backprop multi-run --method orpo|simpo|kto` is refused instead of
+  silently ignored.** The multi-run backend trains SFT only and takes no
+  `method`, so the CLI dropped the flag and every run trained SFT. It now
+  exits with an error that points at `backprop train --method ...`.
+- `backprop runs --json` no longer crashes on a loss value too large for a
+  float in a hand-edited or corrupted run history.
+- **`Trainer.train(resume_from=...)` resumes finished runs.** The run history
+  records a run's output directory, and that was passed to Hugging Face as the
+  checkpoint, so every resume failed with `FileNotFoundError:
+  .../trainer_state.json`. It now resumes from the newest `checkpoint-<step>`
+  inside it (or from the path itself when that is a checkpoint).
+- **Empty CSV / parquet cells no longer become the text "None" in training
+  data.** An empty cell loads as `None`, and the Alpaca, ShareGPT and
+  preference converters wrote it into the ChatML text as the word `None`.
+- `export_lora` given a single adapter file now raises `ExportError`. It used to
+  report success with an empty export directory, replacing any earlier export.
+- `refresh_features()` detects installed extras while
+  `BACKPROPAGATE_DEFER_FEATURE_DETECTION` is set (it did nothing, so installed
+  extras still looked missing).
+- A model-load failure through Unsloth keeps its auth / network / version
+  category and hint (it was wrapped a second time, losing both).
 - **Windows: multi-run auto-resume no longer sends Ctrl+C.** The check for
   whether an earlier run's process is still alive used `os.kill(pid, 0)`. On
   Windows signal 0 is `CTRL_C_EVENT`, so the check sent a Ctrl+C console

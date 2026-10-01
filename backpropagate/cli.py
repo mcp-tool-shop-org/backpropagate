@@ -2121,6 +2121,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "full_ft_offload diagnostic: 'nearest' switches the bf16 write-back from stochastic rounding to round-to-nearest, which drops sub-ulp updates (update retention 0.17 measured). For reproducing the failure mode only; never for training.",
         ),
         (
+            "BACKPROPAGATE_OFFLOAD_FUSED",
+            "0",
+            "bool",
+            "full_ft_offload: '1' steps each parameter inside backward, from the weights and gradient FSDP2 already has on the GPU, and writes the new bf16 weights back once. This skips the gradient copy to the host and the optimizer's re-upload of gradients and weights. Needs gradient accumulation of 1 (otherwise it logs once and uses the default 3-pass step). Same math and same stochastic-rounding noise as the default path. Off by default until measured on a real card.",
+        ),
+        (
             "BACKPROPAGATE_OFFLOAD_TRACE",
             "0",
             "str",

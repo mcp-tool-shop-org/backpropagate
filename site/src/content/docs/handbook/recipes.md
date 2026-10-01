@@ -135,7 +135,7 @@ backprop eval <run_id> \
   --metric token_f1
 ```
 
-Each held-out reference line is `{"prompt": "...", "reference": "..."}` (or `"references": ["...", "..."]` for multiple acceptable answers). Available metrics: `normalized_exact_match`, `token_f1`, `contains`, `regex`, `pass_rate`. `--metric` is repeatable; when you pass `--references` with no `--metric`, it defaults to `normalized_exact_match` + `token_f1`. (ROUGE-L / BLEU are intentionally **not** gateable metrics — they reward surface n-gram overlap and are easily gamed.)
+Each held-out reference line is `{"prompt": "...", "reference": "..."}` (or `"references": ["...", "..."]` for multiple acceptable answers). Available metrics: `normalized_exact_match`, `token_f1`, `contains`, `regex`, `pass_rate`. `pass_rate` scores generated code against test snippets by **running it**, so it needs `--allow-code-exec`; each sample runs in its own process with a timeout (`--code-exec-timeout`, default 10 s), but that is not a sandbox. `--metric` is repeatable; when you pass `--references` with no `--metric`, it defaults to `normalized_exact_match` + `token_f1`. (ROUGE-L / BLEU are intentionally **not** gateable metrics — they reward surface n-gram overlap and are easily gamed.)
 
 To **gate** a continual-merge / SLAO campaign on non-regression, add `--gate-against` and name the metrics that must not regress with `--gate-metric`:
 

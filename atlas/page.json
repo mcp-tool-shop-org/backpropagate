@@ -51,113 +51,24 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 16,
-      "changed": 12,
+      "added": 0,
+      "changed": 4,
       "moved": 0,
-      "parts": 4,
+      "parts": 1,
       "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI's push trigger now also names `requirements/**` and `scripts/ci_install_locked.sh`.",
-        "subjects": [
-          ".github/workflows/ci.yml"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "CI now also runs backpropagate/cli.py and scripts/ci_install_locked.sh.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "backpropagate/cli.py",
-          "scripts/ci_install_locked.sh"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "CI now also checks LICENSE, README.md, pyproject.toml and 3 more.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "LICENSE",
-          "README.md",
-          "pyproject.toml",
-          "requirements/build-backend.txt",
-          "requirements/uv.txt",
-          "uv.lock"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "And 4 more changes to doors.",
-        "subjects": []
-      },
-      {
-        "kind": "landing",
-        "sentence": ".github/release-tools/package-lock.json is now read by .github/workflows/release.yml.",
-        "subjects": [
-          ".github/release-tools/package-lock.json",
-          ".github/workflows/release.yml"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": ".github/release-tools/package.json is now read by .github/workflows/release.yml.",
-        "subjects": [
-          ".github/release-tools/package.json",
-          ".github/workflows/release.yml"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "requirements/bandit.txt is now read by .github/workflows/ci.yml.",
-        "subjects": [
-          "requirements/bandit.txt",
-          ".github/workflows/ci.yml"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "And 6 more new writers and readers of places.",
-        "subjects": []
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "requirements/bandit.in is new and belongs to no part, so atlas check fails on it against the previous map.",
-        "subjects": [
-          "requirements/bandit.in"
-        ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "requirements/bandit.txt is new and belongs to no part, so atlas check fails on it against the previous map.",
-        "subjects": [
-          "requirements/bandit.txt"
-        ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "requirements/build-backend.in is new and belongs to no part, so atlas check fails on it against the previous map.",
-        "subjects": [
-          "requirements/build-backend.in"
-        ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "And 10 more new files that belong to no part.",
-        "subjects": []
-      },
-      {
         "kind": "counts",
-        "sentence": "16 files added and 12 changed content, across 4 parts.",
+        "sentence": "Nothing structural changed since 2026-10-01; 4 files changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
-      "generatedAt": "2026-10-01T00:33:05.173Z"
+      "commit": "128cb5511a22c4f11bae860505e7ec83a7b662d3",
+      "generatedAt": "2026-10-01T02:39:07.940Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [
     {
@@ -181,7 +92,7 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 20 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "128cb5511a22c4f11bae860505e7ec83a7b662d3",
+  "commit": "3037ef09a23ee2fb47dd6a50cc2dff7ea0058502",
   "defaultBranch": "main",
   "derived": "11 parts, mostly Python (144 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
@@ -610,7 +521,7 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T02:39:07.940Z",
+  "generatedAt": "2026-10-01T02:54:12.387Z",
   "limits": [
     "43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.",

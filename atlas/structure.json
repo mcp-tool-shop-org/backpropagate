@@ -52,15 +52,15 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "9f11d771c55e5255d40e080236acc37677b0d311522fda92860fa83e91457c44",
+          "hash": "4f1e9472ba345a6d69665dcaeb1ea9b833501a536846d5286d9bad19c4519f8e",
           "path": ".github/release-tools/package-lock.json"
         },
         {
-          "hash": "d1ee88625af8114a81282076fde642b5b498a18a51cf6db295d0d9a051c6d5d9",
+          "hash": "0b1e63695281b6ce047237b7eb3506fd8a0bb1c448a358d6a64eed493fbd2ecf",
           "path": ".github/release-tools/package.json"
         },
         {
-          "hash": "7803114def0301687a0445c7c8cde53ffbb25ccd7e21d33536b224c02d2f6dd9",
+          "hash": "bca1153276caafd311ab284d764e376113c10af291cb41df8b41fb20395bb471",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -88,7 +88,7 @@
           "path": ".github/workflows/publish.yml"
         },
         {
-          "hash": "4e714d64072e5cc8a058309cd2feab2bcdf40fe6f797254b3724b68ec866cb51",
+          "hash": "6a01a25d9ac6dc6d7f67b2fc831085854f293b6e720d0d3dc56f05c0dd9bb91d",
           "path": ".github/workflows/release.yml"
         },
         {
@@ -15349,6 +15349,16 @@
           "dir": "",
           "job": "release",
           "programs": [
+            "echo",
+            "node",
+            "npm"
+          ],
+          "step": "Require npm >= 11.5 for OIDC trusted-publishing auth"
+        },
+        {
+          "dir": "",
+          "job": "release",
+          "programs": [
             "cp",
             "echo",
             "mkdir",
@@ -15356,7 +15366,7 @@
             "popd",
             "pushd"
           ],
-          "step": "Install pinned npm (>=11.5) in sandbox for OIDC trusted-publishing auth"
+          "step": "Install pinned release tools"
         },
         {
           "dir": "",
@@ -15451,13 +15461,13 @@
             {
               "ranges": [
                 {
-                  "from": "22",
-                  "range": ">=22.0.0 <23.0.0-0"
+                  "from": "24",
+                  "range": ">=24.0.0 <25.0.0-0"
                 }
               ],
               "step": "Setup Node",
               "uses": "actions/setup-node",
-              "version": "22"
+              "version": "24"
             },
             {
               "ranges": [
@@ -15808,7 +15818,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "128cb5511a22c4f11bae860505e7ec83a7b662d3",
+    "commit": "3037ef09a23ee2fb47dd6a50cc2dff7ea0058502",
     "tracked": 437
   },
   "landings": [

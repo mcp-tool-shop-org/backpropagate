@@ -28,6 +28,14 @@ boundaries:
     globs:
       - examples/**
     role: config
+  - name: fuzz
+    globs:
+      - fuzz/**
+    role: test
+  - name: requirements
+    globs:
+      - requirements/**
+    role: config
   - name: root
     globs:
       - "*"

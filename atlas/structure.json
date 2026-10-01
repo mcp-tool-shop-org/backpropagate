@@ -52,7 +52,7 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "e56e52fa9272a233e351fc2d20f1d1d13bc1340158a874451392bad980f5b5ce",
+          "hash": "1d5e7b3b471ef7249dfd2aa416177cca4817047052a91dc24145b03483050d12",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -60,7 +60,11 @@
           "path": ".github/workflows/doc-drift.yml"
         },
         {
-          "hash": "84add51a22c8dca94f57b3e40380b64f0a62e849f44200afc1ae50f7edfb7c8c",
+          "hash": "3f61e933fda049529a690f1aff60f960e0095afc2078faa5560349ddf3444f7c",
+          "path": ".github/workflows/fuzz.yml"
+        },
+        {
+          "hash": "de223fcb7695b19d7eaa8f3dfed9c7073441b0a4e91db57f86159f8f89c2d0c6",
           "path": ".github/workflows/mutmut.yml"
         },
         {
@@ -4649,7 +4653,7 @@
             "is_trust_remote_code_error",
             "print_error_code_catalog"
           ],
-          "hash": "96d51f242dd71ede8b92313da7dab01ffe5812c3d57d0e74af77271ccfc19e83",
+          "hash": "1ae46d1bb351d8221a6956abc90c6ca3b253aa04918ae0fde0529ee4b1340e59",
           "path": "backpropagate/exceptions.py"
         },
         {
@@ -4674,714 +4678,715 @@
             {
               "in": "_validate_model_name",
               "kind": "raise",
-              "line": 86
+              "line": 87
             },
             {
               "in": "_validate_model_name",
               "kind": "raise",
-              "line": 97
+              "line": 98
             },
             {
               "in": "_validate_model_name",
               "kind": "raise",
-              "line": 105
+              "line": 106
             },
             {
               "in": "_validate_model_name",
               "kind": "raise",
-              "line": 116
+              "line": 117
             },
             {
               "in": "_validate_model_name",
               "kind": "raise",
-              "line": 126
+              "line": 127
             },
             {
               "in": "_validate_repo_id",
               "kind": "raise",
-              "line": 143
+              "line": 144
             },
             {
               "in": "_validate_repo_id",
               "kind": "raise",
-              "line": 163
+              "line": 164
             },
             {
               "in": "_validate_repo_id",
               "kind": "raise",
-              "line": 176
+              "line": 177
             },
             {
               "in": "_validate_repo_id",
               "kind": "raise",
-              "line": 186
+              "line": 187
             },
             {
               "in": "_validate_repo_id",
               "kind": "raise",
-              "line": 197
+              "line": 198
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "except",
-              "line": 249
+              "line": 250
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "except",
-              "line": 257
+              "line": 258
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "raise",
-              "line": 259
-            },
-            {
-              "in": "_run_subprocess_interruptible",
-              "kind": "except",
               "line": 260
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "except",
-              "line": 270
+              "line": 261
+            },
+            {
+              "in": "_run_subprocess_interruptible",
+              "kind": "except",
+              "line": 271
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "raise",
-              "line": 272
+              "line": 273
             },
             {
               "in": "_run_subprocess_interruptible",
               "kind": "raise",
-              "line": 282
+              "line": 283
             },
             {
               "in": "_maybe_write_model_card",
               "kind": "except",
-              "line": 394
+              "line": 395
             },
             {
               "in": "_resolve_hf_token",
               "kind": "except",
-              "line": 455
+              "line": 456
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 511
-            },
-            {
-              "in": "push_to_hub",
-              "kind": "raise",
               "line": 512
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 522
+              "line": 513
+            },
+            {
+              "in": "push_to_hub",
+              "kind": "raise",
+              "line": 523
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 558
+              "line": 559
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 581
+              "line": 582
             },
             {
               "in": "_inventory",
               "kind": "except",
-              "line": 615
+              "line": 616
             },
             {
               "in": "_inventory",
               "kind": "except",
-              "line": 624
+              "line": 625
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 639
+              "line": 640
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 657
+              "line": 658
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 699
+              "line": 700
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 720
+              "line": 721
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 731
+              "line": 732
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 741
-            },
-            {
-              "in": "push_to_hub",
-              "kind": "except",
               "line": 742
             },
             {
               "in": "push_to_hub",
-              "kind": "raise",
-              "line": 749
+              "kind": "except",
+              "line": 743
             },
             {
               "in": "push_to_hub",
-              "kind": "except",
+              "kind": "raise",
               "line": 750
             },
             {
               "in": "push_to_hub",
-              "kind": "raise",
-              "line": 755
+              "kind": "except",
+              "line": 751
             },
             {
               "in": "push_to_hub",
-              "kind": "except",
+              "kind": "raise",
               "line": 756
             },
             {
               "in": "push_to_hub",
+              "kind": "except",
+              "line": 757
+            },
+            {
+              "in": "push_to_hub",
               "kind": "raise",
-              "line": 766
+              "line": 767
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 782
+              "line": 783
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 805
+              "line": 806
             },
             {
               "in": "_unsloth_gguf_ready",
               "kind": "except",
-              "line": 856
+              "line": 857
             },
             {
               "in": "_unsloth_gguf_ready",
               "kind": "except",
-              "line": 860
+              "line": 861
             },
             {
               "in": "_estimate_param_count",
               "kind": "except",
-              "line": 956
+              "line": 957
             },
             {
               "in": "_estimate_param_count",
               "kind": "except",
-              "line": 960
+              "line": 961
             },
             {
               "in": "_model_has_float32_params",
               "kind": "except",
-              "line": 980
+              "line": 981
             },
             {
               "in": "_model_has_float32_params",
               "kind": "except",
-              "line": 984
+              "line": 985
             },
             {
               "in": "_model_has_float32_params",
               "kind": "except",
-              "line": 990
+              "line": 991
             },
             {
               "in": "_cast_merged_model_to_bf16",
               "kind": "except",
-              "line": 1034
+              "line": 1035
             },
             {
               "in": "_check_export_disk_space",
               "kind": "except",
-              "line": 1074
+              "line": 1075
             },
             {
               "in": "_check_export_disk_space",
               "kind": "raise",
-              "line": 1087
+              "line": 1088
             },
             {
               "in": "_is_peft_model",
               "kind": "except",
-              "line": 1114
+              "line": 1115
             },
             {
               "in": "_has_unsloth",
               "kind": "except",
-              "line": 1126
+              "line": 1127
             },
             {
               "in": "load_model_for_export",
               "kind": "except",
-              "line": 1208
-            },
-            {
-              "in": "load_model_for_export",
-              "kind": "raise",
-              "line": 1209
+              "line": 1210
             },
             {
               "in": "load_model_for_export",
               "kind": "raise",
-              "line": 1216
+              "line": 1211
+            },
+            {
+              "in": "load_model_for_export",
+              "kind": "raise",
+              "line": 1218
             },
             {
               "in": "load_model_for_export",
               "kind": "except",
-              "line": 1240
+              "line": 1243
             },
             {
               "in": "load_model_for_export",
               "kind": "except",
-              "line": 1258
+              "line": 1261
             },
             {
               "in": "export_lora",
               "kind": "except",
-              "line": 1316
+              "line": 1320
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1317
-            },
-            {
-              "in": "export_lora",
-              "kind": "except",
               "line": 1321
             },
             {
               "in": "export_lora",
+              "kind": "except",
+              "line": 1325
+            },
+            {
+              "in": "export_lora",
               "kind": "raise",
-              "line": 1322
+              "line": 1326
             },
             {
               "in": "export_lora",
               "kind": "except",
-              "line": 1329
+              "line": 1333
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1330
+              "line": 1334
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1337
+              "line": 1341
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1349
+              "line": 1353
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1357
+              "line": 1361
             },
             {
               "in": "export_lora",
               "kind": "except",
-              "line": 1366
+              "line": 1370
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1367
+              "line": 1371
             },
             {
               "in": "export_lora",
               "kind": "except",
-              "line": 1368
+              "line": 1372
             },
             {
               "in": "export_lora",
               "kind": "raise",
-              "line": 1369
+              "line": 1373
             },
             {
               "in": "export_merged",
               "kind": "except",
-              "line": 1438
+              "line": 1442
             },
             {
               "in": "export_merged",
               "kind": "raise",
-              "line": 1439
-            },
-            {
-              "in": "export_merged",
-              "kind": "except",
               "line": 1443
             },
             {
               "in": "export_merged",
-              "kind": "raise",
-              "line": 1444
-            },
-            {
-              "in": "export_merged",
-              "kind": "raise",
+              "kind": "except",
               "line": 1447
             },
             {
               "in": "export_merged",
-              "kind": "except",
-              "line": 1464
+              "kind": "raise",
+              "line": 1448
             },
             {
               "in": "export_merged",
               "kind": "raise",
-              "line": 1465
-            },
-            {
-              "in": "export_merged",
-              "kind": "except",
-              "line": 1477
-            },
-            {
-              "in": "export_merged",
-              "kind": "raise",
-              "line": 1478
-            },
-            {
-              "in": "export_merged",
-              "kind": "raise",
-              "line": 1483
+              "line": 1451
             },
             {
               "in": "export_merged",
               "kind": "except",
-              "line": 1491
+              "line": 1468
             },
             {
               "in": "export_merged",
               "kind": "raise",
-              "line": 1492
+              "line": 1469
+            },
+            {
+              "in": "export_merged",
+              "kind": "except",
+              "line": 1481
+            },
+            {
+              "in": "export_merged",
+              "kind": "raise",
+              "line": 1482
+            },
+            {
+              "in": "export_merged",
+              "kind": "raise",
+              "line": 1487
+            },
+            {
+              "in": "export_merged",
+              "kind": "except",
+              "line": 1495
+            },
+            {
+              "in": "export_merged",
+              "kind": "raise",
+              "line": 1496
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1566
+              "line": 1570
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1567
-            },
-            {
-              "in": "export_gguf",
-              "kind": "except",
               "line": 1571
             },
             {
               "in": "export_gguf",
-              "kind": "raise",
-              "line": 1572
+              "kind": "except",
+              "line": 1575
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1586
+              "line": 1576
+            },
+            {
+              "in": "export_gguf",
+              "kind": "raise",
+              "line": 1590
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1646
+              "line": 1650
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1647
+              "line": 1651
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1674
+              "line": 1678
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1690
+              "line": 1694
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1701
+              "line": 1705
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1734
-            },
-            {
-              "in": "export_gguf",
-              "kind": "raise",
               "line": 1738
             },
             {
               "in": "export_gguf",
-              "kind": "except",
-              "line": 1739
-            },
-            {
-              "in": "export_gguf",
               "kind": "raise",
-              "line": 1810
-            },
-            {
-              "in": "export_gguf",
-              "kind": "raise",
-              "line": 1840
+              "line": 1742
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1864
+              "line": 1743
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1865
-            },
-            {
-              "in": "export_gguf",
-              "kind": "except",
-              "line": 1887
+              "line": 1814
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1890
+              "line": 1844
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1926
+              "line": 1868
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1929
+              "line": 1869
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1935
+              "line": 1891
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1942
+              "line": 1894
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1952
-            },
-            {
-              "in": "export_gguf",
-              "kind": "except",
-              "line": 1964
+              "line": 1930
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1965
+              "line": 1933
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1970
+              "line": 1939
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1972
+              "line": 1946
             },
             {
               "in": "export_gguf",
               "kind": "except",
-              "line": 1980
+              "line": 1956
+            },
+            {
+              "in": "export_gguf",
+              "kind": "except",
+              "line": 1968
             },
             {
               "in": "export_gguf",
               "kind": "raise",
-              "line": 1992
+              "line": 1969
+            },
+            {
+              "in": "export_gguf",
+              "kind": "except",
+              "line": 1974
+            },
+            {
+              "in": "export_gguf",
+              "kind": "raise",
+              "line": 1976
+            },
+            {
+              "in": "export_gguf",
+              "kind": "except",
+              "line": 1984
+            },
+            {
+              "in": "export_gguf",
+              "kind": "raise",
+              "line": 1996
             },
             {
               "in": "_reject_modelfile_unsafe",
               "kind": "raise",
-              "line": 2082
+              "line": 2086
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2167
+              "line": 2171
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2175
+              "line": 2179
             },
             {
               "in": "register_with_ollama",
               "kind": "except",
-              "line": 2190
+              "line": 2194
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2191
+              "line": 2195
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2202
+              "line": 2206
             },
             {
               "in": "register_with_ollama",
               "kind": "except",
-              "line": 2215
+              "line": 2219
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2216
+              "line": 2220
             },
             {
               "in": "register_with_ollama",
               "kind": "except",
-              "line": 2221
+              "line": 2225
             },
             {
               "in": "register_with_ollama",
               "kind": "raise",
-              "line": 2223
+              "line": 2227
             },
             {
               "in": "register_with_ollama",
               "kind": "except",
-              "line": 2239
+              "line": 2243
             },
             {
               "in": "list_ollama_models",
               "kind": "except",
-              "line": 2280
+              "line": 2284
             },
             {
               "in": "list_ollama_models",
               "kind": "except",
-              "line": 2292
+              "line": 2296
             },
             {
               "in": "remove_ollama_model",
               "kind": "except",
-              "line": 2357
+              "line": 2361
             },
             {
               "in": "remove_ollama_model",
               "kind": "raise",
-              "line": 2358
+              "line": 2362
             },
             {
               "in": "remove_ollama_model",
               "kind": "except",
-              "line": 2367
+              "line": 2371
             },
             {
               "in": "remove_ollama_model",
               "kind": "raise",
-              "line": 2392
+              "line": 2396
             },
             {
               "in": "_resolve_adapter_artifact",
               "kind": "raise",
-              "line": 2470
+              "line": 2474
             },
             {
               "in": "_resolve_adapter_artifact",
               "kind": "raise",
-              "line": 2485
+              "line": 2489
             },
             {
               "in": "_resolve_adapter_artifact",
               "kind": "raise",
-              "line": 2516
+              "line": 2520
             },
             {
               "in": "_reject_modelfile_unsafe",
               "kind": "raise",
-              "line": 2631
+              "line": 2635
             },
             {
               "in": "export_ollama_adapter",
               "kind": "raise",
-              "line": 2802
+              "line": 2806
             },
             {
               "in": "export_ollama_adapter",
               "kind": "except",
-              "line": 2831
+              "line": 2835
             },
             {
               "in": "export_ollama_adapter",
               "kind": "raise",
-              "line": 2832
+              "line": 2836
             },
             {
               "in": "export_ollama_adapter",
               "kind": "except",
-              "line": 2841
+              "line": 2845
             },
             {
               "in": "export_ollama_adapter",
               "kind": "raise",
-              "line": 2843
+              "line": 2847
             },
             {
               "in": "export_ollama_adapter",
               "kind": "except",
-              "line": 2861
+              "line": 2865
             },
             {
               "in": "list_adapter_shelf",
               "kind": "except",
-              "line": 2939
+              "line": 2943
             },
             {
               "in": "list_adapter_shelf",
               "kind": "except",
-              "line": 2949
+              "line": 2953
             }
           ],
-          "hash": "f6e9121e3ef00dd07ce8718523fb0d19cdd98e573eb378baf54f2d2e3babfabc",
+          "hash": "c599ffbb33a1985948dc9780015d74ad28135be7cbb4660e0c949df06f0d332f",
           "importsFiles": [
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
-            "backpropagate/model_card.py"
+            "backpropagate/model_card.py",
+            "backpropagate/security.py"
           ],
           "path": "backpropagate/export.py",
           "sequences": [
@@ -5389,7 +5394,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(model_name, str) or not model_name",
-                  "line": 81,
+                  "line": 82,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5397,7 +5402,7 @@
                 },
                 {
                   "branch": "any(ch in model_name for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 92,
+                  "line": 93,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5405,7 +5410,7 @@
                 },
                 {
                   "branch": "model_name.startswith(\"-\")",
-                  "line": 100,
+                  "line": 101,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5413,7 +5418,7 @@
                 },
                 {
                   "branch": "not _OLLAMA_MODEL_NAME_RE.match(model_name)",
-                  "line": 108,
+                  "line": 109,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5421,7 +5426,7 @@
                 },
                 {
                   "branch": "Path(model_name).name != model_name",
-                  "line": 121,
+                  "line": 122,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5437,7 +5442,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(repo_id, str) or not repo_id",
-                  "line": 138,
+                  "line": 139,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5445,7 +5450,7 @@
                 },
                 {
                   "branch": "\"\\\\\" in repo_id",
-                  "line": 153,
+                  "line": 154,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5453,7 +5458,7 @@
                 },
                 {
                   "branch": "any(ch in repo_id for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 166,
+                  "line": 167,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5461,7 +5466,7 @@
                 },
                 {
                   "branch": "any(seg == \"..\" or seg == \".\" for seg in segments)",
-                  "line": 181,
+                  "line": 182,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5469,7 +5474,7 @@
                 },
                 {
                   "branch": "not _HF_REPO_ID_RE.match(repo_id)",
-                  "line": 189,
+                  "line": 190,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5484,14 +5489,14 @@
             {
               "calls": [
                 {
-                  "line": 354,
+                  "line": 355,
                   "name": "load_run_history_for_card",
                   "target": {
                     "file": "backpropagate/model_card.py"
                   }
                 },
                 {
-                  "line": 393,
+                  "line": 394,
                   "name": "write_model_card_for_export",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5506,7 +5511,7 @@
             {
               "calls": [
                 {
-                  "line": 410,
+                  "line": 411,
                   "name": "write_model_card_for_export",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5522,7 +5527,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(repo_id, str) or not repo_id",
-                  "line": 138,
+                  "line": 139,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5531,7 +5536,7 @@
                 },
                 {
                   "branch": "\"\\\\\" in repo_id",
-                  "line": 153,
+                  "line": 154,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5540,7 +5545,7 @@
                 },
                 {
                   "branch": "any(ch in repo_id for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 166,
+                  "line": 167,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5549,7 +5554,7 @@
                 },
                 {
                   "branch": "any(seg == \"..\" or seg == \".\" for seg in segments)",
-                  "line": 181,
+                  "line": 182,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5558,7 +5563,7 @@
                 },
                 {
                   "branch": "not _HF_REPO_ID_RE.match(repo_id)",
-                  "line": 189,
+                  "line": 190,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5566,7 +5571,7 @@
                   "via": "_validate_repo_id"
                 },
                 {
-                  "line": 512,
+                  "line": 513,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5574,33 +5579,33 @@
                 },
                 {
                   "branch": "not local_path_p.exists()",
-                  "line": 522,
+                  "line": 523,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 612,
+                  "line": 613,
                   "name": "is_file",
                   "target": null,
                   "via": "_inventory"
                 },
                 {
-                  "line": 614,
+                  "line": 615,
                   "name": "stat",
                   "target": null,
                   "via": "_inventory"
                 },
                 {
-                  "line": 619,
+                  "line": 620,
                   "name": "rglob",
                   "target": null,
                   "via": "_inventory"
                 },
                 {
                   "branch": "status in (401, 403)",
-                  "line": 711,
+                  "line": 712,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5608,14 +5613,14 @@
                 },
                 {
                   "branch": "status == 404",
-                  "line": 722,
+                  "line": 723,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 732,
+                  "line": 733,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5630,18 +5635,18 @@
             {
               "calls": [
                 {
-                  "line": 936,
+                  "line": 937,
                   "name": "is_file",
                   "target": null
                 },
                 {
                   "branch": "path.is_file()",
-                  "line": 937,
+                  "line": 938,
                   "name": "stat",
                   "target": null
                 },
                 {
-                  "line": 939,
+                  "line": 940,
                   "name": "rglob",
                   "target": null
                 }
@@ -5654,7 +5659,7 @@
             {
               "calls": [
                 {
-                  "line": 955,
+                  "line": 956,
                   "name": "parameters",
                   "target": null
                 }
@@ -5667,7 +5672,7 @@
             {
               "calls": [
                 {
-                  "line": 979,
+                  "line": 980,
                   "name": "parameters",
                   "target": null
                 }
@@ -5680,7 +5685,7 @@
             {
               "calls": [
                 {
-                  "line": 979,
+                  "line": 980,
                   "name": "parameters",
                   "target": null,
                   "via": "_model_has_float32_params"
@@ -5694,7 +5699,7 @@
             {
               "calls": [
                 {
-                  "line": 955,
+                  "line": 956,
                   "name": "parameters",
                   "target": null,
                   "via": "_estimate_param_count"
@@ -5708,7 +5713,15 @@
             {
               "calls": [
                 {
-                  "line": 1209,
+                  "branch": "not adapter_config_path.is_file()",
+                  "line": 1205,
+                  "name": "check_chat_template_names",
+                  "target": {
+                    "file": "backpropagate/security.py"
+                  }
+                },
+                {
+                  "line": 1211,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5716,10 +5729,25 @@
                 },
                 {
                   "branch": "not base_name",
-                  "line": 1216,
+                  "line": 1218,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "branch": "_is_peft_model(model)",
+                  "line": 1236,
+                  "name": "check_chat_template_names",
+                  "target": {
+                    "file": "backpropagate/security.py"
+                  }
+                },
+                {
+                  "line": 1267,
+                  "name": "check_chat_template_names",
+                  "target": {
+                    "file": "backpropagate/security.py"
                   }
                 }
               ],
@@ -5731,7 +5759,7 @@
             {
               "calls": [
                 {
-                  "line": 1317,
+                  "line": 1321,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5739,7 +5767,7 @@
                 },
                 {
                   "branch": "not src_path.exists()",
-                  "line": 1337,
+                  "line": 1341,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5747,45 +5775,45 @@
                 },
                 {
                   "branch": "files_copied == 0",
-                  "line": 1349,
+                  "line": 1353,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1355,
+                  "line": 1359,
                   "name": "save_pretrained",
                   "target": null
                 },
                 {
-                  "line": 1357,
+                  "line": 1361,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 936,
+                  "line": 937,
                   "name": "is_file",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "path.is_file()",
-                  "line": 937,
+                  "line": 938,
                   "name": "stat",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
-                  "line": 939,
+                  "line": 940,
                   "name": "rglob",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
-                  "line": 354,
+                  "line": 355,
                   "name": "load_run_history_for_card",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5793,7 +5821,7 @@
                   "via": "_maybe_write_model_card"
                 },
                 {
-                  "line": 393,
+                  "line": 394,
                   "name": "write_model_card_for_export",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5809,7 +5837,7 @@
             {
               "calls": [
                 {
-                  "line": 1439,
+                  "line": 1443,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5817,20 +5845,20 @@
                 },
                 {
                   "branch": "not _is_peft_model(model)",
-                  "line": 1447,
+                  "line": 1451,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 955,
+                  "line": 956,
                   "name": "parameters",
                   "target": null,
                   "via": "_estimate_param_count"
                 },
                 {
-                  "line": 1457,
+                  "line": 1461,
                   "name": "MergeExportError",
                   "passed": true,
                   "target": {
@@ -5838,30 +5866,30 @@
                   }
                 },
                 {
-                  "line": 1463,
+                  "line": 1467,
                   "name": "merge_and_unload",
                   "target": null
                 },
                 {
-                  "line": 1465,
+                  "line": 1469,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 979,
+                  "line": 980,
                   "name": "parameters",
                   "target": null,
                   "via": "_model_has_float32_params"
                 },
                 {
-                  "line": 1476,
+                  "line": 1480,
                   "name": "save_pretrained",
                   "target": null
                 },
                 {
-                  "line": 1478,
+                  "line": 1482,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5869,45 +5897,45 @@
                 },
                 {
                   "branch": "not repo_id",
-                  "line": 1483,
+                  "line": 1487,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1489,
+                  "line": 1493,
                   "name": "push_to_hub",
                   "target": null
                 },
                 {
-                  "line": 1492,
+                  "line": 1496,
                   "name": "MergeExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 936,
+                  "line": 937,
                   "name": "is_file",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "path.is_file()",
-                  "line": 937,
+                  "line": 938,
                   "name": "stat",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
-                  "line": 939,
+                  "line": 940,
                   "name": "rglob",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
-                  "line": 354,
+                  "line": 355,
                   "name": "load_run_history_for_card",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5915,7 +5943,7 @@
                   "via": "_maybe_write_model_card"
                 },
                 {
-                  "line": 393,
+                  "line": 394,
                   "name": "write_model_card_for_export",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -5931,7 +5959,7 @@
             {
               "calls": [
                 {
-                  "line": 1567,
+                  "line": 1571,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5939,20 +5967,20 @@
                 },
                 {
                   "branch": "quant_str not in valid_quants",
-                  "line": 1586,
+                  "line": 1590,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 955,
+                  "line": 956,
                   "name": "parameters",
                   "target": null,
                   "via": "_estimate_param_count"
                 },
                 {
-                  "line": 1624,
+                  "line": 1628,
                   "name": "GGUFExportError",
                   "passed": true,
                   "target": {
@@ -5960,20 +5988,20 @@
                   }
                 },
                 {
-                  "line": 1647,
+                  "line": 1651,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1665,
+                  "line": 1669,
                   "name": "save_pretrained_gguf",
                   "target": null
                 },
                 {
                   "branch": "not gguf_files",
-                  "line": 1674,
+                  "line": 1678,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -5981,41 +6009,41 @@
                 },
                 {
                   "branch": "not gguf_path.exists()",
-                  "line": 1690,
+                  "line": 1694,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 936,
+                  "line": 937,
                   "name": "is_file",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "path.is_file()",
-                  "line": 937,
+                  "line": 938,
                   "name": "stat",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
-                  "line": 939,
+                  "line": 940,
                   "name": "rglob",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "size_mb == 0",
-                  "line": 1701,
+                  "line": 1705,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 354,
+                  "line": 355,
                   "name": "load_run_history_for_card",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -6023,7 +6051,7 @@
                   "via": "_maybe_write_model_card"
                 },
                 {
-                  "line": 393,
+                  "line": 394,
                   "name": "write_model_card_for_export",
                   "target": {
                     "file": "backpropagate/model_card.py"
@@ -6032,37 +6060,37 @@
                 },
                 {
                   "branch": "convert_script is None",
-                  "line": 1810,
+                  "line": 1814,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1840,
+                  "line": 1844,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1873,
+                  "line": 1877,
                   "name": "merge_and_unload",
                   "target": null
                 },
                 {
-                  "line": 979,
+                  "line": 980,
                   "name": "parameters",
                   "target": null,
                   "via": "_model_has_float32_params"
                 },
                 {
-                  "line": 1886,
+                  "line": 1890,
                   "name": "save_pretrained",
                   "target": null
                 },
                 {
-                  "line": 1890,
+                  "line": 1894,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6070,7 +6098,7 @@
                 },
                 {
                   "branch": "not gguf_path.exists()",
-                  "line": 1992,
+                  "line": 1996,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6086,7 +6114,7 @@
               "calls": [
                 {
                   "branch": "ord(ch) < 0x20 and ch != \"\\t\"",
-                  "line": 2082,
+                  "line": 2086,
                   "name": "ExportError",
                   "over": "value",
                   "target": {
@@ -6104,7 +6132,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(model_name, str) or not model_name",
-                  "line": 81,
+                  "line": 82,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6113,7 +6141,7 @@
                 },
                 {
                   "branch": "any(ch in model_name for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 92,
+                  "line": 93,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6122,7 +6150,7 @@
                 },
                 {
                   "branch": "model_name.startswith(\"-\")",
-                  "line": 100,
+                  "line": 101,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6131,7 +6159,7 @@
                 },
                 {
                   "branch": "not _OLLAMA_MODEL_NAME_RE.match(model_name)",
-                  "line": 108,
+                  "line": 109,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6140,7 +6168,7 @@
                 },
                 {
                   "branch": "Path(model_name).name != model_name",
-                  "line": 121,
+                  "line": 122,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6148,13 +6176,13 @@
                   "via": "_validate_model_name"
                 },
                 {
-                  "line": 2166,
+                  "line": 2170,
                   "name": "exists",
                   "target": null
                 },
                 {
                   "branch": "not gguf_path.exists()",
-                  "line": 2167,
+                  "line": 2171,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6162,7 +6190,7 @@
                 },
                 {
                   "branch": "not shutil.which(\"ollama\")",
-                  "line": 2175,
+                  "line": 2179,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6170,7 +6198,7 @@
                 },
                 {
                   "branch": "ord(ch) < 0x20 and ch != \"\\t\"",
-                  "line": 2082,
+                  "line": 2086,
                   "name": "ExportError",
                   "over": "value",
                   "target": {
@@ -6179,7 +6207,7 @@
                   "via": "_reject_modelfile_unsafe"
                 },
                 {
-                  "line": 2191,
+                  "line": 2195,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6187,14 +6215,14 @@
                 },
                 {
                   "branch": "not re.fullmatch(r\"[A-Za-z0-9_]{1,16}\", quantize)",
-                  "line": 2202,
+                  "line": 2206,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2216,
+                  "line": 2220,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6210,7 +6238,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(model_name, str) or not model_name",
-                  "line": 81,
+                  "line": 82,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6219,7 +6247,7 @@
                 },
                 {
                   "branch": "any(ch in model_name for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 92,
+                  "line": 93,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6228,7 +6256,7 @@
                 },
                 {
                   "branch": "model_name.startswith(\"-\")",
-                  "line": 100,
+                  "line": 101,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6237,7 +6265,7 @@
                 },
                 {
                   "branch": "not _OLLAMA_MODEL_NAME_RE.match(model_name)",
-                  "line": 108,
+                  "line": 109,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6246,7 +6274,7 @@
                 },
                 {
                   "branch": "Path(model_name).name != model_name",
-                  "line": 121,
+                  "line": 122,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6254,7 +6282,7 @@
                   "via": "_validate_model_name"
                 },
                 {
-                  "line": 2358,
+                  "line": 2362,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6269,38 +6297,38 @@
             {
               "calls": [
                 {
-                  "line": 2466,
+                  "line": 2470,
                   "name": "is_file",
                   "target": null
                 },
                 {
                   "branch": "adapter_path.is_file()",
-                  "line": 2470,
+                  "line": 2474,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2484,
+                  "line": 2488,
                   "name": "is_dir",
                   "target": null
                 },
                 {
                   "branch": "not adapter_path.is_dir()",
-                  "line": 2485,
+                  "line": 2489,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2500,
+                  "line": 2504,
                   "name": "glob",
                   "target": null
                 },
                 {
-                  "line": 2516,
+                  "line": 2520,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6315,7 +6343,7 @@
             {
               "calls": [
                 {
-                  "line": 2543,
+                  "line": 2547,
                   "name": "is_dir",
                   "target": null
                 }
@@ -6328,14 +6356,14 @@
             {
               "calls": [
                 {
-                  "line": 2466,
+                  "line": 2470,
                   "name": "is_file",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
                   "branch": "adapter_path.is_file()",
-                  "line": 2470,
+                  "line": 2474,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6343,14 +6371,14 @@
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2484,
+                  "line": 2488,
                   "name": "is_dir",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
                   "branch": "not adapter_path.is_dir()",
-                  "line": 2485,
+                  "line": 2489,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6358,13 +6386,13 @@
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2500,
+                  "line": 2504,
                   "name": "glob",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2516,
+                  "line": 2520,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6373,7 +6401,7 @@
                 },
                 {
                   "branch": "ord(ch) < 0x20 and ch != \"\\t\"",
-                  "line": 2631,
+                  "line": 2635,
                   "name": "ExportError",
                   "over": "value",
                   "target": {
@@ -6390,14 +6418,14 @@
             {
               "calls": [
                 {
-                  "line": 2543,
+                  "line": 2547,
                   "name": "is_dir",
                   "target": null,
                   "via": "_derive_adapter_tag"
                 },
                 {
                   "branch": "not isinstance(model_name, str) or not model_name",
-                  "line": 81,
+                  "line": 82,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6406,7 +6434,7 @@
                 },
                 {
                   "branch": "any(ch in model_name for ch in (\"\\x00\", \"\\n\", \"\\r\"))",
-                  "line": 92,
+                  "line": 93,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6415,7 +6443,7 @@
                 },
                 {
                   "branch": "model_name.startswith(\"-\")",
-                  "line": 100,
+                  "line": 101,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6424,7 +6452,7 @@
                 },
                 {
                   "branch": "not _OLLAMA_MODEL_NAME_RE.match(model_name)",
-                  "line": 108,
+                  "line": 109,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6433,7 +6461,7 @@
                 },
                 {
                   "branch": "Path(model_name).name != model_name",
-                  "line": 121,
+                  "line": 122,
                   "name": "ExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6441,14 +6469,14 @@
                   "via": "_validate_model_name"
                 },
                 {
-                  "line": 2466,
+                  "line": 2470,
                   "name": "is_file",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
                   "branch": "adapter_path.is_file()",
-                  "line": 2470,
+                  "line": 2474,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6456,14 +6484,14 @@
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2484,
+                  "line": 2488,
                   "name": "is_dir",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
                   "branch": "not adapter_path.is_dir()",
-                  "line": 2485,
+                  "line": 2489,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6471,13 +6499,13 @@
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2500,
+                  "line": 2504,
                   "name": "glob",
                   "target": null,
                   "via": "_resolve_adapter_artifact"
                 },
                 {
-                  "line": 2516,
+                  "line": 2520,
                   "name": "GGUFExportError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -6486,7 +6514,7 @@
                 },
                 {
                   "branch": "ord(ch) < 0x20 and ch != \"\\t\"",
-                  "line": 2631,
+                  "line": 2635,
                   "name": "ExportError",
                   "over": "value",
                   "target": {
@@ -6496,35 +6524,35 @@
                 },
                 {
                   "branch": "modelfile_only",
-                  "line": 936,
+                  "line": 937,
                   "name": "is_file",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "modelfile_only",
-                  "line": 937,
+                  "line": 938,
                   "name": "stat",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "modelfile_only",
-                  "line": 939,
+                  "line": 940,
                   "name": "rglob",
                   "target": null,
                   "via": "_get_dir_size_mb"
                 },
                 {
                   "branch": "not shutil.which(\"ollama\")",
-                  "line": 2802,
+                  "line": 2806,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2832,
+                  "line": 2836,
                   "name": "OllamaRegistrationError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -7317,6 +7345,7 @@
           "entryRule": 1,
           "exports": [
             "audit_log",
+            "check_chat_template_names",
             "check_torch_security",
             "safe_path",
             "safe_torch_load"
@@ -7325,60 +7354,84 @@
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 124
+              "line": 126
             },
             {
               "in": "safe_path",
               "kind": "except",
-              "line": 136
+              "line": 138
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 137
+              "line": 139
             },
             {
               "in": "safe_path",
               "kind": "except",
-              "line": 154
+              "line": 156
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 161
+              "line": 163
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 168
+              "line": 170
+            },
+            {
+              "in": "check_chat_template_names",
+              "kind": "raise",
+              "line": 204
             },
             {
               "in": "check_torch_security",
               "kind": "except",
-              "line": 210
+              "line": 244
             },
             {
               "kind": "except",
-              "line": 262
+              "line": 296
             },
             {
               "in": "safe_torch_load",
               "kind": "raise",
-              "line": 312
+              "line": 346
             },
             {
               "in": "safe_torch_load",
               "kind": "except",
-              "line": 346
+              "line": 380
             }
           ],
-          "hash": "16ab7f122d34fcc8c847da32384053f11146fa4f780f58d568fd51db6e5150ec",
+          "hash": "2ec93a060948d8b24fe7ad394d0129c83ea82fe5c59043020ee76851fc23d038",
+          "importsFiles": [
+            "backpropagate/exceptions.py"
+          ],
           "path": "backpropagate/security.py",
           "sequences": [
             {
               "calls": [
                 {
-                  "line": 311,
+                  "branch": "bad",
+                  "line": 204,
+                  "name": "UnsafeChatTemplateError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "check_chat_template_names"
+            },
+            {
+              "calls": [
+                {
+                  "line": 345,
                   "name": "exists",
                   "target": null
                 }
@@ -7609,1085 +7662,1085 @@
             {
               "in": "_hf_transient_exceptions",
               "kind": "except",
-              "line": 108
+              "line": 109
             },
             {
               "in": "_hf_transient_exceptions",
               "kind": "except",
-              "line": 114
+              "line": 115
             },
             {
               "in": "_retry_hf_call",
               "kind": "except",
-              "line": 185
+              "line": 186
             },
             {
               "in": "_retry_hf_call",
               "kind": "raise",
-              "line": 192
+              "line": 193
             },
             {
               "in": "_classify_model_load_cause",
               "kind": "except",
-              "line": 248
+              "line": 249
             },
             {
               "in": "_classify_model_load_cause",
               "kind": "except",
-              "line": 267
+              "line": 268
             },
             {
               "in": "_compute_dataset_hash",
               "kind": "except",
-              "line": 328
+              "line": 329
             },
             {
               "in": "_detect_chat_markers",
               "kind": "except",
-              "line": 429
+              "line": 430
             },
             {
               "in": "_detect_chat_markers",
               "kind": "except",
-              "line": 457
+              "line": 458
             },
             {
               "in": "_build_trl_bridge_callback",
               "kind": "except",
-              "line": 545
+              "line": 546
             },
             {
               "in": "on_log",
               "kind": "except",
-              "line": 574
+              "line": 575
             },
             {
               "in": "on_log",
               "kind": "except",
-              "line": 584
+              "line": 585
             },
             {
               "in": "on_log",
               "kind": "except",
-              "line": 593
+              "line": 594
             },
             {
               "in": "on_epoch_end",
               "kind": "except",
-              "line": 605
+              "line": 606
             },
             {
               "in": "on_epoch_end",
               "kind": "except",
-              "line": 609
+              "line": 610
             },
             {
               "in": "on_save",
               "kind": "except",
-              "line": 622
+              "line": 623
             },
             {
               "in": "on_save",
               "kind": "except",
-              "line": 626
+              "line": 627
             },
             {
               "in": "_detect_total_vram_gb",
               "kind": "except",
-              "line": 824
+              "line": 825
             },
             {
               "in": "_detect_total_vram_gb",
               "kind": "except",
-              "line": 826
+              "line": 827
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "except",
-              "line": 849
-            },
-            {
-              "in": "_ensure_fsdp_runtime",
-              "kind": "raise",
               "line": 850
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 855
+              "line": 851
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 861
+              "line": 856
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 862
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "except",
-              "line": 878
+              "line": 879
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 879
+              "line": 880
             },
             {
               "in": "_gather_fsdp_full_state_dict",
               "kind": "except",
-              "line": 904
+              "line": 905
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 1013
+              "line": 1014
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 1015
+              "line": 1016
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 1039
+              "line": 1040
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "except",
-              "line": 1093
+              "line": 1094
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "except",
-              "line": 1097
+              "line": 1098
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "raise",
-              "line": 1128
+              "line": 1129
             },
             {
               "in": "_build_sft_config",
               "kind": "raise",
-              "line": 1536
+              "line": 1537
             },
             {
               "in": "_config_declares",
               "kind": "except",
-              "line": 1713
+              "line": 1714
             },
             {
               "in": "_require_config_field",
               "kind": "raise",
-              "line": 1729
+              "line": 1730
             },
             {
               "in": "_build_orpo_config",
               "kind": "except",
-              "line": 1820
+              "line": 1821
             },
             {
               "in": "_build_orpo_config",
               "kind": "except",
-              "line": 1823
-            },
-            {
-              "in": "_build_orpo_config",
-              "kind": "raise",
               "line": 1824
             },
             {
-              "in": "_build_cpo_config",
-              "kind": "except",
-              "line": 1969
-            },
-            {
-              "in": "_build_cpo_config",
-              "kind": "except",
-              "line": 1972
-            },
-            {
-              "in": "_build_cpo_config",
+              "in": "_build_orpo_config",
               "kind": "raise",
+              "line": 1825
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 1970
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
               "line": 1973
             },
             {
-              "in": "_build_kto_config",
-              "kind": "except",
-              "line": 2134
-            },
-            {
-              "in": "_build_kto_config",
-              "kind": "except",
-              "line": 2137
-            },
-            {
-              "in": "_build_kto_config",
+              "in": "_build_cpo_config",
               "kind": "raise",
+              "line": 1974
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2135
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
               "line": 2138
             },
             {
+              "in": "_build_kto_config",
+              "kind": "raise",
+              "line": 2139
+            },
+            {
               "in": "_apply_train_on_responses_only",
               "kind": "except",
-              "line": 2290
+              "line": 2291
             },
             {
               "in": "_apply_train_on_responses_only",
               "kind": "except",
-              "line": 2293
+              "line": 2294
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2609
+              "line": 2610
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2619
+              "line": 2620
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2626
+              "line": 2627
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2636
+              "line": 2637
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2643
+              "line": 2644
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2650
+              "line": 2651
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2657
+              "line": 2658
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2730
+              "line": 2731
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2775
+              "line": 2776
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2811
+              "line": 2812
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2839
+              "line": 2840
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2898
+              "line": 2899
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3011
+              "line": 3012
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3023
+              "line": 3024
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3038
+              "line": 3039
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3219
+              "line": 3220
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3233
+              "line": 3234
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3254
+              "line": 3255
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3353
+              "line": 3354
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3375
+              "line": 3376
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3391
+              "line": 3392
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3405
+              "line": 3406
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3416
+              "line": 3417
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 3507
+              "line": 3508
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3626
+              "line": 3627
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3631
+              "line": 3632
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3636
+              "line": 3637
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3662
+              "line": 3663
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3693
+              "line": 3694
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3704
+              "line": 3705
             },
             {
               "in": "_resolve_full_ft_engine",
               "kind": "raise",
-              "line": 3716
+              "line": 3717
             },
             {
               "in": "_enforce_offload_fit",
               "kind": "raise",
-              "line": 3826
+              "line": 3827
             },
             {
               "in": "_enforce_offload_fit_for_model",
               "kind": "except",
-              "line": 3852
+              "line": 3853
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3961
+              "line": 3962
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3986
+              "line": 3987
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4038
+              "line": 4039
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4056
+              "line": 4057
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 4064
+              "line": 4065
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4150
+              "line": 4151
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "raise",
-              "line": 4152
+              "line": 4153
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4185
+              "line": 4186
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4204
+              "line": 4205
             },
             {
               "in": "_detect_optimal_dtype",
               "kind": "except",
-              "line": 4276
+              "line": 4277
             },
             {
               "in": "load_model",
               "kind": "except",
-              "line": 4411
+              "line": 4412
             },
             {
               "in": "load_model",
               "kind": "raise",
-              "line": 4417
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
               "line": 4418
             },
             {
               "in": "load_model",
-              "kind": "raise",
-              "line": 4420
-            },
-            {
-              "in": "load_model",
               "kind": "except",
-              "line": 4431
+              "line": 4419
             },
             {
               "in": "load_model",
               "kind": "raise",
-              "line": 4433
+              "line": 4421
             },
             {
               "in": "load_model",
               "kind": "except",
+              "line": 4432
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
               "line": 4434
             },
             {
               "in": "load_model",
+              "kind": "except",
+              "line": 4435
+            },
+            {
+              "in": "load_model",
               "kind": "raise",
-              "line": 4440
+              "line": 4441
             },
             {
               "in": "load_model",
               "kind": "except",
-              "line": 4446
+              "line": 4447
             },
             {
               "in": "load_model",
               "kind": "raise",
-              "line": 4449
+              "line": 4450
             },
             {
               "in": "load_model",
               "kind": "raise",
-              "line": 4459
+              "line": 4460
             },
             {
               "in": "load_model",
               "kind": "except",
-              "line": 4464
+              "line": 4465
             },
             {
               "in": "load_model",
               "kind": "raise",
-              "line": 4469
+              "line": 4470
             },
             {
               "in": "_load_with_unsloth",
               "kind": "except",
-              "line": 4557
+              "line": 4558
             },
             {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4559
+              "line": 4560
             },
             {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4565
+              "line": 4566
             },
             {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4593
+              "line": 4595
             },
             {
               "in": "_load_with_unsloth",
               "kind": "except",
-              "line": 4633
+              "line": 4635
             },
             {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4638
+              "line": 4640
             },
             {
               "in": "_load_with_transformers",
               "kind": "except",
-              "line": 4763
-            },
-            {
-              "in": "_load_with_transformers",
-              "kind": "raise",
               "line": 4765
             },
             {
               "in": "_load_with_transformers",
               "kind": "raise",
-              "line": 4766
+              "line": 4767
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "raise",
+              "line": 4768
             },
             {
               "in": "_load_with_transformers",
               "kind": "except",
-              "line": 4828
+              "line": 4831
             },
             {
               "in": "_build_trainer",
               "kind": "except",
-              "line": 4915
+              "line": 4918
             },
             {
               "in": "_build_trainer",
               "kind": "except",
-              "line": 4919
+              "line": 4922
             },
             {
               "in": "_build_trainer",
               "kind": "raise",
-              "line": 4920
+              "line": 4923
             },
             {
               "in": "_auto_balance_kto_weights",
               "kind": "except",
-              "line": 5254
+              "line": 5257
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5398
+              "line": 5401
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5404
+              "line": 5407
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5550
+              "line": 5553
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5577
+              "line": 5580
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5599
+              "line": 5602
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5606
+              "line": 5609
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5607
+              "line": 5610
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5777
+              "line": 5780
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5867
+              "line": 5870
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5868
+              "line": 5871
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5869
+              "line": 5872
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5878
+              "line": 5881
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5946
+              "line": 5949
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5966
+              "line": 5969
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5968
+              "line": 5971
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6012
+              "line": 6015
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6074
+              "line": 6077
             },
             {
               "in": "_finite_loss",
               "kind": "except",
-              "line": 6120
+              "line": 6123
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6152
+              "line": 6155
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6196
+              "line": 6199
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6212
+              "line": 6215
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6233
+              "line": 6236
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6240
+              "line": 6243
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6250
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6254
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6258
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6267
+              "line": 6253
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6272
+              "line": 6257
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6273
+              "line": 6261
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6282
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6293
+              "line": 6270
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6309
+              "line": 6275
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6325
+              "line": 6276
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6334
+              "line": 6285
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6345
+              "line": 6296
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6312
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6328
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6337
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6348
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6459
+              "line": 6462
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6543
+              "line": 6546
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6568
+              "line": 6571
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6574
+              "line": 6577
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6584
+              "line": 6587
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6591
+              "line": 6594
             },
             {
               "in": "_train_with_mlx",
               "kind": "raise",
-              "line": 6593
+              "line": 6596
             },
             {
               "in": "_require_preference_columns",
               "kind": "raise",
-              "line": 6686
+              "line": 6689
             },
             {
               "in": "_require_kto_columns",
               "kind": "raise",
-              "line": 6699
+              "line": 6702
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6754
+              "line": 6757
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6755
+              "line": 6758
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6800
+              "line": 6803
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6801
+              "line": 6804
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6820
+              "line": 6823
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6824
+              "line": 6827
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6828
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6829
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6830
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
               "line": 6831
             },
             {
               "in": "_load_dataset",
-              "kind": "raise",
+              "kind": "except",
               "line": 6832
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6833
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6834
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6835
             },
             {
               "in": "_token_counter",
               "kind": "except",
-              "line": 6915
+              "line": 6918
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6933
+              "line": 6936
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6954
+              "line": 6957
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6965
+              "line": 6968
             },
             {
               "in": "tokenize_fn",
               "kind": "except",
-              "line": 7004
+              "line": 7007
             },
             {
               "in": "tokenize_fn",
               "kind": "raise",
-              "line": 7005
+              "line": 7008
             },
             {
               "in": "_pre_tokenize",
               "kind": "except",
-              "line": 7018
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "raise",
-              "line": 7019
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "except",
-              "line": 7020
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "raise",
               "line": 7021
             },
             {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 7065
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 7085
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 7093
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 7098
-            },
-            {
-              "in": "_train_full_offload",
+              "in": "_pre_tokenize",
               "kind": "raise",
+              "line": 7022
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "except",
+              "line": 7023
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "raise",
+              "line": 7024
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7068
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7088
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7096
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
               "line": 7101
             },
             {
               "in": "_train_full_offload",
               "kind": "raise",
-              "line": 7102
+              "line": 7104
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7105
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7136
+              "line": 7139
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 7141
+              "line": 7144
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7224
+              "line": 7227
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7267
+              "line": 7270
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7268
+              "line": 7271
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7272
+              "line": 7275
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7273
+              "line": 7276
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7295
+              "line": 7298
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7302
+              "line": 7305
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7303
+              "line": 7306
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7358
+              "line": 7361
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7383
+              "line": 7386
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7393
+              "line": 7396
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7399
+              "line": 7402
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7403
-            },
-            {
-              "in": "save",
-              "kind": "raise",
-              "line": 7404
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7405
-            },
-            {
-              "in": "save",
-              "kind": "raise",
               "line": 7406
             },
             {
               "in": "save",
+              "kind": "raise",
+              "line": 7407
+            },
+            {
+              "in": "save",
               "kind": "except",
-              "line": 7462
+              "line": 7408
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7409
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7465
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7520
+              "line": 7523
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7574
+              "line": 7577
             },
             {
               "in": "_release_model",
               "kind": "except",
-              "line": 7648
+              "line": 7651
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 7658
+              "line": 7661
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7739
+              "line": 7742
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7753
+              "line": 7756
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7808
+              "line": 7811
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7816
+              "line": 7819
             },
             {
               "in": "_count_lora_layers",
               "kind": "except",
-              "line": 7855
+              "line": 7858
             },
             {
               "in": "__getattr__",
               "kind": "raise",
-              "line": 7922
+              "line": 7925
             }
           ],
-          "hash": "a609a78a69a74567aab504b0b27df3f67d829722e5739d2e05c495d4131e0a9f",
+          "hash": "851849e8ec959370fc49a04818e70c404b37537395117646f7810231d923777e",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
@@ -8701,14 +8754,15 @@
             "backpropagate/logging_config.py",
             "backpropagate/mlx_backend.py",
             "backpropagate/multi_run.py",
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/security.py"
           ],
           "path": "backpropagate/trainer.py",
           "sequences": [
             {
               "calls": [
                 {
-                  "line": 450,
+                  "line": 451,
                   "name": "apply_chat_template",
                   "target": null
                 }
@@ -8721,14 +8775,14 @@
             {
               "calls": [
                 {
-                  "line": 758,
+                  "line": 759,
                   "name": "detect_host_ram_gib",
                   "target": {
                     "file": "backpropagate/offload_engine.py"
                   }
                 },
                 {
-                  "line": 761,
+                  "line": 762,
                   "name": "offload_param_ceiling_billions",
                   "target": {
                     "file": "backpropagate/offload_engine.py"
@@ -8743,7 +8797,7 @@
             {
               "calls": [
                 {
-                  "line": 850,
+                  "line": 851,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8751,7 +8805,7 @@
                 },
                 {
                   "branch": "not torch.cuda.is_available()",
-                  "line": 855,
+                  "line": 856,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8759,14 +8813,14 @@
                 },
                 {
                   "branch": "not (dist.is_available() and dist.is_nccl_available())",
-                  "line": 861,
+                  "line": 862,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 879,
+                  "line": 880,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8781,14 +8835,14 @@
             {
               "calls": [
                 {
-                  "line": 993,
+                  "line": 994,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
                   }
                 },
                 {
-                  "line": 997,
+                  "line": 998,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8803,17 +8857,17 @@
             {
               "calls": [
                 {
-                  "line": 1085,
+                  "line": 1086,
                   "name": "num_parameters",
                   "target": null
                 },
                 {
-                  "line": 1090,
+                  "line": 1091,
                   "name": "parameters",
                   "target": null
                 },
                 {
-                  "line": 993,
+                  "line": 994,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8821,7 +8875,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 997,
+                  "line": 998,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8830,7 +8884,7 @@
                 },
                 {
                   "branch": "estimated_billions > ceiling_billions",
-                  "line": 1128,
+                  "line": 1129,
                   "name": "FullFinetuneModelTooLargeError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8845,7 +8899,7 @@
             {
               "calls": [
                 {
-                  "line": 993,
+                  "line": 994,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8853,7 +8907,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 997,
+                  "line": 998,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8861,7 +8915,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 1383,
+                  "line": 1384,
                   "name": "offload_host_ram_required_gib",
                   "target": {
                     "file": "backpropagate/offload_engine.py"
@@ -8876,7 +8930,7 @@
             {
               "calls": [
                 {
-                  "line": 1729,
+                  "line": 1730,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8891,7 +8945,7 @@
             {
               "calls": [
                 {
-                  "line": 1824,
+                  "line": 1825,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8906,7 +8960,7 @@
             {
               "calls": [
                 {
-                  "line": 1973,
+                  "line": 1974,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8921,7 +8975,7 @@
             {
               "calls": [
                 {
-                  "line": 2138,
+                  "line": 2139,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8936,7 +8990,7 @@
             {
               "calls": [
                 {
-                  "line": 450,
+                  "line": 451,
                   "name": "apply_chat_template",
                   "target": null,
                   "via": "_detect_chat_markers"
@@ -8950,7 +9004,7 @@
             {
               "calls": [
                 {
-                  "line": 7822,
+                  "line": 7825,
                   "name": "named_modules",
                   "target": null
                 }
@@ -8964,7 +9018,7 @@
               "calls": [
                 {
                   "branch": "target_modules.lower() == \"all-linear\"",
-                  "line": 7822,
+                  "line": 7825,
                   "name": "named_modules",
                   "target": null,
                   "via": "_all_linear_leaf_names"
@@ -8978,7 +9032,7 @@
             {
               "calls": [
                 {
-                  "line": 7854,
+                  "line": 7857,
                   "name": "named_modules",
                   "target": null
                 }
@@ -10176,7 +10230,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 72,
+      "testedBy": 74,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -10250,7 +10304,7 @@
           "path": "docs/full-ft-engines-design-2026-09-30.md"
         },
         {
-          "hash": "73688cbe2e64077bd0e17371aa30960e995eaf2253cade4b383dce6bf021b7bb",
+          "hash": "c1229a72c764957ca120059407d7275b8ceecc7749ff722a485d4907574dbd88",
           "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
         },
         {
@@ -10872,6 +10926,1110 @@
       "externals": 0,
       "files": [
         {
+          "hash": "7c566c38b1568ab1ac6482d8860cbd9398a23f1be7b03a538397fbbfcf670ee4",
+          "path": "fuzz/corpus/.gitattributes"
+        },
+        {
+          "hash": "ccf50141e0cab2b2de7fd4abe6799757b337a77f06ffa7e9b7913ed9f5edf7a9",
+          "path": "fuzz/corpus/config/cov-28b83cc0.seed"
+        },
+        {
+          "hash": "44602a999abbebedf7de0ae1318e4f57e3cb1d67e482a65f9657f7541f3fe4bb",
+          "path": "fuzz/corpus/config/cov-34cce324.seed"
+        },
+        {
+          "hash": "0174eaa8f5e96da80a11da0050bfabb66fec3829203dc35df2b28a19219a0ed9",
+          "path": "fuzz/corpus/config/cov-3f545fbc.seed"
+        },
+        {
+          "hash": "1cd74fe726d64af77ecf9125e3ab6d9e4ea932adb71fa5602be081e08c7a8e10",
+          "path": "fuzz/corpus/config/cov-4e9b6d09.seed"
+        },
+        {
+          "hash": "2c87b5d9a3d5abd514efb8cacf98b9ce030f6b383d56eeaea6c3dac6e69b7cb4",
+          "path": "fuzz/corpus/config/cov-5d902957.seed"
+        },
+        {
+          "hash": "3cbed461eaf12984eae3788b63a5d54cd63a6fcd29013d43b99c449c58d3d45e",
+          "path": "fuzz/corpus/config/cov-65d6a132.seed"
+        },
+        {
+          "hash": "1327e89b16e4b65dd7e0b1ecd18fb9baa9ca9d8accb3783cb895d39d5db578a2",
+          "path": "fuzz/corpus/config/cov-6d786427.seed"
+        },
+        {
+          "hash": "f4a44ff6856a4b3664254c0d6d29a378309908ec7b637f460e16f2d7f7956045",
+          "path": "fuzz/corpus/config/cov-765a93e5.seed"
+        },
+        {
+          "hash": "8d33f520a3c4cef80d2453aef81b612bfe1cb44c8b2025630ad38662763f13d3",
+          "path": "fuzz/corpus/config/cov-7e15bb5c.seed"
+        },
+        {
+          "hash": "de79bc1f702216a1441883740d66c02044eec15a71aea2954670f6fd8c56300f",
+          "path": "fuzz/corpus/config/cov-9344b533.seed"
+        },
+        {
+          "hash": "0857a1866c103d92dddc873ebbce930f9ecfe5be96fa93f11d2cba878689f25b",
+          "path": "fuzz/corpus/config/cov-ac3b4dbc.seed"
+        },
+        {
+          "hash": "b804a6931253dd7155200feeae3fb32d99e216a9bc4fe667852c1da927cf62b5",
+          "path": "fuzz/corpus/config/cov-ae9c2e36.seed"
+        },
+        {
+          "hash": "4ffaaa8c2358dd214790561efbda15aeb2f34696bc634b17c510414481ba3b80",
+          "path": "fuzz/corpus/config/cov-b7bf202f.seed"
+        },
+        {
+          "hash": "2243fd4627973919385c8bd32bdb73bf299e27a4b0c47517d365d228120ac5ba",
+          "path": "fuzz/corpus/config/cov-bc68f0c0.seed"
+        },
+        {
+          "hash": "5eb0db1e55d63b912fb0b8b5c62edd1641aa484147ceb83e8f7d25acbc2c7a2b",
+          "path": "fuzz/corpus/config/cov-c62947bc.seed"
+        },
+        {
+          "hash": "f81c21670a47a488ae05f3a040e0275f4c23f444883b9df373af92abf58e851c",
+          "path": "fuzz/corpus/config/cov-ce76a38c.seed"
+        },
+        {
+          "hash": "b19ebd381f0351e9673c0d088f34b4e2fd59372b2d96aab06c1c896f83a11897",
+          "path": "fuzz/corpus/config/cov-d8d2814a.seed"
+        },
+        {
+          "hash": "3b940f16118a27c432bd58159a87abe020bdfd0baeb4d0ea7569be333da01592",
+          "path": "fuzz/corpus/config/cov-de6ae08d.seed"
+        },
+        {
+          "hash": "00b06ea9577c836758e4fd492dcf23f69aa8ccf54abc5788b0c6c29a79a04dc7",
+          "path": "fuzz/corpus/config/cov-deedffb9.seed"
+        },
+        {
+          "hash": "810a6212937579a1bb06c326766ee433deb6dedfd7b2f63bcf5c60cb55ff71ab",
+          "path": "fuzz/corpus/config/cov-e34b6199.seed"
+        },
+        {
+          "hash": "ac4b86aa109c5ba5f2a6d98154f8153016e868fcefab01d70f474acfe6ba643d",
+          "path": "fuzz/corpus/config/cov-f52b691f.seed"
+        },
+        {
+          "hash": "d6b8a72f7811eae4ddecbf7419e99b4106129cfccf0b4789321ca42bf97ed5ff",
+          "path": "fuzz/corpus/config/cov-f790c907.seed"
+        },
+        {
+          "hash": "6ba923b5127f405b8a732009d1690376d11b00dbaa91d5cce2598250177523ab",
+          "path": "fuzz/corpus/config/cov-fb317701.seed"
+        },
+        {
+          "hash": "7393d52d244240bbcaf6af6fd9b9e3e2d57adaa6f1a895ab4c8286efc84c98d9",
+          "path": "fuzz/corpus/config/finding_f4b_kto_desirable_weight.seed"
+        },
+        {
+          "hash": "5459b80197c83a38db8e045665907e6177302f207b6035454ef66ef7036a9630",
+          "path": "fuzz/corpus/config/finding_f4b_orpo_beta.seed"
+        },
+        {
+          "hash": "eaee0bd7e6c154f0e3d36e45a48ebff37bdafbdbc751cc1571e8ed0b97ec8ccd",
+          "path": "fuzz/corpus/config/finding_f4b_simpo_gamma.seed"
+        },
+        {
+          "hash": "30e4c6693a8c353c98ba73c2c488ffe7fc87936b4ef9b7ac3d48e3ea4f428a47",
+          "path": "fuzz/corpus/config/invalid_backend.seed"
+        },
+        {
+          "hash": "8a421d638c4fc4c4a43f737e19ac7db08cf1453e234a5da0f0041138495c73cb",
+          "path": "fuzz/corpus/config/invalid_method.seed"
+        },
+        {
+          "hash": "d0b3244cbfe6112a4e41a85661041b8d9a87433d1911aa0a99c63dc093679b0a",
+          "path": "fuzz/corpus/config/section_DataConfig.seed"
+        },
+        {
+          "hash": "5896c947f34abbb940cdccfc802c0721396f64e6386fcd4909400d688e56f6f5",
+          "path": "fuzz/corpus/config/section_LoRAConfig.seed"
+        },
+        {
+          "hash": "7e03c27640c023a5f904a25a1e3e9ae00ec10904ebbf1a8ac3220f3ece4dc8ef",
+          "path": "fuzz/corpus/config/section_ModelConfig.seed"
+        },
+        {
+          "hash": "462ced8e1a86c5aed8bbedde1eb7da5db17ba19bb41bd0e6ab4d9816dd3c9425",
+          "path": "fuzz/corpus/config/section_MultiRunSettings.seed"
+        },
+        {
+          "hash": "727251dfa395eca4cd71844979794f6325136b92abdf973a4842bb1b23c3681a",
+          "path": "fuzz/corpus/config/section_SecurityConfig.seed"
+        },
+        {
+          "hash": "305c99190d609c26c2dce5e61bb6d884657144c647a137b942765afcd40e2ee3",
+          "path": "fuzz/corpus/config/section_TrainingConfig.seed"
+        },
+        {
+          "hash": "3306c3a8059c937ed840a6a4c170333d849aeecb2288ce0ecf9a0129fa576239",
+          "path": "fuzz/corpus/config/section_UIConfig.seed"
+        },
+        {
+          "hash": "24dbfc6846463bdcdec47bb45155e693c889540232a9bfaa57a023e6e12fbf1c",
+          "path": "fuzz/corpus/config/ui_security_env.seed"
+        },
+        {
+          "hash": "bbcac19fb43843f4f3eca5cc96de6b20633c41e29a3182ac6502973ae61cb246",
+          "path": "fuzz/corpus/dataset_files/all_bad.jsonl"
+        },
+        {
+          "hash": "6d70568cfed7da40a74703e0293630b25660101acb2fbc05e347d54c2cb423f2",
+          "path": "fuzz/corpus/dataset_files/array.json"
+        },
+        {
+          "hash": "06d6c67424e9cd9ec891c52f10b8b0c116c2b6f7070f0eded36e0a6558bf7eec",
+          "path": "fuzz/corpus/dataset_files/bad_utf8.jsonl"
+        },
+        {
+          "hash": "62bd665b4493e3edf689de9dde203b691743c9c812f5f1f6e3b6c2c4e958bad3",
+          "path": "fuzz/corpus/dataset_files/bigint_line.jsonl"
+        },
+        {
+          "hash": "6dc52e9228bf05e4301f79bc7eeb8b813cc60d9afe9302e2c343b143f4a517f9",
+          "path": "fuzz/corpus/dataset_files/bom.jsonl"
+        },
+        {
+          "hash": "8109e18571e6f1a138965d2b0610f5eaaf2c82adf3388f5cdccae63768e85b7c",
+          "path": "fuzz/corpus/dataset_files/crlf_blank.jsonl"
+        },
+        {
+          "hash": "bdf4de9c67ae246408bd39ef6aaae3998c446717f6e847a28ebd33333d9202a6",
+          "path": "fuzz/corpus/dataset_files/deep_nesting.jsonl"
+        },
+        {
+          "hash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "path": "fuzz/corpus/dataset_files/empty.jsonl"
+        },
+        {
+          "hash": "012ee2b4f92f9a8d37b94d62ab26b36326f1b74acd3efef402a776811dafa6af",
+          "path": "fuzz/corpus/dataset_files/finding_f1.jsonl"
+        },
+        {
+          "hash": "e58ed5b84682ff07a8a70d12f1402abf15abf6febba46581188fce5e659727f2",
+          "path": "fuzz/corpus/dataset_files/invalid.json"
+        },
+        {
+          "hash": "07d5a42b217eeaa5ab9d4cd975468f4ef85f5f92df268a11f74ac9260c110005",
+          "path": "fuzz/corpus/dataset_files/mixed_bad_lines.jsonl"
+        },
+        {
+          "hash": "2674c873e8d7f56da1a0b4a5a864d33707fb332d0d810d0147b4497f8b3016f0",
+          "path": "fuzz/corpus/dataset_files/object.json"
+        },
+        {
+          "hash": "18adfc2b6a92ed029ec6bc9b0a8a5591f577fcc98d79345b744cfff7911a8e1b",
+          "path": "fuzz/corpus/dataset_files/ok.jsonl"
+        },
+        {
+          "hash": "9fbb3d070023505d91f419e55febd4b2ba16a40fd914734249bf01081f1a4a5b",
+          "path": "fuzz/corpus/dataset_files/paragraphs.txt"
+        },
+        {
+          "hash": "fbc6affb683398e807a7ca478f8a1f2c517b7b89032e56744290940a88894a10",
+          "path": "fuzz/corpus/dataset_files/single.md"
+        },
+        {
+          "hash": "0a656a31da6ed0c3f3ed29b45632df5ef8f50e712717848776e4061f69e06161",
+          "path": "fuzz/corpus/dataset_files/unknown_ext.dat"
+        },
+        {
+          "hash": "ac951a10753abc321d52d00494e851f3cecaa2ed9bccbf5d8f99ae9d910fbffa",
+          "path": "fuzz/corpus/datasets/finding_f1_unhashable_role.seed"
+        },
+        {
+          "hash": "2488bcdcea18de616e6be31f6987ed11a76590862b2b58977f6943bd4eab0d2e",
+          "path": "fuzz/corpus/datasets/finding_f6_lone_surrogate.seed"
+        },
+        {
+          "hash": "0c8182fcc0a7f3eb34046d69d9cdb29f798712b6e33d3951afed700f01381230",
+          "path": "fuzz/corpus/datasets/notjson.seed"
+        },
+        {
+          "hash": "639ffde12c1b07ea9595cf8d21859d2b3359a15e210b3a33c57d9379a68fc5cd",
+          "path": "fuzz/corpus/datasets/roundtrip_0.seed"
+        },
+        {
+          "hash": "cf57d3ed5658e834fe7dd006b1a740ebe6aac2dbc5eb0d4c159ded64d1708e89",
+          "path": "fuzz/corpus/datasets/roundtrip_1.seed"
+        },
+        {
+          "hash": "37479d04c60977d4474af85a7ba55494868ed9a45ca23e2a8f1a1ac736de6355",
+          "path": "fuzz/corpus/datasets/roundtrip_2.seed"
+        },
+        {
+          "hash": "2e6257d644e0562b5418da627062afb0d9068856f23bd13257a512e9015a23de",
+          "path": "fuzz/corpus/datasets/roundtrip_3.seed"
+        },
+        {
+          "hash": "d76d4bef0c28833771b1d03a70ba21a5d8c21e35e20c63d84bfb7c1194d345b4",
+          "path": "fuzz/corpus/datasets/roundtrip_4.seed"
+        },
+        {
+          "hash": "8cebb20fab85fa040685f5fa73dec546ab58e47a61559f44631d65ca5ae70b31",
+          "path": "fuzz/corpus/datasets/rows_alpaca.seed"
+        },
+        {
+          "hash": "897d09e4895501d31dceef64b86a76a63bbf3ffb60f5ee9ea4e9e7600d59e543",
+          "path": "fuzz/corpus/datasets/rows_chatml.seed"
+        },
+        {
+          "hash": "7520c92b2e4b1d69cde3c0b82f165c596389be66e3d0bbec2caddecaaee040b0",
+          "path": "fuzz/corpus/datasets/rows_empty.seed"
+        },
+        {
+          "hash": "be30faa4d70f7043d663ab658d6c0c79c57dac33326458c1fbe4a3657d1af0e5",
+          "path": "fuzz/corpus/datasets/rows_kto.seed"
+        },
+        {
+          "hash": "2a8be5300777a0398029fbf25973d721191c3537d2114bdb84ee316c7b6ee4b4",
+          "path": "fuzz/corpus/datasets/rows_mixed.seed"
+        },
+        {
+          "hash": "b7a81eae8330bcc53577a55d6010cd5020448fa53a73cbef2d2b70549a784aae",
+          "path": "fuzz/corpus/datasets/rows_openai.seed"
+        },
+        {
+          "hash": "f78a2c0349678f3c021b2ca5ade15710ba30f2b6f8af0e3ec5da55c86b594466",
+          "path": "fuzz/corpus/datasets/rows_openai_function.seed"
+        },
+        {
+          "hash": "36ca4b91a6809a9227f3c217fd9bd8bff0cfb450cd84f6bb5e9c4787b9ce0867",
+          "path": "fuzz/corpus/datasets/rows_preference.seed"
+        },
+        {
+          "hash": "edd95f5230ad8f0a35afa8d4ef808e71a3bb89114555a79deede724b22c0a376",
+          "path": "fuzz/corpus/datasets/rows_sharegpt.seed"
+        },
+        {
+          "hash": "aebc1e19f7d42701c8e7aaeb879963f65a29228f0127a1242947bc1f67ebc1d1",
+          "path": "fuzz/corpus/datasets/split_ngrams.seed"
+        },
+        {
+          "hash": "f7808adaf7eca25273a8550d4200181f420ef7c21bbd94430e773a7ae6050463",
+          "path": "fuzz/corpus/paths/base_backslash.seed"
+        },
+        {
+          "hash": "e88050000eaa7866805ca41b1e5800de84cbd7efd8371e165a264da0f1fa74ce",
+          "path": "fuzz/corpus/paths/base_inside.seed"
+        },
+        {
+          "hash": "f5d8d30db95e66e8fd358694b7aa56244db68e45c88f7fa4033257c2af7944c3",
+          "path": "fuzz/corpus/paths/base_loop.seed"
+        },
+        {
+          "hash": "2cbea037cfc4c5800ea3d24da1f816b1a08a9a3f97accaca172429710a1abdac",
+          "path": "fuzz/corpus/paths/base_nul.seed"
+        },
+        {
+          "hash": "15db89759e103d2517ec5ecf48b9aed2a12a7cff80ce933b9dbc8ffd4eaec9f8",
+          "path": "fuzz/corpus/paths/base_symlink_in.seed"
+        },
+        {
+          "hash": "56e3f9ebb375fc8be6096d7357ba14cd9d950a1ea5281fa4087b638bb3d96239",
+          "path": "fuzz/corpus/paths/base_symlink_out.seed"
+        },
+        {
+          "hash": "ab60b4e58285c35f41093e47265ef0845e329d05450ce0780d3b689a0a99572c",
+          "path": "fuzz/corpus/paths/base_traversal.seed"
+        },
+        {
+          "hash": "c79bb9a39ab119705c14d80609c339b44e7e3fc6729760583e952f283cc8bfa2",
+          "path": "fuzz/corpus/paths/base_unicode_dots.seed"
+        },
+        {
+          "hash": "de7d1b721a1e0632b7cf04edf5032c8ecffa9f9a08492152b926f1a5a7e765d7",
+          "path": "fuzz/corpus/paths/cov-042dc451.seed"
+        },
+        {
+          "hash": "0f2c7f7e50abf7ce2200ae61f3ae429ca9f31d1c7cd57e94248f0b9b5d4fac03",
+          "path": "fuzz/corpus/paths/cov-05836b62.seed"
+        },
+        {
+          "hash": "e7ac0786668e0ff0f02b62bd04f45ff636fd82db63b1104601c975dc005f3a67",
+          "path": "fuzz/corpus/paths/cov-05a79f06.seed"
+        },
+        {
+          "hash": "08eb7a84a1935b1620504303ba70a5eaa9d5a8c0af51ab287e12fa89e2dc869a",
+          "path": "fuzz/corpus/paths/cov-109ffb2c.seed"
+        },
+        {
+          "hash": "4e55e44206d7f1ed89d1b759eb26bd3d62e01424135f04694e0aacf3bb726736",
+          "path": "fuzz/corpus/paths/cov-125f3af0.seed"
+        },
+        {
+          "hash": "587bb38d53a81144fbab043dca47f74ca05a7e6156e5e243520de6d3f74943a8",
+          "path": "fuzz/corpus/paths/cov-267563fd.seed"
+        },
+        {
+          "hash": "f1a5fc565b2d90856051a0c5446b25fb9eaea20a7171532a60eab31443b42051",
+          "path": "fuzz/corpus/paths/cov-3ac09d54.seed"
+        },
+        {
+          "hash": "7c3345deb9df6f04a1f656902d21f413f2cd344fa48f343dad122f4f6ddd8c6e",
+          "path": "fuzz/corpus/paths/cov-46e4409a.seed"
+        },
+        {
+          "hash": "5577547d6b430e072a060ef7047b67ed5c97da23a7ae486020ad246550d5a2d3",
+          "path": "fuzz/corpus/paths/cov-4f5d7b0e.seed"
+        },
+        {
+          "hash": "31ff2916d263036c01aa2d9b67edc35fafb5394851c7a7c185a89a125b80b09d",
+          "path": "fuzz/corpus/paths/cov-5333c70a.seed"
+        },
+        {
+          "hash": "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
+          "path": "fuzz/corpus/paths/cov-5d1be7e9.seed"
+        },
+        {
+          "hash": "d87d01642f47a0d1901b1dfd2331c9def1bcfc69d8835c6cd911fe4165b804e4",
+          "path": "fuzz/corpus/paths/cov-62901032.seed"
+        },
+        {
+          "hash": "15eaa08251f54e4ebfc2618cbe95ca88bc9187adeca2ffc3417eaa0d94ca924d",
+          "path": "fuzz/corpus/paths/cov-7c14c4a0.seed"
+        },
+        {
+          "hash": "c7b99f1c681eaad2096f54c0380b8f950fa5cbe47cb3695ed590167c0dfff315",
+          "path": "fuzz/corpus/paths/cov-7f761f6a.seed"
+        },
+        {
+          "hash": "61ef0aba0e099784c058f2c9886a04405c034d41057b75e5f9e071bd30b7c078",
+          "path": "fuzz/corpus/paths/cov-948c70ab.seed"
+        },
+        {
+          "hash": "f9e46b2fbfe2357a82b710e4d583b8fdd7b7ba98840f0ef4765bf01aac38f906",
+          "path": "fuzz/corpus/paths/cov-958e445c.seed"
+        },
+        {
+          "hash": "fa814cc22ad1c831738f41eabb943d15ada38cbaff3e4269bebd08a07920255a",
+          "path": "fuzz/corpus/paths/cov-97b8a6e3.seed"
+        },
+        {
+          "hash": "52bfb6998542e9d69ce7e68c6ec2fac242529e5f5dd6e4f38a2982496ed6f7d7",
+          "path": "fuzz/corpus/paths/cov-b10e0f26.seed"
+        },
+        {
+          "hash": "f0f719bd51b1c1e6f146038fb64472dbe554445e3ad2e9935236c7606b8df23b",
+          "path": "fuzz/corpus/paths/cov-b25ce80c.seed"
+        },
+        {
+          "hash": "88a570240d07fd1ed883b7b9088e175a70b2ea0dd11295678c248edcbeadea5e",
+          "path": "fuzz/corpus/paths/cov-b3a44633.seed"
+        },
+        {
+          "hash": "df9f188da1208f692545737aa3a6eacae9f3db9f258fdf2bbcb87e3ae9b6c4a2",
+          "path": "fuzz/corpus/paths/cov-b8eee14c.seed"
+        },
+        {
+          "hash": "8dbe14663b47e2476c8c3fcc10066b4f951e988bed0b3b2cb734b9eba74ccc6b",
+          "path": "fuzz/corpus/paths/cov-b8f4970d.seed"
+        },
+        {
+          "hash": "f0337b00fae10fdda7497b729f901dd2ab421ce49f9b5db4f8fc6d65293ea1ba",
+          "path": "fuzz/corpus/paths/cov-c5d68608.seed"
+        },
+        {
+          "hash": "9091e78f78ad4c92f9b16f89432ce7c4f0a785f5c905b8d375be71a0f6529436",
+          "path": "fuzz/corpus/paths/cov-eacc13fc.seed"
+        },
+        {
+          "hash": "48df398788b252f9380e6013bcd48fbc3cf8e25cfcaaae9c92ff2da31b1df314",
+          "path": "fuzz/corpus/paths/cov-f2c1d516.seed"
+        },
+        {
+          "hash": "2d8727ba743375631247d4dbfc434ef6b9dda6665de299614bb7a2766fae1ac5",
+          "path": "fuzz/corpus/paths/cov-f8a3104b.seed"
+        },
+        {
+          "hash": "958c9c4cd8e39888891adb7e0681282025569ca30994af8c398910c7251e4276",
+          "path": "fuzz/corpus/paths/finding_f2_dots_in_controls.seed"
+        },
+        {
+          "hash": "c03d501983dead536179f0dfb623072b67f5f315333bb552d2a2b23a13fad045",
+          "path": "fuzz/corpus/paths/forb_dotdot_ssh.seed"
+        },
+        {
+          "hash": "0a4d79b84bc41b8b62b00651c6cb67e0135d0d9a881f314a136c9b03a8506809",
+          "path": "fuzz/corpus/paths/forb_etc.seed"
+        },
+        {
+          "hash": "eb850883c4c21169ac3579be9cd7edfb0421add38400856e48e827a5d49d081c",
+          "path": "fuzz/corpus/paths/forb_etc_dotdot.seed"
+        },
+        {
+          "hash": "478995f98e62f11c4ee6b318451dfcbc732da8a32acd991cbfbf4cdf0d975811",
+          "path": "fuzz/corpus/paths/forb_ok_work.seed"
+        },
+        {
+          "hash": "428e50338211f6560d0711f3d88d0105f571ba63b4ca85c5e3fce778a93efc87",
+          "path": "fuzz/corpus/paths/forb_proc_self_root.seed"
+        },
+        {
+          "hash": "e59445ae3fdcc8aac3b53f6483cf2a57f6ea9b417244dfc45a862cb877f62a6d",
+          "path": "fuzz/corpus/paths/forb_ssh.seed"
+        },
+        {
+          "hash": "010030d084ea4db622da91e76da5906f75c40d61fa00a7490bf4be5a4c004350",
+          "path": "fuzz/corpus/paths/forb_symlink_ssh.seed"
+        },
+        {
+          "hash": "6c1232ccb669c8732b6cbfb195abf145bf77f020ad6119f65d6e7081df3b8291",
+          "path": "fuzz/corpus/paths/name_control_mix.seed"
+        },
+        {
+          "hash": "8ea18c0aa3b9b275a6a3184d29ee5e542d75f49e285d142bf3c825f3f43331f9",
+          "path": "fuzz/corpus/paths/name_plain.seed"
+        },
+        {
+          "hash": "4df52f51ba480b8acb3d764c73cf8d7075e0c8bb2467269c2a7d4d4b378603c4",
+          "path": "fuzz/corpus/paths/name_separators.seed"
+        },
+        {
+          "hash": "b0a94a61449f4c5b1876705359c6a6a9ce6ecd27e5aa9e0683d43412734f236f",
+          "path": "fuzz/corpus/paths/nobase_dotdot_abs.seed"
+        },
+        {
+          "hash": "37936817b0f388a5b81667a353870e6182eaaa2eb632bb59c4031a400bb3c9c9",
+          "path": "fuzz/corpus/paths/nobase_dotdot_rel.seed"
+        },
+        {
+          "hash": "a42a847bc4d61813247855880f2bfd856822b3da3372ca4a8fa545cf97f5fb06",
+          "path": "fuzz/corpus/paths/nobase_plain.seed"
+        },
+        {
+          "hash": "4a39d877c3ab4e1a21403f0d80f17f59d1ffbd6285077daefc197378abb2947a",
+          "path": "fuzz/corpus/ui_input/cov-0873dd44.seed"
+        },
+        {
+          "hash": "675e9b34e4a0b5c423b538aac1a93ea3814f70d74715c4942cfb59cf142b2406",
+          "path": "fuzz/corpus/ui_input/cov-0a1b3a3e.seed"
+        },
+        {
+          "hash": "45f83d17e10b34fca01eb8f4454dac34a777d9404a464e732cf4abf2c0da94c4",
+          "path": "fuzz/corpus/ui_input/cov-0ad052dd.seed"
+        },
+        {
+          "hash": "2e77d99b2171959a3463981bb795b9140ec5ce80d7c18982976118330332183d",
+          "path": "fuzz/corpus/ui_input/cov-0ed1dfff.seed"
+        },
+        {
+          "hash": "4abe6bbf2899d08cc71d497caa7284d615b8e4500fe1fc100d0c3dbeb5e4ed9a",
+          "path": "fuzz/corpus/ui_input/cov-176e373d.seed"
+        },
+        {
+          "hash": "96232ccaa5da09daaeccf67f39cdf1a0eca5ee7d002a7db6f850cb39e0b6cf74",
+          "path": "fuzz/corpus/ui_input/cov-19b67cd6.seed"
+        },
+        {
+          "hash": "057fda48919071e0508bed578b66f2b44a7b6bd653c4b69a6497f12f25bec1be",
+          "path": "fuzz/corpus/ui_input/cov-1b341f22.seed"
+        },
+        {
+          "hash": "1049050c1b7b4c0a9d15a2a91a69ef2400d9ecc7d082d04b3d38e5fdd5b155bd",
+          "path": "fuzz/corpus/ui_input/cov-1cea2b09.seed"
+        },
+        {
+          "hash": "399a5b7242a75f2e24939277b5b2203ec68363a22ae18c25c7a6f381850a9c11",
+          "path": "fuzz/corpus/ui_input/cov-1d1386ce.seed"
+        },
+        {
+          "hash": "c59a7c6ea3c24e3fe8243dd475821e5cad6442f03983fcc6d2191d608cdeb8c0",
+          "path": "fuzz/corpus/ui_input/cov-2248035a.seed"
+        },
+        {
+          "hash": "781a7ff10005f935502cb02f18e69f494d7300869e156b4a1396cf4d9598b9f9",
+          "path": "fuzz/corpus/ui_input/cov-2436b390.seed"
+        },
+        {
+          "hash": "b9033c5e59187819867a4a1be8b157289fb1ca932324dc8d0e2e3081c2094483",
+          "path": "fuzz/corpus/ui_input/cov-261bc930.seed"
+        },
+        {
+          "hash": "43ca46c77820779603dacef2d2a16c66cb0f3e7205de41e3731d2564b0ca723e",
+          "path": "fuzz/corpus/ui_input/cov-26f597a8.seed"
+        },
+        {
+          "hash": "9071864696bef44c2cb1e9c857c0525c50d16f1840a33d14334d49eb9f62671c",
+          "path": "fuzz/corpus/ui_input/cov-2aebdeb7.seed"
+        },
+        {
+          "hash": "67586e98fad27da0b9968bc039a1ef34c939b9b8e523a8bef89d478608c5ecf6",
+          "path": "fuzz/corpus/ui_input/cov-2d0134ed.seed"
+        },
+        {
+          "hash": "4964aaa5c4fb68feb01cb03f3ac7cfc3be0aad3969b4c27a58bd55a2c6ca8e57",
+          "path": "fuzz/corpus/ui_input/cov-2e760400.seed"
+        },
+        {
+          "hash": "656cc5e6d61969b5acef0e62d798051197021119f38ab87a0d66ef177362d1a0",
+          "path": "fuzz/corpus/ui_input/cov-34739748.seed"
+        },
+        {
+          "hash": "a68998953eb627559fda70e31f0a519a6dc1d703f2989e30816a7ff52689f6c8",
+          "path": "fuzz/corpus/ui_input/cov-362882d1.seed"
+        },
+        {
+          "hash": "97bfe767f72b39599a9ad01f75b9f9be45da30aea282fee8919d614e938aafba",
+          "path": "fuzz/corpus/ui_input/cov-3c59c55e.seed"
+        },
+        {
+          "hash": "0ad6a5741f40957d5f9c17c2c683b510b4ff99b42724d8acee2136168e970229",
+          "path": "fuzz/corpus/ui_input/cov-42bb48f7.seed"
+        },
+        {
+          "hash": "b3cc98b5b6febf5c6854ed61d4b297f64eeabbd13828f7712839df60adb031b3",
+          "path": "fuzz/corpus/ui_input/cov-4fd2dfe6.seed"
+        },
+        {
+          "hash": "5050e69600bedcab842dbccfb70f764fc2b5535a05c5d8061073a6c4c397ffef",
+          "path": "fuzz/corpus/ui_input/cov-52acd09c.seed"
+        },
+        {
+          "hash": "8a1ef2065caa8c198415f04ee0157a9c72c9785e0b13d7b4417fa14e709c5b1e",
+          "path": "fuzz/corpus/ui_input/cov-54110161.seed"
+        },
+        {
+          "hash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "path": "fuzz/corpus/ui_input/cov-5ba93c9d.seed"
+        },
+        {
+          "hash": "c30fa89eecee33dc37a1be0f70f25b87d0194a9c127984feee2914ec47920ba9",
+          "path": "fuzz/corpus/ui_input/cov-5d6020d3.seed"
+        },
+        {
+          "hash": "ae600cbd25fca4c31377405a19ee3281d44eaa118448130fb6f511d3f857c4bb",
+          "path": "fuzz/corpus/ui_input/cov-6218a144.seed"
+        },
+        {
+          "hash": "b2f3790f04a97bfbe2459129c81ea08df30bed1cf52f544cc837ba81f263b491",
+          "path": "fuzz/corpus/ui_input/cov-67308c81.seed"
+        },
+        {
+          "hash": "552d7d672c5bbbccfb210a425e36a1d65bc663d3d3c395114c8ebc9c7cf28394",
+          "path": "fuzz/corpus/ui_input/cov-6dd4ac18.seed"
+        },
+        {
+          "hash": "39d214c9ab0802bc1da60cfd3cf64daa2e3898ee236afdffe8f9c0ebda944a02",
+          "path": "fuzz/corpus/ui_input/cov-6e8d9840.seed"
+        },
+        {
+          "hash": "d3756e46667acef74b91ccc70e1f3e85fef45286a791156004c0122b9688de10",
+          "path": "fuzz/corpus/ui_input/cov-772c8bbb.seed"
+        },
+        {
+          "hash": "4da7a23d0c018bf5865d46ff28cb46e388fe1c4df515aed70fbabc3f588c8c71",
+          "path": "fuzz/corpus/ui_input/cov-7a9bcabf.seed"
+        },
+        {
+          "hash": "a11578e9cdc7fdd071a963779622d6554ddfc59c7079cc67e65b1acac977c4b8",
+          "path": "fuzz/corpus/ui_input/cov-7f66dff2.seed"
+        },
+        {
+          "hash": "aca2f30d873892e58b813b131c81c7e4852f6fb4c2e55cf948ca6aa09dbdd4b2",
+          "path": "fuzz/corpus/ui_input/cov-84f1519b.seed"
+        },
+        {
+          "hash": "06a0350ba2d2fd5546f5a2651227817cd2105c68058c7fccd2acb9df2e73cbc8",
+          "path": "fuzz/corpus/ui_input/cov-8c74383d.seed"
+        },
+        {
+          "hash": "beead77994cf573341ec17b58bbf7eb34d2711c993c1d976b128b3188dc1829a",
+          "path": "fuzz/corpus/ui_input/cov-8d883f15.seed"
+        },
+        {
+          "hash": "45a8e175d7cddbfa89b447bbbe345d17d50b27ee8a3386bef44949c97e2a3c2d",
+          "path": "fuzz/corpus/ui_input/cov-8e6d3a4d.seed"
+        },
+        {
+          "hash": "c2f6483fda8b3dd02b65b80657219dbc95165336d9318123c2697b315cbd858c",
+          "path": "fuzz/corpus/ui_input/cov-918edff5.seed"
+        },
+        {
+          "hash": "55de6706b093ce9e3804f3c0e5f8471926e9abd734ac95c8a131400195f06172",
+          "path": "fuzz/corpus/ui_input/cov-9359a193.seed"
+        },
+        {
+          "hash": "566845c6136dbc12bd8e4632278b877f27fb98a2c83e80c7cce766577c4f63e0",
+          "path": "fuzz/corpus/ui_input/cov-93be2cca.seed"
+        },
+        {
+          "hash": "3a393a862889fd2bcc4a2939b02eab350625a27342e6a8257769839cbd458e5b",
+          "path": "fuzz/corpus/ui_input/cov-93cdc93f.seed"
+        },
+        {
+          "hash": "3372a510bc71853e0264800e95deefc6991e4e0e8cf62d7c009e8daf2b20b833",
+          "path": "fuzz/corpus/ui_input/cov-97704be2.seed"
+        },
+        {
+          "hash": "084fed08b978af4d7d196a7446a86b58009e636b611db16211b65a9aadff29c5",
+          "path": "fuzz/corpus/ui_input/cov-9842926a.seed"
+        },
+        {
+          "hash": "9fa23227e2f0bbf02e7040f55afbfd5c29fc74966c665ce943b43cc6e738c197",
+          "path": "fuzz/corpus/ui_input/cov-a48e37e5.seed"
+        },
+        {
+          "hash": "6da98d25121042e68ff8de9f903d6aac9ead57608b77c2bdd9586cd6e5f41af6",
+          "path": "fuzz/corpus/ui_input/cov-a68c368f.seed"
+        },
+        {
+          "hash": "2d27545849950acecda8ce3c4cb24cb78e7340091e3f7a3ce99ac7e88c0bb523",
+          "path": "fuzz/corpus/ui_input/cov-aec155ee.seed"
+        },
+        {
+          "hash": "57b5d036c6a14d873043088218ce3afdc5bb02490a1a1d7365ba9966bf8df53e",
+          "path": "fuzz/corpus/ui_input/cov-b3d30a8e.seed"
+        },
+        {
+          "hash": "908b31d9e4fa8b94f65840f1d28969cdf2b601edebab038a7586bdea01d57885",
+          "path": "fuzz/corpus/ui_input/cov-b4791206.seed"
+        },
+        {
+          "hash": "a66ef077e16abbdcd19b4c07ff337835246b7013efb5d58ec91bf755b6a41537",
+          "path": "fuzz/corpus/ui_input/cov-b7fff48b.seed"
+        },
+        {
+          "hash": "2f11a3413b4974a0e2c4413ec25896b695ba481651e8cbc3950fb2808dd24fbc",
+          "path": "fuzz/corpus/ui_input/cov-be5d119d.seed"
+        },
+        {
+          "hash": "dabd3aff769f07eb2965401eb029974ebba3407afd02b26ddb564ea5f8efae72",
+          "path": "fuzz/corpus/ui_input/cov-c4dd3c8c.seed"
+        },
+        {
+          "hash": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986",
+          "path": "fuzz/corpus/ui_input/cov-c4ea21bb.seed"
+        },
+        {
+          "hash": "63c22fee763430e0841bd866713573b6480fccc48550509caf510cc406d2edd5",
+          "path": "fuzz/corpus/ui_input/cov-c8a6f2b1.seed"
+        },
+        {
+          "hash": "4650564ca1581868556f224529e81a19b59f588eae9aae847b07d293ab274c1a",
+          "path": "fuzz/corpus/ui_input/cov-ca782708.seed"
+        },
+        {
+          "hash": "f7ddc42e4c3e1c4ca3bb4e155d19da405ee7b814933c34f8f3b008fd0e0fe11c",
+          "path": "fuzz/corpus/ui_input/cov-cb0c3b06.seed"
+        },
+        {
+          "hash": "97c488ff73a2ade7590a3aabbe08636a3bf69038da4eab6a8597da4d179ec83a",
+          "path": "fuzz/corpus/ui_input/cov-d90a3efe.seed"
+        },
+        {
+          "hash": "970bec7483984728e413a0ff65986310f4bbe8fff5f02c58e6064856262d8476",
+          "path": "fuzz/corpus/ui_input/cov-de736e80.seed"
+        },
+        {
+          "hash": "50cff72c8e550546d661ec235431888fb2f9f7bada40c17020d47f6ccc117aae",
+          "path": "fuzz/corpus/ui_input/cov-df9e7e9f.seed"
+        },
+        {
+          "hash": "1702c7fc920c5ef061079a21c78b35e6e3583562fdaa01d1ebff017abaeb0023",
+          "path": "fuzz/corpus/ui_input/cov-e0d8276c.seed"
+        },
+        {
+          "hash": "6d6ce875f7c57cc52c3a76702f1e3f4a4a834c1a017be4591eafef1072ca54a9",
+          "path": "fuzz/corpus/ui_input/cov-e9cf12a2.seed"
+        },
+        {
+          "hash": "b184d29a1c103b5269165d679d2460bdc54ed484d57a4716800bfba78ae036ff",
+          "path": "fuzz/corpus/ui_input/cov-efc92681.seed"
+        },
+        {
+          "hash": "4281736a18ed802e3d20a2199b96682603e2dacfd5daae760f042c66c3260dd2",
+          "path": "fuzz/corpus/ui_input/cov-f5e99144.seed"
+        },
+        {
+          "hash": "fe5c5c13b804e74f4edfff7f2ef101fc9407a83237b327b017cbda8094914854",
+          "path": "fuzz/corpus/ui_input/cov-fe735997.seed"
+        },
+        {
+          "hash": "9fcfeac82830673488bc4a27ec7259fe7b06513e3dc6781ecab9c24b08881086",
+          "path": "fuzz/corpus/ui_input/finding_f4_nan.seed"
+        },
+        {
+          "hash": "5faa4eec3611556812c2d74b437c8c49add3f910f10063d801441f7d75cd5e3b",
+          "path": "fuzz/corpus/ui_input/mode0.seed"
+        },
+        {
+          "hash": "80b88f86575d849a9ead21511514b930f2ceffa6993340f22ba5666938ea1f7d",
+          "path": "fuzz/corpus/ui_input/mode1.seed"
+        },
+        {
+          "hash": "4f5af87bf6dc4845ac866989c652e9a372408059e2727ace6d770d12f179dcb0",
+          "path": "fuzz/corpus/ui_input/mode2.seed"
+        },
+        {
+          "hash": "291724c4c704ec6f0d57d5b7ad5795e6834896258764eb698ddcc449643be9a7",
+          "path": "fuzz/corpus/ui_input/mode3.seed"
+        },
+        {
+          "hash": "578c7fdda14690d19ecbe040de38caccaaca8587212d41d74870f76739cb9daf",
+          "path": "fuzz/corpus/ui_input/mode4.seed"
+        },
+        {
+          "hash": "fbb21152e46dd33a142ed5b1cbe8f7bf8792a505abd8ce25d3962775a8319677",
+          "path": "fuzz/corpus/ui_input/mode5.seed"
+        },
+        {
+          "hash": "d5e599f74d2852e5e6f9f8f66ecee00710f67ab8ebdd6b7fc77916cb08cad6b5",
+          "path": "fuzz/corpus/ui_input/mode6.seed"
+        },
+        {
+          "exports": [
+            "has_unhashable_role",
+            "instrument",
+            "main",
+            "patched_environ",
+            "scratch_dir"
+          ],
+          "failurePaths": [
+            {
+              "kind": "except",
+              "line": 72
+            }
+          ],
+          "hash": "4392623015954c126b6e3eb4d648e39a6b0677b010cafdccdabd75be2cc025bd",
+          "path": "fuzz/fuzz_common.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_config",
+            "check_section",
+            "check_training_invariants",
+            "check_ui_security_env"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_section",
+              "kind": "except",
+              "line": 112
+            },
+            {
+              "in": "check_section",
+              "kind": "except",
+              "line": 115
+            },
+            {
+              "in": "check_section",
+              "kind": "raise",
+              "line": 117
+            },
+            {
+              "in": "check_ui_security_env",
+              "kind": "except",
+              "line": 153
+            }
+          ],
+          "hash": "7e3a6cb6c73ab90f076143d71b2061108fa97cbe117dd8bad036c3f1fd770d78",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_config.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_dataset_files",
+            "reference"
+          ],
+          "failurePaths": [
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 58
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 66
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 68
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 88
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 90
+            },
+            {
+              "in": "_try",
+              "kind": "except",
+              "line": 100
+            },
+            {
+              "in": "check_dataset_files",
+              "kind": "except",
+              "line": 147
+            },
+            {
+              "in": "check_dataset_files",
+              "kind": "raise",
+              "line": 150
+            }
+          ],
+          "hash": "4de63476629cdbefef7fe94b8dee2fb90ec05bab43a11582e847c25dcf22236a",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_dataset_files.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_datasets",
+            "check_ngrams_and_split",
+            "check_roundtrip",
+            "check_rows",
+            "decode_rows"
+          ],
+          "failurePaths": [
+            {
+              "in": "decode_rows",
+              "kind": "except",
+              "line": 64
+            },
+            {
+              "in": "check_rows",
+              "kind": "except",
+              "line": 87
+            },
+            {
+              "in": "check_rows",
+              "kind": "raise",
+              "line": 90
+            },
+            {
+              "in": "check_rows",
+              "kind": "except",
+              "line": 124
+            },
+            {
+              "in": "check_rows",
+              "kind": "raise",
+              "line": 128
+            },
+            {
+              "in": "check_ngrams_and_split",
+              "kind": "except",
+              "line": 180
+            }
+          ],
+          "hash": "f2a80272424c14281c1ee88c33a8c8af98d7f423e9794dcf0a8bb34b5f3678cd",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_datasets.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_forbidden_output_base",
+            "check_paths",
+            "check_safe_path_no_base",
+            "check_safe_path_with_base",
+            "check_sanitize_filename",
+            "check_sanitized",
+            "tree"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_safe_path_with_base",
+              "kind": "except",
+              "line": 120
+            },
+            {
+              "in": "check_safe_path_with_base",
+              "kind": "except",
+              "line": 122
+            },
+            {
+              "in": "check_safe_path_with_base",
+              "kind": "except",
+              "line": 125
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 154
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 157
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 160
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 164
+            }
+          ],
+          "hash": "da3879be63dc9eb73036e782ccbe60f55b0eee16630315405cd2d65202c04116",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_paths.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_auth_shape",
+            "check_error_sanitizing",
+            "check_file_magic",
+            "check_markdown_fence",
+            "check_numeric",
+            "check_numeric_input",
+            "check_redaction",
+            "check_redaction_leak",
+            "check_string_input",
+            "check_ui_input"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_string_input",
+              "kind": "except",
+              "line": 79
+            },
+            {
+              "in": "check_numeric",
+              "kind": "except",
+              "line": 104
+            },
+            {
+              "in": "check_numeric",
+              "kind": "except",
+              "line": 106
+            },
+            {
+              "in": "check_auth_shape",
+              "kind": "except",
+              "line": 176
+            }
+          ],
+          "hash": "6c4c117622c018b678b8aa1a565a486afb3a17647f65b77a56cefaba378ed21e",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_ui_input.py"
+        }
+      ],
+      "globs": [
+        "fuzz/**"
+      ],
+      "importConfidence": "full",
+      "name": "fuzz",
+      "origin": "authored",
+      "outsidePlaces": [
+        {
+          "reads": 0,
+          "where": [
+            "temp"
+          ],
+          "writes": 2
+        }
+      ],
+      "outsideWrites": 2,
+      "role": "test",
+      "testRunners": [
+        "pytest"
+      ],
+      "testedBy": 1,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicSpawns": 0,
+      "dynamicSpawnsInTests": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "c25484124b0bb97975cce6fd43b73a9e3afaa7ae3c974bd8149e55dfff154d9d",
+          "path": "requirements/fuzz.in"
+        },
+        {
+          "hash": "034f528a633971ac7961978fb8a82a1eba1a566d168448609bc95158ece666d4",
+          "path": "requirements/fuzz.txt"
+        }
+      ],
+      "globs": [
+        "requirements/**"
+      ],
+      "importConfidence": "full",
+      "name": "requirements",
+      "origin": "authored",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicSpawns": 0,
+      "dynamicSpawnsInTests": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
           "hash": "61d91d5f767d64859b754fe228504dd748353303db6ba6fa7ca4f3efca8c29d5",
           "path": ".dockerignore"
         },
@@ -10892,7 +12050,7 @@
           "path": ".secrets.baseline"
         },
         {
-          "hash": "028849b8cf73d6e7a5c8fca2ec94a14c68896185b9d087167a7ca60ffb6e7333",
+          "hash": "5a35322d6f13a8a176c0c07b3615739b9d8660d560a08472c6fc808911a19b34",
           "path": "CHANGELOG.md"
         },
         {
@@ -10924,35 +12082,35 @@
           "path": "PRODUCTION_READINESS_AUDIT.md"
         },
         {
-          "hash": "1e4ec7aa7c354a1722d05f6861ad7cc7d8139b17815e2e08ad0e579531450bce",
+          "hash": "5b8be9b8a75af4dc3fcc1f505673f5596340295c886b046a39ff6f534ddf8ff1",
           "path": "README.es.md"
         },
         {
-          "hash": "f84cbc5e4cd366ca877ff62bb2eab5423da32a3b475b321da8076e205636ac3f",
+          "hash": "a6ae62a632505fdb86f4522cdf301bb128e606b6220509c6352c7e4126d8ab1a",
           "path": "README.fr.md"
         },
         {
-          "hash": "ca97a78e4bedf1197536aa8d18b277c565fe35a014822ad97eba409d4b2d4622",
+          "hash": "a907f815eed18c30c92b7bc2675fe78f36d221767a55f06b66eb69cb342ff8e6",
           "path": "README.hi.md"
         },
         {
-          "hash": "adcb6b5cfc9a7f08b2a701373e6076d7243f8b7e579e67327c7a76d2e9707826",
+          "hash": "3e01075559d1128f582e23ab453f6e41c083a98e0144ac0ea60a96aa25702bee",
           "path": "README.it.md"
         },
         {
-          "hash": "843cff592c531c13d1fb0bbbbd35097672c438af90ba808d9cafa59607138715",
+          "hash": "af261579f3ef7d82c0539ae9d594d652e487db23b0095a66b468026249ce3017",
           "path": "README.ja.md"
         },
         {
-          "hash": "16fbbef1337bbbe0a9c1ee421ad3232cbdda0a6fdb481178188c71bcc951947b",
+          "hash": "bbdef86537ac5f92d8982f6a90752ee4a297f9764cf1a8eb3f7f913e975bf3bc",
           "path": "README.md"
         },
         {
-          "hash": "0c0856db2ee2d37399562ca397ecc890efafe7733b4f20b1bf70625554349086",
+          "hash": "d73d607978d8547bbb684770b9535eda0c4f72f86bcafee32b07eb9715578e36",
           "path": "README.pt-BR.md"
         },
         {
-          "hash": "983e90822032c285424f6486fb61b30a0436b049a8b22e1bffc4d6bf852bc2ea",
+          "hash": "dbdffa414164e6f819919fd6b438028fb8acc1df76375588055c65d8c49ffbd2",
           "path": "README.zh.md"
         },
         {
@@ -10996,6 +12154,10 @@
           "path": "logo.png"
         },
         {
+          "hash": "964998ad1980460c4e109ad043d6bd0f8bb6573d97971e16dd2707418360cee2",
+          "path": "osv-scanner.toml"
+        },
+        {
           "hash": "5bc118631c159ff66b85b767cf196b833b6d32285e35d8781be202d894a51821",
           "path": "package.json"
         },
@@ -11004,7 +12166,7 @@
           "path": "pyproject.toml"
         },
         {
-          "hash": "504aa864a8e7bd901591f49d0f97e6707a96debfd81fc6b1aa26ab562f56907c",
+          "hash": "eaf3fb1bd3614d4ab5a2ca4e2bfe229780577d1bfba0cea11bcb0fa01f72457d",
           "path": "uv.lock"
         },
         {
@@ -11509,14 +12671,14 @@
           "failurePaths": [
             {
               "kind": "raise",
-              "line": 48
+              "line": 53
             }
           ],
-          "hash": "f47df04c97d86d703f7b17cd9c23faa9bd4c3250806e69d4e988a06a13a4943a",
+          "hash": "3b8a33bdc34652476ea887a6d78dd79c7c4af5cf187672c19dd0e849fdf3532d",
           "path": "scripts/runpod/deadman.py"
         },
         {
-          "hash": "6b4d0ebd52e21c9239faffa050a7b1b97e550865d29ea7b240c145711053e11a",
+          "hash": "79b776417a60473553bdc0fba2aca5383958bb82c1f1af8e4d3ff6028d47c3ef",
           "path": "scripts/runpod/pod.sh"
         },
         {
@@ -11600,7 +12762,7 @@
           "path": "site/src/content/docs/handbook/env-vars.md"
         },
         {
-          "hash": "0ab81680a9d4ed7741b6660177b795a3665f7df3acd183fbb3008f13e4d3e829",
+          "hash": "2a87a12fd8ce82ea269fa2bfce3a4d8ec9878c7fc8871fbcffc9509749989fff",
           "path": "site/src/content/docs/handbook/error-codes.md"
         },
         {
@@ -12018,6 +13180,25 @@
             "backpropagate/trainer.py"
           ],
           "path": "tests/test_callback_integration.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "c6fc60d5717baeb29c3951697303b9b4cc23b728472d1dc142501b669f722c2d",
+          "importOrder": [
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/security.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_chat_template_guard.py",
           "testFramework": "pytest"
         },
         {
@@ -12459,6 +13640,44 @@
             "backpropagate/checkpoints.py"
           ],
           "path": "tests/test_fuzz_checkpoints.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "corpus_and_random",
+            "corpus_files",
+            "first_failure",
+            "load",
+            "random_inputs"
+          ],
+          "hash": "ce3e9106c1033a46a14c6ebec0e6c506fc7e1445244f0d221cbd613df093ebf1",
+          "importOrder": [
+            "fuzz/fuzz_config.py",
+            "fuzz/fuzz_dataset_files.py",
+            "fuzz/fuzz_datasets.py",
+            "fuzz/fuzz_paths.py",
+            "fuzz/fuzz_ui_input.py",
+            "backpropagate/datasets.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/config.py",
+            "backpropagate/security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "importsFiles": [
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py",
+            "fuzz/fuzz_config.py",
+            "fuzz/fuzz_dataset_files.py",
+            "fuzz/fuzz_datasets.py",
+            "fuzz/fuzz_paths.py",
+            "fuzz/fuzz_ui_input.py"
+          ],
+          "path": "tests/test_fuzz_harnesses.py",
           "testFramework": "pytest"
         },
         {
@@ -13872,7 +15091,16 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 82
+          "files": 84
+        },
+        {
+          "boundary": "fuzz",
+          "depth": 1,
+          "enters": {
+            "file": "fuzz/fuzz_config.py",
+            "from": "tests/test_fuzz_harnesses.py"
+          },
+          "files": 6
         },
         {
           "boundary": "scripts",
@@ -13961,7 +15189,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 84,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -13969,7 +15197,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 82,
+          "files": 84,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -13977,28 +15205,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 84,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 84,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 84,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 82,
+          "files": 84,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -14165,6 +15393,105 @@
       "commands": [
         {
           "dir": "",
+          "job": "fuzz",
+          "programs": [
+            "pip"
+          ],
+          "step": "Install the fuzzing dependencies (hash-pinned)"
+        },
+        {
+          "dir": "",
+          "job": "fuzz",
+          "programs": [
+            "1",
+            "echo",
+            "mkdir",
+            "python",
+            "sed",
+            "tail",
+            "tee"
+          ],
+          "step": "Fuzz each harness"
+        }
+      ],
+      "elsewhere": [],
+      "file": ".github/workflows/fuzz.yml",
+      "jobs": [
+        {
+          "basis": "declared",
+          "name": "fuzz",
+          "runsOn": [
+            {
+              "labels": [
+                "ubuntu-latest"
+              ],
+              "platform": {
+                "cpu": "x64",
+                "libc": "glibc",
+                "os": "linux"
+              }
+            }
+          ],
+          "setup": [
+            {
+              "ranges": [
+                {
+                  "from": "3.12",
+                  "range": ">=3.12.0 <3.13.0-0"
+                }
+              ],
+              "step": "Set up Python 3.12",
+              "uses": "actions/setup-python",
+              "version": "3.12"
+            }
+          ]
+        }
+      ],
+      "landings": [],
+      "mentions": [
+        {
+          "job": "fuzz",
+          "path": "requirements/fuzz.txt"
+        }
+      ],
+      "name": "Fuzz",
+      "permissions": [
+        "contents:read"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact"
+      ],
+      "usesWorkflowToken": false
+    },
+    {
+      "checksCount": 0,
+      "commands": [
+        {
+          "dir": "",
           "job": "mutmut",
           "programs": [
             "pip",
@@ -14265,6 +15592,7 @@
       ],
       "name": "Mutation testing (mutmut)",
       "permissions": [
+        "contents:read",
         "contents:write",
         "issues:write",
         "pull-requests:write"
@@ -15464,6 +16792,11 @@
   ],
   "edges": [
     {
+      "from": "fuzz",
+      "kind": "file",
+      "to": "backpropagate"
+    },
+    {
       "from": "scripts",
       "kind": "file",
       "to": "backpropagate"
@@ -15478,13 +16811,19 @@
       "from": "tests",
       "fromTests": true,
       "kind": "file",
+      "to": "fuzz"
+    },
+    {
+      "from": "tests",
+      "fromTests": true,
+      "kind": "file",
       "to": "scripts"
     }
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
-    "tracked": 421
+    "commit": "ad3ec41839cf85871ce806a90b046d7550660fe2",
+    "tracked": 622
   },
   "landings": [
     {
@@ -15507,6 +16846,18 @@
         }
       ],
       "target": ".github/workflows/ci.yml",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": ".github/workflows/fuzz.yml",
       "writers": []
     },
     {
@@ -15920,6 +17271,28 @@
     {
       "readers": [
         {
+          "by": ".github/workflows/fuzz.yml",
+          "confidence": "config"
+        },
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "requirements/fuzz.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": "scripts/preflight.sh",
           "call": "literal",
           "confidence": "text"
@@ -16084,7 +17457,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 85,
+  "testFiles": 87,
   "unassigned": [],
   "unseen": [
     {

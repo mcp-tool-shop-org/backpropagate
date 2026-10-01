@@ -273,7 +273,9 @@ class TestSizeAndLookup:
         stats = mgr.get_stats()
         assert isinstance(stats, CheckpointStats)
         assert "Best: Run 0 (val_loss=0.2500)" in stats.summary()
-        assert stats.total_count == 1 and stats.prunable_count in (0, 1)
+        # keep_best_n=1: the lone checkpoint is the retained best, so nothing is prunable
+        assert stats.total_count == 1 and stats.prunable_count == 0
+        assert stats.best_checkpoint.run_index == 0 and stats.protected_count == 0
 
     def test_stats_summary_omits_best_without_loss(self):
         s = CheckpointStats(total_count=2, protected_count=1, prunable_count=1)

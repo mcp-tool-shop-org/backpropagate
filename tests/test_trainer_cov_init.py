@@ -285,18 +285,16 @@ class TestOffloadFitForModel:
         assert ei.value.code == "RUNTIME_FULL_FT_MODEL_TOO_LARGE"
 
     def test_loaded_model_shape_is_used_when_available(self, monkeypatch):
-        import torch
+        from tests.helpers.tiny_models import tiny_llama
 
         self._patched(monkeypatch)
         t = make(model="acme/Small-1B", mode="full")
-        from tests.helpers.tiny_models import tiny_llama
-
         t._model = tiny_llama(layers=2)
         t._is_loaded = True
-        report = t._enforce_offload_fit_for_model()
+        with patch("transformers.AutoConfig.from_pretrained",
+                   side_effect=AssertionError("must not probe the hub when a model is loaded")):
+            report = t._enforce_offload_fit_for_model()
         assert report["fits"] is True
-        assert sum(p.numel() for p in t._model.parameters()) > 0
-        assert isinstance(t._model, torch.nn.Module)
 
 
 # ---------------------------------------------------------------------------

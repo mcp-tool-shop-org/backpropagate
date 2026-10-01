@@ -10830,7 +10830,7 @@
           "path": "docs/receipts/2026-09-30-offload/smollm3_puregpu.json"
         },
         {
-          "hash": "2ea1681933dcc47b7c78adee5ee1407d8c547af238b88054766c6ae58cd617f6",
+          "hash": "559f62e3c3d9323a8474b3baedcc95752154c9d62da1e5903dd35ec6e42f09f6",
           "path": "docs/receipts/2026-10-e4-code/README.md"
         },
         {
@@ -10838,11 +10838,11 @@
           "path": "docs/receipts/2026-10-e4-code/licence_evidence.json"
         },
         {
-          "hash": "db243373b412db7612d1818a269fd152006525a6e5fe05011265ea1791ae703f",
+          "hash": "944f42b49b9cb3e7dde306fa986abeccb4164128f9f93fe04248b86f0e757624",
           "path": "docs/receipts/2026-10-e4-code/pre/lengths_code_Qwen_Qwen2.5-3B.json"
         },
         {
-          "hash": "8ae9baaaeff5ebbd7f753657b999e304646c3085bfde40b24e185c847142bf78",
+          "hash": "7290e12b4dcee72b13623fc452d217b26f0e92743d75dc0e5534fcce69033540",
           "path": "docs/receipts/2026-10-e4-code/pre/prep_code.json"
         }
       ],
@@ -11273,6 +11273,7 @@
             "beats",
             "build_dataset",
             "build_user_prompt",
+            "build_with_shards",
             "chatml_text",
             "code_blocks",
             "content_hash",
@@ -11281,6 +11282,8 @@
             "eval_meta",
             "exec_supported",
             "extract_code",
+            "fit_filter",
+            "fit_filter_with_attribution",
             "interface_hint",
             "item_arrays",
             "majority_correct",
@@ -11310,69 +11313,74 @@
             {
               "in": "_parses",
               "kind": "except",
-              "line": 100
+              "line": 104
             },
             {
               "in": "_json_list",
               "kind": "except",
-              "line": 129
+              "line": 133
             },
             {
               "in": "interface_hint",
               "kind": "except",
-              "line": 151
+              "line": 155
             },
             {
               "in": "prepare_row",
               "kind": "except",
-              "line": 195
+              "line": 199
+            },
+            {
+              "in": "build_with_shards",
+              "kind": "raise",
+              "line": 363
             },
             {
               "in": "exec_supported",
               "kind": "except",
-              "line": 348
+              "line": 410
             },
             {
               "in": "ensure_exec_allowed",
               "kind": "raise",
-              "line": 356
+              "line": 418
             },
             {
               "in": "ensure_exec_allowed",
               "kind": "raise",
-              "line": 358
+              "line": 420
             },
             {
               "in": "run_candidate",
               "kind": "except",
-              "line": 444
+              "line": 506
             },
             {
               "in": "run_candidate",
               "kind": "except",
-              "line": 457
+              "line": 519
             },
             {
               "in": "pair_stats",
               "kind": "raise",
-              "line": 598
+              "line": 660
             },
             {
               "in": "pair_stats",
               "kind": "raise",
-              "line": 600
+              "line": 662
             },
             {
               "in": "plan_for",
               "kind": "raise",
-              "line": 706
+              "line": 768
             },
             {
               "kind": "except",
-              "line": 797
+              "line": 859
             }
           ],
-          "hash": "994e13c8a7c8e5721ebd7a998ae69824b1c1b900842b4c439c94054d450d1142",
+          "hash": "eae7f38d17a1a08597dbf3bc72e23da0f0fc381d4ad2f5300df11bd7773ce133",
           "path": "scripts/e4_lib.py"
         },
         {
@@ -11507,93 +11515,93 @@
             },
             {
               "kind": "raise",
-              "line": 216
+              "line": 230
             },
             {
               "kind": "raise",
-              "line": 230
+              "line": 244
             },
             {
               "in": "gsm_number",
               "kind": "except",
-              "line": 236
+              "line": 250
             },
             {
               "kind": "raise",
-              "line": 275
+              "line": 289
             },
             {
               "kind": "raise",
-              "line": 301
+              "line": 315
             },
             {
               "kind": "raise",
-              "line": 381
+              "line": 395
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 460
+              "line": 474
             },
             {
               "in": "_loop",
               "kind": "except",
-              "line": 475
+              "line": 489
             },
             {
               "in": "versions",
               "kind": "except",
-              "line": 524
+              "line": 538
             },
             {
               "kind": "raise",
-              "line": 814
+              "line": 817
             },
             {
               "kind": "raise",
-              "line": 849
+              "line": 852
             },
             {
               "kind": "except",
-              "line": 868
+              "line": 871
             },
             {
               "kind": "raise",
-              "line": 881
+              "line": 884
             },
             {
               "kind": "raise",
-              "line": 903
+              "line": 906
             },
             {
               "kind": "raise",
-              "line": 920
+              "line": 923
             },
             {
               "kind": "raise",
-              "line": 934
+              "line": 937
             },
             {
               "in": "describe_optimizer",
               "kind": "except",
-              "line": 1066
+              "line": 1069
             },
             {
               "in": "describe_optimizer",
               "kind": "except",
-              "line": 1077
+              "line": 1080
             },
             {
               "in": "training_step",
               "kind": "except",
-              "line": 1114
+              "line": 1117
             },
             {
               "kind": "except",
-              "line": 1249
+              "line": 1252
             }
           ],
-          "hash": "f80c84198ca2f119a7d755197a7b580926fe5434d147aec309f48585bb7a2153",
+          "hash": "c0e513cc1a05e57299bb5cb62be086c8ad2d40ee43dcca3cf967c98c7b161999",
           "importOrder": [
             "scripts/e4_lib.py",
             "backpropagate/datasets.py",
@@ -11636,7 +11644,7 @@
             "write_budget",
             "write_json"
           ],
-          "hash": "e7b11fc8601fb8e25ee042e0a86e9eaea3e11e80e659a111cfda056512b1bc85",
+          "hash": "ad9cdebdec205427aea6ac319817f4aabaca94dba2cdc2250e85f8f254898a4f",
           "importsFiles": [
             "scripts/e4_lib.py"
           ],
@@ -11657,10 +11665,10 @@
             {
               "in": "summarize_stage",
               "kind": "except",
-              "line": 131
+              "line": 129
             }
           ],
-          "hash": "ac1f6c9dcbb8f78e45f0a72cbbcbbec316fcfa74740b9ac431287060c478fca8",
+          "hash": "f5e1e8107621491b0a440f3e208902aacb352815066284cef95fd1436743f4f4",
           "importsFiles": [
             "scripts/e4_lib.py"
           ],
@@ -12453,7 +12461,7 @@
             "test_driver_exposes_the_code_dataset_and_the_exec_flag",
             "write_run"
           ],
-          "hash": "feeec1ad439bb85d2e30f6352a57f1a576d46ff4b89562c235056575ea10ad5a",
+          "hash": "42fa47205c30bf5dcdcbd57076540ce5b17c929b0eb536f86ba69710bce7b43b",
           "importOrder": [
             "scripts/e4_lib.py",
             "scripts/pod_e4.py",
@@ -15717,7 +15725,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "b6c93e6546878766d702a9062e63448d8a2b3ef5",
+    "commit": "df6b9c4be68349a5306a5191ee66ddc4fbc7748a",
     "tracked": 430
   },
   "landings": [

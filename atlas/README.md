@@ -1,18 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit b6c93e6 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit df6b9c4 by Atlas 1.24.0.
 
 ## What this is
 
 11 parts, mostly Python (148 files), shell (10), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (16e6e37)
+## What changed since 2026-10-01 (b6c93e6)
 
-- scripts/pod_block_engine.py is now read by scripts/pod_e4.py and tests/test_e4_harness.py.
-- scripts/pod_block_engine.sh is now read by tests/test_e4_harness.py.
-- scripts/pod_e4_summary.py is now read by scripts/pod_e4.py.
-- And 1 more new writer or reader of a place.
-- 9 files added and 1 changed content, across 3 parts.
+Nothing structural changed since 2026-10-01; 8 files changed content.
 
 ## What comes in
 

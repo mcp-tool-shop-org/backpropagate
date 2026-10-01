@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`ui_security.SecureSessionHandler`: one CSRF slot per session, and logout
+  now revokes.** It keyed CSRF tokens and its session registry on the first 32
+  characters of the access token. Every HS256 JWT starts with the same encoded
+  header, so all users shared one CSRF slot (one user's CSRF token validated
+  another's request), and `logout()` revoked nothing. Sessions are now keyed by
+  a SHA-256 of the whole token, and a token is honoured only while its session
+  is registered. The class is a public helper; the bundled web UI does not use
+  it.
+- `CSRFProtection.validate_token` returns invalid for a non-ASCII or non-string
+  token instead of raising `TypeError`.
+- `FileValidator.validate()` given a `pathlib.Path` now runs the size cap and
+  magic-byte checks (it looked up the bare file name and skipped them).
+- `validate_numeric_input` and the UI's numeric fields reject NaN and infinity.
 - **Tokenizers with path-like chat template names are refused at load**
   (new stable code `INPUT_UNSAFE_CHAT_TEMPLATE`). transformers before 5.10
   saves each named chat template to a file named after it without checking
@@ -42,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lockfile: gitpython 3.2.0, virtualenv 21.14.1 and accelerate 1.15.0 clear
   9 advisories. Six more are documented as not affecting backpropagate in
   `osv-scanner.toml`, each with its reason and an expiry date.
+
+### Fixed
+
+- Web UI `/runs`: the Model and Dataset columns showed "-" for every run (they
+  read field names the run store does not write); the dataset path is shown
+  redacted. The "Interrupted" filter, which the store rejects, is removed.
 
 ## [1.7.2] - 2026-09-30
 

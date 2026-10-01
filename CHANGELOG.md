@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--switch-block-every`, `--block-order`, `--block-writeback`,
   `--block-freeze-embeddings`. Receipts: `docs/receipts/2026-09-30-gsm8k/`.
 
+### Security
+
+- **Tokenizers with path-like chat template names are refused at load**
+  (new stable code `INPUT_UNSAFE_CHAT_TEMPLATE`). transformers before 5.10
+  saves each named chat template to a file named after it without checking
+  the name (PYSEC-2026-3929), so a crafted Hub repository could make a
+  tokenizer save write outside your output directory. unsloth's version caps
+  keep transformers at 5.5.0, so backpropagate checks the names itself.
+- Lockfile: gitpython 3.2.0, virtualenv 21.14.1 and accelerate 1.15.0 clear
+  9 advisories. Six more are documented as not affecting backpropagate in
+  `osv-scanner.toml`, each with its reason and an expiry date.
+
 ## [1.7.2] - 2026-09-30
 
 ### Security

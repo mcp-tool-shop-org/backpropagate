@@ -1,0 +1,9 @@
+{
+  "name": "backpropagate-release-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned tool installs for .github/workflows/release.yml (the CycloneDX npm SBOM generator). Not part of the published package. Install with `npm ci`; refresh with `npm install --package-lock-only` and commit package.json + package-lock.json together.",
+  "dependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1"
+  }
+}

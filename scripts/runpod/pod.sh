@@ -44,7 +44,7 @@ VOLUME_GB="${RUNPOD_VOLUME_GB:-0}"
 AUTH=(-H "Authorization: Bearer ${RUNPOD_API_KEY}")
 
 _create_once() {  # gpu cloud min_ram name -> prints pod id or nothing
-  local body
+  local body resp
   body=$(python - "$1" "$2" "$3" "$4" "$IMAGE" "$PUBKEY_FILE" "$DISK_GB" "$VOLUME_GB" <<'PY'
 import json, os, sys
 gpu, cloud, ram, name, image, pub, disk, volume = sys.argv[1:9]
@@ -61,8 +61,10 @@ if int(volume) > 0:
 print(json.dumps(body))
 PY
 )
-  curl -s -X POST "$API/pods" "${AUTH[@]}" -H "Content-Type: application/json" --data "$body" \
-    | python -c "import json,sys; d=json.load(sys.stdin); print(d.get('id') or '', file=sys.stdout); print(json.dumps({k:d.get(k) for k in ('id','costPerHr','memoryInGb','machineId','error')}), file=sys.stderr)"
+  # Capture the response, then parse it: no download is piped into an
+  # interpreter (OpenSSF Scorecard Pinned-Dependencies: downloadThenRun).
+  resp=$(curl -s -X POST "$API/pods" "${AUTH[@]}" -H "Content-Type: application/json" --data "$body")
+  python -c "import json,sys; d=json.load(sys.stdin); print(d.get('id') or '', file=sys.stdout); print(json.dumps({k:d.get(k) for k in ('id','costPerHr','memoryInGb','machineId','error')}), file=sys.stderr)" <<<"$resp"
 }
 
 cmd="${1:-}"; shift || true
@@ -81,7 +83,8 @@ case "$cmd" in
     done ;;
   ssh-info)
     for _ in $(seq 1 20); do
-      out=$(curl -s "$API/pods/$1" "${AUTH[@]}" | python -c "import json,sys; d=json.load(sys.stdin); pm=d.get('portMappings') or {}; print(d.get('publicIp') or '', pm.get('22',''))")
+      resp=$(curl -s "$API/pods/$1" "${AUTH[@]}")
+      out=$(python -c "import json,sys; d=json.load(sys.stdin); pm=d.get('portMappings') or {}; print(d.get('publicIp') or '', pm.get('22',''))" <<<"$resp")
       set -- "$1" $out
       if [ -n "${2:-}" ] && [ -n "${3:-}" ]; then echo "ssh -i $SSH_KEY -p $3 root@$2"; exit 0; fi
       sleep 30
@@ -93,7 +96,8 @@ case "$cmd" in
     ssh -i "$SSH_KEY" -p "$port" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=25 "$host" \
       "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader; free -g | sed -n 2p; df -h / /workspace 2>/dev/null | tail -n +2; python -c 'import torch;print(torch.__version__, torch.cuda.is_available())'" ;;
   list)
-    curl -s "$API/pods" "${AUTH[@]}" | python -c "import json,sys; [print(p['id'], p.get('name'), p.get('desiredStatus'), p.get('costPerHr')) for p in json.load(sys.stdin)]" ;;
+    resp=$(curl -s "$API/pods" "${AUTH[@]}")
+    python -c "import json,sys; [print(p['id'], p.get('name'), p.get('desiredStatus'), p.get('costPerHr')) for p in json.load(sys.stdin)]" <<<"$resp" ;;
   delete)
     curl -s -o /dev/null -w "DELETE $1 -> HTTP %{http_code}\n" -X DELETE "$API/pods/$1" "${AUTH[@]}" ;;
   *)

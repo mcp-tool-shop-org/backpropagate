@@ -42,6 +42,8 @@ on:
       - 'uv.lock'
       - 'Dockerfile'
       - 'requirements*.txt'
+      - 'requirements/**'
+      - 'scripts/ci_install_locked.sh'
       - '.github/workflows/**'
       - 'atlas/**'
       # Codecov reads its status and comment settings from this file.
@@ -191,7 +193,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
+          # LOCKED INSTALLS (OpenSSF Scorecard Pinned-Dependencies). Every cell
+          # but the no-unsloth one installs from uv.lock through
+          # scripts/ci_install_locked.sh: `uv export --frozen` -> `pip install
+          # --require-hashes`, so each package is verified against a hash
+          # committed in uv.lock and the run tests the exact set the lock
+          # describes. `pip install --upgrade pip` is gone for the same reason:
+          # the pip that setup-python ships is the pip under test, not whatever
+          # PyPI served this minute.
+          #
+          # FRESH-RESOLVE COVERAGE IS KEPT where a lock cannot stand in: this
+          # job's no-unsloth cell (below; the only one that is fresh by design),
+          # the weekly nightly-train-smoke.yml (an upstream bump is invisible to
+          # a paths filter), and post-publish-smoke.yml (what PyPI actually
+          # serves, on 2 OSes x 4 Pythons).
+          #
           # Windows takes the same feature surface MINUS `export`.
           # llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its
           # 74.9 MB sdist and compiles it: measured 9.0 min of a 20 min job on
@@ -213,6 +229,20 @@ jobs:
           # A matrix `extras` value overrides both branches (see the ubuntu /
           # 3.13 include above): that cell installs `full` MINUS `unsloth`.
           if [ -n "${MATRIX_EXTRAS}" ]; then
+            # UNLOCKED ON PURPOSE (the one fresh-by-design install in this file).
+            #
+            # This cell exists to install the way a user's `pip install
+            # backpropagate` does: a FRESH resolve with no lock, so the resolver
+            # walks to whatever trl / transformers / torch the index serves today
+            # (see CIDOCS-B-103 in pyproject.toml and the KTO `TypeError` this
+            # cell was added for). A locked install would test the same set on
+            # every run and could never see the next resolver walk-back.
+            #
+            # OpenSSF Scorecard flags this line under Pinned-Dependencies, and
+            # that deduction is accepted: pinning it would remove the CI
+            # coverage of what users actually get. Do not "fix" it with a
+            # lock, a hash file or a tool Scorecard does not parse -- that
+            # would keep the score and lose the coverage.
             pip install -e ".[${MATRIX_EXTRAS}]"
             # Fail loudly if unsloth arrived anyway (another extra started
             # pulling it in): the cell would then test the stack every other
@@ -223,9 +253,12 @@ jobs:
             fi
             echo "::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')"
           elif [ "${{ runner.os }}" = "Windows" ]; then
-            pip install -e ".[dev,full-no-export]"
+            # Locked, like Linux, minus `export` (see above). uv.lock moved torch
+            # to 2.12.1; the 2.10.0 it pinned before died with "Illegal
+            # instruction" in a CPU bf16 kernel on the hosted Windows runner.
+            bash scripts/ci_install_locked.sh dev full-no-export
           else
-            pip install -e ".[dev,full]"
+            bash scripts/ci_install_locked.sh dev full
           fi
         env:
           # Empty on every cell except the one that sets `extras`.
@@ -301,6 +334,22 @@ jobs:
       # for the long-tail tests that dominate wall-clock). The tests
       # agent owns the per-test `serial` / `xdist_group` marker audit;
       # this YAML is the consumer.
+      # Some hosted Windows VMs advertise CPU features (AVX-512 BF16 / AMX) in
+      # CPUID that the guest OS does not enable, and torch's CPU kernels pick
+      # them anyway: tests/test_block_engine.py::TestPrecision::
+      # test_fp32_block_trains_under_bf16_autocast then dies with "Illegal
+      # instruction" (exit 132). It is intermittent across runs of the same
+      # commit (it hit main, PR and fuzz branches alike, on torch 2.10 and
+      # 2.12), so it follows the runner hardware, not the code. Cap the ISA
+      # that ATen and oneDNN dispatch to on Windows; results are unchanged,
+      # only the kernel choice is.
+      - name: Cap CPU instruction set (Windows runners)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "ATEN_CPU_CAPABILITY=avx2" >> "$GITHUB_ENV"
+          echo "ONEDNN_MAX_CPU_ISA=AVX2" >> "$GITHUB_ENV"
+
       - name: Run tests
         if: matrix.python-version != '3.11'
         shell: bash
@@ -479,8 +528,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,full]"
+          bash scripts/ci_install_locked.sh dev full
 
       - name: Run tests under -n auto --dist worksteal
         shell: bash
@@ -525,12 +573,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      # uv comes from PyPI under --require-hashes (requirements/uv.txt), not
+      # from `curl | sh`: a script piped into a shell is not pinned to anything.
       - name: Install uv
         shell: bash
         run: |
           set -euo pipefail
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          pip install --require-hashes -r requirements/uv.txt
 
       - name: uv sync --frozen --extra dev --extra full
         shell: bash
@@ -626,8 +675,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -e ".[ui]"
+          bash scripts/ci_install_locked.sh ui
 
       - name: Reflex dry-run compile (all pages)
         if: steps.filter.outputs.ui == 'true'
@@ -666,6 +714,50 @@ jobs:
           a.app._compile(dry_run=True)
           print("Reflex dry-run compile: OK — all pages compiled.")
 
+  # Docker image build smoke.
+  #
+  # The Dockerfile installs from uv.lock with hashes (uv exported to a hashed
+  # requirements file, `pip install --require-hashes --no-deps`, the project
+  # built to a wheel with a hash-pinned hatchling). Nothing else in CI builds
+  # the image -- publish.yml does, at release time, after PyPI has already been
+  # published -- so a Dockerfile that stopped building would first be noticed
+  # in the middle of a release. This builds the builder stage (where every
+  # install happens) on amd64 and runs the installed entry point.
+  #
+  # Gated INSIDE the job (dorny/paths-filter, as ui-compile-smoke does) rather
+  # than by a workflow-level paths filter, which would leave a required-check
+  # deadlock (see the comment at the top of this file). backpropagate/** is
+  # deliberately not in the filter: the image installs the project's own source
+  # as a wheel, and the unit-test matrix already covers that code.
+  docker-build-smoke:
+    name: Docker image build smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Filter image-relevant paths
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        with:
+          filters: |
+            image:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'uv.lock'
+              - 'pyproject.toml'
+              - 'requirements/uv.txt'
+              - 'requirements/build-backend.txt'
+              - '.github/workflows/ci.yml'
+
+      - name: Build the builder stage
+        if: steps.filter.outputs.image == 'true'
+        run: docker build --target builder --tag backpropagate-builder:ci .
+
+      - name: Run the installed entry point
+        if: steps.filter.outputs.image == 'true'
+        run: docker run --rm --entrypoint /opt/venv/bin/backpropagate backpropagate-builder:ci --version
+
   # --- Security scanning (merged from security.yml) ---
 
   bandit:
@@ -684,7 +776,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Bandit
-        run: pip install bandit[sarif]
+        run: pip install --require-hashes -r requirements/bandit.txt
 
       - name: Run Bandit scan (SARIF — all severities to Security tab)
         run: |
@@ -759,6 +851,10 @@ jobs:
     # call out. This still kills a genuinely hung job; it just no longer
     # cancels one that is only riding out an OSV brownout.
     timeout-minutes: 15
+    env:
+      # The hashed export of uv.lock (core + dev) that every pip-audit step
+      # below audits. Relative: the `runner` context is not available here.
+      AUDIT_REQ: audit-requirements.txt
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -767,11 +863,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      # pip-audit comes from a hash-pinned file. What it audits is the lock
+      # itself: uv.lock exported with hashes, read with --disable-pip, so
+      # nothing is installed or resolved -- the findings are about exactly the
+      # versions the lock pins, not about whatever a fresh resolve picked today.
+      - name: Install pip-audit and export the audit set
         run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements/pip-audit.txt
+          bash scripts/ci_install_locked.sh --export-only "${AUDIT_REQ}" dev
 
       # Advisory step: report EVERY known vuln (fixed and unfixed) for
       # human review. Never blocks — informational only. Mirrors Trivy's
@@ -783,6 +882,7 @@ jobs:
         run: |
           set -euo pipefail
           pip-audit \
+            -r "${AUDIT_REQ}" --require-hashes --disable-pip \
             --desc on \
             --format markdown \
             --output pip-audit-report.md || true
@@ -808,7 +908,7 @@ jobs:
       #   - GHSA-69w3-r845-3855 (transformers.Trainer ACE, MED): affects
       #     transformers <5.0.0rc3. uv.lock has 5.5.0.
       #
-      # Note what this job can see: it installs `.[dev]` only, so a package
+      # Note what this job can see: it audits `.[dev]` only, so a package
       # reachable only through an extra (the unsloth tree, reflex, wandb,
       # llama-cpp-python) is never audited here. The full locked closure is
       # the Trivy job's scan of uv.lock.
@@ -828,6 +928,7 @@ jobs:
           # To accept an ID: add `--ignore-vuln <GHSA-id> \` to this command AND
           # its rationale + review-by date to the comment block above.
           pip-audit \
+            -r "${AUDIT_REQ}" --require-hashes --disable-pip \
             --vulnerability-service osv \
           && echo "pip-audit: no known advisories." \
           || echo "::warning::pip-audit reports advisories (above) that are not on the decision-on-record list in ci.yml. Triage: bump the dep in pyproject.toml + uv.lock, or accept the ID with --ignore-vuln plus a one-line rationale and review-by date in the CIDOCS-B-101 comment. New FIXABLE advisories are the signal."
@@ -870,6 +971,7 @@ jobs:
             rm -f pip-audit.json
             # Exit status deliberately ignored (see above); report_ok decides.
             timeout 100 pip-audit \
+              -r "${AUDIT_REQ}" --require-hashes --disable-pip \
               --vulnerability-service osv \
               --format json \
               --output pip-audit.json \
@@ -991,6 +1093,9 @@ jobs:
         # tab via SARIF upload. The CRITICAL-only gate below provides
         # the real floor in v1.1.2.
         #
+        # .trivyignore was RECREATED 2026-10-01 with one entry, CVE-2026-9856
+        # (transformers, mitigated in code by security.check_chat_template_names;
+        # see .trivyignore and osv-scanner.toml). Earlier history:
         # .trivyignore WAS RETIRED 2026-09-23 at zero live entries, per its
         # own protocol. All 13 of its IDs (urllib3, python-multipart, pip,
         # Pillow, idna, GitPython) are fixed at the versions uv.lock pins, and
@@ -1013,6 +1118,7 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
         continue-on-error: true
 
       - name: Upload SARIF to GitHub Security
@@ -1035,6 +1141,7 @@ jobs:
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
           exit-code: '1'
 
   # secrets-scan-baseline-noop: a deliberately-empty placeholder so the
@@ -1089,13 +1196,22 @@ jobs:
           python-version: "3.11"
           cache: 'pip'
 
+      # build + twine + the hatchling backend, all from one hash-pinned file;
+      # --no-isolation so `python -m build` uses that hatchling instead of
+      # fetching an unhashed one into a throwaway environment.
       - name: Install build tools
+        run: pip install --require-hashes -r requirements/build-tools.txt
+
+      # The lock must describe pyproject.toml. Every other job exports uv.lock
+      # with --frozen (no check), so this is the one place a stale lock fails.
+      # Same pinned uv as every other job; it is installed here for this check.
+      - name: uv.lock is up to date
         run: |
-          python -m pip install --upgrade pip
-          pip install build twine
+          pip install --require-hashes -r requirements/uv.txt
+          uv lock --check
 
       - name: Build package
-        run: python -m build
+        run: python -m build --no-isolation
 
       - name: Check package
         run: twine check dist/*
@@ -1206,8 +1322,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,full]"
+          # build + twine (and the hatchling backend) first: the locked install
+          # runs last, so its versions win wherever the two sets overlap.
+          pip install --require-hashes -r requirements/build-tools.txt
+          bash scripts/ci_install_locked.sh dev full
           # CIDOCS-F-006 (v1.4 Wave 6a) — verify.sh's `build` stage runs
           # `python -m build` + `twine check dist/*`. Pre-Wave-6a these
           # tools were missing from the verify-smoke environment; the
@@ -1215,8 +1333,7 @@ jobs:
           # deps as a JSON parse failure. Strict-flip surfaced both. The
           # dedicated `build` job (line 540) installs them; verify-smoke
           # mirrors that install so the build + twine_check stages have
-          # the tooling they advertise.
-          pip install build twine
+          # the tooling they advertise (installed above from requirements/).
 
       - name: Run verify.sh --format=json
         id: verify

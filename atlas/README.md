@@ -1,42 +1,44 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit ad3ec41 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit 40d00bd by Atlas 1.24.0.
 
 ## What this is
 
-13 parts, mostly Python (152 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 5 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+13 parts, mostly Python (163 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (16e6e37)
+## What changed since 2026-10-01 (ad3ec41)
 
-- fuzz now imports backpropagate.
-- tests now imports fuzz.
-- Fuzz (.github/workflows/fuzz.yml) is a new door. It starts by hand. It runs no file this map can see.
-- .github/workflows/fuzz.yml is now read by tests/test_fuzz_harnesses.py.
-- requirements/fuzz.txt is now read by .github/workflows/fuzz.yml and tests/test_fuzz_harnesses.py.
-- fuzz is a new part, drawn from `fuzz/**`.
-- requirements is a new part, drawn from `requirements/**`.
-- 201 files added and 20 changed content, across 9 parts.
+- CI's push trigger now also names `requirements/**` and `scripts/ci_install_locked.sh`.
+- CI now also runs backpropagate/cli.py and scripts/ci_install_locked.sh.
+- CI now also checks LICENSE, README.md, pyproject.toml and 3 more.
+- And 4 more changes to doors.
+- .github/release-tools/package-lock.json is now read by .github/workflows/release.yml.
+- .github/release-tools/package.json is now read by .github/workflows/release.yml.
+- requirements/bandit.txt is now read by .github/workflows/ci.yml.
+- And 6 more new writers and readers of places.
+- 28 files added and 23 changed content, across 7 parts.
 
 ## What comes in
 
-1. **CI.** On a pull request to main; on a push to main touching 9 paths; or by hand. Runs tests/ and verify.sh; checks backpropagate/.
-2. **Publish.** When a release is published; when the workflow Release completes; or by hand. Runs backpropagate/cli.py; checks backpropagate/; packs LICENSE, README.md and pyproject.toml into an image.
-3. **Nightly Train Smoke.** On a schedule (`0 4 * * 1`), Monday at 04:00 UTC; or by hand. Runs scripts/nightly_train_smoke.py.
-4. **Doc Drift Check.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs scripts/check_doc_drift.py.
-5. **Pages deploy.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
-6. **Post-Publish Smoke.** When the workflow Publish completes; or by hand. Runs backpropagate/cli.py.
-7. **Fuzz.** By hand. Runs no file this map can see.
-8. **Mutation testing (mutmut).** By hand. Runs no file this map can see.
-9. **OpenSSF Scorecard.** On a `branch_protection_rule` event; on a push to main; on a schedule (`0 6 * * 1`), Monday at 06:00 UTC; or by hand. Runs no file this map can see.
-10. **Release.** When a tag matching `v*` is pushed; or by hand. Runs no file this map can see.
+1. **CI.** On a pull request to main; on a push to main touching 11 paths; or by hand. Runs backpropagate/cli.py, scripts/ci_install_locked.sh, tests/ and 1 more; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, pyproject.toml and 1 more into an image.
+2. **Publish.** When a release is published; when the workflow Release completes; or by hand. Runs backpropagate/cli.py; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, pyproject.toml and 1 more into an image.
+3. **Release.** When a tag matching `v*` is pushed; or by hand. Runs scripts/ci_install_locked.sh; checks pyproject.toml.
+4. **Nightly Train Smoke.** On a schedule (`0 4 * * 1`), Monday at 04:00 UTC; or by hand. Runs scripts/nightly_train_smoke.py.
+5. **Doc Drift Check.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs scripts/check_doc_drift.py.
+6. **Mutation testing (mutmut).** By hand. Runs scripts/ci_install_locked.sh.
+7. **Pages deploy.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
+8. **Post-Publish Smoke.** When the workflow Publish completes; or by hand. Runs backpropagate/cli.py.
+9. **Fuzz.** By hand. Runs no file this map can see.
+10. **OpenSSF Scorecard.** On a `branch_protection_rule` event; on a push to main; on a schedule (`0 6 * * 1`), Monday at 06:00 UTC; or by hand. Runs no file this map can see.
 11. **backprop** (a command people run). Runs backpropagate/cli.py.
 12. **backpropagate** (a command people run, from package.json). Runs bin/backpropagate.js.
 13. **backpropagate** (a command people run, from pyproject.toml). Runs backpropagate/cli.py.
 
 ## What happens through CI
 
-1. The workflow runs verify.sh in the repository root and tests/ in tests; it checks backpropagate/ in backpropagate.
-2. That reaches fuzz (6 files) and scripts (1 file).
+1. The workflow runs backpropagate/cli.py in backpropagate, verify.sh in the repository root, scripts/ci_install_locked.sh in scripts and tests/ in tests; it checks backpropagate/ in backpropagate and requirements/build-backend.txt and requirements/uv.txt in requirements; it packs 4 files in the repository root into an image.
+   1. Inside backpropagate/cli.py, `main` does, in order: `logging_config.py` (5 steps).
+2. That reaches fuzz (6 files).
 3. It uploads coverage to Codecov.
 4. It scans code with CodeQL.
 
@@ -46,11 +48,15 @@ CI writes nothing this map can see.
 
 ## The other doors
 
-**Publish** runs backpropagate/cli.py, checks backpropagate/, packs LICENSE, README.md and pyproject.toml into an image, and publishes to PyPI and a container image.
+**Publish** runs backpropagate/cli.py, checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt, packs LICENSE, README.md, pyproject.toml and 1 more into an image, publishes to PyPI and a container image, and uploads dist/* and files named at run time to the release.
+
+**Release** runs scripts/ci_install_locked.sh, checks pyproject.toml, publishes to npm, creates a GitHub release, and uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release.
 
 **Nightly Train Smoke** runs scripts/nightly_train_smoke.py, reaches backpropagate, and opens an issue when it fails.
 
 **Doc Drift Check** runs scripts/check_doc_drift.py.
+
+**Mutation testing (mutmut)** runs scripts/ci_install_locked.sh, commits .github/mutmut-baseline.txt and pushes to a branch for review, never to main, and opens a pull request.
 
 **Pages deploy** runs site/astro.config.mjs and site/src/, and deploys the site.
 
@@ -58,11 +64,7 @@ CI writes nothing this map can see.
 
 **Fuzz** runs no file this map can see.
 
-**Mutation testing (mutmut)** runs no file this map can see, commits .github/mutmut-baseline.txt and pushes to a branch for review, never to main, and opens a pull request.
-
 **OpenSSF Scorecard** runs no file this map can see and scans code with CodeQL.
-
-**Release** runs no file this map can see, publishes to npm, creates a GitHub release, and uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release.
 
 **backprop** (a command people run) runs backpropagate/cli.py.
 
@@ -73,8 +75,9 @@ CI writes nothing this map can see.
 ## What breaks what
 
 - **backpropagate** is imported by 2 parts (fuzz, scripts), and by 1 more only from tests; it sits on the path of 6 doors.
-- **scripts** is imported only from tests, by 1 part (tests), and sits on the path of 3 doors.
-- **the repository root** is imported by no other part and sits on the path of 2 doors.
+- **scripts** is imported only from tests, by 1 part (tests), and sits on the path of 5 doors.
+- **the repository root** is imported by no other part and sits on the path of 3 doors.
+- **requirements** is imported by no other part and sits on the path of 2 doors.
 - **fuzz** is imported only from tests, by 1 part (tests), and sits on the path of 1 door.
 - **CITATION.cff** is written by scripts and read by scripts; a hand edit reaches every reader.
 
@@ -108,13 +111,13 @@ People write .claude/, .github/, assets/, docs/, examples/, requirements/ and si
 
 ## Where to start
 
-backpropagate/cli.py → backpropagate/logging_config.py
+.github/workflows/ci.yml → backpropagate/cli.py → backpropagate/logging_config.py
 
-Read those in order to follow one run of backprop end to end. This path follows backprop (a command people run) from its entry, since CI runs only tests and checks.
+Read those in order to follow one pull request end to end.
 
 ## What this map cannot see
 
-- 43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
+- 44 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
 - 8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.
 - 8 writes and 10 reads use paths built at run time and are not named here.
 - 31 writes and 64 reads go to a path their caller passes, not to this repository.

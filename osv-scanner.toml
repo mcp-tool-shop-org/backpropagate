@@ -1,0 +1,46 @@
+# Advisories in uv.lock that do not affect backpropagate, with the reason for each.
+# Read by osv-scanner and by OpenSSF Scorecard's Vulnerabilities check.
+#
+# Rule for this file: an entry needs a reason a reviewer can check against the
+# code, and an expiry. When an entry expires, re-check the advisory and the
+# lock: delete the entry if the lock has moved past the fix, or renew it with
+# the reason re-confirmed. Never add an entry to hide an advisory that affects
+# users.
+#
+# Why these packages cannot simply be upgraded: uv.lock resolves every extra
+# at once, and the [unsloth] extra pins unsloth's own caps (unsloth 2026.9.12:
+# torch<2.13, transformers<=5.5.0, datasets<4.4). The torch, transformers and
+# datasets fixes below are above those caps.
+#
+# Reviewed 2026-10-01 by the lead (Claude), with the Director's approval of
+# the approach. Code references are to main at the time of review.
+
+[[IgnoredVulns]]
+id = "GHSA-rrmf-rvhw-rf47"
+ignoreUntil = 2027-01-01
+reason = "torch.jit.script memory corruption (CVE-2025-3000), local attack via the code passed to torch.jit.script. backpropagate never calls torch.jit.script; nothing it runs scripts user-supplied code. Fixed in torch 2.13, above unsloth's torch<2.13 cap."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-139"
+ignoreUntil = 2027-01-01
+reason = "torch pt2 loading handler deserialization (CVE-2026-4538), local attack via a crafted .pt2 archive. backpropagate never loads .pt2 archives (no torch.export.load); it loads safetensors, and .pt files only with weights_only=True (security.safe_torch_load; the multi_run adapter fallback). No fixed release."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-3929"
+ignoreUntil = 2027-01-01
+reason = "transformers < 5.10 save_pretrained writes named chat templates to paths taken from the tokenizer config (CVE-2026-9856). Reachable in principle, because backpropagate saves tokenizers it loaded from the Hub, and mitigated in backpropagate: security.check_chat_template_names refuses path-like template names right after every tokenizer load that can be saved (Trainer load paths, export.load_model_for_export), raising INPUT_UNSAFE_CHAT_TEMPLATE before any save. tests/test_chat_template_guard.py shows both the escape on the installed transformers and the refusal. Fixed in transformers 5.10, above unsloth's transformers<=5.5.0 cap."
+
+[[IgnoredVulns]]
+id = "GHSA-x9r9-c232-4q39"
+ignoreUntil = 2027-01-01
+reason = "transformers <= 5.8.1 fetches custom_generate/generate.py before the trust_remote_code consent check (CVE-2026-80047); it writes the file but does not run it. backpropagate never passes custom_generate (eval.py generates with max_new_tokens/do_sample/temperature only), and transformers 5.5 auto-loads custom_generate at from_pretrained only when trust_remote_code=True, which backpropagate defaults to False (settings.model.trust_remote_code). A user who turns it on has already consented to running repository code. No fixed release in the range unsloth allows."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-3716"
+ignoreUntil = 2027-01-01
+reason = "datasets <= 5.0.0 folder-based builders read files named by unvalidated file_name metadata, and leak them through Dataset.save_to_disk or Dataset.push_to_hub (CVE-2026-66007). backpropagate loads json/csv files or Hub datasets for text training (text/messages columns) and never calls Dataset.save_to_disk or Dataset.push_to_hub (its push_to_hub uploads models and tokenizers), so there is no output path for leaked files. Fixed in datasets 5.0.1, above unsloth's datasets<4.4 cap."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-2447"
+ignoreUntil = 2027-01-01
+reason = "diskcache pickles cache entries, so an attacker who can write to the cache directory gets code execution when the cache is read (CVE-2025-69872). It is in the lock only through llama-cpp-python (LlamaDiskCache); backpropagate imports neither diskcache nor llama_cpp's cache. No fixed release."

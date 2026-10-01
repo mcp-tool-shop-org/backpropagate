@@ -1,0 +1,5 @@
+# Build backend for pyproject.toml [build-system] (hatchling>=1.27), installed up front so
+# `pip install --no-build-isolation` / `python -m build --no-isolation` never fetch it
+# unhashed at build time. `editables` is what hatchling asks for on an editable install.
+hatchling>=1.27
+editables

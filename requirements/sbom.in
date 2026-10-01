@@ -1,0 +1,2 @@
+# CycloneDX SBOM generator (release.yml). Entry point: cyclonedx-py.
+cyclonedx-bom>=5.0.0

@@ -349,7 +349,8 @@ def _resolve_resume_checkpoint(path: str) -> str | None:
         return None
     from transformers.trainer_utils import get_last_checkpoint
 
-    return get_last_checkpoint(str(p))
+    last: str | None = get_last_checkpoint(str(p))
+    return last
 
 
 # F-014: chat-template marker detection for ``train_on_responses_only``.

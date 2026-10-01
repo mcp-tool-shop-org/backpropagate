@@ -39,32 +39,99 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Read-only by default. publish-pypi, docker, attach-dist and provenance each
+# grant themselves exactly what they need (OpenSSF Scorecard Token-Permissions).
+permissions:
+  contents: read
+
+# RELEASE ASSETS AND SLSA PROVENANCE (OpenSSF Scorecard Signed-Releases)
+#
+# `build` is the ONLY place the wheel and sdist are made. Everything that ships
+# them consumes the `dist` artifact it uploads, so these are the same bytes:
+#   * publish-pypi   uploads dist/* to PyPI (Trusted Publishing; it MUST stay in
+#                    this file -- PyPI authenticates the workflow filename)
+#   * attach-dist    attaches dist/* to the GitHub Release
+#   * provenance     SLSA provenance for those bytes, attached to the same
+#                    Release as `<name>.intoto.jsonl`
+# `build` publishes the sha256 of every file as the `hashes` output; the three
+# consumers all check that, so a swapped or truncated artifact fails loudly.
+#
+# provenance and attach-dist only run when a release tag can be resolved
+# (a manual re-run with no tag still builds and publishes to PyPI as before).
+# They are siblings of publish-pypi, not gates on it: a problem in the new
+# release-asset path must not be able to stop a PyPI release.
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      # base64 of `sha256sum <each file in dist/>` -- the SLSA generator's
+      # `base64-subjects` format, also what the consumers verify against.
+      hashes: ${{ steps.hash.outputs.hashes }}
+      # The release tag this run is for ("" when none can be resolved).
+      tag: ${{ steps.tag.outputs.tag }}
     # When triggered by workflow_run, only proceed if the upstream Release
     # workflow succeeded. release: published / workflow_dispatch invocations
     # set workflow_run to null, which evaluates this expression to truthy
     # (we only want to short-circuit FAILED workflow_run events).
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      # Resolve the release tag first so the checkout can build THAT tag. Under
+      # `workflow_run` a bare checkout is the default branch's head, not the tag
+      # the upstream Release run was for (see the `Resolve release version` step
+      # in the docker job for the same trap), and a provenance statement about
+      # bytes built from some other commit would be worse than none.
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        env:
+          # Through env, never interpolated into the script: head_branch is a
+          # ref name.
+          WORKFLOW_RUN_REF: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          REF="${WORKFLOW_RUN_REF:-${RELEASE_TAG:-${INPUT_TAG:-}}}"
+          if [[ "${REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "tag=${REF}" >> "$GITHUB_OUTPUT"
+            echo "Release tag: ${REF}"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "::notice::No release tag resolved (ref='${REF}'): building from the triggering ref; release assets and provenance will be skipped."
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag && format('refs/tags/{0}', steps.tag.outputs.tag) || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
 
+      # build + twine + the hatchling backend from one hash-pinned file;
+      # --no-isolation so the wheel is built with THAT hatchling instead of an
+      # unhashed one fetched into a throwaway build environment.
       - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
+        run: pip install --require-hashes -r requirements/build-tools.txt
 
       - name: Build package
-        run: python -m build
+        run: python -m build --no-isolation
 
       - name: Check package
         run: twine check dist/*
+
+      # `cd dist` so the subject names are bare file names, matching the names
+      # the files get as release assets and on PyPI.
+      - name: Hash the distributions
+        id: hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "hashes=$(sha256sum -- * | base64 -w0)" >> "$GITHUB_OUTPUT"
+          sha256sum -- *
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -86,6 +153,17 @@ jobs:
         with:
           name: dist
           path: dist/
+
+      # What goes to PyPI must be byte-for-byte what `build` hashed (and so what
+      # the provenance below describes).
+      - name: Verify dist/ matches the build's hashes
+        shell: bash
+        env:
+          HASHES: ${{ needs.build.outputs.hashes }}
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "${HASHES}" | base64 -d | sha256sum --check --strict
 
       # First attempt: the official OIDC trusted-publishing action.
       # On transient E409 (packument-save race documented across
@@ -124,6 +202,100 @@ jobs:
         with:
           skip-existing: true
           verbose: true
+
+  attach-dist:
+    name: Attach wheel + sdist to the GitHub Release
+    needs: build
+    if: ${{ needs.build.outputs.tag != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Verify dist/ matches the build's hashes
+        shell: bash
+        env:
+          HASHES: ${{ needs.build.outputs.hashes }}
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "${HASHES}" | base64 -d | sha256sum --check --strict
+
+      # The Release already exists: release.yml creates it and this workflow
+      # runs after it (workflow_run), or a person cut it by hand (release:
+      # published). --clobber makes a re-run replace its own files and nothing
+      # else: no other asset on the Release is touched.
+      - name: Upload to the Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+
+  # SLSA Build L3 provenance for dist/*, from the slsa-github-generator generic
+  # generator. It signs with this run's OIDC identity (Sigstore), records the
+  # build in Rekor, and uploads `multiple.intoto.jsonl` to the Release, which is
+  # the file name OpenSSF Scorecard's Signed-Releases check looks for. Verify a
+  # downloaded wheel with:
+  #   slsa-verifier verify-artifact <file> --provenance-path multiple.intoto.jsonl \
+  #     --source-uri github.com/mcp-tool-shop-org/backpropagate --source-tag <tag>
+  #
+  # PINNED BY TAG, NOT SHA -- the one reference in this repo that is. The
+  # generator verifies its own reference and fails the build for anything but a
+  # full `@vX.Y.Z` tag ("MUST be referenced by a tag of the form @vX.Y.Z ...
+  # fail if you reference it by a hash": slsa-github-generator,
+  # internal/builders/generic/README.md). Scorecard therefore counts it as one
+  # unpinned reusable workflow; that is the cost of SLSA3 provenance and it is
+  # accepted. Bump it deliberately, to a release tag.
+  #
+  # continue-on-error is ON until the first release has produced provenance
+  # end to end: this path cannot be exercised without cutting a release, and
+  # until it has been, a generator problem must not turn a PyPI release red or
+  # stop post-publish-smoke (which keys on this workflow succeeding).
+  # provenance-status below turns a failure into a visible warning. Flip
+  # `continue-on-error` to false once a release has carried a provenance file.
+  provenance:
+    name: SLSA provenance
+    needs: build
+    if: ${{ needs.build.outputs.tag != '' }}
+    permissions:
+      actions: read     # the generator detects the Actions environment
+      id-token: write   # sign the provenance with this run's OIDC identity
+      contents: write   # upload the provenance to the Release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.build.outputs.tag }}
+      continue-on-error: true
+
+  provenance-status:
+    name: SLSA provenance status
+    needs: [build, provenance]
+    if: ${{ always() && needs.build.outputs.tag != '' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report
+        shell: bash
+        env:
+          RESULT: ${{ needs.provenance.result }}
+          OUTCOME: ${{ needs.provenance.outputs.outcome }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${RESULT}" = "success" ] && { [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = "success" ]; }; then
+            echo "SLSA provenance for ${TAG}: generated and uploaded."
+          else
+            echo "::warning::SLSA provenance for ${TAG} was NOT produced (job result=${RESULT}, generator outcome=${OUTCOME:-n/a}). This release has no *.intoto.jsonl asset, so OpenSSF Scorecard Signed-Releases will not credit it. Read the 'SLSA provenance' job's logs; fix it, then re-run this workflow with workflow_dispatch (tag=${TAG}); re-uploading is idempotent."
+          fi
 
   docker:
     name: Publish to GHCR

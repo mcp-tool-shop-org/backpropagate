@@ -32,30 +32,46 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Node 24 (LTS) rather than 22 because of npm, not because of Node. npm
+      # >= 11.5 is required for OIDC trusted-publishing auth; Node 22 bundles
+      # npm 10.9, which signs Sigstore provenance fine but cannot negotiate the
+      # OIDC auth path -- the PUT returns a misleading 404 "not in this
+      # registry" (see memory: npm-115-required-for-oidc). Node 24 bundles npm
+      # 11.x (24.21.0 ships 11.19.0), so no separate npm install is needed.
+      #
+      # This replaces a sandbox `npm install npm@latest`, which could not be
+      # pinned: a committed lockfile for the npm CLI drags npm's bundled
+      # dependencies into the repo (brace-expansion, undici, ip-address), where
+      # Trivy flags them and no published npm release has fixed versions yet.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install npm >=11.5 in sandbox for OIDC trusted-publishing auth
+      - name: Require npm >= 11.5 for OIDC trusted-publishing auth
         run: |
-          # Node 22 ships npm 10.9, which signs Sigstore provenance fine but
-          # cannot negotiate the OIDC auth path for trusted publishing — the
-          # PUT returns a misleading 404 "not in this registry".
-          #
-          # An in-place `npm install -g npm@latest` races on Node 22's bundled
-          # npm 10.9 arborist rebuild and breaks irrecoverably (MODULE_NOT_FOUND:
-          # promise-retry). Sandbox install + PATH shadow avoids the race.
-          # See memory: npm-115-required-for-oidc
-          SANDBOX="$HOME/.npm-cli-sandbox"
+          NPM_VERSION="$(npm --version)"
+          echo "node $(node --version), npm ${NPM_VERSION}"
+          if ! node -e 'const [maj, min] = process.argv[1].split(".").map(Number); process.exit(maj > 11 || (maj === 11 && min >= 5) ? 0 : 1)' "${NPM_VERSION}"; then
+            echo "::error::npm ${NPM_VERSION} cannot do OIDC trusted publishing (needs >= 11.5). Use a Node release that bundles a newer npm."
+            exit 1
+          fi
+
+      # The CycloneDX npm SBOM tool, from a committed lockfile with `npm ci`
+      # (.github/release-tools/) instead of `npx --yes`, which ran whatever
+      # version was newest on release day. To move it:
+      #   cd .github/release-tools && npm install @cyclonedx/cyclonedx-npm@<version> --save-exact
+      # and commit package.json + package-lock.json together.
+      - name: Install pinned release tools
+        run: |
+          SANDBOX="$HOME/.release-tools"
           mkdir -p "$SANDBOX"
+          cp .github/release-tools/package.json .github/release-tools/package-lock.json "$SANDBOX/"
           pushd "$SANDBOX" >/dev/null
-          echo '{"name":"npm-cli-sandbox","version":"0.0.0","private":true}' > package.json
-          npm install --no-save --no-audit --no-fund --silent npm@latest
+          npm ci --no-audit --no-fund --silent
           popd >/dev/null
           echo "$SANDBOX/node_modules/.bin" >> "$GITHUB_PATH"
-          "$SANDBOX/node_modules/.bin/npm" --version
 
       - name: Verify tag matches package.json version
         run: |
@@ -91,13 +107,11 @@ jobs:
             exit 1
           fi
 
-      # No package-lock.json is committed (sole dep is @mcptoolshop/npm-launcher
-      # which is digest-locked by the registry). `npm install` is the honest
-      # path here; the previous `npm ci || npm install` fallback masked which
-      # branch was taken at release time.
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
-
+      # No dependency install step: package.json declares no dependencies (the
+      # old comment about @mcptoolshop/npm-launcher was stale), so the
+      # `npm install` that used to sit here installed nothing and, with no
+      # lockfile, could not have been pinned. If a dependency is ever added,
+      # commit package-lock.json and install it here with `npm ci`.
       - name: npm pack dry-run (verify shape)
         run: npm pack --dry-run
 
@@ -108,11 +122,13 @@ jobs:
       # Sigstore SBOM attestation already rides the `--provenance` flag on the
       # `npm publish` step above; this step adds the SBOM artifact itself to
       # the release so auditors can grep the dep tree without re-running
-      # `pip install` or `npm install`. The Python SBOM is generated from
-      # the package's installed dependency tree (cyclonedx-py environment
-      # mode — captures the full transitive closure that PyPI install
-      # actually pulls). The npm SBOM is generated from package.json.
-      # Both files are attached to the GH Release after creation.
+      # `pip install` or `npm install`. The Python SBOM describes the locked
+      # core dependency closure (uv.lock, no extras): the hashed export of the
+      # lock read by `cyclonedx-py requirements`, so it lists exactly the
+      # versions and hashes CI tested, reproducibly, rather than whatever a
+      # fresh `pip install .` resolved on release day. The npm SBOM is
+      # generated from package.json. Both files are attached to the GH Release
+      # after creation.
       - name: Set up Python for SBOM generation
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -122,33 +138,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
           # cyclonedx-bom (entrypoint: cyclonedx-py) is the maintained
           # Python SBOM generator and the de-facto pick for CycloneDX in
-          # PyPA tooling. The `environment` subcommand walks the current
-          # venv's installed package list — install the package first so
-          # the tree matches what `pip install backpropagate` would pull.
-          pip install "cyclonedx-bom>=5.0.0"
-          # Install backpropagate WITHOUT optional extras so the SBOM
-          # tracks the published wheel's required-dep closure. Operators
-          # who install with [full] get extra packages; those are surfaced
-          # via pyproject.toml's optional-dependencies table, which the
-          # `requirements` subcommand below covers as a static manifest.
-          pip install .
+          # PyPA tooling. Installed from a hash-pinned file.
+          pip install --require-hashes -r requirements/sbom.txt
+          # Core dependencies only (no extras), so the SBOM tracks the
+          # published wheel's required-dep closure. Operators who install
+          # with [full] get extra packages; those are surfaced via
+          # pyproject.toml's optional-dependencies table.
+          bash scripts/ci_install_locked.sh --export-only "${RUNNER_TEMP}/sbom-requirements.txt"
 
-          # Wheel SBOM — actual installed dependency closure.
-          cyclonedx-py environment \
-            --output-format JSON \
-            --output-file backpropagate-sbom.cdx.json
+          # Wheel SBOM — the locked dependency closure, with the project as
+          # the root component.
+          cyclonedx-py requirements "${RUNNER_TEMP}/sbom-requirements.txt" \
+            --pyproject pyproject.toml \
+            --of JSON \
+            -o backpropagate-sbom.cdx.json
 
-          # Optional: capture the npm shim's tree too (single dep on the
-          # friendly-error shim path; still useful for audit trail).
-          if command -v npm >/dev/null 2>&1 && [ -f package.json ]; then
-            npm install --no-audit --no-fund --no-save || true
-            # @cyclonedx/cyclonedx-npm requires only the lockfile; the
-            # repo doesn't commit one but `npm install` above creates one
-            # locally for this run.
-            npx --yes @cyclonedx/cyclonedx-npm \
+          # Optional: capture the npm shim's tree too (the shim declares no
+          # dependencies; still useful for the audit trail). cyclonedx-npm
+          # comes from the committed lockfile in .github/release-tools/ (put on
+          # PATH by the "Install pinned release tools" step), not from `npx --yes`.
+          if command -v cyclonedx-npm >/dev/null 2>&1 && [ -f package.json ]; then
+            # The tool wants evidence of an installed tree (a lockfile or a
+            # node_modules/). The shim has no dependencies, so an empty
+            # node_modules/ IS its installed state.
+            mkdir -p node_modules
+            cyclonedx-npm \
               --output-format JSON \
               --output-file backpropagate-npm-sbom.cdx.json || \
               echo "::warning::npm SBOM generation skipped (non-fatal)"

@@ -116,7 +116,10 @@ class TestHarnessesHaveTeeth:
 
     def test_paths_catches_a_sandbox_that_ignores_allowed_base(self, monkeypatch):
         module, check = load("paths")
-        monkeypatch.setattr(module, "safe_path", lambda cand, **_kw: Path(cand).resolve())
+        # os.path.realpath, not Path.resolve: on Python 3.11 resolve() raises
+        # RuntimeError on a symlink loop in the corpus, before the harness can
+        # flag the escape this sabotage exists to show.
+        monkeypatch.setattr(module, "safe_path", lambda cand, **_kw: Path(os.path.realpath(cand)))
         assert first_failure(check, corpus_and_random("paths", 200)) is not None
 
     def test_paths_catches_an_empty_forbidden_denylist(self, monkeypatch):

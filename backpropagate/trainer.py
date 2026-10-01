@@ -331,6 +331,27 @@ def _compute_dataset_hash(dataset: Any) -> str | None:
         return None
 
 
+def _resolve_resume_checkpoint(path: str) -> str | None:
+    """The checkpoint directory to hand to ``train(resume_from_checkpoint=...)``.
+
+    ``Trainer.train(resume_from_checkpoint=<str>)`` takes ONE checkpoint
+    directory and reads ``trainer_state.json`` from it. The run history stores the
+    run's output directory, which holds ``checkpoint-<step>`` subdirectories, so
+    passing it straight through made every single-run ``resume_from`` fail with
+    ``FileNotFoundError: .../trainer_state.json``. Return ``path`` itself when it
+    already is a checkpoint, else its newest ``checkpoint-<step>`` child, else
+    ``None`` (nothing to resume from).
+    """
+    p = Path(path)
+    if (p / "trainer_state.json").is_file():
+        return str(p)
+    if not p.is_dir():
+        return None
+    from transformers.trainer_utils import get_last_checkpoint
+
+    return get_last_checkpoint(str(p))
+
+
 # F-014: chat-template marker detection for ``train_on_responses_only``.
 # Unsloth's masker needs literal substrings that uniquely tag the start of the
 # user turn (``instruction_part``) and the start of the assistant turn
@@ -5857,10 +5878,23 @@ class Trainer:
                     _resume_arg: str | None = None
                     if resume_checkpoint_path:
                         if Path(resume_checkpoint_path).exists():
-                            _resume_arg = resume_checkpoint_path
-                            logger.info(
-                                f"Resuming single-run training from {_resume_arg}"
+                            # The run history records the run's OUTPUT directory;
+                            # HF wants ONE checkpoint directory (it reads
+                            # <dir>/trainer_state.json), so resolve the newest
+                            # checkpoint-<step> inside it.
+                            _resume_arg = _resolve_resume_checkpoint(
+                                resume_checkpoint_path
                             )
+                            if _resume_arg is not None:
+                                logger.info(
+                                    f"Resuming single-run training from {_resume_arg}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"resume_from path {resume_checkpoint_path!r} "
+                                    "holds no checkpoint-<step> directory and is "
+                                    "not itself a checkpoint; starting fresh."
+                                )
                         else:
                             logger.warning(
                                 f"resume_from checkpoint path {resume_checkpoint_path!r} "

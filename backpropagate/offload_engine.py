@@ -21,7 +21,14 @@ This engine applies FSDP2 directly and keeps the host footprint at ~4 B/param:
 * **Updates are written back with stochastic rounding.** bf16 has an 8-bit
   mantissa, so at a full-FT learning rate (2e-5) round-to-nearest drops most
   updates: only 2.99 % of params changed after step 1, measured. Stochastic
-  rounding keeps every update in expectation at zero extra bytes.
+  rounding keeps every update in expectation at zero extra bytes. Each
+  parameter draws its rounding noise from its own seeded generator.
+* **Optionally the step is fused into backward** (``BACKPROPAGATE_OFFLOAD_FUSED``,
+  :class:`FusedBackwardStep`): each parameter is updated while its weights and
+  gradient are already on the GPU, so the gradient never goes down to the host
+  and the optimizer does not re-upload it. Same math, same routine.
+* **Per-leg timing** is available with ``BACKPROPAGATE_OFFLOAD_TRACE``
+  (:mod:`backpropagate.offload_trace`).
 
 Trade-offs that callers and docs must state:
 * Adafactor, not AdamW (no momentum; the second moment is factored).
@@ -34,6 +41,7 @@ Trade-offs that callers and docs must state:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -44,7 +52,12 @@ from typing import Any
 
 import torch
 
+from .offload_trace import LegTrace, install_fsdp_probes, profile_step, trace_mode
+
 logger = logging.getLogger(__name__)
+
+# What a timing leg is when tracing is off: one shared, empty context manager.
+_NO_LEG = contextlib.nullcontext()
 
 # Rows of a 2-D parameter processed per optimizer chunk on the GPU. Bounds the
 # transient fp32 working set of the step (a 7B embedding is 545M elements).
@@ -57,15 +70,18 @@ def _local(t: Any) -> Any:
     return to_local() if callable(to_local) else t
 
 
-def stochastic_round_to_bf16_(dst: torch.Tensor, src_fp32: torch.Tensor) -> None:
+def stochastic_round_to_bf16_(
+    dst: torch.Tensor, src_fp32: torch.Tensor, generator: torch.Generator | None = None
+) -> None:
     """Write fp32 ``src_fp32`` into bf16 ``dst`` with stochastic rounding.
 
     Adds uniform noise below bf16's lowest kept bit, then truncates. The
     expected value of the result equals the fp32 input, so tiny updates survive
-    on average instead of rounding to zero.
+    on average instead of rounding to zero. ``generator`` (on ``src_fp32``'s
+    device) makes the noise a function of its own state, not of the global RNG.
     """
     bits = src_fp32.contiguous().view(torch.int32)
-    noise = torch.randint(0, 1 << 16, bits.shape, dtype=torch.int32, device=bits.device)
+    noise = torch.randint(0, 1 << 16, bits.shape, dtype=torch.int32, device=bits.device, generator=generator)
     rounded = (bits + noise) & -65536
     dst.copy_(rounded.view(torch.float32))
 
@@ -80,6 +96,15 @@ class OffloadAdafactor(torch.optim.Optimizer):
     does. The result is written back to the host with stochastic rounding for
     bf16 params and an exact copy for fp32. Row/column statistics live on the
     GPU.
+
+    There is one update routine, :meth:`_update_param`. :meth:`step` calls it
+    with the gradient on the host (the gradient FSDP2 copied down), and
+    :meth:`step_param_fused` calls it from a backward hook with the gradient
+    and weights already on the device, where the copies in it are no-ops. The
+    two paths therefore run the same math. Each parameter also owns a
+    ``torch.Generator`` for its stochastic rounding, seeded from ``seed`` and
+    the parameter's position, so the noise does not depend on the order in
+    which parameters are stepped (forward order here, backward order fused).
     """
 
     def __init__(
@@ -93,6 +118,7 @@ class OffloadAdafactor(torch.optim.Optimizer):
         clip_threshold: float = 1.0,
         stochastic_rounding: bool = True,
         device: torch.device | str | None = None,
+        seed: int = 0,
     ) -> None:
         if lr <= 0:
             raise ValueError(f"lr must be > 0, got {lr}")
@@ -103,124 +129,319 @@ class OffloadAdafactor(torch.optim.Optimizer):
         self.clip_threshold = clip_threshold
         self.stochastic_rounding = stochastic_rounding
         self.device = torch.device(device) if device is not None else torch.device("cuda")
+        self.seed = seed
         self.last_update_retention: float | None = None
-        self._kept = torch.zeros((), dtype=torch.float64)
-        self._intended = torch.zeros((), dtype=torch.float64)
+        self.last_fused_params = 0  # parameters the previous step() found already stepped in backward
+        self.trace: LegTrace | None = None  # set by the train loop when tracing
+        self._kept: torch.Tensor | None = None
+        self._intended: torch.Tensor | None = None
+        self._fused_done: set[int] = set()
+        self._gens: dict[int, torch.Generator] = {}
+        self._ordinal = {id(q): i for i, q in enumerate(q for g in self.param_groups for q in g["params"])}
 
-    def _write_back(self, host: torch.Tensor, new_fp32: torch.Tensor, old_fp32: torch.Tensor) -> None:
+    def _leg(self, name: str, nbytes: int = 0) -> Any:
+        """A timing context for ``name`` when tracing, else an empty one."""
+        return self.trace.leg(name, nbytes) if self.trace is not None else _NO_LEG
+
+    def _fetch(self, src: torch.Tensor) -> torch.Tensor:
+        """``src`` on the optimizer's device: a non-blocking copy, or ``src`` if it is already there."""
+        dev = self.device
+        if src.device.type == dev.type and (dev.index is None or src.device.index == dev.index):
+            return src
+        with self._leg("opt_h2d", src.numel() * src.element_size()):
+            return src.to(dev, non_blocking=True)
+
+    def _generator(self, p: torch.Tensor) -> torch.Generator:
+        """The stochastic-rounding generator of ``p``, created on first use."""
+        gen = self._gens.get(id(p))
+        if gen is None:
+            ordinal = self._ordinal.setdefault(id(p), len(self._ordinal))
+            gen = torch.Generator(device=self.device)
+            gen.manual_seed((self.seed + 1_000_003 * ordinal) & ((1 << 63) - 1))
+            self._gens[id(p)] = gen
+        return gen
+
+    def _accumulators(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """The step's (kept, intended) update sums, created on the device on first use."""
+        if self._kept is None or self._intended is None:
+            self._kept = torch.zeros((), dtype=torch.float64, device=self.device)
+            self._intended = torch.zeros((), dtype=torch.float64, device=self.device)
+        return self._kept, self._intended
+
+    def _write_back(
+        self,
+        host: torch.Tensor,
+        new_fp32: torch.Tensor,
+        old_fp32: torch.Tensor,
+        gen: torch.Generator | None = None,
+    ) -> None:
         """Round ``new_fp32`` into ``host`` and account how much of the update survived.
 
         ``update_retention`` = sum(actual_delta * sign(intended)) / sum(|intended|):
         ~1.0 means the applied bf16 update equals the fp32 update in expectation.
         Round-to-nearest drops sub-ulp updates, and the ratio falls well below 1.
         """
+        kept, intended_sum = self._accumulators()
         if host.dtype == torch.bfloat16:
             tmp = torch.empty_like(new_fp32, dtype=torch.bfloat16)
             if self.stochastic_rounding:
-                stochastic_round_to_bf16_(tmp, new_fp32)
+                stochastic_round_to_bf16_(tmp, new_fp32, gen)
             else:
                 tmp.copy_(new_fp32)
             intended = new_fp32 - old_fp32
-            self._kept += ((tmp.float() - old_fp32) * intended.sign()).sum()
-            self._intended += intended.abs().sum()
-            host.copy_(tmp)
+            kept += ((tmp.float() - old_fp32) * intended.sign()).sum()
+            intended_sum += intended.abs().sum()
+            with self._leg("opt_writeback_d2h", tmp.numel() * tmp.element_size()):
+                host.copy_(tmp)
         else:
-            host.copy_(new_fp32)
+            with self._leg("opt_writeback_d2h", new_fp32.numel() * new_fp32.element_size()):
+                host.copy_(new_fp32)
             delta = (new_fp32 - old_fp32).abs().sum()
-            self._kept += delta
-            self._intended += delta
+            kept += delta
+            intended_sum += delta
 
     @torch.no_grad()
     def step(self, closure: Callable[[], Any] | None = None) -> Any:  # type: ignore[override]
+        """Step every parameter that has a host gradient and was not already stepped in backward."""
         loss = closure() if closure is not None else None
-        dev = self.device
-        self._kept = torch.zeros((), dtype=torch.float64, device=dev)
-        self._intended = torch.zeros((), dtype=torch.float64, device=dev)
         for group in self.param_groups:
             lr, wd = group["lr"], group["weight_decay"]
             for p in group["params"]:
-                if p.grad is None:
+                if p.grad is None or id(p) in self._fused_done:
                     continue
-                w_host = _local(p)
-                g_host = _local(p.grad)
-                st = self.state[p]
-                if not st:
-                    st["step"] = 0
-                    if w_host.dim() >= 2:
-                        st["row"] = torch.zeros(w_host.shape[0], dtype=torch.float32, device=dev)
-                        st["col"] = torch.zeros(w_host[0].numel(), dtype=torch.float32, device=dev)
-                    else:
-                        st["v"] = torch.zeros(w_host.shape, dtype=torch.float32, device=dev)
-                st["step"] += 1
-                beta2 = 1.0 - st["step"] ** self.beta2_decay
-
-                if w_host.dim() < 2:
-                    g = g_host.to(dev, non_blocking=True).float()
-                    st["v"].mul_(beta2).add_(g * g + self.eps, alpha=1.0 - beta2)
-                    u = g / st["v"].sqrt()
-                    u.div_(max(1.0, float(u.pow(2).mean().sqrt()) / self.clip_threshold))
-                    w = w_host.to(dev, non_blocking=True).float()
-                    old = w.clone()
-                    if wd:
-                        w.mul_(1.0 - lr * wd)
-                    w.sub_(u, alpha=lr)
-                    self._write_back(w_host, w, old)
-                    continue
-
-                rows = w_host.shape[0]
-                g2d_host = g_host.reshape(rows, -1)
-                w2d_host = w_host.view(rows, -1)  # a VIEW: writes must land in the param
-                cols = g2d_host.shape[1]
-                chunk = max(1, _MAX_CHUNK_NUMEL // max(1, cols))
-                spans = [(i, min(rows, i + chunk)) for i in range(0, rows, chunk)]
-                cached: dict[str, torch.Tensor] = {}  # single-chunk params keep g on the device
-
-                def _g(
-                    a: int,
-                    b: int,
-                    src: torch.Tensor = g2d_host,
-                    single: bool = len(spans) == 1,
-                    cache: dict[str, torch.Tensor] = cached,
-                ) -> torch.Tensor:
-                    if single:
-                        if "g" not in cache:
-                            cache["g"] = src[a:b].to(dev, non_blocking=True).float()
-                        return cache["g"]
-                    return src[a:b].to(dev, non_blocking=True).float()
-
-                # Pass 1: row / column means of g^2 -> factored second moment.
-                col_sum = torch.zeros(cols, dtype=torch.float32, device=dev)
-                row_mean = torch.empty(rows, dtype=torch.float32, device=dev)
-                for a, b in spans:
-                    g2 = _g(a, b).pow(2).add_(self.eps)
-                    row_mean[a:b] = g2.mean(dim=1)
-                    col_sum.add_(g2.sum(dim=0))
-                st["row"].mul_(beta2).add_(row_mean, alpha=1.0 - beta2)
-                st["col"].mul_(beta2).add_(col_sum / rows, alpha=1.0 - beta2)
-                row_norm = st["row"] / st["row"].mean()
-                col_rsqrt = st["col"].rsqrt()
-
-                # Pass 2: RMS of the update, for clipping.
-                sumsq = torch.zeros((), dtype=torch.float32, device=dev)
-                for a, b in spans:
-                    u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
-                    sumsq.add_(u.pow(2).sum())
-                rms = float((sumsq / (rows * cols)).sqrt())
-                scale = lr / max(1.0, rms / self.clip_threshold)
-
-                # Pass 3: apply and write back.
-                for a, b in spans:
-                    u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
-                    w = w2d_host[a:b].to(dev, non_blocking=True).float()
-                    old = w.clone()
-                    if wd:
-                        w.mul_(1.0 - lr * wd)
-                    w.sub_(u, alpha=scale)
-                    self._write_back(w2d_host[a:b], w, old)
-        intended = float(self._intended)
-        self.last_update_retention = float(self._kept) / intended if intended > 0 else 1.0
+                with self._leg("opt_total"):
+                    self._update_param(p, lr, wd, _local(p), _local(p.grad))
+        self.last_fused_params = len(self._fused_done)
+        self._fused_done.clear()
+        kept = float(self._kept) if self._kept is not None else 0.0
+        intended = float(self._intended) if self._intended is not None else 0.0
+        self._kept = self._intended = None
+        self.last_update_retention = kept / intended if intended > 0 else 1.0
         return loss
 
+    @torch.no_grad()
+    def step_param_fused(
+        self, p: torch.Tensor, grad: torch.Tensor, weight: torch.Tensor | None = None
+    ) -> None:
+        """Step ``p`` now, from a gradient (and optionally weights) already on the device.
+
+        Called from a backward hook. ``step()`` later skips ``p`` and only
+        finalizes the update-retention figure. Valid for one backward per
+        optimizer step: a second call before ``step()`` means the gradient was
+        accumulated over micro-batches, which a per-backward update cannot do.
+        """
+        if id(p) in self._fused_done:
+            raise RuntimeError(
+                "the fused backward step ran twice for one parameter in a single optimizer step; "
+                "it needs gradient_accumulation == 1"
+            )
+        group = next((g for g in self.param_groups if any(q is p for q in g["params"])), None)
+        if group is None:
+            raise KeyError("step_param_fused: the parameter is not in any of the optimizer's groups")
+        with self._leg("opt_total"):
+            self._update_param(p, group["lr"], group["weight_decay"], _local(p), grad, weight)
+        self._fused_done.add(id(p))
+
+    def _update_param(
+        self,
+        p: torch.Tensor,
+        lr: float,
+        wd: float,
+        w_host: torch.Tensor,
+        g_src: torch.Tensor,
+        w_src: torch.Tensor | None = None,
+    ) -> None:
+        """One Adafactor update of ``p``: grad ``g_src`` in, new weights into ``w_host``.
+
+        ``g_src`` and ``w_src`` (default: ``w_host``) may be on the host, where
+        each chunk is copied up, or already on the device, where the copy is a
+        no-op. Neither is modified. The clip factor stays on the device, so the
+        update does not wait on the GPU once per parameter.
+        """
+        dev = self.device
+        gen = self._generator(p)
+        st = self.state[p]
+        if not st:
+            st["step"] = 0
+            if w_host.dim() >= 2:
+                st["row"] = torch.zeros(w_host.shape[0], dtype=torch.float32, device=dev)
+                st["col"] = torch.zeros(w_host[0].numel(), dtype=torch.float32, device=dev)
+            else:
+                st["v"] = torch.zeros(w_host.shape, dtype=torch.float32, device=dev)
+        st["step"] += 1
+        beta2 = 1.0 - st["step"] ** self.beta2_decay
+        w_read = w_host if w_src is None else w_src
+
+        if w_host.dim() < 2:
+            g = self._fetch(g_src).float()
+            st["v"].mul_(beta2).add_(g * g + self.eps, alpha=1.0 - beta2)
+            u = g / st["v"].sqrt()
+            u.div_(torch.clamp(u.pow(2).mean().sqrt() / self.clip_threshold, min=1.0))
+            old = self._fetch(w_read).float()
+            w = old.clone()
+            if wd:
+                w.mul_(1.0 - lr * wd)
+            w.sub_(u, alpha=lr)
+            self._write_back(w_host, w, old, gen)
+            return
+
+        rows = w_host.shape[0]
+        g2d = g_src.reshape(rows, -1)
+        w2d_host = w_host.view(rows, -1)  # a VIEW: writes must land in the param
+        w2d_read = w_read.reshape(rows, -1)
+        cols = g2d.shape[1]
+        chunk = max(1, _MAX_CHUNK_NUMEL // max(1, cols))
+        spans = [(i, min(rows, i + chunk)) for i in range(0, rows, chunk)]
+        cached: dict[str, torch.Tensor] = {}  # single-chunk params keep g on the device
+
+        def _g(
+            a: int,
+            b: int,
+            src: torch.Tensor = g2d,
+            single: bool = len(spans) == 1,
+            cache: dict[str, torch.Tensor] = cached,
+        ) -> torch.Tensor:
+            if single:
+                if "g" not in cache:
+                    cache["g"] = self._fetch(src[a:b]).float()
+                return cache["g"]
+            return self._fetch(src[a:b]).float()
+
+        # Pass 1: row / column means of g^2 -> factored second moment.
+        col_sum = torch.zeros(cols, dtype=torch.float32, device=dev)
+        row_mean = torch.empty(rows, dtype=torch.float32, device=dev)
+        for a, b in spans:
+            g2 = _g(a, b).pow(2).add_(self.eps)
+            row_mean[a:b] = g2.mean(dim=1)
+            col_sum.add_(g2.sum(dim=0))
+        st["row"].mul_(beta2).add_(row_mean, alpha=1.0 - beta2)
+        st["col"].mul_(beta2).add_(col_sum / rows, alpha=1.0 - beta2)
+        row_norm = st["row"] / st["row"].mean()
+        col_rsqrt = st["col"].rsqrt()
+
+        # Pass 2: RMS of the update, for clipping. The factor is computed in
+        # float64 on the device and rounded to fp32 once, as a Python float was.
+        sumsq = torch.zeros((), dtype=torch.float32, device=dev)
+        for a, b in spans:
+            u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
+            sumsq.add_(u.pow(2).sum())
+        rms = (sumsq / (rows * cols)).sqrt()
+        scale = (lr / torch.clamp(rms.double() / self.clip_threshold, min=1.0)).float()
+
+        # Pass 3: apply and write back.
+        for a, b in spans:
+            u = _g(a, b) * row_norm[a:b].rsqrt().unsqueeze(1) * col_rsqrt
+            u.mul_(scale)
+            old = self._fetch(w2d_read[a:b]).float()
+            w = old.clone()
+            if wd:
+                w.mul_(1.0 - lr * wd)
+            w.sub_(u)
+            self._write_back(w2d_host[a:b], w, old, gen)
+
+
+def fused_backward_requested() -> bool:
+    """``BACKPROPAGATE_OFFLOAD_FUSED``: step each parameter inside backward (default off)."""
+    return os.environ.get("BACKPROPAGATE_OFFLOAD_FUSED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class FusedBackwardStep:
+    """Steps each parameter during backward, from the copy FSDP2 already has on the GPU.
+
+    Per step the 3-pass path moves a parameter's bytes over PCIe like this: up
+    for the forward gather, up again for the backward gather, down as the
+    gradient (FSDP2's ``post_backward``), then up as the gradient (once per
+    pass, so three times for a tensor over one chunk) and up as the weights in
+    ``OffloadAdafactor.step``, and finally down as the new weights. During
+    backward the weights and the finished gradient are both on the GPU already.
+    A post-accumulate-grad hook on the gathered ("unsharded") parameter runs
+    before FSDP2 copies the gradient down. It hands both to
+    ``optimizer.step_param_fused`` and clears the gradient, so ``post_backward``
+    finds no gradient for that parameter and skips its reduce and copy. What
+    crosses is then the two gathers up and one write-back down.
+
+    Gradient accumulation must be 1: the update happens at each backward.
+    The hook calls ``optimizer.step_param_fused`` with the unsharded weights
+    when their dtype matches the host shard (at world size 1 they are
+    bit-identical, a bf16 copy of a bf16 shard); otherwise it passes none and
+    the update reads the host weights, as the 3-pass path does.
+    """
+
+    def __init__(self, optimizer: OffloadAdafactor) -> None:
+        self.optimizer = optimizer
+        self.handles: list[Any] = []
+        self.attached = 0
+
+    def attach(self, unsharded: torch.nn.Parameter, owner: torch.nn.Parameter) -> None:
+        """Hook ``unsharded`` (the on-device copy) so it steps ``owner`` (the optimizer's parameter)."""
+        if not unsharded.requires_grad:
+            return
+        optimizer = self.optimizer
+
+        def hook(u: torch.nn.Parameter) -> None:
+            if u.grad is None:
+                return
+            with torch.no_grad():
+                same_dtype = u.dtype == _local(owner).dtype
+                optimizer.step_param_fused(owner, u.grad, u.detach() if same_dtype else None)
+            u.grad = None
+
+        self.handles.append(unsharded.register_post_accumulate_grad_hook(hook))
+        self.attached += 1
+
+    def remove(self) -> None:
+        for handle in self.handles:
+            handle.remove()
+        self.handles.clear()
+
+
+def _fsdp_units(model: Any) -> list[tuple[Any, Any]]:
+    """(module, FSDP2 parameter group) for every ``fully_shard`` unit of ``model``."""
+    units = []
+    for module in model.modules():
+        get_state = getattr(module, "_get_fsdp_state", None)
+        group = getattr(get_state(), "_fsdp_param_group", None) if callable(get_state) else None
+        if group is not None:
+            units.append((module, group))
+    return units
+
+
+def install_fused_backward_step(model: Any, optimizer: OffloadAdafactor) -> FusedBackwardStep:
+    """Attach :class:`FusedBackwardStep` hooks to a model sharded by ``shard_for_cpu_offload``.
+
+    FSDP2 creates a parameter's unsharded copy at its first gather, so the
+    hooks are attached from a one-shot forward pre-hook that runs after
+    FSDP2's own (which gathers). The unsharded ``nn.Parameter`` is created
+    once and reused every step, so the hook stays on it.
+
+    The only private names used are ``_get_fsdp_state()._fsdp_param_group``
+    and its ``fsdp_params[i].sharded_param`` / ``.unsharded_param``. A
+    parameter that does not get a hook is not lost: ``optimizer.step()`` steps
+    every parameter that still has a host gradient.
+    """
+    fused = FusedBackwardStep(optimizer)
+    wanted = {id(q) for g in optimizer.param_groups for q in g["params"]}
+    for module, group in _fsdp_units(model):
+        once = _AttachOnFirstForward(fused, group, wanted)
+        once.handle = module.register_forward_pre_hook(once, with_kwargs=True)
+        fused.handles.append(once.handle)
+    return fused
+
+
+class _AttachOnFirstForward:
+    """Forward pre-hook for one FSDP2 unit: attach the fused hooks once, then remove itself."""
+
+    def __init__(self, fused: FusedBackwardStep, group: Any, wanted: set[int]) -> None:
+        self.fused = fused
+        self.group = group
+        self.wanted = wanted
+        self.handle: Any = None
+
+    def __call__(self, _module: Any, _args: Any, _kwargs: Any) -> None:
+        for fp in self.group.fsdp_params:
+            if id(fp.sharded_param) in self.wanted and hasattr(fp, "_unsharded_param"):
+                self.fused.attach(fp.unsharded_param, fp.sharded_param)
+        self.handle.remove()
 
 
 # =============================================================================
@@ -272,10 +493,21 @@ def offload_param_ceiling_billions(host_available_gib: float) -> float:
     return max(0.0, (host_available_gib - _HOST_FIXED_GIB) / _HOST_GIB_PER_BILLION_PARAMS)
 
 
-def offload_vram_required_gib(root_unit_bytes: float, layer_bytes: float, tokens: int) -> float:
-    """Peak VRAM (GiB) for one step: max(fwd/bwd working set, optimizer chunk) + margin."""
-    fwd_bwd = (2 * root_unit_bytes + 2 * layer_bytes) / 2**30 + tokens * _VRAM_MIB_PER_TOKEN / 1024
-    return max(fwd_bwd, _VRAM_OPTIMIZER_WORKSET_GIB) + _VRAM_MARGIN_GIB
+def offload_vram_required_gib(
+    root_unit_bytes: float, layer_bytes: float, tokens: int, *, fused: bool = False, prefetch: int = 0
+) -> float:
+    """Peak VRAM (GiB) for one step: max(fwd/bwd working set, optimizer chunk) + margin.
+
+    With the fused backward step the optimizer chunk is live inside backward, on
+    top of the forward/backward working set, so the two add. An explicit
+    prefetch of ``prefetch`` layers keeps ``prefetch - 1`` more layers than the
+    default (current + one ahead) on the device. Neither is measured; the
+    max() form with the default prefetch is the one the receipts anchor.
+    """
+    extra_layers = max(0, prefetch - 1)
+    fwd_bwd = (2 * root_unit_bytes + (2 + extra_layers) * layer_bytes) / 2**30 + tokens * _VRAM_MIB_PER_TOKEN / 1024
+    peak = fwd_bwd + _VRAM_OPTIMIZER_WORKSET_GIB if fused else max(fwd_bwd, _VRAM_OPTIMIZER_WORKSET_GIB)
+    return peak + _VRAM_MARGIN_GIB
 
 
 def model_offload_shape(model: Any) -> tuple[int, int, int]:
@@ -338,6 +570,8 @@ def check_offload_fit(
     host_total_gib: float | None,
     host_available_gib: float | None,
     vram_total_gib: float | None,
+    fused: bool = False,
+    prefetch: int = 0,
 ) -> dict[str, Any]:
     """Measured fit check for ``full_ft_offload``; returns a report dict.
 
@@ -357,7 +591,7 @@ def check_offload_fit(
     ram_ok = host_available_gib is None or ram_need <= host_available_gib
     vram_ok = True
     if root_unit_bytes is not None and layer_bytes is not None:
-        vram_need = offload_vram_required_gib(root_unit_bytes, layer_bytes, tokens)
+        vram_need = offload_vram_required_gib(root_unit_bytes, layer_bytes, tokens, fused=fused, prefetch=prefetch)
         report["vram_required_gib"] = round(vram_need, 1)
         vram_ok = vram_total_gib is None or vram_need <= vram_total_gib
     report["fits_host_ram"] = ram_ok
@@ -372,7 +606,8 @@ def _decoder_layers(model: Any) -> list[Any]:
     best: list[Any] = []
     for module in model.modules():
         if isinstance(module, torch.nn.ModuleList) and len(module) > len(best):
-            if not names or type(module[0]).__name__ in names:
+            # fully_shard renames a class to FSDP<Name>, so match a sharded model too.
+            if not names or type(module[0]).__name__.removeprefix("FSDP") in names:
                 best = list(module)
     return best
 
@@ -389,10 +624,15 @@ def _pin_mode() -> str:
       the existing param storage in place, with no copy and no rounding. H2D
       stays DMA-fast. Grads use pageable memory: exact size, but a slower
       blocking D2H in backward.
+    * ``arena``: ``pin_memory=False``, then every shard is copied once into one
+      exactly-sized host slab (:class:`HostArena`) that is page-locked with a
+      single ``cudaHostRegister``, and FSDP2 and the optimizer are pointed at
+      views of it. Same bytes as ``register``, one registration instead of one
+      per storage, and no per-storage registration failures.
     * ``none``: pageable everything (slowest, smallest).
     """
     mode = os.environ.get("BACKPROPAGATE_OFFLOAD_PIN", "register").strip().lower()
-    return mode if mode in {"register", "pinned", "none"} else "register"
+    return mode if mode in {"register", "pinned", "arena", "none"} else "register"
 
 
 def register_host_params(model: Any) -> list[int]:
@@ -433,11 +673,143 @@ def unregister_host_params(ptrs: list[int]) -> None:
         cudart.cudaHostUnregister(ptr)
 
 
-def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16) -> Any:
+# Each shard starts on a page boundary. A page is also the unit cudaHostRegister
+# locks, so no two shards share a locked page. The cost is under one page per
+# parameter (a 7B model has ~340): about 1.4 MB.
+_ARENA_ALIGN = 4096
+
+
+def _align_up(n: int, align: int = _ARENA_ALIGN) -> int:
+    return (n + align - 1) // align * align
+
+
+class HostArena:
+    """One host slab for all parameter shards, page-locked with a single registration.
+
+    ``CPUOffloadPolicy(pin_memory=True)`` pins each shard through torch's pinned
+    caching allocator, which rounds every block up to a power of two (a 7B run
+    crossed 60 GB). Allocating one ``torch.empty(..., pin_memory=True)`` slab
+    would round the whole slab the same way: a 17 GiB model would take 32 GiB.
+    So the slab is an ordinary ``uint8`` tensor of exactly the planned size,
+    and :meth:`register` page-locks it in place once. The pages are touched as
+    shards are copied in, so RSS grows by the bytes of the shards and no more.
+
+    The slab's first byte is page-aligned and each :meth:`take` starts on a page
+    boundary. ``planned_bytes`` is the sum of the aligned sizes, which is the
+    slab's size.
+    """
+
+    def __init__(self, nbytes: int, align: int = _ARENA_ALIGN) -> None:
+        self.nbytes = nbytes
+        self.align = align
+        self._base = torch.empty(nbytes + align, dtype=torch.uint8)  # +1 page to align the start
+        start = -self._base.data_ptr() % align
+        self.slab = self._base[start : start + nbytes]
+        self._cursor = 0
+        self._registered = False
+
+    @staticmethod
+    def planned_bytes(sizes: list[int], align: int = _ARENA_ALIGN) -> int:
+        """Slab size for shards of ``sizes`` bytes: each rounded up to ``align``."""
+        return sum(_align_up(n, align) for n in sizes)
+
+    def take(self, shape: torch.Size | tuple[int, ...], dtype: torch.dtype) -> torch.Tensor:
+        """A view of the next aligned region of the slab, shaped ``shape`` as ``dtype``."""
+        numel = 1
+        for dim in shape:
+            numel *= dim
+        nbytes = numel * torch.empty((), dtype=dtype).element_size()
+        start = self._cursor
+        if start + nbytes > self.nbytes:
+            raise ValueError("HostArena is full: more shards were taken than were planned")
+        self._cursor = _align_up(start + nbytes, self.align)
+        return self.slab[start : start + nbytes].view(dtype).view(shape)
+
+    def register(self) -> bool:
+        """Page-lock the slab (needs CUDA). False, and the slab stays pageable, if the driver refuses."""
+        cudart = torch.cuda.cudart()
+        ok = int(cudart.cudaHostRegister(self.slab.data_ptr(), self.nbytes, 0)) == 0
+        self._registered = ok
+        logger.info(
+            "full_ft_offload: host arena of %.2f GiB %s.",
+            self.nbytes / 2**30,
+            "page-locked" if ok else "could not be page-locked and stays pageable (slower copies)",
+        )
+        return ok
+
+    def release(self) -> None:
+        """Unlock the slab. Call before anything can free it (the views keep it alive until then)."""
+        if self._registered:
+            torch.cuda.cudart().cudaHostUnregister(self.slab.data_ptr())
+            self._registered = False
+
+
+def move_params_to_arena(model: Any, *, pin: bool = True) -> HostArena:
+    """Copy every FSDP2 host shard into one :class:`HostArena` and point FSDP2 at the copy.
+
+    For each ``fully_shard`` unit's parameter, FSDP2 keeps the shard twice over
+    the same storage: ``_sharded_param_data`` (the flat tensor the next gather
+    copies up) and the sharded DTensor's ``_local_tensor`` (what the optimizer
+    reads and writes). Both are replaced by views of the arena, so the gather,
+    the optimizer and ``state_dict`` all see one set of bytes. ``reset_sharded_param``
+    in torch does the same re-pointing for ``load_state_dict(assign=True)``.
+
+    Everything is checked before anything is changed, so a ``ValueError`` means
+    the model is untouched (the caller falls back to ``register``). Shards are
+    copied one at a time and the old storage is dropped at once, so host RAM
+    holds the model once plus one shard in flight.
+    """
+    plan = []
+    for _module, group in _fsdp_units(model):
+        for fp in group.fsdp_params:
+            try:
+                flat = fp._sharded_param_data
+                local = fp.sharded_param._local_tensor
+            except AttributeError as exc:
+                raise ValueError(f"this torch's FSDP2 has no {exc.name!r} on its parameters") from exc
+            if flat.device.type != "cpu" or not flat.is_contiguous() or not local.is_contiguous():
+                raise ValueError("an FSDP2 shard is not a contiguous CPU tensor")
+            if local.numel() != flat.numel() or local.untyped_storage().data_ptr() != flat.untyped_storage().data_ptr():
+                raise ValueError("an FSDP2 shard is padded or does not alias its flat copy (world size > 1?)")
+            plan.append(fp)
+    if not plan:
+        raise ValueError("no FSDP2 units found: shard the model with shard_for_cpu_offload first")
+    sizes = [fp._sharded_param_data.numel() * fp._sharded_param_data.element_size() for fp in plan]
+    arena = HostArena(HostArena.planned_bytes(sizes))
+    for fp in plan:
+        shape = fp.sharded_param._local_tensor.shape
+        view = arena.take(fp._sharded_param_data.shape, fp._sharded_param_data.dtype)
+        view.copy_(fp._sharded_param_data)
+        fp._sharded_param_data = view
+        fp.sharded_param._local_tensor = view.view(shape)
+    if pin:
+        arena.register()
+    return arena
+
+
+def pin_host_params(model: Any) -> Callable[[], None]:
+    """Page-lock the host shards per ``BACKPROPAGATE_OFFLOAD_PIN``; returns the function that undoes it."""
+    mode = _pin_mode()
+    if mode == "arena":
+        try:
+            arena = move_params_to_arena(model)
+        except ValueError as exc:
+            logger.warning("full_ft_offload: host arena unavailable (%s); using per-storage registration.", exc)
+            mode = "register"
+        else:
+            return arena.release
+    if mode == "register":
+        ptrs = register_host_params(model)
+        return lambda: unregister_host_params(ptrs)
+    return lambda: None
+
+
+def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16, mesh: Any = None) -> Any:
     """Apply FSDP2 ``fully_shard`` + CPU offload in place, keeping param dtype.
 
     Enables activation checkpointing (non-reentrant) first. Returns ``model``,
-    which is now an ``FSDPModule`` whose sharded params live on the CPU.
+    which is now an ``FSDPModule`` whose sharded params live on the CPU. ``mesh`` is
+    FSDP2's device mesh; None takes the default (CUDA), and tests pass a CPU mesh.
     """
     from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 
@@ -452,9 +824,64 @@ def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat1
     if not layers:
         raise RuntimeError("full_ft_offload: could not find the model's decoder-layer ModuleList to shard.")
     for layer in layers:
-        fully_shard(layer, mp_policy=mp, offload_policy=off)
-    fully_shard(model, mp_policy=mp, offload_policy=off)
+        fully_shard(layer, mesh=mesh, mp_policy=mp, offload_policy=off)
+    fully_shard(model, mesh=mesh, mp_policy=mp, offload_policy=off)
     return model
+
+
+_MAX_PREFETCH_DEPTH = 8
+
+
+def prefetch_depth() -> int:
+    """``BACKPROPAGATE_OFFLOAD_PREFETCH``: decoder layers to gather ahead (0 = FSDP2's default)."""
+    raw = os.environ.get("BACKPROPAGATE_OFFLOAD_PREFETCH", "0").strip()
+    try:
+        depth = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(depth, _MAX_PREFETCH_DEPTH))
+
+
+def set_explicit_prefetch(model: Any, depth: int) -> int:
+    """Have each decoder layer ask FSDP2 to gather the next ``depth`` layers before it computes.
+
+    What FSDP2 does without this, from its source (torch 2.8 and 2.10):
+
+    * Forward has no explicit prefetch. A layer's gather is issued from that
+      layer's own pre-forward hook, so it overlaps the previous layer's compute
+      only because the CPU runs ahead of the GPU. Anything that blocks the CPU
+      (a copy from pageable host memory, a ``float()`` of a GPU value) removes
+      that overlap.
+    * Backward prefetches one layer: the previous one in reverse forward order.
+
+    This uses FSDP2's own explicit lists (``set_modules_to_forward_prefetch`` and
+    ``set_modules_to_backward_prefetch``). A listed layer's gather is issued
+    from the current layer's pre-forward / pre-backward hook, before that
+    layer's compute is queued, so it does not depend on CPU run-ahead. FSDP2
+    runs those gathers on its own copy stream and orders them against compute
+    with its own events, so the stream and event handling stays FSDP2's. The
+    cost is ``depth`` extra layers resident on the GPU (about 0.45 GB each at
+    7B). The root unit prefetches the first layer in forward and the last in
+    backward.
+
+    Where torch's ``wait_for_unshard`` special-cases world size 1 (present in
+    2.10, absent in 2.8.0) the host-to-device copy is made on the compute
+    stream at the wait, so a prefetch there issues no copy and cannot overlap
+    one. The trace shows it: ``fwd_gather`` does not shrink.
+
+    Returns the number of modules configured (0 if ``depth`` < 1 or this torch
+    has no such API).
+    """
+    if depth < 1 or not hasattr(model, "set_modules_to_forward_prefetch"):
+        return 0
+    layers = _decoder_layers(model)
+    for i, layer in enumerate(layers):
+        layer.set_modules_to_forward_prefetch(layers[i + 1 : i + 1 + depth])
+        layer.set_modules_to_backward_prefetch(layers[max(0, i - depth) : i][::-1])
+    if layers:
+        model.set_modules_to_forward_prefetch(layers[:1])
+        model.set_modules_to_backward_prefetch(layers[::-1][:depth])
+    return len(layers) + 1
 
 
 def _encode(dataset: Any, tokenizer: Any, max_seq_length: int) -> list[list[int]]:
@@ -476,6 +903,16 @@ def _encode(dataset: Any, tokenizer: Any, max_seq_length: int) -> list[list[int]
     if not rows:
         raise ValueError("full_ft_offload: the dataset produced no trainable rows.")
     return rows
+
+
+def _no_leg(name: str, nbytes: int = 0) -> Any:  # noqa: ARG001 — same signature as LegTrace.leg
+    return _NO_LEG
+
+
+def _sync(device: torch.device) -> None:
+    """Wait for the device's queued work (a no-op off CUDA, so the loop runs in CPU tests)."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def _lr_factor(step: int, total: int, warmup: int, kind: str) -> float:
@@ -506,25 +943,35 @@ def run_offload_training(
     weight_decay: float = 0.0,
     seed: int = 42,
     on_step: Callable[[int, float], None] | None = None,
+    fused: bool | None = None,
 ) -> dict[str, Any]:
-    """Shard ``model``, train ``steps`` optimizer steps, and return losses + timing."""
+    """Shard ``model``, train ``steps`` optimizer steps, and return losses + timing.
+
+    ``fused`` steps each parameter inside backward (:class:`FusedBackwardStep`);
+    None reads ``BACKPROPAGATE_OFFLOAD_FUSED``. It needs ``gradient_accumulation == 1``
+    and falls back to the 3-pass step otherwise.
+    """
     torch.manual_seed(seed)
     rng = random.Random(seed)  # nosec B311 — seeded training-data shuffle, not crypto
     device = torch.device("cuda", torch.cuda.current_device())
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = shard_for_cpu_offload(model, compute_dtype=compute_dtype)
-    registered = register_host_params(model) if _pin_mode() == "register" else []
+    depth = prefetch_depth()
+    set_explicit_prefetch(model, depth)
+    unpin = pin_host_params(model)
     try:
         return _train_loop(
             model, tokenizer, dataset, steps=steps, batch_size=batch_size,
             gradient_accumulation=gradient_accumulation, learning_rate=learning_rate,
             max_seq_length=max_seq_length, warmup_steps=warmup_steps,
             lr_scheduler_type=lr_scheduler_type, weight_decay=weight_decay,
-            rng=rng, device=device, on_step=on_step,
+            rng=rng, device=device, on_step=on_step, seed=seed,
+            fused=fused_backward_requested() if fused is None else fused,
+            prefetch=depth,
         )
     finally:
         # Unregister before anything can free the storage (save() only reads it).
-        unregister_host_params(registered)
+        unpin()
 
 
 def _train_loop(
@@ -543,12 +990,16 @@ def _train_loop(
     rng: random.Random,
     device: torch.device,
     on_step: Callable[[int, float], None] | None,
+    seed: int = 0,
+    fused: bool = False,
+    prefetch: int = 0,
 ) -> dict[str, Any]:
     optimizer = OffloadAdafactor(
         [p for p in model.parameters() if p.requires_grad],
         lr=learning_rate,
         weight_decay=weight_decay,
         device=device,
+        seed=seed,
         # Diagnostic only: BACKPROPAGATE_OFFLOAD_ROUNDING=nearest reproduces the
         # failure mode (bf16 round-to-nearest drops sub-ulp updates) so the gate
         # in scripts/pod_offload_7b.sh can be checked against it on real models.
@@ -576,36 +1027,78 @@ def _train_loop(
         labels = ids.masked_fill(mask == 0, -100)
         return ids.to(device), mask.to(device), labels.to(device)
 
+    use_fused = fused
+    if fused and gradient_accumulation != 1:
+        logger.info(
+            "full_ft_offload: the fused backward step needs gradient_accumulation == 1 (got %d); "
+            "using the 3-pass optimizer step.",
+            gradient_accumulation,
+        )
+        use_fused = False
+    fused_hooks = install_fused_backward_step(model, optimizer) if use_fused else None
+    n_trainable = sum(len(g["params"]) for g in optimizer.param_groups)
+
+    mode = trace_mode()
+    trace = LegTrace(device) if mode != "off" else None
+    undo_probes = install_fsdp_probes(trace) if trace is not None else None
+    optimizer.trace = trace
+    leg = trace.leg if trace is not None else _no_leg
+    profile_at = min(1, steps - 1)  # the second step: lazy init stays out of the profile
+
     model.train()
     losses: list[float] = []
     step_times: list[float] = []
     retention: list[float] = []
+    fused_params: list[int] = []
     samples = 0
     t_start = time.perf_counter()
-    for step in range(steps):
-        t0 = time.perf_counter()
-        for group in optimizer.param_groups:
-            group["lr"] = learning_rate * _lr_factor(step, steps, warmup_steps, lr_scheduler_type)
-        total = 0.0
-        for _ in range(gradient_accumulation):
-            ids, mask, labels = next_batch()
-            out = model(input_ids=ids, attention_mask=mask, labels=labels)
-            (out.loss / gradient_accumulation).backward()
-            total += float(out.loss.detach()) / gradient_accumulation
-            samples += ids.shape[0]
-        optimizer.step()
-        retention.append(round(optimizer.last_update_retention or 0.0, 4))
-        optimizer.zero_grad(set_to_none=True)
-        torch.cuda.synchronize(device)
-        step_times.append(time.perf_counter() - t0)
-        losses.append(total)
-        logger.info("full_ft_offload step %d/%d loss=%.4f (%.2fs)", step + 1, steps, total, step_times[-1])
-        if on_step is not None:
-            try:
-                on_step(step + 1, total)
-            except Exception as cb_err:  # noqa: BLE001 — callback isolation contract
-                logger.warning("on_step callback raised: %s", cb_err)
-    return {
+    try:
+        for step in range(steps):
+            t0 = time.perf_counter()
+            for group in optimizer.param_groups:
+                group["lr"] = learning_rate * _lr_factor(step, steps, warmup_steps, lr_scheduler_type)
+            total = 0.0
+            profiling = trace is not None and mode == "profile" and step == profile_at
+            with profile_step(trace) if profiling and trace is not None else _NO_LEG:
+                for _ in range(gradient_accumulation):
+                    ids, mask, labels = next_batch()
+                    with leg("forward"):
+                        out = model(input_ids=ids, attention_mask=mask, labels=labels)
+                    with leg("backward"):
+                        (out.loss / gradient_accumulation).backward()
+                    total += float(out.loss.detach()) / gradient_accumulation
+                    samples += ids.shape[0]
+                with leg("optimizer_step"):
+                    optimizer.step()
+                retention.append(round(optimizer.last_update_retention or 0.0, 4))
+                fused_params.append(optimizer.last_fused_params)
+                optimizer.zero_grad(set_to_none=True)
+                _sync(device)
+            step_times.append(time.perf_counter() - t0)
+            losses.append(total)
+            if trace is not None:
+                trace.end_step(step, step_times[-1] * 1e3)
+                if profiling and trace.profile is not None:
+                    trace.profile["step"] = step
+            logger.info("full_ft_offload step %d/%d loss=%.4f (%.2fs)", step + 1, steps, total, step_times[-1])
+            if fused_hooks is not None and step == 0:
+                (logger.info if fused_params[0] else logger.warning)(
+                    "full_ft_offload fused backward step: %d of %d parameters stepped in backward; "
+                    "the rest took the 3-pass step.",
+                    fused_params[0], n_trainable,
+                )
+            if on_step is not None:
+                try:
+                    on_step(step + 1, total)
+                except Exception as cb_err:  # noqa: BLE001 — callback isolation contract
+                    logger.warning("on_step callback raised: %s", cb_err)
+    finally:
+        if fused_hooks is not None:
+            fused_hooks.remove()
+        if undo_probes is not None:
+            undo_probes()
+        optimizer.trace = None
+    result: dict[str, Any] = {
         "model": model,
         "losses": losses,
         "step_times": step_times,
@@ -613,4 +1106,12 @@ def _train_loop(
         "samples_seen": samples,
         "duration_seconds": time.perf_counter() - t_start,
         "optimizer": optimizer,
+        "fused": use_fused,
+        "fused_params": fused_params,
+        "prefetch": prefetch,
     }
+    if trace is not None:
+        result["trace"] = trace.summary(
+            {"pin": _pin_mode(), "trace_mode": mode, "fused": use_fused, "prefetch": prefetch}
+        )
+    return result

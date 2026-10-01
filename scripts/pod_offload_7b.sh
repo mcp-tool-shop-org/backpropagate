@@ -220,6 +220,15 @@ rec = {
     "losses": losses, "final_loss": run.final_loss,
     "pct_params_changed_step1": pct1.get("v"),
     "update_retention": run.metadata.get("update_retention"),
+    # E1 (engine A speed): which switches this run used, and the per-leg trace when
+    # BACKPROPAGATE_OFFLOAD_TRACE is set. fused_params is the per-step count of parameters
+    # stepped in backward (0 everywhere = the fused path did not engage).
+    "offload_env": {k: os.environ.get(k) for k in ("BACKPROPAGATE_OFFLOAD_PIN", "BACKPROPAGATE_OFFLOAD_FUSED",
+                    "BACKPROPAGATE_OFFLOAD_PREFETCH", "BACKPROPAGATE_OFFLOAD_TRACE", "BACKPROPAGATE_OFFLOAD_ROUNDING")},
+    "fused": run.metadata.get("fused"),
+    "fused_params": run.metadata.get("fused_params"),
+    "prefetch": run.metadata.get("prefetch"),
+    "trace": run.metadata.get("trace"),
     "pct_params_changed_final": pct_changed(t._model, snap),
 }
 if os.environ.get("NO_SAVE") == "1" and not gate:

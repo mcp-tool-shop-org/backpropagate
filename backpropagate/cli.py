@@ -2112,13 +2112,31 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "BACKPROPAGATE_OFFLOAD_PIN",
             "register",
             "str",
-            "full_ft_offload: how host params are page-locked. 'register' (default): cudaHostRegister in place, exact size (~4.0 B/param host RAM measured). 'pinned': FSDP2 pin_memory, 3-5x faster, but torch's pinned allocator rounds blocks to powers of two (~1.8x host RAM at 7B). 'none': pageable, slowest.",
+            "full_ft_offload: how host params are page-locked. 'register' (default): cudaHostRegister in place, exact size (~4.0 B/param host RAM measured). 'pinned': FSDP2 pin_memory, 3-5x faster, but torch's pinned allocator rounds blocks to powers of two (~1.8x host RAM at 7B). 'arena': copy every shard once into one exactly-sized host slab, page-locked with a single cudaHostRegister (same bytes as 'register', no power-of-two rounding). 'none': pageable, slowest.",
         ),
         (
             "BACKPROPAGATE_OFFLOAD_ROUNDING",
             "stochastic",
             "str",
             "full_ft_offload diagnostic: 'nearest' switches the bf16 write-back from stochastic rounding to round-to-nearest, which drops sub-ulp updates (update retention 0.17 measured). For reproducing the failure mode only; never for training.",
+        ),
+        (
+            "BACKPROPAGATE_OFFLOAD_FUSED",
+            "0",
+            "bool",
+            "full_ft_offload: '1' steps each parameter inside backward, from the weights and gradient FSDP2 already has on the GPU, and writes the new bf16 weights back once. This skips the gradient copy to the host and the optimizer's re-upload of gradients and weights. Needs gradient accumulation of 1 (otherwise it logs once and uses the default 3-pass step). Same math and same stochastic-rounding noise as the default path. Off by default until measured on a real card.",
+        ),
+        (
+            "BACKPROPAGATE_OFFLOAD_PREFETCH",
+            "0",
+            "int",
+            "full_ft_offload: number of decoder layers FSDP2 gathers ahead, in forward and in backward (0-8; values above 8 are clamped). 0 keeps FSDP2's default (backward prefetches one layer, forward relies on the CPU running ahead). 1 or more uses FSDP2's explicit prefetch lists, which issue the next layers' gathers before the current layer computes. Each extra layer costs about 0.45 GB of VRAM at 7B. It does not change the numbers a run produces.",
+        ),
+        (
+            "BACKPROPAGATE_OFFLOAD_TRACE",
+            "0",
+            "str",
+            "full_ft_offload diagnostic: '1' times each leg of a step (forward and backward, the FSDP2 parameter gather and gradient copy, the optimizer's host-to-device copies and write-back) with CUDA events and counts the bytes per leg; 'profile' adds a torch.profiler summary of one step. The result is returned under 'trace' by run_offload_training. Off by default, with no overhead.",
         ),
         (
             "BACKPROPAGATE_CLOUDFLARED_TIMEOUT",

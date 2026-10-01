@@ -3802,7 +3802,12 @@ class Trainer:
         owns the OOM risk.
         """
         from .exceptions import OffloadDoesNotFitError
-        from .offload_engine import check_offload_fit, detect_host_ram_gib
+        from .offload_engine import (
+            check_offload_fit,
+            detect_host_ram_gib,
+            fused_backward_requested,
+            prefetch_depth,
+        )
 
         total, available = detect_host_ram_gib()
         batch = self.batch_size if isinstance(self.batch_size, int) else 1
@@ -3814,6 +3819,8 @@ class Trainer:
             host_total_gib=total,
             host_available_gib=available,
             vram_total_gib=_detect_total_vram_gb(),
+            fused=fused_backward_requested() and int(self.gradient_accumulation or 1) == 1,
+            prefetch=prefetch_depth(),
         )
         logger.info(f"full_ft_offload fit check: {report}")
         if not report["fits"]:
@@ -7120,6 +7127,11 @@ class Trainer:
                 "optimizer": "adafactor-factored-sr",
                 "step_times": result["step_times"],
                 "update_retention": result.get("update_retention", []),
+                # E1 speed switches and the optional per-leg trace (see offload_trace).
+                "fused": result.get("fused"),
+                "fused_params": result.get("fused_params"),
+                "prefetch": result.get("prefetch"),
+                "trace": result.get("trace"),
             },
         )
         self._training_runs.append(run)

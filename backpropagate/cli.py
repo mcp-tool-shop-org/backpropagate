@@ -2127,6 +2127,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "full_ft_offload: '1' steps each parameter inside backward, from the weights and gradient FSDP2 already has on the GPU, and writes the new bf16 weights back once. This skips the gradient copy to the host and the optimizer's re-upload of gradients and weights. Needs gradient accumulation of 1 (otherwise it logs once and uses the default 3-pass step). Same math and same stochastic-rounding noise as the default path. Off by default until measured on a real card.",
         ),
         (
+            "BACKPROPAGATE_OFFLOAD_PREFETCH",
+            "0",
+            "int",
+            "full_ft_offload: number of decoder layers FSDP2 gathers ahead, in forward and in backward (0-8; values above 8 are clamped). 0 keeps FSDP2's default (backward prefetches one layer, forward relies on the CPU running ahead). 1 or more uses FSDP2's explicit prefetch lists, which issue the next layers' gathers before the current layer computes. Each extra layer costs about 0.45 GB of VRAM at 7B. It does not change the numbers a run produces.",
+        ),
+        (
             "BACKPROPAGATE_OFFLOAD_TRACE",
             "0",
             "str",

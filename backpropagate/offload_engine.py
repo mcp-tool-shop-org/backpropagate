@@ -494,15 +494,18 @@ def offload_param_ceiling_billions(host_available_gib: float) -> float:
 
 
 def offload_vram_required_gib(
-    root_unit_bytes: float, layer_bytes: float, tokens: int, *, fused: bool = False
+    root_unit_bytes: float, layer_bytes: float, tokens: int, *, fused: bool = False, prefetch: int = 0
 ) -> float:
     """Peak VRAM (GiB) for one step: max(fwd/bwd working set, optimizer chunk) + margin.
 
     With the fused backward step the optimizer chunk is live inside backward, on
-    top of the forward/backward working set, so the two add. That bound is not
-    measured; the max() form is the one the receipts anchor.
+    top of the forward/backward working set, so the two add. An explicit
+    prefetch of ``prefetch`` layers keeps ``prefetch - 1`` more layers than the
+    default (current + one ahead) on the device. Neither is measured; the
+    max() form with the default prefetch is the one the receipts anchor.
     """
-    fwd_bwd = (2 * root_unit_bytes + 2 * layer_bytes) / 2**30 + tokens * _VRAM_MIB_PER_TOKEN / 1024
+    extra_layers = max(0, prefetch - 1)
+    fwd_bwd = (2 * root_unit_bytes + (2 + extra_layers) * layer_bytes) / 2**30 + tokens * _VRAM_MIB_PER_TOKEN / 1024
     peak = fwd_bwd + _VRAM_OPTIMIZER_WORKSET_GIB if fused else max(fwd_bwd, _VRAM_OPTIMIZER_WORKSET_GIB)
     return peak + _VRAM_MARGIN_GIB
 
@@ -568,6 +571,7 @@ def check_offload_fit(
     host_available_gib: float | None,
     vram_total_gib: float | None,
     fused: bool = False,
+    prefetch: int = 0,
 ) -> dict[str, Any]:
     """Measured fit check for ``full_ft_offload``; returns a report dict.
 
@@ -587,7 +591,7 @@ def check_offload_fit(
     ram_ok = host_available_gib is None or ram_need <= host_available_gib
     vram_ok = True
     if root_unit_bytes is not None and layer_bytes is not None:
-        vram_need = offload_vram_required_gib(root_unit_bytes, layer_bytes, tokens, fused=fused)
+        vram_need = offload_vram_required_gib(root_unit_bytes, layer_bytes, tokens, fused=fused, prefetch=prefetch)
         report["vram_required_gib"] = round(vram_need, 1)
         vram_ok = vram_total_gib is None or vram_need <= vram_total_gib
     report["fits_host_ram"] = ram_ok
@@ -602,7 +606,8 @@ def _decoder_layers(model: Any) -> list[Any]:
     best: list[Any] = []
     for module in model.modules():
         if isinstance(module, torch.nn.ModuleList) and len(module) > len(best):
-            if not names or type(module[0]).__name__ in names:
+            # fully_shard renames a class to FSDP<Name>, so match a sharded model too.
+            if not names or type(module[0]).__name__.removeprefix("FSDP") in names:
                 best = list(module)
     return best
 
@@ -824,6 +829,61 @@ def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat1
     return model
 
 
+_MAX_PREFETCH_DEPTH = 8
+
+
+def prefetch_depth() -> int:
+    """``BACKPROPAGATE_OFFLOAD_PREFETCH``: decoder layers to gather ahead (0 = FSDP2's default)."""
+    raw = os.environ.get("BACKPROPAGATE_OFFLOAD_PREFETCH", "0").strip()
+    try:
+        depth = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(depth, _MAX_PREFETCH_DEPTH))
+
+
+def set_explicit_prefetch(model: Any, depth: int) -> int:
+    """Have each decoder layer ask FSDP2 to gather the next ``depth`` layers before it computes.
+
+    What FSDP2 does without this, from its source (torch 2.8 and 2.10):
+
+    * Forward has no explicit prefetch. A layer's gather is issued from that
+      layer's own pre-forward hook, so it overlaps the previous layer's compute
+      only because the CPU runs ahead of the GPU. Anything that blocks the CPU
+      (a copy from pageable host memory, a ``float()`` of a GPU value) removes
+      that overlap.
+    * Backward prefetches one layer: the previous one in reverse forward order.
+
+    This uses FSDP2's own explicit lists (``set_modules_to_forward_prefetch`` and
+    ``set_modules_to_backward_prefetch``). A listed layer's gather is issued
+    from the current layer's pre-forward / pre-backward hook, before that
+    layer's compute is queued, so it does not depend on CPU run-ahead. FSDP2
+    runs those gathers on its own copy stream and orders them against compute
+    with its own events, so the stream and event handling stays FSDP2's. The
+    cost is ``depth`` extra layers resident on the GPU (about 0.45 GB each at
+    7B). The root unit prefetches the first layer in forward and the last in
+    backward.
+
+    Where torch's ``wait_for_unshard`` special-cases world size 1 (present in
+    2.10, absent in 2.8.0) the host-to-device copy is made on the compute
+    stream at the wait, so a prefetch there issues no copy and cannot overlap
+    one. The trace shows it: ``fwd_gather`` does not shrink.
+
+    Returns the number of modules configured (0 if ``depth`` < 1 or this torch
+    has no such API).
+    """
+    if depth < 1 or not hasattr(model, "set_modules_to_forward_prefetch"):
+        return 0
+    layers = _decoder_layers(model)
+    for i, layer in enumerate(layers):
+        layer.set_modules_to_forward_prefetch(layers[i + 1 : i + 1 + depth])
+        layer.set_modules_to_backward_prefetch(layers[max(0, i - depth) : i][::-1])
+    if layers:
+        model.set_modules_to_forward_prefetch(layers[:1])
+        model.set_modules_to_backward_prefetch(layers[::-1][:depth])
+    return len(layers) + 1
+
+
 def _encode(dataset: Any, tokenizer: Any, max_seq_length: int) -> list[list[int]]:
     cols = set(getattr(dataset, "column_names", []) or [])
     rows: list[list[int]] = []
@@ -896,6 +956,8 @@ def run_offload_training(
     device = torch.device("cuda", torch.cuda.current_device())
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = shard_for_cpu_offload(model, compute_dtype=compute_dtype)
+    depth = prefetch_depth()
+    set_explicit_prefetch(model, depth)
     unpin = pin_host_params(model)
     try:
         return _train_loop(
@@ -905,6 +967,7 @@ def run_offload_training(
             lr_scheduler_type=lr_scheduler_type, weight_decay=weight_decay,
             rng=rng, device=device, on_step=on_step, seed=seed,
             fused=fused_backward_requested() if fused is None else fused,
+            prefetch=depth,
         )
     finally:
         # Unregister before anything can free the storage (save() only reads it).
@@ -929,6 +992,7 @@ def _train_loop(
     on_step: Callable[[int, float], None] | None,
     seed: int = 0,
     fused: bool = False,
+    prefetch: int = 0,
 ) -> dict[str, Any]:
     optimizer = OffloadAdafactor(
         [p for p in model.parameters() if p.requires_grad],
@@ -1044,7 +1108,10 @@ def _train_loop(
         "optimizer": optimizer,
         "fused": use_fused,
         "fused_params": fused_params,
+        "prefetch": prefetch,
     }
     if trace is not None:
-        result["trace"] = trace.summary({"pin": _pin_mode(), "trace_mode": mode, "fused": use_fused})
+        result["trace"] = trace.summary(
+            {"pin": _pin_mode(), "trace_mode": mode, "fused": use_fused, "prefetch": prefetch}
+        )
     return result

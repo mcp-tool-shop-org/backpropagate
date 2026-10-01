@@ -1907,9 +1907,9 @@ def deduplicate_exact(
 
     for sample in samples:
         text = _get_text_content(sample, key)
-        text_hash = hashlib.sha1(
-            text.encode("utf-8", "surrogatepass"), usedforsecurity=False
-        ).hexdigest()
+        # SHA-256, not SHA-1: not a security use, but it keeps static analysis
+        # quiet without a suppression and costs nothing measurable here.
+        text_hash = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
         if text_hash not in seen:
             seen.add(text_hash)

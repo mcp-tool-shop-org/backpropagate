@@ -1,14 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit bfbbe1d by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit 16e6e37 by Atlas 1.24.0.
 
 ## What this is
 
 11 parts, mostly Python (144 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (dfaf4b4)
+## What changed since 2026-10-01 (bfbbe1d)
 
-Nothing structural changed since 2026-10-01; 129 files added and 5 changed content.
+Nothing structural changed since 2026-10-01; no file changed.
 
 ## What comes in
 

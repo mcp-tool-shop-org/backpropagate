@@ -253,12 +253,16 @@ def _has_module(name: str) -> bool:
         return False
 
 
-def _detect_features() -> None:
+def _detect_features(*, force: bool = False) -> None:
     """Detect which optional features are available.
 
     Honors the ``BACKPROPAGATE_DEFER_FEATURE_DETECTION`` env var as an opt-out
     for power users who want the absolute-fastest CLI startup; when set, all
     features remain ``False`` until :func:`refresh_features` is called.
+    ``force=True`` (what :func:`refresh_features` passes) detects regardless of
+    the env var: the deferral only skips the import-time pass, so an explicit
+    refresh, or the auto-refresh on first ``require_feature`` use, has to see
+    the truth even while the variable is still set.
 
     BRIDGE-B-014 (Stage C humanization): when deferral is enabled the
     detection is genuinely skipped, but FEATURES stays a dict of all-False
@@ -272,7 +276,7 @@ def _detect_features() -> None:
     """
     global FEATURES
 
-    if os.environ.get("BACKPROPAGATE_DEFER_FEATURE_DETECTION"):
+    if not force and os.environ.get("BACKPROPAGATE_DEFER_FEATURE_DETECTION"):
         # WARN-level emission so the deferral is visible without being
         # spammy. Notebook / long-running consumers who set the env var
         # deliberately suppress with BACKPROPAGATE_DEFER_FEATURE_QUIET=1.
@@ -465,7 +469,7 @@ def refresh_features() -> dict[str, bool]:
     # Reset all flags before re-detection
     for key in FEATURES:
         FEATURES[key] = False
-    _detect_features()
+    _detect_features(force=True)
     return dict(FEATURES)
 
 

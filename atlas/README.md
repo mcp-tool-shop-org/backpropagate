@@ -1,19 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit 4d93400 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit a4b0e1a by Atlas 1.24.0.
 
 ## What this is
 
 13 parts, mostly Python (221 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (2db7f10)
+## What changed since 2026-10-01 (4d93400)
 
-- CI now also checks docker/fetch_bun.py.
-- Publish now also checks docker/fetch_bun.py.
-- .dockerignore is now read by tests/test_container_ui.py.
-- .gitignore is now read by tests/test_container_ui.py.
-- docker/fetch_bun.py is new and belongs to no part, so atlas check fails on it against the previous map.
-- 4 files added, 1 removed and 15 changed content, across 4 parts.
+Nothing structural changed since 2026-10-01; 1 file removed.
 
 ## What comes in
 

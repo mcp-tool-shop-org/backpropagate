@@ -70,7 +70,7 @@
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 97,
+      "qualifyingSourceCommits": 99,
       "rebaseline": null
     },
     {
@@ -220,7 +220,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 79,
+      "qualifyingSourceCommits": 82,
       "rebaseline": null
     }
   ],
@@ -358,8 +358,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 74,
-        "lines": 1430,
+        "commits": 77,
+        "lines": 1473,
         "path": "CHANGELOG.md"
       },
       {
@@ -478,8 +478,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 12,
-        "lines": 479,
+        "commits": 13,
+        "lines": 501,
         "path": "atlas/README.md"
       },
       {
@@ -488,18 +488,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 12,
-        "lines": 1936,
+        "commits": 13,
+        "lines": 2008,
         "path": "atlas/page.json"
       },
       {
-        "commits": 12,
-        "lines": 10580,
+        "commits": 13,
+        "lines": 10654,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 12,
-        "lines": 40037,
+        "commits": 13,
+        "lines": 41008,
         "path": "atlas/structure.json"
       },
       {
@@ -678,8 +678,8 @@
         "path": "backpropagate/checkpoints.py"
       },
       {
-        "commits": 73,
-        "lines": 22233,
+        "commits": 77,
+        "lines": 22552,
         "path": "backpropagate/cli.py"
       },
       {
@@ -698,8 +698,8 @@
         "path": "backpropagate/datasets.py"
       },
       {
-        "commits": 7,
-        "lines": 3583,
+        "commits": 10,
+        "lines": 4714,
         "path": "backpropagate/eval.py"
       },
       {
@@ -2943,18 +2943,18 @@
         "path": "site/src/content/docs/handbook/beginners.md"
       },
       {
-        "commits": 34,
-        "lines": 1194,
+        "commits": 37,
+        "lines": 1210,
         "path": "site/src/content/docs/handbook/cli-reference.md"
       },
       {
-        "commits": 35,
-        "lines": 469,
+        "commits": 38,
+        "lines": 472,
         "path": "site/src/content/docs/handbook/env-vars.md"
       },
       {
-        "commits": 25,
-        "lines": 313,
+        "commits": 28,
+        "lines": 319,
         "path": "site/src/content/docs/handbook/error-codes.md"
       },
       {
@@ -2993,8 +2993,8 @@
         "path": "site/src/content/docs/handbook/preference-tuning.md"
       },
       {
-        "commits": 8,
-        "lines": 824,
+        "commits": 11,
+        "lines": 830,
         "path": "site/src/content/docs/handbook/recipes.md"
       },
       {
@@ -3003,8 +3003,8 @@
         "path": "site/src/content/docs/handbook/reference.md"
       },
       {
-        "commits": 9,
-        "lines": 396,
+        "commits": 12,
+        "lines": 414,
         "path": "site/src/content/docs/handbook/security.md"
       },
       {
@@ -3273,8 +3273,8 @@
         "path": "tests/test_cli_cov_train.py"
       },
       {
-        "commits": 3,
-        "lines": 462,
+        "commits": 5,
+        "lines": 498,
         "path": "tests/test_cli_cov_ui.py"
       },
       {
@@ -3298,14 +3298,19 @@
         "path": "tests/test_cli_data_eval.py"
       },
       {
-        "commits": 21,
-        "lines": 3196,
+        "commits": 23,
+        "lines": 3308,
         "path": "tests/test_cli_extended.py"
       },
       {
         "commits": 1,
         "lines": 61,
         "path": "tests/test_cli_multi_run_method_guard.py"
+      },
+      {
+        "commits": 2,
+        "lines": 418,
+        "path": "tests/test_cli_run_reflex.py"
       },
       {
         "commits": 22,
@@ -3398,8 +3403,8 @@
         "path": "tests/test_eval.py"
       },
       {
-        "commits": 1,
-        "lines": 627,
+        "commits": 4,
+        "lines": 642,
         "path": "tests/test_eval_cov_extra.py"
       },
       {
@@ -3408,9 +3413,14 @@
         "path": "tests/test_eval_gate_roundtrip.py"
       },
       {
-        "commits": 3,
-        "lines": 1683,
+        "commits": 6,
+        "lines": 1707,
         "path": "tests/test_eval_metrics.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1113,
+        "path": "tests/test_eval_pass_rate_isolation.py"
       },
       {
         "commits": 9,
@@ -3513,8 +3523,8 @@
         "path": "tests/test_helpers.py"
       },
       {
-        "commits": 5,
-        "lines": 373,
+        "commits": 7,
+        "lines": 389,
         "path": "tests/test_host_gate.py"
       },
       {
@@ -3783,8 +3793,8 @@
         "path": "tests/test_trust_remote_code.py"
       },
       {
-        "commits": 1,
-        "lines": 503,
+        "commits": 3,
+        "lines": 507,
         "path": "tests/test_ui_auth_hardening.py"
       },
       {
@@ -3838,8 +3848,8 @@
         "path": "tests/test_ui_cov_state_runs.py"
       },
       {
-        "commits": 3,
-        "lines": 474,
+        "commits": 6,
+        "lines": 506,
         "path": "tests/test_ui_e2e_real_reflex.py"
       },
       {
@@ -3923,9 +3933,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T15:43:51.818Z",
+  "generatedAt": "2026-10-01T16:06:27.769Z",
   "generatedFrom": {
-    "commit": "4d93400ced5923e962038ba5e72c64cfa7e1b47a"
+    "commit": "a4b0e1a04144c736553ca1a975cb9d0ed4fdf2b0"
   },
   "pairs": [
     {
@@ -4078,9 +4088,9 @@
     {
       "a": "backpropagate/exceptions.py",
       "b": "site/src/content/docs/handbook/error-codes.md",
-      "either": 23,
+      "either": 24,
       "shared": 13,
-      "strength": 0.565217
+      "strength": 0.541667
     },
     {
       "a": "backpropagate/multi_run.py",
@@ -4099,9 +4109,9 @@
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
       "b": "site/src/content/docs/handbook/env-vars.md",
-      "either": 25,
-      "shared": 14,
-      "strength": 0.56
+      "either": 26,
+      "shared": 15,
+      "strength": 0.576923
     }
   ],
   "parameters": {
@@ -4114,16 +4124,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-01T10:39:49-04:00",
-    "inScopeFiles": 719,
+    "headDate": "2026-10-01T11:44:10-04:00",
+    "inScopeFiles": 729,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 201,
+    "qualifyingCommits": 204,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-04T14:39:49.000Z",
+    "since": "2026-04-04T15:44:10.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

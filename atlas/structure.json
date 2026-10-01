@@ -12410,10 +12410,6 @@
           "path": ".dockerignore"
         },
         {
-          "hash": "9ac8ba5fce8e868c5ae3c55a2caeca8c66f9501a573372490baca351a5b7e77e",
-          "path": ".gitignore"
-        },
-        {
           "hash": "64d152274b1e8adfab4fed33678119f1a9973fc1839cb97fafd524d1b6e52f4a",
           "path": ".npmignore"
         },
@@ -18781,8 +18777,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "4d93400ced5923e962038ba5e72c64cfa7e1b47a",
-    "tracked": 711
+    "commit": "a4b0e1a04144c736553ca1a975cb9d0ed4fdf2b0",
+    "tracked": 710
   },
   "landings": [
     {
@@ -18849,18 +18845,6 @@
         }
       ],
       "target": ".github/workflows/fuzz.yml",
-      "writers": []
-    },
-    {
-      "readers": [
-        {
-          "by": "tests/test_container_ui.py",
-          "call": "literal",
-          "confidence": "ast",
-          "fromTests": true
-        }
-      ],
-      "target": ".gitignore",
       "writers": []
     },
     {

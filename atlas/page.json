@@ -71,63 +71,24 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 4,
-      "changed": 15,
+      "added": 0,
+      "changed": 0,
       "moved": 0,
-      "parts": 4,
+      "parts": 1,
       "removed": 1
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI now also checks docker/fetch_bun.py.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "docker/fetch_bun.py"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "Publish now also checks docker/fetch_bun.py.",
-        "subjects": [
-          ".github/workflows/publish.yml",
-          "docker/fetch_bun.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": ".dockerignore is now read by tests/test_container_ui.py.",
-        "subjects": [
-          ".dockerignore",
-          "tests/test_container_ui.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": ".gitignore is now read by tests/test_container_ui.py.",
-        "subjects": [
-          ".gitignore",
-          "tests/test_container_ui.py"
-        ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "docker/fetch_bun.py is new and belongs to no part, so atlas check fails on it against the previous map.",
-        "subjects": [
-          "docker/fetch_bun.py"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "4 files added, 1 removed and 15 changed content, across 4 parts.",
+        "sentence": "Nothing structural changed since 2026-10-01; 1 file removed.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "2db7f1062aeaf851bcfe9b6ff4d6b385c82ed011",
-      "generatedAt": "2026-10-01T14:27:02.050Z"
+      "commit": "4d93400ced5923e962038ba5e72c64cfa7e1b47a",
+      "generatedAt": "2026-10-01T15:43:51.818Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [],
   "changesTogetherNote": [
@@ -135,7 +96,7 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 23 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "4d93400ced5923e962038ba5e72c64cfa7e1b47a",
+  "commit": "a4b0e1a04144c736553ca1a975cb9d0ed4fdf2b0",
   "defaultBranch": "main",
   "derived": "13 parts, mostly Python (221 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
@@ -600,7 +561,7 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T15:43:51.818Z",
+  "generatedAt": "2026-10-01T16:06:27.769Z",
   "limits": [
     "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.",

@@ -64,12 +64,12 @@
           "scripts"
         ]
       },
-      "cohesion": 0.319579,
-      "cohesionDropped": false,
+      "cohesion": 0,
+      "cohesionDropped": true,
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 84,
+      "qualifyingSourceCommits": 94,
       "rebaseline": null
     },
     {
@@ -151,7 +151,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "scripts",
-      "qualifyingSourceCommits": 10,
+      "qualifyingSourceCommits": 11,
       "rebaseline": null
     },
     {
@@ -185,7 +185,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 66,
+      "qualifyingSourceCommits": 125,
       "rebaseline": null
     }
   ],
@@ -233,8 +233,8 @@
         "path": ".github/dependabot.yml"
       },
       {
-        "commits": 64,
-        "lines": 3557,
+        "commits": 65,
+        "lines": 3569,
         "path": ".github/workflows/ci.yml"
       },
       {
@@ -243,8 +243,8 @@
         "path": ".github/workflows/doc-drift.yml"
       },
       {
-        "commits": 14,
-        "lines": 384,
+        "commits": 15,
+        "lines": 394,
         "path": ".github/workflows/mutmut.yml"
       },
       {
@@ -318,8 +318,8 @@
         "path": "CITATION.cff"
       },
       {
-        "commits": 21,
-        "lines": 247,
+        "commits": 22,
+        "lines": 249,
         "path": "CLAUDE.md"
       },
       {
@@ -343,43 +343,43 @@
         "path": "PRODUCTION_READINESS_AUDIT.md"
       },
       {
-        "commits": 19,
-        "lines": 2756,
+        "commits": 20,
+        "lines": 2758,
         "path": "README.es.md"
       },
       {
-        "commits": 19,
-        "lines": 2576,
+        "commits": 20,
+        "lines": 2578,
         "path": "README.fr.md"
       },
       {
-        "commits": 19,
-        "lines": 2590,
+        "commits": 20,
+        "lines": 2592,
         "path": "README.hi.md"
       },
       {
-        "commits": 19,
-        "lines": 3328,
+        "commits": 20,
+        "lines": 3330,
         "path": "README.it.md"
       },
       {
-        "commits": 19,
-        "lines": 2876,
+        "commits": 20,
+        "lines": 2878,
         "path": "README.ja.md"
       },
       {
-        "commits": 47,
-        "lines": 1803,
+        "commits": 48,
+        "lines": 1805,
         "path": "README.md"
       },
       {
-        "commits": 19,
-        "lines": 2526,
+        "commits": 20,
+        "lines": 2528,
         "path": "README.pt-BR.md"
       },
       {
-        "commits": 19,
-        "lines": 2556,
+        "commits": 20,
+        "lines": 2558,
         "path": "README.zh.md"
       },
       {
@@ -428,8 +428,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 8,
-        "lines": 354,
+        "commits": 7,
+        "lines": 331,
         "path": "atlas/README.md"
       },
       {
@@ -438,18 +438,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 8,
-        "lines": 1523,
+        "commits": 7,
+        "lines": 1397,
         "path": "atlas/page.json"
       },
       {
-        "commits": 8,
-        "lines": 4263,
+        "commits": 7,
+        "lines": 4764,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 8,
-        "lines": 35130,
+        "commits": 7,
+        "lines": 32830,
         "path": "atlas/structure.json"
       },
       {
@@ -618,8 +618,8 @@
         "path": "backpropagate/assets/logo.png"
       },
       {
-        "commits": 2,
-        "lines": 2132,
+        "commits": 1,
+        "lines": 1066,
         "path": "backpropagate/block_engine.py"
       },
       {
@@ -628,8 +628,8 @@
         "path": "backpropagate/checkpoints.py"
       },
       {
-        "commits": 70,
-        "lines": 22021,
+        "commits": 69,
+        "lines": 21944,
         "path": "backpropagate/cli.py"
       },
       {
@@ -643,8 +643,8 @@
         "path": "backpropagate/dataset_report.py"
       },
       {
-        "commits": 33,
-        "lines": 5007,
+        "commits": 35,
+        "lines": 5045,
         "path": "backpropagate/datasets.py"
       },
       {
@@ -653,18 +653,18 @@
         "path": "backpropagate/eval.py"
       },
       {
-        "commits": 35,
-        "lines": 2880,
+        "commits": 36,
+        "lines": 2921,
         "path": "backpropagate/exceptions.py"
       },
       {
-        "commits": 33,
-        "lines": 4868,
+        "commits": 36,
+        "lines": 4938,
         "path": "backpropagate/export.py"
       },
       {
-        "commits": 21,
-        "lines": 1017,
+        "commits": 23,
+        "lines": 1037,
         "path": "backpropagate/feature_flags.py"
       },
       {
@@ -688,8 +688,8 @@
         "path": "backpropagate/model_card.py"
       },
       {
-        "commits": 55,
-        "lines": 8472,
+        "commits": 58,
+        "lines": 8562,
         "path": "backpropagate/multi_run.py"
       },
       {
@@ -703,8 +703,8 @@
         "path": "backpropagate/rxconfig.py"
       },
       {
-        "commits": 13,
-        "lines": 401,
+        "commits": 14,
+        "lines": 435,
         "path": "backpropagate/security.py"
       },
       {
@@ -723,8 +723,8 @@
         "path": "backpropagate/theme_gradio_legacy.py"
       },
       {
-        "commits": 72,
-        "lines": 17805,
+        "commits": 75,
+        "lines": 17633,
         "path": "backpropagate/trainer.py"
       },
       {
@@ -863,8 +863,8 @@
         "path": "backpropagate/ui_app/pages/run_detail.py"
       },
       {
-        "commits": 17,
-        "lines": 1213,
+        "commits": 19,
+        "lines": 1215,
         "path": "backpropagate/ui_app/pages/runs.py"
       },
       {
@@ -878,13 +878,13 @@
         "path": "backpropagate/ui_gradio_legacy.py"
       },
       {
-        "commits": 35,
-        "lines": 4887,
+        "commits": 37,
+        "lines": 5011,
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 34,
-        "lines": 6942,
+        "commits": 36,
+        "lines": 7020,
         "path": "backpropagate/ui_state.py"
       },
       {
@@ -938,8 +938,8 @@
         "path": "docs/full-ft-engines-design-2026-09-30.md"
       },
       {
-        "commits": 1,
-        "lines": 260,
+        "commits": 2,
+        "lines": 313,
         "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
       },
       {
@@ -953,613 +953,613 @@
         "path": "docs/production-quality-plan-2026-09-30.md"
       },
       {
-        "commits": 2,
-        "lines": 90,
+        "commits": 1,
+        "lines": 45,
         "path": "docs/receipts/2026-09-30-block-engine/README.md"
       },
       {
-        "commits": 2,
-        "lines": 2,
+        "commits": 1,
+        "lines": 1,
         "path": "docs/receipts/2026-09-30-block-engine/env.json"
       },
       {
-        "commits": 2,
-        "lines": 22,
+        "commits": 1,
+        "lines": 11,
         "path": "docs/receipts/2026-09-30-block-engine/prep.json"
       },
       {
-        "commits": 2,
-        "lines": 122,
+        "commits": 1,
+        "lines": 61,
         "path": "docs/receipts/2026-09-30-block-engine/receipt.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 1418,
+        "commits": 1,
+        "lines": 709,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 402,
+        "commits": 1,
+        "lines": 201,
         "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 154,
+        "commits": 1,
+        "lines": 77,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap16_frozen.json"
       },
       {
-        "commits": 2,
-        "lines": 154,
+        "commits": 1,
+        "lines": 77,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap24.json"
       },
       {
-        "commits": 2,
-        "lines": 366,
+        "commits": 1,
+        "lines": 183,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap24_frozen.json"
       },
       {
-        "commits": 2,
-        "lines": 938,
+        "commits": 1,
+        "lines": 469,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_k5_random.json"
       },
       {
-        "commits": 2,
-        "lines": 938,
+        "commits": 1,
+        "lines": 469,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_k5_random_ad76bcf.json"
       },
       {
-        "commits": 2,
-        "lines": 494,
+        "commits": 1,
+        "lines": 247,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_uncapped.json"
       },
       {
-        "commits": 2,
-        "lines": 282,
+        "commits": 1,
+        "lines": 141,
         "path": "docs/receipts/2026-09-30-block-engine/runs/b_qlora.json"
       },
       {
-        "commits": 2,
-        "lines": 50,
+        "commits": 1,
+        "lines": 25,
         "path": "docs/receipts/2026-09-30-block-engine/runs/base_HuggingFaceTB_SmolLM2-360M-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 50,
+        "commits": 1,
+        "lines": 25,
         "path": "docs/receipts/2026-09-30-block-engine/runs/base_HuggingFaceTB_SmolLM3-3B.json"
       },
       {
-        "commits": 2,
-        "lines": 50,
+        "commits": 1,
+        "lines": 25,
         "path": "docs/receipts/2026-09-30-block-engine/runs/base_Qwen_Qwen2.5-1.5B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 50,
+        "commits": 1,
+        "lines": 25,
         "path": "docs/receipts/2026-09-30-block-engine/runs/base_Qwen_Qwen2.5-7B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 968,
+        "commits": 1,
+        "lines": 484,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k10_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 968,
+        "commits": 1,
+        "lines": 484,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k10_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 518,
+        "commits": 1,
+        "lines": 259,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k200_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 518,
+        "commits": 1,
+        "lines": 259,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k200_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k50_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k50_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 968,
+        "commits": 1,
+        "lines": 484,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k10_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 968,
+        "commits": 1,
+        "lines": 484,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k10_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 518,
+        "commits": 1,
+        "lines": 259,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k200_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 518,
+        "commits": 1,
+        "lines": 259,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k200_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k50_nearest.json"
       },
       {
-        "commits": 2,
-        "lines": 608,
+        "commits": 1,
+        "lines": 304,
         "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k50_stochastic.json"
       },
       {
-        "commits": 2,
-        "lines": 26,
+        "commits": 1,
+        "lines": 13,
         "path": "docs/receipts/2026-09-30-block-engine/runs/p_hub.json"
       },
       {
-        "commits": 2,
-        "lines": 94,
+        "commits": 1,
+        "lines": 47,
         "path": "docs/receipts/2026-09-30-block-engine/runs/p_qwen35_4b_lora.json"
       },
       {
-        "commits": 2,
-        "lines": 376,
+        "commits": 1,
+        "lines": 188,
         "path": "docs/receipts/2026-09-30-block-engine/runs/smoke_block.json"
       },
       {
-        "commits": 2,
-        "lines": 496,
+        "commits": 1,
+        "lines": 248,
         "path": "docs/receipts/2026-09-30-block-engine/stage_a.json"
       },
       {
-        "commits": 2,
-        "lines": 296,
+        "commits": 1,
+        "lines": 148,
         "path": "docs/receipts/2026-09-30-block-engine/stage_a2.json"
       },
       {
-        "commits": 2,
-        "lines": 478,
+        "commits": 1,
+        "lines": 239,
         "path": "docs/receipts/2026-09-30-block-engine/stage_b.json"
       },
       {
-        "commits": 2,
-        "lines": 1272,
+        "commits": 1,
+        "lines": 636,
         "path": "docs/receipts/2026-09-30-block-engine/stage_c.json"
       },
       {
-        "commits": 2,
-        "lines": 58,
+        "commits": 1,
+        "lines": 29,
         "path": "docs/receipts/2026-09-30-gsm8k/README.md"
       },
       {
-        "commits": 2,
-        "lines": 2,
+        "commits": 1,
+        "lines": 1,
         "path": "docs/receipts/2026-09-30-gsm8k/d2_triggers.json"
       },
       {
-        "commits": 2,
-        "lines": 24,
+        "commits": 1,
+        "lines": 12,
         "path": "docs/receipts/2026-09-30-gsm8k/d_pick.json"
       },
       {
-        "commits": 2,
-        "lines": 2,
+        "commits": 1,
+        "lines": 1,
         "path": "docs/receipts/2026-09-30-gsm8k/env.json"
       },
       {
-        "commits": 2,
-        "lines": 536,
+        "commits": 1,
+        "lines": 268,
         "path": "docs/receipts/2026-09-30-gsm8k/prep_gsm8k.json"
       },
       {
-        "commits": 2,
-        "lines": 188,
+        "commits": 1,
+        "lines": 94,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_HuggingFaceTB_SmolLM3-3B.json"
       },
       {
-        "commits": 2,
-        "lines": 188,
+        "commits": 1,
+        "lines": 94,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_Qwen_Qwen2.5-3B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 188,
+        "commits": 1,
+        "lines": 94,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_Qwen_Qwen2.5-7B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 3620,
+        "commits": 1,
+        "lines": 1810,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 3620,
+        "commits": 1,
+        "lines": 1810,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 3620,
+        "commits": 1,
+        "lines": 1810,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 12982,
+        "commits": 1,
+        "lines": 6491,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_lr5e-5_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12982,
+        "commits": 1,
+        "lines": 6491,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_lr5e-5_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 12980,
+        "commits": 1,
+        "lines": 6490,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12980,
+        "commits": 1,
+        "lines": 6490,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 12980,
+        "commits": 1,
+        "lines": 6490,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 2372,
+        "commits": 1,
+        "lines": 1186,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_adafactor_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s2.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_qlora_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_qlora_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 12966,
+        "commits": 1,
+        "lines": 6483,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_block_k5_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12966,
+        "commits": 1,
+        "lines": 6483,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_block_k5_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 2358,
+        "commits": 1,
+        "lines": 1179,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_galore_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 2366,
+        "commits": 1,
+        "lines": 1183,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_qlora_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_HuggingFaceTB_SmolLM3-3B.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_Qwen_Qwen2.5-3B-Instruct.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_Qwen_Qwen2.5-7B-Instruct.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s2.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_lr5e-5_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_lr5e-5_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s2.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_adafactor_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s2.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_qlora_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_qlora_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_block_k5_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_block_k5_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_galore_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_qlora_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k50_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k5_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k5_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_default_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_default_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_qlora_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_block_k5_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_block_k5_s1.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 500,
+        "commits": 1,
+        "lines": 250,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_qlora_s0.jsonl"
       },
       {
-        "commits": 2,
-        "lines": 144,
+        "commits": 1,
+        "lines": 72,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/lengths_Qwen_Qwen2.5-3B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 144,
+        "commits": 1,
+        "lines": 72,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/lengths_Qwen_Qwen2.5-7B-Instruct.json"
       },
       {
-        "commits": 2,
-        "lines": 730,
+        "commits": 1,
+        "lines": 365,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/smoke_block.json"
       },
       {
-        "commits": 2,
-        "lines": 3616,
+        "commits": 1,
+        "lines": 1808,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k50_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12976,
+        "commits": 1,
+        "lines": 6488,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k5_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12976,
+        "commits": 1,
+        "lines": 6488,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k5_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 2362,
+        "commits": 1,
+        "lines": 1181,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_default_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 2362,
+        "commits": 1,
+        "lines": 1181,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_default_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 2362,
+        "commits": 1,
+        "lines": 1181,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_qlora_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12962,
+        "commits": 1,
+        "lines": 6481,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_block_k5_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 12962,
+        "commits": 1,
+        "lines": 6481,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_block_k5_s1.json"
       },
       {
-        "commits": 2,
-        "lines": 2362,
+        "commits": 1,
+        "lines": 1181,
         "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_qlora_s0.json"
       },
       {
-        "commits": 2,
-        "lines": 3894,
+        "commits": 1,
+        "lines": 1947,
         "path": "docs/receipts/2026-09-30-gsm8k/stage_d.json"
       },
       {
-        "commits": 2,
-        "lines": 2362,
+        "commits": 1,
+        "lines": 1181,
         "path": "docs/receipts/2026-09-30-gsm8k/stage_x1000.json"
       },
       {
@@ -1683,13 +1683,18 @@
         "path": "logo.png"
       },
       {
+        "commits": 1,
+        "lines": 46,
+        "path": "osv-scanner.toml"
+      },
+      {
         "commits": 21,
         "lines": 140,
         "path": "package.json"
       },
       {
-        "commits": 56,
-        "lines": 571,
+        "commits": 57,
+        "lines": 573,
         "path": "pyproject.toml"
       },
       {
@@ -1733,18 +1738,18 @@
         "path": "scripts/offload_quality.py"
       },
       {
-        "commits": 2,
-        "lines": 2062,
+        "commits": 1,
+        "lines": 1031,
         "path": "scripts/pod_block_engine.py"
       },
       {
-        "commits": 2,
-        "lines": 938,
+        "commits": 1,
+        "lines": 469,
         "path": "scripts/pod_block_engine.sh"
       },
       {
-        "commits": 2,
-        "lines": 484,
+        "commits": 1,
+        "lines": 242,
         "path": "scripts/pod_gsm8k_summary.py"
       },
       {
@@ -1773,13 +1778,13 @@
         "path": "scripts/run_mutmut.sh"
       },
       {
-        "commits": 1,
-        "lines": 48,
+        "commits": 2,
+        "lines": 55,
         "path": "scripts/runpod/deadman.py"
       },
       {
         "commits": 2,
-        "lines": 87,
+        "lines": 115,
         "path": "scripts/runpod/pod.sh"
       },
       {
@@ -1808,8 +1813,8 @@
         "path": "site/src/content/docs/handbook/beginners.md"
       },
       {
-        "commits": 33,
-        "lines": 1190,
+        "commits": 32,
+        "lines": 1181,
         "path": "site/src/content/docs/handbook/cli-reference.md"
       },
       {
@@ -1818,8 +1823,8 @@
         "path": "site/src/content/docs/handbook/env-vars.md"
       },
       {
-        "commits": 23,
-        "lines": 310,
+        "commits": 24,
+        "lines": 311,
         "path": "site/src/content/docs/handbook/error-codes.md"
       },
       {
@@ -1833,8 +1838,8 @@
         "path": "site/src/content/docs/handbook/export.md"
       },
       {
-        "commits": 10,
-        "lines": 749,
+        "commits": 9,
+        "lines": 726,
         "path": "site/src/content/docs/handbook/full-fine-tuning.md"
       },
       {
@@ -1963,8 +1968,8 @@
         "path": "test_verify_multirun.py"
       },
       {
-        "commits": 6,
-        "lines": 674,
+        "commits": 7,
+        "lines": 679,
         "path": "tests/COVERAGE_ROADMAP.md"
       },
       {
@@ -1973,8 +1978,8 @@
         "path": "tests/EVENT_HANDLER_ROADMAP.md"
       },
       {
-        "commits": 2,
-        "lines": 718,
+        "commits": 3,
+        "lines": 720,
         "path": "tests/README.md"
       },
       {
@@ -1993,8 +1998,13 @@
         "path": "tests/helpers/asgi.py"
       },
       {
-        "commits": 2,
-        "lines": 144,
+        "commits": 4,
+        "lines": 128,
+        "path": "tests/helpers/cli_cov_support.py"
+      },
+      {
+        "commits": 1,
+        "lines": 72,
         "path": "tests/helpers/tiny_models.py"
       },
       {
@@ -2023,19 +2033,29 @@
         "path": "tests/test_auth_middleware_fuzz.py"
       },
       {
-        "commits": 2,
-        "lines": 1206,
+        "commits": 1,
+        "lines": 603,
         "path": "tests/test_block_engine.py"
       },
       {
-        "commits": 2,
-        "lines": 806,
+        "commits": 3,
+        "lines": 492,
+        "path": "tests/test_block_engine_cov_extra.py"
+      },
+      {
+        "commits": 1,
+        "lines": 403,
         "path": "tests/test_block_engine_trainer.py"
       },
       {
         "commits": 16,
         "lines": 1245,
         "path": "tests/test_callback_integration.py"
+      },
+      {
+        "commits": 1,
+        "lines": 102,
+        "path": "tests/test_chat_template_guard.py"
       },
       {
         "commits": 2,
@@ -2048,6 +2068,16 @@
         "path": "tests/test_checkpoints.py"
       },
       {
+        "commits": 2,
+        "lines": 1018,
+        "path": "tests/test_checkpoints_cov_history.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1558,
+        "path": "tests/test_checkpoints_cov_manager.py"
+      },
+      {
         "commits": 33,
         "lines": 4160,
         "path": "tests/test_cli.py"
@@ -2056,6 +2086,76 @@
         "commits": 2,
         "lines": 574,
         "path": "tests/test_cli_banner.py"
+      },
+      {
+        "commits": 2,
+        "lines": 484,
+        "path": "tests/test_cli_cov_data.py"
+      },
+      {
+        "commits": 3,
+        "lines": 480,
+        "path": "tests/test_cli_cov_eval.py"
+      },
+      {
+        "commits": 2,
+        "lines": 864,
+        "path": "tests/test_cli_cov_export.py"
+      },
+      {
+        "commits": 3,
+        "lines": 970,
+        "path": "tests/test_cli_cov_gen_vram_ollama.py"
+      },
+      {
+        "commits": 2,
+        "lines": 562,
+        "path": "tests/test_cli_cov_info.py"
+      },
+      {
+        "commits": 3,
+        "lines": 584,
+        "path": "tests/test_cli_cov_main.py"
+      },
+      {
+        "commits": 2,
+        "lines": 726,
+        "path": "tests/test_cli_cov_replay.py"
+      },
+      {
+        "commits": 2,
+        "lines": 680,
+        "path": "tests/test_cli_cov_resume_push.py"
+      },
+      {
+        "commits": 3,
+        "lines": 464,
+        "path": "tests/test_cli_cov_runs.py"
+      },
+      {
+        "commits": 4,
+        "lines": 876,
+        "path": "tests/test_cli_cov_train.py"
+      },
+      {
+        "commits": 2,
+        "lines": 828,
+        "path": "tests/test_cli_cov_ui.py"
+      },
+      {
+        "commits": 2,
+        "lines": 766,
+        "path": "tests/test_cli_cov_ui_support.py"
+      },
+      {
+        "commits": 2,
+        "lines": 396,
+        "path": "tests/test_cli_cov_validate.py"
+      },
+      {
+        "commits": 3,
+        "lines": 446,
+        "path": "tests/test_cli_cov_validators.py"
       },
       {
         "commits": 5,
@@ -2071,6 +2171,11 @@
         "commits": 22,
         "lines": 2509,
         "path": "tests/test_config.py"
+      },
+      {
+        "commits": 2,
+        "lines": 998,
+        "path": "tests/test_config_cov_extra.py"
       },
       {
         "commits": 1,
@@ -2104,6 +2209,21 @@
       },
       {
         "commits": 2,
+        "lines": 2058,
+        "path": "tests/test_datasets_cov_core.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1978,
+        "path": "tests/test_datasets_cov_loaders.py"
+      },
+      {
+        "commits": 2,
+        "lines": 110,
+        "path": "tests/test_datasets_cov_regression.py"
+      },
+      {
+        "commits": 2,
         "lines": 116,
         "path": "tests/test_datasets_extended.py"
       },
@@ -2133,6 +2253,11 @@
         "path": "tests/test_eval.py"
       },
       {
+        "commits": 2,
+        "lines": 1254,
+        "path": "tests/test_eval_cov_extra.py"
+      },
+      {
         "commits": 4,
         "lines": 1038,
         "path": "tests/test_eval_gate_roundtrip.py"
@@ -2153,14 +2278,49 @@
         "path": "tests/test_exceptions.py"
       },
       {
+        "commits": 2,
+        "lines": 460,
+        "path": "tests/test_exceptions_cov_extra.py"
+      },
+      {
         "commits": 21,
         "lines": 4083,
         "path": "tests/test_export.py"
       },
       {
+        "commits": 2,
+        "lines": 2098,
+        "path": "tests/test_export_cov_helpers.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1924,
+        "path": "tests/test_export_cov_models.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1278,
+        "path": "tests/test_export_cov_ollama.py"
+      },
+      {
+        "commits": 2,
+        "lines": 96,
+        "path": "tests/test_export_cov_regression.py"
+      },
+      {
         "commits": 7,
         "lines": 288,
         "path": "tests/test_feature_flags.py"
+      },
+      {
+        "commits": 2,
+        "lines": 268,
+        "path": "tests/test_feature_flags_cov_deferral.py"
+      },
+      {
+        "commits": 2,
+        "lines": 668,
+        "path": "tests/test_feature_flags_cov_extra.py"
       },
       {
         "commits": 6,
@@ -2194,6 +2354,11 @@
       },
       {
         "commits": 2,
+        "lines": 1380,
+        "path": "tests/test_gpu_safety_cov_nvml.py"
+      },
+      {
+        "commits": 2,
         "lines": 76,
         "path": "tests/test_helpers.py"
       },
@@ -2208,6 +2373,11 @@
         "path": "tests/test_hypothesis_slao.py"
       },
       {
+        "commits": 2,
+        "lines": 244,
+        "path": "tests/test_init_cov_extra.py"
+      },
+      {
         "commits": 7,
         "lines": 271,
         "path": "tests/test_init_imports.py"
@@ -2218,8 +2388,8 @@
         "path": "tests/test_init_lazy_loading.py"
       },
       {
-        "commits": 12,
-        "lines": 808,
+        "commits": 14,
+        "lines": 822,
         "path": "tests/test_integration.py"
       },
       {
@@ -2253,9 +2423,59 @@
         "path": "tests/test_model_card.py"
       },
       {
+        "commits": 2,
+        "lines": 424,
+        "path": "tests/test_model_card_cov_extra.py"
+      },
+      {
         "commits": 31,
         "lines": 7468,
         "path": "tests/test_multi_run.py"
+      },
+      {
+        "commits": 3,
+        "lines": 908,
+        "path": "tests/test_multi_run_cov_data_eval.py"
+      },
+      {
+        "commits": 4,
+        "lines": 1473,
+        "path": "tests/test_multi_run_cov_execute.py"
+      },
+      {
+        "commits": 2,
+        "lines": 350,
+        "path": "tests/test_multi_run_cov_gpu.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1134,
+        "path": "tests/test_multi_run_cov_helpers.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1022,
+        "path": "tests/test_multi_run_cov_model_io.py"
+      },
+      {
+        "commits": 3,
+        "lines": 118,
+        "path": "tests/test_multi_run_cov_peft_extraction.py"
+      },
+      {
+        "commits": 3,
+        "lines": 462,
+        "path": "tests/test_multi_run_cov_resume.py"
+      },
+      {
+        "commits": 3,
+        "lines": 860,
+        "path": "tests/test_multi_run_cov_run.py"
+      },
+      {
+        "commits": 3,
+        "lines": 592,
+        "path": "tests/test_multi_run_cov_support.py"
       },
       {
         "commits": 2,
@@ -2338,6 +2558,16 @@
         "path": "tests/test_slao.py"
       },
       {
+        "commits": 2,
+        "lines": 1136,
+        "path": "tests/test_slao_cov_merger.py"
+      },
+      {
+        "commits": 2,
+        "lines": 718,
+        "path": "tests/test_slao_cov_strategies.py"
+      },
+      {
         "commits": 3,
         "lines": 32,
         "path": "tests/test_theme.py"
@@ -2353,6 +2583,41 @@
         "path": "tests/test_trainer.py"
       },
       {
+        "commits": 2,
+        "lines": 1774,
+        "path": "tests/test_trainer_cov_data_io.py"
+      },
+      {
+        "commits": 2,
+        "lines": 758,
+        "path": "tests/test_trainer_cov_edges.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1546,
+        "path": "tests/test_trainer_cov_helpers.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1328,
+        "path": "tests/test_trainer_cov_init.py"
+      },
+      {
+        "commits": 2,
+        "lines": 920,
+        "path": "tests/test_trainer_cov_load.py"
+      },
+      {
+        "commits": 3,
+        "lines": 334,
+        "path": "tests/test_trainer_cov_regressions.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1148,
+        "path": "tests/test_trainer_cov_train.py"
+      },
+      {
         "commits": 4,
         "lines": 2751,
         "path": "tests/test_trainer_simpo_kto.py"
@@ -2366,6 +2631,51 @@
         "commits": 2,
         "lines": 32,
         "path": "tests/test_ui_components.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1202,
+        "path": "tests/test_ui_cov_auth.py"
+      },
+      {
+        "commits": 2,
+        "lines": 574,
+        "path": "tests/test_ui_cov_logging.py"
+      },
+      {
+        "commits": 2,
+        "lines": 974,
+        "path": "tests/test_ui_cov_middleware.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1764,
+        "path": "tests/test_ui_cov_pages.py"
+      },
+      {
+        "commits": 2,
+        "lines": 2696,
+        "path": "tests/test_ui_cov_security.py"
+      },
+      {
+        "commits": 2,
+        "lines": 346,
+        "path": "tests/test_ui_cov_security_bugs.py"
+      },
+      {
+        "commits": 2,
+        "lines": 308,
+        "path": "tests/test_ui_cov_state_bugs.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1918,
+        "path": "tests/test_ui_cov_state_forms.py"
+      },
+      {
+        "commits": 3,
+        "lines": 2356,
+        "path": "tests/test_ui_cov_state_runs.py"
       },
       {
         "commits": 9,
@@ -2433,8 +2743,8 @@
         "path": "ui_gradio_legacy.py}"
       },
       {
-        "commits": 25,
-        "lines": 14711,
+        "commits": 27,
+        "lines": 14737,
         "path": "uv.lock"
       },
       {
@@ -2448,185 +2758,178 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T00:33:05.173Z",
+  "generatedAt": "2026-10-01T03:45:05.600Z",
   "generatedFrom": {
-    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193"
+    "commit": "de66750e31c64b18cb6faca445c4d06e275239b0"
   },
   "pairs": [
     {
       "a": "README.es.md",
       "b": "README.fr.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.hi.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.it.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.ja.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.pt-BR.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.es.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.hi.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.it.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.ja.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.pt-BR.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.fr.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.it.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.ja.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.pt-BR.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.hi.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.ja.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.pt-BR.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.it.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.ja.md",
       "b": "README.pt-BR.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.ja.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
     },
     {
       "a": "README.pt-BR.md",
       "b": "README.zh.md",
-      "either": 10,
-      "shared": 10,
+      "either": 11,
+      "shared": 11,
       "strength": 1
-    },
-    {
-      "a": "backpropagate/cli.py",
-      "b": "backpropagate/trainer.py",
-      "either": 59,
-      "shared": 30,
-      "strength": 0.508475
     },
     {
       "a": "backpropagate/exceptions.py",
       "b": "site/src/content/docs/handbook/error-codes.md",
-      "either": 21,
-      "shared": 11,
-      "strength": 0.52381
+      "either": 22,
+      "shared": 12,
+      "strength": 0.545455
     },
     {
       "a": "backpropagate/multi_run.py",
       "b": "tests/test_multi_run.py",
-      "either": 34,
+      "either": 36,
       "shared": 18,
-      "strength": 0.529412
+      "strength": 0.5
     },
     {
       "a": "backpropagate/trainer.py",
       "b": "tests/test_trainer.py",
-      "either": 47,
+      "either": 50,
       "shared": 26,
-      "strength": 0.553191
+      "strength": 0.52
     },
     {
       "a": "site/src/content/docs/handbook/cli-reference.md",
@@ -2646,16 +2949,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-09-30T20:32:05-04:00",
-    "inScopeFiles": 426,
+    "headDate": "2026-09-30T23:44:46-04:00",
+    "inScopeFiles": 488,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 180,
+    "qualifyingCommits": 241,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-04T00:32:05.000Z",
+    "since": "2026-04-04T03:44:46.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -2671,7 +2974,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 20,
+    "sourceFilesReachingStrongFloor": 21,
     "strength": 0.5,
     "windowDays": 180
   },

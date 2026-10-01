@@ -51,50 +51,42 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 0,
+      "added": 62,
+      "changed": 31,
       "moved": 0,
-      "parts": 0,
+      "parts": 7,
       "removed": 0
     },
     "items": [
       {
+        "kind": "landing",
+        "sentence": "README.md is now also read by tests/test_export_cov_helpers.py.",
+        "subjects": [
+          "README.md",
+          "tests/test_export_cov_helpers.py"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-10-01; no file changed.",
+        "sentence": "62 files added and 31 changed content, across 7 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "bfbbe1d5eb2f3e66ea0f8c09b605d2b56cbd9c60",
-      "generatedAt": "2026-10-01T00:32:05.011Z"
+      "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
+      "generatedAt": "2026-10-01T00:33:05.173Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
-  "changesTogether": [
-    {
-      "a": "backpropagate/cli.py",
-      "b": "backpropagate/trainer.py",
-      "either": 59,
-      "partLabels": [
-        "backpropagate",
-        "backpropagate"
-      ],
-      "parts": [
-        "backpropagate",
-        "backpropagate"
-      ],
-      "relation": "inside",
-      "shared": 30
-    }
-  ],
+  "changesTogether": [],
   "changesTogetherNote": [
     "2 files changed together with their own tests, as expected.",
-    "Window: 180 days; a pair counts from 10 shared commits, since 20 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
+    "Window: 180 days; a pair counts from 10 shared commits, since 21 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
+  "commit": "de66750e31c64b18cb6faca445c4d06e275239b0",
   "defaultBranch": "main",
-  "derived": "11 parts, mostly Python (144 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "11 parts, mostly Python (205 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -121,7 +113,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 82
+          "files": 143
         },
         {
           "boundary": "scripts",
@@ -484,10 +476,10 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T00:33:05.173Z",
+  "generatedAt": "2026-10-01T03:45:05.600Z",
   "limits": [
-    "43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.",
+    "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.",
     "8 writes and 10 reads use paths built at run time and are not named here.",
     "31 writes and 64 reads go to a path their caller passes, not to this repository.",
     "1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.",
@@ -522,9 +514,9 @@
   "startReason": "This path follows backprop (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 85,
+  "testFiles": 146,
   "testedBy": {
-    "backpropagate": 72,
+    "backpropagate": 133,
     "bin": 0,
     "scripts": 2
   },

@@ -48,10 +48,10 @@ on:
         required: false
         default: 'backpropagate/slao.py,backpropagate/checkpoints.py'
 
+# Read-only at the top; the one job grants itself what the baseline-refresh
+# PR needs (OpenSSF Scorecard scores any top-level write as 0).
 permissions:
-  contents: write          # CIDOCS-B-002 — push a baseline-refresh branch
-  pull-requests: write     # CIDOCS-B-002 — open the baseline-refresh PR
-  issues: write            # `gh pr create --label` requires label-write scope (labels are issue-scoped)
+  contents: read
 
 concurrency:
   # Required by the studio Actions rules; this file had no block at all.
@@ -64,6 +64,10 @@ jobs:
   mutmut:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write          # CIDOCS-B-002 — push a baseline-refresh branch
+      pull-requests: write     # CIDOCS-B-002 — open the baseline-refresh PR
+      issues: write            # `gh pr create --label` requires label-write scope (labels are issue-scoped)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

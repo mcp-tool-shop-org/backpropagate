@@ -1338,18 +1338,27 @@ def export_lora(
                     f"Source model path does not exist: {src_path}",
                     suggestion="Check that the model was trained and saved correctly"
                 )
-            if src_path.is_dir():
-                # Copy adapter files
-                files_copied = 0
-                for pattern in ["adapter_*.safetensors", "adapter_*.bin", "adapter_config.json"]:
-                    for f in src_path.glob(pattern):
-                        shutil.copy2(f, partial_path / f.name)
-                        files_copied += 1
-                if files_copied == 0:
-                    raise ExportError(
-                        f"No adapter files found in {src_path}",
-                        suggestion="Ensure the directory contains adapter_*.safetensors or adapter_*.bin files"
-                    )
+            if not src_path.is_dir():
+                # A single file used to skip the copy loop and promote an EMPTY
+                # directory as a successful export (size_mb == 0.0).
+                raise ExportError(
+                    f"Source adapter path is not a directory: {src_path}",
+                    suggestion=(
+                        "Pass the adapter directory (it holds adapter_config.json "
+                        "and adapter_model.safetensors), not a single file inside it"
+                    ),
+                )
+            # Copy adapter files
+            files_copied = 0
+            for pattern in ["adapter_*.safetensors", "adapter_*.bin", "adapter_config.json"]:
+                for f in src_path.glob(pattern):
+                    shutil.copy2(f, partial_path / f.name)
+                    files_copied += 1
+            if files_copied == 0:
+                raise ExportError(
+                    f"No adapter files found in {src_path}",
+                    suggestion="Ensure the directory contains adapter_*.safetensors or adapter_*.bin files"
+                )
         elif _is_peft_model(model):
             # Save from PeftModel
             model.save_pretrained(partial_path, adapter_name=adapter_name)

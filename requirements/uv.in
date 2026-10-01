@@ -1,0 +1,3 @@
+# uv, used by scripts/ci_install_locked.sh to export uv.lock to a hashed requirements file.
+# Installed from PyPI under --require-hashes, so the exporter itself is pinned too.
+uv

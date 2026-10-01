@@ -621,6 +621,17 @@ def _render_function_call(function_call: Any) -> str:
     return f"[Function call: {function_call}]"
 
 
+def _text_or_empty(value: Any) -> Any:
+    """Map a missing/``None`` field to ``""`` so it never renders as ``'None'``.
+
+    A CSV/parquet empty cell is loaded as ``None`` (DATA-B-002). ``dict.get(k,
+    "")`` only supplies the default for ABSENT keys, so a present-but-``None``
+    value used to be interpolated into the ChatML text as the literal four
+    characters ``None`` — silently training the model to answer ``None``.
+    """
+    return "" if value is None else value
+
+
 class FormatConverter:
     """Convert between dataset formats."""
 
@@ -648,7 +659,7 @@ class FormatConverter:
         for turn in conversations:
             role_raw = turn.get("from", "").lower()
             role = FormatConverter.ROLE_MAP_SHAREGPT.get(role_raw, role_raw)
-            content = turn.get("value", "")
+            content = _text_or_empty(turn.get("value", ""))
 
             parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
 
@@ -657,9 +668,9 @@ class FormatConverter:
     @staticmethod
     def alpaca_to_chatml(sample: dict) -> str:
         """Convert Alpaca format to ChatML."""
-        instruction = sample.get("instruction", "")
+        instruction = _text_or_empty(sample.get("instruction", ""))
         input_text = sample.get("input", "")
-        output = sample.get("output", "")
+        output = _text_or_empty(sample.get("output", ""))
         system = sample.get("system", "")
 
         parts = []
@@ -768,7 +779,7 @@ class FormatConverter:
                 )
             )
 
-        chosen = sample.get("chosen", "")
+        chosen = _text_or_empty(sample.get("chosen", ""))
         if isinstance(chosen, list):
             parts.extend(
                 FormatConverter._messages_to_chatml_parts(

@@ -319,9 +319,12 @@ class TestE2EResumeTraining:
                 call_kwargs = mock_sft_instance.train.call_args.kwargs
                 # The kwarg is resume_from_checkpoint (HF/TRL convention)
                 rfc = call_kwargs.get("resume_from_checkpoint")
-                assert rfc is not None and rfc == str(output_dir), (
+                # HF reads <dir>/trainer_state.json from exactly the directory it
+                # is given, so the output dir recorded in run history is resolved
+                # to the newest checkpoint-<step> inside it (here: checkpoint-50).
+                assert rfc is not None and rfc == str(checkpoint_path), (
                     f"resume_from_checkpoint kwarg was {rfc!r}; expected the "
-                    f"on-disk checkpoint dir {str(output_dir)!r}. The "
+                    f"newest on-disk checkpoint dir {str(checkpoint_path)!r}. The "
                     f"pre-F-017 bug was that this kwarg never got threaded "
                     f"through, causing resume to silently start from step 0."
                 )

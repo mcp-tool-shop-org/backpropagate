@@ -259,7 +259,7 @@ def auth_ui(tmp_path_factory):
     password = secrets.token_urlsafe(18)
     launch = _UiLaunch(
         tmp_path_factory.mktemp("ui-auth"),
-        _base_port() + 10,
+        _free_port(),
         ["--auth", f"{user}:{password}"],
     )
     launch.user = user

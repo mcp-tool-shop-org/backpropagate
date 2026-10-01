@@ -27,9 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The SSH port-forwarding examples in the README and handbook forwarded port
   7860 while `backprop ui` listens on 7862; they now use 7862 and the banner
   URL.
+- **Ctrl+C reliably stops `backprop ui` on Windows.** About 1 launch in 5 to
+  10, Reflex's own shutdown hung, and the CLI sat in an uninterruptible wait
+  on it, so Ctrl+C did nothing. The CLI now polls the Reflex process; after
+  Ctrl+C it waits up to 10 s for a clean exit, then kills the whole process
+  tree (`taskkill /F /T` on Windows). A second Ctrl+C skips the wait.
 
 ### Security
 
+- **The `pass_rate` eval metric no longer runs model output inside your
+  process, and needs an explicit opt-in.** It used `exec` on the generated
+  code in the eval process, behind a "restricted builtins" list that is easy to
+  escape, with no timeout (a generated infinite loop hung the eval). It now
+  refuses to run without `--allow-code-exec` (or
+  `BACKPROPAGATE_ALLOW_CODE_EVAL=1`), and each sample runs in a separate
+  `python -I` process with a timeout (`--code-exec-timeout`, default 10 s), a
+  stripped environment, a temporary working directory and, on Linux/macOS,
+  CPU / memory / file-size limits. Still not a sandbox: see the handbook's
+  security page.
 - **A default `backprop ui` launch is authenticated.** Without `--auth`, the
   CLI now generates a random token per launch, prints it in the banner URL and
   writes it to a `0600` lock file deleted on exit; the first request trades it

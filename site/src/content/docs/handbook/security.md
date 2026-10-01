@@ -135,6 +135,12 @@ The UI sandboxes filesystem writes (saved adapters, GGUF exports, converted data
 - Do **not** disable the output-directory denylist. It exists to prevent path-traversal bugs in the UI from writing into your system or credential paths.
 - Do **not** invoke `python -m reflex run` or `reflex run` from inside the `backpropagate/` package directory while setting `BACKPROPAGATE_UI_AUTH` and assume auth is wired. The layer-3 + layer-4 import-time guards refuse to start when `ENFORCEMENT_AVAILABLE=False` precisely so that operator confusion cannot bypass the middleware. Always launch via `backprop ui`.
 
+## Code-execution metric (`pass_rate`)
+
+`backprop eval --metric pass_rate` scores generated code by running it against test snippets. Model output is untrusted code, so this is off unless you pass `--allow-code-exec` (or set `BACKPROPAGATE_ALLOW_CODE_EVAL=1`). When it is on, each sample runs in a separate `python -I` process with a timeout (`--code-exec-timeout`, default 10 s), a stripped environment (no `HF_TOKEN` or other secrets from your shell), a fresh temporary working directory, closed stdin, and on Linux/macOS limits on CPU time, memory (2 GiB), file size (10 MiB) and core dumps. A sample that times out, crashes or prints a malformed report scores 0.
+
+This is isolation, **not a sandbox**: the code still runs as your user, with your file-system and network access. Run it only on output you would be willing to run yourself, or inside a container or VM. Before v1.8.1 the metric ran the code with `exec` inside the eval process, with no timeout.
+
 ## Reporting vulnerabilities
 
 See the repo-root [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md). Open a GitHub Security Advisory; do **not** file as a public issue. Include the `run_id` (printed at startup) and the structured error code if one was emitted.

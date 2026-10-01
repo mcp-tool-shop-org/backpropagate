@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The `pass_rate` eval metric no longer runs model output inside your
+  process, and needs an explicit opt-in.** It used `exec` on the generated
+  code in the eval process, behind a "restricted builtins" list that is easy to
+  escape, with no timeout (a generated infinite loop hung the eval). It now
+  refuses to run without `--allow-code-exec` (or
+  `BACKPROPAGATE_ALLOW_CODE_EVAL=1`), and each sample runs in a separate
+  `python -I` process with a timeout (`--code-exec-timeout`, default 10 s), a
+  stripped environment, a temporary working directory and, on Linux/macOS,
+  CPU / memory / file-size limits. Still not a sandbox: see the handbook's
+  security page.
+
 ## [1.8.0] - 2026-10-01
 
 ### Added

@@ -541,6 +541,11 @@ class TestEvaluateRunWithStub:
 
 
 class TestMetricEdges:
+    @pytest.fixture(autouse=True)
+    def _allow_code_eval(self, monkeypatch):
+        # pass_rate runs model output in a child process and is opt-in.
+        monkeypatch.setenv("BACKPROPAGATE_ALLOW_CODE_EVAL", "1")
+
     def test_reference_coercion(self):
         assert ev._as_reference_list(None) == []
         assert ev._as_reference_list("one") == ["one"]

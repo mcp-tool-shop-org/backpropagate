@@ -145,6 +145,11 @@ class TestRegex:
 # =============================================================================
 
 class TestPassRate:
+    @pytest.fixture(autouse=True)
+    def _allow_code_eval(self, monkeypatch):
+        # pass_rate runs model output in a child process and is opt-in.
+        monkeypatch.setenv("BACKPROPAGATE_ALLOW_CODE_EVAL", "1")
+
     def test_passing_code_scores_one(self):
         code = "def add(a, b):\n    return a + b\n"
         tests = ["assert add(2, 3) == 5"]
@@ -185,7 +190,8 @@ class TestComputeTaskMetric:
     def test_dispatches_regex(self):
         assert compute_task_metric("regex", "abc123", [r"\d+"]) == 1.0
 
-    def test_dispatches_pass_rate(self):
+    def test_dispatches_pass_rate(self, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_ALLOW_CODE_EVAL", "1")
         assert compute_task_metric(
             "pass_rate", "def f():\n    return 1\n", ["assert f() == 1"]
         ) == pytest.approx(1.0)

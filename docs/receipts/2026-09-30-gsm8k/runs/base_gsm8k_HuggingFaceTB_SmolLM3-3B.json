@@ -1,0 +1,94 @@
+{
+ "manifest": {
+  "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+  "image": "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "vram_total_gib": 31.37,
+  "cuda_runtime": "12.8",
+  "card": "NVIDIA GeForce RTX 5090",
+  "card_total_gib": 31.37,
+  "vram_cap_gib": null,
+  "emulated_rtx5090": false,
+  "comparable_vram_figure": "NVML peak and torch max reserved",
+  "cuda_driver": "570.211.01",
+  "versions": {
+   "torch": "2.8.0+cu128",
+   "transformers": "5.18.0",
+   "trl": "1.14.1",
+   "accelerate": "1.15.0",
+   "peft": "0.21.1",
+   "bitsandbytes": "0.50.2",
+   "galore-torch": "1.0",
+   "nvidia-ml-py": "13.615.71",
+   "unsloth": null,
+   "datasets": "5.0.1",
+   "backpropagate": "1.7.1"
+  },
+  "pytorch_cuda_alloc_conf": "expandable_segments:True"
+ },
+ "mode": "base",
+ "dataset": "gsm8k",
+ "model": "HuggingFaceTB/SmolLM3-3B",
+ "heldout_loss": 1.1767,
+ "answer_loss": 1.1767,
+ "answer_tokens": 19346,
+ "acc_strict": 0.124,
+ "acc_lenient": 0.868,
+ "has_hash_answer": 0.144,
+ "hit_max_new_tokens": 7,
+ "prefix_mismatch": 0,
+ "n": 250,
+ "eval_s": 47.0,
+ "samples": [
+  {
+   "output": "<think>\n\n</think>\nFirst, we need to determine how many eggs Janet has left after she eats and bakes muffins. \n\nJanet's ducks lay 16 eggs per day. She eats 3 eggs for breakfast every morning, and she bakes muffins for her friends every day with 4 eggs. So, the total number of eggs she uses per day is 3 (for breakfast) + 4 (for muffins) = 7 eggs.\n\nNow, we subtract the number of eggs she uses from the total number of eggs laid by her ducks: 16 (eggs laid) - 7 (eggs used) = 9 eggs.\n\nThese 9 eggs are sold at the farmers' market for $2 each. To find out how much money Janet makes, we multiply the nu",
+   "gold": 18.0,
+   "strict": false
+  },
+  {
+   "output": "<think>\n\n</think>\nFirst, we need to find the original value of the house before the repairs. Josh bought the house for $80,000, so the original value is $80,000.\n\nNext, we need to calculate the value of the house after the repairs. The problem states that the repairs increased the value of the house by 150%. To find the value after the increase, we can calculate 150% of the original value and add it to the original value.\n\n150% of $80,000 is 1.5 * $80,000 = $120,000.\n\nNow, we add this to the original value: $80,000 + $120,000 = $200,000.\n\nSo, the value of the house after the repairs is $200,00",
+   "gold": 70000.0,
+   "strict": false
+  },
+  {
+   "output": "<think>\n\n</think>\nFirst, we need to find out how many sprints James runs in a week. He runs 3 sprints 3 times a week, so that's 3 sprints * 3 times a week = 9 sprints per week.\n\nNext, we need to find out how many meters he runs in one sprint. He runs 60 meters each sprint.\n\nNow, we can calculate the total meters he runs in a week by multiplying the number of sprints by the meters per sprint: 9 sprints * 60 meters per sprint = 540 meters.\n\nSo, the total meters James runs a week is 540.",
+   "gold": 540.0,
+   "strict": false
+  }
+ ],
+ "template_example_prompt": "<|im_start|>user\nJanet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?\n\nSolve the math word problem. Show your reasoning step by step, then give the final numeric answer on its own last line in the form '#### <number>'.<|im_end|>\n<|im_start|>assistant\n",
+ "items_file": "runs/items/base_gsm8k_HuggingFaceTB_SmolLM3-3B.jsonl",
+ "floor": 0.0,
+ "ceiling": 1.0,
+ "in_bounds": true,
+ "near_ceiling": false,
+ "near_floor": false,
+ "acc_wilson95": [
+  0.0887,
+  0.1706
+ ],
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.37,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "galore-torch": "1.0",
+  "nvidia-ml-py": "13.615.71",
+  "unsloth": null,
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+ "nvml_peak_gib": 9.427,
+ "nvml_baseline_gib": 0.48,
+ "nvml_phase_peak_gib": {
+  "start": 9.427
+ },
+ "nvml_sample_hz": 10,
+ "written": "2026-09-30T19:59:39Z"
+}

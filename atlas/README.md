@@ -1,15 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit dfaf4b4 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit bfbbe1d by Atlas 1.24.0.
 
 ## What this is
 
-11 parts, mostly Python (138 files), shell (8), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+11 parts, mostly Python (144 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-09-30 (27eb75c)
+## What changed since 2026-10-01 (dfaf4b4)
 
-- examples/quickstart.jsonl is now also read by README.es.md, README.fr.md, README.hi.md, README.it.md, README.ja.md, README.md, README.pt-BR.md and README.zh.md.
-- 5 files added and 20 changed content, across 6 parts.
+Nothing structural changed since 2026-10-01; 129 files added and 5 changed content.
 
 ## What comes in
 
@@ -104,10 +103,10 @@ Read those in order to follow one run of backprop end to end. This path follows 
 
 ## What this map cannot see
 
-- 41 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
+- 43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
 - 8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.
 - 8 writes and 10 reads use paths built at run time and are not named here.
-- 20 writes and 54 reads go to a path their caller passes, not to this repository.
+- 31 writes and 64 reads go to a path their caller passes, not to this repository.
 - 1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.
 - 1 read goes to the directory the command is run in, not to this repository.
 - 1 read goes to the home directory (.cache/), not to this repository.

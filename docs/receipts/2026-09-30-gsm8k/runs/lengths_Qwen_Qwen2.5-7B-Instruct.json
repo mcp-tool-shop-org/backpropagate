@@ -1,0 +1,72 @@
+{
+ "manifest": {
+  "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+  "image": "runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "vram_total_gib": 31.37,
+  "cuda_runtime": "12.8",
+  "card": "NVIDIA GeForce RTX 5090",
+  "card_total_gib": 31.37,
+  "vram_cap_gib": null,
+  "emulated_rtx5090": false,
+  "comparable_vram_figure": "NVML peak and torch max reserved",
+  "cuda_driver": "570.211.01",
+  "versions": {
+   "torch": "2.8.0+cu128",
+   "transformers": "5.18.0",
+   "trl": "1.14.1",
+   "accelerate": "1.15.0",
+   "peft": "0.21.1",
+   "bitsandbytes": "0.50.2",
+   "galore-torch": "1.0",
+   "nvidia-ml-py": "13.615.71",
+   "unsloth": null,
+   "datasets": "5.0.1",
+   "backpropagate": "1.7.1"
+  },
+  "pytorch_cuda_alloc_conf": "expandable_segments:True"
+ },
+ "mode": "lengths",
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.37,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "galore-torch": "1.0",
+  "nvidia-ml-py": "13.615.71",
+  "unsloth": null,
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "6c3c031cd87a02e41be34199338829f54b6cf9c8",
+ "train": {
+  "n": 7473,
+  "p50": 181,
+  "p90": 269,
+  "p99": 357,
+  "max": 484,
+  "frac_gold_truncated_at_512": 0.0,
+  "frac_gold_truncated_at_768": 0.0,
+  "frac_text_over_512": 0.0
+ },
+ "test": {
+  "n": 250,
+  "p50": 178,
+  "p90": 260,
+  "p99": 353,
+  "max": 442,
+  "frac_gold_truncated_at_512": 0.0,
+  "frac_gold_truncated_at_768": 0.0,
+  "frac_text_over_512": 0.0
+ },
+ "seq_choice": 512,
+ "rule": "768 if the gold '####' line is truncated at 512 for > 1% of train or test examples",
+ "dropped": "nothing: long examples are truncated by the trainer, not filtered",
+ "written": "2026-09-30T20:02:40Z"
+}

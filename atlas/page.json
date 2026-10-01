@@ -51,39 +51,24 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 5,
-      "changed": 20,
+      "added": 129,
+      "changed": 5,
       "moved": 0,
       "parts": 6,
       "removed": 0
     },
     "items": [
       {
-        "kind": "landing",
-        "sentence": "examples/quickstart.jsonl is now also read by README.es.md, README.fr.md, README.hi.md, README.it.md, README.ja.md, README.md, README.pt-BR.md and README.zh.md.",
-        "subjects": [
-          "examples/quickstart.jsonl",
-          "README.es.md",
-          "README.fr.md",
-          "README.hi.md",
-          "README.it.md",
-          "README.ja.md",
-          "README.md",
-          "README.pt-BR.md",
-          "README.zh.md"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "5 files added and 20 changed content, across 6 parts.",
+        "sentence": "Nothing structural changed since 2026-10-01; 129 files added and 5 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "27eb75c90df945e09c383c2354f16376e01e9619",
-      "generatedAt": "2026-09-30T21:08:27.532Z"
+      "commit": "dfaf4b4b13559339afc0576b0537d00721923890",
+      "generatedAt": "2026-10-01T00:15:00.664Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [
     {
@@ -107,9 +92,9 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 20 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "dfaf4b4b13559339afc0576b0537d00721923890",
+  "commit": "bfbbe1d5eb2f3e66ea0f8c09b605d2b56cbd9c60",
   "defaultBranch": "main",
-  "derived": "11 parts, mostly Python (138 files), shell (8), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "11 parts, mostly Python (144 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -126,7 +111,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -136,7 +121,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 79
+          "files": 82
         },
         {
           "boundary": "scripts",
@@ -181,7 +166,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -222,7 +207,7 @@
         {
           "boundary": "backpropagate",
           "depth": 1,
-          "files": 19
+          "files": 20
         }
       ],
       "runs": [
@@ -312,7 +297,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "runs": [
@@ -415,7 +400,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "runs": [
@@ -467,7 +452,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "runs": [
@@ -499,12 +484,12 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T00:15:00.664Z",
+  "generatedAt": "2026-10-01T00:32:05.011Z",
   "limits": [
-    "41 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.",
     "8 writes and 10 reads use paths built at run time and are not named here.",
-    "20 writes and 54 reads go to a path their caller passes, not to this repository.",
+    "31 writes and 64 reads go to a path their caller passes, not to this repository.",
     "1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.",
     "1 read goes to the directory the command is run in, not to this repository.",
     "1 read goes to the home directory (.cache/), not to this repository.",
@@ -537,9 +522,9 @@
   "startReason": "This path follows backprop (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 82,
+  "testFiles": 85,
   "testedBy": {
-    "backpropagate": 70,
+    "backpropagate": 72,
     "bin": 0,
     "scripts": 2
   },

@@ -1,0 +1,1181 @@
+{
+ "mode": "summarize",
+ "stage": "x1000",
+ "arms": {
+  "3b|block_k5": {
+   "model": "Qwen/Qwen2.5-3B-Instruct",
+   "seeds": [
+    0,
+    1
+   ],
+   "acc_strict": {
+    "n": 2,
+    "mean": 0.634,
+    "sd": 0.0311,
+    "min": 0.612,
+    "max": 0.656
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.612,
+     "wilson95": [
+      0.5503,
+      0.6703
+     ]
+    },
+    "1": {
+     "acc": 0.656,
+     "wilson95": [
+      0.5952,
+      0.7121
+     ]
+    }
+   },
+   "acc_pooled": 0.634,
+   "acc_pooled_wilson95": [
+    0.5909,
+    0.6751
+   ],
+   "acc_lenient": {
+    "n": 2,
+    "mean": 0.638,
+    "sd": 0.0311,
+    "min": 0.616,
+    "max": 0.66
+   },
+   "heldout_answer_loss": {
+    "n": 2,
+    "mean": 0.6093,
+    "sd": 0.0019,
+    "min": 0.6079,
+    "max": 0.6106
+   },
+   "base_acc": 0.596,
+   "base_answer_loss": 0.8715,
+   "s_per_step": {
+    "n": 2,
+    "mean": 0.1363,
+    "sd": 0.0024,
+    "min": 0.1346,
+    "max": 0.138
+   },
+   "nvml_peak_gib": {
+    "n": 2,
+    "mean": 14.9565,
+    "sd": 0.5763,
+    "min": 14.549,
+    "max": 15.364
+   },
+   "nvml_train_peak_gib": {
+    "n": 2,
+    "mean": 14.9565,
+    "sd": 0.5763,
+    "min": 14.549,
+    "max": 15.364
+   },
+   "torch_max_allocated_gib": {
+    "n": 2,
+    "mean": 12.5125,
+    "sd": 0.0021,
+    "min": 12.511,
+    "max": 12.514
+   },
+   "torch_max_reserved_gib": {
+    "n": 2,
+    "mean": 13.623,
+    "sd": 0.9249,
+    "min": 12.969,
+    "max": 14.277
+   },
+   "optimizer_paged_state_gib": {
+    "n": 2,
+    "mean": 0.0,
+    "sd": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 2e-05,
+    "optimizer_class": "backpropagate.block_engine.BlockCoordinateOptimizer",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 5,
+    "order": "random",
+    "engine": "block",
+    "lora_r_used": null,
+    "optimizer_defaults": {
+     "lr": 2e-05,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0,
+    1
+   ],
+   "has_hash_answer": [
+    0.992,
+    0.984
+   ]
+  },
+  "3b|block_k50": {
+   "model": "Qwen/Qwen2.5-3B-Instruct",
+   "seeds": [
+    0
+   ],
+   "acc_strict": {
+    "n": 1,
+    "mean": 0.648,
+    "sd": 0.0,
+    "min": 0.648,
+    "max": 0.648
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.648,
+     "wilson95": [
+      0.587,
+      0.7046
+     ]
+    }
+   },
+   "acc_pooled": 0.648,
+   "acc_pooled_wilson95": [
+    0.587,
+    0.7046
+   ],
+   "acc_lenient": {
+    "n": 1,
+    "mean": 0.644,
+    "sd": 0.0,
+    "min": 0.644,
+    "max": 0.644
+   },
+   "heldout_answer_loss": {
+    "n": 1,
+    "mean": 0.6146,
+    "sd": 0.0,
+    "min": 0.6146,
+    "max": 0.6146
+   },
+   "base_acc": 0.596,
+   "base_answer_loss": 0.8715,
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.1404,
+    "sd": 0.0,
+    "min": 0.1404,
+    "max": 0.1404
+   },
+   "nvml_peak_gib": {
+    "n": 1,
+    "mean": 15.325,
+    "sd": 0.0,
+    "min": 15.325,
+    "max": 15.325
+   },
+   "nvml_train_peak_gib": {
+    "n": 1,
+    "mean": 15.325,
+    "sd": 0.0,
+    "min": 15.325,
+    "max": 15.325
+   },
+   "torch_max_allocated_gib": {
+    "n": 1,
+    "mean": 12.711,
+    "sd": 0.0,
+    "min": 12.711,
+    "max": 12.711
+   },
+   "torch_max_reserved_gib": {
+    "n": 1,
+    "mean": 14.238,
+    "sd": 0.0,
+    "min": 14.238,
+    "max": 14.238
+   },
+   "optimizer_paged_state_gib": {
+    "n": 1,
+    "mean": 0.0,
+    "sd": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 2e-05,
+    "optimizer_class": "backpropagate.block_engine.BlockCoordinateOptimizer",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 50,
+    "order": "random",
+    "engine": "block",
+    "lora_r_used": null,
+    "optimizer_defaults": {
+     "lr": 2e-05,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0
+   ],
+   "has_hash_answer": [
+    0.996
+   ]
+  },
+  "3b|default": {
+   "model": "Qwen/Qwen2.5-3B-Instruct",
+   "seeds": [
+    0,
+    1
+   ],
+   "acc_strict": {
+    "n": 2,
+    "mean": 0.602,
+    "sd": 0.0255,
+    "min": 0.584,
+    "max": 0.62
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.584,
+     "wilson95": [
+      0.5221,
+      0.6434
+     ]
+    },
+    "1": {
+     "acc": 0.62,
+     "wilson95": [
+      0.5584,
+      0.6779
+     ]
+    }
+   },
+   "acc_pooled": 0.602,
+   "acc_pooled_wilson95": [
+    0.5585,
+    0.644
+   ],
+   "acc_lenient": {
+    "n": 2,
+    "mean": 0.602,
+    "sd": 0.0255,
+    "min": 0.584,
+    "max": 0.62
+   },
+   "heldout_answer_loss": {
+    "n": 2,
+    "mean": 0.8381,
+    "sd": 0.0032,
+    "min": 0.8359,
+    "max": 0.8404
+   },
+   "base_acc": 0.596,
+   "base_answer_loss": 0.8715,
+   "s_per_step": {
+    "n": 2,
+    "mean": 0.2994,
+    "sd": 0.0021,
+    "min": 0.298,
+    "max": 0.3009
+   },
+   "nvml_peak_gib": {
+    "n": 2,
+    "mean": 21.845,
+    "sd": 0.2574,
+    "min": 21.663,
+    "max": 22.027
+   },
+   "nvml_train_peak_gib": {
+    "n": 2,
+    "mean": 21.845,
+    "sd": 0.2574,
+    "min": 21.663,
+    "max": 22.027
+   },
+   "torch_max_allocated_gib": {
+    "n": 2,
+    "mean": 12.181,
+    "sd": 0.0,
+    "min": 12.181,
+    "max": 12.181
+   },
+   "torch_max_reserved_gib": {
+    "n": 2,
+    "mean": 13.0105,
+    "sd": 0.0926,
+    "min": 12.945,
+    "max": 13.076
+   },
+   "optimizer_paged_state_gib": {
+    "n": 2,
+    "mean": 7.486,
+    "sd": 0.0,
+    "min": 7.486,
+    "max": 7.486
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 2e-05,
+    "optimizer_class": "bitsandbytes.optim.adamw.AdamW",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 50,
+    "order": "random",
+    "engine": "default",
+    "lora_r_used": null,
+    "optimizer_defaults": {
+     "lr": 2e-05,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01,
+     "alpha": 0.0,
+     "t_alpha": null,
+     "t_beta3": null,
+     "differentiable": false
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0,
+    0
+   ],
+   "has_hash_answer": [
+    0.996,
+    0.996
+   ]
+  },
+  "3b|qlora": {
+   "model": "Qwen/Qwen2.5-3B-Instruct",
+   "seeds": [
+    0
+   ],
+   "acc_strict": {
+    "n": 1,
+    "mean": 0.456,
+    "sd": 0.0,
+    "min": 0.456,
+    "max": 0.456
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.456,
+     "wilson95": [
+      0.3954,
+      0.5179
+     ]
+    }
+   },
+   "acc_pooled": 0.456,
+   "acc_pooled_wilson95": [
+    0.3954,
+    0.5179
+   ],
+   "acc_lenient": {
+    "n": 1,
+    "mean": 0.456,
+    "sd": 0.0,
+    "min": 0.456,
+    "max": 0.456
+   },
+   "heldout_answer_loss": {
+    "n": 1,
+    "mean": 0.9373,
+    "sd": 0.0,
+    "min": 0.9373,
+    "max": 0.9373
+   },
+   "base_acc": 0.596,
+   "base_answer_loss": 0.8715,
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.4069,
+    "sd": 0.0,
+    "min": 0.4069,
+    "max": 0.4069
+   },
+   "nvml_peak_gib": {
+    "n": 1,
+    "mean": 7.653,
+    "sd": 0.0,
+    "min": 7.653,
+    "max": 7.653
+   },
+   "nvml_train_peak_gib": {
+    "n": 1,
+    "mean": 7.653,
+    "sd": 0.0,
+    "min": 7.653,
+    "max": 7.653
+   },
+   "torch_max_allocated_gib": {
+    "n": 1,
+    "mean": 6.023,
+    "sd": 0.0,
+    "min": 6.023,
+    "max": 6.023
+   },
+   "torch_max_reserved_gib": {
+    "n": 1,
+    "mean": 6.566,
+    "sd": 0.0,
+    "min": 6.566,
+    "max": 6.566
+   },
+   "optimizer_paged_state_gib": {
+    "n": 1,
+    "mean": 0.0,
+    "sd": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 0.0002,
+    "optimizer_class": "bitsandbytes.optim.adamw.AdamW",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 50,
+    "order": "random",
+    "engine": "qlora",
+    "lora_r_used": 256,
+    "optimizer_defaults": {
+     "lr": 0.0002,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01,
+     "alpha": 0.0,
+     "t_alpha": null,
+     "t_beta3": null,
+     "differentiable": false
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0
+   ],
+   "has_hash_answer": [
+    1.0
+   ]
+  },
+  "7b|block_k5": {
+   "model": "Qwen/Qwen2.5-7B-Instruct",
+   "seeds": [
+    0,
+    1
+   ],
+   "acc_strict": {
+    "n": 2,
+    "mean": 0.73,
+    "sd": 0.0198,
+    "min": 0.716,
+    "max": 0.744
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.716,
+     "wilson95": [
+      0.6572,
+      0.7683
+     ]
+    },
+    "1": {
+     "acc": 0.744,
+     "wilson95": [
+      0.6865,
+      0.7941
+     ]
+    }
+   },
+   "acc_pooled": 0.73,
+   "acc_pooled_wilson95": [
+    0.6894,
+    0.7671
+   ],
+   "acc_lenient": {
+    "n": 2,
+    "mean": 0.734,
+    "sd": 0.0198,
+    "min": 0.72,
+    "max": 0.748
+   },
+   "heldout_answer_loss": {
+    "n": 2,
+    "mean": 0.6438,
+    "sd": 0.0008,
+    "min": 0.6432,
+    "max": 0.6444
+   },
+   "base_acc": 0.316,
+   "base_answer_loss": 1.1264,
+   "s_per_step": {
+    "n": 2,
+    "mean": 0.2037,
+    "sd": 0.003,
+    "min": 0.2016,
+    "max": 0.2059
+   },
+   "nvml_peak_gib": {
+    "n": 2,
+    "mean": 29.6105,
+    "sd": 0.3868,
+    "min": 29.337,
+    "max": 29.884
+   },
+   "nvml_train_peak_gib": {
+    "n": 2,
+    "mean": 29.6105,
+    "sd": 0.3868,
+    "min": 29.337,
+    "max": 29.884
+   },
+   "torch_max_allocated_gib": {
+    "n": 2,
+    "mean": 25.427,
+    "sd": 0.0085,
+    "min": 25.421,
+    "max": 25.433
+   },
+   "torch_max_reserved_gib": {
+    "n": 2,
+    "mean": 28.5235,
+    "sd": 0.3868,
+    "min": 28.25,
+    "max": 28.797
+   },
+   "optimizer_paged_state_gib": {
+    "n": 2,
+    "mean": 0.0,
+    "sd": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 2e-05,
+    "optimizer_class": "backpropagate.block_engine.BlockCoordinateOptimizer",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 5,
+    "order": "random",
+    "engine": "block",
+    "lora_r_used": null,
+    "optimizer_defaults": {
+     "lr": 2e-05,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0,
+    0
+   ],
+   "has_hash_answer": [
+    0.996,
+    0.996
+   ]
+  },
+  "7b|qlora": {
+   "model": "Qwen/Qwen2.5-7B-Instruct",
+   "seeds": [
+    0
+   ],
+   "acc_strict": {
+    "n": 1,
+    "mean": 0.624,
+    "sd": 0.0,
+    "min": 0.624,
+    "max": 0.624
+   },
+   "acc_strict_per_seed": {
+    "0": {
+     "acc": 0.624,
+     "wilson95": [
+      0.5625,
+      0.6817
+     ]
+    }
+   },
+   "acc_pooled": 0.624,
+   "acc_pooled_wilson95": [
+    0.5625,
+    0.6817
+   ],
+   "acc_lenient": {
+    "n": 1,
+    "mean": 0.624,
+    "sd": 0.0,
+    "min": 0.624,
+    "max": 0.624
+   },
+   "heldout_answer_loss": {
+    "n": 1,
+    "mean": 0.8027,
+    "sd": 0.0,
+    "min": 0.8027,
+    "max": 0.8027
+   },
+   "base_acc": 0.316,
+   "base_answer_loss": 1.1264,
+   "s_per_step": {
+    "n": 1,
+    "mean": 0.4966,
+    "sd": 0.0,
+    "min": 0.4966,
+    "max": 0.4966
+   },
+   "nvml_peak_gib": {
+    "n": 1,
+    "mean": 13.885,
+    "sd": 0.0,
+    "min": 13.885,
+    "max": 13.885
+   },
+   "nvml_train_peak_gib": {
+    "n": 1,
+    "mean": 13.885,
+    "sd": 0.0,
+    "min": 13.885,
+    "max": 13.885
+   },
+   "torch_max_allocated_gib": {
+    "n": 1,
+    "mean": 12.006,
+    "sd": 0.0,
+    "min": 12.006,
+    "max": 12.006
+   },
+   "torch_max_reserved_gib": {
+    "n": 1,
+    "mean": 12.303,
+    "sd": 0.0,
+    "min": 12.303,
+    "max": 12.303
+   },
+   "optimizer_paged_state_gib": {
+    "n": 1,
+    "mean": 0.0,
+    "sd": 0.0,
+    "min": 0.0,
+    "max": 0.0
+   },
+   "config": {
+    "steps": 1000,
+    "batch": 4,
+    "seq": 512,
+    "packing_used": false,
+    "lr_used": 0.0002,
+    "optimizer_class": "bitsandbytes.optim.adamw.AdamW",
+    "optim_setting": "adamw_8bit",
+    "schedule": {
+     "lr_scheduler_type": "cosine",
+     "warmup_steps": 10,
+     "weight_decay": 0.01,
+     "gradient_accumulation": 1
+    },
+    "k": 50,
+    "order": "random",
+    "engine": "qlora",
+    "lora_r_used": 256,
+    "optimizer_defaults": {
+     "lr": 0.0002,
+     "betas": "(0.9, 0.999)",
+     "eps": 1e-08,
+     "weight_decay": 0.01,
+     "alpha": 0.0,
+     "t_alpha": null,
+     "t_beta3": null,
+     "differentiable": false
+    },
+    "s_per_step_measured_on": "measured on NVIDIA GeForce RTX 5090",
+    "vram_cap_gib": null
+   },
+   "hit_max_new_tokens": [
+    0
+   ],
+   "has_hash_answer": [
+    1.0
+   ]
+  }
+ },
+ "pairs": [
+  {
+   "size": "7b",
+   "a": "block_k5",
+   "b": "qlora",
+   "seeds_a": [
+    0,
+    1
+   ],
+   "seeds_b": [
+    0
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 49,
+      "b_only": 26,
+      "p": 0.01058
+     },
+     "acc_diff": 0.092,
+     "acc_diff_ci95": [
+      0.024,
+      0.16
+     ],
+     "loss_diff": -0.1582,
+     "loss_diff_ci95": [
+      -0.1768,
+      -0.1397
+     ]
+    },
+    {
+     "seed_a": 1,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 53,
+      "b_only": 23,
+      "p": 0.00076
+     },
+     "acc_diff": 0.12,
+     "acc_diff_ci95": [
+      0.052,
+      0.188
+     ],
+     "loss_diff": -0.1595,
+     "loss_diff_ci95": [
+      -0.1789,
+      -0.1401
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": 0.106,
+    "acc_diff_ci95": [
+     0.046,
+     0.166
+    ],
+    "loss_diff": -0.1589,
+    "loss_diff_ci95": [
+     -0.1773,
+     -0.1403
+    ]
+   },
+   "d2_eligible": true,
+   "loss_ci_spans_zero": false
+  },
+  {
+   "size": "3b",
+   "a": "block_k5",
+   "b": "default",
+   "seeds_a": [
+    0,
+    1
+   ],
+   "seeds_b": [
+    0,
+    1
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 37,
+      "b_only": 30,
+      "p": 0.46382
+     },
+     "acc_diff": 0.028,
+     "acc_diff_ci95": [
+      -0.036,
+      0.092
+     ],
+     "loss_diff": -0.2297,
+     "loss_diff_ci95": [
+      -0.2492,
+      -0.2109
+     ]
+    },
+    {
+     "seed_a": 1,
+     "seed_b": 1,
+     "mcnemar": {
+      "a_only": 41,
+      "b_only": 32,
+      "p": 0.34918
+     },
+     "acc_diff": 0.036,
+     "acc_diff_ci95": [
+      -0.028,
+      0.1
+     ],
+     "loss_diff": -0.2281,
+     "loss_diff_ci95": [
+      -0.2481,
+      -0.2083
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": 0.032,
+    "acc_diff_ci95": [
+     -0.02,
+     0.082
+    ],
+    "loss_diff": -0.2289,
+    "loss_diff_ci95": [
+     -0.2476,
+     -0.2107
+    ]
+   },
+   "d2_eligible": true,
+   "loss_ci_spans_zero": false
+  },
+  {
+   "size": "3b",
+   "a": "block_k5",
+   "b": "qlora",
+   "seeds_a": [
+    0,
+    1
+   ],
+   "seeds_b": [
+    0
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 62,
+      "b_only": 23,
+      "p": 3e-05
+     },
+     "acc_diff": 0.156,
+     "acc_diff_ci95": [
+      0.084,
+      0.224
+     ],
+     "loss_diff": -0.3267,
+     "loss_diff_ci95": [
+      -0.3555,
+      -0.2978
+     ]
+    },
+    {
+     "seed_a": 1,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 65,
+      "b_only": 15,
+      "p": 0.0
+     },
+     "acc_diff": 0.2,
+     "acc_diff_ci95": [
+      0.1359,
+      0.268
+     ],
+     "loss_diff": -0.3294,
+     "loss_diff_ci95": [
+      -0.3594,
+      -0.2996
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": 0.178,
+    "acc_diff_ci95": [
+     0.118,
+     0.238
+    ],
+    "loss_diff": -0.3281,
+    "loss_diff_ci95": [
+     -0.3573,
+     -0.299
+    ]
+   },
+   "d2_eligible": true,
+   "loss_ci_spans_zero": false
+  },
+  {
+   "size": "3b",
+   "a": "block_k5",
+   "b": "block_k50",
+   "seeds_a": [
+    0,
+    1
+   ],
+   "seeds_b": [
+    0
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 31,
+      "b_only": 40,
+      "p": 0.34247
+     },
+     "acc_diff": -0.036,
+     "acc_diff_ci95": [
+      -0.104,
+      0.028
+     ],
+     "loss_diff": -0.004,
+     "loss_diff_ci95": [
+      -0.0101,
+      0.0022
+     ]
+    },
+    {
+     "seed_a": 1,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 32,
+      "b_only": 30,
+      "p": 0.89908
+     },
+     "acc_diff": 0.008,
+     "acc_diff_ci95": [
+      -0.056,
+      0.072
+     ],
+     "loss_diff": -0.0067,
+     "loss_diff_ci95": [
+      -0.0135,
+      0.0001
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": -0.014,
+    "acc_diff_ci95": [
+     -0.07,
+     0.042
+    ],
+    "loss_diff": -0.0054,
+    "loss_diff_ci95": [
+     -0.011,
+     0.0004
+    ]
+   },
+   "d2_eligible": true,
+   "loss_ci_spans_zero": true
+  },
+  {
+   "size": "3b",
+   "a": "block_k50",
+   "b": "default",
+   "seeds_a": [
+    0
+   ],
+   "seeds_b": [
+    0,
+    1
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 41,
+      "b_only": 25,
+      "p": 0.06402
+     },
+     "acc_diff": 0.064,
+     "acc_diff_ci95": [
+      0.0,
+      0.128
+     ],
+     "loss_diff": -0.2258,
+     "loss_diff_ci95": [
+      -0.2458,
+      -0.2064
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": 0.046,
+    "acc_diff_ci95": [
+     -0.012,
+     0.104
+    ],
+    "loss_diff": -0.2235,
+    "loss_diff_ci95": [
+     -0.2432,
+     -0.2043
+    ]
+   },
+   "d2_eligible": false
+  },
+  {
+   "size": "3b",
+   "a": "default",
+   "b": "qlora",
+   "seeds_a": [
+    0,
+    1
+   ],
+   "seeds_b": [
+    0
+   ],
+   "per_seed": [
+    {
+     "seed_a": 0,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 59,
+      "b_only": 27,
+      "p": 0.00073
+     },
+     "acc_diff": 0.128,
+     "acc_diff_ci95": [
+      0.056,
+      0.2
+     ],
+     "loss_diff": -0.0969,
+     "loss_diff_ci95": [
+      -0.1241,
+      -0.0698
+     ]
+    },
+    {
+     "seed_a": 1,
+     "seed_b": 0,
+     "mcnemar": {
+      "a_only": 65,
+      "b_only": 24,
+      "p": 2e-05
+     },
+     "acc_diff": 0.164,
+     "acc_diff_ci95": [
+      0.092,
+      0.232
+     ],
+     "loss_diff": -0.1014,
+     "loss_diff_ci95": [
+      -0.1296,
+      -0.0744
+     ]
+    }
+   ],
+   "pooled_over_seeds": {
+    "acc_diff": 0.146,
+    "acc_diff_ci95": [
+     0.082,
+     0.208
+    ],
+    "loss_diff": -0.0992,
+    "loss_diff_ci95": [
+     -0.1262,
+     -0.0729
+    ]
+   },
+   "d2_eligible": false
+  }
+ ],
+ "mask_report": {
+  "3b_s0": [
+   [
+    "a71def56d6cd6b76",
+    "b4de0e5edf66dac5",
+    936
+   ]
+  ],
+  "3b_s1": [
+   [
+    "be11d166b85e326b",
+    "d25a1b92e8472af7",
+    703
+   ]
+  ],
+  "7b_s0": [
+   [
+    "a71def56d6cd6b76",
+    "b4de0e5edf66dac5",
+    936
+   ]
+  ],
+  "7b_s1": [
+   [
+    "be11d166b85e326b",
+    "d25a1b92e8472af7",
+    703
+   ]
+  ]
+ },
+ "checks": {
+  "completed:x1000_3b_block_k50_s0": true,
+  "completed:x1000_3b_block_k5_s0": true,
+  "completed:x1000_3b_block_k5_s1": true,
+  "completed:x1000_3b_default_s0": true,
+  "completed:x1000_3b_default_s1": true,
+  "completed:x1000_3b_qlora_s0": true,
+  "completed:x1000_7b_block_k5_s0": true,
+  "completed:x1000_7b_block_k5_s1": true,
+  "completed:x1000_7b_qlora_s0": true,
+  "same_first_batch_and_mask:3b_s0": true,
+  "same_first_batch_and_mask:3b_s1": true,
+  "same_first_batch_and_mask:7b_s0": true,
+  "same_first_batch_and_mask:7b_s1": true
+ },
+ "d2_rule": "for d2-eligible pairs, rerun at 2000 steps (same seeds) if the pooled held-out-loss difference's 95% bootstrap CI spans 0",
+ "d2_triggers": null
+}

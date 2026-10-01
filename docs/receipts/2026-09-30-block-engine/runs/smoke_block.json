@@ -1,0 +1,188 @@
+{
+ "mode": "train",
+ "tag": "smoke_block",
+ "arm": "smoke",
+ "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+ "engine": "block",
+ "seed": 0,
+ "steps": 20,
+ "batch": 4,
+ "seq": 256,
+ "lr": 2e-05,
+ "k": 5,
+ "order": "ascending",
+ "writeback": "stochastic",
+ "freeze_embeddings": false,
+ "vram_cap_gib": null,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gib": 31.36,
+ "cuda": "12.8",
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.18.0",
+  "trl": "1.14.1",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "bitsandbytes": "0.50.2",
+  "datasets": "5.0.1",
+  "backpropagate": "1.7.1"
+ },
+ "git_sha": "209458d0ba164ef39890d8a9415beffdb352c56d",
+ "settings_seed": 0,
+ "settings_logging_steps": 1,
+ "load_s": 2.7,
+ "params": 134515008,
+ "fit_projection": {
+  "params_billions": 0.134515008,
+  "num_blocks": 31,
+  "max_block_billions": 0.028312128,
+  "seq_len": 256,
+  "batch_size": 4,
+  "paper_formula_gb": 0.338,
+  "weights_gb": 0.269,
+  "active_block_gb": 0.396,
+  "activations_gb": 0.055,
+  "logits_gb": 0.503,
+  "overhead_gb": 0.122,
+  "total_gb": 1.347,
+  "status": "projection \u2014 not measured",
+  "notes": []
+ },
+ "partition": {
+  "num_blocks": 31,
+  "layer_list": "model.layers",
+  "tied_embeddings": true,
+  "max_block": "embed+head",
+  "max_block_params": 28312128,
+  "total_params": 134515008,
+  "frozen_params": 0
+ },
+ "train_s": 4.1,
+ "peak_vram_alloc_gib": 0.951,
+ "peak_vram_reserved_gib": 1.293,
+ "s_per_step": 0.0503,
+ "s_per_step_source": "median gap between per-step log callbacks",
+ "losses": [
+  2.6648,
+  2.5553,
+  2.6498,
+  2.7965,
+  2.4885,
+  2.5251,
+  3.0365,
+  2.8552,
+  2.5477,
+  2.666,
+  2.8835,
+  2.7135,
+  2.6897,
+  2.8033,
+  2.4161,
+  2.2018,
+  2.07,
+  3.1021,
+  2.6363,
+  3.0566,
+  3.0566
+ ],
+ "final_loss": 2.6679156899452208,
+ "engine_summary": {
+  "num_blocks": 31,
+  "layer_list": "model.layers",
+  "tied_embeddings": true,
+  "max_block": "embed+head",
+  "max_block_params": 28312128,
+  "total_params": 134515008,
+  "frozen_params": 0,
+  "engine": "block",
+  "switch_block_every": 5,
+  "block_order": "ascending",
+  "block_writeback": "stochastic",
+  "upcast_active_block_fp32": true,
+  "optimizer_steps": 20,
+  "block_visits": 5,
+  "switches": [
+   {
+    "block": "embed+head",
+    "index": 0,
+    "visit": 0,
+    "steps": 5,
+    "at_global_step": 5,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.0",
+    "index": 1,
+    "visit": 1,
+    "steps": 5,
+    "at_global_step": 10,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.1",
+    "index": 2,
+    "visit": 2,
+    "steps": 5,
+    "at_global_step": 15,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.2",
+    "index": 3,
+    "visit": 3,
+    "steps": 5,
+    "at_global_step": 20,
+    "writeback": "stochastic"
+   },
+   {
+    "block": "model.layers.3",
+    "index": 4,
+    "visit": 4,
+    "steps": 0,
+    "at_global_step": 20,
+    "writeback": "stochastic"
+   }
+  ]
+ },
+ "visit_peaks": [
+  {
+   "block": "embed+head",
+   "params": 28312128,
+   "steps": 5,
+   "peak_alloc_gib": 0.951,
+   "peak_reserved_gib": 1.291
+  },
+  {
+   "block": "model.layers.0",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.636,
+   "peak_reserved_gib": 1.291
+  },
+  {
+   "block": "model.layers.1",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.534,
+   "peak_reserved_gib": 1.293
+  },
+  {
+   "block": "model.layers.2",
+   "params": 3540096,
+   "steps": 5,
+   "peak_alloc_gib": 0.532,
+   "peak_reserved_gib": 1.293
+  },
+  {
+   "block": "model.layers.3",
+   "params": 3540096,
+   "steps": 0,
+   "peak_alloc_gib": 0.316,
+   "peak_reserved_gib": 1.293
+  }
+ ],
+ "heldout_after": 2.6525,
+ "status": "ok",
+ "wall_s": 7.8,
+ "written": "2026-09-30T18:21:12Z"
+}

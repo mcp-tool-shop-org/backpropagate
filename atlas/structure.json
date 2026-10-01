@@ -328,6 +328,98 @@
           "path": "backpropagate/assets/logo.png"
         },
         {
+          "exports": [
+            "build_block_engine_callback",
+            "build_for_sft_trainer",
+            "drop_input_require_grads_hook",
+            "estimate_block_engine_vram",
+            "find_layer_list",
+            "fit_from_model",
+            "params_by_block",
+            "partition_model",
+            "round_nearest_to",
+            "stochastic_round_to_bf16",
+            "validate_block_engine_settings"
+          ],
+          "failurePaths": [
+            {
+              "in": "validate_block_engine_settings",
+              "kind": "raise",
+              "line": 139
+            },
+            {
+              "in": "validate_block_engine_settings",
+              "kind": "raise",
+              "line": 150
+            },
+            {
+              "in": "validate_block_engine_settings",
+              "kind": "raise",
+              "line": 157
+            },
+            {
+              "in": "stochastic_round_to_bf16",
+              "kind": "raise",
+              "line": 185
+            },
+            {
+              "in": "find_layer_list",
+              "kind": "raise",
+              "line": 281
+            },
+            {
+              "in": "partition_model",
+              "kind": "except",
+              "line": 328
+            },
+            {
+              "in": "partition_model",
+              "kind": "except",
+              "line": 334
+            },
+            {
+              "in": "partition_model",
+              "kind": "raise",
+              "line": 396
+            },
+            {
+              "in": "_activate",
+              "kind": "raise",
+              "line": 554
+            },
+            {
+              "in": "step",
+              "kind": "raise",
+              "line": 641
+            },
+            {
+              "in": "step",
+              "kind": "raise",
+              "line": 654
+            },
+            {
+              "in": "load_state_dict",
+              "kind": "raise",
+              "line": 749
+            },
+            {
+              "in": "load_state_dict",
+              "kind": "raise",
+              "line": 757
+            },
+            {
+              "in": "build_for_sft_trainer",
+              "kind": "raise",
+              "line": 1037
+            }
+          ],
+          "hash": "6ef30a0232591886ab34b8a1754ab81a4e5ad14989806e546bf19e34a9942f46",
+          "importsFiles": [
+            "backpropagate/exceptions.py"
+          ],
+          "path": "backpropagate/block_engine.py"
+        },
+        {
           "failurePaths": [
             {
               "kind": "except",
@@ -663,192 +755,177 @@
             {
               "in": "cmd_train",
               "kind": "except",
-              "line": 917
-            },
-            {
-              "in": "cmd_train",
-              "kind": "except",
-              "line": 921
-            },
-            {
-              "in": "cmd_train",
-              "kind": "except",
-              "line": 928
-            },
-            {
-              "in": "cmd_train",
-              "kind": "except",
               "line": 937
             },
             {
               "in": "cmd_train",
               "kind": "except",
-              "line": 946
+              "line": 941
             },
             {
               "in": "cmd_train",
               "kind": "except",
-              "line": 951
+              "line": 948
             },
             {
               "in": "cmd_train",
               "kind": "except",
-              "line": 960
+              "line": 957
+            },
+            {
+              "in": "cmd_train",
+              "kind": "except",
+              "line": 966
+            },
+            {
+              "in": "cmd_train",
+              "kind": "except",
+              "line": 971
+            },
+            {
+              "in": "cmd_train",
+              "kind": "except",
+              "line": 980
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1011
+              "line": 1031
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1020
+              "line": 1040
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1079
+              "line": 1099
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1102
+              "line": 1122
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1223
+              "line": 1243
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1227
+              "line": 1247
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1232
+              "line": 1252
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1239
+              "line": 1259
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1244
+              "line": 1264
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1249
+              "line": 1269
             },
             {
               "in": "cmd_multi_run",
               "kind": "except",
-              "line": 1256
+              "line": 1276
             },
             {
               "in": "_read_hub_token_file",
               "kind": "raise",
-              "line": 1296
-            },
-            {
-              "in": "_read_hub_token_file",
-              "kind": "except",
               "line": 1316
             },
             {
               "in": "_read_hub_token_file",
               "kind": "except",
-              "line": 1320
+              "line": 1336
+            },
+            {
+              "in": "_read_hub_token_file",
+              "kind": "except",
+              "line": 1340
             },
             {
               "in": "_read_hub_token_file",
               "kind": "raise",
-              "line": 1321
+              "line": 1341
             },
             {
               "in": "_read_hub_token_file",
               "kind": "raise",
-              "line": 1328
+              "line": 1348
             },
             {
               "in": "cmd_export",
               "kind": "raise",
-              "line": 1482
+              "line": 1502
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1524
+              "line": 1544
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1532
+              "line": 1552
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1549
+              "line": 1569
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1575
+              "line": 1595
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1585
+              "line": 1605
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1597
+              "line": 1617
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1638
+              "line": 1658
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1650
+              "line": 1670
             },
             {
               "in": "cmd_export",
               "kind": "raise",
-              "line": 1830
+              "line": 1850
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1881
+              "line": 1901
             },
             {
               "in": "cmd_export",
               "kind": "except",
-              "line": 1889
-            },
-            {
-              "in": "cmd_export",
-              "kind": "except",
-              "line": 1894
-            },
-            {
-              "in": "cmd_export",
-              "kind": "except",
-              "line": 1902
-            },
-            {
-              "in": "cmd_export",
-              "kind": "except",
-              "line": 1907
+              "line": 1909
             },
             {
               "in": "cmd_export",
@@ -856,109 +933,119 @@
               "line": 1914
             },
             {
-              "in": "_detect_installed_versions",
+              "in": "cmd_export",
               "kind": "except",
-              "line": 1958
+              "line": 1922
+            },
+            {
+              "in": "cmd_export",
+              "kind": "except",
+              "line": 1927
+            },
+            {
+              "in": "cmd_export",
+              "kind": "except",
+              "line": 1934
             },
             {
               "in": "_detect_installed_versions",
               "kind": "except",
-              "line": 1960
+              "line": 1978
             },
             {
               "in": "_detect_installed_versions",
               "kind": "except",
-              "line": 1972
+              "line": 1980
+            },
+            {
+              "in": "_detect_installed_versions",
+              "kind": "except",
+              "line": 1992
             },
             {
               "in": "_safe_default",
               "kind": "except",
-              "line": 2155
+              "line": 2175
             },
             {
               "in": "cmd_info",
               "kind": "except",
-              "line": 2436
+              "line": 2456
             },
             {
               "in": "cmd_info",
               "kind": "except",
-              "line": 2438
+              "line": 2458
             },
             {
               "in": "_lock_file_dir",
               "kind": "except",
-              "line": 2546
+              "line": 2566
             },
             {
               "in": "write_launch_token_lock",
               "kind": "except",
-              "line": 2605
+              "line": 2625
             },
             {
               "in": "write_launch_token_lock",
               "kind": "except",
-              "line": 2612
+              "line": 2632
             },
             {
               "in": "write_launch_token_lock",
               "kind": "except",
-              "line": 2617
+              "line": 2637
             },
             {
               "in": "write_launch_token_lock",
               "kind": "raise",
-              "line": 2619
+              "line": 2639
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2799
+              "line": 2819
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2830
+              "line": 2850
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2837
+              "line": 2857
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2859
+              "line": 2879
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2872
+              "line": 2892
             },
             {
               "in": "_reader",
               "kind": "except",
-              "line": 2914
+              "line": 2934
             },
             {
               "in": "_reader",
               "kind": "except",
-              "line": 2918
+              "line": 2938
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2937
+              "line": 2957
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2953
-            },
-            {
-              "in": "_spawn_cloudflared_tunnel",
-              "kind": "except",
-              "line": 2966
+              "line": 2973
             },
             {
               "in": "_spawn_cloudflared_tunnel",
@@ -968,62 +1055,52 @@
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 2998
+              "line": 3006
             },
             {
               "in": "_spawn_cloudflared_tunnel",
               "kind": "except",
-              "line": 3008
+              "line": 3018
+            },
+            {
+              "in": "_spawn_cloudflared_tunnel",
+              "kind": "except",
+              "line": 3028
             },
             {
               "in": "_find_port_in_use",
               "kind": "except",
-              "line": 3065
+              "line": 3085
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3134
+              "line": 3154
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3148
+              "line": 3168
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3158
+              "line": 3178
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3173
+              "line": 3193
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3205
+              "line": 3225
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3223
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "except",
-              "line": 3227
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "raise",
-              "line": 3228
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "raise",
-              "line": 3235
+              "line": 3243
             },
             {
               "in": "cmd_ui",
@@ -1038,77 +1115,77 @@
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3269
+              "line": 3255
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "except",
+              "line": 3267
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3287
+              "line": 3268
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3316
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "except",
-              "line": 3338
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "except",
-              "line": 3346
+              "line": 3289
             },
             {
               "in": "cmd_ui",
               "kind": "raise",
-              "line": 3381
+              "line": 3307
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "raise",
+              "line": 3336
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3436
+              "line": 3358
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3451
+              "line": 3366
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "raise",
+              "line": 3401
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3476
+              "line": 3456
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3553
+              "line": 3471
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3593
+              "line": 3496
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3603
+              "line": 3573
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3606
+              "line": 3613
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3614
-            },
-            {
-              "in": "cmd_ui",
-              "kind": "except",
-              "line": 3619
+              "line": 3623
             },
             {
               "in": "cmd_ui",
@@ -1133,297 +1210,307 @@
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3679
+              "line": 3654
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3681
+              "line": 3659
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3691
+              "line": 3666
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3693
+              "line": 3699
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3705
+              "line": 3701
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3707
+              "line": 3711
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3723
+              "line": 3713
             },
             {
               "in": "cmd_ui",
               "kind": "except",
-              "line": 3731
+              "line": 3725
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "except",
+              "line": 3727
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "except",
+              "line": 3743
+            },
+            {
+              "in": "cmd_ui",
+              "kind": "except",
+              "line": 3751
             },
             {
               "in": "cmd_config",
               "kind": "except",
-              "line": 3810
+              "line": 3830
             },
             {
               "in": "cmd_resume",
               "kind": "except",
-              "line": 3846
+              "line": 3866
             },
             {
               "in": "cmd_resume",
               "kind": "except",
-              "line": 3854
+              "line": 3874
             },
             {
               "in": "cmd_resume",
               "kind": "except",
-              "line": 3942
+              "line": 3962
             },
             {
               "in": "cmd_resume",
               "kind": "except",
-              "line": 3946
+              "line": 3966
             },
             {
               "in": "cmd_resume",
               "kind": "except",
-              "line": 3951
+              "line": 3971
             },
             {
               "in": "cmd_push",
               "kind": "raise",
-              "line": 4004
+              "line": 4024
             },
             {
               "in": "cmd_push",
               "kind": "except",
-              "line": 4021
+              "line": 4041
             },
             {
               "in": "cmd_push",
               "kind": "except",
-              "line": 4060
+              "line": 4080
             },
             {
               "in": "cmd_push",
               "kind": "except",
-              "line": 4074
+              "line": 4094
             },
             {
               "in": "cmd_push",
               "kind": "except",
-              "line": 4079
+              "line": 4099
             },
             {
               "in": "cmd_list_runs",
               "kind": "except",
-              "line": 4139
+              "line": 4159
             },
             {
               "in": "_build_runs_payload",
               "kind": "except",
-              "line": 4266
+              "line": 4286
             },
             {
               "in": "_build_runs_payload",
               "kind": "except",
-              "line": 4279
+              "line": 4299
             },
             {
               "in": "cmd_runs",
               "kind": "except",
-              "line": 4338
+              "line": 4358
             },
             {
               "in": "_resolve",
               "kind": "raise",
-              "line": 4565
+              "line": 4585
             },
             {
               "in": "cmd_diff_runs",
               "kind": "except",
-              "line": 4590
+              "line": 4610
             },
             {
               "in": "_parse_replay_override",
               "kind": "raise",
-              "line": 4688
+              "line": 4708
             },
             {
               "in": "_parse_replay_override",
               "kind": "raise",
-              "line": 4694
+              "line": 4714
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 4795
+              "line": 4815
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 4803
-            },
-            {
-              "in": "cmd_replay",
-              "kind": "raise",
               "line": 4823
             },
             {
               "in": "cmd_replay",
-              "kind": "except",
+              "kind": "raise",
               "line": 4843
             },
             {
-              "in": "_coerce",
+              "in": "cmd_replay",
               "kind": "except",
-              "line": 4901
+              "line": 4863
             },
             {
               "in": "_coerce",
               "kind": "except",
-              "line": 4905
+              "line": 4921
+            },
+            {
+              "in": "_coerce",
+              "kind": "except",
+              "line": 4925
             },
             {
               "in": "_coerce",
               "kind": "raise",
-              "line": 4915
+              "line": 4935
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 4940
+              "line": 4960
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 4986
+              "line": 5006
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 5015
+              "line": 5035
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 5105
+              "line": 5125
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 5149
+              "line": 5169
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 5153
+              "line": 5173
             },
             {
               "in": "cmd_replay",
               "kind": "except",
-              "line": 5158
+              "line": 5178
             },
             {
               "in": "cmd_export_runs",
               "kind": "except",
-              "line": 5210
+              "line": 5230
             },
             {
               "in": "cmd_export_runs",
               "kind": "except",
-              "line": 5258
+              "line": 5278
             },
             {
               "in": "cmd_validate",
               "kind": "except",
-              "line": 5344
+              "line": 5364
             },
             {
               "in": "cmd_validate",
               "kind": "except",
-              "line": 5352
+              "line": 5372
             },
             {
               "in": "cmd_validate",
               "kind": "except",
-              "line": 5365
+              "line": 5385
             },
             {
               "in": "cmd_validate",
               "kind": "except",
-              "line": 5409
+              "line": 5429
             },
             {
               "in": "_read_jsonl",
               "kind": "except",
-              "line": 5626
+              "line": 5646
             },
             {
               "in": "cmd_data_report",
               "kind": "except",
-              "line": 5641
+              "line": 5661
             },
             {
               "in": "cmd_data_report",
               "kind": "except",
-              "line": 5653
+              "line": 5673
             },
             {
               "in": "cmd_data_report",
               "kind": "except",
-              "line": 5730
+              "line": 5750
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5785
+              "line": 5805
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5790
+              "line": 5810
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5794
+              "line": 5814
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5815
+              "line": 5835
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5838
+              "line": 5858
             },
             {
               "in": "cmd_data_split",
               "kind": "except",
-              "line": 5852
+              "line": 5872
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 5920
-            },
-            {
-              "in": "cmd_eval",
-              "kind": "except",
-              "line": 5930
+              "line": 5940
             },
             {
               "in": "cmd_eval",
@@ -1431,182 +1518,187 @@
               "line": 5950
             },
             {
+              "in": "cmd_eval",
+              "kind": "except",
+              "line": 5970
+            },
+            {
               "in": "_resolve",
               "kind": "except",
-              "line": 5982
+              "line": 6002
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6008
+              "line": 6028
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6029
+              "line": 6049
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6057
+              "line": 6077
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6071
+              "line": 6091
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6076
+              "line": 6096
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6079
+              "line": 6099
             },
             {
               "in": "cmd_eval",
               "kind": "except",
-              "line": 6173
+              "line": 6193
             },
             {
               "in": "_infer_base_model_from_adapter",
               "kind": "except",
-              "line": 6276
+              "line": 6296
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6311
+              "line": 6331
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6327
+              "line": 6347
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6342
+              "line": 6362
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6365
+              "line": 6385
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6427
+              "line": 6447
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6431
+              "line": 6451
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6438
+              "line": 6458
             },
             {
               "in": "cmd_generate",
               "kind": "except",
-              "line": 6448
+              "line": 6468
             },
             {
               "in": "cmd_estimate_vram",
               "kind": "except",
-              "line": 6507
+              "line": 6527
             },
             {
               "in": "cmd_estimate_vram",
               "kind": "except",
-              "line": 6509
+              "line": 6529
             },
             {
               "in": "cmd_estimate_vram",
               "kind": "except",
-              "line": 6575
+              "line": 6595
             },
             {
               "in": "cmd_ollama_register",
               "kind": "except",
-              "line": 6738
+              "line": 6758
             },
             {
               "in": "cmd_ollama_register",
               "kind": "except",
-              "line": 6750
+              "line": 6770
             },
             {
               "in": "cmd_ollama_rm",
               "kind": "except",
-              "line": 6832
+              "line": 6852
             },
             {
               "in": "cmd_ollama_rm",
               "kind": "except",
-              "line": 6842
+              "line": 6862
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9305
+              "line": 9382
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9308
+              "line": 9385
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9369
+              "line": 9446
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9388
+              "line": 9465
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9406
+              "line": 9483
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9425
+              "line": 9502
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9487
+              "line": 9564
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9493
+              "line": 9570
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 9496
+              "line": 9573
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9497
+              "line": 9574
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 9528
+              "line": 9605
             }
           ],
-          "hash": "f289be1aead4203c6a4be44e1ff2624c7711385e7d5c2fd3c69d3b28968f37d3",
+          "hash": "d59efed2f7601c1ecd3509a8736786b6a15f9be65e55e95f217d48cb4ac8cce4",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -1659,21 +1751,21 @@
                   }
                 },
                 {
-                  "line": 863,
+                  "line": 883,
                   "name": "Trainer",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 881,
+                  "line": 901,
                   "name": "TrainingCallback",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 891,
+                  "line": 911,
                   "name": "train",
                   "receiver": "Trainer",
                   "target": {
@@ -1681,7 +1773,7 @@
                   }
                 },
                 {
-                  "line": 902,
+                  "line": 922,
                   "name": "save",
                   "receiver": "Trainer",
                   "target": {
@@ -1705,21 +1797,21 @@
             {
               "calls": [
                 {
-                  "line": 1010,
+                  "line": 1030,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 1014,
+                  "line": 1034,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 1078,
+                  "line": 1098,
                   "name": "MultiRunConfig",
                   "passed": true,
                   "target": {
@@ -1727,28 +1819,28 @@
                   }
                 },
                 {
-                  "line": 1173,
+                  "line": 1193,
                   "name": "MergeMode",
                   "target": {
                     "file": "backpropagate/multi_run.py"
                   }
                 },
                 {
-                  "line": 1169,
+                  "line": 1189,
                   "name": "MultiRunConfig",
                   "target": {
                     "file": "backpropagate/multi_run.py"
                   }
                 },
                 {
-                  "line": 1181,
+                  "line": 1201,
                   "name": "MultiRunTrainer",
                   "target": {
                     "file": "backpropagate/multi_run.py"
                   }
                 },
                 {
-                  "line": 1190,
+                  "line": 1210,
                   "name": "run",
                   "receiver": "MultiRunTrainer",
                   "target": {
@@ -1773,14 +1865,14 @@
               "calls": [
                 {
                   "branch": "not token_path.exists()",
-                  "line": 1296,
+                  "line": 1316,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1321,
+                  "line": 1341,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1788,7 +1880,7 @@
                 },
                 {
                   "branch": "not token_text",
-                  "line": 1328,
+                  "line": 1348,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1804,77 +1896,77 @@
               "calls": [
                 {
                   "branch": "args.ollama and args.format != \"gguf\"",
-                  "line": 1482,
+                  "line": 1502,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 1523,
+                  "line": 1543,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 1527,
+                  "line": 1547,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 1568,
+                  "line": 1588,
                   "name": "safe_path",
                   "target": {
                     "file": "backpropagate/security.py"
                   }
                 },
                 {
-                  "line": 1677,
+                  "line": 1697,
                   "name": "export_lora",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1690,
+                  "line": 1710,
                   "name": "load_model_for_export",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1692,
+                  "line": 1712,
                   "name": "export_merged",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1704,
+                  "line": 1724,
                   "name": "load_model_for_export",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1709,
+                  "line": 1729,
                   "name": "export_gguf",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1733,
+                  "line": 1753,
                   "name": "export_ollama_adapter",
                   "target": {
                     "file": "backpropagate/export.py"
                   }
                 },
                 {
-                  "line": 1789,
+                  "line": 1809,
                   "name": "register_with_ollama",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -1882,7 +1974,7 @@
                 },
                 {
                   "branch": "inline_hub_token and hub_token_file",
-                  "line": 1830,
+                  "line": 1850,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1890,7 +1982,7 @@
                 },
                 {
                   "branch": "not token_path.exists()",
-                  "line": 1296,
+                  "line": 1316,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1898,7 +1990,7 @@
                   "via": "_read_hub_token_file"
                 },
                 {
-                  "line": 1321,
+                  "line": 1341,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1907,7 +1999,7 @@
                 },
                 {
                   "branch": "not token_text",
-                  "line": 1328,
+                  "line": 1348,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -1915,7 +2007,7 @@
                   "via": "_read_hub_token_file"
                 },
                 {
-                  "line": 1874,
+                  "line": 1894,
                   "name": "push_to_hub",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -1939,21 +2031,21 @@
               "calls": [
                 {
                   "branch": "getattr(args, \"error_codes\", False)",
-                  "line": 2210,
+                  "line": 2230,
                   "name": "print_error_code_catalog",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2320,
+                  "line": 2340,
                   "name": "get_system_info",
                   "target": {
                     "file": "backpropagate/feature_flags.py"
                   }
                 },
                 {
-                  "line": 2321,
+                  "line": 2341,
                   "name": "get_gpu_info",
                   "target": {
                     "file": "backpropagate/feature_flags.py"
@@ -1961,7 +2053,7 @@
                 },
                 {
                   "branch": "getattr(args, \"json\", False)",
-                  "line": 2369,
+                  "line": 2389,
                   "name": "FEATURES",
                   "passed": true,
                   "target": {
@@ -1969,7 +2061,7 @@
                   }
                 },
                 {
-                  "line": 2389,
+                  "line": 2409,
                   "name": "__version__",
                   "passed": true,
                   "target": {
@@ -1977,21 +2069,21 @@
                   }
                 },
                 {
-                  "line": 2431,
+                  "line": 2451,
                   "name": "get_gpu_status",
                   "target": {
                     "file": "backpropagate/gpu_safety.py"
                   }
                 },
                 {
-                  "line": 2447,
+                  "line": 2467,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/feature_flags.py"
                   }
                 },
                 {
-                  "line": 2455,
+                  "line": 2475,
                   "name": "get",
                   "target": {
                     "file": "backpropagate/feature_flags.py"
@@ -2006,7 +2098,7 @@
             {
               "calls": [
                 {
-                  "line": 2789,
+                  "line": 2809,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2022,7 +2114,7 @@
               "calls": [
                 {
                   "branch": "auth_file and args.auth",
-                  "line": 3173,
+                  "line": 3193,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2030,22 +2122,7 @@
                 },
                 {
                   "branch": "not auth_file_path.exists()",
-                  "line": 3205,
-                  "name": "UserInputError",
-                  "target": {
-                    "file": "backpropagate/exceptions.py"
-                  }
-                },
-                {
-                  "line": 3228,
-                  "name": "UserInputError",
-                  "target": {
-                    "file": "backpropagate/exceptions.py"
-                  }
-                },
-                {
-                  "branch": "not auth_text",
-                  "line": 3235,
+                  "line": 3225,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2059,8 +2136,23 @@
                   }
                 },
                 {
+                  "branch": "not auth_text",
+                  "line": 3255,
+                  "name": "UserInputError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "line": 3268,
+                  "name": "UserInputError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
                   "branch": "args.share and args.auth is None",
-                  "line": 3269,
+                  "line": 3289,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2068,7 +2160,7 @@
                 },
                 {
                   "branch": "requested_host is not None and requested_host not in _LOOPB…",
-                  "line": 3287,
+                  "line": 3307,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2076,14 +2168,14 @@
                 },
                 {
                   "branch": "args.auth is not None and not ENFORCEMENT_AVAILABLE",
-                  "line": 3316,
+                  "line": 3336,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 3345,
+                  "line": 3365,
                   "name": "validate_auth_shape",
                   "target": {
                     "file": "backpropagate/ui_security.py"
@@ -2091,14 +2183,14 @@
                 },
                 {
                   "branch": "_busy_port is not None",
-                  "line": 3381,
+                  "line": 3401,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 2789,
+                  "line": 2809,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2122,28 +2214,28 @@
             {
               "calls": [
                 {
-                  "line": 3845,
+                  "line": 3865,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 3849,
+                  "line": 3869,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 3869,
+                  "line": 3889,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 3870,
+                  "line": 3890,
                   "name": "get_run",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2152,7 +2244,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 3908,
+                  "line": 3928,
                   "name": "MergeMode",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2160,7 +2252,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 3904,
+                  "line": 3924,
                   "name": "MultiRunConfig",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2168,7 +2260,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 3911,
+                  "line": 3931,
                   "name": "MultiRunTrainer",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2176,7 +2268,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 3916,
+                  "line": 3936,
                   "name": "run",
                   "receiver": "MultiRunTrainer",
                   "target": {
@@ -2184,21 +2276,21 @@
                   }
                 },
                 {
-                  "line": 3923,
+                  "line": 3943,
                   "name": "Trainer",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 3929,
+                  "line": 3949,
                   "name": "TrainingCallback",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 3930,
+                  "line": 3950,
                   "name": "train",
                   "receiver": "Trainer",
                   "target": {
@@ -2206,7 +2298,7 @@
                   }
                 },
                 {
-                  "line": 3937,
+                  "line": 3957,
                   "name": "save",
                   "receiver": "Trainer",
                   "target": {
@@ -2231,7 +2323,7 @@
               "calls": [
                 {
                   "branch": "inline_token and token_file",
-                  "line": 4004,
+                  "line": 4024,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2239,7 +2331,7 @@
                 },
                 {
                   "branch": "not token_path.exists()",
-                  "line": 1296,
+                  "line": 1316,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2247,7 +2339,7 @@
                   "via": "_read_hub_token_file"
                 },
                 {
-                  "line": 1321,
+                  "line": 1341,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2256,7 +2348,7 @@
                 },
                 {
                   "branch": "not token_text",
-                  "line": 1328,
+                  "line": 1348,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2264,7 +2356,7 @@
                   "via": "_read_hub_token_file"
                 },
                 {
-                  "line": 4051,
+                  "line": 4071,
                   "name": "push_to_hub",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -2287,14 +2379,14 @@
             {
               "calls": [
                 {
-                  "line": 4136,
+                  "line": 4156,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 4138,
+                  "line": 4158,
                   "name": "list_runs",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2310,14 +2402,14 @@
             {
               "calls": [
                 {
-                  "line": 4335,
+                  "line": 4355,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 4337,
+                  "line": 4357,
                   "name": "list_runs",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2333,14 +2425,14 @@
             {
               "calls": [
                 {
-                  "line": 4389,
+                  "line": 4409,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 4390,
+                  "line": 4410,
                   "name": "get_run",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2356,14 +2448,14 @@
             {
               "calls": [
                 {
-                  "line": 4555,
+                  "line": 4575,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 4558,
+                  "line": 4578,
                   "name": "get_run",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2372,7 +2464,7 @@
                   "via": "_resolve"
                 },
                 {
-                  "line": 4565,
+                  "line": 4585,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2388,28 +2480,28 @@
             {
               "calls": [
                 {
-                  "line": 4794,
+                  "line": 4814,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 4798,
+                  "line": 4818,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 4819,
+                  "line": 4839,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 4820,
+                  "line": 4840,
                   "name": "get_run",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2417,7 +2509,7 @@
                   }
                 },
                 {
-                  "line": 4823,
+                  "line": 4843,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2425,7 +2517,7 @@
                 },
                 {
                   "branch": "key in _REPLAY_NUMERIC_OVERRIDE_KEYS",
-                  "line": 4915,
+                  "line": 4935,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -2434,7 +2526,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 4975,
+                  "line": 4995,
                   "name": "MergeMode",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2442,7 +2534,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 4985,
+                  "line": 5005,
                   "name": "MultiRunConfig",
                   "passed": true,
                   "target": {
@@ -2451,7 +2543,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 5029,
+                  "line": 5049,
                   "name": "MultiRunConfig",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2459,7 +2551,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 5030,
+                  "line": 5050,
                   "name": "MultiRunTrainer",
                   "target": {
                     "file": "backpropagate/multi_run.py"
@@ -2467,7 +2559,7 @@
                 },
                 {
                   "branch": "session_kind == \"multi_run\"",
-                  "line": 5035,
+                  "line": 5055,
                   "name": "run",
                   "receiver": "MultiRunTrainer",
                   "target": {
@@ -2475,21 +2567,21 @@
                   }
                 },
                 {
-                  "line": 5108,
+                  "line": 5128,
                   "name": "Trainer",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 5109,
+                  "line": 5129,
                   "name": "TrainingCallback",
                   "target": {
                     "file": "backpropagate/trainer.py"
                   }
                 },
                 {
-                  "line": 5112,
+                  "line": 5132,
                   "name": "train",
                   "receiver": "Trainer",
                   "target": {
@@ -2497,7 +2589,7 @@
                   }
                 },
                 {
-                  "line": 5118,
+                  "line": 5138,
                   "name": "save",
                   "receiver": "Trainer",
                   "target": {
@@ -2521,14 +2613,14 @@
             {
               "calls": [
                 {
-                  "line": 5207,
+                  "line": 5227,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 5209,
+                  "line": 5229,
                   "name": "list_runs",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2544,21 +2636,21 @@
             {
               "calls": [
                 {
-                  "line": 5404,
+                  "line": 5424,
                   "name": "detect_format",
                   "target": {
                     "file": "backpropagate/datasets.py"
                   }
                 },
                 {
-                  "line": 5407,
+                  "line": 5427,
                   "name": "DatasetFormat",
                   "target": {
                     "file": "backpropagate/datasets.py"
                   }
                 },
                 {
-                  "line": 5426,
+                  "line": 5446,
                   "name": "validate_dataset",
                   "target": {
                     "file": "backpropagate/datasets.py"
@@ -2573,7 +2665,7 @@
             {
               "calls": [
                 {
-                  "line": 5687,
+                  "line": 5707,
                   "name": "analyze_dataset",
                   "target": {
                     "file": "backpropagate/dataset_report.py"
@@ -2581,7 +2673,7 @@
                 },
                 {
                   "branch": "gate_tripped",
-                  "line": 5723,
+                  "line": 5743,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2596,14 +2688,14 @@
             {
               "calls": [
                 {
-                  "line": 5814,
+                  "line": 5834,
                   "name": "split_dataset",
                   "target": {
                     "file": "backpropagate/datasets.py"
                   }
                 },
                 {
-                  "line": 5844,
+                  "line": 5864,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2618,14 +2710,14 @@
             {
               "calls": [
                 {
-                  "line": 5919,
+                  "line": 5939,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 5923,
+                  "line": 5943,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2633,21 +2725,21 @@
                 },
                 {
                   "branch": "not output_dir.exists()",
-                  "line": 5945,
+                  "line": 5965,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 5957,
+                  "line": 5977,
                   "name": "RunHistoryManager",
                   "target": {
                     "file": "backpropagate/checkpoints.py"
                   }
                 },
                 {
-                  "line": 5964,
+                  "line": 5984,
                   "name": "get_run",
                   "receiver": "RunHistoryManager",
                   "target": {
@@ -2656,7 +2748,7 @@
                   "via": "_resolve"
                 },
                 {
-                  "line": 5975,
+                  "line": 5995,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2665,7 +2757,7 @@
                 },
                 {
                   "branch": "not heldout_path.exists() or heldout_path.is_dir()",
-                  "line": 6003,
+                  "line": 6023,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2673,7 +2765,7 @@
                 },
                 {
                   "branch": "not prompts_path.exists() or prompts_path.is_dir()",
-                  "line": 6024,
+                  "line": 6044,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2681,14 +2773,14 @@
                 },
                 {
                   "branch": "not ref_path.exists() or ref_path.is_dir()",
-                  "line": 6052,
+                  "line": 6072,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 6118,
+                  "line": 6138,
                   "name": "evaluate_run",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2696,7 +2788,7 @@
                 },
                 {
                   "branch": "getattr(args, \"gate_against\", None)",
-                  "line": 6124,
+                  "line": 6144,
                   "name": "evaluate_run",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2704,7 +2796,7 @@
                 },
                 {
                   "branch": "getattr(args, \"gate_against\", None)",
-                  "line": 6130,
+                  "line": 6150,
                   "name": "eval_gate",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2712,7 +2804,7 @@
                 },
                 {
                   "branch": "not decision.accept",
-                  "line": 6164,
+                  "line": 6184,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2720,7 +2812,7 @@
                 },
                 {
                   "branch": "getattr(args, \"vs\", None)",
-                  "line": 6180,
+                  "line": 6200,
                   "name": "evaluate_run",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2728,7 +2820,7 @@
                 },
                 {
                   "branch": "getattr(args, \"vs\", None)",
-                  "line": 6181,
+                  "line": 6201,
                   "name": "diff_evals",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2743,7 +2835,7 @@
             {
               "calls": [
                 {
-                  "line": 6310,
+                  "line": 6330,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2751,7 +2843,7 @@
                 },
                 {
                   "branch": "not adapter_path.exists()",
-                  "line": 6322,
+                  "line": 6342,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2759,7 +2851,7 @@
                 },
                 {
                   "branch": "not adapter_path.is_dir()",
-                  "line": 6337,
+                  "line": 6357,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -2767,21 +2859,21 @@
                 },
                 {
                   "branch": "not base_model",
-                  "line": 6360,
+                  "line": 6380,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 6400,
+                  "line": 6420,
                   "name": "_load_model_and_tokenizer",
                   "target": {
                     "file": "backpropagate/eval.py"
                   }
                 },
                 {
-                  "line": 6406,
+                  "line": 6426,
                   "name": "_generate",
                   "target": {
                     "file": "backpropagate/eval.py"
@@ -2804,7 +2896,7 @@
             {
               "calls": [
                 {
-                  "line": 6546,
+                  "line": 6566,
                   "name": "estimate_vram",
                   "target": {
                     "file": "backpropagate/trainer.py"
@@ -2819,7 +2911,7 @@
             {
               "calls": [
                 {
-                  "line": 6737,
+                  "line": 6757,
                   "name": "register_with_ollama",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -2842,7 +2934,7 @@
             {
               "calls": [
                 {
-                  "line": 6787,
+                  "line": 6807,
                   "name": "list_ollama_models",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -2857,7 +2949,7 @@
             {
               "calls": [
                 {
-                  "line": 6831,
+                  "line": 6851,
                   "name": "remove_ollama_model",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -2880,7 +2972,7 @@
             {
               "calls": [
                 {
-                  "line": 6885,
+                  "line": 6905,
                   "name": "list_adapter_shelf",
                   "target": {
                     "file": "backpropagate/export.py"
@@ -2895,35 +2987,35 @@
             {
               "calls": [
                 {
-                  "line": 9368,
+                  "line": 9445,
                   "name": "configure_logging",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 9387,
+                  "line": 9464,
                   "name": "bind_run_context",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 9401,
+                  "line": 9478,
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 9512,
+                  "line": 9589,
                   "name": "redact_secrets",
                   "target": {
                     "file": "backpropagate/logging_config.py"
                   }
                 },
                 {
-                  "line": 9519,
+                  "line": 9596,
                   "name": "UserInputError",
                   "passed": true,
                   "target": {
@@ -2931,7 +3023,7 @@
                   }
                 },
                 {
-                  "line": 9521,
+                  "line": 9598,
                   "name": "DatasetError",
                   "passed": true,
                   "target": {
@@ -2939,7 +3031,7 @@
                   }
                 },
                 {
-                  "line": 9538,
+                  "line": 9615,
                   "name": "redact_secrets",
                   "target": {
                     "file": "backpropagate/logging_config.py"
@@ -7602,517 +7694,527 @@
             {
               "in": "_detect_total_vram_gb",
               "kind": "except",
-              "line": 778
+              "line": 824
             },
             {
               "in": "_detect_total_vram_gb",
               "kind": "except",
-              "line": 780
+              "line": 826
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "except",
-              "line": 803
+              "line": 849
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 804
+              "line": 850
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 809
+              "line": 855
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 815
+              "line": 861
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "except",
-              "line": 832
+              "line": 878
             },
             {
               "in": "_ensure_fsdp_runtime",
               "kind": "raise",
-              "line": 833
+              "line": 879
             },
             {
               "in": "_gather_fsdp_full_state_dict",
               "kind": "except",
-              "line": 858
+              "line": 904
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 967
+              "line": 1013
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 969
+              "line": 1015
             },
             {
               "in": "_estimate_param_count_billions",
               "kind": "except",
-              "line": 993
+              "line": 1039
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "except",
-              "line": 1047
+              "line": 1093
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "except",
-              "line": 1051
+              "line": 1097
             },
             {
               "in": "_enforce_full_ft_param_ceiling",
               "kind": "raise",
-              "line": 1082
+              "line": 1128
             },
             {
               "in": "_build_sft_config",
               "kind": "raise",
-              "line": 1490
+              "line": 1536
             },
             {
               "in": "_config_declares",
               "kind": "except",
-              "line": 1667
+              "line": 1713
             },
             {
               "in": "_require_config_field",
               "kind": "raise",
-              "line": 1683
+              "line": 1729
             },
             {
               "in": "_build_orpo_config",
               "kind": "except",
-              "line": 1774
+              "line": 1820
             },
             {
               "in": "_build_orpo_config",
               "kind": "except",
-              "line": 1777
+              "line": 1823
             },
             {
               "in": "_build_orpo_config",
               "kind": "raise",
-              "line": 1778
+              "line": 1824
             },
             {
               "in": "_build_cpo_config",
               "kind": "except",
-              "line": 1923
+              "line": 1969
             },
             {
               "in": "_build_cpo_config",
               "kind": "except",
-              "line": 1926
+              "line": 1972
             },
             {
               "in": "_build_cpo_config",
               "kind": "raise",
-              "line": 1927
+              "line": 1973
             },
             {
               "in": "_build_kto_config",
               "kind": "except",
-              "line": 2088
+              "line": 2134
             },
             {
               "in": "_build_kto_config",
               "kind": "except",
-              "line": 2091
+              "line": 2137
             },
             {
               "in": "_build_kto_config",
               "kind": "raise",
-              "line": 2092
+              "line": 2138
             },
             {
               "in": "_apply_train_on_responses_only",
               "kind": "except",
-              "line": 2244
+              "line": 2290
             },
             {
               "in": "_apply_train_on_responses_only",
               "kind": "except",
-              "line": 2247
+              "line": 2293
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2545
+              "line": 2609
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2555
+              "line": 2619
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2562
+              "line": 2626
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2572
+              "line": 2636
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2579
+              "line": 2643
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2586
+              "line": 2650
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2593
+              "line": 2657
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2666
+              "line": 2730
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2711
+              "line": 2775
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2740
+              "line": 2811
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2768
+              "line": 2839
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2827
+              "line": 2898
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2940
+              "line": 3011
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2952
+              "line": 3023
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 2967
+              "line": 3038
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3148
+              "line": 3219
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3162
+              "line": 3233
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3183
+              "line": 3254
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3282
+              "line": 3353
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3304
+              "line": 3375
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3320
+              "line": 3391
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3334
+              "line": 3405
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 3345
+              "line": 3416
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 3436
+              "line": 3507
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3555
+              "line": 3626
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3560
+              "line": 3631
             },
             {
               "in": "_detect_batch_size",
               "kind": "except",
-              "line": 3565
+              "line": 3636
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3662
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3693
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3704
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3716
             },
             {
               "in": "_enforce_offload_fit",
               "kind": "raise",
-              "line": 3633
+              "line": 3826
             },
             {
               "in": "_enforce_offload_fit_for_model",
               "kind": "except",
-              "line": 3659
+              "line": 3852
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3768
+              "line": 3961
             },
             {
               "in": "_detect_optim_for_card",
               "kind": "except",
-              "line": 3793
+              "line": 3986
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 3845
+              "line": 4038
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 3863
+              "line": 4056
             },
             {
               "in": "_fp8_supported",
               "kind": "except",
-              "line": 3871
+              "line": 4064
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 3957
+              "line": 4150
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "raise",
-              "line": 3959
+              "line": 4152
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 3992
+              "line": 4185
             },
             {
               "in": "_apply_fp8_to_base",
               "kind": "except",
-              "line": 4011
+              "line": 4204
             },
             {
               "in": "_detect_optimal_dtype",
               "kind": "except",
-              "line": 4083
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4218
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4224
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4225
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4227
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4238
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4240
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4241
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4247
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4253
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4256
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
-              "line": 4266
-            },
-            {
-              "in": "load_model",
-              "kind": "except",
-              "line": 4271
-            },
-            {
-              "in": "load_model",
-              "kind": "raise",
               "line": 4276
             },
             {
-              "in": "_load_with_unsloth",
+              "in": "load_model",
               "kind": "except",
-              "line": 4364
+              "line": 4411
             },
             {
-              "in": "_load_with_unsloth",
+              "in": "load_model",
               "kind": "raise",
-              "line": 4366
+              "line": 4417
             },
             {
-              "in": "_load_with_unsloth",
-              "kind": "raise",
-              "line": 4372
-            },
-            {
-              "in": "_load_with_unsloth",
-              "kind": "raise",
-              "line": 4400
-            },
-            {
-              "in": "_load_with_unsloth",
+              "in": "load_model",
               "kind": "except",
+              "line": 4418
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4420
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4431
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4433
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4434
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
               "line": 4440
             },
             {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4446
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4449
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4459
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4464
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4469
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4557
+            },
+            {
               "in": "_load_with_unsloth",
               "kind": "raise",
-              "line": 4445
+              "line": 4559
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4565
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4593
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4633
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4638
             },
             {
               "in": "_load_with_transformers",
               "kind": "except",
-              "line": 4570
+              "line": 4763
             },
             {
               "in": "_load_with_transformers",
               "kind": "raise",
-              "line": 4572
+              "line": 4765
             },
             {
               "in": "_load_with_transformers",
               "kind": "raise",
-              "line": 4573
+              "line": 4766
             },
             {
               "in": "_load_with_transformers",
               "kind": "except",
-              "line": 4635
+              "line": 4828
             },
             {
               "in": "_build_trainer",
               "kind": "except",
-              "line": 4722
+              "line": 4915
             },
             {
               "in": "_build_trainer",
               "kind": "except",
-              "line": 4726
+              "line": 4919
             },
             {
               "in": "_build_trainer",
               "kind": "raise",
-              "line": 4727
+              "line": 4920
             },
             {
               "in": "_auto_balance_kto_weights",
               "kind": "except",
-              "line": 5007
+              "line": 5254
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5151
+              "line": 5398
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5157
+              "line": 5404
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5303
+              "line": 5550
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5330
+              "line": 5577
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5352
+              "line": 5599
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5359
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 5360
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 5517
+              "line": 5606
             },
             {
               "in": "train",
@@ -8121,463 +8223,474 @@
             },
             {
               "in": "train",
-              "kind": "raise",
-              "line": 5608
+              "kind": "except",
+              "line": 5777
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5609
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 5618
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 5686
+              "line": 5867
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5706
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 5708
+              "line": 5868
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5752
+              "line": 5869
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5878
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5946
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 5814
+              "line": 5966
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5968
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6012
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6074
             },
             {
               "in": "_finite_loss",
               "kind": "except",
-              "line": 5860
+              "line": 6120
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5892
+              "line": 6152
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5932
+              "line": 6196
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5948
+              "line": 6212
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5969
+              "line": 6233
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5976
+              "line": 6240
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 5986
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 5990
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 5994
-            },
-            {
-              "in": "train",
-              "kind": "except",
-              "line": 6003
+              "line": 6250
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6008
+              "line": 6254
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6009
+              "line": 6258
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6018
-            },
-            {
-              "in": "train",
-              "kind": "raise",
-              "line": 6029
+              "line": 6267
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6045
+              "line": 6272
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6061
+              "line": 6273
             },
             {
               "in": "train",
               "kind": "except",
-              "line": 6070
+              "line": 6282
             },
             {
               "in": "train",
               "kind": "raise",
-              "line": 6081
+              "line": 6293
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6309
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6325
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6334
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6345
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6190
+              "line": 6459
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6274
+              "line": 6543
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6299
+              "line": 6568
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6305
+              "line": 6574
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6315
+              "line": 6584
             },
             {
               "in": "_train_with_mlx",
               "kind": "except",
-              "line": 6322
+              "line": 6591
             },
             {
               "in": "_train_with_mlx",
               "kind": "raise",
-              "line": 6324
+              "line": 6593
             },
             {
               "in": "_require_preference_columns",
               "kind": "raise",
-              "line": 6417
+              "line": 6686
             },
             {
               "in": "_require_kto_columns",
               "kind": "raise",
-              "line": 6430
+              "line": 6699
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6485
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6486
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6531
+              "line": 6754
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6532
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6551
+              "line": 6755
             },
             {
               "in": "_load_dataset",
               "kind": "except",
-              "line": 6555
+              "line": 6800
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6559
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "except",
-              "line": 6560
+              "line": 6801
             },
             {
               "in": "_load_dataset",
               "kind": "raise",
-              "line": 6561
+              "line": 6820
             },
             {
               "in": "_load_dataset",
-              "kind": "except",
-              "line": 6562
-            },
-            {
-              "in": "_load_dataset",
-              "kind": "raise",
-              "line": 6563
-            },
-            {
-              "in": "_token_counter",
-              "kind": "except",
-              "line": 6646
-            },
-            {
-              "in": "_filter_reasoning_traces",
-              "kind": "except",
-              "line": 6664
-            },
-            {
-              "in": "_filter_reasoning_traces",
-              "kind": "except",
-              "line": 6685
-            },
-            {
-              "in": "_filter_reasoning_traces",
-              "kind": "except",
-              "line": 6696
-            },
-            {
-              "in": "tokenize_fn",
-              "kind": "except",
-              "line": 6735
-            },
-            {
-              "in": "tokenize_fn",
-              "kind": "raise",
-              "line": 6736
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "except",
-              "line": 6749
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "raise",
-              "line": 6750
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "except",
-              "line": 6751
-            },
-            {
-              "in": "_pre_tokenize",
-              "kind": "raise",
-              "line": 6752
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 6796
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "except",
-              "line": 6816
-            },
-            {
-              "in": "_train_full_offload",
               "kind": "except",
               "line": 6824
             },
             {
-              "in": "_train_full_offload",
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6828
+            },
+            {
+              "in": "_load_dataset",
               "kind": "except",
               "line": 6829
             },
             {
-              "in": "_train_full_offload",
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6830
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6831
+            },
+            {
+              "in": "_load_dataset",
               "kind": "raise",
               "line": 6832
             },
             {
-              "in": "_train_full_offload",
-              "kind": "raise",
-              "line": 6833
-            },
-            {
-              "in": "_train_full_offload",
+              "in": "_token_counter",
               "kind": "except",
-              "line": 6867
+              "line": 6915
             },
             {
-              "in": "_train_full_offload",
+              "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6872
+              "line": 6933
             },
             {
-              "in": "save",
-              "kind": "raise",
-              "line": 6955
-            },
-            {
-              "in": "save",
+              "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6998
+              "line": 6954
             },
             {
-              "in": "save",
-              "kind": "raise",
-              "line": 6999
-            },
-            {
-              "in": "save",
+              "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 7003
+              "line": 6965
             },
             {
-              "in": "save",
-              "kind": "raise",
+              "in": "tokenize_fn",
+              "kind": "except",
               "line": 7004
             },
             {
-              "in": "save",
-              "kind": "except",
-              "line": 7026
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7033
-            },
-            {
-              "in": "save",
+              "in": "tokenize_fn",
               "kind": "raise",
-              "line": 7034
+              "line": 7005
             },
             {
-              "in": "save",
+              "in": "_pre_tokenize",
               "kind": "except",
-              "line": 7089
+              "line": 7018
             },
             {
-              "in": "save",
-              "kind": "except",
-              "line": 7114
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7124
-            },
-            {
-              "in": "save",
+              "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 7130
+              "line": 7019
             },
             {
-              "in": "save",
+              "in": "_pre_tokenize",
               "kind": "except",
-              "line": 7134
+              "line": 7020
             },
             {
-              "in": "save",
+              "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 7135
+              "line": 7021
             },
             {
-              "in": "save",
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7065
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7085
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7093
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7098
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7101
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7102
+            },
+            {
+              "in": "_train_full_offload",
               "kind": "except",
               "line": 7136
             },
             {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7141
+            },
+            {
               "in": "save",
               "kind": "raise",
-              "line": 7137
+              "line": 7224
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7193
+              "line": 7267
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7268
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7272
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7273
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7295
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7302
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7303
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7358
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7383
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7393
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7399
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7403
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7404
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7405
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7406
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7462
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7251
+              "line": 7520
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7305
+              "line": 7574
             },
             {
               "in": "_release_model",
               "kind": "except",
-              "line": 7379
+              "line": 7648
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 7389
+              "line": 7658
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7470
+              "line": 7739
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7484
+              "line": 7753
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7539
+              "line": 7808
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7547
+              "line": 7816
             },
             {
               "in": "_count_lora_layers",
               "kind": "except",
-              "line": 7586
+              "line": 7855
             },
             {
               "in": "__getattr__",
               "kind": "raise",
-              "line": 7653
+              "line": 7922
             }
           ],
-          "hash": "c5c4e98d1862b528da4eac51bea76419453b4fa9e2ced2b7fa06769a5868b36c",
+          "hash": "a609a78a69a74567aab504b0b27df3f67d829722e5739d2e05c495d4131e0a9f",
           "importsFiles": [
             "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/datasets.py",
@@ -8630,7 +8743,7 @@
             {
               "calls": [
                 {
-                  "line": 804,
+                  "line": 850,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8638,7 +8751,7 @@
                 },
                 {
                   "branch": "not torch.cuda.is_available()",
-                  "line": 809,
+                  "line": 855,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8646,14 +8759,14 @@
                 },
                 {
                   "branch": "not (dist.is_available() and dist.is_nccl_available())",
-                  "line": 815,
+                  "line": 861,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 833,
+                  "line": 879,
                   "name": "FsdpUnavailableError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8668,14 +8781,14 @@
             {
               "calls": [
                 {
-                  "line": 947,
+                  "line": 993,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
                   }
                 },
                 {
-                  "line": 951,
+                  "line": 997,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8690,17 +8803,17 @@
             {
               "calls": [
                 {
-                  "line": 1039,
+                  "line": 1085,
                   "name": "num_parameters",
                   "target": null
                 },
                 {
-                  "line": 1044,
+                  "line": 1090,
                   "name": "parameters",
                   "target": null
                 },
                 {
-                  "line": 947,
+                  "line": 993,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8708,7 +8821,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 951,
+                  "line": 997,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8717,7 +8830,7 @@
                 },
                 {
                   "branch": "estimated_billions > ceiling_billions",
-                  "line": 1082,
+                  "line": 1128,
                   "name": "FullFinetuneModelTooLargeError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8732,7 +8845,7 @@
             {
               "calls": [
                 {
-                  "line": 947,
+                  "line": 993,
                   "name": "lookup_model_preset_by_id",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8740,7 +8853,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 951,
+                  "line": 997,
                   "name": "items",
                   "target": {
                     "file": "backpropagate/config.py"
@@ -8748,7 +8861,7 @@
                   "via": "_estimate_param_count_billions"
                 },
                 {
-                  "line": 1337,
+                  "line": 1383,
                   "name": "offload_host_ram_required_gib",
                   "target": {
                     "file": "backpropagate/offload_engine.py"
@@ -8763,7 +8876,7 @@
             {
               "calls": [
                 {
-                  "line": 1683,
+                  "line": 1729,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8778,7 +8891,7 @@
             {
               "calls": [
                 {
-                  "line": 1778,
+                  "line": 1824,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8793,7 +8906,7 @@
             {
               "calls": [
                 {
-                  "line": 1927,
+                  "line": 1973,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8808,7 +8921,7 @@
             {
               "calls": [
                 {
-                  "line": 2092,
+                  "line": 2138,
                   "name": "TrainingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8837,7 +8950,7 @@
             {
               "calls": [
                 {
-                  "line": 7553,
+                  "line": 7822,
                   "name": "named_modules",
                   "target": null
                 }
@@ -8851,7 +8964,7 @@
               "calls": [
                 {
                   "branch": "target_modules.lower() == \"all-linear\"",
-                  "line": 7553,
+                  "line": 7822,
                   "name": "named_modules",
                   "target": null,
                   "via": "_all_linear_leaf_names"
@@ -8865,7 +8978,7 @@
             {
               "calls": [
                 {
-                  "line": 7585,
+                  "line": 7854,
                   "name": "named_modules",
                   "target": null
                 }
@@ -10063,7 +10176,7 @@
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 70,
+      "testedBy": 72,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -10147,6 +10260,494 @@
         {
           "hash": "4ae5bbcc7e95789a95cd30bbcbe98534f92c769abf9bb599a56344b4dced993d",
           "path": "docs/production-quality-plan-2026-09-30.md"
+        },
+        {
+          "hash": "e6b6d76ee555659555b68902b4b9dd7c81c6b6b3e5639278a83260d0793db9a8",
+          "path": "docs/receipts/2026-09-30-block-engine/README.md"
+        },
+        {
+          "hash": "25e33f2ccfd5abe662f26c1e11ecb47aca70a9f5290f5784dacaf32667641c67",
+          "path": "docs/receipts/2026-09-30-block-engine/env.json"
+        },
+        {
+          "hash": "96f12b91470a21229aafc631d6fe17addb597b154dfd45e2123528aa520b8f98",
+          "path": "docs/receipts/2026-09-30-block-engine/prep.json"
+        },
+        {
+          "hash": "fd40d8bb4c90419509d2a8571d562d03373c14b43a9b0da5c614251edb8834a5",
+          "path": "docs/receipts/2026-09-30-block-engine/receipt.json"
+        },
+        {
+          "hash": "3fa103a9ad3cccc600a516e8f0a13b83cc5ded4094e2a2e70b8cf4ff775fa468",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s0.json"
+        },
+        {
+          "hash": "6acbf202d477f10df049aeef81fdbb69c861858b549a3790e97b12bbf38f41fa",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s1.json"
+        },
+        {
+          "hash": "c113469ead2c26dd01c72facc5f3aaadebe64c068e146f246d0e92068fe2b266",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_qwen2_5-1_5b-instruct_block_s2.json"
+        },
+        {
+          "hash": "80272276cd47cb2448d3862e1c89b4493aab001750fa7917c9b8b9b7743adc19",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s0.json"
+        },
+        {
+          "hash": "454123d19f594cd230ddce162b8dfb1a317772ba0225b701ee994d80b8540d4c",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s1.json"
+        },
+        {
+          "hash": "2a167813eaee2b04d84b27bee56369ed4556ba57ec80f5db7403ec7e0a389ded",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a2_smollm3-3b_block_s2.json"
+        },
+        {
+          "hash": "8b99ad24bdc6decb6547eb170712b07f952b32a2cd777146fb1b0cfe69a8b995",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s0.json"
+        },
+        {
+          "hash": "09402e549876408e7dab31202d1c9c3c3318efd2afa5f4389eef76582249f301",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s1.json"
+        },
+        {
+          "hash": "694710c31f06d97e3d0c61a48ad7e6d14398348ada26119eb83a85d6de6af779",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_block_s2.json"
+        },
+        {
+          "hash": "d8d64874fa97ce1c9a9981e769a40ec6b504e0b677dcb6f8d5f44f3927392485",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s0.json"
+        },
+        {
+          "hash": "01141047c545ada5db63100d453a3364ee65ea8c42390b687447bc5fef9c52fd",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s1.json"
+        },
+        {
+          "hash": "d8fafd1f098468b80268b79a2fb800a3ab77094cb950814e912c2544502a73d8",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_qwen2_5-1_5b-instruct_default_s2.json"
+        },
+        {
+          "hash": "cba6a3a17a6592d247528fca7332496ba57a9e7c887d6455bc740980e5a630bf",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s0.json"
+        },
+        {
+          "hash": "3ac49e628b552951b5a8a9e3eec7ea030108affe52cf7dc6f585534f45a611bf",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s1.json"
+        },
+        {
+          "hash": "ea45a8a8f816c4bbed677fe107274f9b998e6f08705c0b503f4c32bcb8366530",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_block_s2.json"
+        },
+        {
+          "hash": "b37ab72553c0180ac3b8c2925568eee92cca67c89a75ca64ec09c6a54d88472e",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s0.json"
+        },
+        {
+          "hash": "0a771c90fc746da30aa1c926b71431b6f95f7fbc4f462f0e6d703f5118fb6560",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s1.json"
+        },
+        {
+          "hash": "9799f9feeaf4baa6b313843cb52613ab325aee9ef82ff4d309515e6a27151d5b",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/a_smollm3-3b_default_s2.json"
+        },
+        {
+          "hash": "fd13d2d82c972ddddf7e536ef4e288be5bf59d1d17294ff4a518b7e5ccf68e9e",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap16_frozen.json"
+        },
+        {
+          "hash": "e073e82c439d5c49563cef5421de1ad3b7de676aa9acc5201f8e9623bd508d1f",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap24.json"
+        },
+        {
+          "hash": "69ee9e040ceb8cf9e5bdfb2bf33ec9bf7423480fc204a0e41bb797eca47abf42",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_cap24_frozen.json"
+        },
+        {
+          "hash": "75c862f34f1b4c49927d8b4c14a289c5e43ed80120b74bcb122655169bf5f2a4",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_k5_random.json"
+        },
+        {
+          "hash": "f6cd9ce8eb09f7f5729441a9cf985825b9fa4d908e16245edba4b8a8a2bc47a4",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_k5_random_ad76bcf.json"
+        },
+        {
+          "hash": "aab3490341d9c50c6cc031be7b0c3d680c3318e602d83e3beb7649c6c3d3795b",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_block_uncapped.json"
+        },
+        {
+          "hash": "0f12be82a4105f1bc804c5e362455b9cdf5dd891ebaf0b65deaa2f28e2f607f3",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/b_qlora.json"
+        },
+        {
+          "hash": "7dcd6cc319201f87e649c309a25d33c7cd3597f9a7f60723372653ac671f6064",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/base_HuggingFaceTB_SmolLM2-360M-Instruct.json"
+        },
+        {
+          "hash": "bd3c040e4f7fb50757bcb0a1a1581d7b81ab3ca64cfd2d9986d4065995bca896",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/base_HuggingFaceTB_SmolLM3-3B.json"
+        },
+        {
+          "hash": "6dd5d27ecb560c699cd53b92496a1149af333d97f2ce0015efd152bc6129962d",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/base_Qwen_Qwen2.5-1.5B-Instruct.json"
+        },
+        {
+          "hash": "6ca59d9b17f1e976f242b4f6d2af82a62b20de8c1a58a18a4e9cf85a8e06719b",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/base_Qwen_Qwen2.5-7B-Instruct.json"
+        },
+        {
+          "hash": "ed30df04d9229ddae9f1e90d6eab9b04e2b7a149fcf86c0ea7c0b34f9b8914c6",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k10_nearest.json"
+        },
+        {
+          "hash": "065abd31ae34d7d7c452eed2bca17e6a207e61b4142d1899d479b433298c1593",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k10_stochastic.json"
+        },
+        {
+          "hash": "42f7c160eddc35ec24645041e31d3821a06d76dd58c12ba4f96cda1ab53776e5",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k200_nearest.json"
+        },
+        {
+          "hash": "164534038148c54c7d57c9d32014b13ad283396cfea95c6b5fa7131973be6dbd",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k200_stochastic.json"
+        },
+        {
+          "hash": "78d7111f10d6bbaf821bc39f75fd6ed7b1c3dd20831b45107b5cc23333f028e4",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k50_nearest.json"
+        },
+        {
+          "hash": "a72a5b9c14f4c50dff3437778f8fe1547e9e6ee66a298e646c3a9954a4d821c9",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm2-360m-instruct_k50_stochastic.json"
+        },
+        {
+          "hash": "426bf00c0fd7d79504e0f0efc4b62db529fc5924ff3fd59e04a96fb9a69f9ca2",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k10_nearest.json"
+        },
+        {
+          "hash": "6d70580f9b88cd315b678049e7f498c5b77d4bf0e93ee94eec4408dfb88e6a15",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k10_stochastic.json"
+        },
+        {
+          "hash": "16c5ce8987982d492adcfdbd3979e9bb648616c76384206d2aa270cbdf4f9029",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k200_nearest.json"
+        },
+        {
+          "hash": "cba27a46861a07c73420fc54dfddbaae67b84b49e0dfb12bf1bfeff1ed6ce0a3",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k200_stochastic.json"
+        },
+        {
+          "hash": "b3d6ba984c6a1f225e4a2a7610e1913bc0972ac7757b15ceac22aa2a24a8d81e",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k50_nearest.json"
+        },
+        {
+          "hash": "4eaca933d562c3bc837e24b0c32eae8badab1b254e5fe4911c8558f87f5ee4b1",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/c_smollm3-3b_k50_stochastic.json"
+        },
+        {
+          "hash": "7f722a3767650fa66ce1f7c8d98c83507711e0111330249343fd776517bed60a",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/p_hub.json"
+        },
+        {
+          "hash": "99d8bde5d8b5e8bbd251022d7509284413967eb4f96653a08992293c19ebbc47",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/p_qwen35_4b_lora.json"
+        },
+        {
+          "hash": "71cfbcbd3d801b680dec1a5c79011a440b74ccfc87603155f796c4acc9cd1bcc",
+          "path": "docs/receipts/2026-09-30-block-engine/runs/smoke_block.json"
+        },
+        {
+          "hash": "989c04ad0f2971a4598ad95c02601e4d14e6e4ef14cde98e82ea6215a93170e9",
+          "path": "docs/receipts/2026-09-30-block-engine/stage_a.json"
+        },
+        {
+          "hash": "e605fc376b3ad1eaa18cff4e201609b99bf0af3d7d9f1e40766e7fe6ebf61766",
+          "path": "docs/receipts/2026-09-30-block-engine/stage_a2.json"
+        },
+        {
+          "hash": "0479ca26ab76159cec0dfb29f1aab072b557f0046288c57fd0ff30a77e7b23e6",
+          "path": "docs/receipts/2026-09-30-block-engine/stage_b.json"
+        },
+        {
+          "hash": "c97e2a86d28b4e8a37464ab80b427f8547fa494bba5e8566d169b07120d9aa3d",
+          "path": "docs/receipts/2026-09-30-block-engine/stage_c.json"
+        },
+        {
+          "hash": "6d3798a34948a86c2f3e7a228ddf22ef82b32b8353a1df48db84b1b30b6972c4",
+          "path": "docs/receipts/2026-09-30-gsm8k/README.md"
+        },
+        {
+          "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "path": "docs/receipts/2026-09-30-gsm8k/d2_triggers.json"
+        },
+        {
+          "hash": "9f99085a4d8fd0ca3cb4db63d635c9ba8b79ac2002caed365608fe855e79a2e4",
+          "path": "docs/receipts/2026-09-30-gsm8k/d_pick.json"
+        },
+        {
+          "hash": "96d8427dd4a71eec33916686fddc44ee6ff93dad38a414cce7b826610d99d7a9",
+          "path": "docs/receipts/2026-09-30-gsm8k/env.json"
+        },
+        {
+          "hash": "5302878f1a3ed2eab0d2674dc187e5a7a219fe6cb2bbf1ba064d2667fcb5ee5b",
+          "path": "docs/receipts/2026-09-30-gsm8k/prep_gsm8k.json"
+        },
+        {
+          "hash": "568d8c64cd6ac5e9bcd9124431def01ed946bf392f665ce2d6df7a0399427449",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_HuggingFaceTB_SmolLM3-3B.json"
+        },
+        {
+          "hash": "731b23c37b638688f4f955338b5285d29ad3fe05eefaae7ca46454c59f31fc45",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_Qwen_Qwen2.5-3B-Instruct.json"
+        },
+        {
+          "hash": "496a9fc560632076852cfc4fe9d44d684ffd5b4a0cad7dc81b2ef0424ee46b2d",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/base_gsm8k_Qwen_Qwen2.5-7B-Instruct.json"
+        },
+        {
+          "hash": "887924c1f71ebdcf59fc3348a36a72fd523dd96cbbeaad91c28812e00265f638",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s0.json"
+        },
+        {
+          "hash": "2cbb7d203d3653ad328e238ccdf905b4c700ece9205d87722a856641268821c1",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s1.json"
+        },
+        {
+          "hash": "12b8319e40188153513b963b6c40deab00d18264c39065af4f0e3049ac3342ca",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k50_s2.json"
+        },
+        {
+          "hash": "5a02d9087f3bf8351070d43775d7d50beaabf2c3a66eaf8d3e778ca213e6b974",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_lr5e-5_s0.json"
+        },
+        {
+          "hash": "2804d4cb43e5e1c416f9f733ab0785834a223ebc474395f9ccb077e0bf69c5c0",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_lr5e-5_s1.json"
+        },
+        {
+          "hash": "ab25ff8a56a76bd6bb13e6f90b1dc6318cb627c710c342a722e854906f3b3c13",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s0.json"
+        },
+        {
+          "hash": "a1158c81586d44aa30e8eeb3ea6962d4764499aefe0625480d0c71d9d6f99c9e",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s1.json"
+        },
+        {
+          "hash": "e409fe2a1d4ecb487491608645012af7dd28c09c853ac657ac8704eacb7e9e31",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_block_k5_s2.json"
+        },
+        {
+          "hash": "71f9d7b18b0c26609f5e3d606cc3641f4da0e721c0a8b9709ae75a48aa781444",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_adafactor_s0.json"
+        },
+        {
+          "hash": "00766872c351383445d54600e0f5f7b5567a924aa006deae9f5f8672b211bafa",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s0.json"
+        },
+        {
+          "hash": "49fe8f3c9c7d88d5badb71c9e8b14e0e775d596d63a35938bb0f08daac2421f7",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s1.json"
+        },
+        {
+          "hash": "5184eae340313b69c86050dfb1aa164ef6c8e34f06f39a2e767bf3a9bd35a7d5",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_default_s2.json"
+        },
+        {
+          "hash": "92ff890b0cb597ea8b3f2f9ecf1be488dc2b339f71fbec8e15c61e2c379db36d",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_qlora_s0.json"
+        },
+        {
+          "hash": "a936d1df3d70b14a358a182031b4f00a3527f4003effafa425f9abeed992ad49",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_3b_qlora_s1.json"
+        },
+        {
+          "hash": "988b3f812927f705ddd2fe58ee216dccc82f64da571629b0846c224123d4eedc",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_block_k5_s0.json"
+        },
+        {
+          "hash": "89f4af62eb33e3c3f33f588c5ac637f08686e5b18788a63e309d98ee45d17380",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_block_k5_s1.json"
+        },
+        {
+          "hash": "41b8587a947bccea9efcecd663ed1c97e013b24f46c2b48240071025259a4483",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_galore_s0.json"
+        },
+        {
+          "hash": "6d293268e548aaa9787a2fb2d93d863412fc06c686e4d3fd4c60428ce04c1ba4",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/d_7b_qlora_s0.json"
+        },
+        {
+          "hash": "fcd52960561ba1bb808348b2268b4304e04eea77272ada87b3f22d7226a654ff",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_HuggingFaceTB_SmolLM3-3B.jsonl"
+        },
+        {
+          "hash": "67e1f2085f4540ba2013f9dc382bbdd198e0f61757df181e565e8931e178a98c",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_Qwen_Qwen2.5-3B-Instruct.jsonl"
+        },
+        {
+          "hash": "88a8bda3733a466a3a005a263ae96bb3861f6bc091b62a70bf108080fa277968",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/base_gsm8k_Qwen_Qwen2.5-7B-Instruct.jsonl"
+        },
+        {
+          "hash": "3933f898edca30c4966ff2e2626c5bb895c5f34cbd54bd8415dc8b6e4e923755",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s0.jsonl"
+        },
+        {
+          "hash": "b3823ec20eeecf96b49d9533c2f43f04eeeab39f4eca78ae4c7a8bc03a876636",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s1.jsonl"
+        },
+        {
+          "hash": "be2399e59e77a5153812cffcb4fe21be69375c97dec547a07a381d2f6af38ad0",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k50_s2.jsonl"
+        },
+        {
+          "hash": "346c387aa2de4fe6275e1eb89927c827f600183e204a0ded50df6109346d673d",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_lr5e-5_s0.jsonl"
+        },
+        {
+          "hash": "2365fc379e9e08deada14ae7b3b1143a7c590885f85034aafb20b214ea44cc94",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_lr5e-5_s1.jsonl"
+        },
+        {
+          "hash": "61c079f89cd39e0e8f3c5258c7db9ea361ce5c852649e8294cba3423bf36bdaf",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s0.jsonl"
+        },
+        {
+          "hash": "2876376453633474965fecf68fca642381056097dd44c95cb331386055a020da",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s1.jsonl"
+        },
+        {
+          "hash": "7b5c729d695311ce37cc30504ff28e6d6ec4f37472ff77e990621027bc7228c6",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_block_k5_s2.jsonl"
+        },
+        {
+          "hash": "7779c5f512aa28527a94fb768d7b1a2f0dfb1d3392ec7f16be36dc167482f369",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_adafactor_s0.jsonl"
+        },
+        {
+          "hash": "88b3603fe7da00c1e60a2577a66ba9d25f023e82d7f2e3495d9f9aa563c38223",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s0.jsonl"
+        },
+        {
+          "hash": "4478bdd2602847233fa97c70186ceb91262078d3b7591cae80a481b841deb5f8",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s1.jsonl"
+        },
+        {
+          "hash": "61a9a91277cb66a58ff87f818ef0bfbad9b0f6da824b6c708b5cd47fe0088e27",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_default_s2.jsonl"
+        },
+        {
+          "hash": "a1fbeb50645fda919116103448ad30f2e5264ddd73af74894ab6e565c28a2117",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_qlora_s0.jsonl"
+        },
+        {
+          "hash": "bc72c30d8ed2c85a316e8a0c7abf9e445e1ba96e11b171a3408c871624b4e3eb",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_3b_qlora_s1.jsonl"
+        },
+        {
+          "hash": "8987297e7566ea4e42e43a083d4b2240709f8fdacde040dd7ea1fb00e1fc4de9",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_block_k5_s0.jsonl"
+        },
+        {
+          "hash": "a8fd61aba69fe392618afa2a30eebedd746616990842048440cc64ca57c3f023",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_block_k5_s1.jsonl"
+        },
+        {
+          "hash": "735f1acd84ce9d615089d6e8667a28d49ce3564664af29212703ac6bd61e3add",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_galore_s0.jsonl"
+        },
+        {
+          "hash": "45f1d74eb813c34e9768e54e1246ea56f62e1e099bf3a2a96b71f4762d808a9e",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/d_7b_qlora_s0.jsonl"
+        },
+        {
+          "hash": "821611aeff7a1ce6a334ddf7c491c30faa363030187b2468fdc0f2944aa8930a",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k50_s0.jsonl"
+        },
+        {
+          "hash": "73591fa6fdc8561319b8569b9c390b4daff9b49b8b523e1059ac662e92dbe6a3",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k5_s0.jsonl"
+        },
+        {
+          "hash": "9d1c5d22e224ccee046fabe72c2c47bffc9031336577461738558eb5369ed514",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_block_k5_s1.jsonl"
+        },
+        {
+          "hash": "6c067213e34af5b8f3727d945078bee012a205e55317ba85ed976b7644e6f6a7",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_default_s0.jsonl"
+        },
+        {
+          "hash": "32e264e0ccd4728543d556e058969f29871a0fe63338abe6a52245adbaa720ef",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_default_s1.jsonl"
+        },
+        {
+          "hash": "411b577e0a5a8cac12dbe787dd9ed28bdd936fd667f3767025b558545730b229",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_3b_qlora_s0.jsonl"
+        },
+        {
+          "hash": "a151ff22f4c0c681e3fcec249d2165defad0816996ab17b49234809218c4715e",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_block_k5_s0.jsonl"
+        },
+        {
+          "hash": "f892fe25eba1cb55b134ce6470154963a9712122698600bfd8f50cc3d249bd02",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_block_k5_s1.jsonl"
+        },
+        {
+          "hash": "716c7f3dbbbe2113549439114973c71103e933cd60212ef3c5529075458eb927",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/items/x1000_7b_qlora_s0.jsonl"
+        },
+        {
+          "hash": "19ed55233c9335dcf7f67bc95c576e2b38e4cea0da6e69d113baf16ba1bf686a",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/lengths_Qwen_Qwen2.5-3B-Instruct.json"
+        },
+        {
+          "hash": "b1fdbd326aa556e854a5972d93db78fde40f15cb1f3f74987367da9e0b9c0476",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/lengths_Qwen_Qwen2.5-7B-Instruct.json"
+        },
+        {
+          "hash": "f5a124dfe79cf0b210d58277c5b1a5d210593eb0715a810167072c159677c634",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/smoke_block.json"
+        },
+        {
+          "hash": "2bc3b6cc10a391d285fef7e0014fbaf2a499b894613105dabc690aa33b679165",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k50_s0.json"
+        },
+        {
+          "hash": "ef859f55794dc3063ed9abc02d159e64e03dc677eb97312e1a47be64447f111f",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k5_s0.json"
+        },
+        {
+          "hash": "5ee76e83ed44aaa81c1b24592b587cc362bf19bf3793b112d265f6426457022e",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_block_k5_s1.json"
+        },
+        {
+          "hash": "0fe96b91e4cf079e946493c3f53fd020707d553cad33891bf6e12899f7c5adb5",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_default_s0.json"
+        },
+        {
+          "hash": "9f3fb9cbed4c2e5ab192cc2c754429f070ad31f5fd283bcf2faa101d889e37ca",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_default_s1.json"
+        },
+        {
+          "hash": "6277cd3d28a25264521c6c60f3dfdd352f9eaa1711de28083f6a2f33e19487d0",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_3b_qlora_s0.json"
+        },
+        {
+          "hash": "929ef1f004a913c43c58aaaf386d0b548a194ca06ad73c854db7ef07f3fb6845",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_block_k5_s0.json"
+        },
+        {
+          "hash": "11dc027372f4762730c7241f2db09a40b0a62e8df3d8c84c4951dab829b6fa37",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_block_k5_s1.json"
+        },
+        {
+          "hash": "fe1a74b585a06ed24034808be72ab7c3fd56187d93928cec321f14865836d7cb",
+          "path": "docs/receipts/2026-09-30-gsm8k/runs/x1000_7b_qlora_s0.json"
+        },
+        {
+          "hash": "090dd2a4cccc3824e31a9fba677ffe1651bff30e9f6d9fb0fc83f6cc63c3c8b6",
+          "path": "docs/receipts/2026-09-30-gsm8k/stage_d.json"
+        },
+        {
+          "hash": "341ae062baa5ef3f81f6225aa45b68e68303cfed40e14bb0173223eeb89539ac",
+          "path": "docs/receipts/2026-09-30-gsm8k/stage_x1000.json"
         },
         {
           "hash": "e0c2188ae332b2c8a24fd368391dd60945bb861a95a1f48d1b701d7879b46097",
@@ -10291,7 +10892,7 @@
           "path": ".secrets.baseline"
         },
         {
-          "hash": "682be3cc3f36a005618c1378a1b0710164b1d5db4f96bd23f521ee0940310e08",
+          "hash": "028849b8cf73d6e7a5c8fca2ec94a14c68896185b9d087167a7ca60ffb6e7333",
           "path": "CHANGELOG.md"
         },
         {
@@ -10430,7 +11031,7 @@
       "externalNames": [
         "datasets"
       ],
-      "externals": 1,
+      "externals": 3,
       "files": [
         {
           "hash": "7b42e87c23d1f2c680208c6943354f27473d2998e7ba98d0654c40c7eb77a8fa",
@@ -10747,6 +11348,141 @@
           "path": "scripts/offload_quality.py"
         },
         {
+          "exports": [
+            "describe_optimizer",
+            "dump",
+            "env",
+            "gsm_eval",
+            "gsm_number",
+            "heldout_loss",
+            "heldout_texts",
+            "load_runs",
+            "mask_check",
+            "nvml_mark",
+            "nvml_report",
+            "on_step",
+            "peak_alloc",
+            "peak_reserved",
+            "reset_peaks",
+            "slug",
+            "spread",
+            "versions",
+            "visit_log",
+            "wilson",
+            "write_items"
+          ],
+          "failurePaths": [
+            {
+              "kind": "raise",
+              "line": 142
+            },
+            {
+              "in": "gsm_number",
+              "kind": "except",
+              "line": 148
+            },
+            {
+              "kind": "raise",
+              "line": 187
+            },
+            {
+              "kind": "raise",
+              "line": 213
+            },
+            {
+              "kind": "raise",
+              "line": 293
+            },
+            {
+              "in": "__init__",
+              "kind": "except",
+              "line": 372
+            },
+            {
+              "in": "_loop",
+              "kind": "except",
+              "line": 387
+            },
+            {
+              "in": "versions",
+              "kind": "except",
+              "line": 436
+            },
+            {
+              "kind": "raise",
+              "line": 632
+            },
+            {
+              "kind": "except",
+              "line": 651
+            },
+            {
+              "kind": "raise",
+              "line": 664
+            },
+            {
+              "kind": "raise",
+              "line": 681
+            },
+            {
+              "kind": "raise",
+              "line": 695
+            },
+            {
+              "in": "describe_optimizer",
+              "kind": "except",
+              "line": 826
+            },
+            {
+              "in": "describe_optimizer",
+              "kind": "except",
+              "line": 837
+            },
+            {
+              "in": "training_step",
+              "kind": "except",
+              "line": 874
+            },
+            {
+              "kind": "except",
+              "line": 1008
+            }
+          ],
+          "hash": "28ea06ffa7dcfb14ec54e13cd2ed82b8b1b6093e8917c35c26ef1c20fd377bff",
+          "importOrder": [
+            "backpropagate/datasets.py",
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
+          ],
+          "path": "scripts/pod_block_engine.py"
+        },
+        {
+          "hash": "1266a16fed293361c1a16db247555b9902454a49dd0d2a235ac18880ab682d18",
+          "path": "scripts/pod_block_engine.sh"
+        },
+        {
+          "exports": [
+            "arrays",
+            "boot",
+            "items",
+            "load",
+            "mcnemar_exact",
+            "spread",
+            "wilson"
+          ],
+          "hash": "d98a3f1bbb330dc3e0ab073c7b864f8727d634bdd11f55cb35657db63ceb0739",
+          "path": "scripts/pod_gsm8k_summary.py"
+        },
+        {
           "hash": "3030c89191c72227be12b70425660e27990153e0688115aaa342b109a3f7e576",
           "path": "scripts/pod_offload_7b.sh"
         },
@@ -10803,11 +11539,11 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 5,
+          "reads": 15,
           "where": [
             "caller"
           ],
-          "writes": 4
+          "writes": 15
         },
         {
           "reads": 0,
@@ -10817,8 +11553,8 @@
           "writes": 1
         }
       ],
-      "outsideReads": 5,
-      "outsideWrites": 5,
+      "outsideReads": 15,
+      "outsideWrites": 16,
       "role": "code",
       "testRunners": [
         "pytest"
@@ -10856,7 +11592,7 @@
           "path": "site/src/content/docs/handbook/beginners.md"
         },
         {
-          "hash": "85224abc7984f5315be298f8ab813682ec3d3434a3e29a7beee8ae6ee92d89c7",
+          "hash": "4773a0697c9c8a09afc5d897d874fc5e609dd1027b3163297dde62adfb3e03ea",
           "path": "site/src/content/docs/handbook/cli-reference.md"
         },
         {
@@ -10876,7 +11612,7 @@
           "path": "site/src/content/docs/handbook/export.md"
         },
         {
-          "hash": "f2a06b9de85cfc12cc03dbc7ceaad6b62e7559161cf33f8bd0d4137a302d7890",
+          "hash": "22190911d5742794835e8c4c46aaec1054da8a7d25228ad9c3507f20b30f57ca",
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
@@ -11099,6 +11835,16 @@
         },
         {
           "exports": [
+            "sentences",
+            "tiny_gpt2",
+            "tiny_llama",
+            "tiny_tokenizer"
+          ],
+          "hash": "41d384476a04da8780c67e6876e2c0a7146443bc2e69b3459c5f8b62c76b7836",
+          "path": "tests/helpers/tiny_models.py"
+        },
+        {
+          "exports": [
             "trl_patch_target"
           ],
           "hash": "4c0cdc0f704f7ef92bb1a5e8ed398cbec90f339166ce8c960057fa0e6f04c035",
@@ -11225,6 +11971,38 @@
             "tests/helpers/ws.py"
           ],
           "path": "tests/test_auth_middleware_fuzz.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "88c925ad7c7918ddf09f35ba851d29fc45410d1763fa9547d81e06f11e7e4ee8",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_block_engine.py",
+          "testFramework": "pytest"
+        },
+        {
+          "hash": "b893d8fc0522f9f20875152857c40a7d83131ee5c5749cc82dacaed8c521e906",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py",
+            "backpropagate/cli.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
+            "tests/helpers/tiny_models.py"
+          ],
+          "path": "tests/test_block_engine_trainer.py",
           "testFramework": "pytest"
         },
         {
@@ -13084,7 +13862,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -13094,7 +13872,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 79
+          "files": 82
         },
         {
           "boundary": "scripts",
@@ -13183,7 +13961,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 79,
+          "files": 82,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -13191,7 +13969,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 79,
+          "files": 82,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -13199,28 +13977,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 79,
+          "files": 82,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 79,
+          "files": 82,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 79,
+          "files": 82,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 79,
+          "files": 82,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -13620,7 +14398,7 @@
             "file": "backpropagate/__init__.py",
             "from": "scripts/nightly_train_smoke.py"
           },
-          "files": 19
+          "files": 20
         }
       ],
       "readers": [],
@@ -13981,7 +14759,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "readers": [],
@@ -14157,7 +14935,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -14614,7 +15392,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "readers": [],
@@ -14656,7 +15434,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 21
+          "files": 22
         }
       ],
       "readers": [],
@@ -14705,8 +15483,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "dfaf4b4b13559339afc0576b0537d00721923890",
-    "tracked": 292
+    "commit": "bfbbe1d5eb2f3e66ea0f8c09b605d2b56cbd9c60",
+    "tracked": 421
   },
   "landings": [
     {
@@ -15306,7 +16084,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 82,
+  "testFiles": 85,
   "unassigned": [],
   "unseen": [
     {

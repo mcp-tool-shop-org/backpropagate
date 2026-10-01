@@ -1,0 +1,11 @@
+{
+ "mode": "prep",
+ "dataset": "databricks/databricks-dolly-15k",
+ "license": "CC BY-SA 3.0",
+ "n_train": 400,
+ "n_heldout": 150,
+ "pool": 12636,
+ "shuffle_seed": 0,
+ "disjoint": true,
+ "written": "2026-09-30T18:19:13Z"
+}

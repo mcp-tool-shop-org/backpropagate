@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
+  transformers 5 gives every model a `get_adapter_state_dict` method that
+  raises "No adapter loaded" for an adapter attached with PEFT, and the
+  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
+  now read from the model's parameters when that call fails. Found by new
+  tests on a real tiny PEFT model.
+- **Resuming a multi-run session keeps the SLAO merge state.** The session
+  restore ran before the SLAO merger existed, so a resumed session dropped
+  its saved merge accumulator and started merging again from its first run.
+
 ### Added
 
 - **Experimental: block-coordinate full fine-tuning** (`--full-ft-engine block`,

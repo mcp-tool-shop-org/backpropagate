@@ -123,6 +123,25 @@ class TestOptimizerGuardRails:
         opt._deactivate()  # nothing active: returns without touching state
         assert all(p.requires_grad for p in opt.model.parameters())  # original flags restored
 
+    def test_step_closure_is_evaluated_with_grad_enabled_and_its_loss_returned(self):
+        model = tiny_llama(layers=2)
+        opt = be.BlockCoordinateOptimizer(model, lr=0.05, switch_block_every=1)
+        ids = torch.randint(3, 64, (2, 8), generator=torch.Generator().manual_seed(0))
+        seen = []
+        first_visit = opt.visit
+
+        def closure():
+            seen.append(torch.is_grad_enabled())  # step() is no_grad; the closure must re-enable it
+            loss = model(input_ids=ids, labels=ids).loss
+            loss.backward()
+            return loss
+
+        returned = opt.step(closure)
+        assert seen == [True]
+        assert isinstance(returned, torch.Tensor) and returned.item() > 0
+        assert opt.global_step == 1
+        assert opt.visit == first_visit + 1  # switch_block_every=1 moved to the next block
+
     def test_step_after_finalize_is_refused(self):
         opt = self._opt()
         opt.finalize()

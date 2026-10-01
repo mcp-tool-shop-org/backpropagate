@@ -52,16 +52,48 @@ class PathTraversalError(ValueError):
 
     code: str = "INPUT_PATH_TRAVERSAL"
 
-    def __init__(self, path: str, allowed_base: str | None = None):
+    def __init__(
+        self,
+        path: str,
+        allowed_base: str | None = None,
+        reason: str | None = None,
+    ):
         self.path = path
         self.allowed_base = allowed_base
 
-        if allowed_base:
+        if reason:
+            # The path could not be resolved (a symlink loop, a path through a
+            # file), so it cannot be shown to stay inside the base: refused.
+            message = f"Path '{path}' cannot be resolved safely: {reason}"
+        elif allowed_base:
             message = f"Path '{path}' escapes allowed directory '{allowed_base}'"
         else:
             message = f"Path traversal detected in: {path}"
 
         super().__init__(message)
+
+
+def _resolve_or_refuse(
+    path: Path,
+    user_path: str | Path,
+    allowed_base: str | Path | None,
+) -> Path:
+    """``path.resolve()``, with a resolution failure turned into a refusal.
+
+    Before CPython 3.13, ``Path.resolve()`` raises ``RuntimeError`` on a symlink
+    loop, and on Windows an ``OSError`` for a path that runs through a file. A
+    path that cannot be resolved cannot be shown to stay inside a boundary, so
+    it fails closed with :class:`PathTraversalError` (the original error is
+    chained as ``__cause__``) instead of leaking a raw ``RuntimeError``.
+    """
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise PathTraversalError(
+            str(user_path),
+            str(allowed_base) if allowed_base is not None else None,
+            reason=f"{type(exc).__name__}: {exc}",
+        ) from exc
 
 
 def safe_path(
@@ -105,7 +137,10 @@ def safe_path(
     Raises:
         PathTraversalError: If the path escapes ``allowed_base``, or — when
             no ``allowed_base`` is supplied — if it contains ``..`` AND is
-            absolute, OR resolves outside the current working directory.
+            absolute, OR resolves outside the current working directory. Also
+            raised (with the original error as ``__cause__``) when the path
+            cannot be resolved at all, e.g. a symlink loop: a path that cannot
+            be resolved cannot be shown to stay inside the boundary.
         FileNotFoundError: If ``must_exist=True`` and the path does not exist.
         ValueError: If ``allow_relative=False`` and the path is relative.
 
@@ -126,11 +161,11 @@ def safe_path(
         raise ValueError(f"Relative paths not allowed: {user_path}")
 
     # Resolve to absolute path
-    resolved = path.resolve()
+    resolved = _resolve_or_refuse(path, user_path, allowed_base)
 
     # Check path traversal against allowed base
     if allowed_base is not None:
-        base_resolved = Path(allowed_base).resolve()
+        base_resolved = _resolve_or_refuse(Path(allowed_base), user_path, allowed_base)
 
         try:
             # This will raise ValueError if resolved is not relative to base_resolved

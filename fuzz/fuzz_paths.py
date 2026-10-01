@@ -45,7 +45,7 @@ import os
 import sys
 from pathlib import Path
 
-from fuzz_common import STRICT, Provider, instrument, main, patched_environ, scratch_dir
+from fuzz_common import Provider, instrument, main, patched_environ, scratch_dir
 
 with instrument(__name__ == "__main__"):
     from backpropagate.security import PathTraversalError, safe_path
@@ -109,7 +109,7 @@ def _candidate(p: Provider, anchors: tuple[str, ...]) -> str:
     return p.pick(anchors) + p.tokens(PATH_VOCAB, 8, PATH_SEPS) + (p.text(6) if p.bool() else "")
 
 
-def check_safe_path_with_base(p: Provider, strict: bool = False) -> None:
+def check_safe_path_with_base(p: Provider) -> None:
     t = tree()
     base = t["base"]
     anchors = (f"{base}/", str(base), f"{base}/sub/", "", "/", f"{t['scratch']}/", f"{t['outside']}/")
@@ -117,15 +117,15 @@ def check_safe_path_with_base(p: Provider, strict: bool = False) -> None:
 
     try:
         out = safe_path(cand, allowed_base=base)
-    except PathTraversalError:
+    except PathTraversalError as exc:
+        if exc.__cause__ is not None:
+            # Unresolvable (a symlink loop, a path through a file): refused
+            # because it cannot be shown to stay inside; no oracle for it.
+            assert isinstance(exc.__cause__, (OSError, RuntimeError))
+            return
         accepted = False
     except ValueError:
         assert "\x00" in cand, f"unexpected ValueError for {cand!r}"
-        return
-    except (OSError, RuntimeError) as exc:
-        # Known finding F7: resolution errors (a path through a file, a symlink
-        # loop) escape as a raw OSError / RuntimeError on some platforms.
-        assert not strict, f"safe_path leaked {exc!r} for {cand!r}"
         return
     else:
         accepted = True
@@ -141,7 +141,7 @@ def check_safe_path_with_base(p: Provider, strict: bool = False) -> None:
         )
 
 
-def check_safe_path_no_base(p: Provider, strict: bool = False) -> None:
+def check_safe_path_no_base(p: Provider) -> None:
     t = tree()
     anchors = (f"{t['base']}/", "", "/", "./", "../", f"{t['outside']}/")
     cand = _candidate(p, anchors)
@@ -151,15 +151,13 @@ def check_safe_path_no_base(p: Provider, strict: bool = False) -> None:
 
     try:
         out = safe_path(cand, must_exist=must_exist, allow_relative=relative_ok)
-    except PathTraversalError:
-        assert ".." in cand, f"{cand!r} rejected as traversal without any '..'"
+    except PathTraversalError as exc:
+        assert ".." in cand or exc.__cause__ is not None, (
+            f"{cand!r} rejected as traversal without any '..'"
+        )
         return
     except FileNotFoundError:
         assert must_exist
-        return
-    except (OSError, RuntimeError) as exc:
-        # Known finding F7 (see check_safe_path_with_base).
-        assert not strict, f"safe_path leaked {exc!r} for {cand!r}"
         return
     except ValueError as exc:
         assert "\x00" in cand or (not relative_ok and not Path(cand).is_absolute()), (
@@ -246,13 +244,13 @@ def check_forbidden_output_base(p: Provider) -> None:
 # --------------------------------------------------------------------------
 
 
-def check_paths(data: bytes, strict: bool = False) -> None:
+def check_paths(data: bytes) -> None:
     p = Provider(data)
     mode = p.int_in_range(0, 3)
     if mode == 0:
-        check_safe_path_with_base(p, strict=strict)
+        check_safe_path_with_base(p)
     elif mode == 1:
-        check_safe_path_no_base(p, strict=strict)
+        check_safe_path_no_base(p)
     elif mode == 2:
         check_sanitize_filename(p)
     else:
@@ -260,7 +258,7 @@ def check_paths(data: bytes, strict: bool = False) -> None:
 
 
 def TestOneInput(data: bytes) -> None:
-    check_paths(data, strict=STRICT)
+    check_paths(data)
 
 
 if __name__ == "__main__":

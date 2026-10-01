@@ -197,27 +197,6 @@ class TestKnownFindings:
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
 
-    @pytest.mark.xfail(
-        sys.version_info < (3, 13),
-        raises=RuntimeError,
-        strict=True,
-        reason="F7: safe_path leaks RuntimeError on a symlink loop (pathlib raises before 3.13)",
-    )
-    def test_f7_safe_path_turns_a_symlink_loop_into_a_clean_error(self, tmp_path):
-        from backpropagate.security import PathTraversalError, safe_path
-
-        base = tmp_path / "base"
-        base.mkdir()
-        try:
-            os.symlink("loop_b", base / "loop_a")
-            os.symlink("loop_a", base / "loop_b")
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks unavailable")
-        try:
-            safe_path(base / "loop_a", allowed_base=base)
-        except (PathTraversalError, FileNotFoundError):
-            pass
-
     @pytest.mark.xfail(strict=True, reason="F8: a space in the user name leaves the surname in the text")
     def test_f8_redact_paths_hides_a_two_word_user_name(self):
         from backpropagate.ui_security import _redact_paths
@@ -355,6 +334,56 @@ class TestFixedFindings:
         unique, removed = deduplicate_exact(rows)
         assert removed == 1
         assert [r["text"] for r in unique] == ["\ud800", "\udc00", "�", "?"]
+
+
+    def test_f7_safe_path_turns_a_symlink_loop_into_a_clean_error(self, tmp_path):
+        from backpropagate.security import PathTraversalError, safe_path
+
+        base = tmp_path / "base"
+        base.mkdir()
+        try:
+            os.symlink("loop_b", base / "loop_a")
+            os.symlink("loop_a", base / "loop_b")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable")
+        # CPython < 3.13 raises RuntimeError from Path.resolve(); 3.13+ resolves
+        # a loop leniently. Either way only PathTraversalError may come out.
+        try:
+            safe_path(base / "loop_a", allowed_base=base)
+        except PathTraversalError as exc:
+            assert isinstance(exc.__cause__, (OSError, RuntimeError))
+        try:
+            safe_path(base / "loop_a" / "x")
+        except PathTraversalError as exc:
+            assert isinstance(exc.__cause__, (OSError, RuntimeError))
+
+    @pytest.mark.parametrize(
+        "error",
+        [RuntimeError("Symlink loop from 'x'"), NotADirectoryError(20, "Not a directory")],
+    )
+    @pytest.mark.parametrize("with_base", [True, False])
+    def test_f7_a_resolution_failure_fails_closed(self, monkeypatch, tmp_path, error, with_base):
+        # Platform-independent: force Path.resolve() to fail the way pathlib does.
+        from backpropagate import security
+
+        def boom(self, strict=False):
+            raise error
+
+        monkeypatch.setattr(security.Path, "resolve", boom)
+        kwargs = {"allowed_base": tmp_path} if with_base else {}
+        with pytest.raises(security.PathTraversalError, match="cannot be resolved safely") as info:
+            security.safe_path("anything", **kwargs)
+        assert info.value.__cause__ is error
+        assert info.value.code == "INPUT_PATH_TRAVERSAL"
+        assert isinstance(info.value, ValueError)  # the documented ValueError family
+
+    def test_f7_ordinary_paths_are_unchanged(self, tmp_path):
+        from backpropagate.security import PathTraversalError, safe_path
+
+        (tmp_path / "sub").mkdir()
+        assert safe_path(tmp_path / "sub", allowed_base=tmp_path) == (tmp_path / "sub").resolve()
+        with pytest.raises(PathTraversalError, match="escapes allowed directory"):
+            safe_path(tmp_path / ".." / "elsewhere", allowed_base=tmp_path)
 
 
 class TestPlumbing:

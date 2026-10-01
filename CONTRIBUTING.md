@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Backpropagate. This document cove
 
 - **Fix a Stage-A or Stage-B finding from a dogfood-swarm audit.** Each release has a `swarms/` JSON corpus under `dogfood-labs/swarms/`; pick a MEDIUM/LOW item nobody's claimed and submit a PR with the fix + a targeted regression test. Wave audit JSON is the canonical "good first issue" board for this repo.
 - **Add a recipe to the handbook.** If you used Backpropagate to do something the [Recipes page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/recipes/) doesn't yet cover, write up the paste-and-run version. Even a 15-line recipe + 4 sentences of context is high-leverage.
-- **Add a test for a corner you noticed wasn't covered.** Coverage floor is 50%, but several files sit at 60–80% and there are real gaps. `pytest --cov=backpropagate --cov-report=html` then `open htmlcov/index.html` shows you which lines are uncovered.
+- **Add a test for a corner you noticed wasn't covered.** Line + branch coverage is about 98.5% and CI enforces a 90% floor, so remaining gaps are mostly GPU-only paths; a behaviour test that would have caught a real bug is worth more than another covered line. `pytest --cov=backpropagate --cov-report=html` then `open htmlcov/index.html` shows you which lines are uncovered.
 - **Triage a stale issue or open Discussion.** Repro the bug, attach a minimal example, and confirm the error code — that drops the maintainer's triage cost dramatically.
 
 If you're not sure what to pick up, start a thread in [Discussions → Ideas](https://github.com/mcp-tool-shop-org/backpropagate/discussions/categories/ideas) and the maintainer will point at something matched to your interests.
@@ -15,7 +15,7 @@ If you're not sure what to pick up, start a thread in [Discussions → Ideas](ht
 
 ### Prerequisites
 
-- Python 3.10+ (3.11 is the most-tested floor; 3.10 reaches upstream EOL October 2026 and will be dropped in v1.4)
+- Python 3.10+ (3.11 is the most-tested floor; 3.10 reaches upstream EOL October 2026 and will be dropped in the first release after that)
 - CUDA-capable GPU (for full testing — many tests are CPU-only and run fine on macOS / non-GPU Linux for triage)
 - Git
 
@@ -38,6 +38,10 @@ pip install -e ".[dev,full]"
 pre-commit install
 ```
 
+### Tests are part of every change
+
+New functionality ships with tests that fail without it, and every bug fix ships with a regression test that reproduces the bug. Tests check behaviour (return values, error codes, files written), not just that lines ran; mock only at real boundaries (GPU, network, external tools) and prefer the tiny CPU models in `tests/helpers/tiny_models.py`. CI enforces a 90% line + branch coverage floor (`[tool.coverage.report].fail_under` in `pyproject.toml`).
+
 ### The local dev loop
 
 The four commands the CI runs on every PR — run them locally before pushing and you'll catch ~95% of CI failures:
@@ -49,7 +53,7 @@ pytest tests/ -m "not gpu and not slow and not integration" # tests (~30s on a 1
 python scripts/check_doc_drift.py                           # doc-drift gate (~1s)
 ```
 
-The full suite (`pytest tests/`) runs ~2000 tests in 30–60 seconds; the `not gpu and not slow and not integration` filter skips ~20 GPU-bound tests that need a CUDA card. For coverage: `pytest --cov=backpropagate --cov-report=term-missing tests/` (or `html` for the rendered surface). If you just touched one file, `pytest tests/test_<that_file>.py` runs in <5 seconds.
+The full suite (`pytest tests/`) runs about 7,100 tests, a minute or two with `-n auto` (pytest-xdist); the `not gpu and not slow and not integration` filter skips ~20 GPU-bound tests that need a CUDA card. For coverage: `pytest --cov=backpropagate --cov-report=term-missing tests/` (or `html` for the rendered surface). If you just touched one file, `pytest tests/test_<that_file>.py` runs in <5 seconds.
 
 The drift gate is load-bearing — it cross-checks env var names, CLI flag names, error codes, and a few specific value drifts across `backpropagate/**/*.py`, the handbook (`site/src/content/docs/handbook/*.md`), and `llms.txt`. If it fires, the message names which surface is out of sync. Per the v1.3 [[grep-all-instances-when-fixing-pattern]] doctrine, when you fix one drift instance, grep the rest of the repo for siblings — Wave 3.5 found 4 sibling drift sites across 5 handbook files via this approach.
 

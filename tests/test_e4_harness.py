@@ -796,7 +796,7 @@ class TestOrchestrator:
         assert pod_e4._require_gates(self.cfg(tmp_path, dry_run=True)) is None
 
     def test_defaults_are_the_pre_registered_ones(self):
-        assert pod_e4.CAPS_USD == {"3b": 4.00, "7b": 4.50}
+        assert pod_e4.CAPS_USD == {"3b": 4.80, "7b": 4.50}  # 3B amended by the Director, 2026-10-01
         assert pod_e4.MODELS == {"3b": "Qwen/Qwen2.5-3B", "7b": "Qwen/Qwen2.5-7B"}
 
     def test_stage_skips_existing_receipts_and_drops_the_tail_when_the_budget_runs_out(

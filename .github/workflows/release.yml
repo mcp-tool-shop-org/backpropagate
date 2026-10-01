@@ -32,30 +32,39 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Node 24 (LTS) rather than 22 because of npm, not because of Node. npm
+      # >= 11.5 is required for OIDC trusted-publishing auth; Node 22 bundles
+      # npm 10.9, which signs Sigstore provenance fine but cannot negotiate the
+      # OIDC auth path -- the PUT returns a misleading 404 "not in this
+      # registry" (see memory: npm-115-required-for-oidc). Node 24 bundles npm
+      # 11.x (24.21.0 ships 11.19.0), so no separate npm install is needed.
+      #
+      # This replaces a sandbox `npm install npm@latest`, which could not be
+      # pinned: a committed lockfile for the npm CLI drags npm's bundled
+      # dependencies into the repo (brace-expansion, undici, ip-address), where
+      # Trivy flags them and no published npm release has fixed versions yet.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install pinned npm (>=11.5) in sandbox for OIDC trusted-publishing auth
+      - name: Require npm >= 11.5 for OIDC trusted-publishing auth
         run: |
-          # Node 22 ships npm 10.9, which signs Sigstore provenance fine but
-          # cannot negotiate the OIDC auth path for trusted publishing — the
-          # PUT returns a misleading 404 "not in this registry".
-          #
-          # An in-place `npm install -g npm@latest` races on Node 22's bundled
-          # npm 10.9 arborist rebuild and breaks irrecoverably (MODULE_NOT_FOUND:
-          # promise-retry). Sandbox install + PATH shadow avoids the race.
-          # See memory: npm-115-required-for-oidc
-          #
-          # The sandbox is installed from a committed lockfile with `npm ci`
-          # (.github/release-tools/: npm itself plus the CycloneDX npm SBOM
-          # tool), so the npm that holds the OIDC publish credential is the
-          # exact, integrity-checked build that was committed rather than
-          # whatever `npm@latest` is on release day. To move it:
-          #   cd .github/release-tools && npm install npm@<version> --save-exact
-          # and commit package.json + package-lock.json together.
+          NPM_VERSION="$(npm --version)"
+          echo "node $(node --version), npm ${NPM_VERSION}"
+          if ! node -e 'const [maj, min] = process.argv[1].split(".").map(Number); process.exit(maj > 11 || (maj === 11 && min >= 5) ? 0 : 1)' "${NPM_VERSION}"; then
+            echo "::error::npm ${NPM_VERSION} cannot do OIDC trusted publishing (needs >= 11.5). Use a Node release that bundles a newer npm."
+            exit 1
+          fi
+
+      # The CycloneDX npm SBOM tool, from a committed lockfile with `npm ci`
+      # (.github/release-tools/) instead of `npx --yes`, which ran whatever
+      # version was newest on release day. To move it:
+      #   cd .github/release-tools && npm install @cyclonedx/cyclonedx-npm@<version> --save-exact
+      # and commit package.json + package-lock.json together.
+      - name: Install pinned release tools
+        run: |
           SANDBOX="$HOME/.release-tools"
           mkdir -p "$SANDBOX"
           cp .github/release-tools/package.json .github/release-tools/package-lock.json "$SANDBOX/"
@@ -63,7 +72,6 @@ jobs:
           npm ci --no-audit --no-fund --silent
           popd >/dev/null
           echo "$SANDBOX/node_modules/.bin" >> "$GITHUB_PATH"
-          "$SANDBOX/node_modules/.bin/npm" --version
 
       - name: Verify tag matches package.json version
         run: |
@@ -150,7 +158,7 @@ jobs:
           # Optional: capture the npm shim's tree too (the shim declares no
           # dependencies; still useful for the audit trail). cyclonedx-npm
           # comes from the committed lockfile in .github/release-tools/ (put on
-          # PATH by the sandbox step above), not from `npx --yes`.
+          # PATH by the "Install pinned release tools" step), not from `npx --yes`.
           if command -v cyclonedx-npm >/dev/null 2>&1 && [ -f package.json ]; then
             # The tool wants evidence of an installed tree (a lockfile or a
             # node_modules/). The shim has no dependencies, so an empty

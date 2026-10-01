@@ -2,8 +2,9 @@
 
 **Status**: Living document; updated 2026-05-23 (v1.3 Wave 1 Stage A).
 
-**Current floor**: `fail_under = 50` in coverage config. Per-module gaps below
-are advisory; the floor is what CI enforces.
+**Current floor**: `fail_under = 90` in coverage config (raised from 50 on
+2026-10-01, when line+branch coverage reached 98.5% locally). Per-module gaps
+below are advisory; the floor is what CI enforces.
 
 **v1.1.0 → v1.2.0 migration note** — the legacy `ui.py` + `theme.py` Gradio
 modules were preserved as `ui_gradio_legacy.py` through v1.1.x and DELETED in

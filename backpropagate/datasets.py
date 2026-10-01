@@ -2208,12 +2208,15 @@ class PerplexityFilter:
                 "pip install transformers torch"
             )
 
+        from .config import settings
+
         logger.info(f"Loading perplexity model: {self.model_name}")
 
         # B-017: retry on transient HF Hub failures (5xx, 429, timeouts).
         self._tokenizer = _retry_hf_call(
             AutoTokenizer.from_pretrained,
             self.model_name,
+            trust_remote_code=settings.model.trust_remote_code,
             _label=f"perplexity_tokenizer:{self.model_name}",
         )
         if self._tokenizer.pad_token is None:
@@ -2225,6 +2228,7 @@ class PerplexityFilter:
         self._model = _retry_hf_call(
             AutoModelForCausalLM.from_pretrained,
             self.model_name,
+            trust_remote_code=settings.model.trust_remote_code,
             _label=f"perplexity_model:{self.model_name}",
             **_dtype_kwarg(_dtype),
         )

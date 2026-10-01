@@ -870,7 +870,12 @@ def _load_model_and_tokenizer(run: dict[str, Any]) -> tuple[Any, Any]:
         import torch  # lazy
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # The base model must load exactly as training loaded it, so honour
+        # the same single setting (default False).
+        from backpropagate.config import settings
+
+        trust = settings.model.trust_remote_code
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust)
         # A missing pad token breaks batched tokenization on many base models;
         # fall back to EOS, which is the conventional eval-time choice.
         if getattr(tokenizer, "pad_token", None) is None:
@@ -879,6 +884,7 @@ def _load_model_and_tokenizer(run: dict[str, Any]) -> tuple[Any, Any]:
         base_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=getattr(torch, "float16", None),
+            trust_remote_code=trust,
         )
 
         model: Any = base_model
@@ -899,6 +905,13 @@ def _load_model_and_tokenizer(run: dict[str, Any]) -> tuple[Any, Any]:
             )
         return model, tokenizer
     except Exception as exc:
+        from backpropagate.exceptions import (
+            TrustRemoteCodeRequiredError,
+            is_trust_remote_code_error,
+        )
+
+        if is_trust_remote_code_error(exc):
+            raise TrustRemoteCodeRequiredError(model_name) from exc
         raise TrainingError(
             f"Failed to load model/adapter for evaluation of run "
             f"{run.get('run_id')!r} (model={model_name!r}, "

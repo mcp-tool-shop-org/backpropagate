@@ -18,13 +18,20 @@ Features:
 - Windows-safe defaults baked in
 """
 
+import dataclasses
+import json
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass as dc_dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from types import UnionType
+from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
+
+_T = TypeVar("_T")
 
 
 def _safe_pkg_version() -> str:
@@ -316,8 +323,11 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         max_seq_length: int = 2048
         # Data type for training
         dtype: str | None = None  # Auto-detect (bf16 on Ampere+)
-        # Trust remote code from HuggingFace
-        trust_remote_code: bool = True
+        # Execute custom Python shipped inside a HuggingFace model repo
+        # (``trust_remote_code`` in transformers). Default OFF: loading a repo
+        # that needs it raises CONFIG_TRUST_REMOTE_CODE_REQUIRED naming the
+        # opt-in (``BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true``).
+        trust_remote_code: bool = False
 
     class LoRAConfig(BaseSettings):
         """LoRA/QLoRA configuration.
@@ -789,8 +799,9 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         # Dataset split
         dataset_split: str = "train_sft"
-        # Number of samples (0 = all)
-        max_samples: int = 1000
+        # Number of samples (0 = all). Default 0 since 1.7.2: it was 1000,
+        # which silently trained on 1000 random rows of any larger dataset.
+        max_samples: int = 0
         # Text column name
         text_column: str = "text"
         # Chat template format (chatml, llama, alpaca, sharegpt)
@@ -1084,30 +1095,135 @@ else:
     # Fallback implementation using dataclasses
     from dataclasses import dataclass, field
 
-    def _get_env(key: str, default: str | None = None) -> str | None:
-        return os.environ.get(f"BACKPROPAGATE_{key}", default)
+    # ------------------------------------------------------------------
+    # Environment binding for the dataclass fallback.
+    #
+    # The pydantic-settings branch above binds BACKPROPAGATE_<GROUP>__<FIELD>
+    # for free. ``pydantic`` / ``pydantic-settings`` live in the optional
+    # ``[validation]`` extra, so a plain ``pip install backpropagate`` lands
+    # HERE -- and this branch used to hard-code its defaults, silently
+    # ignoring every documented BACKPROPAGATE_* configuration variable.
+    # ``_env_dataclass`` gives each config dataclass the same contract:
+    #   * variable name  = <prefix><FIELD>, matched case-insensitively
+    #   * precedence     = explicit constructor argument > environment > default
+    #   * empty string   = ignored (pydantic ``env_ignore_empty=True``)
+    #   * coercion       = bool (true/false/1/0/yes/no/on/off/t/f/y/n), int,
+    #                      float, str, and JSON lists -- same as pydantic
+    #   * bad value      = structured CONFIG_INVALID_SETTING naming the
+    #                      variable, never a silent fallback to the default
+    # tests/test_config_env_fallback.py asserts field-by-field parity with
+    # the pydantic branch.
+    # ------------------------------------------------------------------
+    _ENV_TRUE = frozenset({"1", "true", "t", "yes", "y", "on"})
+    _ENV_FALSE = frozenset({"0", "false", "f", "no", "n", "off"})
 
-    def _get_env_int(key: str, default: int) -> int:
-        val = _get_env(key)
-        return int(val) if val else default
+    def _coerce_env_value(raw: str, annotation: Any) -> Any:
+        """Coerce ``raw`` to ``annotation``; raise ``ValueError(expected)``."""
+        if get_origin(annotation) in (Union, UnionType):
+            members = [a for a in get_args(annotation) if a is not type(None)]
+        else:
+            members = [annotation]
+        text = raw.strip()
+        if any(m is list or get_origin(m) is list for m in members):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                if all(isinstance(i, str) for i in parsed):
+                    return parsed
+                raise ValueError('a JSON list of strings, e.g. ["a", "b"]')
+            if str in members:
+                return raw  # e.g. target_modules="all-linear"
+            raise ValueError('a JSON list of strings, e.g. ["a", "b"]')
+        if bool in members:
+            lowered = text.lower()
+            if lowered in _ENV_TRUE:
+                return True
+            if lowered in _ENV_FALSE:
+                return False
+            raise ValueError("a boolean (true/false, 1/0, yes/no, on/off)")
+        if int in members:
+            try:
+                return int(text)
+            except ValueError:
+                pass
+            try:
+                as_float = float(text)
+            except ValueError:
+                raise ValueError("an integer") from None
+            if as_float.is_integer():
+                return int(as_float)
+            raise ValueError("an integer")
+        if float in members:
+            try:
+                return float(text)
+            except ValueError:
+                raise ValueError("a number") from None
+        return raw
 
-    def _get_env_float(key: str, default: float) -> float:
-        val = _get_env(key)
-        return float(val) if val else default
+    def _env_dataclass(prefix: str) -> Callable[[type[_T]], type[_T]]:
+        """Class decorator: ``@dataclass`` plus BACKPROPAGATE_* env binding."""
 
-    def _get_env_bool(key: str, default: bool) -> bool:
-        val = _get_env(key)
-        return val.lower() in ("true", "1", "yes") if val else default
+        def wrap(cls: type[_T]) -> type[_T]:
+            cls = dataclass(cls)
+            original_init = cls.__init__  # type: ignore[misc]
+            all_init_fields = [
+                f for f in dataclasses.fields(cls) if f.init  # type: ignore[arg-type]
+            ]
+            all_init_names = [f.name for f in all_init_fields]
+            # Annotations may be strings (``from __future__ import
+            # annotations``), so resolve them against this module's namespace.
+            hints = get_type_hints(cls, globalns=globals())
+            # Nested section dataclasses (Settings.model, ...) bind through
+            # their own prefix; only scalar fields bind here.
+            scalar_fields = [
+                f for f in all_init_fields if not dataclasses.is_dataclass(hints[f.name])
+            ]
 
-    @dataclass
+            @wraps(original_init)
+            def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
+                explicit = set(all_init_names[: len(args)]) | set(kwargs)
+                environ = {k.upper(): (k, v) for k, v in os.environ.items()}
+                for f in scalar_fields:
+                    if f.name in explicit:
+                        continue
+                    hit = environ.get(f"{prefix}{f.name}".upper())
+                    if hit is None or hit[1] == "":
+                        continue
+                    try:
+                        kwargs[f.name] = _coerce_env_value(hit[1], hints[f.name])
+                    except ValueError as exc:
+                        from .exceptions import InvalidSettingError
+
+                        # Secret fields (password/jwt_secret) are ``str | None``
+                        # and accept any text, so no secret can reach here.
+                        raise InvalidSettingError(
+                            hit[0],
+                            hit[1],
+                            str(exc),
+                            suggestion=(
+                                f"Fix or unset {hit[0]}; unset falls back to "
+                                "the built-in default."
+                            ),
+                        ) from None
+                original_init(self, *args, **kwargs)
+
+            cls.__init__ = __init__  # type: ignore[method-assign,misc]
+            return cls
+
+        return wrap
+
+    @_env_dataclass("BACKPROPAGATE_MODEL__")
     class ModelConfig:  # type: ignore[no-redef]
         name: str = "Qwen/Qwen2.5-7B-Instruct"  # Official model, Unsloth handles 4-bit
         load_in_4bit: bool = True
         max_seq_length: int = 2048
         dtype: str | None = None
-        trust_remote_code: bool = True
+        # Default OFF; parity with the pydantic branch above.
+        trust_remote_code: bool = False
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_LORA__")
     class LoRAConfig:  # type: ignore[no-redef]
         # v1.3 BACKEND-1: defaults bumped to "quality" preset (rank 256 +
         # all-linear). See BaseSettings branch docstring above for the
@@ -1127,7 +1243,7 @@ else:
         # adapter the same way. alpha/sqrt(r) vs alpha/r; zero inference cost.
         use_rslora: bool = False
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_TRAINING__")
     class TrainingConfig:  # type: ignore[no-redef]
         per_device_train_batch_size: int = 2
         gradient_accumulation_steps: int = 4
@@ -1316,11 +1432,11 @@ else:
                     ),
                 )
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_DATA__")
     class DataConfig:  # type: ignore[no-redef]
         dataset_name: str = "HuggingFaceH4/ultrachat_200k"
         dataset_split: str = "train_sft"
-        max_samples: int = 1000
+        max_samples: int = 0  # 0 = all rows (was 1000 before 1.7.2)
         text_column: str = "text"
         chat_format: str = "chatml"
         pre_tokenize: bool = True
@@ -1335,14 +1451,14 @@ else:
         min_trace_tokens: int = 8
         max_trace_tokens: int = 8192
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_UI__")
     class UIConfig:  # type: ignore[no-redef]
         port: int = 7862
         host: str = "127.0.0.1"
         share: bool = False
         auto_open: bool = True
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_WINDOWS__")
     class WindowsConfig:  # type: ignore[no-redef]
         dataloader_num_workers: int = 0
         tokenizers_parallelism: bool = False
@@ -1350,7 +1466,7 @@ else:
         cuda_launch_blocking: bool = False
         pre_tokenize: bool = True
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_MULTIRUN__")
     class MultiRunSettings:  # type: ignore[no-redef]
         """Dataclass fallback for MultiRunSettings — see BRIDGE-B-004 above."""
 
@@ -1360,7 +1476,7 @@ else:
         continue_from_previous: bool = True
         save_intermediate: bool = True
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_SECURITY__")
     class SecurityConfig:  # type: ignore[no-redef]
         """Security configuration (fallback without pydantic-settings)."""
         require_auth: bool = False
@@ -1393,7 +1509,7 @@ else:
                 warnings.append("SECURITY: jwt_secret not set")
             return warnings
 
-    @dataclass
+    @_env_dataclass("BACKPROPAGATE_")
     class Settings:  # type: ignore[no-redef]
         model: ModelConfig = field(default_factory=ModelConfig)
         training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -1781,8 +1897,12 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     # ----- v1.3 BACKEND-9: Qwen-3.5-4B (Apache 2.0) -----
     "qwen3.5-4b": ModelPreset(
         name="qwen3.5-4b",
-        model_id="Qwen/Qwen3.5-4B-Instruct",
-        description="Qwen 3.5 4B Instruct — Apache-2.0 4B with native long context",
+        model_id="Qwen/Qwen3.5-4B",
+        description=(
+            "Qwen 3.5 4B — Apache-2.0 4B with native long context. The Hub "
+            "repo is tagged image-text-to-text; the trainer loads it text-only "
+            "(QLoRA peak 8.4 GiB measured, RTX 5090, 2026-09-30)."
+        ),
         license="Apache-2.0",
         recommended_lora_r=128,
         # Qwen 3.5 supports native long context out of the box; bump
@@ -1853,8 +1973,8 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="qwen2.5-14b",
         model_id="Qwen/Qwen2.5-14B-Instruct",
         description=(
-            "Qwen2.5 14B Instruct — ~8.5GB (QLoRA). The comfortable "
-            "daily-driver on a 32GB card; the sweet spot of the envelope."
+            "Qwen2.5 14B Instruct — QLoRA, 25.0 GiB peak measured at 4096 "
+            "context, batch 1. The daily driver on a 32GB card."
         ),
         license="Apache-2.0",
         # 14B+ tier: rank == alpha at 32 per the KB (wider rank pays off once
@@ -1863,9 +1983,10 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         recommended_max_seq_length=4096,
         recommended_packing=True,
         best_for=(
-            "The 32GB daily driver — Apache-2.0 14B QLoRA at ~8.5GB measured, "
-            "rank/alpha 32 on all-linear, paged_adamw_8bit, max_seq 4096. "
-            "Best quality-per-VRAM in the envelope tier."
+            "The 32GB daily driver — Apache-2.0 14B QLoRA, rank/alpha 32 on "
+            "all-linear, 8-bit AdamW, max_seq 4096. Measured 25.0 GiB peak "
+            "(28.1 reserved) at a full 4096 window, batch 1, RTX 5090, "
+            "2026-09-30. The 4-bit weights alone are ~8.5GB."
         ),
     ),
     # ----- v1.7: Mistral-Small-24B (Apache 2.0) — the ~24B envelope preset ---
@@ -1873,18 +1994,19 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="mistral-small-24b",
         model_id="mistralai/Mistral-Small-24B-Instruct-2501",
         description=(
-            "Mistral Small 24B Instruct (2501) — ~18GB (QLoRA). Apache-2.0 "
-            "24B that fits the 32GB envelope with headroom for 4096 context."
+            "Mistral Small 24B Instruct (2501) — QLoRA, 26.5 GiB peak "
+            "measured at 4096 context, batch 1. Apache-2.0 24B on a 32GB card."
         ),
         license="Apache-2.0",
         recommended_lora_r=32,
-        # 24B fits 4096 on a 32GB card (still ~6GB of headroom at ~18GB used).
+        # 24B fits 4096 on a 32GB card: 26.5 GiB allocated / 29.6 reserved at a
+        # full 4096 window, batch 1 (RTX 5090, 2026-09-30 preset smoke).
         recommended_max_seq_length=4096,
         recommended_packing=True,
         best_for=(
-            "Apache-2.0 24B QLoRA on a 32GB card — ~18GB measured, rank/alpha "
-            "32, paged_adamw_8bit, max_seq 4096. Strong reasoning at a size "
-            "that still leaves VRAM headroom."
+            "Apache-2.0 24B QLoRA on a 32GB card — rank/alpha 32, 8-bit "
+            "AdamW, max_seq 4096. Measured 26.5 GiB peak (29.6 reserved) at "
+            "a full 4096 window, batch 1. The 4-bit weights alone are ~18GB."
         ),
     ),
     # ----- v1.7: Qwen2.5-32B (Apache 2.0) — the 32B-class ceiling preset -----
@@ -1892,8 +2014,8 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="qwen2.5-32b",
         model_id="Qwen/Qwen2.5-32B-Instruct",
         description=(
-            "Qwen2.5 32B Instruct — ~26GB (QLoRA, max_len 2048). The top of "
-            "the 32GB envelope: it JUST fits with reduced context."
+            "Qwen2.5 32B Instruct — QLoRA, 28.8 GiB peak measured at 2048 "
+            "context, batch 1. The top of the 32GB envelope: it just fits."
         ),
         license="Apache-2.0",
         recommended_lora_r=32,
@@ -1903,9 +2025,9 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         recommended_max_seq_length=2048,
         recommended_packing=True,
         best_for=(
-            "The largest model the 32GB envelope holds — Apache-2.0 32B QLoRA "
-            "at ~26GB measured, but ONLY with max_seq dropped to 2048 and "
-            "paged_adamw_8bit. It just fits; expect zero VRAM headroom."
+            "The largest model the 32GB envelope holds — Apache-2.0 32B QLoRA, "
+            "8-bit AdamW, ONLY with max_seq at 2048. Measured 28.8 GiB peak "
+            "(30.7 reserved, ~0.65 GiB to spare) at a full 2048 window, batch 1."
         ),
     ),
 }

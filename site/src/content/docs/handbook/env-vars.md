@@ -90,7 +90,7 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_MODEL__LOAD_IN_4BIT` | `true` | 4-bit quantization at load time (saves ~50% VRAM). |
 | `BACKPROPAGATE_MODEL__MAX_SEQ_LENGTH` | `2048` | Maximum sequence length. |
 | `BACKPROPAGATE_MODEL__DTYPE` | unset (auto) | Force `bf16` / `fp16` / `fp32`. Auto-detects bf16 on Ampere+. |
-| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `true` | Whether to trust custom modeling code from HF Hub. |
+| `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE` | `false` | Whether to run custom Python code that a model's Hugging Face repository ships. Off by default since v1.7.2: a model that needs it fails with `CONFIG_TRUST_REMOTE_CODE_REQUIRED`. Set to `true` only for a repository you have read and trust. None of the curated presets need it. |
 
 ## LoRA
 
@@ -134,13 +134,20 @@ Two ways to set them: export in your shell, or put them in a `.env` file in the 
 | `BACKPROPAGATE_TRAINING__FP8` | `false` | **v1.5; verified on Blackwell in v1.6** — FP8 compute path on Blackwell (RTX 5090, sm_120) / Hopper (sm_90+) via torchao. Base projection weights in float8 (~1.4x throughput, ~60% less base memory); the LoRA adapter stays bf16 and the merge → GGUF → Ollama export still works. `mode='lora'` + `method='sft'` only; falls back to bf16 with a warning if unsupported (a broken torchao install raises `RUNTIME_FP8_UNSUPPORTED`). Needs `pip install 'backpropagate[fp8]'`. Equivalent to `--fp8` on the CLI. |
 | `BACKPROPAGATE_TRAINING__BACKEND` | `auto` | **v1.5 T3.1 (experimental — Apple-Silicon rail BUILT-BUT-UNVERIFIED)** — the compute rail. One of `auto` / `cuda` / `mlx`. `auto` (default) routes to CUDA on an NVIDIA host and to the MLX (`mlx_lm.lora`) rail on an Apple-Silicon Mac with the `[mlx]` extra — existing CUDA rigs stay byte-identical. `cuda` forces the CUDA rail; `mlx` forces the Apple-Silicon rail. MLX is LoRA SFT only in v1.5 (`method='orpo'` / `mode='full'` / `fp8=True` / multi-run rejected with `CONFIG_INVALID_SETTING`). A forced `mlx` on a non-Apple host errors with `CONFIG_INVALID_SETTING`; if the resolved rail is `mlx` but `mlx_lm` is missing, the run raises `DEP_MLX_UNAVAILABLE` (`pip install 'backpropagate[mlx]'`). Equivalent to `--backend` on the CLI. The MLX rail is built + unit-tested (mocked), pending dogfood verification on real Apple Silicon. |
 
+## Full fine-tuning offload (`--full-ft-offload`)
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `BACKPROPAGATE_OFFLOAD_PIN` | `register` | How the offload engine page-locks host memory. `register` page-locks the parameter storage in place: no copy, exact size. `pinned` uses PyTorch's pinned allocator, which made steps 3-5x faster in our runs but rounds every block up to a power of two; at 7B that pushed host RAM past 60 GiB. `none` uses ordinary pageable memory: slowest, smallest. |
+| `BACKPROPAGATE_OFFLOAD_ROUNDING` | `stochastic` | Diagnostic only. The engine keeps weights in bf16 and writes each update back with stochastic rounding. `nearest` switches to round-to-nearest, which drops most small updates, so the run stops learning. It exists to test the engine's own safety check. Leave it at the default. |
+
 ## Data
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `BACKPROPAGATE_DATA__DATASET_NAME` | `HuggingFaceH4/ultrachat_200k` | Default HF dataset when none is passed. |
 | `BACKPROPAGATE_DATA__DATASET_SPLIT` | `train_sft` | Which split to load. |
-| `BACKPROPAGATE_DATA__MAX_SAMPLES` | `1000` | Cap dataset to N samples (`0` = all). |
+| `BACKPROPAGATE_DATA__MAX_SAMPLES` | `0` | Cap the training set to N randomly chosen rows. `0` (the default) uses every row. Before v1.7.2 the default was `1000`, which silently dropped the rest of any larger dataset. |
 | `BACKPROPAGATE_DATA__TEXT_COLUMN` | `text` | Column name for raw-text datasets. |
 | `BACKPROPAGATE_DATA__CHAT_FORMAT` | `chatml` | Chat template (`chatml` / `llama` / `alpaca` / `sharegpt`). |
 | `BACKPROPAGATE_DATA__PRE_TOKENIZE` | `true` | Pre-tokenize before training (Windows-safe). |

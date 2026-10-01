@@ -188,7 +188,7 @@ class TestModelConfig:
         assert config.name == "Qwen/Qwen2.5-7B-Instruct"
         assert config.load_in_4bit is True
         assert config.max_seq_length == 2048
-        assert config.trust_remote_code is True
+        assert config.trust_remote_code is False
 
     def test_model_config_dtype_default(self):
         """ModelConfig dtype defaults to None (auto-detect)."""
@@ -283,7 +283,7 @@ class TestDataConfig:
         config = DataConfig()
         assert config.dataset_name == "HuggingFaceH4/ultrachat_200k"
         assert config.dataset_split == "train_sft"
-        assert config.max_samples == 1000
+        assert config.max_samples == 0  # 0 = all rows (1.7.2; was 1000)
         assert config.text_column == "text"
 
     def test_data_config_flags(self):

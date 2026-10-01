@@ -84,8 +84,11 @@ __all__ = [
     # Training
     "TrainingError",
     "ModelLoadError",
+    "TrustRemoteCodeRequiredError",
+    "is_trust_remote_code_error",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
+    "OffloadDoesNotFitError",
     "MLXUnavailableError",
     "FsdpUnavailableError",
     "TrainingAbortedError",
@@ -328,6 +331,20 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
         "retryable": "no",
     },
+    "CONFIG_TRUST_REMOTE_CODE_REQUIRED": {
+        "description": (
+            "Loading this model would execute Python code shipped inside the "
+            "model repository (trust_remote_code), and trust_remote_code is "
+            "off (the default)."
+        ),
+        "default_hint": (
+            "Read the repository's code first. To opt in, set "
+            "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true in the environment "
+            "(or settings.model.trust_remote_code = True in Python), or pick "
+            "a model transformers supports natively."
+        ),
+        "retryable": "no",
+    },
     "DEP_MODEL_LOAD_FAILED": {
         "description": "Failed to load the model or tokenizer from disk or HuggingFace Hub.",
         "default_hint": "Verify model name, HF token, and network access to huggingface.co.",
@@ -475,13 +492,16 @@ ERROR_CODES: dict[str, dict[str, str]] = {
             "mode='full' was selected but the target model exceeds the "
             "card-aware full fine-tuning parameter ceiling. The pure-GPU "
             "ceiling is derived from detected VRAM (16GB->4B, 24GB->5B, "
-            "32GB->6B); FSDP2 CPU-offload (--full-ft-offload) lifts it "
-            "(32GB->~8B, enabling 7B-class full-FT into 64GB host RAM)."
+            "32GB->6B). With --full-ft-offload the gate is a measured fit "
+            "check instead: host RAM ~3.73 GiB per billion params + 10.1 GiB "
+            "(7.6B -> ~38.5 GiB), and VRAM for the embedding/head + 2 layers "
+            "+ activations at the requested seq length."
         ),
         "default_hint": (
             "If the model fits the FSDP2 CPU-offload ceiling, add "
             "--full-ft-offload (Python: full_ft_offload=True) to spill "
-            "params+optimizer into host RAM (slower, needs ~64GB RAM). "
+            "params into host RAM (slower; ~3.73 GiB of host RAM per "
+            "billion params + 10.1 GiB). "
             "Otherwise re-run with mode='lora' (the default) — LoRA/QLoRA "
             "fits 7B-34B on a 32GB card — or switch to a smaller model. "
             "See handbook/full-fine-tuning.md for the 4-addend VRAM math + "
@@ -988,6 +1008,11 @@ class ModelLoadError(TrainingError):
     behave byte-identically to pre-Stage-C ModelLoadError.
     """
 
+    # Overridden by subclasses that carry their own stable code (see
+    # TrustRemoteCodeRequiredError).
+    _CODE = "DEP_MODEL_LOAD_FAILED"
+    _RETRYABLE = True
+
     def __init__(
         self,
         model_name: str,
@@ -1018,13 +1043,80 @@ class ModelLoadError(TrainingError):
             f"Failed to load model '{model_name}': {reason}",
             details=details,
             suggestion=effective_hint,
-            code="DEP_MODEL_LOAD_FAILED",
+            code=self._CODE,
             # Most ModelLoadError instances come from transient network
             # failures (HF Hub 503 / timeout). Callers may inspect
             # ``details['reason']`` or ``cause_category`` to decide whether
             # a retry is worth attempting (e.g. auth/not_found ⇒ don't retry).
-            retryable=True,
+            retryable=self._RETRYABLE,
         )
+
+
+class TrustRemoteCodeRequiredError(ModelLoadError):
+    """The model repo needs ``trust_remote_code`` and the setting is off.
+
+    Raised instead of a bare transformers ``ValueError`` when loading a model
+    whose repository ships custom modeling code (``auto_map`` in config.json)
+    while ``settings.model.trust_remote_code`` is False (the default).
+    Subclasses :class:`ModelLoadError` so existing handlers still
+    catch it; carries its own stable code ``CONFIG_TRUST_REMOTE_CODE_REQUIRED``
+    and is not retryable (only the operator can opt in).
+
+    The message names the model and says that loading it would execute code
+    from the model repository; the suggestion gives the exact opt-in.
+    """
+
+    _CODE = "CONFIG_TRUST_REMOTE_CODE_REQUIRED"
+    _RETRYABLE = False
+
+    def __init__(self, model_name: str):
+        import os
+
+        where = (
+            f"the files in {os.path.abspath(model_name)}"
+            if os.path.isdir(model_name)
+            else f"https://huggingface.co/{model_name}"
+        )
+        super().__init__(
+            model_name,
+            (
+                "loading it would execute Python code from the model "
+                "repository (custom modeling code), and trust_remote_code is "
+                "off (the default)"
+            ),
+            suggestion=(
+                f"Read the code first ({where}). To opt in, set "
+                "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true in the "
+                "environment (this also applies to the CLI, e.g. "
+                "`BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true backprop train ...`), "
+                "or in Python: `from backpropagate.config import settings; "
+                "settings.model.trust_remote_code = True` before creating the "
+                "Trainer. Otherwise pick a model transformers supports "
+                "natively."
+            ),
+        )
+
+
+def is_trust_remote_code_error(exc: BaseException) -> bool:
+    """True when ``exc`` (or its cause chain) is transformers' "needs
+    trust_remote_code" refusal.
+
+    transformers raises ``ValueError`` from ``resolve_trust_remote_code`` when
+    a repo has custom code and the caller passed ``trust_remote_code=False``
+    (4.46 .. 5.x word it differently but every variant names the
+    ``trust_remote_code`` argument). Backpropagate always passes an explicit
+    bool, so transformers never falls into its interactive
+    "Do you wish to run the custom code? [y/N]" prompt -- a non-interactive
+    run cannot hang on it. Unsloth may re-wrap the error, hence the chain walk.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ValueError) and "trust_remote_code" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 class FullFinetuneModelTooLargeError(TrainingError):
@@ -1096,8 +1188,8 @@ class FullFinetuneModelTooLargeError(TrainingError):
                 f"~{offload_ceiling_billions:.1f}B with FSDP2 CPU-offload. "
                 f"Enable --full-ft-offload (Python: full_ft_offload=True) to "
                 f"spill params + optimizer state into host RAM and full-fine-tune "
-                f"this model (slower, PCIe/CPU-bandwidth-bound, needs ~64GB host "
-                f"RAM), OR re-run with mode='lora' (the default) for a LoRA adapter."
+                f"this model (slower, PCIe-bound; host RAM is checked at train time), "
+                f"OR re-run with mode='lora' (the default) for a LoRA adapter."
             )
         else:
             # Exceeds even the offload ceiling, or offload is already active:
@@ -1131,6 +1223,68 @@ class FullFinetuneModelTooLargeError(TrainingError):
             message,
             details=details,
             suggestion=suggestion,
+            code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
+            retryable=False,
+        )
+
+
+class OffloadDoesNotFitError(FullFinetuneModelTooLargeError):
+    """full_ft_offload=True requested, but the measured fit check says no.
+
+    The measured model lives in ``backpropagate.offload_engine`` (constants
+    cite the receipts in docs/receipts/2026-09-30-offload/). It compares:
+    host RAM needed (to train AND save/reload) against AVAILABLE host RAM, and
+    peak VRAM for one step at the requested seq x batch against the card.
+    Same ``code`` as its parent (RUNTIME_FULL_FT_MODEL_TOO_LARGE), so the CLI
+    exit-code mapper and the error-code catalogue need no change. The message
+    states required vs available for both, plus the remedies that apply.
+    """
+
+    def __init__(self, model_name: str, report: dict[str, Any]):
+        self.report = report
+        self.model_name = model_name
+        self.param_count_billions = report.get("params_billions")
+        self.ceiling_billions = float("nan")
+        self.offload_ceiling_billions = None
+        self.offload_recoverable = False
+        self.offload_active = True
+        lines = [
+            f"full_ft_offload: model {model_name!r} "
+            f"(~{report.get('params_billions')}B params) does not fit this machine."
+        ]
+        remedies = []
+        if not report.get("fits_host_ram", True):
+            lines.append(
+                f"Host RAM: needs ~{report['host_ram_required_gib']} GiB to train and "
+                f"save; {report['host_ram_available_gib']} GiB available "
+                f"(MemTotal {report['host_ram_total_gib']} GiB)."
+            )
+            remedies.append(
+                "free host RAM, add RAM, or under WSL2 raise the VM cap "
+                "(`memory=` in %UserProfile%\\.wslconfig, then `wsl --shutdown`)"
+            )
+        if not report.get("fits_vram", True):
+            lines.append(
+                f"VRAM: needs ~{report['vram_required_gib']} GiB at "
+                f"{report['tokens_per_step']} tokens/step; the card has "
+                f"{report['vram_total_gib']} GiB."
+            )
+            remedies.append("lower max_seq_length or batch_size")
+        remedies.append("pick a smaller model")
+        remedies.append(
+            "use mode='lora' (QLoRA fits 7B-32B on a 32 GB card)"
+        )
+        lines.append("Remedies: " + "; ".join(remedies) + ".")
+        lines.append(
+            "To override the check, pass --full-ft-ceiling-billions / "
+            "full_ft_ceiling_billions (you then own the OOM risk)."
+        )
+        message = " ".join(lines)
+        TrainingError.__init__(
+            self,
+            message,
+            details={"model_name": model_name, **report},
+            suggestion=None,
             code="RUNTIME_FULL_FT_MODEL_TOO_LARGE",
             retryable=False,
         )

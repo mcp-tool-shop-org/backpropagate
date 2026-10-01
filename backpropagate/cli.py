@@ -2107,6 +2107,19 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "bool",
             "Opt in to Unsloth installing system packages (winget / apt / brew: CMake, compilers, OpenSSL) and building llama.cpp for its GGUF export. Off by default: importing backpropagate sets UNSLOTH_AUTO_INSTALL=0 unless this is '1' / 'true' / 'yes' / 'on'. With it off and no llama.cpp built under ~/.unsloth, GGUF export uses backpropagate's llama.cpp fallback.",
         ),
+        # full_ft_offload engine knobs (backpropagate/offload_engine.py).
+        (
+            "BACKPROPAGATE_OFFLOAD_PIN",
+            "register",
+            "str",
+            "full_ft_offload: how host params are page-locked. 'register' (default): cudaHostRegister in place, exact size (~4.0 B/param host RAM measured). 'pinned': FSDP2 pin_memory, 3-5x faster, but torch's pinned allocator rounds blocks to powers of two (~1.8x host RAM at 7B). 'none': pageable, slowest.",
+        ),
+        (
+            "BACKPROPAGATE_OFFLOAD_ROUNDING",
+            "stochastic",
+            "str",
+            "full_ft_offload diagnostic: 'nearest' switches the bf16 write-back from stochastic rounding to round-to-nearest, which drops sub-ulp updates (update retention 0.17 measured). For reproducing the failure mode only; never for training.",
+        ),
         (
             "BACKPROPAGATE_CLOUDFLARED_TIMEOUT",
             "30",

@@ -1,0 +1,40 @@
+{
+ "model": "HuggingFaceTB/SmolLM3-3B",
+ "params": 3075098624,
+ "steps": 5,
+ "seq": 512,
+ "offload": true,
+ "engine": "fsdp2-direct",
+ "vram_cap_gb": 8.0,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "vram_total_gb": 31.36,
+ "host_ram_total_gb": 1007.5,
+ "rss_ceiling_gb": 60.0,
+ "versions": {
+  "torch": "2.8.0+cu128",
+  "transformers": "5.17.0",
+  "trl": "0.27.2",
+  "accelerate": "1.15.0",
+  "peft": "0.21.1",
+  "backpropagate": "1.7.1"
+ },
+ "param_dtype": "torch.bfloat16",
+ "param_device": "cpu",
+ "host_param_B_per_param": 2.0,
+ "peak_vram_alloc_gb": 2.25,
+ "peak_vram_reserved_gb": 4.79,
+ "peak_rss_train_gb": 13.71,
+ "load_s": 3.9,
+ "s_per_step": 5.177,
+ "losses": [
+  0.2674,
+  0.1257,
+  0.1213,
+  0.0904,
+  0.0554
+ ],
+ "final_loss": 0.0554170235991478,
+ "pct_params_changed_step1": 29.728,
+ "pct_params_changed_final": 41.409,
+ "peak_rss_total_gb": 13.71
+}

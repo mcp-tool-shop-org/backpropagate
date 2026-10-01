@@ -36,17 +36,25 @@ class TestFullFtCeilingAnchors:
     def test_pure_gpu_ceiling(self, vram, expected):
         assert t._full_ft_ceiling_for_vram(vram) == expected
 
+    # The v1.7 offload VRAM table (24 GB -> 7B, 32 GB -> 8B) is gone. It was
+    # never measured and never looked at host RAM. The offload ceiling now comes
+    # from AVAILABLE host RAM through the measured model; the full RAM + VRAM
+    # check is in tests/test_offload_fit.py.
     @pytest.mark.parametrize(
-        "vram,expected",
-        [(None, 4.0), (16, 4.0), (24, 7.0), (32, 8.0), (48, 16.0), (23.6, 7.0), (31.8, 8.0)],
+        "available_gib,expected",
+        [(64.0, 14.46), (28.0, 4.80), (10.0, 0.0)],
     )
-    def test_offload_ceiling(self, vram, expected):
-        assert t._full_ft_offload_ceiling_for_vram(vram) == expected
+    def test_offload_ceiling_from_host_ram(self, monkeypatch, available_gib, expected):
+        import backpropagate.offload_engine as oe
 
-    def test_offload_ceiling_strictly_higher_at_32gb(self):
-        # The whole point: offload lifts the 32 GB full-FT ceiling past 7B.
-        assert t._full_ft_offload_ceiling_for_vram(32) > t._full_ft_ceiling_for_vram(32)
-        assert t._full_ft_offload_ceiling_for_vram(32) >= 7.0
+        monkeypatch.setattr(oe, "detect_host_ram_gib", lambda: (available_gib, available_gib))
+        assert t._full_ft_offload_ceiling_billions() == pytest.approx(expected, abs=0.01)
+
+    def test_offload_ceiling_falls_back_when_ram_unknown(self, monkeypatch):
+        import backpropagate.offload_engine as oe
+
+        monkeypatch.setattr(oe, "detect_host_ram_gib", lambda: (None, None))
+        assert t._full_ft_offload_ceiling_billions() == t._FULL_FT_PARAM_CEILING_BILLIONS
 
 
 # ---------------------------------------------------------------------------
@@ -62,35 +70,38 @@ class TestCeilingGate:
             t._enforce_full_ft_param_ceiling(
                 self.SEVEN_B,
                 ceiling_billions=t._full_ft_ceiling_for_vram(32),
-                offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
+                offload_ceiling_billions=14.46,  # 64 GiB available (measured model)
                 full_ft_offload=False,
             )
         msg = str(ei.value)
         assert "--full-ft-offload" in msg
         assert ei.value.offload_recoverable is True
 
-    def test_7b_offload_32gb_approved(self):
-        """With offload on, 7B clears the 8B offload ceiling -> no raise."""
+    def test_offload_is_not_gated_by_a_param_table(self):
+        """With offload on, the param-count table no longer gates (effective
+        ceiling = inf); the measured fit check does (tests/test_offload_fit.py)."""
         t._enforce_full_ft_param_ceiling(
-            self.SEVEN_B,
-            ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-            offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
+            "meta-llama/Llama-3.1-70B-Instruct",
+            ceiling_billions=float("inf"),
+            offload_ceiling_billions=14.46,
             full_ft_offload=True,
         )
 
-    def test_70b_exceeds_even_offload_names_lora(self):
-        """A 70B model exceeds even the offload ceiling -> recovery is LoRA/QLoRA,
-        NOT --full-ft-offload."""
-        with pytest.raises(FullFinetuneModelTooLargeError) as ei:
-            t._enforce_full_ft_param_ceiling(
-                "meta-llama/Llama-3.1-70B-Instruct",
-                ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-                offload_ceiling_billions=t._full_ft_offload_ceiling_for_vram(32),
-                full_ft_offload=True,
-            )
-        msg = str(ei.value).lower()
-        assert "lora" in msg
-        assert ei.value.offload_recoverable is False
+    def test_70b_offload_fails_the_fit_check_naming_lora(self):
+        """A 70B model fails the measured host-RAM check even at 64 GiB; the
+        recovery names LoRA/QLoRA and not --full-ft-offload."""
+        from backpropagate.exceptions import OffloadDoesNotFitError
+        from backpropagate.offload_engine import check_offload_fit
+
+        report = check_offload_fit(
+            params=70.6e9, root_unit_bytes=None, layer_bytes=None, tokens=512,
+            host_total_gib=64.0, host_available_gib=64.0, vram_total_gib=31.4,
+        )
+        assert report["fits"] is False
+        err = OffloadDoesNotFitError("meta-llama/Llama-3.1-70B-Instruct", report)
+        assert "lora" in str(err).lower()
+        assert err.code == "RUNTIME_FULL_FT_MODEL_TOO_LARGE"
+        assert isinstance(err, FullFinetuneModelTooLargeError)
 
     def test_explicit_ceiling_override_allows_7b_without_offload(self):
         """--full-ft-ceiling-billions raises the ceiling so 7B passes pure-GPU."""
@@ -129,6 +140,79 @@ class TestDepFsdp:
         with pytest.raises(FsdpUnavailableError) as ei:
             t._ensure_fsdp_runtime()
         assert "NCCL" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# FSDP2 offload SFTConfig — CPU pins for the bugs the real-GPU smoke found
+# (tests/test_full_ft_offload_smoke.py is the end-to-end regression test; these
+# keep the config contract pinned in CI, where the smoke cannot run).
+# ---------------------------------------------------------------------------
+class TestOffloadSftConfig:
+    @staticmethod
+    def _build(**overrides):
+        from unittest.mock import patch
+
+        # Resolve trl's lazy SFTConfig BEFORE the CUDA mocks: importing it under
+        # a MagicMock device-props patch blows up inside trl's import.
+        import trl
+
+        _ = trl.SFTConfig
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.get_device_properties") as props, \
+             patch("torch.cuda.get_device_capability", return_value=(12, 0)), \
+             patch("trl.SFTConfig") as sft:
+            props.return_value.total_memory = 32 * 1024 ** 3
+            kwargs = {
+                "output_dir": "/tmp/out",
+                "per_device_train_batch_size": 1,
+                "gradient_accumulation_steps": 1,
+                "max_steps": 2,
+                "learning_rate": 2e-5,
+                "warmup_steps": 0,
+                "max_seq_length": 128,
+                "seed": 42,
+                "lr_scheduler_type": "cosine",
+                "logging_steps": 1,
+                "mode": "full",
+            }
+            kwargs.update(overrides)
+            t._build_sft_config(**kwargs)
+            return sft.call_args.kwargs
+
+    def test_offload_disables_trainingargs_gradient_checkpointing_explicitly(self):
+        """TRL's SFTConfig defaults gradient_checkpointing=True, so popping the
+        key re-enabled it and transformers refused the FSDP config."""
+        kw = self._build(full_ft_offload=True)
+        assert kw["gradient_checkpointing"] is False
+        assert "gradient_checkpointing_kwargs" not in kw
+        assert kw["fsdp_config"]["activation_checkpointing"] is True
+
+    @pytest.mark.parametrize("pinned", [None, "adamw_8bit", "paged_adamw_8bit"])
+    def test_offload_never_uses_a_bitsandbytes_optimizer(self, pinned):
+        """bnb optimizers cannot step CPU-offloaded DTensor params."""
+        kw = self._build(full_ft_offload=True, optim=pinned)
+        assert kw["optim"] == "adamw_torch"
+
+    def test_offload_honors_a_torch_optimizer_pin(self):
+        kw = self._build(full_ft_offload=True, optim="adamw_torch_fused")
+        assert kw["optim"] == "adamw_torch_fused"
+
+    def test_offload_checkpoints_are_sharded(self):
+        """A single-process FULL_STATE_DICT checkpoint gathers the whole model +
+        optimizer onto the GPU; SHARDED_STATE_DICT writes the CPU shards."""
+        kw = self._build(full_ft_offload=True)
+        assert kw["fsdp_config"]["state_dict_type"] == "SHARDED_STATE_DICT"
+
+    def test_pure_gpu_full_ft_unchanged(self):
+        kw = self._build(full_ft_offload=False)
+        assert kw["gradient_checkpointing"] is True
+        assert kw["optim"] == "paged_adamw_8bit"
+        assert "fsdp" not in kw
+
+    def test_gather_full_state_dict_is_noop_for_unsharded_models(self):
+        import torch
+
+        assert t._gather_fsdp_full_state_dict(torch.nn.Linear(2, 2)) is None
 
 
 # ---------------------------------------------------------------------------

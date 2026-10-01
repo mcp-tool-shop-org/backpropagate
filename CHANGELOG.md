@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-09-30
+
 ### Security
 
+- **BREAKING (security default): `trust_remote_code` is now off.** Loading a
+  model no longer runs Python code from the model's Hugging Face repository
+  unless you opt in. Through v1.7.1 the default was on, and nothing in the
+  README, SECURITY.md or the env-vars page said so. A model that needs
+  remote code now fails with the new stable code
+  `CONFIG_TRUST_REMOTE_CODE_REQUIRED`, which names the model and the opt-in
+  (`BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true`, or
+  `settings.model.trust_remote_code = True`). None of the curated presets
+  need it. The eval loader, the perplexity filter and the MLX rail now read
+  the same setting; before, they ignored it.
 - **Unsloth can no longer install system software unasked.** On a machine
   without a built llama.cpp, Unsloth's GGUF export runs `winget install`
   (or apt / brew) for CMake, compilers and OpenSSL and accepts their licence
@@ -51,9 +63,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-locked trl 1.13.0 and broke ORPO: trl 1.x no longer exports
   `ORPOConfig`/`ORPOTrainer` from the top level, and ORPO has no
   `trl.experimental` fallback. Both were closed.
+- **The `[unsloth]` extra now resolves to the tested stack** (#215). It was
+  `unsloth>=2024.1` with no caps, so pip backtracked through about 100 unsloth
+  releases and landed on unsloth 2025.11.1 with torch 2.14 and transformers
+  4.57, a combination never run on a GPU. The extra now floors
+  `unsloth>=2026.6.8` and restates unsloth's own caps beside it
+  (`torch<2.13`, `transformers<=5.5.0`, `trl<=0.24.0`, `datasets<4.4.0`).
+  `[standard]`, `[full]` and `[production]` installs resolve in under a
+  minute to the stack the GPU smokes run.
+- **Training now uses every row of your dataset by default** (#241). The
+  default `max_samples` was 1000, so `trainer.train("data.jsonl")` and
+  `backprop train` trained on 1000 randomly chosen rows of any larger dataset
+  without saying so. The default is now `0` (all rows); `samples=N`,
+  `--samples N` and `BACKPROPAGATE_DATA__MAX_SAMPLES` still cap it, and a cap
+  that drops rows is now logged. Training length is still set by `steps`.
+- **trl 1.x is supported; the cap moves from `<0.28` to `<2`** (#216). ORPO
+  falls back to `trl.experimental` where trl moved it, and only config fields
+  the installed trl still declares are passed.
+- **trl 1.1 through 1.5 are excluded** (#235, fixes #134). Those releases read
+  their bundled chat templates without an encoding, which fails on Windows
+  (cp1252) the moment training imports trl. trl 1.6 fixed it. If you are
+  pinned inside that range on Windows, set `PYTHONUTF8=1`.
+- **`--full-ft-offload` is a new engine** (#231). It shards the model with
+  FSDP2 directly and keeps weights and gradients in host RAM in bf16, about
+  4 bytes per parameter instead of 16. Measured on an RTX 5090: Qwen2.5-7B
+  (7.6B) trains in 5.3 GiB of VRAM and 30.8 GiB of host RAM (32.2 GiB with
+  save and reload) at 14.7 s/step. Trade-offs: the optimizer is Adafactor
+  (no momentum, factored second moment), weights have no fp32 copy and are
+  updated with stochastic rounding, and the loop is plain SFT with no
+  packing, response-only masking, intermediate checkpoints or resume.
+  Linux / WSL2 only. Receipts: `docs/receipts/2026-09-30-offload/`.
+- **The offload ceiling table is replaced by a fit check** (#231). The old
+  table (24 GB → 7B, 32 GB → 8B) never looked at host RAM and its "measured"
+  comment was not true. Before loading weights the trainer now compares
+  what the run needs (host RAM ~3.73 GiB per billion parameters + 10.1 GiB;
+  VRAM from the largest layer plus activations) with what the machine has,
+  and stops with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` showing both.
+  `--full-ft-ceiling-billions` still overrides it.
+- **The 14B / 24B / 32B presets state their measured peaks** (25.0 / 26.5 /
+  28.8 GiB at each preset's full context window, batch 1). They said
+  "~8.5GB / ~18GB / ~26GB measured", which were the 4-bit weight sizes.
 
 ### Fixed
 
+- **The `qwen3.5-4b` preset could not load.** It pointed at
+  `Qwen/Qwen3.5-4B-Instruct`, which does not exist on the Hugging Face Hub.
+  It now points at `Qwen/Qwen3.5-4B`, which the trainer loads text-only;
+  on an RTX 5090 it trained 5 QLoRA steps at an 8.4 GiB peak and generated
+  coherent text. Whether the repository's vision weights are also loaded
+  has not been checked.
+- **KTO crashed on a plain `pip install`** (#216). trl 0.27 removed
+  `max_prompt_length` from `KTOConfig`; passing it (any window of 512 tokens
+  or less, or an explicit value) raised `TypeError`. Only fields the
+  installed trl declares are passed now.
+- **`--full-ft-offload` never completed a run.** Four bugs, each found on a
+  real GPU: the trainer could not be constructed (TRL's
+  `gradient_checkpointing=True` default clashed with FSDP's activation
+  checkpointing), the first optimizer step crashed (bitsandbytes optimizers
+  cannot step CPU-offloaded parameters), `save()` crashed on sharded
+  parameters, and checkpointing gathered the whole fp32 model onto the GPU.
+- **Unsloth was never used for LoRA with the default settings** (#230). The
+  default `target_modules="all-linear"` reached Unsloth as a string, which it
+  split into characters, and training silently fell back to transformers.
+  The target list is now derived from the loaded model the way PEFT does it
+  (every linear layer except the output head), the number of adapted modules
+  is logged, and a fallback is logged as a warning.
+- **`BACKPROPAGATE_*` settings were ignored on a base install** (#234). Without
+  the `[validation]` extra (pydantic-settings), the fallback config never
+  read the environment, so every documented `BACKPROPAGATE_<GROUP>__<FIELD>`
+  variable, including `MODEL__TRUST_REMOTE_CODE`, had no effect. It now reads
+  them with the same names and types, and a bad value is an error.
+- **Structured log fields were dropped without structlog** (#233, fixes #135).
+  The stdlib fallback rejected keyword fields such as `cli_run_id`; they are
+  now folded into the message.
 - **`backprop export --format gguf` and `--format merged` work again on QLoRA
   checkpoints (#132).** Both failed with `UnboundLocalError: ... 'active_adapters'`
   on any 4-bit QLoRA checkpoint, with or without Unsloth. The export reused
@@ -75,6 +157,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UTF-8 output crashed the cp1252 pipe reader on Windows. The error message
   kept the first 500 characters of the traceback and cut off the line that
   said what went wrong.
+
+### Documentation
+
+- The README and handbook now use measured numbers from 2026-09-30, with
+  their conditions stated. The README cited Biderman et al. 2024 as showing
+  LoRA matches full fine-tuning; that paper finds LoRA substantially
+  underperforms full fine-tuning on code and math, while forgetting less.
+  Both it and Thinking Machines 2025 are now described as they are.
+- Quick Start runs from a `pipx` install (it downloads the example dataset),
+  and the README shows the data report → split → train → eval → export loop.
+- The CLI example exported `./output/lora`; `backprop train` writes to
+  `./output`.
+- The VRAM estimator page no longer claims 10–20% accuracy. It under-reads
+  QLoRA on 14B–32B by 25–45%.
+
+### Known issues
+
+- On a 32 GB card the automatic batch size (6) is likely too large for the
+  14B–32B QLoRA presets at their full context window; the OOM recovery halves
+  it and retries. Set `batch_size` explicitly for those presets.
+- Full fine-tuning on the GPU uses more VRAM than PyTorch reports. The paged
+  8-bit optimizer state is CUDA managed memory that PyTorch's counters do not
+  see: at 3B, PyTorch reported 13.4 GiB reserved, and the system-wide peak
+  was 22.0 GiB (7.5 GiB of it paged optimizer state). Managed memory can
+  spill to host RAM when the card is full, so smaller cards may still run,
+  more slowly; that has not been tested. The card-aware ceilings
+  (16 GB → 4B, 24 GB → 5B, 32 GB → 6B) have not been re-derived.
+
+### Internal
+
+- `.trivyignore` is retired and the pip-audit accept list is empty (#214):
+  every entry was fixed at the locked versions.
+- pip-audit's required check no longer fails when the OSV service is down;
+  it retries, then warns (#220).
+- The Ubuntu 3.13 test cell installs without the `unsloth` extra, so CI
+  covers what a plain `pip install` gets (#221).
+- The checkpoint fuzz tests have an explicit 300 s timeout; on a Windows
+  runner they exceeded the suite-wide 60 s (#238).
 
 ## [1.7.1] - 2026-09-07
 
@@ -602,7 +722,8 @@ A minor release that takes the project from "polished v1" to "real v1" via a 10-
 
 ---
 
-[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/mcp-tool-shop-org/backpropagate/compare/v1.5.0...v1.6.0

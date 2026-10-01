@@ -60,6 +60,8 @@ from .exceptions import (
     ModelLoadError,
     TrainingAbortedError,
     TrainingError,
+    TrustRemoteCodeRequiredError,
+    is_trust_remote_code_error,
 )
 from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
@@ -664,7 +666,8 @@ def _build_trl_bridge_callback(user_callback: TrainingCallback) -> Any:
 # wrongly rejected every "3B" preset at load time (count > 3.0); raised to 4.0
 # in the v1.4.x mode='full' fix. v1.7 "32 GB envelope" shipped the
 # `--full-ft-ceiling-billions` flag + VRAM-derived ceilings
-# (:func:`_full_ft_ceiling_for_vram` / :func:`_full_ft_offload_ceiling_for_vram`);
+# (:func:`_full_ft_ceiling_for_vram`; offload uses the measured fit check in
+# :mod:`backpropagate.offload_engine`);
 # this constant remains the DOCUMENTED FALLBACK used when VRAM can't be
 # detected (no CUDA / query failure) and no explicit override was passed.
 _FULL_FT_PARAM_CEILING_BILLIONS: float = 4.0
@@ -699,26 +702,6 @@ _FULL_FT_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
     (48.0, 10.0),
     (32.0, 6.0),
     (24.0, 5.0),
-    (0.0, 4.0),
-)
-
-# When FSDP2 CPU-offload is enabled the params + optimizer state spill into
-# host RAM (64 GB on this rig), so the GPU only has to hold the active shard +
-# activations + overhead. That lifts the param ceiling materially per card.
-# Anchored to the MEASURED FSDP2 `fully_shard` + `CPUOffloadPolicy` +
-# activation-checkpointing + bf16 recipe (the documented escape hatch — slow,
-# PCIe/CPU-bandwidth-bound, NOT the default):
-#     <=16 GB -> 4.0B   (offload buys little headroom on a tiny card; the
-#                        host-RAM spill still needs a working GPU shard)
-#       24 GB -> 7.0B
-#       32 GB -> 8.0B    (RTX 5090: a 7B-class full-FT fits comfortably here,
-#                        measured; the table leaves margin to 8B)
-#     >=48 GB -> 16.0B
-#   None (VRAM unknown) -> the 4.0B fallback constant.
-_FULL_FT_OFFLOAD_VRAM_CEILING_TIERS: tuple[tuple[float, float], ...] = (
-    (48.0, 16.0),
-    (32.0, 8.0),
-    (24.0, 7.0),
     (0.0, 4.0),
 )
 
@@ -758,28 +741,24 @@ def _full_ft_ceiling_for_vram(vram_gb: float | None) -> float:
     return _FULL_FT_PARAM_CEILING_BILLIONS
 
 
-def _full_ft_offload_ceiling_for_vram(vram_gb: float | None) -> float:
-    """v1.7: full-FT parameter ceiling (billions) WHEN FSDP2 CPU-offload is on.
+def _full_ft_offload_ceiling_billions() -> float:
+    """Largest model the full_ft_offload path admits on THIS host, in billions.
 
-    With FSDP2 ``fully_shard`` + ``CPUOffloadPolicy`` the params + optimizer
-    spill to host RAM, leaving the GPU to hold the active shard + activations +
-    overhead. Anchored to the MEASURED FSDP2-CPUOffload recipe on this rig
-    (RTX 5090 32 GB + 64 GB host RAM):
-
-        None -> 4.0   (VRAM unknown — the documented fallback constant)
-        <=16 -> 4.0
-          24 -> 7.0
-          32 -> 8.0   (RTX 5090: 7B-class full-FT fits comfortably; offload top)
-        >=48 -> 16.0
-
-    Returns the ceiling in billions. ``None`` returns the fallback constant.
+    Derived from AVAILABLE host RAM through the measured host-RAM model in
+    :mod:`backpropagate.offload_engine` (bf16 params + grads, ~4.0 B/param, plus
+    a fixed term that covers save/reload; the receipts are cited there). This
+    replaces the v1.7 VRAM lookup table (24 GB -> 7B / 32 GB -> 8B). That table
+    was never measured and never looked at host RAM, which is the constraint that
+    actually binds. Falls back to the 4B constant when RAM cannot be probed.
+    Used for the contrastive "--full-ft-offload fits up to ~N B here" hint. The
+    authoritative gate is the full fit check (RAM + VRAM) in Trainer.train().
     """
-    if vram_gb is None:
+    from .offload_engine import detect_host_ram_gib, offload_param_ceiling_billions
+
+    _total, available = detect_host_ram_gib()
+    if available is None:
         return _FULL_FT_PARAM_CEILING_BILLIONS
-    for threshold, ceiling in _FULL_FT_OFFLOAD_VRAM_CEILING_TIERS:
-        if vram_gb + _VRAM_TIER_TOLERANCE_GB >= threshold:
-            return ceiling
-    return _FULL_FT_PARAM_CEILING_BILLIONS
+    return offload_param_ceiling_billions(available)
 
 
 # Engine B (block-coordinate AdamW, ``full_ft_engine='block'``): the whole
@@ -900,24 +879,43 @@ def _ensure_fsdp_runtime() -> None:
             raise FsdpUnavailableError(
                 reason=f"could not initialize the FSDP process group ({exc})."
             ) from exc
-    # Host-RAM advisory: the spill target. Warn (don't fail) if well under 64GB.
-    try:
-        import psutil
-
-        host_gb = psutil.virtual_memory().total / (1024 ** 3)
-        if host_gb < 56:  # ~64GB minus OS headroom
-            logger.warning(
-                "FSDP2 CPU-offload spills params+optimizer to host RAM, but this "
-                "host has only %.0fGB — the measured 7B recipe wants ~64GB; the "
-                "run may exhaust host RAM.",
-                host_gb,
-            )
-    except Exception:  # noqa: BLE001 — psutil is optional; advisory only
-        pass  # nosec B110 — host-RAM probe is advisory; its absence must not block training
+    # Host RAM is judged by the measured fit check (Trainer._enforce_offload_fit),
+    # which fails fast with required vs available. No separate advisory here.
     logger.warning(
-        "FSDP2 CPU-offload active: params+optimizer spilled to host RAM. This is "
+        "FSDP2 CPU-offload active: bf16 params + grads live in host RAM. This is "
         "the documented escape hatch — expect a slower, PCIe/CPU-bandwidth-bound "
         "run than a model that fits the pure-GPU full-FT ceiling."
+    )
+
+
+def _gather_fsdp_full_state_dict(model: Any) -> dict[str, Any] | None:
+    """v1.7: full (unsharded, CPU) state dict for an FSDP2 model, else None.
+
+    Under ``full_ft_offload=True`` accelerate applies FSDP2 ``fully_shard`` in
+    place, so after training ``model.state_dict()`` holds CPU-offloaded
+    ``DTensor`` shards that ``save_pretrained`` / safetensors cannot serialize.
+    ``get_model_state_dict(full_state_dict=True, cpu_offload=True)`` gathers
+    plain tensors with the ORIGINAL parameter names (FSDP2 does not rename).
+    Returns None for any model that is not an ``FSDPModule`` (every non-offload
+    path), so callers keep their existing save call unchanged.
+    """
+    try:
+        from torch.distributed.fsdp import FSDPModule
+    except Exception:  # noqa: BLE001 — torch without FSDP2: cannot be sharded
+        return None
+    if not isinstance(model, FSDPModule):
+        return None
+    from torch.distributed.checkpoint.state_dict import (
+        StateDictOptions,
+        get_model_state_dict,
+    )
+
+    # FSDP2 swaps the model's class in place (it IS still the nn.Module), but
+    # the isinstance check narrowed the static type to FSDPModule.
+    sharded_module: Any = model
+    return get_model_state_dict(
+        sharded_module,
+        options=StateDictOptions(full_state_dict=True, cpu_offload=True),
     )
 
 
@@ -1234,6 +1232,7 @@ def estimate_vram(
     overhead_fraction: float = 0.15,
     param_count_billions: float | None = None,
     offload: bool = False,
+    vocab_size: int = 152064,  # offload VRAM model only; Qwen2.5-class default
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1369,18 +1368,32 @@ def estimate_vram(
     #    captures the host-resident estimate; the GPU lines shrink accordingly.
     host_ram_gb = 0.0
     if offload and mode == "full":
-        bf16_weights_gb = (params * 2) * bytes_to_gb
-        host_grads_gb = (params * 2) * bytes_to_gb
-        host_optimizer_gb = (params * 2) * bytes_to_gb  # paged 8-bit moments
-        host_ram_gb = bf16_weights_gb + host_grads_gb + host_optimizer_gb
-        # GPU holds ~one transformer block's params resident at a time under
-        # fully_shard + CPUOffloadPolicy.
-        model_weights_gb = bf16_weights_gb / max(1.0, float(num_layers))
+        # Measured model (backpropagate.offload_engine; the receipts are cited
+        # there). Host: bf16 params + grads, ~4.0 B/param, plus the fixed
+        # save/reload term. GPU: 2x the root unit (embedding + untied head,
+        # assumed untied at vocab_size, which is conservative) + 2 decoder
+        # layers + 1.40 MiB per token + 0.8 GiB margin. Nothing optimizer-sized
+        # lives on the GPU.
+        from .offload_engine import (
+            _VRAM_MARGIN_GIB,
+            _VRAM_MIB_PER_TOKEN,
+            offload_host_ram_required_gib,
+        )
+
+        host_ram_gb = offload_host_ram_required_gib(params)
+        root_bytes = 2 * vocab_size * hidden_dim * 2
+        layer_bytes = max(0.0, params - root_bytes / 2) / max(1, num_layers) * 2
+        model_weights_gb = (2 * root_bytes + 2 * layer_bytes) * bytes_to_gb
         optimizer_state_gb = 0.0
+        activations_gb = batch_size * max_seq_length * _VRAM_MIB_PER_TOKEN / 1024
+        kv_cache_gb = 0.0
+        overhead_fraction = 0.0
+        lora_adapter_gb = 0.0
+        model_weights_gb += _VRAM_MARGIN_GIB
         notes.append(
-            f"FSDP2 CPU-offload: ~{host_ram_gb:.1f}GB of params+gradients+"
-            f"optimizer spilled to host RAM; GPU holds a working shard + "
-            f"activations (PCIe/CPU-bandwidth-bound, slower than a fitting run)"
+            f"full_ft_offload (measured model): ~{host_ram_gb:.1f} GiB host RAM to train "
+            f"+ save; GPU holds the embedding/head + 2 layers + activations "
+            f"(PCIe-bound: ~14.7 s/step at 7.6B)"
         )
 
     subtotal = (
@@ -1624,13 +1637,48 @@ def _build_sft_config(
         # TrainingArguments.gradient_checkpointing — the latter adds a redundant
         # AllGather in the backward pass (HF transformers#30404). Move the
         # checkpointing knob into the FSDP config so we don't double-wrap.
-        kwargs.pop("gradient_checkpointing", None)
+        # Set it to False EXPLICITLY — popping the key is not enough: TRL's
+        # SFTConfig defaults ``gradient_checkpointing=True`` (trl 0.2x), and
+        # transformers refuses FSDP activation_checkpointing + TrainingArguments
+        # gradient_checkpointing together (ValueError at trainer construction).
+        # Caught by tests/test_full_ft_offload_smoke.py on the first real run.
+        kwargs["gradient_checkpointing"] = False
         kwargs.pop("gradient_checkpointing_kwargs", None)
+        # bitsandbytes optimizers cannot step FSDP2 CPU-offloaded params: the
+        # params are DTensors living on the CPU, and bnb's update kernels have
+        # no DTensor sharding strategy (NotImplementedError: "Operator
+        # bitsandbytes.optimizer_update_32bit.default does not have a sharding
+        # strategy registered") and are CUDA-only besides. The full-FT default
+        # resolves to paged_adamw_8bit above, so without this every offload run
+        # crashed at the first optimizer.step(). Downgrade ANY bnb optimizer —
+        # an explicit operator pin included, since it physically cannot run
+        # here (same rule as the CPU-runner downgrade in _detect_optim_for_card)
+        # — to torch AdamW, which steps CPU DTensors natively. Caught by
+        # tests/test_full_ft_offload_smoke.py on the first real run.
+        if Trainer._is_bnb_8bit_optim(kwargs["optim"]):
+            logger.info(
+                "full_ft_offload: optim %r -> adamw_torch (bitsandbytes "
+                "optimizers cannot step FSDP2 CPU-offloaded DTensor params).",
+                kwargs["optim"],
+            )
+            kwargs["optim"] = "adamw_torch"
         kwargs["fsdp"] = "full_shard offload auto_wrap"
         kwargs["fsdp_config"] = {
             "fsdp_version": 2,
             "cpu_ram_efficient_loading": True,
             "activation_checkpointing": True,
+            # Intermediate/final HF checkpoints (checkpoint-N/) must NOT gather
+            # the full model + optimizer onto the GPU. With a single process,
+            # accelerate forces FULL_STATE_DICT gathers onto the card
+            # (offload_to_cpu is only enabled for num_processes > 1): measured
+            # on SmolLM2-360M the checkpoint save peaked at ~7.5 B/param of
+            # VRAM (fp32 params + both Adam moments) vs 0.39 GB during the
+            # training steps — i.e. a 7B run would OOM a 32 GB card at its
+            # first checkpoint. SHARDED_STATE_DICT writes the CPU-resident
+            # DTensor shards via torch.distributed.checkpoint with no gather.
+            # The final artifact is still a plain HF model: Trainer.save()
+            # gathers it to CPU (_gather_fsdp_full_state_dict).
+            "state_dict_type": "SHARDED_STATE_DICT",
         }
 
     return SFTConfig(**kwargs)
@@ -2399,8 +2447,8 @@ class Trainer:
         # ``full_ft_ceiling_billions`` (default None) — an EXPLICIT override of
         # the mode='full' parameter ceiling, in billions. When None the gate
         # derives the ceiling from the DETECTED card VRAM
-        # (:func:`_full_ft_ceiling_for_vram`, or
-        # :func:`_full_ft_offload_ceiling_for_vram` when offload is on), falling
+        # (:func:`_full_ft_ceiling_for_vram`; with offload on, the measured
+        # host-RAM + VRAM fit check in offload_engine gates instead), falling
         # back to the 4B constant when VRAM is unknown. When set, the operator's
         # value WINS over both the derived and fallback ceilings — the escape
         # hatch for operators who know their card / their memory budget.
@@ -2408,12 +2456,12 @@ class Trainer:
         # ``full_ft_offload`` (default False) — opt in to the FSDP2 CPU-offload
         # full-FT path. When True AND mode='full', the trainer configures FSDP2
         # ``full_shard`` + ``offload`` + activation checkpointing + bf16 so the
-        # params + optimizer state spill into host RAM, enabling a 7B-class TRUE
-        # full fine-tune on a 32 GB card. It is the documented escape hatch, NOT
-        # the default: PCIe/CPU-bandwidth-bound (slow) and needs ~64 GB host RAM.
+        # params stay in host RAM (bf16), enabling a 7B-class TRUE full fine-tune
+        # on a 32 GB card (measured: 32.2 GiB host peak at 7.6B). It is the
+        # documented escape hatch, NOT the default: PCIe-bound (slow).
         # The toolchain (accelerate/torch.distributed FSDP) must be importable;
         # if not, the trainer raises DEP_FSDP_UNAVAILABLE. Offload also lifts the
-        # derived parameter ceiling (see _full_ft_offload_ceiling_for_vram).
+        # parameter ceiling: offload is gated by the measured fit check instead.
         full_ft_offload: bool = False,
         # v1.5 T1.2 (ORPO Wave 2): training objective. ``"sft"`` (the default)
         # is the supervised fine-tuning path — byte-identical pre-v1.5
@@ -3021,6 +3069,13 @@ class Trainer:
                 full_ft_offload=self.full_ft_offload,
                 offload_ceiling_billions=_offload_ceiling,
             )
+            # full_ft_offload: fail fast at construction on host RAM when the
+            # param count can be estimated from the id. The RAM + VRAM check on
+            # the model's real shape runs again in train() before any weights load.
+            if self.full_ft_offload:
+                _est = _estimate_param_count_billions(self.model_name)
+                if _est is not None:
+                    self._enforce_offload_fit(params=_est * 1e9)
             # Per the Biderman 2024 / Thinking Machines 2025 quality math
             # (full FT needs ~10x lower LR than LoRA). Apply the divisor
             # ONLY when the operator did not explicitly override the
@@ -3715,11 +3770,15 @@ class Trainer:
         about ``--full-ft-offload`` even when offload is off.
         """
         vram = _detect_total_vram_gb()
-        offload_ceiling = _full_ft_offload_ceiling_for_vram(vram)
+        offload_ceiling = _full_ft_offload_ceiling_billions()
         if self.full_ft_ceiling_billions is not None:
             effective = float(self.full_ft_ceiling_billions)
         elif self.full_ft_offload:
-            effective = offload_ceiling
+            # The param-count table does not gate offload any more. The measured
+            # fit check (host RAM + VRAM, _enforce_offload_fit) does, at
+            # construction (RAM, from the estimated param count) and again in
+            # train() (RAM + VRAM, from the model's real shape).
+            effective = float("inf")
         elif getattr(self, "full_ft_engine", "default") == "block":
             effective = _full_ft_block_ceiling_for_vram(
                 vram, train_embeddings=bool(getattr(self, "block_train_embeddings", True))
@@ -3727,6 +3786,80 @@ class Trainer:
         else:
             effective = _full_ft_ceiling_for_vram(vram)
         return effective, offload_ceiling
+
+    def _enforce_offload_fit(
+        self,
+        *,
+        params: float,
+        root_unit_bytes: float | None = None,
+        layer_bytes: float | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Measured fit check for full_ft_offload; raise OffloadDoesNotFitError.
+
+        ``full_ft_ceiling_billions`` (the explicit override) turns a failing
+        check into a WARNING: the documented escape hatch, where the operator
+        owns the OOM risk.
+        """
+        from .exceptions import OffloadDoesNotFitError
+        from .offload_engine import check_offload_fit, detect_host_ram_gib
+
+        total, available = detect_host_ram_gib()
+        batch = self.batch_size if isinstance(self.batch_size, int) else 1
+        report = check_offload_fit(
+            params=params,
+            root_unit_bytes=root_unit_bytes,
+            layer_bytes=layer_bytes,
+            tokens=tokens if tokens is not None else int(self.max_seq_length) * batch,
+            host_total_gib=total,
+            host_available_gib=available,
+            vram_total_gib=_detect_total_vram_gb(),
+        )
+        logger.info(f"full_ft_offload fit check: {report}")
+        if not report["fits"]:
+            if self.full_ft_ceiling_billions is not None:
+                logger.warning(
+                    "full_ft_offload fit check FAILED but full_ft_ceiling_billions="
+                    f"{self.full_ft_ceiling_billions} overrides it; proceeding. {report}"
+                )
+            else:
+                raise OffloadDoesNotFitError(self.model_name, report)
+        return report
+
+    def _enforce_offload_fit_for_model(self, *, steps_batch: Any = None) -> dict[str, Any]:
+        """Fit check on the model's REAL shape, before any weights load.
+
+        Uses the already-loaded model when there is one. Otherwise it builds the
+        model on the meta device from its config (no weights, no memory) to get
+        the exact param count, embedding/head size and decoder-layer size.
+        """
+        from .offload_engine import model_offload_shape
+
+        del steps_batch  # batch is read from self.batch_size
+        model = self._model if self._is_loaded else None
+        if model is None:
+            try:
+                from accelerate import init_empty_weights
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                cfg = AutoConfig.from_pretrained(
+                    self.model_name, trust_remote_code=settings.model.trust_remote_code
+                )
+                with init_empty_weights():
+                    model = AutoModelForCausalLM.from_config(
+                        cfg, trust_remote_code=settings.model.trust_remote_code
+                    )
+            except Exception as exc:  # noqa: BLE001 — shape probe is best-effort
+                logger.warning(
+                    f"full_ft_offload: could not build a meta model for {self.model_name!r} "
+                    f"({exc!r}); fit check falls back to the estimated param count."
+                )
+                est = _estimate_param_count_billions(self.model_name)
+                if est is None:
+                    return {}
+                return self._enforce_offload_fit(params=est * 1e9)
+        params, root, layer = model_offload_shape(model)
+        return self._enforce_offload_fit(params=params, root_unit_bytes=root, layer_bytes=layer)
 
     # =========================================================================
     # v1.3 BACKEND-5 / BACKEND-7 — per-card optim + dtype resolution
@@ -4275,11 +4408,12 @@ class Trainer:
             if self.use_unsloth:
                 try:
                     self._load_with_unsloth()
-                except (ImportError, RuntimeError):
+                except (ImportError, RuntimeError, TrustRemoteCodeRequiredError):
                     # Don't downgrade ImportError / RuntimeError — those are
                     # the "your env is wrong" / "CUDA is wrong" signals the
                     # surrounding except blocks rely on for accurate error
-                    # routing.
+                    # routing. A repo that needs trust_remote_code would fail
+                    # identically on the transformers path, so don't retry it.
                     raise
                 except Exception as unsloth_err:
                     if not self.unsloth_fallback:
@@ -4294,6 +4428,9 @@ class Trainer:
                     self._load_with_transformers()
             else:
                 self._load_with_transformers()
+        except TrustRemoteCodeRequiredError:
+            # Already structured (names the model + the exact opt-in).
+            raise
         except ImportError as e:
             # F-019: ImportError = missing/incompatible upstream package.
             # We keep the explicit "pip install" suggestion (more specific
@@ -4418,6 +4555,8 @@ class Trainer:
                 **from_pretrained_kwargs,
             )
         except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
             # F-019: Unsloth's from_pretrained tunnels through huggingface_hub
             # for the actual weight download, so 401/403/404/connection
             # errors surface here too. Classify so the per-category hint
@@ -4564,7 +4703,16 @@ class Trainer:
             }
             # device_map='auto' only when CUDA is present (a CPU runner would
             # need accelerate and gain nothing).
-            if torch.cuda.is_available():
+            #
+            # v1.7 full_ft_offload: load on the CPU instead. accelerate's FSDP2
+            # prepare upcasts every trainable param to fp32 IN PLACE before
+            # fully_shard + CPUOffloadPolicy park the shards on the host; with
+            # the model GPU-resident that upcast allocates bf16 + fp32 copies of
+            # the WHOLE model on the card (~7.5 B/param peak measured on
+            # SmolLM2-135M/360M — ~50 GB for a 7B, i.e. an OOM on the 32 GB
+            # card the offload path exists for). Loading on CPU keeps the upcast
+            # in host RAM, which is where the offloaded state lives anyway.
+            if torch.cuda.is_available() and not self.full_ft_offload:
                 model_load_kwargs["device_map"] = "auto"
         elif self._load_in_4bit:
             # LoRA / QLoRA (default): 4-bit nf4 base + adapter. bitsandbytes
@@ -4596,20 +4744,26 @@ class Trainer:
                 "_label": f"transformers_from_pretrained:{self.model_name}",
             }
 
-        # Load model
-        self._model = _retry_hf_call(
-            AutoModelForCausalLM.from_pretrained,
-            self.model_name,
-            **model_load_kwargs,
-        )
-
-        # Load tokenizer
-        self._tokenizer = _retry_hf_call(
-            AutoTokenizer.from_pretrained,
-            self.model_name,
-            trust_remote_code=settings.model.trust_remote_code,
-            _label=f"tokenizer_from_pretrained:{self.model_name}",
-        )
+        # Load model + tokenizer. ``trust_remote_code`` is always an explicit
+        # bool (never None), so transformers never prompts on stdin; a repo
+        # that needs custom code while the setting is off surfaces as a
+        # structured CONFIG_TRUST_REMOTE_CODE_REQUIRED error.
+        try:
+            self._model = _retry_hf_call(
+                AutoModelForCausalLM.from_pretrained,
+                self.model_name,
+                **model_load_kwargs,
+            )
+            self._tokenizer = _retry_hf_call(
+                AutoTokenizer.from_pretrained,
+                self.model_name,
+                trust_remote_code=settings.model.trust_remote_code,
+                _label=f"tokenizer_from_pretrained:{self.model_name}",
+            )
+        except Exception as e:
+            if is_trust_remote_code_error(e):
+                raise TrustRemoteCodeRequiredError(self.model_name) from e
+            raise
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -5273,6 +5427,7 @@ class Trainer:
         # gate already lifted the param ceiling for this path).
         if self.mode == "full" and self.full_ft_offload:
             _ensure_fsdp_runtime()
+            self._enforce_offload_fit_for_model(steps_batch=self.batch_size)
 
         # Load model if not loaded
         if not self._is_loaded:
@@ -5294,6 +5449,16 @@ class Trainer:
         # No-op for non-KTO methods.
         if self.method == "kto":
             self._auto_balance_kto_weights(train_dataset)
+
+        # full_ft_offload: the direct-FSDP2 engine (backpropagate.offload_engine)
+        # replaces the SFTTrainer + TrainingArguments(fsdp=...) route. That route
+        # upcast params to fp32 and used AdamW, ~16 host B/param (113 GB at 7.6B).
+        # The engine keeps bf16 params and steps a factored Adafactor on the GPU
+        # with stochastic rounding, for ~4 host B/param.
+        if self.mode == "full" and self.full_ft_offload:
+            return self._train_full_offload(
+                train_dataset, dataset=dataset, steps=steps, callback=callback
+            )
 
         # Pre-tokenize for Windows safety.
         #
@@ -6332,6 +6497,7 @@ class Trainer:
                 batch_size=self.batch_size,
                 max_seq_length=self.max_seq_length,
                 seed=settings.training.seed,
+                trust_remote_code=settings.model.trust_remote_code,
             )
             result = backend.run()
 
@@ -6668,6 +6834,12 @@ class Trainer:
         # Limit samples. Method-agnostic: preference Datasets are ordinary
         # datasets.Dataset objects, so shuffle/select apply identically.
         if max_samples > 0 and len(ds) > max_samples:
+            # Say so: before 1.7.2 a default cap of 1000 dropped rows silently.
+            logger.info(
+                "Using %d of %d dataset rows (max_samples=%d; set samples=0 or "
+                "BACKPROPAGATE_DATA__MAX_SAMPLES=0 to use all).",
+                max_samples, len(ds), max_samples,
+            )
             if settings.data.shuffle:
                 ds = ds.shuffle(seed=settings.training.seed)
             ds = ds.select(range(max_samples))
@@ -6849,6 +7021,126 @@ class Trainer:
             raise DatasetError(f"Tokenization failed: {e}") from e
 
         return tokenized
+
+    def _train_full_offload(
+        self,
+        train_dataset: Any,
+        *,
+        dataset: Any,
+        steps: int | None,
+        callback: TrainingCallback | None,
+    ) -> TrainingRun:
+        """Run the direct-FSDP2 CPU-offload full fine-tune (see offload_engine)."""
+        import math
+        import time
+        import uuid
+
+        from . import offload_engine
+
+        run_id = uuid.uuid4().hex
+        total_steps = steps or settings.training.max_steps
+        batch = self.batch_size if isinstance(self.batch_size, int) else 1
+        run_history = RunHistoryManager(str(self.output_dir))
+        try:
+            run_history.record_run_started(
+                run_id=run_id,
+                model_name=self.model_name,
+                dataset_info=dataset if isinstance(dataset, str) else type(dataset).__name__,
+                hyperparameters={
+                    "mode": "full",
+                    "full_ft_offload": True,
+                    "engine": "fsdp2-direct",
+                    "optimizer": "adafactor-factored-sr",
+                    "learning_rate": self.learning_rate,
+                    "batch_size": batch,
+                    "gradient_accumulation": self.gradient_accumulation,
+                    "max_seq_length": self.max_seq_length,
+                    "max_steps": total_steps,
+                    "seed": settings.training.seed,
+                    "method": self.method,
+                },
+                session_kind="single_run",
+                checkpoint_path=str(self.output_dir),
+            )
+        except Exception as hist_err:  # noqa: BLE001 — history is best-effort
+            logger.warning(f"RunHistoryManager.record_run_started failed: {hist_err}")
+
+        start = time.time()
+        try:
+            result = offload_engine.run_offload_training(
+                self._model,
+                self._tokenizer,
+                train_dataset,
+                steps=total_steps,
+                batch_size=batch,
+                gradient_accumulation=max(1, int(self.gradient_accumulation or 1)),
+                learning_rate=self.learning_rate,
+                max_seq_length=self.max_seq_length,
+                warmup_steps=min(settings.training.warmup_steps, max(0, total_steps // 10)),
+                lr_scheduler_type=settings.training.lr_scheduler_type,
+                weight_decay=settings.training.weight_decay or 0.0,
+                seed=settings.training.seed,
+                on_step=(callback.on_step if callback and callback.on_step else None),
+            )
+        except Exception as exc:
+            try:
+                run_history.record_run_failed(
+                    run_id=run_id,
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                    loss_history=[],
+                    duration_seconds=time.time() - start,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # nosec B110 — history is best-effort
+            if callback and callback.on_error:
+                try:
+                    callback.on_error(exc)
+                except Exception as cb_err:  # noqa: BLE001
+                    logger.warning(f"on_error callback raised error: {cb_err}")
+            if isinstance(exc, BackpropagateError):
+                raise
+            raise TrainingError(f"full_ft_offload training failed: {exc}") from exc
+
+        self._model = result["model"]
+        # Kept for introspection (tests / receipts): the engine's optimizer.
+        self._offload_optimizer = result["optimizer"]
+        losses = [x for x in result["losses"] if math.isfinite(x)]
+        final_loss = result["losses"][-1] if result["losses"] else 0.0
+        duration = time.time() - start
+        run = TrainingRun(
+            run_id=run_id,
+            steps=total_steps,
+            final_loss=final_loss,
+            loss_history=losses,
+            duration_seconds=duration,
+            samples_seen=result["samples_seen"],
+            output_path=str(self.output_dir),
+            metadata={
+                "engine": "fsdp2-direct",
+                "optimizer": "adafactor-factored-sr",
+                "step_times": result["step_times"],
+                "update_retention": result.get("update_retention", []),
+            },
+        )
+        self._training_runs.append(run)
+        self._has_trained = True
+        try:
+            run_history.record_run_completed(
+                run_id=run_id,
+                final_loss=final_loss,
+                loss_history=losses,
+                steps=total_steps,
+                duration_seconds=duration,
+                checkpoint_path=str(self.output_dir),
+            )
+        except Exception as hist_err:  # noqa: BLE001
+            logger.warning(f"RunHistoryManager.record_run_completed failed: {hist_err}")
+        if callback and callback.on_complete:
+            try:
+                callback.on_complete(run)
+            except Exception as cb_err:  # noqa: BLE001
+                logger.warning(f"on_complete callback raised error: {cb_err}")
+        return run
 
     def save(
         self,
@@ -7043,7 +7335,18 @@ class Trainer:
                     save_method="merged_16bit",
                 )
             else:
-                self._model.save_pretrained(str(partial_path))
+                # v1.7 full_ft_offload: an FSDP2-sharded model's parameters are
+                # DTensors (CPU-offloaded shards); save_pretrained cannot
+                # serialize them ("Attempted to access the data pointer on an
+                # invalid python storage"). Gather a plain full state dict
+                # first. None for every non-FSDP model — unchanged path.
+                full_sd = _gather_fsdp_full_state_dict(self._model)
+                if full_sd is not None:
+                    self._model.save_pretrained(
+                        str(partial_path), state_dict=full_sd
+                    )
+                else:
+                    self._model.save_pretrained(str(partial_path))
                 self._tokenizer.save_pretrained(str(partial_path))
 
             # B-001: drop run_id into the checkpoint dir so an operator can

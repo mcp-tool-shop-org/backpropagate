@@ -1,6 +1,7 @@
 {
   "authored": [
     ".claude/",
+    ".github/",
     "assets/",
     "docs/",
     "examples/",
@@ -8,7 +9,7 @@
   ],
   "breaks": [
     {
-      "doors": 2,
+      "doors": 6,
       "importedBy": [
         "scripts"
       ],
@@ -16,7 +17,8 @@
         "tests"
       ],
       "kind": "part",
-      "name": "backpropagate"
+      "name": "backpropagate",
+      "partLabel": "backpropagate"
     },
     {
       "doors": 3,
@@ -25,7 +27,16 @@
         "tests"
       ],
       "kind": "part",
-      "name": "scripts"
+      "name": "scripts",
+      "partLabel": "scripts"
+    },
+    {
+      "doors": 2,
+      "importedBy": [],
+      "importedByTests": [],
+      "kind": "part",
+      "name": "root",
+      "partLabel": "the repository root"
     },
     {
       "kind": "place",
@@ -40,24 +51,94 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 8,
-      "changed": 23,
+      "added": 154,
+      "changed": 257,
       "moved": 0,
-      "parts": 7,
+      "parts": 10,
       "removed": 1
     },
     "items": [
       {
+        "kind": "door",
+        "sentence": "Pages deploy now also runs site/astro.config.mjs and site/src/.",
+        "subjects": [
+          ".github/workflows/pages-deploy.yml",
+          "site/astro.config.mjs",
+          "site/src/"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "Post-Publish Smoke now also runs backpropagate/cli.py.",
+        "subjects": [
+          ".github/workflows/post-publish-smoke.yml",
+          "backpropagate/cli.py"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "Publish now also runs backpropagate/cli.py.",
+        "subjects": [
+          ".github/workflows/publish.yml",
+          "backpropagate/cli.py"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "And 4 more changes to doors.",
+        "subjects": []
+      },
+      {
+        "kind": "landing",
+        "sentence": ".github/workflows/ci.yml is now read by docs/ci-gates-triage-plan.md.",
+        "subjects": [
+          ".github/workflows/ci.yml",
+          "docs/ci-gates-triage-plan.md"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "README.md is now also read by pyproject.toml and tests/test_model_card.py.",
+        "subjects": [
+          "README.md",
+          "pyproject.toml",
+          "tests/test_model_card.py"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "backpropagate/ is now also read by CONTRIBUTING.md, pyproject.toml, scripts/check_doc_drift.py and tests/test_error_codes_catalog.py.",
+        "subjects": [
+          "backpropagate/",
+          "CONTRIBUTING.md",
+          "pyproject.toml",
+          "scripts/check_doc_drift.py",
+          "tests/test_error_codes_catalog.py"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 16 more new writers and readers of places.",
+        "subjects": []
+      },
+      {
+        "kind": "origin",
+        "sentence": ".github was generated and is now authored.",
+        "subjects": [
+          ".github"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-09-30; 8 files added, 1 removed and 23 changed content.",
+        "sentence": "154 files added, 1 removed and 257 changed content, across 10 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "9bb2f01aeb6505866bc034d81967da222d39e5cb",
-      "generatedAt": "2026-09-30T16:15:00.419Z"
+      "commit": "28a7fc834c396d77f304d7eb1c4d7c63533fff24",
+      "generatedAt": "2026-09-30T18:55:15.739Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
   "changesTogether": [
     {
@@ -66,25 +147,33 @@
       "either": 57,
       "partLabels": [
         "backpropagate",
-        "backpropagate"
+        null
       ],
       "parts": [
         "backpropagate",
-        "backpropagate"
+        null
       ],
-      "relation": "inside",
+      "relation": "unassigned",
       "shared": 30
     }
   ],
   "changesTogetherNote": [
     "2 files changed together with their own tests, as expected.",
-    "Window: 180 days; a pair counts from 10 shared commits."
+    "Window: 180 days; a pair counts from 10 shared commits, since 20 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "28a7fc834c396d77f304d7eb1c4d7c63533fff24",
+  "commit": "128a3b9487b425722b9f6f3db44c34c02a4c2f2f",
+  "defaultBranch": "main",
+  "derived": "11 parts, mostly Python (142 files), shell (8), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
+      "checks": [
+        "backpropagate/"
+      ],
+      "checksCount": 1,
+      "checksMore": 0,
       "file": ".github/workflows/ci.yml",
+      "id": ".github/workflows/ci.yml",
       "landings": [],
       "name": "CI",
       "pushes": false,
@@ -102,7 +191,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 76
+          "files": 82
         },
         {
           "boundary": "scripts",
@@ -111,21 +200,71 @@
         }
       ],
       "runs": [
-        "backpropagate/",
         "tests/",
         "verify.sh"
       ],
-      "runsCount": 3,
-      "sends": [],
+      "runsCount": 2,
+      "runsMore": 0,
+      "sends": [
+        "uploads coverage to Codecov",
+        "scans code with CodeQL"
+      ],
       "stages": [],
       "triggers": [
-        "on a pull request",
+        "on a pull request to main",
         "on a push to main touching 9 paths",
         "or by hand"
       ]
     },
     {
+      "checks": [
+        "backpropagate/"
+      ],
+      "checksCount": 1,
+      "checksMore": 0,
+      "file": ".github/workflows/publish.yml",
+      "id": ".github/workflows/publish.yml",
+      "landings": [],
+      "name": "Publish",
+      "packs": [
+        "LICENSE",
+        "README.md",
+        "pyproject.toml"
+      ],
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 52
+        },
+        {
+          "boundary": "root",
+          "depth": 0,
+          "files": 3
+        }
+      ],
+      "runs": [
+        "backpropagate/cli.py"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [
+        "publishes to PyPI and a container image"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a release is published",
+        "when the workflow Release completes",
+        "or by hand"
+      ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/nightly-train-smoke.yml",
+      "id": ".github/workflows/nightly-train-smoke.yml",
       "landings": [],
       "name": "Nightly Train Smoke",
       "pushes": false,
@@ -138,13 +277,14 @@
         {
           "boundary": "backpropagate",
           "depth": 1,
-          "files": 19
+          "files": 16
         }
       ],
       "runs": [
         "scripts/nightly_train_smoke.py"
       ],
       "runsCount": 1,
+      "runsMore": 0,
       "sends": [
         "opens an issue when it fails"
       ],
@@ -155,7 +295,11 @@
       ]
     },
     {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/doc-drift.yml",
+      "id": ".github/workflows/doc-drift.yml",
       "landings": [],
       "name": "Doc Drift Check",
       "pushes": false,
@@ -170,24 +314,90 @@
         "scripts/check_doc_drift.py"
       ],
       "runsCount": 1,
+      "runsMore": 0,
       "sends": [],
       "stages": [],
       "triggers": [
-        "on a pull request",
+        "on a pull request to main",
         "on a push to main touching 7 paths",
         "or by hand"
       ]
     },
     {
-      "file": ".github/workflows/mutmut.yml",
-      "landings": [
-        ".github/"
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": ".github/workflows/pages-deploy.yml",
+      "id": ".github/workflows/pages-deploy.yml",
+      "landings": [],
+      "name": "Pages deploy",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "site",
+          "depth": 0,
+          "files": 6
+        }
       ],
+      "runs": [
+        "site/astro.config.mjs",
+        "site/src/"
+      ],
+      "runsCount": 2,
+      "runsMore": 0,
+      "sends": [
+        "deploys the site"
+      ],
+      "stages": [],
+      "triggers": [
+        "on a push to main touching 2 paths",
+        "or by hand"
+      ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": ".github/workflows/post-publish-smoke.yml",
+      "id": ".github/workflows/post-publish-smoke.yml",
+      "landings": [],
+      "name": "Post-Publish Smoke",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 18
+        }
+      ],
+      "runs": [
+        "backpropagate/cli.py"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [
+        "opens an issue when it fails"
+      ],
+      "stages": [],
+      "triggers": [
+        "when the workflow Publish completes",
+        "or by hand"
+      ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": ".github/workflows/mutmut.yml",
+      "id": ".github/workflows/mutmut.yml",
+      "landings": [],
       "name": "Mutation testing (mutmut)",
-      "pushes": true,
+      "pushes": false,
+      "pushesForReview": true,
       "reach": [],
       "runs": [],
       "runsCount": 0,
+      "runsMore": 0,
       "sends": [
         "opens a pull request"
       ],
@@ -199,14 +409,21 @@
       ]
     },
     {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/scorecard.yml",
+      "id": ".github/workflows/scorecard.yml",
       "landings": [],
       "name": "OpenSSF Scorecard",
       "pushes": false,
       "reach": [],
       "runs": [],
       "runsCount": 0,
-      "sends": [],
+      "runsMore": 0,
+      "sends": [
+        "scans code with CodeQL"
+      ],
       "stages": [],
       "triggers": [
         "on a `branch_protection_rule` event",
@@ -216,86 +433,120 @@
       ]
     },
     {
-      "file": ".github/workflows/pages-deploy.yml",
-      "landings": [],
-      "name": "Pages deploy",
-      "pushes": false,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "sends": [
-        "deploys the site"
-      ],
-      "stages": [],
-      "triggers": [
-        "on a push to main touching 2 paths",
-        "or by hand"
-      ]
-    },
-    {
-      "file": ".github/workflows/post-publish-smoke.yml",
-      "landings": [],
-      "name": "Post-Publish Smoke",
-      "pushes": false,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "sends": [
-        "opens an issue when it fails"
-      ],
-      "stages": [],
-      "triggers": [
-        "when the workflow Publish completes",
-        "or by hand"
-      ]
-    },
-    {
-      "file": ".github/workflows/publish.yml",
-      "landings": [],
-      "name": "Publish",
-      "pushes": false,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "sends": [
-        "publishes to PyPI and a container image"
-      ],
-      "stages": [],
-      "triggers": [
-        "when a release is published",
-        "when the workflow Release completes",
-        "or by hand"
-      ]
-    },
-    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/release.yml",
+      "id": ".github/workflows/release.yml",
       "landings": [],
       "name": "Release",
       "pushes": false,
       "reach": [],
       "runs": [],
       "runsCount": 0,
+      "runsMore": 0,
       "sends": [
         "publishes to npm",
-        "creates a GitHub release"
+        "creates a GitHub release",
+        "uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release"
       ],
       "stages": [],
       "triggers": [
         "when a tag matching `v*` is pushed",
         "or by hand"
       ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": "pyproject.toml",
+      "id": "pyproject.toml#backprop",
+      "kind": "command",
+      "landings": [],
+      "name": "backprop",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 18
+        }
+      ],
+      "runs": [
+        "backpropagate/cli.py"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": []
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": "package.json",
+      "id": "package.json#backpropagate",
+      "kind": "command",
+      "landings": [],
+      "name": "backpropagate",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "bin",
+          "depth": 0,
+          "files": 1
+        }
+      ],
+      "runs": [
+        "bin/backpropagate.js"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": []
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": "pyproject.toml",
+      "id": "pyproject.toml#backpropagate",
+      "kind": "command",
+      "landings": [],
+      "name": "backpropagate",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "backpropagate",
+          "depth": 0,
+          "files": 18
+        }
+      ],
+      "runs": [
+        "backpropagate/cli.py"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": []
     }
   ],
   "duplicates": [],
   "duplicatesLead": null,
   "duplicatesNote": [],
-  "generated": [
+  "edges": [
     {
-      "place": ".github/",
-      "writers": [
-        ".github/workflows/mutmut.yml"
-      ]
-    },
+      "from": "scripts",
+      "fromTests": false,
+      "to": "backpropagate"
+    }
+  ],
+  "engine": "1.24.0",
+  "generated": [
     {
       "place": "CITATION.cff",
       "writers": [
@@ -303,31 +554,53 @@
       ]
     }
   ],
-  "generatedAt": "2026-09-30T18:55:15.739Z",
+  "generatedAt": "2026-10-01T00:02:18.258Z",
   "limits": [
-    "42 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "7 import sites could not be resolved.",
-    "18 writes and 40 reads use paths built at run time and are not named here."
+    "40 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "352 imports could not be resolved: `backpropagate/__init__.py` imports `.trainer`, which is no module on its import path and no declared dependency; `backpropagate/cli.py` imports `.trainer`, which is no module on its import path and no declared dependency, twice; `scripts/offload_probe.py` imports `backpropagate.trainer`, which is no module on its import path and no declared dependency; and 348 more.",
+    "6 writes and 10 reads use paths built at run time and are not named here.",
+    "26 writes and 64 reads go to a path their caller passes, not to this repository.",
+    "1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.",
+    "1 read goes to the directory the command is run in, not to this repository.",
+    "1 read goes to the home directory (.cache/), not to this repository.",
+    "1 write goes to a temporary directory, not to this repository.",
+    "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page."
   ],
   "mainDoor": ".github/workflows/ci.yml",
+  "partLabels": {
+    ".claude": ".claude",
+    ".github": ".github",
+    "assets": "assets",
+    "backpropagate": "backpropagate",
+    "bin": "bin",
+    "docs": "docs",
+    "examples": "examples",
+    "root": "the repository root",
+    "scripts": "scripts",
+    "site": "site",
+    "tests": "tests"
+  },
   "parts": 11,
   "readers": [],
   "repo": "mcp-tool-shop-org/backpropagate",
   "sequences": [],
+  "startDoor": "pyproject.toml#backprop",
   "startHere": [
-    ".github/workflows/ci.yml",
-    "tests/",
-    "scripts/check_doc_drift.py"
+    "backpropagate/cli.py",
+    "backpropagate/logging_config.py"
   ],
+  "startReason": "This path follows backprop (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 79,
+  "testFiles": 85,
   "testedBy": {
-    "backpropagate": 66,
+    "backpropagate": 71,
     "bin": 0,
     "scripts": 2
   },
+  "unnamedWrites": 6,
   "unread": [],
+  "unreadFiles": 0,
   "unreadNote": [],
   "untested": [
     {
@@ -337,5 +610,5 @@
     }
   ],
   "untestedNote": [],
-  "written": 2
+  "written": 1
 }

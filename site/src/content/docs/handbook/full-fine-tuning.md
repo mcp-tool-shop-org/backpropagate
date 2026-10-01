@@ -1,129 +1,159 @@
 ---
 title: Full fine-tuning (mode="full")
-description: Card-aware full fine-tuning on one GPU — the 4-addend VRAM ceiling, the FSDP2 CPU-offload path for 7B-class models, and the quality math from Biderman 2024 / Thinking Machines 2025.
+description: Full fine-tuning on one GPU — the card-aware ceiling, the measured FSDP2 CPU-offload path for 7B-class models, and what the LoRA-vs-full evidence actually says.
 sidebar:
   order: 2.5
 ---
 
-`mode="full"` updates every weight of the base model during training — no adapter, full-precision (bf16) weights. Backpropagate sizes it to the card you actually have: the parameter ceiling is **derived from your detected VRAM**, and `--full-ft-offload` extends it to **7B-class** by spilling params + optimizer state into host RAM via FSDP2. This page covers when to use it, the card-aware ceiling, the offload path, and the LoRA-vs-full quality math.
+`mode="full"` updates every weight of the base model — no adapter, bf16 weights. There are two ways to run it:
+
+- **On the GPU** (the default for `mode="full"`): model, gradients and optimizer state all live in VRAM. Fast. Capped by your card.
+- **With `--full-ft-offload`**: weights and gradients live in host RAM and stream to the GPU. Fits a 7B-class model on a 32 GB card, at a real cost in speed. Linux or WSL2 only.
+
+This page covers when full fine-tuning is worth it, both paths, and the measured numbers behind them. Every figure marked *measured* comes from runs on an RTX 5090 (32 GB) on 2026-09-30; the receipts are in the repository under [`docs/receipts/2026-09-30-offload/`](https://github.com/mcp-tool-shop-org/backpropagate/tree/main/docs/receipts/2026-09-30-offload).
 
 ## TL;DR
 
-- **Default is `mode="lora"`** (low-rank adapter; ~67% of the compute and matches full fine-tuning on most post-training tasks per [Biderman 2024](https://arxiv.org/abs/2405.09673) and [Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/)).
-- **The full-FT ceiling is card-aware.** Derived from the 4-addend training-memory arithmetic against your detected VRAM: **16 GB → 4B, 24 GB → 5B, 32 GB → 6B** pure-GPU. A model past the ceiling exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` — see [error codes](/backpropagate/handbook/error-codes/#runtime_full_ft_model_too_large).
-- **`--full-ft-offload` lifts the ceiling to 7B-class** (≈8B on a 32 GB card) via FSDP2 `fully_shard` + `CPUOffloadPolicy`, spilling params + optimizer to ~64 GB host RAM. Slower (PCIe/CPU-bandwidth-bound); needs an NCCL backend (Linux/WSL2 — not Windows-native).
-- **`--full-ft-ceiling-billions B`** overrides the derived ceiling explicitly when you know your card's headroom.
+- **Default is `mode="lora"`.** For most instruction, persona and style work on modest datasets, LoRA applied to every layer is the better use of one card. See [the evidence](#lora-or-full-fine-tuning-the-evidence) — it is more mixed than "LoRA always matches".
+- **On the GPU, the ceiling is card-aware:** 16 GB → 4B, 24 GB → 5B, 32 GB → 6B. Those caps come from memory arithmetic. Runs up to 3B are measured to train; their peak VRAM is being re-measured (see below).
+- **`--full-ft-offload` trains a 7.6B model on a 32 GB card** (*measured*: 5.3 GiB VRAM, 30.8 GiB host RAM, 14.7 s/step). The run is checked up front and refused, with the numbers, if the machine cannot hold it.
+- **`--full-ft-ceiling-billions B`** overrides the ceiling (and turns a failed offload fit check into a warning) when you know better.
 
 ## When to use `mode="full"`
 
-The honest, narrow case: you have measured a quality gap between LoRA and full fine-tuning on YOUR task, on YOUR data, and you've decided to spend the extra compute to close it. Most operators most of the time should stay with LoRA. The Biderman 2024 + Thinking Machines 2025 data make this clear:
+Full fine-tuning learns changes that a low-rank adapter cannot represent. [Biderman et al. 2024](https://arxiv.org/abs/2405.09673) found that full fine-tuning learns weight changes of 10–100× higher rank than typical LoRA settings, and that in standard low-rank settings LoRA substantially underperforms full fine-tuning on **code and math**. The same paper found LoRA **forgets less** of what the base model could already do.
 
-- **Instruction following / RLHF-style preference learning:** LoRA at correct rank (256+) matches full FT.
-- **Persona / style transfer:** LoRA matches.
-- **Domain adaptation (medical / legal / financial):** LoRA matches at rank 256 + all-linear target modules.
-- **Code generation (very long-tail token distribution):** small but consistent gap in favor of full FT.
-- **Heavy reasoning post-training (RLHF on math / chain-of-thought):** full FT pulls ahead measurably.
+[Thinking Machines 2025](https://thinkingmachines.ai/blog/lora/) found LoRA matching full fine-tuning when two conditions hold: LoRA is applied to **every layer** (especially the MLP layers), and the dataset is **small enough for the adapter's capacity**. Past that capacity, LoRA underperforms.
 
-If you're in one of the last two categories AND you've benchmarked the gap on your specific data, `mode="full"` is the tool. Otherwise stick with LoRA — the quality math is overwhelmingly in its favor at 67% of the compute, and QLoRA fits 7B–34B on a 32 GB card.
+So reach for `mode="full"` when:
 
-## When to STAY with LoRA / QLoRA
+- the task is code or math, or the dataset is large relative to an adapter's capacity, **and**
+- you have measured a gap between LoRA (the default quality preset: rank 256, all linear layers) and full fine-tuning on your own data.
 
-- You haven't measured a gap on your specific task.
-- Your model is past the full-FT ceiling even with offload (≈13B+ on a 32 GB card) — QLoRA handles 14B–34B there instead.
-- You're prototyping (LoRA's faster iteration loop dominates the trade-off).
-- You're doing single-task instruction tuning, persona transfer, or domain adaptation — the three cases the literature has settled in LoRA's favor.
+Otherwise stay with LoRA / QLoRA. It is faster, it forgets less, and QLoRA reaches 32B on one 32 GB card.
 
 ## Python API
 
 ```python
 from backpropagate import Trainer
 
-# Default: LoRA, rank 256, all-linear target modules (v1.3 quality preset).
+# Default: LoRA, rank 256, all linear layers.
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct")
 trainer.train("my_data.jsonl", steps=100)
 
-# Pure-GPU full fine-tuning of a model within the card-aware ceiling
-# (e.g. a genuine ~3B on 16 GB, up to ~6B on a 32 GB card).
+# Full fine-tuning on the GPU, within the card-aware ceiling.
 trainer = Trainer("smollm3-3b", mode="full")
 trainer.train("my_data.jsonl", steps=100)
 
-# 7B-class full fine-tuning on a 32 GB card via FSDP2 CPU-offload
-# (spills params + optimizer to host RAM; Linux/WSL2, ~64 GB host RAM).
+# 7B-class full fine-tuning with CPU offload (Linux / WSL2).
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", mode="full", full_ft_offload=True)
 trainer.train("my_data.jsonl", steps=100)
 
-# Override the ceiling explicitly (you know your card's headroom):
+# Override the ceiling (and the offload fit check) explicitly.
 trainer = Trainer("Qwen/Qwen2.5-7B-Instruct", mode="full", full_ft_ceiling_billions=8.0)
 ```
 
 ## CLI
 
 ```bash
-# Default (LoRA on the canonical 7B):
-backprop train --data my_data.jsonl --steps 100
-
-# Pure-GPU full fine-tuning within the card-aware ceiling:
+# Full fine-tuning on the GPU:
 backprop train --model smollm3-3b --mode full --data my_data.jsonl --steps 100
 
-# 7B-class full fine-tuning via FSDP2 CPU-offload (Linux/WSL2):
+# 7B-class full fine-tuning with CPU offload (Linux / WSL2):
 backprop train --model Qwen/Qwen2.5-7B-Instruct --mode full --full-ft-offload \
   --data my_data.jsonl --steps 100
 
-# Override the ceiling explicitly:
+# Override the ceiling:
 backprop train --model Qwen/Qwen2.5-7B-Instruct --mode full --full-ft-ceiling-billions 8 \
   --data my_data.jsonl --steps 100
 ```
 
-## What changes when `mode="full"` is set
+## Full fine-tuning on the GPU
 
-The trainer applies these mode-specific settings inside `_build_sft_config`:
+With `mode="full"` and no offload, the trainer:
 
-1. **No PEFT config** — full FT bypasses LoRA / adapter machinery entirely; every weight updates via standard backprop on full-precision (bf16) weights (no 4-bit base).
-2. **`gradient_checkpointing=True` by default** — activation memory scales as sqrt(L) instead of linearly in layer count. (When `--full-ft-offload` is on, checkpointing moves into the FSDP config as `activation_checkpointing` to avoid a redundant all-gather.)
-3. **`paged_adamw_8bit` optimizer** — the paged 8-bit Adam the consumer-card path uses, applied to every parameter. 2 momentum buffers × 1 byte + the gradient in bf16 keeps the optimizer addend small.
-4. **Learning rate divided by 10** — full FT literature recommends ~10× lower LR than LoRA. Default LoRA LR `2e-4` → default full FT LR `2e-5`. Override via `learning_rate=`.
+1. Skips the adapter entirely. Every weight trains, in bf16; there is no 4-bit base.
+2. Turns on gradient checkpointing, trading recomputation for activation memory.
+3. Uses `paged_adamw_8bit`, so the optimizer state costs about 2 bytes per parameter.
+4. Divides the learning rate by 10 (LoRA default `2e-4` → full fine-tuning default `2e-5`). Override with `learning_rate=`.
 
-## The card-aware ceiling (the 4-addend arithmetic)
+Weights (2 B/param) + gradients (2 B/param) + 8-bit optimizer state (~2 B/param) come to about 6 bytes per parameter on the card, plus activations. Against detected VRAM that gives the ceiling:
 
-Training VRAM is the sum of four addends — **model weights + gradients + optimizer state + activations**. For full fine-tuning every parameter is trainable, so weights (bf16, 2 B/param) + gradients (2 B/param) + paged 8-bit AdamW optimizer (~2 B/param) dominate at ≈6 B/param GPU-resident. Against detected VRAM that yields the pure-GPU ceiling:
-
-| Card | Pure-GPU full-FT ceiling | With `--full-ft-offload` |
+| Card | Ceiling on the GPU | Measured |
 |---|---|---|
-| 16 GB | 4B | 4B (offload needs NCCL/host RAM) |
-| 24 GB | 5B | 7B |
-| 32 GB | **6B** | **8B (7B-class)** |
-| 48 GB+ | 10B | 16B |
+| 16 GB | 4B | — |
+| 24 GB | 5B | — |
+| 32 GB | 6B | 3B: **22.0 GiB** system-wide (13.4 GiB PyTorch-reserved + 7.5 GiB paged optimizer state), batch 4, 512 tokens, 0.30 s/step |
+| 48 GB+ | 10B | — |
 
-The ceiling bounds the parameter **count** — it does not promise a fit for every admitted model under every sequence length. It is enforced in two places:
+**Note on the measured figures.** `paged_adamw_8bit` keeps its state in CUDA managed memory, which bitsandbytes allocates outside PyTorch's allocator, so `torch.cuda.max_memory_allocated()` does not include it. Measured with system-wide NVIDIA counters at 3B, the peak was 22.0 GiB against 13.4 GiB reported by PyTorch. Managed memory can spill to host RAM when the card fills, so the run may still work on a smaller card, more slowly; that has not been tested, and the ceilings in the table have not been re-derived from this measurement.
 
-1. **`Trainer.__init__`** — preset-table / model-id lookup; the gate fires before the model is loaded.
-2. **`Trainer.load_model()`** — second check via `model.num_parameters()` (authoritative). Catches custom model ids the preset table doesn't know.
+The ceiling bounds the parameter **count**. It does not promise a fit at every sequence length. It is checked when the `Trainer` is created (from the preset table or model id) and again after loading (from the actual parameter count). A model over the ceiling exits `2` with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`; the error names `--full-ft-offload` when offload would fit it, and LoRA / QLoRA when it would not.
 
-A model past the (offload-aware) ceiling exits `2` with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`. The error is **contrastive**: if your model clears the offload ceiling but not the pure-GPU one, it names `--full-ft-offload`; if it's past even the offload ceiling, it names LoRA / QLoRA.
+## Full fine-tuning with CPU offload (`--full-ft-offload`)
 
-## FSDP2 CPU-offload (`--full-ft-offload`)
+The offload engine keeps each weight and its gradient in host RAM in bf16, and streams one transformer layer at a time to the GPU. It shards the model with PyTorch's FSDP2 directly and runs its own training loop.
 
-When a true full fine-tune of a 7B-class model won't fit pure-GPU on a 32 GB card, `--full-ft-offload` configures FSDP2 (`fully_shard` + `CPUOffloadPolicy` + activation checkpointing + bf16) to spill params + optimizer state into host RAM. This is the studio's **measured** recipe — a 7B-class full fine-tune fits a 32 GB card backed by ~64 GB host RAM.
+### Measured on an RTX 5090
 
-It is a **documented escape hatch, not the default**:
+| Model | Batch | Host RAM peak | VRAM (allocated / reserved) | Speed |
+|---|---|---|---|---|
+| Qwen2.5-7B (7.6B) | 1 | 30.8 GiB training, 32.2 GiB with save + reload | 5.3 / 14.7 GiB | 14.7 s/step |
+| Qwen3-4B | 1 | 25.1 GiB with save + reload | — | 4.3 s/step |
+| SmolLM3-3B | 4 | — | 4.3 GiB | 5.1 s/step |
+| Qwen2.5-1.5B | 1 | — | — | 1.8 s/step |
 
-- **Slower.** The run is PCIe/CPU-bandwidth-bound, not compute-bound. Budget for a noticeably slower run than a model that fits pure-GPU.
-- **Needs host RAM.** ~64 GB is the measured target; the trainer warns if it detects much less.
-- **Needs an NCCL backend → Linux / WSL2.** FSDP CUDA collectives require NCCL, which is not available on Windows-native (gloo can't carry CUDA collectives). On a host without NCCL the path fails fast with `DEP_FSDP_UNAVAILABLE` naming the WSL2 / Linux requirement — it never silently runs without offload and OOMs. The trainer initializes a single-process group automatically, so a bare `backprop train` works (no `accelerate launch` / `torchrun` needed) on a capable host.
+All at 512 tokens. The engine keeps everything in PyTorch-allocated memory, so these VRAM figures are complete. At 2048 tokens the 7.6B step was still 14.7 s: the run is limited by moving weights over PCIe, not by compute.
 
-If FSDP2 CPU-offload still OOMs host RAM, the next step is DeepSpeed ZeRO-Infinity NVMe offload (outside Backpropagate's single-command scope) — or drop to QLoRA, which fits 7B–34B on a 32 GB card natively.
+With VRAM capped on the same card, a 3B model trained under a 6 GiB cap, and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps, not runs on real 8 GB hardware.
 
-## Quality math: should I switch from LoRA to full FT?
+### What it costs
 
-The empirical answer for most operators is **no**. The two load-bearing references:
+- **Speed.** About 8× slower than training on the GPU at 3B (5.1 against about 0.63 s/step, both at batch 4). Use it only when the model does not fit without it. The optimizer currently re-reads every weight and gradient from host RAM after the backward pass; folding it into the backward pass should cut the traffic by about half, and that work is planned.
+- **Optimizer: Adafactor, not AdamW.** It keeps no momentum and factors the second moment, so its state is a few MB even at 7B. The published evidence for Adafactor on LLM fine-tuning is thinner than for AdamW.
+- **No fp32 copy of the weights.** Weights stay in bf16, and each update is written back with **stochastic rounding**. Round-to-nearest drops most small updates at a full fine-tuning learning rate: in our runs only about 17% of each intended update survived it, and the run stopped learning. Stochastic rounding keeps all of it on average. The engine records the surviving fraction every step; with stochastic rounding it stays near 1 by construction, so it confirms the write-back works rather than measuring training health.
+- **Quality.** On one 3B run (Dolly-15k, 400 training examples, 150 held-out, 150 steps, one seed), held-out loss went from 2.45 to 1.93 with offload and to 1.84 with ordinary full fine-tuning on the GPU: about 85% of the improvement. The two paths use different optimizers, so this compares recipes, not just precision. One seed is not a benchmark.
+- **Scope.** Plain supervised fine-tuning over the whole sequence. No packing, no response-only masking, no intermediate checkpoints (it saves at the end), no resume. `method="sft"` only.
+- **Linux or WSL2 only.** FSDP2 needs NCCL, which Windows-native PyTorch does not have. On Windows-native it stops with `DEP_FSDP_UNAVAILABLE` before loading the model.
 
-- **[Biderman et al. (2024). "LoRA Learns Less and Forgets Less."](https://arxiv.org/abs/2405.09673)** Authoritative head-to-head LoRA vs full FT across instruction tuning, math reasoning, and code. Headline: at correct rank (256+) + all-linear targets + 10× LR scale, LoRA matches full FT on instruction tuning + math and trails by ~5% on code, at ~67% of the compute.
-- **[Thinking Machines (2025). "LoRA Without Regret."](https://thinkingmachines.ai/blog/lora/)** Replication + ablations. Headline: the "LoRA loses to full FT" stories measured rank 8–16 LoRA — a setup the v1.3 quality preset already left behind. At rank 256 + all-linear, LoRA matches or wins on most post-training benchmarks.
+### The fit check
 
-The v1.3 quality preset (`--lora-preset=quality`, the default) is the bar the literature compares to. If you haven't measured a gap between that preset and full FT on your data, the literature says you won't find one — and QLoRA up to 34B on one card is the leaner path.
+Before loading any weights, the trainer works out what the run needs and compares it with what the machine has:
+
+- **Host RAM:** about **3.73 GiB per billion parameters + 10.1 GiB**, which covers training plus the save and reload at the end. It is deliberately conservative: at 7.6B it asks for 38.5 GiB, and the run peaked at 32.2 GiB. It is compared with the RAM available when the run starts. Under WSL2 that is the VM's memory cap, not the machine's.
+- **VRAM:** the largest layer and embedding in bf16, plus about 1.4 MiB per token of batch × sequence length, plus a margin.
+
+If either does not fit, the run stops with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`, showing required against available for both and the ways out: a smaller model, more RAM (or a higher WSL2 memory cap), a shorter sequence, or LoRA.
+
+Worked examples from the formula:
+
+| Model | Host RAM needed |
+|---|---|
+| 1.5B | ~16 GiB |
+| 4B | ~25 GiB |
+| 7.6B | ~39 GiB |
+| 13B | ~59 GiB |
+
+The constants come from four runs between 1.5B and 7.6B. Above 7.6B the formula is an extrapolation; nothing larger has been run. Under WSL2's default memory cap, raise it in `%UserProfile%\.wslconfig` (`[wsl2]` → `memory=`) and restart WSL with `wsl --shutdown`. A 28 GB cap holds about 4.8B.
+
+### Environment variables
+
+- `BACKPROPAGATE_OFFLOAD_PIN` — how host memory is page-locked (`register`, the default; `pinned`; `none`). `pinned` was 3–5× faster in our runs but rounds every block up to a power of two, which pushed a 7B run past 60 GiB. See [environment variables](/backpropagate/handbook/env-vars/).
+- `BACKPROPAGATE_OFFLOAD_ROUNDING` — diagnostic only; leave it at `stochastic`.
+
+### Not yet tested
+
+Long runs, gradient accumulation above 1, a physical 64 GB machine (the test machine had more RAM, with a 60 GiB limit enforced by the test), and anything above 7.6B.
+
+## LoRA or full fine-tuning: the evidence
+
+- **[Biderman et al. 2024, "LoRA Learns Less and Forgets Less"](https://arxiv.org/abs/2405.09673).** In standard low-rank settings, LoRA substantially underperforms full fine-tuning on programming and mathematics. It forgets less of the base model's abilities outside the target domain, more than weight decay or dropout do. Full fine-tuning learns perturbations of 10–100× higher rank than typical LoRA.
+- **[Thinking Machines 2025, "LoRA Without Regret"](https://thinkingmachines.ai/blog/lora/).** LoRA matches full fine-tuning when it is applied to all layers (especially MLP) and the dataset fits within its capacity; past that capacity it underperforms. Attention-only LoRA underperforms clearly. LoRA takes a little over two-thirds of the compute of full fine-tuning per pass, and its best learning rate is about 10× full fine-tuning's.
+
+Backpropagate's default LoRA preset (rank 256, all linear layers) follows the conditions in the second paper. Whether it closes the gap on your task is something to measure — `backprop eval` compares two runs on held-out data.
 
 ## See also
 
 - [Error codes → `RUNTIME_FULL_FT_MODEL_TOO_LARGE`](/backpropagate/handbook/error-codes/#runtime_full_ft_model_too_large) · [`DEP_FSDP_UNAVAILABLE`](/backpropagate/handbook/error-codes/#dep_fsdp_unavailable)
 - [CLI reference → `backprop train`](/backpropagate/handbook/cli-reference/#backprop-train) — `--mode`, `--full-ft-offload`, `--full-ft-ceiling-billions`.
-- [What you can fine-tune on one GPU](/backpropagate/) — the full envelope (QLoRA 7B–34B + full-FT tiers).
+- [Estimate VRAM](/backpropagate/handbook/estimate-vram/)

@@ -38,6 +38,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 |------|-------------|-----|
 | `CONFIG_INVALID` | The persisted configuration (env vars, `.env`, settings) is invalid in a way that doesn't fit a more specific code. | Run `backprop config` to dump the resolved config; correct the offending value. |
 | `CONFIG_INVALID_SETTING` | A specific setting has an invalid value (type, range, enum). | The error includes the setting name, the value seen, and the expected shape — fix that one knob. |
+| `CONFIG_TRUST_REMOTE_CODE_REQUIRED` | The model's repository ships its own Python modeling code, and loading it would run that code. `trust_remote_code` is off by default, so the load is refused. | Read the repository's code first. If you trust it, set `BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true` (or `settings.model.trust_remote_code = True` in Python) and run again. |
 
 ## DEP_*  (external dependency)
 

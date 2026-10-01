@@ -10238,8 +10238,20 @@
           "path": "docs/ci-gates-triage-plan.md"
         },
         {
+          "hash": "202ed010178571b917a0e62d92256dccc143e45a8e2d986759a8c536ce53a7c2",
+          "path": "docs/consult/consult-brief-full-ft-engines-2026-09-30.md"
+        },
+        {
+          "hash": "5c279720cd126c5e71433b32fec9891a76a01fbde9e12ab12bb1439bbe375652",
+          "path": "docs/consult/consult-response-kimi-k3-2026-09-30.md"
+        },
+        {
           "hash": "8fe123b3430523d19db9edba4c02a763d92450c6b5a454bd90a886ecbb3a3101",
           "path": "docs/full-ft-engines-design-2026-09-30.md"
+        },
+        {
+          "hash": "73688cbe2e64077bd0e17371aa30960e995eaf2253cade4b383dce6bf021b7bb",
+          "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
         },
         {
           "hash": "22b35d565693e762f631b1f1b4ad4bfb6dbec7c49284fd92f75aebc3bb132956",
@@ -11014,7 +11026,7 @@
       "dynamicReads": 3,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 0,
+      "dynamicWrites": 2,
       "entryPoints": [],
       "externalNames": [
         "datasets"
@@ -11489,6 +11501,23 @@
         {
           "hash": "0c434e0e24de19a0a4d8244377fa2b66e51b0d5040b8031c66713d7a8e5a1820",
           "path": "scripts/run_mutmut.sh"
+        },
+        {
+          "exports": [
+            "main"
+          ],
+          "failurePaths": [
+            {
+              "kind": "raise",
+              "line": 48
+            }
+          ],
+          "hash": "f47df04c97d86d703f7b17cd9c23faa9bd4c3250806e69d4e988a06a13a4943a",
+          "path": "scripts/runpod/deadman.py"
+        },
+        {
+          "hash": "6b4d0ebd52e21c9239faffa050a7b1b97e550865d29ea7b240c145711053e11a",
+          "path": "scripts/runpod/pod.sh"
         },
         {
           "exports": [
@@ -15454,8 +15483,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "7deb5b55cdabe45001c1f90d1c1f86b2b0fe86a4",
-    "tracked": 416
+    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
+    "tracked": 421
   },
   "landings": [
     {

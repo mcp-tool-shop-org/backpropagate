@@ -39,3 +39,8 @@ reason = "datasets <= 5.0.0 folder-based builders read files named by unvalidate
 id = "PYSEC-2026-2447"
 ignoreUntil = 2027-01-01
 reason = "diskcache pickles cache entries, so an attacker who can write to the cache directory gets code execution when the cache is read (CVE-2025-69872). It is in the lock only through llama-cpp-python (LlamaDiskCache); backpropagate imports neither diskcache nor llama_cpp's cache. No fixed release."
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-3447"
+ignoreUntil = 2027-01-01
+reason = "setuptools < 83 applies MANIFEST.in exclude rules without Unicode normalization, so on macOS APFS/HFS+ an NFD file name can slip into a source distribution (CVE-2026-59890). backpropagate builds with hatchling (pyproject [build-system]), has no MANIFEST.in, and builds its sdist on ubuntu-latest (publish.yml), so the affected code path never runs for it. setuptools is in uv.lock only as a torch dependency, and torch 2.12 caps it below 82; overriding that cap would pin an unsupported combination. Fixed in setuptools 83."

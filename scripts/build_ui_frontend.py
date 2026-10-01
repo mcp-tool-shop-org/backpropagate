@@ -6,9 +6,14 @@ the package and ``backpropagate/ui_frontend.py`` seeds into the per-user
 workdir at first launch::
 
     ui_frontend_payload/
-        payload.json   schema, reflex/backpropagate/bun versions, bun hash
-        web/           the complete Reflex .web tree WITHOUT the machine-local
-                       install-cache marker (regenerated at seed time)
+        payload.json   schema, reflex/backpropagate/bun versions, bun hash,
+                       web.zip hash
+        web.zip        the complete Reflex .web tree, zipped WITHOUT the
+                       machine-local install-cache marker (regenerated at
+                       seed time). Zipped because the raw node_modules tails
+                       exceed MAX_PATH under the WindowsApps install prefix
+                       (LongPathsEnabled=0) — extraction happens in the
+                       per-user workdir where the depth budget holds.
         bun/bun.exe    pinned bun-windows-x64 build, SHA-256 verified
 
 How: stage a throwaway dir holding a stub rxconfig (rendered from the shipped
@@ -49,6 +54,27 @@ BUN_VERSION = "1.3.13"
 BUN_WINDOWS_SHA256 = "85b14f3e0584218e9b63407b3aa6b90c4835ec5c32435c1f12cb6fc13667c7c9"
 
 BUILD_TIMEOUT_SECONDS = 360
+
+# Windows MAX_PATH model (LongPathsEnabled=0): the runtime extraction target
+# is %LOCALAPPDATA%\backpropagate\ui\<version>-<hash8>\.web\<member>. Worst
+# realistic prefix: 15 + U_MAX ("C:\Users\<name>\AppData\Local"; profile names
+# are <= 20 for local accounts, we model 24 for Entra-linked outliers) + 16
+# ("backpropagate\ui\") + 20 (version up to "10.20.30" + '-abcdefgh') + 6
+# ("\\.web\\") = 81 chars. node_modules MUST ship: reflex's prod path runs
+# `react-router build` unconditionally at every launch (setup_frontend_prod →
+# build(), verified in reflex 0.9.5 source); bun install runs in "isolated"
+# linker mode, which nests co-dependency copies ~8 levels deep under each
+# @radix-ui root package — that nesting is the depth driver and pruning
+# .map/.d.ts does NOT collapse it (the compiled .mjs sits at the same depth).
+_U_MAX = 24
+_VERSION_DIR_MAX = 20
+RUNTIME_PREFIX_MODEL = 15 + _U_MAX + 16 + _VERSION_DIR_MAX + 6  # = 81
+WEB_DEPTH_BUDGET = 259 - RUNTIME_PREFIX_MODEL
+
+
+def web_depth_budget() -> int:
+    """Max chars a .web member path may occupy (modeled worst runtime prefix)."""
+    return WEB_DEPTH_BUDGET
 
 
 def _free_port() -> int:
@@ -214,31 +240,38 @@ def main(argv: list[str] | None = None) -> int:
     bun_sha = _fetch_bun(payload_root / "bun")
     _build_web(staging)
 
-    print(f"[3/4] harvesting .web -> {payload_root / 'web'}", flush=True)
-    shutil.copytree(
-        staging / ".web",
-        payload_root / "web",
-        # The install-cache marker embeds build-machine paths/ports — it is
-        # regenerated on the user's machine by ui_frontend's warmup step.
-        ignore=shutil.ignore_patterns("reflex.install_frontend_packages.cached"),
-    )
+    print(f"[3/4] zipping .web -> {payload_root / 'web.zip'}", flush=True)
 
-    # Windows MAX_PATH gate (LongPathsEnabled=0 machines): the runtime
-    # workdir prefix is ~60-90 chars (LOCALAPPDATA + username + versioning),
-    # so a payload with deep node_modules tails must leave headroom or the
-    # 1.2 GB-class seed copy dies with ENOENT mid-copy.
-    deepest = max(
-        (len(str(p.relative_to(payload_root))) for p in payload_root.rglob("*") if p.is_file()),
-        default=0,
+    # Ship zipped: the raw tree's node_modules tails (~180 chars relative to
+    # the payload root) would exceed MAX_PATH under the ~86-char WindowsApps
+    # install prefix. The seed step extracts into the per-user workdir, where
+    # the producer-side depth budget (below) holds.
+    zip_path = payload_root / "web.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for file in sorted((staging / ".web").rglob("*")):
+            if file.name == "reflex.install_frontend_packages.cached":
+                continue  # machine-local install marker — regenerated at seed
+            if file.is_file():
+                zf.write(file, file.relative_to(staging / ".web").as_posix())
+    web_zip_sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+
+    deepest_member = max(
+        (str(p.relative_to(staging / ".web")).replace("\\", "/") for p in (staging / ".web").rglob("*") if p.is_file()),
+        key=len,
+        default="",
     )
-    budget = 258 - 90
+    deepest = len(deepest_member)
+    budget = web_depth_budget()
     if deepest > budget:
         raise RuntimeError(
-            f"payload's deepest file path is {deepest} chars; with a 90-char "
-            f"runtime prefix budget that breaks MAX_PATH (260). Shorten the "
-            "tree (fewer node_modules nesting levels) before shipping."
+            f"payload's deepest .web member is {deepest} chars ({deepest_member!r}); "
+            f"with the modeled worst runtime prefix ({RUNTIME_PREFIX_MODEL} chars: "
+            f"LOCALAPPDATA, u<=24, version dir <=20) the run would need "
+            f"{deepest + RUNTIME_PREFIX_MODEL} > 259. If this "
+            "trips, shorten OUR segments (workdir naming) — the node_modules "
+            "nesting itself is reflex+bun's, not ours to prune."
         )
-    print(f"      deepest payload path: {deepest} chars (budget {budget})", flush=True)
+    print(f"      deepest .web member: {deepest} chars (budget {budget})", flush=True)
 
     meta = {
         "schema": 1,
@@ -247,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         "bun_version": BUN_VERSION,
         "bun_sha256": hashlib.sha256((payload_root / "bun" / "bun.exe").read_bytes()).hexdigest(),
         "bun_note": f"bun.exe bytes verified against pinned zip hash {BUN_WINDOWS_SHA256}",
+        "web_zip_sha256": web_zip_sha,
+        "deepest_web_member": deepest,
         "built_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     (payload_root / "payload.json").write_text(

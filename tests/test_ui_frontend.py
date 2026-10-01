@@ -11,6 +11,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -26,14 +27,17 @@ MAX_HASH_SEED = 2**32 - 1
 def payload(tmp_path, monkeypatch):
     """A minimal fake payload pointed at by BACKPROPAGATE_UI_PAYLOAD_DIR."""
     root = tmp_path / "payload"
-    (root / "web" / "build").mkdir(parents=True)
-    (root / "web" / "package.json").write_text("{}", encoding="utf-8")
-    (root / "web" / "bun.lock").write_text("lock", encoding="utf-8")
-    (root / "web" / "build" / "index.js").write_text("bundle", encoding="utf-8")
-    (root / "bun").mkdir()
+    (root / "bun").mkdir(parents=True)
     bun_bytes = b"fake-bun-binary"
     # The seeder looks up the PLATFORM bun name (bun.exe on nt, bun elsewhere).
     (root / "bun" / BUN_NAME).write_bytes(bun_bytes)
+    # The web tree ships ZIPPED (raw node_modules tails exceed MAX_PATH under
+    # the WindowsApps install prefix).
+    web_zip = root / "web.zip"
+    with zipfile.ZipFile(web_zip, "w") as zf:
+        zf.writestr("package.json", "{}")
+        zf.writestr("bun.lock", "lock")
+        zf.writestr("build/index.js", "bundle")
     from importlib.metadata import version as _dist_version
 
     meta = {
@@ -42,11 +46,16 @@ def payload(tmp_path, monkeypatch):
         "backpropagate_version": "0.0.0",
         "bun_version": "1.3.13",
         "bun_sha256": hashlib.sha256(bun_bytes).hexdigest(),
+        "web_zip_sha256": _sha256(web_zip),
         "built_utc": "2026-10-01T00:00:00+00:00",
     }
     (root / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
     monkeypatch.setenv(PAYLOAD_ENV, str(root))
     return root
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 @pytest.fixture
@@ -171,7 +180,6 @@ class TestSeeding:
         _prepare(workdir, tmp_path)
         (workdir / ".web" / "stale.txt").write_text("old", encoding="utf-8")
         # payload changes (version bump) → reseed
-        (payload / "web" / "stale.txt").parent.mkdir(exist_ok=True)
         meta = json.loads((payload / "payload.json").read_text())
         meta["built_utc"] = "2026-10-02T00:00:00+00:00"
         (payload / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -250,6 +258,46 @@ class TestHashSeedContract:
         assert _read_record(workdir)["hash_seed"] == hash_seed != "0"
 
 
+class TestWebZipVerification:
+    def test_missing_web_zip_sha256_refuses(
+        self, payload, reflex_dir, no_warmup, tmp_path
+    ):
+        meta = json.loads((payload / "payload.json").read_text())
+        del meta["web_zip_sha256"]
+        (payload / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
+        with pytest.raises(OSError, match="no web_zip_sha256"):
+            ui_frontend.prepare_offline_frontend(
+                tmp_path / "wd", tmp_path, port=1, backend_host="h",
+                child_env={}, warn=lambda m: None,
+            )
+
+    def test_corrupt_web_zip_refuses(self, payload, reflex_dir, no_warmup, tmp_path):
+        (payload / "web.zip").write_bytes(b"tampered")
+        with pytest.raises(OSError, match="SHA-256"):
+            ui_frontend.prepare_offline_frontend(
+                tmp_path / "wd", tmp_path, port=1, backend_host="h",
+                child_env={}, warn=lambda m: None,
+            )
+
+    def test_web_zip_member_traversal_refused(
+        self, payload, reflex_dir, no_warmup, tmp_path
+    ):
+        evil = payload / "web.zip"
+        with zipfile.ZipFile(evil, "w") as zf:
+            zf.writestr("build/index.js", "bundle")
+            zf.writestr("../evil.txt", "x")
+        # Keep the manifest hash CONSISTENT so only the traversal guard fires.
+        meta = json.loads((payload / "payload.json").read_text())
+        meta["web_zip_sha256"] = hashlib.sha256(evil.read_bytes()).hexdigest()
+        (payload / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
+        with pytest.raises(OSError, match="escapes the extract root"):
+            ui_frontend.prepare_offline_frontend(
+                tmp_path / "wd", tmp_path, port=1, backend_host="h",
+                child_env={}, warn=lambda m: None,
+            )
+        assert not (tmp_path / "evil.txt").exists()
+
+
 class TestBunVerification:
     def test_corrupt_bundled_bun_raises(self, payload, reflex_dir, no_warmup, tmp_path):
         meta = json.loads((payload / "payload.json").read_text())
@@ -292,6 +340,22 @@ class TestBunVerification:
             child_env={}, warn=lambda m: None,
         )
         assert probe.read_bytes() == b"operator bun"
+
+
+class TestDepthPreflight:
+    def test_short_workdir_is_silent(self):
+        warn = ui_frontend._preflight_web_depth(Path(r"C:\Users\u\AppData\Local\backpropagate\ui\1.8.2-a1b2c3d4"), 178)
+        assert warn is None
+
+    def test_deep_workdir_warns_with_exact_numbers(self):
+        deep = Path("C:") / ("u" * 100) / "wd"
+        warn = ui_frontend._preflight_web_depth(deep, 178)
+        assert warn is not None
+        assert "BACKPROPAGATE_UI_WORKDIR" in warn
+        assert "259" in warn
+
+    def test_missing_metadata_is_silent(self):
+        assert ui_frontend._preflight_web_depth(Path("C:/x"), None) is None
 
 
 class TestWarmupRunner:

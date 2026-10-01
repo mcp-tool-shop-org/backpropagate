@@ -486,13 +486,16 @@ class TestOfflineFrontend:
 
     @pytest.fixture
     def payload(self, tmp_path, monkeypatch):
+        import zipfile
+
         root = tmp_path / "payload"
-        (root / "web" / "build").mkdir(parents=True)
-        (root / "web" / "build" / "bundle.js").write_text("b", encoding="utf-8")
-        (root / "bun").mkdir()
+        (root / "bun").mkdir(parents=True)
         (root / "bun" / ("bun.exe" if sys.platform == "win32" else "bun")).write_bytes(
             b"bun-bytes"
         )
+        web_zip = root / "web.zip"
+        with zipfile.ZipFile(web_zip, "w") as zf:
+            zf.writestr("build/bundle.js", "b")
         from importlib.metadata import version as _dist_version
 
         meta = {
@@ -500,6 +503,7 @@ class TestOfflineFrontend:
             "reflex_version": _dist_version("reflex"),
             "bun_version": "1.3.13",
             "bun_sha256": hashlib.sha256(b"bun-bytes").hexdigest(),
+            "web_zip_sha256": hashlib.sha256(web_zip.read_bytes()).hexdigest(),
         }
         (root / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
         monkeypatch.setenv("BACKPROPAGATE_UI_PAYLOAD_DIR", str(root))

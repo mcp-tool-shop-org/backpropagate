@@ -619,10 +619,15 @@ def _pin_mode() -> str:
       the existing param storage in place, with no copy and no rounding. H2D
       stays DMA-fast. Grads use pageable memory: exact size, but a slower
       blocking D2H in backward.
+    * ``arena``: ``pin_memory=False``, then every shard is copied once into one
+      exactly-sized host slab (:class:`HostArena`) that is page-locked with a
+      single ``cudaHostRegister``, and FSDP2 and the optimizer are pointed at
+      views of it. Same bytes as ``register``, one registration instead of one
+      per storage, and no per-storage registration failures.
     * ``none``: pageable everything (slowest, smallest).
     """
     mode = os.environ.get("BACKPROPAGATE_OFFLOAD_PIN", "register").strip().lower()
-    return mode if mode in {"register", "pinned", "none"} else "register"
+    return mode if mode in {"register", "pinned", "arena", "none"} else "register"
 
 
 def register_host_params(model: Any) -> list[int]:
@@ -661,6 +666,137 @@ def unregister_host_params(ptrs: list[int]) -> None:
     cudart = torch.cuda.cudart()
     for ptr in ptrs:
         cudart.cudaHostUnregister(ptr)
+
+
+# Each shard starts on a page boundary. A page is also the unit cudaHostRegister
+# locks, so no two shards share a locked page. The cost is under one page per
+# parameter (a 7B model has ~340): about 1.4 MB.
+_ARENA_ALIGN = 4096
+
+
+def _align_up(n: int, align: int = _ARENA_ALIGN) -> int:
+    return (n + align - 1) // align * align
+
+
+class HostArena:
+    """One host slab for all parameter shards, page-locked with a single registration.
+
+    ``CPUOffloadPolicy(pin_memory=True)`` pins each shard through torch's pinned
+    caching allocator, which rounds every block up to a power of two (a 7B run
+    crossed 60 GB). Allocating one ``torch.empty(..., pin_memory=True)`` slab
+    would round the whole slab the same way: a 17 GiB model would take 32 GiB.
+    So the slab is an ordinary ``uint8`` tensor of exactly the planned size,
+    and :meth:`register` page-locks it in place once. The pages are touched as
+    shards are copied in, so RSS grows by the bytes of the shards and no more.
+
+    The slab's first byte is page-aligned and each :meth:`take` starts on a page
+    boundary. ``planned_bytes`` is the sum of the aligned sizes, which is the
+    slab's size.
+    """
+
+    def __init__(self, nbytes: int, align: int = _ARENA_ALIGN) -> None:
+        self.nbytes = nbytes
+        self.align = align
+        self._base = torch.empty(nbytes + align, dtype=torch.uint8)  # +1 page to align the start
+        start = -self._base.data_ptr() % align
+        self.slab = self._base[start : start + nbytes]
+        self._cursor = 0
+        self._registered = False
+
+    @staticmethod
+    def planned_bytes(sizes: list[int], align: int = _ARENA_ALIGN) -> int:
+        """Slab size for shards of ``sizes`` bytes: each rounded up to ``align``."""
+        return sum(_align_up(n, align) for n in sizes)
+
+    def take(self, shape: torch.Size | tuple[int, ...], dtype: torch.dtype) -> torch.Tensor:
+        """A view of the next aligned region of the slab, shaped ``shape`` as ``dtype``."""
+        numel = 1
+        for dim in shape:
+            numel *= dim
+        nbytes = numel * torch.empty((), dtype=dtype).element_size()
+        start = self._cursor
+        if start + nbytes > self.nbytes:
+            raise ValueError("HostArena is full: more shards were taken than were planned")
+        self._cursor = _align_up(start + nbytes, self.align)
+        return self.slab[start : start + nbytes].view(dtype).view(shape)
+
+    def register(self) -> bool:
+        """Page-lock the slab (needs CUDA). False, and the slab stays pageable, if the driver refuses."""
+        cudart = torch.cuda.cudart()
+        ok = int(cudart.cudaHostRegister(self.slab.data_ptr(), self.nbytes, 0)) == 0
+        self._registered = ok
+        logger.info(
+            "full_ft_offload: host arena of %.2f GiB %s.",
+            self.nbytes / 2**30,
+            "page-locked" if ok else "could not be page-locked and stays pageable (slower copies)",
+        )
+        return ok
+
+    def release(self) -> None:
+        """Unlock the slab. Call before anything can free it (the views keep it alive until then)."""
+        if self._registered:
+            torch.cuda.cudart().cudaHostUnregister(self.slab.data_ptr())
+            self._registered = False
+
+
+def move_params_to_arena(model: Any, *, pin: bool = True) -> HostArena:
+    """Copy every FSDP2 host shard into one :class:`HostArena` and point FSDP2 at the copy.
+
+    For each ``fully_shard`` unit's parameter, FSDP2 keeps the shard twice over
+    the same storage: ``_sharded_param_data`` (the flat tensor the next gather
+    copies up) and the sharded DTensor's ``_local_tensor`` (what the optimizer
+    reads and writes). Both are replaced by views of the arena, so the gather,
+    the optimizer and ``state_dict`` all see one set of bytes. ``reset_sharded_param``
+    in torch does the same re-pointing for ``load_state_dict(assign=True)``.
+
+    Everything is checked before anything is changed, so a ``ValueError`` means
+    the model is untouched (the caller falls back to ``register``). Shards are
+    copied one at a time and the old storage is dropped at once, so host RAM
+    holds the model once plus one shard in flight.
+    """
+    plan = []
+    for _module, group in _fsdp_units(model):
+        for fp in group.fsdp_params:
+            try:
+                flat = fp._sharded_param_data
+                local = fp.sharded_param._local_tensor
+            except AttributeError as exc:
+                raise ValueError(f"this torch's FSDP2 has no {exc.name!r} on its parameters") from exc
+            if flat.device.type != "cpu" or not flat.is_contiguous() or not local.is_contiguous():
+                raise ValueError("an FSDP2 shard is not a contiguous CPU tensor")
+            if local.numel() != flat.numel() or local.untyped_storage().data_ptr() != flat.untyped_storage().data_ptr():
+                raise ValueError("an FSDP2 shard is padded or does not alias its flat copy (world size > 1?)")
+            plan.append(fp)
+    if not plan:
+        raise ValueError("no FSDP2 units found: shard the model with shard_for_cpu_offload first")
+    sizes = [fp._sharded_param_data.numel() * fp._sharded_param_data.element_size() for fp in plan]
+    arena = HostArena(HostArena.planned_bytes(sizes))
+    for fp in plan:
+        shape = fp.sharded_param._local_tensor.shape
+        view = arena.take(fp._sharded_param_data.shape, fp._sharded_param_data.dtype)
+        view.copy_(fp._sharded_param_data)
+        fp._sharded_param_data = view
+        fp.sharded_param._local_tensor = view.view(shape)
+    if pin:
+        arena.register()
+    return arena
+
+
+def pin_host_params(model: Any) -> Callable[[], None]:
+    """Page-lock the host shards per ``BACKPROPAGATE_OFFLOAD_PIN``; returns the function that undoes it."""
+    mode = _pin_mode()
+    if mode == "arena":
+        try:
+            arena = move_params_to_arena(model)
+        except ValueError as exc:
+            logger.warning("full_ft_offload: host arena unavailable (%s); using per-storage registration.", exc)
+            mode = "register"
+        else:
+            return arena.release
+    if mode == "register":
+        ptrs = register_host_params(model)
+        return lambda: unregister_host_params(ptrs)
+    return lambda: None
 
 
 def shard_for_cpu_offload(model: Any, compute_dtype: torch.dtype = torch.bfloat16, mesh: Any = None) -> Any:
@@ -760,7 +896,7 @@ def run_offload_training(
     device = torch.device("cuda", torch.cuda.current_device())
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     model = shard_for_cpu_offload(model, compute_dtype=compute_dtype)
-    registered = register_host_params(model) if _pin_mode() == "register" else []
+    unpin = pin_host_params(model)
     try:
         return _train_loop(
             model, tokenizer, dataset, steps=steps, batch_size=batch_size,
@@ -772,7 +908,7 @@ def run_offload_training(
         )
     finally:
         # Unregister before anything can free the storage (save() only reads it).
-        unregister_host_params(registered)
+        unpin()
 
 
 def _train_loop(

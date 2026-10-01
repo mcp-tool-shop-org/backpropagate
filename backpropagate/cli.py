@@ -2112,7 +2112,7 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "BACKPROPAGATE_OFFLOAD_PIN",
             "register",
             "str",
-            "full_ft_offload: how host params are page-locked. 'register' (default): cudaHostRegister in place, exact size (~4.0 B/param host RAM measured). 'pinned': FSDP2 pin_memory, 3-5x faster, but torch's pinned allocator rounds blocks to powers of two (~1.8x host RAM at 7B). 'none': pageable, slowest.",
+            "full_ft_offload: how host params are page-locked. 'register' (default): cudaHostRegister in place, exact size (~4.0 B/param host RAM measured). 'pinned': FSDP2 pin_memory, 3-5x faster, but torch's pinned allocator rounds blocks to powers of two (~1.8x host RAM at 7B). 'arena': copy every shard once into one exactly-sized host slab, page-locked with a single cudaHostRegister (same bytes as 'register', no power-of-two rounding). 'none': pageable, slowest.",
         ),
         (
             "BACKPROPAGATE_OFFLOAD_ROUNDING",

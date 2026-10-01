@@ -67,6 +67,7 @@ from .feature_flags import check_feature
 from .gpu_safety import check_gpu_safe
 from .logging_config import bind_run_context, unbind_run_context
 from .mlx_backend import detect_apple_silicon, resolve_backend
+from .security import check_chat_template_names
 
 logger = logging.getLogger(__name__)
 
@@ -4567,6 +4568,7 @@ class Trainer:
                 f"Unsloth model loading failed: {e}",
                 cause_category=_classify_model_load_cause(e),
             ) from e
+        check_chat_template_names(self._tokenizer, self.model_name)
 
         # mode='full': Unsloth already returned a fully-trainable model. Do
         # NOT apply a LoRA adapter — that would re-introduce the v1.4.0
@@ -4764,6 +4766,7 @@ class Trainer:
             if is_trust_remote_code_error(e):
                 raise TrustRemoteCodeRequiredError(self.model_name) from e
             raise
+        check_chat_template_names(self._tokenizer, self.model_name)
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 

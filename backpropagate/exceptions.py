@@ -85,6 +85,7 @@ __all__ = [
     "TrainingError",
     "ModelLoadError",
     "TrustRemoteCodeRequiredError",
+    "UnsafeChatTemplateError",
     "is_trust_remote_code_error",
     "ModelLoadCauseCategory",
     "FullFinetuneModelTooLargeError",
@@ -329,6 +330,19 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     "UI_OUTPUT_DIR_FORBIDDEN": {
         "description": "BACKPROPAGATE_UI__OUTPUT_DIR points at a forbidden base path (e.g., /etc, ~/.ssh).",
         "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
+        "retryable": "no",
+    },
+    "INPUT_UNSAFE_CHAT_TEMPLATE": {
+        "description": (
+            "The tokenizer names one of its chat templates with a path "
+            "(e.g. '../x'). Saving it would write a file outside the output "
+            "directory (transformers < 5.10, PYSEC-2026-3929)."
+        ),
+        "default_hint": (
+            "Do not use this tokenizer. Template names must be plain names "
+            "like 'default' or 'tool_use'; a repository that ships path-like "
+            "names is malformed or hostile."
+        ),
         "retryable": "no",
     },
     "CONFIG_TRUST_REMOTE_CODE_REQUIRED": {
@@ -1093,6 +1107,33 @@ class TrustRemoteCodeRequiredError(ModelLoadError):
                 "settings.model.trust_remote_code = True` before creating the "
                 "Trainer. Otherwise pick a model transformers supports "
                 "natively."
+            ),
+        )
+
+
+class UnsafeChatTemplateError(ModelLoadError):
+    """A tokenizer's named chat templates would escape the save directory.
+
+    transformers before 5.10 saves each named chat template to
+    ``<save_dir>/additional_chat_templates/<name>.jinja`` without checking the
+    name (PYSEC-2026-3929 / CVE-2026-9856), so a crafted ``tokenizer_config.json``
+    on the Hub can write anywhere when the tokenizer is saved. Raised at load
+    time by :func:`backpropagate.security.check_chat_template_names`, before
+    any save can happen. Not retryable.
+    """
+
+    _CODE = "INPUT_UNSAFE_CHAT_TEMPLATE"
+    _RETRYABLE = False
+
+    def __init__(self, model_name: str, names: list[str]):
+        self.names = names
+        super().__init__(
+            model_name,
+            f"its tokenizer names chat templates with paths: {names!r}. Saving it "
+            "would write files outside the output directory",
+            suggestion=(
+                "Do not use this tokenizer. Chat template names must be plain "
+                "names such as 'default' or 'tool_use'."
             ),
         )
 

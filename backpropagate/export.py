@@ -37,6 +37,7 @@ from .exceptions import (
     MergeExportError,
     OllamaRegistrationError,
 )
+from .security import check_chat_template_names
 
 # =============================================================================
 # INPUT VALIDATORS (BRIDGE-A-001, BRIDGE-A-002)
@@ -1201,6 +1202,7 @@ def load_model_for_export(model_path: str | Path) -> tuple[Any, Any]:
         tokenizer = AutoTokenizer.from_pretrained(
             str(path), trust_remote_code=trust_remote_code
         )
+        check_chat_template_names(tokenizer, str(model_path))
         return model, tokenizer
 
     try:
@@ -1231,6 +1233,7 @@ def load_model_for_export(model_path: str | Path) -> tuple[Any, Any]:
                 trust_remote_code=trust_remote_code,
             )
             if _is_peft_model(model):
+                check_chat_template_names(tokenizer, str(model_path))
                 return model, tokenizer
             logger.warning(
                 "load_model_for_export: Unsloth returned %s for adapter dir %s, "
@@ -1261,6 +1264,7 @@ def load_model_for_export(model_path: str | Path) -> tuple[Any, Any]:
         )
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
+    check_chat_template_names(tokenizer, str(model_path))
     return model, tokenizer
 
 

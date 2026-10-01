@@ -15,6 +15,7 @@ Usage:
 """
 
 import logging
+import re
 import threading
 import warnings
 from pathlib import Path
@@ -25,6 +26,7 @@ __all__ = [
     "check_torch_security",
     "SecurityWarning",
     "PathTraversalError",
+    "check_chat_template_names",
 ]
 
 logger = logging.getLogger(__name__)
@@ -168,6 +170,38 @@ def safe_path(
         raise FileNotFoundError(f"Path does not exist: {resolved}")
 
     return resolved
+
+
+# A chat template name becomes a file name when the tokenizer is saved. Allow
+# plain names only: no separators, no drive letters, no '..'.
+_SAFE_TEMPLATE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+
+
+def check_chat_template_names(tokenizer: Any, model_name: str) -> None:
+    """Refuse a tokenizer whose named chat templates are paths.
+
+    transformers before 5.10 writes a dict-valued ``chat_template`` to
+    ``additional_chat_templates/<name>.jinja`` on save without validating
+    ``name`` (PYSEC-2026-3929), so ``'../../x'`` escapes the save directory.
+    backpropagate saves tokenizers it loaded from the Hub (adapters,
+    checkpoints, merged exports), and unsloth's own caps hold transformers at
+    5.5.0, so the check lives here. Call it right after loading a tokenizer.
+
+    Raises:
+        UnsafeChatTemplateError: when any template name is not a plain name.
+    """
+    templates = getattr(tokenizer, "chat_template", None)
+    if not isinstance(templates, dict):
+        return
+    bad = [
+        str(name) for name in templates
+        if not isinstance(name, str) or ".." in name or not _SAFE_TEMPLATE_NAME.match(name)
+    ]
+    if bad:
+        from .exceptions import UnsafeChatTemplateError
+
+        logger.error("Refusing tokenizer of %s: path-like chat template names %r", model_name, bad)
+        raise UnsafeChatTemplateError(model_name, bad)
 
 
 def check_torch_security() -> bool:

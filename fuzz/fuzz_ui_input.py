@@ -103,12 +103,6 @@ def check_numeric(value: Any, lo: float | None, hi: float | None, strict: bool =
         out = validate_numeric_input(value, "n", min_value=lo, max_value=hi, allow_none=False)
     except UserInputError:
         return
-    except OverflowError:
-        # Known finding F5: ``float(10**400)`` raises OverflowError, which the
-        # validator does not translate into a UserInputError.
-        assert not strict, f"OverflowError escaped for {value!r}"
-        assert isinstance(value, int) and abs(value) > 10**308
-        return
 
     assert isinstance(out, float)
     if math.isnan(out):

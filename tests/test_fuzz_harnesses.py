@@ -198,14 +198,6 @@ class TestKnownFindings:
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
 
-    @pytest.mark.xfail(raises=OverflowError, strict=True, reason="F5: huge int escapes as OverflowError")
-    def test_f5_validate_numeric_input_wraps_an_overflowing_int(self):
-        from backpropagate.exceptions import UserInputError
-        from backpropagate.ui_security import validate_numeric_input
-
-        with pytest.raises(UserInputError):
-            validate_numeric_input(10**400, "n")
-
     @pytest.mark.xfail(raises=UnicodeEncodeError, strict=True, reason="F6: lone surrogate breaks dedupe")
     def test_f6_deduplicate_exact_survives_a_lone_surrogate(self):
         from backpropagate.datasets import deduplicate_exact
@@ -334,6 +326,21 @@ class TestFixedFindings:
 
         c = TrainingConfig(orpo_beta=0.2, simpo_gamma=0.5, kto_desirable_weight=1.3)
         assert (c.orpo_beta, c.simpo_gamma, c.kto_desirable_weight) == (0.2, 0.5, 1.3)
+
+
+    @pytest.mark.parametrize("value", [10**400, -(10**400), 10**309])
+    @pytest.mark.parametrize("bounds", [{}, {"min_value": 0.0, "max_value": 1.0}])
+    def test_f5_validate_numeric_input_wraps_an_overflowing_int(self, value, bounds):
+        from backpropagate.exceptions import UserInputError
+        from backpropagate.ui_security import validate_numeric_input
+
+        with pytest.raises(UserInputError, match="too large"):
+            validate_numeric_input(value, "n", **bounds)
+
+    def test_f5_a_large_but_representable_int_still_validates(self):
+        from backpropagate.ui_security import validate_numeric_input
+
+        assert validate_numeric_input(10**300, "n") == 1e300
 
 
 class TestPlumbing:

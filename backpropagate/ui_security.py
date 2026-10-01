@@ -960,6 +960,10 @@ def validate_numeric_input(
 
     try:
         num = float(value)
+    except OverflowError:
+        # float(10**400): an int too large for a double raises OverflowError,
+        # which is neither ValueError nor TypeError.
+        raise UserInputError(f"{name} is too large to be a number")
     except (ValueError, TypeError):
         raise UserInputError(
             f"{name} must be a number, got: {type(value).__name__}"

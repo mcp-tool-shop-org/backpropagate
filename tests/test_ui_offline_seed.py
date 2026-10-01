@@ -56,7 +56,7 @@ def _payload_root() -> Path:
     if not raw:
         pytest.skip(f"no payload: set {PAYLOAD_ENV} (see module docstring)")
     root = Path(raw)
-    if not (root / "payload.json").is_file() or not (root / "web").is_dir():
+    if not (root / "payload.json").is_file() or not (root / "web.zip").is_file():
         pytest.skip(f"{PAYLOAD_ENV}={root} is not a built payload (run scripts/build_ui_frontend.py)")
     return root
 

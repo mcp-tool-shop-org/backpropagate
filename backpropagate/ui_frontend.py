@@ -7,17 +7,22 @@ spike S4/S4b, 2026-10-01). The payload lives next to the installed package as
 ``ui_frontend_payload/``::
 
     payload.json   {"schema": 1, "reflex_version": ..., "backpropagate_version": ...,
-                    "bun_version": ..., "bun_sha256": ..., "built_utc": ...}
-    web/           the complete .web tree (node_modules, bun.lock, build/, ...)
-                   EXCLUDING the machine-specific install marker
+                    "bun_version": ..., "bun_sha256": ..., "web_zip_sha256": ...,
+                    "built_utc": ...}
+    web.zip        the complete .web tree (node_modules, bun.lock, build/, ...),
+                   zipped: the raw node_modules tails would exceed MAX_PATH
+                   under the WindowsApps install prefix; extraction happens in
+                   the per-user workdir where the depth budget holds
     bun/bun.exe    the pinned Windows bun binary
 
 What ``prepare_offline_frontend`` does for a launch (no-ops without a payload,
 so pip installs are unchanged):
 
-1. Copies the payload ``.web`` into the per-user working directory when it is
-   missing or built from a different payload (tracked by the seed record; a
-   version bump / package rebuild reseeds once).
+1. Extracts the payload ``web.zip`` into the per-user working directory when
+   it is missing or built from a different payload (tracked by the seed
+   record; a version bump / package rebuild reseeds once). The archive's
+   SHA-256 is verified against the manifest first; zip members are checked
+   against traversal before anything touches disk.
 2. Installs the pinned bun binary at Reflex's probe path when absent
    (``$REFLEX_DIR/bun/bin/bun.exe``; Reflex only ``which()``-falls back or
    errors offline otherwise).
@@ -51,6 +56,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -101,6 +107,100 @@ def _payload_id(package_dir: Path) -> str:
     ).hexdigest()
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _extract_web_zip(zip_path: Path, web_target: Path) -> None:
+    """Extract a VERIFIED payload web.zip into place (caller checked the hash).
+
+    Two-stage: extract beside the target, then os.replace, so a failed extract
+    never leaves a half-written tree at ``.web``. Every member is validated
+    against traversal even though the hash was verified — the package ships
+    read-only, but defense in depth is cheap here.
+    """
+    temp = web_target.with_name(f".web.tmp-{os.getpid()}")
+    if temp.exists():
+        shutil.rmtree(temp)
+    temp.mkdir(parents=True)
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.infolist():
+                name = member.filename
+                if (
+                    name.startswith(("/", "\\"))
+                    or name.startswith("../")
+                    or "/../" in name
+                    or (len(name) > 1 and name[1] == ":")
+                ):
+                    raise OSError(f"web.zip member escapes the extract root: {name!r}")
+            for member in archive.infolist():
+                archive.extract(member, temp)
+    except Exception:
+        shutil.rmtree(temp, ignore_errors=True)
+        raise
+    if web_target.exists():
+        shutil.rmtree(web_target)
+    os.replace(temp, web_target)
+
+
+def _preflight_web_depth(workdir: Path, deepest_member: int | None) -> str | None:
+    """Warn-string when this machine's actual workdir makes extraction too deep.
+
+    The producer gates against a MODELED worst prefix (web_depth_budget); this
+    runtime check uses the REAL workdir, so unusually long usernames get an
+    exact, actionable warning instead of a mid-extract ENOENT traceback.
+    """
+    if not deepest_member:
+        return None
+    total = len(str(workdir / ".web")) + 1 + deepest_member
+    if total <= 259:
+        return None
+    return (
+        "this machine's UI workdir is too deep for the bundled frontend "
+        f"(would write {total} chars at its deepest file > MAX_PATH 259): "
+        f"{workdir}. Set BACKPROPAGATE_UI_WORKDIR to a shorter path "
+        "(e.g. C:\\bp-ui) or enable long paths (LongPathsEnabled)."
+    )
+
+
+def _seed_web(
+    package_dir: Path,
+    web_target: Path,
+    meta: dict,
+    *,
+    warn: Callable[[str], None],
+    info: Callable[[str], None] | None,
+) -> None:
+    """Verify + extract the bundled frontend archive into the workdir."""
+    zip_path = payload_dir(package_dir) / "web.zip"
+    expected = meta.get("web_zip_sha256")
+    # Never seed an unverified payload (same doctrine as the bun binary).
+    if not expected:
+        raise OSError(
+            "payload.json carries no web_zip_sha256; refusing to seed an "
+            "unverified frontend payload"
+        )
+    if not zip_path.is_file():
+        raise OSError(f"bundled frontend archive missing from the payload at {zip_path}")
+    actual = _sha256_file(zip_path)
+    if actual != expected:
+        raise OSError(
+            f"web.zip failed its SHA-256 check ({actual} != {expected}); "
+            "the package payload is corrupt"
+        )
+    if info is not None:
+        info("Seeding the bundled UI frontend (~1 GB on disk; once per version)...")
+    depth_warning = _preflight_web_depth(web_target.parent, meta.get("deepest_web_member"))
+    if depth_warning is not None:
+        warn(depth_warning)
+    _extract_web_zip(zip_path, web_target)
+
+
 def _load_seed_record(workdir: Path) -> dict:
     try:
         record = json.loads((workdir / SEED_RECORD).read_text(encoding="utf-8"))
@@ -147,7 +247,7 @@ def _ensure_bun(
         )
     if not bundled.is_file():
         raise OSError(f"bundled bun missing from the payload at {bundled}")
-    actual = hashlib.sha256(bundled.read_bytes()).hexdigest()
+    actual = _sha256_file(bundled)
     if actual != expected:
         raise OSError(
             f"bundled bun failed its SHA-256 check ({actual} != {expected}); "
@@ -247,11 +347,7 @@ def prepare_offline_frontend(
     web_target = workdir / ".web"
 
     if record.get("payload_id") != payload_id or not web_target.is_dir():
-        if info is not None:
-            info("Seeding the bundled UI frontend (~250 MB; once per version)...")
-        if web_target.exists():
-            shutil.rmtree(web_target)
-        shutil.copytree(payload_dir(package_dir) / "web", web_target)
+        _seed_web(package_dir, web_target, meta, warn=warn, info=info)
         record = {"payload_id": payload_id}
         _write_seed_record(workdir, record)
 

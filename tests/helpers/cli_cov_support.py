@@ -24,6 +24,15 @@ def run(argv: list[str]) -> int:
     return cli.main(argv)
 
 
+def seed_runs(output_dir, entries: list[dict]) -> None:
+    """Persist ``entries`` through the real ``RunHistoryManager`` (no mocking)."""
+    from backpropagate.checkpoints import RunHistoryManager
+
+    manager = RunHistoryManager(str(output_dir))
+    for entry in entries:
+        assert manager.record_run(dict(entry)), f"record_run refused {entry!r}"
+
+
 def last_json(text: str) -> Any:
     """Return the last top-level JSON object found in ``text`` (skips log noise)."""
     decoder = json.JSONDecoder()

@@ -1036,11 +1036,13 @@ class TestHandleUploadHappyPaths:
         assert s.upload_error.startswith("Rejected unnamed:") and s.upload_count == 0
 
     def test_chunked_reader_streams_across_multiple_reads(self, sandbox):
-        line = '{"text": "x"}\n'
-        big = (line * 100_000).encode()  # ~1.4 MB -> two 1 MB chunks
+        # one ~1.5 MB record -> two 1 MB reads, but a single stats row (a many-record
+        # file of an undetectable format would log one warning per record)
+        big = ('{"text": "' + "x" * 1_500_000 + '"}\n').encode()
         s = us.DatasetState()
         _upload(s, [_Reader(big, "big.jsonl")])
-        assert s.upload_error == "" and s.record_count == 100_000
+        assert s.upload_error == "" and s.record_count == 1
+        assert (sandbox.out / "uploads" / "big.jsonl").stat().st_size == len(big)
 
     def test_one_shot_reader_uses_the_fallback_read(self, sandbox):
         s = us.DatasetState()

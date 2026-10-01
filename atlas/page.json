@@ -71,40 +71,24 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 3,
-      "changed": 16,
+      "added": 2,
+      "changed": 0,
       "moved": 0,
-      "parts": 5,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
-        "kind": "landing",
-        "sentence": ".gitignore is now read by tests/test_container_ui.py.",
-        "subjects": [
-          ".gitignore",
-          "tests/test_container_ui.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "CHANGELOG.md is now read by .github/workflows/release.yml.",
-        "subjects": [
-          "CHANGELOG.md",
-          ".github/workflows/release.yml"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "3 files added and 16 changed content, across 5 parts.",
+        "sentence": "Nothing structural changed since 2026-10-01; 2 files added.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "a4b0e1a04144c736553ca1a975cb9d0ed4fdf2b0",
-      "generatedAt": "2026-10-01T16:06:27.769Z"
+      "commit": "d09f5311bc678821f6aa4c99300109fe010b2b07",
+      "generatedAt": "2026-10-01T17:07:20.504Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [],
   "changesTogetherNote": [
@@ -112,9 +96,9 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 23 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "d09f5311bc678821f6aa4c99300109fe010b2b07",
+  "commit": "34b2e8ed0b9c0cbdfbdb526d29fda8d3e9a1c541",
   "defaultBranch": "main",
-  "derived": "13 parts, mostly Python (221 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "13 parts, mostly Python (223 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -140,7 +124,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 53
+          "files": 54
         },
         {
           "boundary": "requirements",
@@ -160,7 +144,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 152
+          "files": 153
         },
         {
           "boundary": "fuzz",
@@ -211,7 +195,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 53
+          "files": 54
         },
         {
           "boundary": "requirements",
@@ -414,7 +398,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "runs": [
@@ -488,7 +472,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "runs": [
@@ -540,7 +524,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "runs": [
@@ -577,16 +561,16 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T17:07:20.504Z",
+  "generatedAt": "2026-10-01T18:17:45.985Z",
   "limits": [
     "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "15 imports could not be resolved: `backpropagate/cli.py` imports `.ui_workdir`, which is no module on its import path and no declared dependency; `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; and 12 more.",
+    "14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.",
     "8 writes and 10 reads use paths built at run time and are not named here.",
-    "31 writes and 64 reads go to a path their caller passes, not to this repository.",
+    "31 writes and 65 reads go to a path their caller passes, not to this repository.",
+    "1 write and 3 reads go to the home directory (.cache/ and AppData/), not to this repository.",
     "3 writes go to a temporary directory, not to this repository.",
     "1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.",
     "1 read goes to the directory the command is run in, not to this repository.",
-    "1 read goes to the home directory (.cache/), not to this repository.",
     "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.",
     "1 file belongs to no part: docker/fetch_bun.py."
   ],
@@ -636,9 +620,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 155,
+  "testFiles": 156,
   "testedBy": {
-    "backpropagate": 142,
+    "backpropagate": 143,
     "bin": 0,
     "scripts": 2
   },

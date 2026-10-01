@@ -1797,7 +1797,8 @@
             "backpropagate/security.py",
             "backpropagate/trainer.py",
             "backpropagate/ui_app/auth.py",
-            "backpropagate/ui_security.py"
+            "backpropagate/ui_security.py",
+            "backpropagate/ui_workdir.py"
           ],
           "path": "backpropagate/cli.py",
           "sequences": [
@@ -2288,6 +2289,13 @@
                   "name": "validate_auth_shape",
                   "target": {
                     "file": "backpropagate/ui_security.py"
+                  }
+                },
+                {
+                  "line": 3537,
+                  "name": "ensure_ui_workdir",
+                  "target": {
+                    "file": "backpropagate/ui_workdir.py"
                   }
                 },
                 {
@@ -10542,6 +10550,67 @@
         {
           "hash": "51a1dcd932f01040ea17c3093bf9cbbc5f7075bb4c913694a51ae771a5861760",
           "path": "backpropagate/ui_theme.py"
+        },
+        {
+          "entry": "ensure_ui_workdir",
+          "entryRule": 4,
+          "exports": [
+            "default_ui_work_root",
+            "ensure_ui_workdir",
+            "package_dir_key",
+            "render_stub_rxconfig"
+          ],
+          "failurePaths": [
+            {
+              "in": "render_stub_rxconfig",
+              "kind": "raise",
+              "line": 91
+            },
+            {
+              "in": "_prune_stale_siblings",
+              "kind": "except",
+              "line": 124
+            },
+            {
+              "in": "_prune_stale_siblings",
+              "kind": "except",
+              "line": 133
+            }
+          ],
+          "hash": "8d064dbd7add3a4599f385563fbe217786632d4b756c499772b0c40d1ecf4ab4",
+          "importsFiles": [
+            "backpropagate/__init__.py"
+          ],
+          "path": "backpropagate/ui_workdir.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 123,
+                  "name": "iterdir",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_prune_stale_siblings"
+            },
+            {
+              "calls": [
+                {
+                  "line": 123,
+                  "name": "iterdir",
+                  "target": null,
+                  "via": "_prune_stale_siblings"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "ensure_ui_workdir"
+            }
+          ]
         }
       ],
       "globs": [
@@ -10552,7 +10621,7 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 49,
+          "reads": 50,
           "where": [
             "caller"
           ],
@@ -10581,28 +10650,31 @@
             "home:.cache/"
           ],
           "writes": 0
+        },
+        {
+          "reads": 2,
+          "where": [
+            "home:.cache/",
+            "home:AppData/"
+          ],
+          "writes": 1
         }
       ],
-      "outsideReads": 51,
-      "outsideWrites": 17,
+      "outsideReads": 54,
+      "outsideWrites": 18,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 142,
+      "testedBy": 143,
       "unresolvedNamed": [
-        {
-          "path": "backpropagate/cli.py",
-          "specifier": ".ui_workdir",
-          "why": "unplaced"
-        },
         {
           "path": "backpropagate/trainer.py",
           "specifier": null,
           "why": "dynamic"
         }
       ],
-      "unresolvedSites": 2
+      "unresolvedSites": 1
     },
     {
       "dynamicReads": 0,
@@ -15917,6 +15989,21 @@
         },
         {
           "exports": [
+            "default_env"
+          ],
+          "hash": "b8c0ddc0dcda4e53e80a2d3beefe45e96dae7024bed2b26160f058b9b9102b42",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/ui_workdir.py"
+          ],
+          "names": [
+            "backpropagate/rxconfig.py"
+          ],
+          "path": "tests/test_ui_workdir.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
             "test_auto_install_is_off_before_unsloth_is_imported",
             "test_existing_env_value_is_overridden",
             "test_explicit_opt_in_is_honoured"
@@ -16797,7 +16884,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 53
+          "files": 54
         },
         {
           "boundary": "requirements",
@@ -16817,7 +16904,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 152
+          "files": 153
         },
         {
           "boundary": "fuzz",
@@ -16992,7 +17079,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 152,
+          "files": 153,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -17000,7 +17087,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 152,
+          "files": 153,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -17008,28 +17095,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 152,
+          "files": 153,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 152,
+          "files": 153,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 152,
+          "files": 153,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 152,
+          "files": 153,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -17890,7 +17977,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "readers": [],
@@ -18176,7 +18263,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 53
+          "files": 54
         },
         {
           "boundary": "requirements",
@@ -18701,7 +18788,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "readers": [],
@@ -18743,7 +18830,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 22
+          "files": 23
         }
       ],
       "readers": [],
@@ -18803,8 +18890,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "d09f5311bc678821f6aa4c99300109fe010b2b07",
-    "tracked": 713
+    "commit": "34b2e8ed0b9c0cbdfbdb526d29fda8d3e9a1c541",
+    "tracked": 715
   },
   "landings": [
     {
@@ -19558,7 +19645,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 155,
+  "testFiles": 156,
   "unassigned": [
     {
       "exports": [

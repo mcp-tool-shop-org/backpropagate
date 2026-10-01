@@ -70,7 +70,7 @@
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 95,
+      "qualifyingSourceCommits": 96,
       "rebaseline": null
     },
     {
@@ -220,7 +220,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 76,
+      "qualifyingSourceCommits": 77,
       "rebaseline": null
     }
   ],
@@ -478,8 +478,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 12,
-        "lines": 488,
+        "commits": 13,
+        "lines": 498,
         "path": "atlas/README.md"
       },
       {
@@ -488,18 +488,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 12,
-        "lines": 1945,
+        "commits": 13,
+        "lines": 1983,
         "path": "atlas/page.json"
       },
       {
-        "commits": 12,
-        "lines": 10632,
+        "commits": 13,
+        "lines": 10891,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 12,
-        "lines": 40898,
+        "commits": 13,
+        "lines": 41512,
         "path": "atlas/structure.json"
       },
       {
@@ -678,8 +678,8 @@
         "path": "backpropagate/checkpoints.py"
       },
       {
-        "commits": 72,
-        "lines": 22378,
+        "commits": 73,
+        "lines": 22411,
         "path": "backpropagate/cli.py"
       },
       {
@@ -941,6 +941,11 @@
         "commits": 8,
         "lines": 542,
         "path": "backpropagate/ui_theme.py"
+      },
+      {
+        "commits": 1,
+        "lines": 169,
+        "path": "backpropagate/ui_workdir.py"
       },
       {
         "commits": 14,
@@ -2848,8 +2853,8 @@
         "path": "scripts/convert_validated_pairs.py"
       },
       {
-        "commits": 9,
-        "lines": 480,
+        "commits": 10,
+        "lines": 485,
         "path": "scripts/doc-drift-allow.toml"
       },
       {
@@ -3118,8 +3123,8 @@
         "path": "tests/README.md"
       },
       {
-        "commits": 12,
-        "lines": 532,
+        "commits": 13,
+        "lines": 546,
         "path": "tests/conftest.py"
       },
       {
@@ -3278,8 +3283,8 @@
         "path": "tests/test_cli_cov_train.py"
       },
       {
-        "commits": 2,
-        "lines": 480,
+        "commits": 3,
+        "lines": 516,
         "path": "tests/test_cli_cov_ui.py"
       },
       {
@@ -3853,8 +3858,8 @@
         "path": "tests/test_ui_cov_state_runs.py"
       },
       {
-        "commits": 1,
-        "lines": 464,
+        "commits": 2,
+        "lines": 472,
         "path": "tests/test_ui_e2e_real_reflex.py"
       },
       {
@@ -3881,6 +3886,11 @@
         "commits": 17,
         "lines": 6377,
         "path": "tests/test_ui_states.py"
+      },
+      {
+        "commits": 1,
+        "lines": 172,
+        "path": "tests/test_ui_workdir.py"
       },
       {
         "commits": 1,
@@ -3938,9 +3948,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T17:07:20.504Z",
+  "generatedAt": "2026-10-01T18:17:45.985Z",
   "generatedFrom": {
-    "commit": "d09f5311bc678821f6aa4c99300109fe010b2b07"
+    "commit": "34b2e8ed0b9c0cbdfbdb526d29fda8d3e9a1c541"
   },
   "pairs": [
     {
@@ -4129,16 +4139,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-01T09:49:53-07:00",
-    "inScopeFiles": 718,
+    "headDate": "2026-10-01T13:14:21-04:00",
+    "inScopeFiles": 720,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 195,
+    "qualifyingCommits": 196,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-04T16:49:53.000Z",
+    "since": "2026-04-04T17:14:21.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

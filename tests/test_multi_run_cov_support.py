@@ -231,3 +231,66 @@ def make_trainer(tmp_path: Path, *, inner: FakeInnerTrainer | None = None,
             ),
         )
     return mrt
+
+
+def _cfg(tmp_path, **over):
+    base = {
+        "num_runs": 3,
+        "steps_per_run": 2,
+        "samples_per_run": 8,
+        "checkpoint_dir": str(tmp_path),
+        "enable_gpu_monitoring": False,
+        "pause_on_overheat": False,
+        "validate_every_run": False,
+        "shuffle_data": False,
+    }
+    base.update(over)
+    return MultiRunConfig(**base)
+
+
+def build_env(monkeypatch, tmp_path):
+    """Install the GPU/Trainer boundaries; return a builder for a ready trainer.
+
+    Each test module wraps this in its own ``env`` fixture (shared fixtures do
+    not live in ``conftest.py``).
+    """
+
+    class Env:
+        pass
+
+    e = Env()
+    e.tmp_path = tmp_path
+    e.inner = FakeInnerTrainer()
+    e.monkeypatch = monkeypatch
+    e.gpu_calls = 0
+
+    def gpu_status(*_a, **_k):
+        e.gpu_calls += 1
+        return safe_gpu_status()
+
+    monkeypatch.setattr("backpropagate.multi_run.get_gpu_status", gpu_status)
+
+    import backpropagate.trainer as trainer_mod
+
+    real_trainer_cls = trainer_mod.Trainer
+
+    class _ProxyMeta(type):
+        # _build_sft_config reaches for Trainer._detect_* classmethods, so the
+        # stand-in must still answer for the real class's static helpers.
+        def __getattr__(cls, name):
+            return getattr(real_trainer_cls, name)
+
+    class _TrainerStandIn(metaclass=_ProxyMeta):
+        def __new__(cls, **kwargs):
+            e.inner.ctor_kwargs = kwargs
+            return e.inner
+
+    monkeypatch.setattr("backpropagate.trainer.Trainer", _TrainerStandIn)
+
+    def build(train_fns=None, **cfg_over):
+        e.fake = make_fake_sft(train_fns)
+        install_fake_sft(monkeypatch, e.fake)
+        return MultiRunTrainer(model="tiny-test", config=_cfg(tmp_path, **cfg_over))
+
+    e.build = build
+    return e

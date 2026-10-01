@@ -2386,6 +2386,14 @@ class TestHfTransientRetryStatusCodeFilter:
 class TestReportToResolution:
     """Trainer._resolve_report_to behaviour for F-005 (W&B/TB/MLflow wiring)."""
 
+    @pytest.fixture(autouse=True)
+    def wandb_logged_in(self, monkeypatch):
+        """These tests cover tracker selection, so W&B counts as logged in.
+
+        The no-credentials paths live in tests/test_report_to_wandb_gate.py.
+        """
+        monkeypatch.setenv("WANDB_API_KEY", "x" * 40)
+
     @pytest.fixture
     def trainer(self):
         from backpropagate.trainer import Trainer

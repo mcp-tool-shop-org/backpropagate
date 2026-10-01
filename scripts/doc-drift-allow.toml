@@ -106,6 +106,12 @@ cli_flags_grandfathered = [
     # 1.8.2 doc-change list (public docs are lead-written); this bridges the
     # drift gate until that docs PR lands in the same release.
     "--open-browser",   # backprop ui --open-browser
+    # report_to W&B fix (2026-10-01): experiment-tracker choice for train and
+    # multi-run (auto|none|wandb|tensorboard|mlflow). The cli-reference.md
+    # rows (train + multi-run tables) are on the lead's doc-change list
+    # (public docs are lead-written); this bridges the drift gate until that
+    # docs PR lands.
+    "--report-to",      # backprop train / multi-run --report-to
 ]
 
 # ---------------------------------------------------------------------------

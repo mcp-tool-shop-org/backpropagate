@@ -347,16 +347,26 @@ class TestDefaultLaunchToken:
 
     def test_child_process_tree_holds_the_token_not_a_password(self, default_ui):
         seen = 0
+        report = []  # what each process looked like, for the failure message
         for proc in default_ui.reflex_children():
             try:
+                label = f"{proc.pid} {' '.join(proc.cmdline())[:90]!r}"
+            except psutil.Error as exc:
+                label = f"{proc.pid} <cmdline: {type(exc).__name__}>"
+            try:
                 env = proc.environ()
-            except psutil.Error:
+            except psutil.Error as exc:
+                report.append(f"{label}: environ {type(exc).__name__}")
                 continue
-            if "BACKPROPAGATE_UI_LAUNCH_TOKEN" in env:
+            has_token = "BACKPROPAGATE_UI_LAUNCH_TOKEN" in env
+            report.append(f"{label}: {len(env)} vars, token={has_token}")
+            if has_token:
                 seen += 1
                 assert env["BACKPROPAGATE_UI_LAUNCH_TOKEN"] == default_ui.token
             assert "BACKPROPAGATE_UI_AUTH" not in env
-        assert seen, "no descendant carried BACKPROPAGATE_UI_LAUNCH_TOKEN"
+        assert seen, "no descendant carried BACKPROPAGATE_UI_LAUNCH_TOKEN:\n" + (
+            "\n".join(report) or "(no Reflex descendants found)"
+        )
 
     def test_ctrl_c_stops_everything_and_deletes_the_lock_file(self, default_ui):
         default_ui.stop()

@@ -75,10 +75,12 @@ class TestDetectMode:
 
 
 class TestDeriveSecret:
-    def test_auth_creds_hash_to_sha256(self):
+    def test_auth_creds_use_random_process_key_not_a_password_hash(self):
         import hashlib
 
-        assert auth._derive_secret({"BACKPROPAGATE_UI_AUTH": " u:p "}) == hashlib.sha256(b"u:p").digest()
+        key = auth._derive_secret({"BACKPROPAGATE_UI_AUTH": " u:p "})
+        assert key == auth._PROCESS_LOCAL_SECRET
+        assert key != hashlib.sha256(b"u:p").digest()
 
     def test_launch_token_used_verbatim(self):
         assert auth._derive_secret({"BACKPROPAGATE_UI_LAUNCH_TOKEN": "abc"}) == b"abc"

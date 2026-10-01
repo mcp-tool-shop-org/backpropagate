@@ -726,11 +726,28 @@ class TestAppWiring:
         comp = page.component() if callable(page.component) else page.component
         assert "--bp-teal" in _render(comp)
 
-    def test_theme_is_bound_to_color_mode(self):
+    def test_theme_follows_the_live_color_mode_without_a_hard_coded_appearance(self):
         from backpropagate.ui_app.app import app
 
-        # FRONTEND-F-001: appearance follows the live colour mode, not a hard-coded "dark"
-        assert "rawColorMode" in str(app.theme.appearance)
+        # FRONTEND-F-001: appearance follows the live colour mode (Radix "inherit" picks up
+        # the light/dark class Reflex's provider writes on <html>), not a hard-coded "dark".
+        assert '"inherit"' in str(app.theme.appearance)
+
+    def test_theme_does_not_leak_the_color_mode_var_into_the_compiled_context(self):
+        """``appearance=rx.color_mode`` compiled to ``defaultColorMode = rawColorMode``.
+
+        ``rawColorMode`` is only defined inside the provider component, so on Reflex 0.9.3 /
+        0.9.5 that line threw ``ReferenceError`` when ``.web/utils/context.js`` loaded: a
+        blank page in dev and a failed prerender in ``reflex run --env prod``.
+        """
+        from reflex.compiler.compiler import _compile_contexts
+
+        from backpropagate.ui_app.app import app
+
+        lines = _compile_contexts(None, app.theme).splitlines()
+        (default_line,) = [ln for ln in lines if ln.startswith("export const defaultColorMode")]
+        assert "rawColorMode" not in default_line
+        assert default_line.rstrip(";").endswith('"system"')
 
     def test_import_refuses_when_auth_module_import_fails(self, monkeypatch):
         """Mocked: ``backpropagate.ui_app.auth`` import is made to raise."""

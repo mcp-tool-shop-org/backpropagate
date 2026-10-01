@@ -255,7 +255,7 @@ pipx install "backpropagate[ui]"
 backprop ui --port 7862
 ```
 
-A local web interface opens at `http://localhost:7862` for browsing datasets, validating formats, and assembling a training config visually. Training itself runs via `backprop train` (UI-driven training is on the roadmap — the Start button currently surfaces that note). The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+Open the URL it prints, `http://127.0.0.1:7862/?token=...` (each launch makes a new token; the first start builds the frontend and can take a minute or two). It is a local web interface for browsing datasets, validating formats, and assembling a training config visually. Training itself runs via `backprop train` (UI-driven training is on the roadmap — the Start button currently surfaces that note). The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Multi-run training
 
@@ -325,7 +325,7 @@ The Reflex web interface is opt-in — install with `pipx install "backpropagate
 backprop ui --port 7862
 ```
 
-The UI runs locally on `http://localhost:7862`. Today it covers the **browse / validate / configure** half of the workflow — point it at a dataset, check the auto-detected format and stats, pick a model, and assemble a run config. **Launching the run is done from the CLI** (`backprop train` / `backprop multi-run`); the in-UI Start button surfaces a note pointing there. UI-driven training is a planned follow-up — until then the UI is the on-ramp and the CLI is the trigger.
+The UI runs locally: open the URL it prints, `http://127.0.0.1:7862/?token=...`. Without `--auth`, every launch generates a new token and the UI refuses requests that lack it. Today it covers the **browse / validate / configure** half of the workflow — point it at a dataset, check the auto-detected format and stats, pick a model, and assemble a run config. **Launching the run is done from the CLI** (`backprop train` / `backprop multi-run`); the in-UI Start button surfaces a note pointing there. UI-driven training is a planned follow-up — until then the UI is the on-ramp and the CLI is the trigger.
 
 To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
 
@@ -337,10 +337,10 @@ backprop ui --share --auth alice:hunter2
 
 ```bash
 # On the client:
-ssh -L 7860:localhost:7860 <your-training-host>
+ssh -L 7862:localhost:7862 <your-training-host>
 # On the server:
 backprop ui                             # no --share
-# Then open http://localhost:7860 in your local browser
+# Then open the URL the server printed (http://127.0.0.1:7862/?token=...) locally
 ```
 
 See [handbook/security.md](https://mcp-tool-shop-org.github.io/backpropagate/handbook/security/) for the full threat model.

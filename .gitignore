@@ -132,3 +132,5 @@ site/node_modules/
 site/dist/
 .polyglot-cache.json
 .web/
+.states/
+reflex.lock/

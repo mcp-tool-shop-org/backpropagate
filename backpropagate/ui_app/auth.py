@@ -19,9 +19,19 @@ Implements the v1.2.0 DESIGN_BRIEF auth contract (Wave 6, Option B MVP):
   gates BOTH HTTP routes AND the ``/_event`` WebSocket upgrade (the documented
   Reflex >=0.8 hook — see ``research/reflex-auth-middleware.md``).
 
-- Cookie session: HMAC(``<user>:<exp>``) signed with SHA-256(``BACKPROPAGATE_UI_AUTH``)
-  for explicit_creds mode, or the launch-token bytes for token_auto mode.
-  ``HttpOnly`` + ``SameSite=Lax`` + ``Secure`` when non-loopback + 12h expiry.
+- Credentials: the CLI never passes the plaintext password across the process
+  boundary. It hands the subprocess ``BACKPROPAGATE_UI_AUTH_USER`` plus
+  ``BACKPROPAGATE_UI_AUTH_VERIFIER`` (a salted scrypt verifier,
+  ``scrypt$n$r$p$salt$hash``) and Basic-auth attempts are checked against it
+  with a constant-time compare. A developer who sets ``BACKPROPAGATE_UI_AUTH=
+  user:pass`` themselves when running Reflex directly is still accepted: the
+  verifier is derived in memory at first use and never persisted.
+
+- Cookie session: HMAC(``<user>:<exp>``) signed with a random per-process key
+  (``secrets.token_bytes(32)``) for explicit_creds mode, never derived from
+  the password, or the launch-token bytes for token_auto mode. Sessions
+  therefore do not survive a UI restart. ``HttpOnly`` + ``SameSite=Lax`` +
+  ``Secure`` when non-loopback + 12h expiry.
 
 - WS auth: cookie validated BEFORE ``websocket.accept()``; close code 4401 on
   failure (load-bearing — post-accept validation is a documented DoS vector
@@ -46,6 +56,7 @@ from __future__ import annotations
 
 import base64
 import enum
+import functools
 import hashlib
 import hmac
 import logging
@@ -55,6 +66,8 @@ import time
 from collections.abc import Callable
 from http import HTTPStatus
 from urllib.parse import parse_qs, urlsplit
+
+from backpropagate.ui_security import hash_password, is_valid_verifier, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +110,16 @@ Wave-6 flip checklist (so the next maintainer doesn't half-flip):
 
 # Env vars consumed by this module:
 #
-# - ``BACKPROPAGATE_UI_AUTH``       — explicit_creds mode "user:pass"
+# - ``BACKPROPAGATE_UI_AUTH_USER``  — explicit_creds mode username (not secret;
+#                                     set by the CLI alongside the verifier)
+# - ``BACKPROPAGATE_UI_AUTH_VERIFIER`` — explicit_creds mode salted scrypt
+#                                     verifier ``scrypt$n$r$p$salt$hash`` (what
+#                                     the CLI passes; never the plaintext)
+# - ``BACKPROPAGATE_UI_AUTH``       — explicit_creds mode "user:pass" for people
+#                                     who run Reflex directly. Accepted, turned
+#                                     into an in-memory verifier at first use,
+#                                     never written anywhere. The verifier wins
+#                                     if both are set.
 # - ``BACKPROPAGATE_UI_PORT``       — port the operator passed to ``backprop ui``
 #                                     (used to populate the Host-header
 #                                     allowlist with the right loopback:port
@@ -113,9 +135,9 @@ Wave-6 flip checklist (so the next maintainer doesn't half-flip):
 # - ``BACKPROPAGATE_UI_HOST_BIND``  — v1.3 hand-off: bind address from
 #                                     ``--host <addr>`` (used to populate the
 #                                     Host-header allowlist with the LAN IP)
-# - ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` — token_auto mode launch token (the CLI
-#                                     generates this if ``--auth`` is absent
-#                                     and exports it). v1.3 polish item.
+# - ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` — token_auto mode launch token (``backprop ui``
+#                                     generates one per launch when ``--auth``
+#                                     is absent and exports it).
 
 _COOKIE_NAME = "backprop_sess"
 _COOKIE_TTL_SECONDS = 12 * 60 * 60  # 12 hours; matches DESIGN_BRIEF
@@ -129,6 +151,9 @@ _WS_CLOSE_CODE_ORIGIN_FAILED = 4403  # Application-level "forbidden origin"
 # "Host not allowlisted" (echoes HTTP 421 Misdirected Request semantics).
 _WS_CLOSE_CODE_HOST_FAILED = 4404  # Application-level "forbidden host"
 _LAUNCH_TOKEN_ENV = "BACKPROPAGATE_UI_LAUNCH_TOKEN"  # nosec B105 — env var NAME, not a credential value
+_AUTH_ENV = "BACKPROPAGATE_UI_AUTH"
+_AUTH_USER_ENV = "BACKPROPAGATE_UI_AUTH_USER"
+_AUTH_VERIFIER_ENV = "BACKPROPAGATE_UI_AUTH_VERIFIER"
 
 
 class AuthMode(enum.Enum):
@@ -145,18 +170,23 @@ def _detect_mode(env: dict[str, str] | None = None) -> AuthMode:
 
     Order (most-specific first):
 
-    1. ``BACKPROPAGATE_UI_AUTH`` set + ``BACKPROPAGATE_UI_SHARE_HOST`` set →
+    "Credentials set" below means ``BACKPROPAGATE_UI_AUTH_VERIFIER`` (what the
+    CLI passes) or the plaintext ``BACKPROPAGATE_UI_AUTH`` (direct-Reflex use).
+
+    1. Credentials set + ``BACKPROPAGATE_UI_SHARE_HOST`` set →
        PRODUCTION (--share + --auth).
-    2. ``BACKPROPAGATE_UI_AUTH`` set + ``BACKPROPAGATE_UI_HOST_BIND`` set
+    2. Credentials set + ``BACKPROPAGATE_UI_HOST_BIND`` set
        (non-loopback) → PRODUCTION (--host + --auth).
-    3. ``BACKPROPAGATE_UI_AUTH`` set → EXPLICIT_CREDS (loopback bind).
-    4. ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` set → TOKEN_AUTO (v1.3 polish; the
-       CLI doesn't generate this in Wave 6 MVP but the middleware honors it
-       if present).
-    5. Otherwise → NO_AUTH_LOCAL_ONLY (back-compat; smoke-import / dev runs).
+    3. Credentials set → EXPLICIT_CREDS (loopback bind).
+    4. ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` set → TOKEN_AUTO (what a plain
+       ``backprop ui`` launch gets).
+    5. Otherwise → NO_AUTH_LOCAL_ONLY (only reachable by running Reflex
+       directly with no env; ``backprop ui`` never lands here).
     """
     env = env if env is not None else dict(os.environ)
-    auth_creds = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
+    auth_creds = (
+        env.get(_AUTH_VERIFIER_ENV, "").strip() or env.get(_AUTH_ENV, "").strip()
+    )
     share_host = env.get("BACKPROPAGATE_UI_SHARE_HOST", "").strip()
     host_bind = env.get("BACKPROPAGATE_UI_HOST_BIND", "").strip().lower()
     launch_token = env.get(_LAUNCH_TOKEN_ENV, "").strip()
@@ -175,20 +205,26 @@ def _detect_mode(env: dict[str, str] | None = None) -> AuthMode:
 
 
 def _derive_secret(env: dict[str, str] | None = None) -> bytes:
-    """Cookie HMAC secret derivation per DESIGN_BRIEF.
+    """Cookie HMAC secret derivation.
 
-    - ``--auth`` set: SHA-256(BACKPROPAGATE_UI_AUTH) — operator-supplied key
-      material; no separate ``BACKPROP_AUTH_SECRET`` env var needed.
-    - ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` set: token bytes used directly.
-    - Otherwise: stable per-process random bytes (NO_AUTH_LOCAL_ONLY mode
+    - Credentials set (``--auth``): a random per-process key. It is NOT derived
+      from the password, so a stolen cookie or a leaked key reveals nothing
+      about the credential, and nothing about the credential can be used to
+      forge a cookie. Sessions do not survive a UI restart (new process, new
+      key); users sign in again.
+    - ``BACKPROPAGATE_UI_LAUNCH_TOKEN`` set: token bytes used directly (the
+      token is itself a 256-bit random value, not a human-chosen password).
+    - Otherwise: the same per-process random bytes (NO_AUTH_LOCAL_ONLY mode
       doesn't validate cookies, but the secret needs to be non-empty so the
       hmac.new() call doesn't raise).
     """
     env = env if env is not None else dict(os.environ)
-    auth_creds = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
+    auth_creds = (
+        env.get(_AUTH_VERIFIER_ENV, "").strip() or env.get(_AUTH_ENV, "").strip()
+    )
     launch_token = env.get(_LAUNCH_TOKEN_ENV, "").strip()
     if auth_creds:
-        return hashlib.sha256(auth_creds.encode("utf-8")).digest()
+        return _PROCESS_LOCAL_SECRET
     if launch_token:
         return launch_token.encode("utf-8")
     # Stable per-process secret. Calling code in NO_AUTH_LOCAL_ONLY mode
@@ -200,17 +236,55 @@ def _derive_secret(env: dict[str, str] | None = None) -> bytes:
 _PROCESS_LOCAL_SECRET = secrets.token_bytes(32)
 
 
-def _verify_basic_auth(authorization_header: str, env: dict[str, str] | None = None) -> str | None:
-    """Constant-time check of HTTP Basic against ``BACKPROPAGATE_UI_AUTH``.
+@functools.lru_cache(maxsize=8)
+def _verifier_for_plaintext(raw: str) -> tuple[str, str] | None:
+    """Derive an in-memory ``(user, verifier)`` from a plaintext ``user:pass``.
 
-    Returns the authenticated username on success, ``None`` on failure. We
-    use ``hmac.compare_digest`` for both halves so timing doesn't leak the
-    correct username when the password is wrong (and vice versa).
+    Only used when somebody sets ``BACKPROPAGATE_UI_AUTH`` directly (running
+    Reflex without the CLI). Cached so the ~50 ms scrypt derivation runs once
+    per distinct value, not once per request. The cache lives in process
+    memory only; nothing is written to disk and the salt is fresh per process.
+    """
+    if ":" not in raw:
+        return None
+    user, password = raw.split(":", 1)
+    return user, hash_password(password)
+
+
+def _resolve_credential(env: dict[str, str]) -> tuple[str, str] | None:
+    """Return ``(username, verifier)`` for explicit-creds mode, else ``None``.
+
+    ``BACKPROPAGATE_UI_AUTH_VERIFIER`` (+ ``BACKPROPAGATE_UI_AUTH_USER``) wins
+    over the plaintext ``BACKPROPAGATE_UI_AUTH``. A malformed verifier
+    resolves to ``None`` so the caller fails closed (mode stays
+    EXPLICIT_CREDS, nothing verifies).
+    """
+    verifier = env.get(_AUTH_VERIFIER_ENV, "").strip()
+    if verifier:
+        user = env.get(_AUTH_USER_ENV, "").strip()
+        if not user or not is_valid_verifier(verifier):
+            return None
+        return user, verifier
+    plaintext = env.get(_AUTH_ENV, "").strip()
+    if plaintext:
+        return _verifier_for_plaintext(plaintext)
+    return None
+
+
+def _verify_basic_auth(authorization_header: str, env: dict[str, str] | None = None) -> str | None:
+    """Constant-time check of HTTP Basic against the configured credential.
+
+    Returns the authenticated username on success, ``None`` on failure. The
+    username is compared with ``hmac.compare_digest`` and the password is
+    verified against the salted scrypt verifier (``verify_password``, also
+    constant-time). The password check runs even when the username is wrong,
+    so timing doesn't reveal which half failed.
     """
     env = env if env is not None else dict(os.environ)
-    expected = env.get("BACKPROPAGATE_UI_AUTH", "").strip()
-    if not expected:
+    credential = _resolve_credential(env)
+    if credential is None:
         return None
+    exp_user, verifier = credential
 
     # ``Authorization: Basic <b64(user:pass)>`` — strip casing/whitespace
     # robustly because some proxies normalize the scheme.
@@ -228,16 +302,9 @@ def _verify_basic_auth(authorization_header: str, env: dict[str, str] | None = N
     if ":" not in decoded:
         return None
     user, password = decoded.split(":", 1)
-    if ":" not in expected:
-        # Malformed BACKPROPAGATE_UI_AUTH; the CLI validates shape upstream so
-        # this shouldn't happen, but fail-closed if it does.
-        return None
-    exp_user, exp_pass = expected.split(":", 1)
 
-    # Constant-time compare both halves. Different lengths are short-circuited
-    # by hmac.compare_digest itself (still constant-time per Python docs).
     user_ok = hmac.compare_digest(user.encode("utf-8"), exp_user.encode("utf-8"))
-    pass_ok = hmac.compare_digest(password.encode("utf-8"), exp_pass.encode("utf-8"))
+    pass_ok = verify_password(password, verifier)
     if user_ok and pass_ok:
         return user
     return None

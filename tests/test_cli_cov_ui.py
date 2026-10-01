@@ -1,6 +1,6 @@
 """Coverage tests for ``cmd_ui`` in cli.py.
 
-Mocked (real boundaries): ``subprocess.run`` (the Reflex dev server child),
+Mocked (real boundaries): ``cli._run_reflex`` (the Reflex server child),
 ``_spawn_cloudflared_tunnel`` (network tunnel; the helper itself is covered in
 ``test_cli_cov_ui_support.py``) and the port pre-flight (``_find_port_in_use``,
 also covered for real in that file). Real: argument parsing, the auth-file
@@ -20,6 +20,7 @@ import pytest
 from backpropagate import cli
 from backpropagate.exceptions import BackpropagateError, UserInputError
 from tests.helpers.cli_cov_support import parse
+from tests.helpers.ui_auth import assert_child_env_has_verifier
 
 
 class _ExplodingLogger:
@@ -45,7 +46,7 @@ def ui(tmp_path, monkeypatch):
         calls["locks_during"] = sorted(p.name for p in lock_dir.glob("session-*.lock")) if lock_dir.exists() else []
         return SimpleNamespace(returncode=calls.get("returncode", 0))
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_run_reflex", fake_run)
     calls["lock_dir"] = tmp_path / "xdg" / "backpropagate"
     return calls
 
@@ -118,16 +119,20 @@ class TestAuthFile:
         args = parse(["ui", "--port", "7900", "--auth-file", self._file(tmp_path, " alice:s3cret \n")])
         assert cli.cmd_ui(args) == cli.EXIT_OK
         run = ui["run"][0]
-        assert run.env["BACKPROPAGATE_UI_AUTH"] == "alice:s3cret"
+        assert_child_env_has_verifier(run.env, "alice", "s3cret")
         assert run.env["BACKPROPAGATE_UI_PORT"] == "7900"
         assert run.env["BACKPROPAGATE_UI_HOST_BIND"] == "127.0.0.1"
         assert run.cmd[-2:] == ["--backend-host", "127.0.0.1"]
-        assert "--frontend-port" in run.cmd and "7900" in run.cmd and "7901" in run.cmd
+        # production mode on ONE port: the dev backend cannot start on this package layout
+        assert run.cmd[run.cmd.index("--env") + 1] == "prod"
+        assert run.cmd[run.cmd.index("--frontend-port") + 1] == "7900"
+        assert run.cmd[run.cmd.index("--backend-port") + 1] == "7900"
+        assert "7901" not in run.cmd
         out = capsys.readouterr().out
-        assert "Auth lock-file:" in out
+        assert "lock-file" not in out  # credentials are never persisted, so no lock file
         assert "inline" not in out  # the --auth-file path never prints the inline-credential warning
-        assert ui["locks_during"] == ["session-7900.lock"]
-        assert list(ui["lock_dir"].glob("session-*.lock")) == []  # removed after exit
+        assert ui["locks_during"] == []
+        assert list(ui["lock_dir"].glob("session-*.lock")) == []
 
     def test_wide_posix_mode_warns(self, tmp_path, monkeypatch, ui, capsys):
         """On POSIX a group/other-readable credential file triggers a warning (Windows stat reports 0o666)."""
@@ -173,7 +178,7 @@ class TestAuthFile:
         monkeypatch.setattr(cli, "write_launch_token_lock", lambda port, payload: tmp_path / "lock")
         monkeypatch.setattr(Path, "unlink", lambda self, **k: None)
         assert cli.cmd_ui(parse(["ui", "--auth-file", path])) == cli.EXIT_OK
-        assert ui["run"][0].env["BACKPROPAGATE_UI_AUTH"] == "alice:pw"
+        assert_child_env_has_verifier(ui["run"][0].env, "alice", "pw")
 
 
 class TestGates:
@@ -216,9 +221,14 @@ class TestGates:
 
     def test_ambient_auth_env_is_stripped_without_flag(self, ui, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI_AUTH", "ambient:bypass")
+        monkeypatch.setenv("BACKPROPAGATE_UI_AUTH_VERIFIER", "scrypt$ambient")
+        monkeypatch.setenv("BACKPROPAGATE_UI_LAUNCH_TOKEN", "ambient-token")
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
-        assert "BACKPROPAGATE_UI_AUTH" not in ui["run"][0].env
-        assert ui["locks_during"] == []  # nothing persisted for an unauthenticated launch
+        env = ui["run"][0].env
+        assert "BACKPROPAGATE_UI_AUTH" not in env
+        assert "BACKPROPAGATE_UI_AUTH_VERIFIER" not in env
+        assert env["BACKPROPAGATE_UI_LAUNCH_TOKEN"] != "ambient-token"  # a fresh per-launch token
+        assert ui["locks_during"] == ["session-7862.lock"]  # the token lock file, not a credential
 
     def test_rxconfig_missing(self, ui, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(cli, "__file__", str(tmp_path / "pkg" / "cli.py"))
@@ -229,11 +239,27 @@ class TestGates:
         assert ui["run"] == []
 
     def test_port_in_use_raises(self, ui, monkeypatch):
-        monkeypatch.setattr(cli, "_find_port_in_use", lambda host, ports: ports[1])
+        probed: list[list[int]] = []
+
+        def busy(host, ports):
+            probed.append(list(ports))
+            return ports[0]
+
+        monkeypatch.setattr(cli, "_find_port_in_use", busy)
         with pytest.raises(BackpropagateError) as ei:
             cli.cmd_ui(parse(["ui", "--port", "7950"]))
         assert ei.value.code == "RUNTIME_UI_PORT_IN_USE"
-        assert "backend (--port + 1)" in ei.value.message
+        assert "7950" in ei.value.message
+        assert probed == [[7950]]  # one port: there is no N+1 backend any more
+        assert "+ 1" not in ei.value.message and "N+1" not in (ei.value.suggestion or "")
+
+    def test_reflex_runs_in_prod_mode_on_a_single_port(self, ui):
+        assert cli.cmd_ui(parse(["ui", "--port", "7940"])) == cli.EXIT_OK
+        cmd = ui["run"][0].cmd
+        assert cmd[1:4] == ["-m", "reflex", "run"]
+        assert cmd[cmd.index("--env") + 1] == "prod"
+        assert cmd[cmd.index("--frontend-port") + 1] == cmd[cmd.index("--backend-port") + 1] == "7940"
+        assert "7941" not in cmd
 
 
 class _FakeTunnelProc:
@@ -331,7 +357,7 @@ class TestLaunchOutcomes:
             raise OSError("disk full")
 
         monkeypatch.setattr(cli, "write_launch_token_lock", boom)
-        assert cli.cmd_ui(parse(["ui", "--auth", "u:p"])) == cli.EXIT_OK
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
         out = capsys.readouterr().out
         assert "Could not write launch lock-file (disk full)" in out
         assert len(ui["run"]) == 1
@@ -345,7 +371,7 @@ class TestLaunchOutcomes:
         def interrupted(cmd, env=None, cwd=None):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli.subprocess, "run", interrupted)
+        monkeypatch.setattr(cli, "_run_reflex", interrupted)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
         assert "UI stopped" in capsys.readouterr().out
 
@@ -355,14 +381,14 @@ class TestLaunchOutcomes:
         def interrupted(cmd, env=None, cwd=None):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli.subprocess, "run", interrupted)
+        monkeypatch.setattr(cli, "_run_reflex", interrupted)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
 
     def test_interpreter_missing(self, ui, monkeypatch, capsys):
         def missing(cmd, env=None, cwd=None):
             raise FileNotFoundError("python")
 
-        monkeypatch.setattr(cli.subprocess, "run", missing)
+        monkeypatch.setattr(cli, "_run_reflex", missing)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
         captured = capsys.readouterr()
         assert "interpreter not found" in captured.err
@@ -374,14 +400,14 @@ class TestLaunchOutcomes:
         def missing(cmd, env=None, cwd=None):
             raise FileNotFoundError("python")
 
-        monkeypatch.setattr(cli.subprocess, "run", missing)
+        monkeypatch.setattr(cli, "_run_reflex", missing)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
 
     def test_user_input_error_from_launch(self, ui, monkeypatch, capsys):
         def bad(cmd, env=None, cwd=None):
             raise UserInputError("bad flag", hint="fix the flag")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_USER_ERROR
         captured = capsys.readouterr()
         assert "bad flag" in captured.err and "Suggestion: fix the flag" in captured.out
@@ -391,7 +417,7 @@ class TestLaunchOutcomes:
         def bad(cmd, env=None, cwd=None):
             raise BackpropagateError("reflex exploded", suggestion="reinstall")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         args = parse(["ui"])
         args.verbose = verbose
         assert cli.cmd_ui(args) == cli.EXIT_RUNTIME_ERROR
@@ -402,7 +428,7 @@ class TestLaunchOutcomes:
         def bad(cmd, env=None, cwd=None):
             raise RuntimeError("Authorization: Bearer abcdef1234567890")
 
-        monkeypatch.setattr(cli.subprocess, "run", bad)
+        monkeypatch.setattr(cli, "_run_reflex", bad)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_RUNTIME_ERROR
         captured = capsys.readouterr()
         assert "abcdef1234567890" not in captured.err

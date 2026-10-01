@@ -40,6 +40,7 @@ import argparse
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -393,14 +394,14 @@ def _auth_credential(value: str) -> str:
     if not isinstance(value, str) or not value:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got an empty value. "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
     if ":" not in value:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass — no colon separator found. "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -410,7 +411,7 @@ def _auth_credential(value: str) -> str:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got: empty username "
             "(format was ':<pass>'). "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -418,7 +419,7 @@ def _auth_credential(value: str) -> str:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got: empty password "
             "(format was '<user>:'). "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -2523,18 +2524,22 @@ def cmd_info(args: argparse.Namespace) -> int:
 # =============================================================================
 #
 # Per DESIGN_BRIEF "Lock-file token mode (post-CVE-2025-52882 defense)":
-# the per-launch token / auth credentials are also written to
+# the per-launch random token (token-auto mode, i.e. a plain ``backprop ui``)
+# is also written to
 #   $XDG_RUNTIME_DIR/backpropagate/session-<port>.lock     (Linux)
 #   ~/Library/Application Support/backpropagate/session-<port>.lock (macOS)
 #   %LOCALAPPDATA%\backpropagate\session-<port>.lock        (Windows)
 # so machine-to-machine clients (e.g. ``backprop train --watch-ui``) can
-# read the token / credentials without exposing them in argv.
+# read the token without screen-scraping the banner or exposing it in argv.
 #
-# Mode 0o600 on POSIX (owner read+write only). On Windows we fall back to
-# the per-user LOCALAPPDATA directory whose ACL is owner-restricted by
-# default — a tight ACL-rewrite via icacls would require pywin32 which
-# isn't a runtime dependency. The Windows fallback is documented in
-# handbook/security.md (cross-domain handoff to frontend agent below).
+# ``--auth`` / ``--auth-file`` launches write NO lock file: a password (or
+# even its verifier) has no business on disk, and nothing consumes one.
+#
+# Mode 0o600 on POSIX (owner read+write only). On Windows the file lives in
+# the per-user LOCALAPPDATA directory, whose inherited ACL grants access to
+# the user, SYSTEM and local Administrators only — it is NOT tightened
+# further (that would need pywin32 / icacls, not a runtime dependency).
+# The file is deleted when the UI exits. Documented in handbook/security.md.
 #
 # Cross-domain handoff to frontend agent: the test scaffold in
 # tests/test_auth_middleware.py:540 (currently pytest.skip()ed) imports
@@ -2590,16 +2595,15 @@ def _lock_file_dir() -> Path:
 
 
 def write_launch_token_lock(port: int, token: str) -> Path:
-    """Write the launch token / credentials to a per-launch lock file.
+    """Write the per-launch token to a per-launch lock file.
 
     Args:
         port: Port the UI is listening on (used to form the filename so
             two concurrent ``backprop ui`` invocations on different ports
             don't collide).
-        token: The token / credential string to persist. The caller is
-            responsible for deciding whether to persist the launch token
-            (token-auto mode) or the ``user:pass`` shape (basic-auth mode);
-            this helper writes whatever opaque string it gets.
+        token: The launch token to persist (token-auto mode only). Callers
+            must never pass a password here; this helper writes whatever
+            opaque string it gets, so the guarantee lives in ``cmd_ui``.
 
     Returns:
         Path to the lock file (the caller's CLI logs the path so the
@@ -2611,10 +2615,9 @@ def write_launch_token_lock(port: int, token: str) -> Path:
         half-formed token.
 
         On Windows: the file ends up in ``%LOCALAPPDATA%\\backpropagate\\``
-        which inherits the user's ACL by default (owner-restricted on a
-        single-user box). A tight icacls rewrite would require pywin32
-        which is not a runtime dependency; the per-user directory provides
-        the practical floor.
+        which inherits the per-user profile ACL (the user, SYSTEM and local
+        Administrators). It is not tightened further; a tight icacls rewrite
+        would require pywin32 which is not a runtime dependency.
 
     Concurrency:
         Multiple ``backprop ui --port N`` invocations on the SAME port
@@ -3081,11 +3084,9 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     we never block a launch that might actually have succeeded.
 
     Args:
-        host: The interface the Reflex subprocess will bind (frontend +
-            backend share the host; only the port differs).
-        ports: Candidate ports to probe — typically ``[port, port + 1]``
-            (Reflex serves the frontend on ``--port`` and the backend on
-            ``--port + 1``).
+        host: The interface the Reflex subprocess will bind.
+        ports: Candidate ports to probe. ``backprop ui`` runs Reflex in
+            production mode on ONE port, so this is just ``[port]``.
 
     Returns:
         The first occupied port, or ``None`` if all candidates are free.
@@ -3093,11 +3094,9 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     import errno
     import socket
 
-    # Reflex binds the frontend host to 0.0.0.0 regardless of --backend-host
-    # (see the cmd() comment block), but the backend honors the requested
-    # host. Probe on the requested host; fall back to 127.0.0.1 if the host
-    # string isn't bindable here (e.g. a LAN IP not assigned to this box) so a
-    # mis-probe never turns into a false EADDRINUSE.
+    # Probe on the requested host; a host string that isn't bindable here
+    # (e.g. a LAN IP not assigned to this box) is skipped below (EADDRNOTAVAIL)
+    # so a mis-probe never turns into a false EADDRINUSE.
     probe_host = host or "127.0.0.1"
     for port in ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -3120,13 +3119,124 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     return None
 
 
+# How long ``backprop ui`` waits for the Reflex tree to exit on its own after
+# Ctrl+C before it kills the whole tree, and how often it polls the child.
+_UI_STOP_GRACE_SECONDS = 10.0
+_UI_POLL_SECONDS = 0.5
+
+
+def _kill_process_tree(proc: "subprocess.Popen[Any]") -> None:
+    """Hard-kill ``proc`` and every process it spawned (best effort, never raises).
+
+    Reflex starts a granian/uvicorn server (and, in dev mode, a frontend
+    server) as grandchildren, so killing only the direct child leaves a server
+    bound to the port.
+
+    Windows: ``taskkill /F /T``, with the System32 path taken from
+    ``GetSystemDirectoryW`` (the Win32 API) rather than from ``SYSTEMROOT``,
+    which a caller's environment could point at an attacker-chosen directory.
+    POSIX: kill the child's process group when it has its own, otherwise the
+    child and (when ``psutil`` is installed) its descendants.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            buf = ctypes.create_unicode_buffer(260)
+            length = ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260)  # type: ignore[attr-defined,unused-ignore]
+            taskkill = os.path.join(buf.value, "taskkill.exe") if length else "taskkill"
+            subprocess.run(  # nosec B603 - fixed argv, absolute System32 path, pid is an int
+                [taskkill, "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        else:
+            import signal as _signal
+
+            own_group = os.getpgid(proc.pid) != os.getpgid(0)
+            if own_group:
+                os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+            else:
+                try:
+                    import psutil
+
+                    for child in psutil.Process(proc.pid).children(recursive=True):
+                        try:
+                            child.kill()
+                        except psutil.Error:
+                            pass
+                except ImportError:
+                    pass
+    except Exception:  # noqa: BLE001 - last-resort cleanup must not raise  # nosec B110
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_reflex(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+) -> "subprocess.CompletedProcess[Any]":
+    """Run the Reflex server and return when it exits; Ctrl+C-safe on Windows.
+
+    ``subprocess.run`` waits with ``WaitForSingleObject(INFINITE)`` on
+    Windows, which a console Ctrl+C / Ctrl+Break cannot interrupt: the CLI only
+    saw its ``KeyboardInterrupt`` once Reflex had exited, so a Reflex whose
+    shutdown hung (intermittent) left ``backprop ui`` unstoppable. Poll with a
+    short timeout instead so the interrupt is delivered promptly.
+
+    On ``KeyboardInterrupt`` the Reflex tree got the same Ctrl+C (it shares the
+    console), so it is given ``_UI_STOP_GRACE_SECONDS`` to exit by itself; if it
+    has not, the whole tree is killed. A second Ctrl+C during the grace period
+    skips the wait. The ``KeyboardInterrupt`` is re-raised once the tree is down.
+    """
+    import time
+
+    proc = subprocess.Popen(cmd, env=env, cwd=cwd)  # nosec B603 - cmd is internally constructed
+    try:
+        while True:
+            try:
+                returncode = proc.wait(timeout=_UI_POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                continue
+            return subprocess.CompletedProcess(cmd, returncode)
+    except KeyboardInterrupt:
+        try:
+            deadline = time.monotonic() + _UI_STOP_GRACE_SECONDS
+            while proc.poll() is None and time.monotonic() < deadline:
+                try:
+                    proc.wait(timeout=_UI_POLL_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+        except KeyboardInterrupt:
+            pass  # second Ctrl+C: stop waiting, go straight to the kill
+        if proc.poll() is None:
+            _kill_process_tree(proc)
+            try:
+                proc.wait(timeout=10)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                pass
+        raise
+    except BaseException:
+        # Anything else (SystemExit, an unexpected error): never orphan the server.
+        if proc.poll() is None:
+            _kill_process_tree(proc)
+        raise
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     """
     Execute the ui command to launch the Reflex web interface.
 
     The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This
-    handler subprocess-launches ``reflex run`` from the directory containing
-    ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
+    handler subprocess-launches ``reflex run --env prod`` (one port; the
+    backend serves the compiled frontend, so the auth middleware fronts every
+    request) from the directory containing ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
     shape, share-without-auth refuse-to-start, host-without-auth refuse-to-
     start — so misconfigured launches fail loudly on the CLI side regardless
     of what the UI framework does.
@@ -3134,7 +3244,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
     Post-Wave-6 (v1.2.0): with ``ENFORCEMENT_AVAILABLE=True`` the Reflex UI
     enforces the auth contract via FastAPI middleware. ``--auth`` is now a
     normal flag that flows through ``validate_auth_shape`` and into the
-    subprocess via ``BACKPROPAGATE_UI_AUTH``. What remains gated:
+    subprocess as a salted scrypt verifier (``BACKPROPAGATE_UI_AUTH_VERIFIER``
+    + ``BACKPROPAGATE_UI_AUTH_USER``); the plaintext password never leaves
+    this process and is never written to disk. Without ``--auth`` a random
+    per-launch token (``BACKPROPAGATE_UI_LAUNCH_TOKEN``) is generated, printed
+    in the banner URL and written to a 0600 lock file that is removed on exit.
+    What remains gated:
 
     * ``--share`` without ``--auth`` — a public URL with no auth is the bug
       v1.2 closed; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
@@ -3344,7 +3459,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     # (auth.py import error). What it does NOT catch: a runtime regression
     # where FastAPI middleware imports cleanly but raises AttributeError at
     # request time. Adding a Popen + probe loop is a moderate refactor that
-    # requires reworking the subprocess.run call site to a non-blocking
+    # requires reworking the _run_reflex call site to a non-blocking
     # Popen with a healthcheck thread. Tracked as the v1.4 followup
     # "BRIDGE-V14-UI-PROBE" so the auth contract assertion catches both
     # the import-time + runtime layers (same defensive depth that caught
@@ -3407,25 +3522,24 @@ def cmd_ui(args: argparse.Namespace) -> int:
         )
         return EXIT_RUNTIME_ERROR
 
-    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex serves the
-    # frontend on --port and the backend on --port+1; if EITHER is already
-    # bound, the subprocess dies 30-60s in with a bare traceback. Probe both
-    # here so the operator gets a structured EADDRINUSE error naming the port
-    # + the --port remedy BEFORE we spawn cloudflared or print "Launching...".
+    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex runs in
+    # production mode on the single --port (the backend serves the compiled
+    # frontend itself); if it is already bound, the subprocess dies 30-60s in
+    # with a bare traceback. Probe it here so the operator gets a structured
+    # EADDRINUSE error naming the port + the --port remedy BEFORE we spawn
+    # cloudflared or print "Launching...".
     # Done after the auth/host gates so a misconfigured launch still fails on
     # the auth axis first (the higher-severity contract), and before the
     # cloudflared spawn so a busy port doesn't leak a public tunnel.
     _preflight_host = getattr(args, "host", None) or "127.0.0.1"
-    _busy_port = _find_port_in_use(_preflight_host, [args.port, args.port + 1])
+    _busy_port = _find_port_in_use(_preflight_host, [args.port])
     if _busy_port is not None:
-        _which = "frontend" if _busy_port == args.port else "backend (--port + 1)"
         raise BackpropagateError(
-            f"Port {_busy_port} ({_which}) is already in use on "
-            f"{_preflight_host}; the Reflex UI needs both {args.port} and "
-            f"{args.port + 1} free.",
+            f"Port {_busy_port} is already in use on {_preflight_host}; "
+            "the Reflex UI needs it free.",
             suggestion=(
-                f"Pick a free port with --port <N> (the backend uses N+1, so "
-                f"leave a gap), or stop whatever is holding {_busy_port} "
+                "Pick a free port with --port <N>, or stop whatever is "
+                f"holding {_busy_port} "
                 "(a previous `backprop ui` that didn't exit is the usual "
                 "culprit — check `lsof -i :%d` on POSIX or "
                 "`netstat -ano | findstr :%d` on Windows)."
@@ -3434,19 +3548,37 @@ def cmd_ui(args: argparse.Namespace) -> int:
             code="RUNTIME_UI_PORT_IN_USE",
         )
 
-    # Set env vars that Reflex's state can pick up. ``BACKPROPAGATE_UI_AUTH``
-    # is the agreed handoff for the Reflex side to enforce per-request auth
-    # via FastAPI middleware once Phase 3 wires it. For Phase 1 the variable
-    # is exported but Reflex doesn't read it yet.
+    # Build the env the Reflex child sees. The auth hand-off is one of:
+    #   * --auth / --auth-file: BACKPROPAGATE_UI_AUTH_USER + a salted scrypt
+    #     BACKPROPAGATE_UI_AUTH_VERIFIER. The plaintext password NEVER crosses
+    #     the process boundary (env vars are readable by same-user processes
+    #     and inherited by every grandchild) and is never written to disk.
+    #   * neither: a per-launch random BACKPROPAGATE_UI_LAUNCH_TOKEN
+    #     (token-auto mode). The default launch is NOT unauthenticated: the
+    #     middleware demands ``?token=`` on the first request and then a
+    #     signed session cookie.
     env = os.environ.copy()
-    # BRIDGE-B-001: strip ambient BACKPROPAGATE_UI_AUTH when --auth not passed;
-    # prevents ambient-env bypass of refuse-to-start once ENFORCEMENT_AVAILABLE
-    # flips. Without this, `BACKPROPAGATE_UI_AUTH=u:p backprop ui` (no --auth)
-    # would pass the CLI gate then silently activate auth in the Reflex child.
-    if args.auth is None:
-        env.pop("BACKPROPAGATE_UI_AUTH", None)
+    # BRIDGE-B-001: strip every ambient auth variable before deciding what to
+    # hand over. Without this, `BACKPROPAGATE_UI_AUTH=u:p backprop ui` (no
+    # --auth) would pass the CLI gate then activate plaintext auth in the
+    # Reflex child; and an ambient LAUNCH_TOKEN / VERIFIER would let a stale
+    # value override what this launch decided.
+    for _stale in (
+        "BACKPROPAGATE_UI_AUTH",
+        "BACKPROPAGATE_UI_AUTH_USER",
+        "BACKPROPAGATE_UI_AUTH_VERIFIER",
+        "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+    ):
+        env.pop(_stale, None)
+    launch_token: str | None = None
     if auth:
-        env["BACKPROPAGATE_UI_AUTH"] = f"{auth[0]}:{auth[1]}"
+        from .ui_security import hash_password
+
+        env["BACKPROPAGATE_UI_AUTH_USER"] = auth[0]
+        env["BACKPROPAGATE_UI_AUTH_VERIFIER"] = hash_password(auth[1])
+    else:
+        launch_token = secrets.token_urlsafe(32)
+        env["BACKPROPAGATE_UI_LAUNCH_TOKEN"] = launch_token
     env["BACKPROPAGATE_UI_PORT"] = str(args.port)
     # Communicate the bind address so the middleware can enforce a
     # Host-header allow-list (DNS-rebinding defense). When --host is omitted
@@ -3497,70 +3629,78 @@ def cmd_ui(args: argparse.Namespace) -> int:
             )
             return EXIT_RUNTIME_ERROR
 
-    # BRIDGE-F-002 auth-polish item 3 (v1.3 Wave 6a): write the credential
+    # BRIDGE-F-002 auth-polish item 3 (v1.3 Wave 6a): write the launch token
     # to a per-launch lock file at $XDG_RUNTIME_DIR/backpropagate/session-
     # <port>.lock (or the platform equivalent) so machine-to-machine clients
-    # (`backprop train --watch-ui` and similar) can pick up the auth string
-    # without it appearing in argv / ps output. Mode 0o600 on POSIX; the
-    # Windows fallback inherits the per-user LOCALAPPDATA ACL.
+    # (`backprop train --watch-ui` and similar) can pick it up without it
+    # appearing in argv / ps output. Mode 0o600 on POSIX; on Windows the file
+    # sits under %LOCALAPPDATA% and inherits the per-user profile ACL.
     #
-    # We persist either the explicit user:pass (basic-auth mode) or the
-    # launch token (token-auto mode; not yet exposed on the CLI but the
-    # helper is forward-compatible). NO_AUTH_LOCAL_ONLY skips lock-file
-    # creation entirely — there's nothing to authenticate against.
+    # Only the launch token is ever persisted (token-auto mode). --auth /
+    # --auth-file launches skip the lock file entirely: the password must not
+    # be written to disk, and a verifier on disk would serve no consumer.
     lock_file_path: Path | None = None
-    lock_payload = env.get("BACKPROPAGATE_UI_AUTH") or env.get("BACKPROPAGATE_UI_LAUNCH_TOKEN")
-    if lock_payload:
+    if launch_token:
         try:
-            lock_file_path = write_launch_token_lock(args.port, lock_payload)
-            _print_info(f"Auth lock-file: {lock_file_path} (mode 0o600 on POSIX)")
+            lock_file_path = write_launch_token_lock(args.port, launch_token)
+            if os.name == "posix":
+                _print_info(f"Launch-token lock-file: {lock_file_path} (mode 0600, owner only)")
+            else:
+                _print_info(
+                    f"Launch-token lock-file: {lock_file_path} (protected by the "
+                    "per-user profile ACL: you, SYSTEM and Administrators can read "
+                    "it; deleted when the UI exits)"
+                )
         except Exception as exc:  # noqa: BLE001 — lock-file is best-effort observability
             # Don't abort the UI launch just because the lock file failed;
-            # the credential still flows via env var. Surface the reason so
-            # an operator who NEEDS the lock-file path (M2M consumers) can
-            # triage. Auth itself is unaffected.
+            # the token still flows via the child env and the banner URL.
+            # Surface the reason so an operator who NEEDS the lock-file path
+            # (M2M consumers) can triage. Auth itself is unaffected.
             _print_warning(
                 f"Could not write launch lock-file ({exc}); M2M consumers "
-                "will need to read BACKPROPAGATE_UI_AUTH from their own env."
+                "will need to copy the token from the startup banner URL."
             )
 
-    # Reflex's port convention: the frontend serves on --frontend-port and
-    # the backend on --backend-port. We map --port to the frontend (what
-    # users hit in the browser) and the backend gets port+1.
+    # Port model: ONE port, production mode.
     #
-    # BRIDGE-B-001 (Wave 3.5, v1.3): pass --backend-host through to the
-    # Reflex subprocess so the operator-requested bind actually takes effect.
-    # Without this, Reflex's default backend_host="0.0.0.0" (reflex_base.config)
-    # silently bound the FastAPI backend to ALL interfaces regardless of the
-    # operator's --host value — making --host advertise control it didn't
-    # deliver. The CLI's refuse-to-start gates (loopback-only without --auth)
-    # were the only thing standing between a default install and a LAN-exposed
-    # backend; passing --backend-host here makes the bind match what the
-    # operator asked for.
+    # ``reflex run`` in dev mode starts a Vite frontend on --frontend-port and
+    # a separate backend on --backend-port. That cannot work for this package:
+    # the dev backend calls ``reflex.utils.exec.get_reload_paths()``, which
+    # walks up from the app module and raises ``RuntimeError: There should not
+    # be an __init__.py file in your app root directory`` because the app root
+    # (``backpropagate/``, the cwd that holds rxconfig.py) is a real package
+    # with a non-empty ``__init__.py`` (checked on Reflex 0.9.3, 0.9.5 and
+    # 0.9.12). It also leaves the auth middleware on the backend port while
+    # the browser opens the frontend port, so a ``?token=`` URL on the
+    # frontend port never reaches it, and the Vite dev server binds 0.0.0.0
+    # regardless of --backend-host.
     #
-    # Default (no --host): resolves to "127.0.0.1" so the backend is loopback
-    # by default — matches the loopback-first posture the CLI documents.
-    # When --host LAN-IP --auth user:pass passes the gate, the operator-
-    # supplied host flows through.
+    # ``reflex run --env prod`` has none of these problems: the compiled
+    # frontend is mounted INTO the backend ASGI app (``get_frontend_mount``
+    # appends it before the ``api_transformer`` chain is applied), so the auth
+    # / Host / rate-limit middleware fronts every byte on a single port, and
+    # there is a single listener bound to the requested host. The prod path
+    # never calls ``get_reload_paths``. Reflex requires the two ports to be
+    # equal in prod, so both flags carry the same number.
     #
-    # Frontend bind caveat: the Reflex-generated .web/package.json uses
-    # `react-router dev --host` which binds 0.0.0.0 regardless of this
-    # backend-host knob. That is a frontend-domain follow-up — the load-
-    # bearing security on the backend (the FastAPI/uvicorn process where
-    # the API and WebSocket live) is now bound as the operator requested,
-    # and the auth middleware's Host-header allowlist + HTTP Basic check
-    # (BACKPROPAGATE_UI_HOST_BIND-driven) is the enforcement layer in either
-    # case.
+    # BRIDGE-B-001 (Wave 3.5, v1.3): --backend-host carries the operator's
+    # --host so the bind matches what was asked. Default (no --host) is
+    # 127.0.0.1, the loopback-first posture. When --host LAN-IP --auth
+    # user:pass passes the gate, the operator-supplied host flows through;
+    # the middleware's Host-header allowlist (BACKPROPAGATE_UI_HOST_BIND) and
+    # the credential check remain the enforcement layer either way.
     backend_host = requested_host or "127.0.0.1"
     cmd = [
         sys.executable,
         "-m",
         "reflex",
         "run",
+        "--env",
+        "prod",
         "--frontend-port",
         str(args.port),
         "--backend-port",
-        str(args.port + 1),
+        str(args.port),
         "--backend-host",
         backend_host,
     ]
@@ -3587,7 +3727,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             "ui_subprocess_starting",
             host_bind=backend_host,
             port=args.port,
-            auth_mode=("basic" if auth else "none"),
+            auth_mode=("basic" if auth else "token"),
             share=bool(args.share),
             cmd=cmd,
         )
@@ -3596,14 +3736,14 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     # BRIDGE-B (Stage C auth-polish): Jupyter-pattern startup banner.
     # Printed AFTER the refuse-to-start gates have fired (lines above)
-    # and BEFORE the subprocess.run call so the operator sees it the
+    # and BEFORE the _run_reflex call so the operator sees it the
     # moment the launch is decided. Suppressed by BACKPROPAGATE_UI_QUIET=1.
     _print_ui_startup_banner(
         bound_host=backend_host,
         port=args.port,
         auth=auth,
         share=bool(args.share),
-        token_query=None,
+        token_query=launch_token,
     )
 
     import time as _time  # local import to keep cold-start of `backprop --help` cheap
@@ -3620,9 +3760,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
         # banners. The structured-log peer event 'ui_subprocess_phase_launching'
         # fires alongside so JSON consumers see the same lifecycle marker.
         _print_info(
-            "==> Reflex compiling frontend (first start may take 30-60s; "
-            "subsequent starts are cached). Open the URL after the "
-            "'App running at' line appears."
+            "==> Reflex building the production frontend (first start "
+            "installs and builds, up to a minute or two; later starts take "
+            "about 20s). Open the URL after the 'App running at' line "
+            "appears."
         )
         try:
             _ui_logger.info(
@@ -3633,7 +3774,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             )
         except Exception:  # noqa: BLE001  # nosec B110
             pass
-        result = subprocess.run(cmd, env=env, cwd=str(package_dir))  # nosec B603 — cmd is internally constructed
+        result = _run_reflex(cmd, env=env, cwd=str(package_dir))
         _duration = _time.monotonic() - _ui_start_ts
         try:
             _ui_logger.info(
@@ -8545,7 +8686,8 @@ Quantization tradeoffs (fastest -> smallest):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Local-only (loopback bind; no auth needed)
+  # Local-only (loopback bind). No --auth needed: a random per-launch
+  # token is generated and the full URL (with ?token=...) is printed.
   backprop ui --port 7862
 
   # LAN-reachable with HTTP basic auth (DNS-rebinding defense requires --auth)
@@ -8568,7 +8710,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         "--port", "-p",
         type=_port_int,
         default=7862,
-        help="Port to run the server on (default: 7862; must be in range 1..65535)",
+        help="The one port the UI listens on (default: 7862; must be in range 1..65535)",
     )
     ui_parser.add_argument(
         "--host",
@@ -8598,8 +8740,8 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         metavar="USER:PASS",
         help=(
             "Enable HTTP basic auth on the Reflex UI. Required when --share "
-            "or a non-loopback --host is passed. Credentials are forwarded "
-            "to the subprocess via BACKPROPAGATE_UI_AUTH. "
+            "or a non-loopback --host is passed. The subprocess receives "
+            "only a salted scrypt verifier, never the plaintext password. "
             "Username must not contain whitespace, colon, or control chars; "
             "password must not contain newlines or NUL. "
             "Safer alternatives for repeat invocations: --auth-file (mode "

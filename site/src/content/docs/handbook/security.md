@@ -56,9 +56,9 @@ These gates fire even with the middleware live, because they catch contract viol
 - `--host <non-loopback>` without `--auth` → same code. DNS-rebinding defense per CVE-2024-28224 / CVE-2025-49596 lineage.
 - `--auth` requested while `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra) → same code. Stops the runtime before the v1.1.x false-promise re-emerges.
 
-### Layer 2: `cli.py:cmd_ui` strips ambient `BACKPROPAGATE_UI_AUTH`
+### Layer 2: `cli.py:cmd_ui` strips ambient auth variables
 
-If the operator did **not** pass `--auth` but `BACKPROPAGATE_UI_AUTH` is set in the environment, the CLI strips it before spawning the Reflex subprocess. This closes the BRIDGE-B-001 ambient-env bypass: an env-var-only setup would otherwise reach the subprocess and create the *illusion* of auth coverage when the operator never asked for it on the command line.
+Before spawning the Reflex subprocess, the CLI removes `BACKPROPAGATE_UI_AUTH`, `BACKPROPAGATE_UI_AUTH_USER`, `BACKPROPAGATE_UI_AUTH_VERIFIER` and `BACKPROPAGATE_UI_LAUNCH_TOKEN` from the environment it hands over, then sets only what this launch decided. This closes the BRIDGE-B-001 ambient-env bypass: an env-var-only setup would otherwise reach the subprocess and create the *illusion* of auth coverage when the operator never asked for it on the command line, and a stale token or verifier could override the one the launch chose.
 
 ### Layer 3: `ui_app/app.py` module-import guard
 
@@ -74,16 +74,20 @@ The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_t
 
 | Mode | Invocation | Bind | Auth | Allowlist | Footer badge |
 |------|-----------|------|------|-----------|--------------|
-| Default | `backprop ui` | 127.0.0.1 | per-launch random token in URL + lock file (v1.3) | `127.0.0.1`, `localhost` | `Local · token` |
+| Default | `backprop ui` | 127.0.0.1 | per-launch random token in the banner URL, then a session cookie; lock file | `127.0.0.1`, `localhost` | `Local · token` |
 | Basic | `backprop ui --auth user:pass` (or `--auth-file <path>`) | 127.0.0.1 | HTTP Basic | `127.0.0.1`, `localhost` | `Local · Basic` |
 | Shared | `backprop ui --share --auth user:pass` (or `--auth-file <path>`) | cloudflared tunnel (v1.3) | HTTP Basic | `127.0.0.1` + tunnel host | `Shared · Basic` |
 | Network | `backprop ui --host 0.0.0.0 --auth user:pass` (or `--auth-file <path>`) | network | HTTP Basic | `127.0.0.1` + LAN IPs | `Network · Basic` |
 
 **`--auth-file` (v1.3 alternative to `--auth`):** reads `user:pass` from a file instead of taking it on the command line — keeps the credential out of shell history and out of `ps aux`. Mutually exclusive with `--auth` (passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`). The file mode is checked on POSIX: a mode wider than `0600` emits a warning at startup. Create with `printf 'user:pass' > path && chmod 600 path`. Satisfies the same gate as `--auth`. See [recipes → --auth-file](/backpropagate/handbook/recipes/#use---auth-file-for-shell-history-safe-auth).
 
-**Per-launch lock-file token (v1.3, default mode):** in token-auto mode (the default when neither `--auth` nor `--auth-file` is passed), the per-launch random token now also lands in a `0600` lock file at `$XDG_RUNTIME_DIR/backpropagate/session-<port>.lock` (Linux/macOS) or `%LOCALAPPDATA%\backpropagate\session-<port>.lock` (Windows). The file is deleted on shutdown. Parallel processes running as the same user can discover the token without screen-scraping the startup banner — useful for `backprop info --runtime` and external tooling that wants to validate against the running UI.
+**The password never reaches the UI process (1.8.1):** with `--auth` or `--auth-file`, the CLI hashes the password into a salted scrypt verifier and passes the Reflex subprocess only `BACKPROPAGATE_UI_AUTH_USER` and `BACKPROPAGATE_UI_AUTH_VERIFIER`. The middleware checks each Basic credential against the verifier in constant time. Before 1.8.1 the plaintext `user:pass` went into the child's environment, where any process running as the same user, and every grandchild, could read it, and into the session lock file on disk. The session-cookie signing key is now random per process; before 1.8.1 it was the SHA-256 of `user:pass`, so a captured cookie could be brute-forced offline for the password. Sessions therefore end when the UI restarts: sign in again.
+
+**Per-launch token (default mode):** when neither `--auth` nor `--auth-file` is passed, `backprop ui` generates a random token on every launch and prints it in the banner URL, `http://127.0.0.1:<port>/?token=...`. Open that URL: the first request trades the token for a signed HttpOnly session cookie and the token is dropped from the address bar. Requests with neither the cookie nor a valid token are refused, the frontend's assets and the `/_event` WebSocket included (a `?token=` on the WebSocket URL does not open it; only the cookie does). Before 1.8.1 the CLI did not generate a token, so a default launch ran with no authentication at all, loopback-only. The token also lands in a `0600` lock file at `$XDG_RUNTIME_DIR/backpropagate/session-<port>.lock` (Linux/macOS) or `%LOCALAPPDATA%\backpropagate\session-<port>.lock` (Windows). The file is deleted on shutdown; `--auth` / `--auth-file` launches write none. Parallel processes running as the same user can discover the token without screen-scraping the startup banner — useful for `backprop info --runtime` and external tooling that wants to validate against the running UI.
 
 **Public-URL tunnel via `cloudflared` (v1.3):** `--share` now spawns `cloudflared tunnel --url http://127.0.0.1:<port>`, parses the announced `https://*.trycloudflare.com` URL from cloudflared's stderr (with a `BACKPROPAGATE_CLOUDFLARED_TIMEOUT`-bounded wait — default 30s), and adds the URL to the auth middleware's Host + Origin allowlist via `BACKPROPAGATE_UI_SHARE_HOST`. Install `cloudflared` from <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>. The quick-tunnel is ephemeral (no account / no zone / no DNS setup) and dies with the `backprop ui` process. If `cloudflared` is not on `PATH`, the runtime emits a clear error pointing at the install URL + [SSH port-forwarding](#ssh-port-forwarding-recipe) as the fallback.
+
+**One port (1.8.1):** `backprop ui` runs Reflex in production mode. The backend serves the compiled frontend, its assets and the `/_event` WebSocket on the single `--port`, so the middleware fronts every request. Before 1.8.1 it asked Reflex for dev mode, which has a separate frontend server on its own port, bound to `0.0.0.0` and outside the middleware (and on Reflex 0.9.x refused to start at all; see the changelog).
 
 **Host-header allowlist** — every request validates `Host` against the mode's allowlist. DNS-rebinding defense; backpropagate is in the same exposure class as Ollama (CVE-2024-28224), MCP Inspector (CVE-2025-49596 CVSS 9.4), and Claude Code VS Code (CVE-2025-52882).
 
@@ -100,23 +104,23 @@ The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_t
 
 ## SSH port-forwarding recipe
 
-The canonical remote-access pattern when you don't want to expose the UI directly. Works against v1.1.x and v1.2.0 without any auth flags.
+The canonical remote-access pattern when you don't want to expose the UI directly. It needs no auth flags.
 
 On the training host:
 
 ```bash
 backprop ui
-# Listens on 127.0.0.1:7860 (Reflex frontend) + 7861 (backend WebSocket).
+# Listens on 127.0.0.1:7862 and prints http://127.0.0.1:7862/?token=... in its banner.
 ```
 
 On your laptop:
 
 ```bash
-ssh -L 7860:localhost:7860 -L 7861:localhost:7861 you@training-host
-# Then open http://localhost:7860 in your browser.
+ssh -L 7862:localhost:7862 you@training-host
+# Then open the banner URL (http://127.0.0.1:7862/?token=...) in your browser.
 ```
 
-This tunnels both the frontend and the Reflex WebSocket through your authenticated SSH session — no `--share`, no `--host 0.0.0.0`, no auth middleware required. The UI is reachable only from your laptop, gated by your SSH credentials.
+This tunnels the whole UI, WebSocket included, through your authenticated SSH session: no `--share`, no `--host 0.0.0.0`. The UI is reachable only from your laptop, and the per-launch token still applies, so copy the URL from the banner. Before 1.8.1 the UI also needed `port + 1` forwarded.
 
 ## Output-directory sandbox
 
@@ -133,7 +137,7 @@ The UI sandboxes filesystem writes (saved adapters, GGUF exports, converted data
 - Do **not** pass `--host 0.0.0.0` without `--auth user:pass`. v1.2.0 refuses this combination at startup for the same reason — a non-loopback bind without credentials is the DNS-rebinding foot-gun.
 - Do **not** put `HF_TOKEN` or any credential in argparse (it appears in `ps aux`). Export it in the environment or use `huggingface-cli login` to cache it.
 - Do **not** disable the output-directory denylist. It exists to prevent path-traversal bugs in the UI from writing into your system or credential paths.
-- Do **not** invoke `python -m reflex run` or `reflex run` from inside the `backpropagate/` package directory while setting `BACKPROPAGATE_UI_AUTH` and assume auth is wired. The layer-3 + layer-4 import-time guards refuse to start when `ENFORCEMENT_AVAILABLE=False` precisely so that operator confusion cannot bypass the middleware. Always launch via `backprop ui`.
+- Do **not** invoke `python -m reflex run` or `reflex run` from inside the `backpropagate/` package directory while setting `BACKPROPAGATE_UI_AUTH` and assume auth is wired. The layer-3 + layer-4 import-time guards refuse to start when `ENFORCEMENT_AVAILABLE=False` precisely so that operator confusion cannot bypass the middleware. A direct run also skips what `backprop ui` adds: the per-launch token, the password verifier in place of the plaintext, and production mode. Always launch via `backprop ui`.
 
 ## Code-execution metric (`pass_rate`)
 

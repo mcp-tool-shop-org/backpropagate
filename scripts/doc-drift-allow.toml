@@ -53,6 +53,8 @@ env_vars_catalog_grandfathered = [
     # and "CLI / runtime opt-outs" tables; consumed by ui_app/auth.py and
     # ui_security.py via env.get(...) not pydantic introspection.
     "BACKPROPAGATE_UI_AUTH",
+    "BACKPROPAGATE_UI_AUTH_USER",
+    "BACKPROPAGATE_UI_AUTH_VERIFIER",
     "BACKPROPAGATE_UI_CORS_EXTRA_ORIGINS",
     "BACKPROPAGATE_UI_HOST_BIND",
     "BACKPROPAGATE_UI_LAUNCH_TOKEN",

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`backprop ui` starts again.** On Reflex 0.9.x (0.9.3, 0.9.5 and 0.9.12
+  checked), `reflex run` in development mode raised `RuntimeError: There
+  should not be an __init__.py file in your app root directory`, because the
+  app root is the `backpropagate/` package itself, so the UI never came up.
+  `backprop ui` now runs `reflex run --env prod` on one port: the backend
+  serves the compiled frontend, its assets and the WebSocket, and the auth
+  middleware fronts all of it. `port + 1` is no longer used. The first start
+  builds the frontend (a minute or two); later starts take about 20 s. A
+  second bug was hiding behind the first: the theme's
+  `appearance=rx.color_mode` compiled to an undefined `rawColorMode` on Reflex
+  0.9.3/0.9.5, which blanked the page in dev mode and failed the production
+  build; it is now `appearance="inherit"`.
+  A new integration test (`tests/test_ui_e2e_real_reflex.py`) starts the real
+  UI and checks the auth contract end to end; the first run is recorded in
+  `docs/ui-e2e-check-2026-10-01.md`.
+- The SSH port-forwarding examples in the README and handbook forwarded port
+  7860 while `backprop ui` listens on 7862; they now use 7862 and the banner
+  URL.
+- **Ctrl+C reliably stops `backprop ui` on Windows.** About 1 launch in 5 to
+  10, Reflex's own shutdown hung, and the CLI sat in an uninterruptible wait
+  on it, so Ctrl+C did nothing. The CLI now polls the Reflex process; after
+  Ctrl+C it waits up to 10 s for a clean exit, then kills the whole process
+  tree (`taskkill /F /T` on Windows). A second Ctrl+C skips the wait.
+
 ### Security
 
 - **The `pass_rate` eval metric no longer runs model output inside your
@@ -19,6 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stripped environment, a temporary working directory and, on Linux/macOS,
   CPU / memory / file-size limits. Still not a sandbox: see the handbook's
   security page.
+- **A default `backprop ui` launch is authenticated.** Without `--auth`, the
+  CLI now generates a random token per launch, prints it in the banner URL and
+  writes it to a `0600` lock file deleted on exit; the first request trades it
+  for a signed HttpOnly cookie. Before, no token was generated and a default
+  launch ran with no authentication (loopback only).
+- **`--auth` passwords no longer leave the CLI process.** The Reflex
+  subprocess gets the username and a salted scrypt verifier
+  (`BACKPROPAGATE_UI_AUTH_USER`, `BACKPROPAGATE_UI_AUTH_VERIFIER`), checked in
+  constant time. Before, the plaintext `user:pass` was put in the child's
+  environment and written to the session lock file, and the cookie-signing key
+  was the SHA-256 of `user:pass`, so a captured cookie could be brute-forced
+  offline for the password. The key is now random per process; sessions end
+  when the UI restarts.
+- The `--auth` error hints suggested `BACKPROPAGATE_UI_AUTH=user:pass` to keep
+  a password out of shell history, but `backprop ui` deliberately ignores that
+  variable, so following the hint launched without the credential. They now
+  point at `--auth-file`.
 
 ## [1.8.0] - 2026-10-01
 

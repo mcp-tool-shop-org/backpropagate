@@ -39,6 +39,12 @@ from tests.test_multi_run_cov_support import (
 MULTI_RUN_LOGGER = "backpropagate.multi_run"
 
 
+@pytest.fixture(autouse=True)
+def _no_cuda(monkeypatch):
+    """CPU-only and deterministic, whatever GPU the dev rig has."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+
 def _b_tensors(params):
     return {k: v for k, v in params.items() if ".lora_B." in k}
 
@@ -685,3 +691,38 @@ class TestExecuteRunWithValidation:
         by_run = {c.run_index: c for c in mgr._checkpoints}
         assert by_run[1].validation_loss == 0.5
         assert by_run[2].validation_loss is None
+
+
+class TestExecuteRunDefensivePaths:
+    def test_cache_reclaim_failure_during_oom_recovery_is_non_fatal(self, tmp_path, monkeypatch):
+        """Mocked: the CUDA runtime -- reported available, but the first ``empty_cache`` raises."""
+        emptied = []
+
+        def broken_empty_cache():
+            emptied.append(1)
+            if len(emptied) == 1:  # the OOM-recovery reclaim; the end-of-run cleanup works
+                raise RuntimeError("CUDA context lost")
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "empty_cache", broken_empty_cache)
+        monkeypatch.setattr(torch.cuda, "memory_allocated", lambda *a, **k: 0)
+        fake = make_fake_sft([_oom])
+        install_fake_sft(monkeypatch, fake)
+        mrt = make_trainer(tmp_path, merge_mode=MergeMode.SIMPLE)
+
+        result = mrt._execute_run(1, text_dataset(40), tmp_path)
+
+        assert emptied  # the reclaim was attempted ...
+        assert result.failed is False and result.oom_retries == 1  # ... and the retry went on
+        assert len(fake.created) == 2
+
+    def test_run_is_checkpointed_even_without_a_checkpoint_manager(self, tmp_path, monkeypatch):
+        install_fake_sft(monkeypatch, make_fake_sft())
+        mrt = make_trainer(tmp_path)
+        mrt._checkpoint_manager = None
+
+        result = mrt._execute_run(1, text_dataset(40), tmp_path)
+
+        assert result.checkpoint_path == str(tmp_path / "run_001" / "lora")
+        assert (tmp_path / "run_001" / "lora" / "adapter_config.json").exists()
+        assert (tmp_path / "run_001" / "slao" / "merged_lora.pt").exists()

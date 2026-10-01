@@ -35,6 +35,12 @@ from tests.test_multi_run_cov_support import (
 MULTI_RUN_LOGGER = "backpropagate.multi_run"
 
 
+@pytest.fixture(autouse=True)
+def _no_cuda(monkeypatch):
+    """CPU-only and deterministic, whatever GPU the dev rig has."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     return build_env(monkeypatch, tmp_path)
@@ -407,3 +413,18 @@ class TestRunLoopHistoryFailures:
 def _ok(sft, run):
     fill_adapter(sft.model, run=run)
     return type("R", (), {"training_loss": 1.0})()
+
+
+class TestRunLoopStartIndex:
+    def test_a_preset_start_index_without_a_checkpoint_skips_the_earlier_runs(self, env, caplog):
+        """``_resume_start_run_idx`` > 1 but no checkpoint path (nothing to hydrate):
+        the loop still starts at that run and never tries to load weights."""
+        mrt = env.build(num_runs=3, merge_mode=MergeMode.SIMPLE)
+        mrt._resume_start_run_idx = 2
+
+        with caplog.at_level(logging.INFO, logger=MULTI_RUN_LOGGER):
+            result = mrt.run(text_dataset(40))
+
+        assert [r.run_index for r in result.runs] == [2, 3]
+        assert any("Resuming multi-run from run 2/3" in r.getMessage() for r in caplog.records)
+        assert not any("Resumed LoRA weights" in r.getMessage() for r in caplog.records)

@@ -34,6 +34,12 @@ from tests.test_multi_run_cov_support import (
 MULTI_RUN_LOGGER = "backpropagate.multi_run"
 
 
+@pytest.fixture(autouse=True)
+def _no_cuda(monkeypatch):
+    """CPU-only and deterministic, whatever GPU the dev rig has."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     return build_env(monkeypatch, tmp_path)

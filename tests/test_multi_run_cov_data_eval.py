@@ -103,6 +103,33 @@ class TestLoadFullDataset:
         assert len(ds) == len(loader.to_hf_dataset())
         assert any("Dataset validation warning:" in r.getMessage() for r in caplog.records)
 
+    def test_clean_dataset_loader_instance_logs_no_warnings(self, tmp_path, caplog):
+        loader = DatasetLoader(
+            _write_jsonl(tmp_path / "clean.jsonl", [_alpaca_row(i) for i in range(5)]),
+            validate=True,
+        )
+        with caplog.at_level(logging.WARNING, logger=MR_LOGGER):
+            ds = _mrt()._load_full_dataset(loader)
+
+        assert len(ds) == 5
+        assert not caplog.records
+
+    def test_a_file_that_vanishes_between_check_and_open_is_dataset_not_found(
+        self, tmp_path, monkeypatch
+    ):
+        """Simulates a TOCTOU race: the loader raises ``FileNotFoundError`` itself."""
+
+        class _RacingLoader(DatasetLoader):
+            def __init__(self, *a, **k):
+                raise FileNotFoundError("deleted while opening")
+
+        monkeypatch.setattr(multi_run, "DatasetLoader", _RacingLoader)
+
+        with pytest.raises(DatasetNotFoundError) as exc_info:
+            _mrt()._load_full_dataset(str(tmp_path / "gone.jsonl"))
+
+        assert isinstance(exc_info.value.__cause__, FileNotFoundError)
+
     def test_hub_name_goes_through_load_dataset_with_the_configured_split(self, monkeypatch):
         """Mocked: ``datasets.load_dataset`` (HF Hub network call)."""
         calls = []

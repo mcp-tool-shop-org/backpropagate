@@ -273,11 +273,14 @@ def filter_requirements(export_text: str) -> str:
 
 
 def windowsapps_prefix(msix_ver: str) -> str:
-    """The install prefix MSIX deploys to (no trailing separator)."""
-    family_dir = (
-        f"{IDENTITY_NAME}_{msix_ver}_x64__{PUBLISHER_ID_SUFFIX}"
+    """The install prefix MSIX deploys to (no trailing separator).
+
+    A fixed Windows target path by construction - built as a plain string
+    so the value is identical no matter which OS runs the builder or tests.
+    """
+    return (
+        f"C:\\Program Files\\WindowsApps\\{IDENTITY_NAME}_{msix_ver}_x64__{PUBLISHER_ID_SUFFIX}"
     )
-    return str(Path("C:\\Program Files\\WindowsApps") / family_dir)
 
 
 def check_max_path(stage_root: Path, msix_ver: str) -> tuple[int, int]:

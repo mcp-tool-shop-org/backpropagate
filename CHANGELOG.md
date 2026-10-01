@@ -64,6 +64,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exits with an error that points at `backprop train --method ...`.
 - `backprop runs --json` no longer crashes on a loss value too large for a
   float in a hand-edited or corrupted run history.
+- **`Trainer.train(resume_from=...)` resumes finished runs.** The run history
+  records a run's output directory, and that was passed to Hugging Face as the
+  checkpoint, so every resume failed with `FileNotFoundError:
+  .../trainer_state.json`. It now resumes from the newest `checkpoint-<step>`
+  inside it (or from the path itself when that is a checkpoint).
+- **Empty CSV / parquet cells no longer become the text "None" in training
+  data.** An empty cell loads as `None`, and the Alpaca, ShareGPT and
+  preference converters wrote it into the ChatML text as the word `None`.
+- `export_lora` given a single adapter file now raises `ExportError`. It used to
+  report success with an empty export directory, replacing any earlier export.
+- `refresh_features()` detects installed extras while
+  `BACKPROPAGATE_DEFER_FEATURE_DETECTION` is set (it did nothing, so installed
+  extras still looked missing).
+- A model-load failure through Unsloth keeps its auth / network / version
+  category and hint (it was wrapped a second time, losing both).
 
 ## [1.7.2] - 2026-09-30
 

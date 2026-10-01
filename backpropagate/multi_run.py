@@ -196,6 +196,10 @@ def _pid_alive_windows(pid: int) -> bool:
     A process that has exited but whose handle is still held somewhere reports
     an exit code other than ``STILL_ACTIVE`` (259).
     """
+    import sys
+
+    if sys.platform != "win32":  # also lets mypy skip the Windows-only ctypes API on Linux
+        return True
     import ctypes
     from ctypes import wintypes
 
@@ -211,7 +215,7 @@ def _pid_alive_windows(pid: int) -> bool:
 
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
-        err = ctypes.get_last_error()
+        err: int = ctypes.get_last_error()
         # ERROR_INVALID_PARAMETER: no such PID. ERROR_ACCESS_DENIED: it exists
         # but belongs to someone else. Anything else: cannot tell, assume live.
         return err != ERROR_INVALID_PARAMETER
@@ -219,7 +223,8 @@ def _pid_alive_windows(pid: int) -> bool:
         code = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
             return True  # cannot tell: assume live
-        return code.value == STILL_ACTIVE
+        alive: bool = code.value == STILL_ACTIVE
+        return alive
     finally:
         kernel32.CloseHandle(handle)
 

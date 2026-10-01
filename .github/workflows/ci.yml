@@ -202,11 +202,12 @@ jobs:
           # the pip that setup-python ships is the pip under test, not whatever
           # PyPI served this minute.
           #
-          # FRESH-RESOLVE COVERAGE IS KEPT, in three places, because each guards
-          # something a lock cannot: this job's no-unsloth cell (below, the only
-          # one in this file), the weekly nightly-train-smoke.yml (an upstream
-          # bump is invisible to a paths filter), and post-publish-smoke.yml
-          # (what PyPI actually serves, on 2 OSes x 4 Pythons).
+          # FRESH-RESOLVE COVERAGE IS KEPT where a lock cannot stand in: this
+          # job's no-unsloth cell (below; the only one that is fresh by design),
+          # the weekly nightly-train-smoke.yml (an upstream bump is invisible to
+          # a paths filter), and post-publish-smoke.yml (what PyPI actually
+          # serves, on 2 OSes x 4 Pythons). The Windows cell is fresh for a
+          # different, temporary reason, explained at its branch.
           #
           # Windows takes the same feature surface MINUS `export`.
           # llama-cpp-python ships no cp311 win_amd64 wheel, so `full` pulls its
@@ -229,7 +230,7 @@ jobs:
           # A matrix `extras` value overrides both branches (see the ubuntu /
           # 3.13 include above): that cell installs `full` MINUS `unsloth`.
           if [ -n "${MATRIX_EXTRAS}" ]; then
-            # UNLOCKED ON PURPOSE (the one fresh-resolve install in this file).
+            # UNLOCKED ON PURPOSE (the one fresh-by-design install in this file).
             #
             # This cell exists to install the way a user's `pip install
             # backpropagate` does: a FRESH resolve with no lock, so the resolver
@@ -253,7 +254,18 @@ jobs:
             fi
             echo "::notice::No-unsloth cell: trl $(pip show trl | sed -n 's/^Version: //p'), transformers $(pip show transformers | sed -n 's/^Version: //p')"
           elif [ "${{ runner.os }}" = "Windows" ]; then
-            bash scripts/ci_install_locked.sh dev full-no-export
+            # UNLOCKED, TEMPORARILY. uv.lock pins torch 2.10.0, and on the
+            # hosted Windows runner that torch dies with "Illegal instruction"
+            # (exit 132) in tests/test_block_engine.py::TestPrecision::
+            # test_fp32_block_trains_under_bf16_autocast -- a CPU bf16 kernel
+            # the runner CPU does not have. A fresh resolve gets torch 2.12.1
+            # (the unsloth cap is <2.13) and passes; the Linux cells pass on
+            # the locked 2.10.0. So this is a real finding about the lock, not
+            # about this PR: move torch in uv.lock to a 2.12.x, then switch
+            # this branch to `bash scripts/ci_install_locked.sh dev
+            # full-no-export` and delete this comment. Scorecard flags the line
+            # below under Pinned-Dependencies until then.
+            pip install -e ".[dev,full-no-export]"
           else
             bash scripts/ci_install_locked.sh dev full
           fi

@@ -48,7 +48,9 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=bun /opt/bun/bin/bun /opt/bun/bin/bun
 ENV PATH="/opt/venv/bin:/opt/bun/bin:$PATH"
-COPY --chown=root:root backpropagate/ backpropagate/
+# No second copy of the source under /app: the package is installed in
+# /opt/venv, and a copy here shadowed it for `python -c` / `python -m` run from
+# this directory (root-owned, so Reflex could not write its build output).
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 REFLEX_USE_SYSTEM_BUN=1
 # `backprop ui` runs Reflex from the installed package directory, and Reflex
 # writes there: build output (.web/, .states/, reflex.lock/), upload space

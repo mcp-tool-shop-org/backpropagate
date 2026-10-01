@@ -2977,9 +2977,23 @@ class MultiRunTrainer:
 
         # Try to get PEFT adapter state via published API.
         if hasattr(model, 'get_adapter_state_dict'):
-            logger.debug("LoRA extraction path=peft_get_adapter_state_dict")
-            result: dict[str, Any] = model.get_adapter_state_dict()
-            return result
+            try:
+                result: dict[str, Any] = model.get_adapter_state_dict()
+            except ValueError as exc:
+                # transformers>=5 gives every HF model a PeftAdapterMixin whose
+                # get_adapter_state_dict() raises ValueError("No adapter
+                # loaded") for an adapter attached with peft.get_peft_model()
+                # (the mixin only tracks adapters added through transformers'
+                # own integration). hasattr() is therefore True on a perfectly
+                # healthy PEFT model; fall through to the manual scan instead
+                # of failing the whole session at _verify_peft_api().
+                logger.debug(
+                    f"get_adapter_state_dict unusable ({exc}); "
+                    f"falling back to manual named_parameters scan"
+                )
+            else:
+                logger.debug("LoRA extraction path=peft_get_adapter_state_dict")
+                return result
 
         # Fallback: extract lora parameters manually (kept for forward-compat
         # with PEFT versions that may rename or drop the helper).

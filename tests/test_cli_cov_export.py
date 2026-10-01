@@ -10,6 +10,7 @@ writers (``export_merged`` / ``export_gguf``), ``export_ollama_adapter`` and
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,6 +43,19 @@ def _result(path: Path, **kw):
         deferred_quantization=kw.get("deferred_quantization"),
     )
 
+
+
+class _PosixOs:
+    """``os`` as cli sees it, reporting ``name == "posix"``; everything else is the real module.
+
+    Patching the global ``os.name`` instead makes pathlib build ``PosixPath`` on
+    Windows for every caller, pytest's own cache included (INTERNALERROR on CI).
+    """
+
+    name = "posix"
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
 
 class TestExportPreflight:
     def test_no_model_path(self, capsys):
@@ -378,7 +392,7 @@ class TestHubTokenFile:
     def test_posix_wide_mode_warns(self, tmp_path, monkeypatch, capsys):
         f = tmp_path / "t"
         f.write_text("hf_abc", encoding="utf-8")
-        monkeypatch.setattr(cli.os, "name", "posix")
+        monkeypatch.setattr(cli, "os", _PosixOs())
         fake_stat = SimpleNamespace(st_mode=0o100644)
         monkeypatch.setattr(Path, "stat", lambda self, **k: fake_stat)
         assert cli._read_hub_token_file(str(f), flag_name="--hub-token-file") == "hf_abc"
@@ -387,7 +401,7 @@ class TestHubTokenFile:
     def test_posix_stat_oserror_is_ignored(self, tmp_path, monkeypatch):
         f = tmp_path / "t"
         f.write_text("hf_abc", encoding="utf-8")
-        monkeypatch.setattr(cli.os, "name", "posix")
+        monkeypatch.setattr(cli, "os", _PosixOs())
 
         real_stat = Path.stat
         calls = {"n": 0}

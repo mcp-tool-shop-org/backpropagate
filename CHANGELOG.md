@@ -7,18 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
-  transformers 5 gives every model a `get_adapter_state_dict` method that
-  raises "No adapter loaded" for an adapter attached with PEFT, and the
-  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
-  now read from the model's parameters when that call fails. Found by new
-  tests on a real tiny PEFT model.
-- **Resuming a multi-run session keeps the SLAO merge state.** The session
-  restore ran before the SLAO merger existed, so a resumed session dropped
-  its saved merge accumulator and started merging again from its first run.
-
 ### Added
 
 - **Experimental: block-coordinate full fine-tuning** (`--full-ft-engine block`,
@@ -58,9 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
+  transformers 5 gives every model a `get_adapter_state_dict` method that
+  raises "No adapter loaded" for an adapter attached with PEFT, and the
+  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
+  now read from the model's parameters when that call fails. Found by new
+  tests on a real tiny PEFT model.
+- **Resuming a multi-run session keeps the SLAO merge state.** The session
+  restore ran before the SLAO merger existed, so a resumed session dropped
+  its saved merge accumulator and started merging again from its first run.
 - Web UI `/runs`: the Model and Dataset columns showed "-" for every run (they
   read field names the run store does not write); the dataset path is shown
   redacted. The "Interrupted" filter, which the store rejects, is removed.
+- **`backprop multi-run --method orpo|simpo|kto` is refused instead of
+  silently ignored.** The multi-run backend trains SFT only and takes no
+  `method`, so the CLI dropped the flag and every run trained SFT. It now
+  exits with an error that points at `backprop train --method ...`.
+- `backprop runs --json` no longer crashes on a loss value too large for a
+  float in a hand-edited or corrupted run history.
 
 ## [1.7.2] - 2026-09-30
 

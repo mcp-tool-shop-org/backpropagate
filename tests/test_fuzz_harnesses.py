@@ -172,8 +172,6 @@ class TestHarnessesHaveTeeth:
 STRICT_SEEDS = [
     ("datasets", "finding_f6_lone_surrogate.seed", UnicodeEncodeError),
     ("ui_input", "finding_f4_nan.seed", AssertionError),
-    ("config", "finding_f4b_orpo_beta.seed", AssertionError),
-    ("config", "finding_f4b_simpo_gamma.seed", AssertionError),
 ]
 
 
@@ -199,15 +197,6 @@ class TestKnownFindings:
 
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
-
-    @pytest.mark.xfail(strict=True, reason="F4b: NaN passes the 'reject non-positive' validators")
-    @pytest.mark.parametrize("name", ["orpo_beta", "simpo_gamma", "kto_desirable_weight"])
-    def test_f4b_training_config_rejects_nan_in_positive_fields(self, name):
-        pytest.importorskip("pydantic_settings")
-        from backpropagate.config import TrainingConfig
-
-        with pytest.raises(Exception, match=r"(?i)positive|nan|invalid|setting"):
-            TrainingConfig(**{name: float("nan")})
 
     @pytest.mark.xfail(raises=OverflowError, strict=True, reason="F5: huge int escapes as OverflowError")
     def test_f5_validate_numeric_input_wraps_an_overflowing_int(self):
@@ -318,6 +307,33 @@ class TestFixedFindings:
         out = sanitize_filename("a" + "." * 400 + "b")
         assert len(out) <= 255
         assert not out.endswith((".", " "))
+
+
+    @pytest.mark.parametrize(
+        "name",
+        ["orpo_beta", "simpo_gamma", "kto_desirable_weight", "kto_undesirable_weight"],
+    )
+    def test_f4b_training_config_rejects_nan_in_positive_fields(self, name):
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        with pytest.raises(InvalidSettingError) as info:
+            TrainingConfig(**{name: float("nan")})
+        assert info.value.code == "CONFIG_INVALID_SETTING"
+
+    def test_f4b_training_config_rejects_nan_from_the_environment(self, monkeypatch):
+        from backpropagate.config import TrainingConfig
+        from backpropagate.exceptions import InvalidSettingError
+
+        monkeypatch.setenv("BACKPROPAGATE_TRAINING__ORPO_BETA", "nan")
+        with pytest.raises(InvalidSettingError):
+            TrainingConfig()
+
+    def test_f4b_training_config_still_accepts_positive_values(self):
+        from backpropagate.config import TrainingConfig
+
+        c = TrainingConfig(orpo_beta=0.2, simpo_gamma=0.5, kto_desirable_weight=1.3)
+        assert (c.orpo_beta, c.simpo_gamma, c.kto_desirable_weight) == (0.2, 0.5, 1.3)
 
 
 class TestPlumbing:

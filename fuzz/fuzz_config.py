@@ -35,12 +35,11 @@ Run: ``python fuzz/fuzz_config.py -atheris_runs=100000 fuzz/corpus/config``
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 from typing import Any
 
-from fuzz_common import STRICT, Provider, instrument, main, patched_environ
+from fuzz_common import Provider, instrument, main, patched_environ
 
 with instrument(__name__ == "__main__"):
     from pydantic import ValidationError
@@ -80,21 +79,16 @@ def _plain_type_ok(cls: Any, name: str, value: Any) -> None:
         assert type(value) is ann, f"{cls.__name__}.{name}: {value!r} is not {ann.__name__}"
 
 
-def check_training_invariants(c: Any, strict: bool = False) -> None:
+def check_training_invariants(c: Any) -> None:
     assert c.method in cfg._ALLOWED_METHODS
     assert c.backend in ("auto", "cuda", "mlx")
     assert not (c.bf16 and c.fp16)
     for name in ("orpo_beta", "simpo_gamma", "kto_desirable_weight", "kto_undesirable_weight"):
         value = getattr(c, name)
-        if math.isnan(value):
-            # Known finding F4b: ``nan <= 0`` is False, so the "reject
-            # non-positive" validators let NaN through.
-            assert not strict, f"TrainingConfig.{name} accepted NaN"
-            continue
-        assert value > 0, f"TrainingConfig.{name}={value!r} passed validation"
+        assert value > 0, f"TrainingConfig.{name}={value!r} passed validation"  # False for NaN too
 
 
-def check_section(p: Provider, strict: bool = False) -> None:
+def check_section(p: Provider) -> None:
     class_name = p.pick(tuple(SECTIONS))
     cls = getattr(cfg, class_name)
     prefix = SECTIONS[class_name]
@@ -121,7 +115,7 @@ def check_section(p: Provider, strict: bool = False) -> None:
     for name in names:
         _plain_type_ok(cls, name, getattr(first, name))
     if class_name == "TrainingConfig":
-        check_training_invariants(first, strict=strict)
+        check_training_invariants(first)
     if class_name == "SecurityConfig":
         assert isinstance(first.validate_production_config(), list)
         auth = first.get_auth_tuple()
@@ -164,16 +158,16 @@ def check_ui_security_env(p: Provider) -> None:
             assert value == getattr(defaults, name)
 
 
-def check_config(data: bytes, strict: bool = False) -> None:
+def check_config(data: bytes) -> None:
     p = Provider(data)
     if p.int_in_range(0, 3) == 0:
         check_ui_security_env(p)
     else:
-        check_section(p, strict=strict)
+        check_section(p)
 
 
 def TestOneInput(data: bytes) -> None:
-    check_config(data, strict=STRICT)
+    check_config(data)
 
 
 if __name__ == "__main__":

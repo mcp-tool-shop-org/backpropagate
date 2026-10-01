@@ -10,14 +10,17 @@ resolver, auth/host gates, lock-file write + cleanup (into ``tmp_path`` via
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from backpropagate import cli
+from backpropagate import cli, ui_frontend
 from backpropagate.exceptions import BackpropagateError, UserInputError
 from tests.helpers.cli_cov_support import parse
 from tests.helpers.ui_auth import assert_child_env_has_verifier
@@ -472,3 +475,103 @@ class TestUiWorkdir:
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
         assert ui["run"][0].cwd == str(Path(cli.__file__).resolve().parent)
         assert "running Reflex from the package directory" in capsys.readouterr().out
+
+
+class TestOfflineFrontend:
+    """v1.8.2 MSIX track: bundled-payload seeding + --open-browser wiring.
+
+    The payload fixture is tiny; a real ~250 MB payload's offline behavior is
+    covered manually by tests/test_ui_offline_seed.py.
+    """
+
+    @pytest.fixture
+    def payload(self, tmp_path, monkeypatch):
+        root = tmp_path / "payload"
+        (root / "web" / "build").mkdir(parents=True)
+        (root / "web" / "build" / "bundle.js").write_text("b", encoding="utf-8")
+        (root / "bun").mkdir()
+        (root / "bun" / ("bun.exe" if sys.platform == "win32" else "bun")).write_bytes(
+            b"bun-bytes"
+        )
+        from importlib.metadata import version as _dist_version
+
+        meta = {
+            "schema": 1,
+            "reflex_version": _dist_version("reflex"),
+            "bun_version": "1.3.13",
+            "bun_sha256": hashlib.sha256(b"bun-bytes").hexdigest(),
+        }
+        (root / "payload.json").write_text(json.dumps(meta), encoding="utf-8")
+        monkeypatch.setenv("BACKPROPAGATE_UI_PAYLOAD_DIR", str(root))
+        monkeypatch.setenv("REFLEX_DIR", str(tmp_path / "rxstate"))
+        # Never spawn the real reflex CLI in unit tests: the fake warmup
+        # writes the marker like the real hook would have.
+        def fake_warm(workdir, *, port, backend_host, hash_seed, child_env, warn):
+            (
+                Path(workdir) / ".web" / "reflex.install_frontend_packages.cached"
+            ).write_bytes(b"marker")
+            return True
+
+        monkeypatch.setattr(ui_frontend, "_warm_install_marker", fake_warm)
+        return root
+
+    def test_payload_seeds_workdir_and_pins_secret_hashseed(self, ui, payload):
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
+        workdir = Path(ui["run"][0].cwd)
+        assert (workdir / ".web" / "build" / "bundle.js").read_text() == "b"
+        assert (workdir / ".web" / "reflex.install_frontend_packages.cached").is_file()
+        seed = ui["run"][0].env.get("PYTHONHASHSEED")
+        assert seed is not None and seed != "0"  # per-install secret, never the public constant
+        record = json.loads((workdir / ui_frontend.SEED_RECORD).read_text())
+        assert record["hash_seed"] == seed  # run shares the seed the warmup stored
+        # bundled bun landed at the reflex probe path
+        assert (
+            ui_frontend._reflex_bun_probe_path().is_file()
+        )
+
+    def test_no_payload_leaves_env_unpinned(self, ui, monkeypatch):
+        monkeypatch.setenv("BACKPROPAGATE_UI_PAYLOAD_DIR", str(Path.cwd() / "definitely-absent"))
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
+        assert "PYTHONHASHSEED" not in ui["run"][0].env
+
+    def test_seed_failure_warns_and_still_launches(self, ui, monkeypatch, payload, capsys):
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(ui_frontend, "prepare_offline_frontend", boom)
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
+        assert ui["run"]  # the launch carried on
+        assert "Could not seed the bundled UI frontend" in capsys.readouterr().out
+        assert "PYTHONHASHSEED" not in ui["run"][0].env  # degraded launch stays unpinned
+
+
+class TestOpenBrowser:
+    def test_opens_banner_url_once_port_accepts(self, ui, monkeypatch):
+        import socket
+        import webbrowser
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        opened: list[str] = []
+        event = threading.Event()
+
+        def fake_open(url):
+            opened.append(url)
+            event.set()
+            return True
+
+        monkeypatch.setattr(webbrowser, "open", fake_open)
+        try:
+            assert cli.cmd_ui(parse(["ui", "--port", str(port), "--open-browser"])) == cli.EXIT_OK
+            assert event.wait(10)
+            assert opened[0].startswith(f"http://127.0.0.1:{port}/?token=")
+        finally:
+            listener.close()
+
+    def test_no_flag_means_no_browser(self, ui, monkeypatch):
+        import webbrowser
+
+        monkeypatch.setattr(webbrowser, "open", lambda url: pytest.fail("should not open"))
+        assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK

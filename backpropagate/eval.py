@@ -37,9 +37,13 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import random
 import re
+import signal
 import string
+import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +68,8 @@ __all__ = [
     "contains_match",
     "regex_match",
     "pass_rate",
+    "CODE_EVAL_ENV_VAR",
+    "DEFAULT_CODE_EVAL_TIMEOUT",
     "compute_task_metric",
     "bootstrap_ci_halfwidth",
 ]
@@ -334,53 +340,286 @@ def regex_match(prediction: str, references: Any) -> float:
     return 0.0
 
 
-def pass_rate(prediction: str, test_snippets: Any) -> float:
-    """Best-effort code ``pass@1``-style metric: fraction of test snippets the
+# Environment switch that opts in to running model-generated code (the same
+# convention as Hugging Face ``evaluate``'s ``HF_ALLOW_CODE_EVAL``). Accepted
+# truthy values: 1 / true / yes / on (case-insensitive).
+CODE_EVAL_ENV_VAR = "BACKPROPAGATE_ALLOW_CODE_EVAL"
+# Per-sample wall-clock budget (seconds) for the child process.
+DEFAULT_CODE_EVAL_TIMEOUT = 10.0
+# The child's JSON report is read back through a file; anything larger than
+# this is treated as a malformed report (score 0), never held in memory.
+_CODE_EVAL_MAX_OUTPUT_BYTES = 1024 * 1024
+# POSIX ``resource`` limits applied inside the child before any generated code
+# runs. Address space and file size are fixed; CPU seconds follow the timeout.
+_CODE_EVAL_AS_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+_CODE_EVAL_FSIZE_LIMIT_BYTES = 10 * 1024 * 1024
 
-    generated code satisfies. The model output ``prediction`` is exec'd once to
-    define its symbols, then each test snippet is exec'd against that namespace;
-    a snippet "passes" iff it runs without raising (typically an ``assert``).
+# The child program. Run as ``python -I -c <this> <payload.json>`` with stdin
+# closed. It applies resource limits (POSIX only), defines the prediction once,
+# runs each snippet against a copy of that namespace, and prints ONE JSON line:
+# ``{"defined": bool, "results": [bool, ...], "limits_failed": [...]}``.
+# SystemExit/KeyboardInterrupt count as a raise (a failed snippet), never as a
+# crash of the harness. Generated code's own stdout/stderr is swallowed.
+_CODE_EVAL_CHILD = r'''
+import io, json, sys
 
-    Sandboxing is BEST-EFFORT, not a security boundary: builtins are restricted
-    to a small safe subset and there is no network/file isolation. Only run this
-    on code you would already run locally. A syntax error in the generated code,
-    or any snippet raising, scores that snippet 0 rather than crashing the eval.
+with open(sys.argv[1], encoding="utf-8") as fh:
+    payload = json.load(fh)
 
-    Returns ``0.0`` when ``test_snippets`` is empty (nothing proven).
-    """
-    snippets = _as_reference_list(test_snippets)
-    if not snippets:
-        return 0.0
+limits_failed = []
+try:
+    import resource
+except ImportError:
+    resource = None
+if resource is not None:
+    for name, value in payload["limits"].items():
+        try:
+            resource.setrlimit(getattr(resource, name), (value, value))
+        except (ValueError, OSError, AttributeError):
+            limits_failed.append(name)
 
-    # A restricted builtins map — enough for typical asserts / simple helpers,
-    # without obvious foot-guns. NOT a real sandbox (see docstring).
-    safe_builtins = {
-        "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
-        "divmod": divmod, "enumerate": enumerate, "float": float, "int": int,
-        "len": len, "list": list, "map": map, "max": max, "min": min,
-        "pow": pow, "range": range, "reversed": reversed, "round": round,
-        "set": set, "sorted": sorted, "str": str, "sum": sum, "tuple": tuple,
-        "zip": zip, "AssertionError": AssertionError, "Exception": Exception,
-    }
-    base_globals: dict[str, Any] = {"__builtins__": safe_builtins}
+real_stdout = sys.stdout
+sys.stdout = io.StringIO()
+sys.stderr = io.StringIO()
 
-    # Define the model's code once. A syntax/runtime error here means NO snippet
-    # can pass -> 0.0 for the whole sample (do not crash the eval).
-    try:
-        exec(compile(str(prediction), "<generated>", "exec"), base_globals)  # nosec B102 — best-effort, documented
-    except Exception as exc:  # noqa: BLE001 — broken generated code => score 0
-        logger.debug("pass_rate: generated code failed to define (%s)", exc)
-        return 0.0
-
-    passed = 0
+safe_builtins = {
+    "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
+    "divmod": divmod, "enumerate": enumerate, "float": float, "int": int,
+    "len": len, "list": list, "map": map, "max": max, "min": min,
+    "pow": pow, "range": range, "reversed": reversed, "round": round,
+    "set": set, "sorted": sorted, "str": str, "sum": sum, "tuple": tuple,
+    "zip": zip, "AssertionError": AssertionError, "Exception": Exception,
+}
+base_globals = {"__builtins__": safe_builtins}
+snippets = payload["snippets"]
+defined = True
+results = []
+try:
+    exec(compile(payload["prediction"], "<generated>", "exec"), base_globals)
+except BaseException:
+    defined = False
+if defined:
     for snippet in snippets:
         snippet_globals = dict(base_globals)
         try:
-            exec(compile(str(snippet), "<test>", "exec"), snippet_globals)  # nosec B102 — best-effort, documented
-            passed += 1
-        except Exception:  # noqa: BLE001  # nosec B112 — a failing test is a 0, not a crash
-            continue
-    return passed / len(snippets)
+            exec(compile(snippet, "<test>", "exec"), snippet_globals)
+            results.append(True)
+        except BaseException:
+            results.append(False)
+else:
+    results = [False] * len(snippets)
+
+real_stdout.write(json.dumps(
+    {"defined": defined, "results": results, "limits_failed": limits_failed}
+) + "\n")
+real_stdout.flush()
+'''
+
+
+def _code_eval_allowed(allow_code_execution: bool | None) -> bool:
+    """True when the caller passed ``allow_code_execution=True`` or the env opt-in is set."""
+    if allow_code_execution:
+        return True
+    return os.environ.get(CODE_EVAL_ENV_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _require_code_eval_allowed(allow_code_execution: bool | None) -> None:
+    """Raise the structured opt-in error unless code execution was explicitly allowed."""
+    if _code_eval_allowed(allow_code_execution):
+        return
+    from backpropagate.exceptions import UserInputError
+
+    raise UserInputError(
+        "The 'pass_rate' metric executes model-generated code and code "
+        "execution is not enabled.",
+        code="INPUT_VALIDATION_FAILED",
+        hint=(
+            f"Opt in with {CODE_EVAL_ENV_VAR}=1 or --allow-code-exec (Python: "
+            "allow_code_execution=True). This runs model output on THIS machine, "
+            "under your user account, with your files and network reachable: it "
+            "uses a separate process, a timeout and resource limits, but it is "
+            "NOT a sandbox. Only enable it for models and datasets you trust, "
+            "ideally inside a container or VM."
+        ),
+    )
+
+
+def _code_eval_child_env(workdir: str) -> dict[str, str]:
+    """A minimal environment for the child: just enough for Python to start."""
+    env = {"TMPDIR": workdir, "TEMP": workdir, "TMP": workdir, "HOME": workdir, "LANG": "C.UTF-8"}
+    for key in ("SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
+def _kill_process_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the child and anything it spawned, then reap it.
+
+    A Windows venv ``python.exe`` is a launcher that starts the real interpreter
+    as ITS child, so killing only ``proc`` would leave the runaway code looping.
+    """
+    if sys.platform == "win32":
+        taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
+        subprocess.run(  # nosec B603 — fixed absolute path to the system taskkill; argv is our own child's pid
+            [taskkill, "/F", "/T", "/PID", str(proc.pid)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=15,
+        )
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError) as exc:
+            logger.debug("pass_rate: killpg(%s) failed (%s)", proc.pid, exc)
+    proc.kill()
+    proc.wait()
+
+
+def _run_code_eval_child(
+    prediction: str, snippets: list[str], timeout: float
+) -> list[bool] | None:
+    """Run ``prediction`` + ``snippets`` in an isolated child; per-snippet results or ``None``.
+
+    ``None`` means the sample must score 0: timeout, crash, killed by a resource
+    limit, or a malformed/oversized report.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="bp_code_eval_", ignore_cleanup_errors=True) as workdir:
+        payload = {
+            "prediction": prediction,
+            "snippets": snippets,
+            "limits": {
+                "RLIMIT_CPU": int(math.ceil(timeout)) + 1,
+                "RLIMIT_AS": _CODE_EVAL_AS_LIMIT_BYTES,
+                "RLIMIT_FSIZE": _CODE_EVAL_FSIZE_LIMIT_BYTES,
+                "RLIMIT_CORE": 0,
+            },
+        }
+        payload_path = os.path.join(workdir, "payload.json")
+        out_path = os.path.join(workdir, "report.out")
+        with open(payload_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+                subprocess, "CREATE_NO_WINDOW", 0
+            )
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        with open(out_path, "wb") as out_fh:
+            proc = subprocess.Popen(  # nosec B603 — argv is [sys.executable, -I, -c, our constant, path]; no shell, nothing user-controlled in argv
+                [sys.executable, "-I", "-c", _CODE_EVAL_CHILD, payload_path],
+                stdin=subprocess.DEVNULL,
+                stdout=out_fh,
+                stderr=subprocess.DEVNULL,
+                cwd=workdir,
+                env=_code_eval_child_env(workdir),
+                **popen_kwargs,
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.debug("pass_rate: sample exceeded %.1fs; killing child", timeout)
+                _kill_process_tree(proc)
+                return None
+
+        with open(out_path, "rb") as in_fh:
+            raw = in_fh.read(_CODE_EVAL_MAX_OUTPUT_BYTES + 1)
+    if len(raw) > _CODE_EVAL_MAX_OUTPUT_BYTES:
+        logger.debug("pass_rate: child report exceeded the output cap")
+        return None
+    lines = [ln for ln in raw.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        logger.debug("pass_rate: child produced no report (exit code %s)", proc.returncode)
+        return None
+    try:
+        report = json.loads(lines[-1])
+    except ValueError:
+        logger.debug("pass_rate: child report was not valid JSON")
+        return None
+    results = report.get("results") if isinstance(report, dict) else None
+    if (
+        not isinstance(results, list)
+        or len(results) != len(snippets)
+        or not all(isinstance(r, bool) for r in results)
+    ):
+        logger.debug("pass_rate: child report had an unexpected shape")
+        return None
+    return results
+
+
+def pass_rate(
+    prediction: str,
+    test_snippets: Any,
+    *,
+    allow_code_execution: bool | None = None,
+    timeout: float | None = None,
+) -> float:
+    """Best-effort code ``pass@1``-style metric: fraction of test snippets the
+
+    generated code satisfies. ``prediction`` is run once to define its symbols,
+    then each test snippet is run against a copy of that namespace; a snippet
+    "passes" iff it runs without raising (typically an ``assert``). A syntax
+    error or exception while defining the code, a timeout, or a crashed child
+    scores 0 for the sample rather than crashing the eval.
+
+    **This executes model-generated code, so it is opt-in.** It runs nothing
+    unless ``allow_code_execution=True`` (CLI: ``--allow-code-exec``) or the
+    environment variable ``BACKPROPAGATE_ALLOW_CODE_EVAL=1`` is set; otherwise
+    it raises ``UserInputError`` (``INPUT_VALIDATION_FAILED``) before touching
+    the code.
+
+    Isolation (what it does): each sample runs in its own child interpreter
+    (``sys.executable -I``) with stdin closed, a fresh temporary working
+    directory, a minimal environment (no tokens/API keys from the parent), a
+    per-sample wall-clock ``timeout`` (default 10 s; the whole process tree is
+    killed on expiry and the sample scores 0), and a capped result report. On
+    POSIX the child also gets ``resource`` limits (CPU seconds, address space,
+    file size, no core dumps). On Windows there are no ``resource`` limits; the
+    process, directory, environment and timeout isolation still apply. The
+    generated code also sees only a small set of builtins, which stops casual
+    ``import os``.
+
+    Isolation (what it does NOT do): this is **not a sandbox**. The child runs
+    as the same user account, so files that account can read or write and the
+    network are still reachable, and the restricted builtins are a speed bump,
+    not a boundary (``().__class__``-style escapes reach real modules). Only
+    enable it for models and datasets you trust, ideally inside a container or
+    VM.
+
+    Args:
+        prediction: Model-generated code.
+        test_snippets: A snippet or list of snippets (typically ``assert`` lines).
+        allow_code_execution: Explicit opt-in; the env var is the alternative.
+        timeout: Per-sample wall-clock seconds (default
+            :data:`DEFAULT_CODE_EVAL_TIMEOUT`).
+
+    Returns ``0.0`` when ``test_snippets`` is empty (nothing proven).
+    """
+    _require_code_eval_allowed(allow_code_execution)
+    effective_timeout = DEFAULT_CODE_EVAL_TIMEOUT if timeout is None else float(timeout)
+    if not effective_timeout > 0:
+        from backpropagate.exceptions import UserInputError
+
+        raise UserInputError(
+            f"pass_rate timeout must be a positive number of seconds; got {timeout!r}.",
+            code="INPUT_VALIDATION_FAILED",
+            hint="Pass a timeout above 0 (default 10 seconds per sample).",
+        )
+    snippets = _as_reference_list(test_snippets)
+    if not snippets:
+        return 0.0
+    results = _run_code_eval_child(str(prediction), snippets, effective_timeout)
+    if results is None:
+        return 0.0
+    return sum(results) / len(snippets)
 
 
 # Metric registry: name -> pure scorer. CLI binds against these names.
@@ -397,8 +636,20 @@ TASK_METRICS: dict[str, Any] = {
 DEFAULT_TASK_METRICS: list[str] = ["normalized_exact_match", "token_f1"]
 
 
-def compute_task_metric(metric: str, prediction: str, references: Any) -> float:
-    """Dispatch a single metric by name. Unknown metric -> INPUT_ error."""
+def compute_task_metric(
+    metric: str,
+    prediction: str,
+    references: Any,
+    *,
+    allow_code_execution: bool | None = None,
+    code_exec_timeout: float | None = None,
+) -> float:
+    """Dispatch a single metric by name. Unknown metric -> INPUT_ error.
+
+    ``allow_code_execution`` / ``code_exec_timeout`` apply only to
+    ``pass_rate`` (which runs model output and is opt-in; see
+    :func:`pass_rate`); the other metrics ignore them.
+    """
     from backpropagate.exceptions import UserInputError
 
     fn = TASK_METRICS.get(metric)
@@ -411,6 +662,15 @@ def compute_task_metric(metric: str, prediction: str, references: Any) -> float:
                 f"{', '.join(sorted(TASK_METRICS))}. (ROUGE-L/BLEU are not "
                 "wired as gateable metrics by design — see handbook.)"
             ),
+        )
+    if metric == "pass_rate":
+        return float(
+            fn(
+                prediction,
+                references,
+                allow_code_execution=allow_code_execution,
+                timeout=code_exec_timeout,
+            )
         )
     return float(fn(prediction, references))
 
@@ -452,6 +712,9 @@ def _compute_task_metrics(
     generations: list[GenerationSample],
     references: list[dict[str, Any]],
     metrics: list[str],
+    *,
+    allow_code_execution: bool | None = None,
+    code_exec_timeout: float | None = None,
 ) -> tuple[dict[str, float], int, dict[str, float] | None]:
     """Score ``generations`` (aligned 1:1 with ``references``) on each metric.
 
@@ -508,7 +771,13 @@ def _compute_task_metrics(
         refs = ref_lists[idx]
         for metric in metrics:
             per_metric_scores[metric].append(
-                compute_task_metric(metric, prediction, refs)
+                compute_task_metric(
+                    metric,
+                    prediction,
+                    refs,
+                    allow_code_execution=allow_code_execution,
+                    code_exec_timeout=code_exec_timeout,
+                )
             )
 
     task_metrics: dict[str, float] = {}
@@ -938,6 +1207,8 @@ def evaluate_run(
     temperature: float = 0.7,
     metrics: list[str] | None = None,
     references: list[dict[str, Any]] | None = None,
+    allow_code_execution: bool | None = None,
+    code_exec_timeout: float | None = None,
 ) -> EvalResult:
     """Evaluate a completed run: held-out loss + perplexity + N generations.
 
@@ -979,11 +1250,18 @@ def evaluate_run(
             ``EvalResult.task_metrics`` (mean), ``eval_n``, and ``metric_ci``
             (bootstrap half-width). When ``None`` (default) ``task_metrics`` is
             ``{}`` and behavior is byte-identical to the pre-C3 surface.
+        allow_code_execution: Explicit opt-in for the ``pass_rate`` metric,
+            which runs model-generated code in a child process on this
+            machine (not a sandbox; see :func:`pass_rate`). The env var
+            ``BACKPROPAGATE_ALLOW_CODE_EVAL=1`` is the alternative.
+        code_exec_timeout: Per-sample wall-clock seconds for ``pass_rate``
+            (default :data:`DEFAULT_CODE_EVAL_TIMEOUT`).
 
     Raises:
         UserInputError: ``INPUT_EVAL_RUN_NOT_FOUND`` (unknown run) /
             ``INPUT_EVAL_HELDOUT_UNRESOLVED`` (no held-out resolvable) /
-            ``INPUT_VALIDATION_FAILED`` (bad metric name or reference shape).
+            ``INPUT_VALIDATION_FAILED`` (bad metric name or reference shape, or
+            ``pass_rate`` requested without the code-execution opt-in).
         TrainingError: ``RUNTIME_EVAL_FAILED`` (model load / generation crash).
 
     Returns:
@@ -1035,6 +1313,10 @@ def evaluate_run(
                         f"{', '.join(sorted(TASK_METRICS))}."
                     ),
                 )
+        if "pass_rate" in metric_names:
+            # Refuse BEFORE the model load: no download/generation cost for
+            # a run that is not allowed to execute its own output.
+            _require_code_eval_allowed(allow_code_execution)
         reference_items = list(references)
         # Build the reference prompt list, validating shape (a missing prompt is
         # a clear INPUT_ error, not a silent skip). The reference-answer shape is
@@ -1092,7 +1374,11 @@ def evaluate_run(
                 seed=seed,
             )
             task_metrics, eval_n, metric_ci = _compute_task_metrics(
-                ref_generations, reference_items, metric_names
+                ref_generations,
+                reference_items,
+                metric_names,
+                allow_code_execution=allow_code_execution,
+                code_exec_timeout=code_exec_timeout,
             )
     except UserInputError:
         # Input-shaped problems already carry their own stable code; never

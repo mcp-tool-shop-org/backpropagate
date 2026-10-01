@@ -6167,6 +6167,12 @@ def cmd_eval(args: argparse.Namespace) -> int:
         "metrics": metrics,
         "references": references,
     }
+    # `pass_rate` executes model-generated code. The opt-in and timeout are
+    # forwarded only when given so every other eval call is unchanged.
+    if getattr(args, "allow_code_exec", False):
+        eval_kwargs["allow_code_execution"] = True
+    if getattr(args, "code_exec_timeout", None) is not None:
+        eval_kwargs["code_exec_timeout"] = args.code_exec_timeout
 
     primary = evaluate_run(args.run_id, **eval_kwargs)
 
@@ -8901,6 +8907,29 @@ RUNTIME_EVAL_GATE_REGRESSED in the structured log.
             "noise band (repeatable), on top of the held-out-loss floor. One "
             f"of: {', '.join(EVAL_METRIC_CHOICES)}. Requires --references + "
             "--gate-against."
+        ),
+    )
+    eval_parser.add_argument(
+        "--allow-code-exec",
+        dest="allow_code_exec",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow the pass_rate metric to execute model-generated code on "
+            "this machine (a child process with a timeout and resource "
+            "limits, but NOT a sandbox). Without it, --metric pass_rate is "
+            "refused. Env alternative: BACKPROPAGATE_ALLOW_CODE_EVAL=1."
+        ),
+    )
+    eval_parser.add_argument(
+        "--code-exec-timeout",
+        dest="code_exec_timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Per-sample wall-clock timeout for pass_rate code execution "
+            "(default: 10). A sample that exceeds it is killed and scores 0."
         ),
     )
     eval_parser.add_argument(

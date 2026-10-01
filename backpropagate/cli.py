@@ -2129,6 +2129,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "bool",
             "Opt in to Unsloth installing system packages (winget / apt / brew: CMake, compilers, OpenSSL) and building llama.cpp for its GGUF export. Off by default: importing backpropagate sets UNSLOTH_AUTO_INSTALL=0 unless this is '1' / 'true' / 'yes' / 'on'. With it off and no llama.cpp built under ~/.unsloth, GGUF export uses backpropagate's llama.cpp fallback.",
         ),
+        (
+            "BACKPROPAGATE_UI_WORKDIR",
+            "",
+            "path",
+            "Override the Reflex UI working directory entirely: the value is used verbatim (no <version>-<hash> suffix, no stale-sibling pruning). Unset by default: since v1.8.2 the UI runs from %LOCALAPPDATA%/backpropagate/ui/<version>-<hash> on Windows or $XDG_CACHE_HOME/backpropagate/ui/<version>-<hash> elsewhere, so read-only install locations (Store MSIX) work. Tests and sandboxed launchers set this.",
+        ),
         # full_ft_offload engine knobs (backpropagate/offload_engine.py).
         (
             "BACKPROPAGATE_OFFLOAD_PIN",
@@ -3505,10 +3511,13 @@ def cmd_ui(args: argparse.Namespace) -> int:
             _print_info(f"Suggestion: {e.suggestion}")
         return EXIT_USER_ERROR
 
-    # Resolve the directory containing rxconfig.py. Reflex requires the
-    # ``app_name`` package to be a direct subdirectory of the cwd, so we use
-    # the package dir (``.../backpropagate/``) which ships
-    # ``rxconfig.py`` + ``ui_app/`` side-by-side.
+    # Resolve the package directory shipping the rxconfig.py TEMPLATE
+    # (``.../backpropagate/``, side-by-side with ``ui_app/``). Reflex itself
+    # no longer runs there: ``reflex run`` writes .web/ .states/ reflex.lock/
+    # uploaded_files/ ... into its cwd, and read-only install locations (the
+    # Store MSIX layout is the forcing case) must stay pristine. Since v1.8.2
+    # the Reflex cwd is a per-user working directory holding a stub rxconfig
+    # rendered from the package template — see ui_workdir.ensure_ui_workdir.
     package_dir = Path(__file__).resolve().parent
     rx_config = package_dir / "rxconfig.py"
     if not rx_config.exists():
@@ -3521,6 +3530,20 @@ def cmd_ui(args: argparse.Namespace) -> int:
             "`python -m backpropagate.ui_app.app` manually."
         )
         return EXIT_RUNTIME_ERROR
+
+    from .ui_workdir import ensure_ui_workdir
+
+    try:
+        ui_cwd = ensure_ui_workdir(package_dir, warn=_print_warning)
+    except OSError as _wd_exc:
+        # Per-user cache unwritable (locked-down profile, full disk, ...):
+        # fall back to the pre-1.8.2 behavior rather than refusing to launch.
+        _print_warning(
+            f"Could not prepare the per-user UI working directory ({_wd_exc}); "
+            "running Reflex from the package directory instead "
+            "(it must be writable)."
+        )
+        ui_cwd = package_dir
 
     # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex runs in
     # production mode on the single --port (the backend serves the compiled
@@ -3774,7 +3797,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             )
         except Exception:  # noqa: BLE001  # nosec B110
             pass
-        result = _run_reflex(cmd, env=env, cwd=str(package_dir))
+        result = _run_reflex(cmd, env=env, cwd=str(ui_cwd))
         _duration = _time.monotonic() - _ui_start_ts
         try:
             _ui_logger.info(

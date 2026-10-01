@@ -1,14 +1,16 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit a4b0e1a by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit d09f531 by Atlas 1.24.0.
 
 ## What this is
 
 13 parts, mostly Python (221 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (4d93400)
+## What changed since 2026-10-01 (a4b0e1a)
 
-Nothing structural changed since 2026-10-01; 1 file removed.
+- .gitignore is now read by tests/test_container_ui.py.
+- CHANGELOG.md is now read by .github/workflows/release.yml.
+- 3 files added and 16 changed content, across 5 parts.
 
 ## What comes in
 
@@ -110,7 +112,7 @@ Read those in order to follow one pull request end to end.
 ## What this map cannot see
 
 - 56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
-- 14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.
+- 15 imports could not be resolved: `backpropagate/cli.py` imports `.ui_workdir`, which is no module on its import path and no declared dependency; `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; and 12 more.
 - 8 writes and 10 reads use paths built at run time and are not named here.
 - 31 writes and 64 reads go to a path their caller passes, not to this repository.
 - 3 writes go to a temporary directory, not to this repository.

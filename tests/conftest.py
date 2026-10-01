@@ -181,6 +181,20 @@ def _default_backend_to_cuda(request, monkeypatch):
         monkeypatch.setattr(_t, lambda: False, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _ui_workdir_under_tmp(tmp_path, monkeypatch):
+    """Route the Reflex UI working directory (v1.8.2+) into a per-test tmp dir.
+
+    ``cmd_ui`` resolves its Reflex cwd via ui_workdir.ensure_ui_workdir, which
+    writes a stub rxconfig (+ Reflex's build tree on real runs). Without this
+    override, mocked-UI tests would write the stub into the real user profile
+    (%LOCALAPPDATA%/backpropagate/ui). The variable is inert for every test
+    that never reaches the UI launch. Tests exercising the DEFAULT resolution
+    delete this var themselves (same monkeypatch instance, applied later).
+    """
+    monkeypatch.setenv("BACKPROPAGATE_UI_WORKDIR", str(tmp_path / "ui-workdir"))
+
+
 @pytest.fixture
 def mock_torch_cuda():
     """Mock torch.cuda for testing without GPU."""

@@ -1,0 +1,2 @@
+# Bandit SAST runner (ci.yml bandit job). [sarif] adds the SARIF formatter deps.
+bandit[sarif]

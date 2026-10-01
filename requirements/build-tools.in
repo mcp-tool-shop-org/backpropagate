@@ -1,0 +1,7 @@
+# Release-artifact tooling: `python -m build --no-isolation` + `twine check`.
+# Includes the build backend (build-backend.in) so the whole file is one
+# consistent hash-pinned set: with --no-isolation the backend is installed from
+# here instead of being fetched unhashed into a throwaway build environment.
+-r build-backend.in
+build
+twine

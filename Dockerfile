@@ -13,11 +13,25 @@
 FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY requirements/uv.txt requirements/build-backend.txt requirements/
 COPY backpropagate/ backpropagate/
-RUN python -m venv /opt/venv
+
+# Every package in the image is installed with its hash checked (OpenSSF
+# Scorecard Pinned-Dependencies, and a reproducible image).
+#   /opt/tools  uv + the hatchling build backend, from hash-pinned files. It
+#               stays in this stage; only /opt/venv is copied to the final image.
+#   /opt/venv   the runtime venv: the dependency closure of uv.lock (core
+#               dependencies, no extras), exported with hashes and installed
+#               with --no-deps (the export is the complete closure), then the
+#               project's own wheel, built from this source with the pinned
+#               backend and no build isolation.
+RUN python -m venv /opt/tools && python -m venv /opt/venv
+RUN /opt/tools/bin/pip install --no-cache-dir --require-hashes -r requirements/uv.txt -r requirements/build-backend.txt
+RUN /opt/tools/bin/uv export --frozen --no-emit-project --format requirements-txt -o /tmp/requirements.txt
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /tmp/requirements.txt
+RUN /opt/tools/bin/pip wheel --no-cache-dir --no-deps --no-build-isolation --wheel-dir /tmp/wheels . && pip install --no-cache-dir --no-deps /tmp/wheels/*.whl && pip check
 
 FROM python:3.11-slim@sha256:2c285c669cc837aa3bcf1af23ea1932b7b5214f9c9d3aad22417446ad91cb4fb
 WORKDIR /app

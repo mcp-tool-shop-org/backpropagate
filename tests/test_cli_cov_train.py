@@ -35,17 +35,17 @@ def _make_fake_trainer(record: dict, *, train_exc=None, run_id=None, steps_repor
                      full_ft_engine="default", switch_block_every=None,
                      block_order=None, block_writeback=None, block_train_embeddings=True,
                      simpo_beta=None):
-            record["init"] = dict(
-                model=model, lora_r=lora_r, learning_rate=learning_rate, batch_size=batch_size,
-                output_dir=output_dir, use_unsloth=use_unsloth, use_dora=use_dora,
-                packing=packing, method=method, full_ft_engine=full_ft_engine,
-                switch_block_every=switch_block_every, block_order=block_order,
-                block_writeback=block_writeback, block_train_embeddings=block_train_embeddings,
-                simpo_beta=simpo_beta,
-            )
+            record["init"] = {
+                "model": model, "lora_r": lora_r, "learning_rate": learning_rate, "batch_size": batch_size,
+                "output_dir": output_dir, "use_unsloth": use_unsloth, "use_dora": use_dora,
+                "packing": packing, "method": method, "full_ft_engine": full_ft_engine,
+                "switch_block_every": switch_block_every, "block_order": block_order,
+                "block_writeback": block_writeback, "block_train_embeddings": block_train_embeddings,
+                "simpo_beta": simpo_beta,
+            }
 
         def train(self, dataset, steps, samples, callback, resume_from):
-            record["train"] = dict(dataset=dataset, steps=steps, samples=samples, resume=resume_from)
+            record["train"] = {"dataset": dataset, "steps": steps, "samples": samples, "resume": resume_from}
             if train_exc is not None:
                 raise train_exc
             if steps_reported:
@@ -241,8 +241,8 @@ def _make_fake_multi(record: dict, *, run_exc=None, failed_runs=0, call_hook=Tru
                      **extra):
             if ctor_exc is not None:
                 raise ctor_exc
-            record["init"] = dict(model=model, config=config, resume_from=resume_from,
-                                  use_dora=use_dora, extra=extra)
+            record["init"] = {"model": model, "config": config, "resume_from": resume_from,
+                                  "use_dora": use_dora, "extra": extra}
             self._cb = on_run_complete
 
         def run(self, data):

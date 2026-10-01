@@ -271,3 +271,25 @@ class TestSideloadSign:
         msix.write_bytes(b"msix")
         with pytest.raises(RuntimeError, match="thumbprint"):
             mod.sideload_sign(msix)
+
+    def test_sign_failure_still_destroys_the_key(self, mod, tmp_path, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(mod.shutil, "which", lambda name: "pwsh")
+        monkeypatch.setattr(mod, "_find_sdk_tool", lambda name: Path("signtool.exe"))
+
+        def boom(cmd):
+            calls.append(list(cmd))
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr(mod, "_run", boom)
+        monkeypatch.setattr(mod.subprocess, "run", self._fake_run(calls))
+        msix = tmp_path / "backpropagate_1.8.2.0_x64.msix"
+        msix.write_bytes(b"msix")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            mod.sideload_sign(msix)
+
+        cert_dir = tmp_path / "sideload-cert"
+        assert not (cert_dir / "backpropagate-sideload.pfx").exists()  # key destroyed despite the failure
+        removals = [c for c in calls if "Remove-Item 'Cert:" in c[-1]]
+        assert len(removals) == 1 and self.THUMB in removals[0][-1]

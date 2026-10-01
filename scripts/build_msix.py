@@ -688,15 +688,18 @@ def sideload_sign(msix: Path) -> None:
         )
     thumbprint = thumbprints[-1].upper()
     signtool = _find_sdk_tool("signtool.exe")
-    _run([str(signtool), "sign", "/fd", "sha256", "/a", "/f", str(pfx), "/p", password, str(msix)])
-    # Destroy the signing key: a usable key for the Store publisher CN must not
-    # remain on disk. -DeleteKey wipes the key material with the cert.
-    pfx.unlink(missing_ok=True)
-    subprocess.run(  # nosec B603 - fixed internal argv; removes only the cert created above
-        [pwsh, "-NoProfile", "-Command",
-         f"Remove-Item 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey -Force"],
-        check=True, capture_output=True, text=True,
-    )
+    try:
+        _run([str(signtool), "sign", "/fd", "sha256", "/a", "/f", str(pfx), "/p", password, str(msix)])
+    finally:
+        # Destroy the signing key even when signing fails: a usable key for the
+        # Store publisher CN must not remain on disk. -DeleteKey wipes the key
+        # material along with the cert.
+        pfx.unlink(missing_ok=True)
+        subprocess.run(  # nosec B603 - fixed internal argv; removes only the cert created above
+            [pwsh, "-NoProfile", "-Command",
+             f"Remove-Item 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey -Force"],
+            check=True, capture_output=True, text=True,
+        )
     print(
         f"\nSIGNED FOR SIDELOAD TESTING ONLY (throwaway cert {thumbprint}; its private\n"
         "key was deleted right after signing and is unrecoverable).\n"

@@ -41,6 +41,10 @@ env_vars_handbook_grandfathered = [
     # doc-change list (public docs are lead-written); this entry bridges
     # the drift gate until that docs PR lands in the same release.
     "BACKPROPAGATE_UI_WORKDIR",
+    # 1.8.2 MSIX track (ui_frontend.py, PR B): relocation knob for the
+    # bundled offline frontend payload — testing / packaging staging. Same
+    # lead-docs bridge as BACKPROPAGATE_UI_WORKDIR above.
+    "BACKPROPAGATE_UI_PAYLOAD_DIR",
 ]
 
 # ---------------------------------------------------------------------------
@@ -97,6 +101,11 @@ cli_flags_grandfathered = [
     "--token",          # backprop push --token
     "--verbose",        # top-level --verbose / -v
     "--version",        # top-level --version / -V
+    # 1.8.2 MSIX track (PR B): opens the default browser at the banner URL
+    # once the UI port accepts. The cli-reference.md row is on the lead's
+    # 1.8.2 doc-change list (public docs are lead-written); this bridges the
+    # drift gate until that docs PR lands in the same release.
+    "--open-browser",   # backprop ui --open-browser
 ]
 
 # ---------------------------------------------------------------------------

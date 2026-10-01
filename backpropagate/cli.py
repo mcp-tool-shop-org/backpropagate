@@ -2135,6 +2135,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "path",
             "Override the Reflex UI working directory entirely: the value is used verbatim (no <version>-<hash> suffix, no stale-sibling pruning). Unset by default: since v1.8.2 the UI runs from %LOCALAPPDATA%/backpropagate/ui/<version>-<hash> on Windows or $XDG_CACHE_HOME/backpropagate/ui/<version>-<hash> elsewhere, so read-only install locations (Store MSIX) work. Tests and sandboxed launchers set this.",
         ),
+        (
+            "BACKPROPAGATE_UI_PAYLOAD_DIR",
+            "",
+            "path",
+            "Relocate the bundled offline UI frontend payload (ui_frontend_payload/, shipped by the Store package). Testing/packaging knob: when unset the payload is looked up next to the installed package. Pip installs carry no payload; this stays unset there.",
+        ),
         # full_ft_offload engine knobs (backpropagate/offload_engine.py).
         (
             "BACKPROPAGATE_OFFLOAD_PIN",
@@ -2671,6 +2677,43 @@ def write_launch_token_lock(port: int, token: str) -> Path:
     return lock_path
 
 
+def _ui_launch_url(bound_host: str, port: int, token_query: str | None) -> str:
+    """The operator-facing UI URL (single source: banner + browser opener)."""
+    url_path = f"/?token={token_query}" if token_query else "/"
+    return f"http://{bound_host}:{port}{url_path}"
+
+
+def _start_browser_opener(url: str, port: int) -> None:
+    """Open ``url`` in the default browser once the UI port accepts TCP.
+
+    Poll-based (not stdout scraping): Reflex's own 'App running at' line
+    precedes the socket by a beat under load. The watcher is a daemon
+    thread — it dies with the CLI and gives up after 3 minutes (a cold
+    production build has been measured at ~60s).
+    """
+    import socket
+    import threading
+    import time
+    import webbrowser
+
+    def _watch() -> None:
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.5)
+        else:
+            return
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 — a browser-open failure must not crash the CLI  # nosec B110
+            pass
+
+    threading.Thread(target=_watch, name="ui-browser-opener", daemon=True).start()
+
+
 def _print_ui_startup_banner(
     *,
     bound_host: str,
@@ -2733,8 +2776,7 @@ def _print_ui_startup_banner(
     if os.environ.get("BACKPROPAGATE_UI_QUIET") == "1":
         return
 
-    url_path = f"/?token={token_query}" if token_query else "/"
-    url = f"http://{bound_host}:{port}{url_path}"
+    url = _ui_launch_url(bound_host, port, token_query)
 
     # Determine the mode + concrete-consequence pair (Lee & See 2004
     # trust-calibration framing — operator should know what the auth
@@ -3757,6 +3799,38 @@ def cmd_ui(args: argparse.Namespace) -> int:
     except Exception:  # noqa: BLE001 — observability must not block launch  # nosec B110
         pass
 
+    # Offline frontend (v1.8.2 MSIX track): when the package ships a prebuilt
+    # frontend payload (ui_frontend_payload/), seed it into the per-user
+    # workdir, install the pinned bun at Reflex's probe path, and warm the
+    # install-cache marker so the very first launch needs no network. No-ops
+    # for pip installs (no payload). The marker fingerprint spans
+    # set-ordered config JSON, so warmup + the real run must share ONE
+    # PYTHONHASHSEED. That seed is a per-install SECRET (a public constant on
+    # a network-reachable server would enable hash-flooding): it is generated
+    # inside prepare_offline_frontend, persisted in the per-user seed record,
+    # and returned so we pin the real run to the same value.
+    from . import ui_frontend as _ui_frontend
+
+    if _ui_frontend.payload_present(package_dir):
+        try:
+            _seeded, _ui_hash_seed = _ui_frontend.prepare_offline_frontend(
+                ui_cwd,
+                package_dir,
+                port=args.port,
+                backend_host=backend_host,
+                child_env=env,
+                warn=_print_warning,
+                info=_print_info,
+            )
+        except OSError as _seed_exc:
+            _print_warning(
+                f"Could not seed the bundled UI frontend ({_seed_exc}); "
+                "continuing — the first launch may need network access."
+            )
+        else:
+            if _ui_hash_seed is not None:
+                env["PYTHONHASHSEED"] = _ui_hash_seed
+
     # BRIDGE-B (Stage C auth-polish): Jupyter-pattern startup banner.
     # Printed AFTER the refuse-to-start gates have fired (lines above)
     # and BEFORE the _run_reflex call so the operator sees it the
@@ -3768,6 +3842,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
         share=bool(args.share),
         token_query=launch_token,
     )
+
+    # --open-browser (v1.8.2): open the default browser at the banner URL
+    # once the port actually accepts connections (the Store tile launcher
+    # passes this flag).
+    if getattr(args, "open_browser", False):
+        _start_browser_opener(_ui_launch_url(backend_host, args.port, launch_token), args.port)
 
     import time as _time  # local import to keep cold-start of `backprop --help` cheap
     _ui_start_ts = _time.monotonic()
@@ -8787,6 +8867,16 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "Mutex with --auth. On POSIX the file mode is checked and a "
             "warning fires if it's wider than 0600. Use "
             "`printf 'user:pass' > path && chmod 600 path` to create."
+        ),
+    )
+    ui_parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help=(
+            "Open the default browser at the banner URL (including the "
+            "per-launch ?token= link) once the server actually accepts "
+            "connections — polls the port, gives up after 3 min. The "
+            "Microsoft Store tile launcher uses this."
         ),
     )
     ui_parser.set_defaults(func=cmd_ui)

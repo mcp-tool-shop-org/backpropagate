@@ -3,15 +3,13 @@ liveness probing, HF callback bridges, constructor validation, OOM
 classification, learning-rate / data-window arithmetic, result assembly and the
 ``main()`` CLI.
 
-Mocked boundaries are named in each docstring. NOTE: ``os.kill(pid, 0)`` is never
-called for real here -- on Windows signal 0 is ``CTRL_C_EVENT``, so a real probe
-could deliver Ctrl+C to a process group. Every ``_pid_alive`` test therefore
-patches ``os.kill``.
+Mocked boundaries are named in each docstring. ``_pid_alive`` itself is tested
+in tests/test_multi_run_pid_alive.py (real processes on Windows, a mocked
+``os.kill`` for the POSIX probe).
 """
 
 from __future__ import annotations
 
-import errno
 import logging
 import math
 import os
@@ -38,7 +36,6 @@ from backpropagate.multi_run import (
     _build_abort_callback,
     _build_multi_run_step_callback,
     _current_host,
-    _pid_alive,
 )
 from backpropagate.slao import MergeResult
 
@@ -55,63 +52,6 @@ def _trainer(tmp_path=None, **cfg):
     if tmp_path is not None:
         cfg.setdefault("checkpoint_dir", str(tmp_path))
     return MultiRunTrainer(model="m", config=MultiRunConfig(**cfg))
-
-
-# =============================================================================
-# _pid_alive  (os.kill is the mocked OS boundary)
-# =============================================================================
-
-
-class TestPidAlive:
-    @pytest.mark.parametrize("pid", [None, 0, -7])
-    def test_missing_or_non_positive_pid_is_dead_without_probing(self, monkeypatch, pid):
-        def forbidden(*_a):
-            raise AssertionError("os.kill must not be called for an invalid pid")
-
-        monkeypatch.setattr(os, "kill", forbidden)
-        assert _pid_alive(pid) is False
-
-    def test_live_when_the_existence_probe_succeeds(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr(os, "kill", lambda pid, sig: calls.append((pid, sig)))
-        assert _pid_alive(4242) is True
-        assert calls == [(4242, 0)]  # signal 0 = probe only
-
-    def test_dead_when_no_such_process(self, monkeypatch):
-        def gone(*_a):
-            raise ProcessLookupError
-
-        monkeypatch.setattr(os, "kill", gone)
-        assert _pid_alive(4242) is False
-
-    def test_alive_when_owned_by_another_user(self, monkeypatch):
-        def denied(*_a):
-            raise PermissionError
-
-        monkeypatch.setattr(os, "kill", denied)
-        assert _pid_alive(4242) is True
-
-    def test_windows_invalid_parameter_means_dead(self, monkeypatch):
-        class _WinInvalid(OSError):
-            winerror = 87  # ERROR_INVALID_PARAMETER
-
-        def invalid(*_a):
-            raise _WinInvalid(errno.EINVAL, "invalid parameter")
-
-        monkeypatch.setattr(os, "kill", invalid)
-        assert _pid_alive(4242) is False
-
-    @pytest.mark.parametrize(
-        "code, expected",
-        [(errno.ESRCH, False), (errno.EIO, True)],
-    )
-    def test_other_oserrors_are_judged_by_errno(self, monkeypatch, code, expected):
-        def err(*_a):
-            raise OSError(code, "probe failed")
-
-        monkeypatch.setattr(os, "kill", err)
-        # unknown errors fail safe: assume the holder is alive
-        assert _pid_alive(4242) is expected
 
 
 # =============================================================================

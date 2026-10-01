@@ -71,7 +71,6 @@ def _filter_bar() -> rx.Component:
                     rx.select.item("Running", value="running"),
                     rx.select.item("Completed", value="completed"),
                     rx.select.item("Failed", value="failed"),
-                    rx.select.item("Interrupted", value="interrupted"),
                 ),
                 value=RunsState.status_filter,
                 on_change=RunsState.set_status_filter,

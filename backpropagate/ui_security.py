@@ -40,15 +40,17 @@ Usage:
     )
 """
 
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePath
 from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -818,8 +820,14 @@ class FileValidator:
             return False, "No file provided", None
 
         # Get file path
+        # A ``pathlib.Path`` also has a ``.name`` attribute - its *basename* - so
+        # path-likes must be handled first or the size / magic checks below would
+        # look for the bare filename relative to the cwd, miss it, and pass.
         try:
-            file_path = Path(file_obj.name if hasattr(file_obj, "name") else str(file_obj))
+            if isinstance(file_obj, (str, PurePath)):
+                file_path = Path(file_obj)
+            else:
+                file_path = Path(file_obj.name if hasattr(file_obj, "name") else str(file_obj))
         except Exception as e:
             return False, f"Invalid file object: {e}", None
 
@@ -962,6 +970,11 @@ def validate_numeric_input(
         raise UserInputError(
             f"{name} must be a number, got: {type(value).__name__}"
         )
+
+    # NaN compares false against every bound and inf slips past an open-ended
+    # one, so neither is caught by the min/max checks below.
+    if not math.isfinite(num):
+        raise UserInputError(f"{name} must be a finite number, got: {num}")
 
     if min_value is not None and num < min_value:
         raise UserInputError(f"{name} must be at least {min_value}, got {num}")
@@ -2308,7 +2321,12 @@ class CSRFProtection:
                 return False, "CSRF token expired"
 
             # Constant-time comparison to prevent timing attacks
-            if not hmac.compare_digest(csrf_token.token, token):
+            # Compare as UTF-8 bytes: ``compare_digest`` raises TypeError on a
+            # non-ASCII ``str`` (or a non-string), which a hostile client could
+            # trigger to turn a rejected token into an unhandled exception.
+            if not isinstance(token, str) or not hmac.compare_digest(
+                csrf_token.token.encode("utf-8"), token.encode("utf-8", "surrogatepass")
+            ):
                 log_security_event(
                     "csrf_validation_failed",
                     reason="token_mismatch",
@@ -2381,8 +2399,18 @@ class SecureSessionHandler:
     ):
         self.jwt = JWTManager(jwt_config)
         self.csrf = CSRFProtection(csrf_expiry_minutes)
-        self._active_sessions: dict[str, str] = {}  # token -> user_id
+        self._active_sessions: dict[str, str] = {}  # session key -> user_id
         self._lock = Lock()
+
+    @staticmethod
+    def _session_key(access_token: str) -> str:
+        """Stable per-token session identifier (SHA-256 of the whole token).
+
+        Never use a token *prefix*: every HS256 JWT starts with the same 36
+        character header, so ``token[:32]`` is a constant and collapses every
+        user onto one CSRF slot / one session-registry entry.
+        """
+        return hashlib.sha256(access_token.encode("utf-8", "surrogatepass")).hexdigest()
 
     def login(
         self,
@@ -2403,10 +2431,11 @@ class SecureSessionHandler:
         refresh_token = self.jwt.create_token(user_id, is_refresh=True)
 
         # Generate CSRF token keyed by access token
-        csrf_token = self.csrf.generate_token(access_token[:32])
+        session_key = self._session_key(access_token)
+        csrf_token = self.csrf.generate_token(session_key)
 
         with self._lock:
-            self._active_sessions[access_token[:32]] = user_id
+            self._active_sessions[session_key] = user_id
 
         log_security_event("session_login", user_id=user_id)
 
@@ -2440,10 +2469,18 @@ class SecureSessionHandler:
 
         user_id = payload.get("sub")  # type: ignore
 
+        # A correctly signed token is only honoured while its session is
+        # registered: logout() removes it, which revokes the (otherwise
+        # stateless) JWT for the rest of its lifetime.
+        session_key = self._session_key(access_token)
+        with self._lock:
+            if session_key not in self._active_sessions:
+                return False, None, "Session not active (logged out or never created)"
+
         # Validate CSRF if required
         if require_csrf:
             csrf_valid, csrf_msg = self.csrf.validate_token(
-                access_token[:32],
+                session_key,
                 csrf_token,
                 consume=False,  # Don't consume - allow multiple requests
             )
@@ -2460,7 +2497,7 @@ class SecureSessionHandler:
             access_token: JWT access token
         """
         with self._lock:
-            token_key = access_token[:32]
+            token_key = self._session_key(access_token)
             if token_key in self._active_sessions:
                 user_id = self._active_sessions.pop(token_key)
                 log_security_event("session_logout", user_id=user_id)
@@ -2483,8 +2520,13 @@ class SecureSessionHandler:
         if not valid or not new_access:
             return False, None, msg
 
-        # Generate new CSRF token
-        csrf_token = self.csrf.generate_token(new_access[:32])
+        # Register the new access token as a live session and give it its own
+        # CSRF token (a refreshed session is a new session).
+        _ok, new_payload, _msg = self.jwt.verify_token(new_access)
+        session_key = self._session_key(new_access)
+        csrf_token = self.csrf.generate_token(session_key)
+        with self._lock:
+            self._active_sessions[session_key] = (new_payload or {}).get("sub", "")
 
         return True, {
             "access_token": new_access,

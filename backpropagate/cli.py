@@ -40,6 +40,7 @@ import argparse
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -2523,18 +2524,22 @@ def cmd_info(args: argparse.Namespace) -> int:
 # =============================================================================
 #
 # Per DESIGN_BRIEF "Lock-file token mode (post-CVE-2025-52882 defense)":
-# the per-launch token / auth credentials are also written to
+# the per-launch random token (token-auto mode, i.e. a plain ``backprop ui``)
+# is also written to
 #   $XDG_RUNTIME_DIR/backpropagate/session-<port>.lock     (Linux)
 #   ~/Library/Application Support/backpropagate/session-<port>.lock (macOS)
 #   %LOCALAPPDATA%\backpropagate\session-<port>.lock        (Windows)
 # so machine-to-machine clients (e.g. ``backprop train --watch-ui``) can
-# read the token / credentials without exposing them in argv.
+# read the token without screen-scraping the banner or exposing it in argv.
 #
-# Mode 0o600 on POSIX (owner read+write only). On Windows we fall back to
-# the per-user LOCALAPPDATA directory whose ACL is owner-restricted by
-# default — a tight ACL-rewrite via icacls would require pywin32 which
-# isn't a runtime dependency. The Windows fallback is documented in
-# handbook/security.md (cross-domain handoff to frontend agent below).
+# ``--auth`` / ``--auth-file`` launches write NO lock file: a password (or
+# even its verifier) has no business on disk, and nothing consumes one.
+#
+# Mode 0o600 on POSIX (owner read+write only). On Windows the file lives in
+# the per-user LOCALAPPDATA directory, whose inherited ACL grants access to
+# the user, SYSTEM and local Administrators only — it is NOT tightened
+# further (that would need pywin32 / icacls, not a runtime dependency).
+# The file is deleted when the UI exits. Documented in handbook/security.md.
 #
 # Cross-domain handoff to frontend agent: the test scaffold in
 # tests/test_auth_middleware.py:540 (currently pytest.skip()ed) imports
@@ -2590,16 +2595,15 @@ def _lock_file_dir() -> Path:
 
 
 def write_launch_token_lock(port: int, token: str) -> Path:
-    """Write the launch token / credentials to a per-launch lock file.
+    """Write the per-launch token to a per-launch lock file.
 
     Args:
         port: Port the UI is listening on (used to form the filename so
             two concurrent ``backprop ui`` invocations on different ports
             don't collide).
-        token: The token / credential string to persist. The caller is
-            responsible for deciding whether to persist the launch token
-            (token-auto mode) or the ``user:pass`` shape (basic-auth mode);
-            this helper writes whatever opaque string it gets.
+        token: The launch token to persist (token-auto mode only). Callers
+            must never pass a password here; this helper writes whatever
+            opaque string it gets, so the guarantee lives in ``cmd_ui``.
 
     Returns:
         Path to the lock file (the caller's CLI logs the path so the
@@ -2611,10 +2615,9 @@ def write_launch_token_lock(port: int, token: str) -> Path:
         half-formed token.
 
         On Windows: the file ends up in ``%LOCALAPPDATA%\\backpropagate\\``
-        which inherits the user's ACL by default (owner-restricted on a
-        single-user box). A tight icacls rewrite would require pywin32
-        which is not a runtime dependency; the per-user directory provides
-        the practical floor.
+        which inherits the per-user profile ACL (the user, SYSTEM and local
+        Administrators). It is not tightened further; a tight icacls rewrite
+        would require pywin32 which is not a runtime dependency.
 
     Concurrency:
         Multiple ``backprop ui --port N`` invocations on the SAME port
@@ -3134,7 +3137,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
     Post-Wave-6 (v1.2.0): with ``ENFORCEMENT_AVAILABLE=True`` the Reflex UI
     enforces the auth contract via FastAPI middleware. ``--auth`` is now a
     normal flag that flows through ``validate_auth_shape`` and into the
-    subprocess via ``BACKPROPAGATE_UI_AUTH``. What remains gated:
+    subprocess as a salted scrypt verifier (``BACKPROPAGATE_UI_AUTH_VERIFIER``
+    + ``BACKPROPAGATE_UI_AUTH_USER``); the plaintext password never leaves
+    this process and is never written to disk. Without ``--auth`` a random
+    per-launch token (``BACKPROPAGATE_UI_LAUNCH_TOKEN``) is generated, printed
+    in the banner URL and written to a 0600 lock file that is removed on exit.
+    What remains gated:
 
     * ``--share`` without ``--auth`` — a public URL with no auth is the bug
       v1.2 closed; refuses with ``RUNTIME_UI_AUTH_NOT_ENFORCED``.
@@ -3434,19 +3442,37 @@ def cmd_ui(args: argparse.Namespace) -> int:
             code="RUNTIME_UI_PORT_IN_USE",
         )
 
-    # Set env vars that Reflex's state can pick up. ``BACKPROPAGATE_UI_AUTH``
-    # is the agreed handoff for the Reflex side to enforce per-request auth
-    # via FastAPI middleware once Phase 3 wires it. For Phase 1 the variable
-    # is exported but Reflex doesn't read it yet.
+    # Build the env the Reflex child sees. The auth hand-off is one of:
+    #   * --auth / --auth-file: BACKPROPAGATE_UI_AUTH_USER + a salted scrypt
+    #     BACKPROPAGATE_UI_AUTH_VERIFIER. The plaintext password NEVER crosses
+    #     the process boundary (env vars are readable by same-user processes
+    #     and inherited by every grandchild) and is never written to disk.
+    #   * neither: a per-launch random BACKPROPAGATE_UI_LAUNCH_TOKEN
+    #     (token-auto mode). The default launch is NOT unauthenticated: the
+    #     middleware demands ``?token=`` on the first request and then a
+    #     signed session cookie.
     env = os.environ.copy()
-    # BRIDGE-B-001: strip ambient BACKPROPAGATE_UI_AUTH when --auth not passed;
-    # prevents ambient-env bypass of refuse-to-start once ENFORCEMENT_AVAILABLE
-    # flips. Without this, `BACKPROPAGATE_UI_AUTH=u:p backprop ui` (no --auth)
-    # would pass the CLI gate then silently activate auth in the Reflex child.
-    if args.auth is None:
-        env.pop("BACKPROPAGATE_UI_AUTH", None)
+    # BRIDGE-B-001: strip every ambient auth variable before deciding what to
+    # hand over. Without this, `BACKPROPAGATE_UI_AUTH=u:p backprop ui` (no
+    # --auth) would pass the CLI gate then activate plaintext auth in the
+    # Reflex child; and an ambient LAUNCH_TOKEN / VERIFIER would let a stale
+    # value override what this launch decided.
+    for _stale in (
+        "BACKPROPAGATE_UI_AUTH",
+        "BACKPROPAGATE_UI_AUTH_USER",
+        "BACKPROPAGATE_UI_AUTH_VERIFIER",
+        "BACKPROPAGATE_UI_LAUNCH_TOKEN",
+    ):
+        env.pop(_stale, None)
+    launch_token: str | None = None
     if auth:
-        env["BACKPROPAGATE_UI_AUTH"] = f"{auth[0]}:{auth[1]}"
+        from .ui_security import hash_password
+
+        env["BACKPROPAGATE_UI_AUTH_USER"] = auth[0]
+        env["BACKPROPAGATE_UI_AUTH_VERIFIER"] = hash_password(auth[1])
+    else:
+        launch_token = secrets.token_urlsafe(32)
+        env["BACKPROPAGATE_UI_LAUNCH_TOKEN"] = launch_token
     env["BACKPROPAGATE_UI_PORT"] = str(args.port)
     # Communicate the bind address so the middleware can enforce a
     # Host-header allow-list (DNS-rebinding defense). When --host is omitted
@@ -3497,31 +3523,36 @@ def cmd_ui(args: argparse.Namespace) -> int:
             )
             return EXIT_RUNTIME_ERROR
 
-    # BRIDGE-F-002 auth-polish item 3 (v1.3 Wave 6a): write the credential
+    # BRIDGE-F-002 auth-polish item 3 (v1.3 Wave 6a): write the launch token
     # to a per-launch lock file at $XDG_RUNTIME_DIR/backpropagate/session-
     # <port>.lock (or the platform equivalent) so machine-to-machine clients
-    # (`backprop train --watch-ui` and similar) can pick up the auth string
-    # without it appearing in argv / ps output. Mode 0o600 on POSIX; the
-    # Windows fallback inherits the per-user LOCALAPPDATA ACL.
+    # (`backprop train --watch-ui` and similar) can pick it up without it
+    # appearing in argv / ps output. Mode 0o600 on POSIX; on Windows the file
+    # sits under %LOCALAPPDATA% and inherits the per-user profile ACL.
     #
-    # We persist either the explicit user:pass (basic-auth mode) or the
-    # launch token (token-auto mode; not yet exposed on the CLI but the
-    # helper is forward-compatible). NO_AUTH_LOCAL_ONLY skips lock-file
-    # creation entirely — there's nothing to authenticate against.
+    # Only the launch token is ever persisted (token-auto mode). --auth /
+    # --auth-file launches skip the lock file entirely: the password must not
+    # be written to disk, and a verifier on disk would serve no consumer.
     lock_file_path: Path | None = None
-    lock_payload = env.get("BACKPROPAGATE_UI_AUTH") or env.get("BACKPROPAGATE_UI_LAUNCH_TOKEN")
-    if lock_payload:
+    if launch_token:
         try:
-            lock_file_path = write_launch_token_lock(args.port, lock_payload)
-            _print_info(f"Auth lock-file: {lock_file_path} (mode 0o600 on POSIX)")
+            lock_file_path = write_launch_token_lock(args.port, launch_token)
+            if os.name == "posix":
+                _print_info(f"Launch-token lock-file: {lock_file_path} (mode 0600, owner only)")
+            else:
+                _print_info(
+                    f"Launch-token lock-file: {lock_file_path} (protected by the "
+                    "per-user profile ACL: you, SYSTEM and Administrators can read "
+                    "it; deleted when the UI exits)"
+                )
         except Exception as exc:  # noqa: BLE001 — lock-file is best-effort observability
             # Don't abort the UI launch just because the lock file failed;
-            # the credential still flows via env var. Surface the reason so
-            # an operator who NEEDS the lock-file path (M2M consumers) can
-            # triage. Auth itself is unaffected.
+            # the token still flows via the child env and the banner URL.
+            # Surface the reason so an operator who NEEDS the lock-file path
+            # (M2M consumers) can triage. Auth itself is unaffected.
             _print_warning(
                 f"Could not write launch lock-file ({exc}); M2M consumers "
-                "will need to read BACKPROPAGATE_UI_AUTH from their own env."
+                "will need to copy the token from the startup banner URL."
             )
 
     # Reflex's port convention: the frontend serves on --frontend-port and
@@ -3587,7 +3618,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             "ui_subprocess_starting",
             host_bind=backend_host,
             port=args.port,
-            auth_mode=("basic" if auth else "none"),
+            auth_mode=("basic" if auth else "token"),
             share=bool(args.share),
             cmd=cmd,
         )
@@ -3603,7 +3634,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
         port=args.port,
         auth=auth,
         share=bool(args.share),
-        token_query=None,
+        token_query=launch_token,
     )
 
     import time as _time  # local import to keep cold-start of `backprop --help` cheap
@@ -8539,7 +8570,8 @@ Quantization tradeoffs (fastest -> smallest):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Local-only (loopback bind; no auth needed)
+  # Local-only (loopback bind). No --auth needed: a random per-launch
+  # token is generated and the full URL (with ?token=...) is printed.
   backprop ui --port 7862
 
   # LAN-reachable with HTTP basic auth (DNS-rebinding defense requires --auth)
@@ -8592,8 +8624,8 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         metavar="USER:PASS",
         help=(
             "Enable HTTP basic auth on the Reflex UI. Required when --share "
-            "or a non-loopback --host is passed. Credentials are forwarded "
-            "to the subprocess via BACKPROPAGATE_UI_AUTH. "
+            "or a non-loopback --host is passed. The subprocess receives "
+            "only a salted scrypt verifier, never the plaintext password. "
             "Username must not contain whitespace, colon, or control chars; "
             "password must not contain newlines or NUL. "
             "Safer alternatives for repeat invocations: --auth-file (mode "

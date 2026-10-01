@@ -1,0 +1,13 @@
+# Direct dependencies of the Atheris fuzz harnesses (see fuzz/ and
+# .github/workflows/fuzz.yml). Only what `import backpropagate` needs on a CPU
+# runner: torch / transformers / trl / peft are imported lazily by the library
+# and are deliberately absent, so a fuzz run installs in seconds, not minutes.
+#
+# Regenerate fuzz.txt (hash-pinned) from this file with:
+#   uvx --from uv@latest uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-unknown-linux-gnu requirements/fuzz.in -o requirements/fuzz.txt
+atheris
+filelock
+packaging
+pydantic
+pydantic-settings
+tenacity

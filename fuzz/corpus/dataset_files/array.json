@@ -1,0 +1,1 @@
+[{"conversations": [{"from": "human", "value": "hi"}, {"from": "gpt", "value": "hello"}]}, {"instruction": "Add", "input": "1+1", "output": "2", "system": "be brief"}, {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]}]

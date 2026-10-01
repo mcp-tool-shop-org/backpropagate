@@ -59,17 +59,26 @@ def _seed(sandbox, **entry):
     return mgr.record_run(base)
 
 
-def _set_route(monkeypatch, state, rid):
-    """Give ``state`` a real ``RouterData`` whose dynamic route param ``rid`` is set.
+def _detail_state(rid, router=None):
+    """A ``RunDetailState`` wired into a real state tree whose router carries ``rid``.
 
-    ``router`` is a Reflex-owned field that a bare (parent-less) state instance
-    cannot assign through ``__setattr__``; ``object.__setattr__`` stores it directly.
+    ``router`` lives on Reflex's *root* state and substates read it through their
+    parent. A bare ``RunDetailState()`` has no parent, and how Reflex resolves
+    ``router`` on a parent-less substate differs across versions (0.9.3 returns a
+    default ``RouterData``; 0.9.12 dereferences ``parent_state`` and fails with
+    ``'NoneType' object has no attribute 'rx_router_session'``). Building the
+    same tree the app builds (root ``State`` -> substate) and assigning
+    ``root.router`` is how Reflex itself populates the router, and behaves
+    identically on both. ``router`` overrides the default ``RouterData`` (used to
+    simulate a context with no usable router).
     """
+    import reflex as rx
     from reflex.istate.data import RouterData
 
-    data = RouterData.from_router_data(
+    root = rx.State(_reflex_internal_init=True)
+    root.router = router if router is not None else RouterData.from_router_data(
         {"pathname": f"/runs/{rid}", "query": {"rid": rid}, "headers": {}, "ip": "127.0.0.1"})
-    object.__setattr__(state, "router", data)
+    return root.substates[us.RunDetailState.get_name()]
 
 
 # =============================================================================
@@ -313,8 +322,7 @@ class TestRunDetailLoad:
               loss_history=[1.0, 0.5, "x", True, None], steps=100,
               hyperparameters={"lr": 0.0002}, dataset_info="/home/alice/data/train.jsonl",
               session_kind="single_run", completed_at="2026-09-01T10:05:00")
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "runfull1")
+        s = _detail_state("runfull1")
         s.load_run()
         assert s.current_run_id == "runfull1" and s.error == "" and s.not_found is False
         assert s.loading is False and s.was_deleted is False
@@ -339,52 +347,51 @@ class TestRunDetailLoad:
     def test_long_values_are_truncated_in_the_hyperparameter_table(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="longval", failure_reason="x" * 500,
               hyperparameters={"k": "v" * 500})
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "longval")
+        s = _detail_state("longval")
         s.load_run()
         assert all(len(row["value"]) <= 200 for row in s.hyperparameters)
 
     def test_prefix_of_a_run_id_resolves(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="abcdef123456")
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "abcdef")
+        s = _detail_state("abcdef")
         s.load_run()
         assert s.status == "completed" and s.not_found is False
 
     def test_unknown_run_is_not_found_with_redacted_error(self, sandbox, monkeypatch):
         _seed(sandbox)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "missing1")
+        s = _detail_state("missing1")
         s.load_run()
         assert s.not_found is True and "missing1" in s.error
         assert str(sandbox.home) not in s.error and s.loading is False
 
     def test_no_route_param_and_no_current_id_is_not_found(self, sandbox, monkeypatch):
         _seed(sandbox)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "")
+        s = _detail_state("")
         s.load_run()
         assert s.not_found is True
 
     def test_router_failure_falls_back_to_the_programmatic_id(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="fallback1")
 
-        class _BadRouter:
+        from reflex.istate.data import RouterData
+
+        class _BadRouter(RouterData):
+            """A real ``RouterData`` (Reflex reads other attributes off it, e.g. the
+            session) whose ``page`` lookup fails, as when no route is bound."""
+
             @property
             def page(self):
                 raise RuntimeError("no router in this context")
 
-        s = us.RunDetailState()
-        object.__setattr__(s, "router", _BadRouter())
+        s = _detail_state("", router=_BadRouter())
         s.current_run_id = "fallback1"
         s.load_run()
         assert s.status == "completed" and s.not_found is False
 
     @pytest.mark.parametrize("rid", ["--to=/etc/passwd", "../../x", "a b", "-x", "a" * 70])
     def test_hostile_route_params_never_become_the_current_id(self, sandbox, monkeypatch, rid):
-        s = us.RunDetailState()
+        s = _detail_state(rid)
         s.was_deleted = True
-        _set_route(monkeypatch, s, rid)
         s.load_run()
         assert s.current_run_id == "" and s.not_found is True
         assert s.error.startswith("Invalid run id") and s.was_deleted is False
@@ -392,8 +399,7 @@ class TestRunDetailLoad:
 
     def test_missing_history_dir(self, sandbox, monkeypatch):
         monkeypatch.setenv("BACKPROPAGATE_UI__OUTPUT_DIR", str(sandbox.home / ".ssh"))
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "anything")
+        s = _detail_state("anything")
         s.load_run()
         assert s.error.startswith("No run history at") and "<redacted-path>" in s.error
 
@@ -403,16 +409,14 @@ class TestRunDetailLoad:
 
         sandbox.out.mkdir(parents=True)
         monkeypatch.setitem(sys.modules, "backpropagate.checkpoints", None)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "rid1")
+        s = _detail_state("rid1")
         s.load_run()
         assert s.error.startswith("checkpoints module unavailable") and s.loading is False
 
     def test_entry_without_optional_fields_renders_dashes(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="sparse", status=None, model_name=None, dataset_info=None,
               duration_seconds=None, final_loss=None, started_at=None, loss_history=None)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "sparse")
+        s = _detail_state("sparse")
         s.load_run()
         assert (s.status, s.model, s.dataset, s.duration, s.final_loss) == ("-",) * 5
         assert s.loss_history == [] and s.checkpoints == [] and s.log_lines == []
@@ -422,8 +426,7 @@ class TestRunDetailLoad:
     def test_garbage_numbers_and_non_list_loss_history(self, sandbox, monkeypatch):
         _seed(sandbox, run_id="garbage", duration_seconds="soon", final_loss="n/a",
               loss_history="not a list")
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "garbage")
+        s = _detail_state("garbage")
         s.load_run()
         assert (s.duration, s.final_loss) == ("-", "-") and s.loss_history == []
 
@@ -440,8 +443,7 @@ class TestRunDetailLoad:
             return real(self)
 
         monkeypatch.setattr(Path, "iterdir", boom)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "walkfail")
+        s = _detail_state("walkfail")
         s.load_run()
         assert s.checkpoints == [] and s.status == "completed" and s.error == ""
 
@@ -459,8 +461,7 @@ class TestRunDetailLoad:
             return real_open(path, *a, **k)
 
         monkeypatch.setattr(builtins, "open", deny)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "logfail")
+        s = _detail_state("logfail")
         s.load_run()
         assert s.log_lines == [] and s.status == "completed"
 
@@ -469,8 +470,7 @@ class TestRunDetailLoad:
         cp.mkdir()
         (cp / "training.log").write_text("\n".join(f"line {i}" for i in range(500)), encoding="utf-8")
         _seed(sandbox, run_id="biglog", checkpoint_path=str(cp))
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, "biglog")
+        s = _detail_state("biglog")
         s.load_run()
         assert len(s.log_lines) == 200 and s.log_lines[-1] == "line 499"
 
@@ -483,8 +483,7 @@ class TestRunDetailLoad:
 class TestRunDetailActions:
     def _loaded(self, sandbox, monkeypatch, run_id="runact01", **entry):
         _seed(sandbox, run_id=run_id, **entry)
-        s = us.RunDetailState()
-        _set_route(monkeypatch, s, run_id)
+        s = _detail_state(run_id)
         s.load_run()
         return s
 

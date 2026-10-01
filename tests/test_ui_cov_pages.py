@@ -18,6 +18,7 @@ How a tree is inspected:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import re
@@ -32,6 +33,29 @@ from reflex_base.event import EventChain  # noqa: E402
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+@contextlib.contextmanager
+def _second_app_allowed():
+    """Allow a second ``rx.App`` to be created in this process.
+
+    Reflex 0.9.3 (the locked version) lets any number of ``rx.App`` objects share
+    the one ``RegistrationContext``. Reflex >= 0.9.12 allows only one App per
+    context and says to ``.fork()`` the context before creating another, so the
+    tests that re-execute ``ui_app/app.py`` do so inside a fork there. A context
+    without ``fork`` (0.9.3) needs nothing.
+    """
+    from reflex_base.registry import RegistrationContext
+
+    try:
+        ctx = RegistrationContext.get()
+    except LookupError:
+        ctx = None
+    if ctx is not None and hasattr(ctx, "fork"):
+        with ctx.fork():
+            yield
+    else:
+        yield
 
 
 def _walk(component):
@@ -768,7 +792,8 @@ class TestAppWiring:
         mod = importlib.util.module_from_spec(spec)
         mod.__package__ = "backpropagate.ui_app"
         sys.modules.pop("backpropagate.ui_app._app_ok_probe", None)
-        spec.loader.exec_module(mod)  # no refusal
+        with _second_app_allowed():
+            spec.loader.exec_module(mod)  # no refusal
         assert mod.ENFORCEMENT_AVAILABLE is False
 
 

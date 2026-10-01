@@ -204,7 +204,9 @@ class TestVerifyPeftApi:
         mrt = _mrt(build_peft_llama())
         with caplog.at_level(logging.WARNING, logger=MR_LOGGER):
             mrt._verify_peft_api()
-        assert not caplog.records
+        # WARNING and above only: INFO records from construction can reach caplog
+        # when another test has configured package logging at INFO.
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 # =============================================================================

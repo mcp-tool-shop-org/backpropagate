@@ -58,6 +58,19 @@ def _a_tensors(params):
 # =============================================================================
 
 
+
+def _cuda_available_to_multi_run_only() -> bool:
+    """``torch.cuda.is_available`` that says True only to ``backpropagate.multi_run``.
+
+    The tests reach multi_run's GPU-cleanup branches on a machine without a GPU.
+    A plain ``lambda: True`` also convinces transformers' TrainingArguments, which
+    then initialises the real CUDA runtime and fails ("No CUDA GPUs are
+    available"); on a rig with a GPU it silently used the real card instead.
+    """
+    import sys
+
+    return sys._getframe(1).f_globals.get("__name__") == "backpropagate.multi_run"
+
 class TestExecuteRunSlaoHappyPath:
     """Mocked: ``trl.SFTTrainer`` (``make_fake_sft``) and the inner Trainer."""
 
@@ -274,7 +287,7 @@ class TestExecuteRunWiring:
         """Mocked: the CUDA runtime (``is_available`` / ``empty_cache`` /
         ``memory_allocated``) -- there is no GPU on CI."""
         emptied = []
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "is_available", _cuda_available_to_multi_run_only)
         monkeypatch.setattr(torch.cuda, "empty_cache", lambda: emptied.append(1))
         monkeypatch.setattr(torch.cuda, "memory_allocated", lambda *a, **k: 2_000_000_000)
         install_fake_sft(monkeypatch, make_fake_sft())
@@ -703,7 +716,7 @@ class TestExecuteRunDefensivePaths:
             if len(emptied) == 1:  # the OOM-recovery reclaim; the end-of-run cleanup works
                 raise RuntimeError("CUDA context lost")
 
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "is_available", _cuda_available_to_multi_run_only)
         monkeypatch.setattr(torch.cuda, "empty_cache", broken_empty_cache)
         monkeypatch.setattr(torch.cuda, "memory_allocated", lambda *a, **k: 0)
         fake = make_fake_sft([_oom])

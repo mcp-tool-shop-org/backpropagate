@@ -3031,115 +3031,115 @@
             {
               "in": "_coerce_env_value",
               "kind": "except",
-              "line": 1129
+              "line": 1130
             },
             {
               "in": "_coerce_env_value",
               "kind": "raise",
-              "line": 1134
+              "line": 1135
             },
             {
               "in": "_coerce_env_value",
               "kind": "raise",
-              "line": 1137
+              "line": 1138
             },
             {
               "in": "_coerce_env_value",
               "kind": "raise",
-              "line": 1144
+              "line": 1145
             },
             {
               "in": "_coerce_env_value",
               "kind": "except",
-              "line": 1148
+              "line": 1149
             },
             {
               "in": "_coerce_env_value",
               "kind": "except",
-              "line": 1152
-            },
-            {
-              "in": "_coerce_env_value",
-              "kind": "raise",
               "line": 1153
             },
             {
               "in": "_coerce_env_value",
               "kind": "raise",
-              "line": 1156
-            },
-            {
-              "in": "_coerce_env_value",
-              "kind": "except",
-              "line": 1160
+              "line": 1154
             },
             {
               "in": "_coerce_env_value",
               "kind": "raise",
+              "line": 1157
+            },
+            {
+              "in": "_coerce_env_value",
+              "kind": "except",
               "line": 1161
             },
             {
+              "in": "_coerce_env_value",
+              "kind": "raise",
+              "line": 1162
+            },
+            {
               "in": "__init__",
               "kind": "except",
-              "line": 1195
+              "line": 1196
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 1200
+              "line": 1201
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1297
+              "line": 1298
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1315
+              "line": 1316
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1337
+              "line": 1338
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1356
+              "line": 1357
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1379
+              "line": 1380
             },
             {
               "in": "__post_init__",
               "kind": "except",
-              "line": 1401
+              "line": 1402
             },
             {
               "in": "__post_init__",
               "kind": "raise",
-              "line": 1422
+              "line": 1423
             },
             {
               "in": "get_lora_preset",
               "kind": "raise",
-              "line": 1763
+              "line": 1764
             },
             {
               "in": "get_model_preset",
               "kind": "raise",
-              "line": 2043
+              "line": 2050
             },
             {
               "in": "get_preset",
               "kind": "raise",
-              "line": 2163
+              "line": 2170
             }
           ],
-          "hash": "073451ce29ad2d7562fdd3aac99c6067d9020f3b492d0dc6c856f4231639541d",
+          "hash": "a5d2c2d4d7b668668bc7fdc6103e141a0acc3d4029dcc6b1add9af7fbcd1c1dc",
           "importOrder": [
             "backpropagate/logging_config.py",
             "backpropagate/exceptions.py"
@@ -8352,230 +8352,230 @@
             {
               "in": "_token_counter",
               "kind": "except",
-              "line": 6640
+              "line": 6646
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6658
+              "line": 6664
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6679
+              "line": 6685
             },
             {
               "in": "_filter_reasoning_traces",
               "kind": "except",
-              "line": 6690
+              "line": 6696
             },
             {
               "in": "tokenize_fn",
               "kind": "except",
-              "line": 6729
+              "line": 6735
             },
             {
               "in": "tokenize_fn",
               "kind": "raise",
-              "line": 6730
+              "line": 6736
             },
             {
               "in": "_pre_tokenize",
               "kind": "except",
-              "line": 6743
+              "line": 6749
             },
             {
               "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 6744
+              "line": 6750
             },
             {
               "in": "_pre_tokenize",
               "kind": "except",
-              "line": 6745
+              "line": 6751
             },
             {
               "in": "_pre_tokenize",
               "kind": "raise",
-              "line": 6746
+              "line": 6752
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6790
+              "line": 6796
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6810
+              "line": 6816
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6818
+              "line": 6824
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6823
-            },
-            {
-              "in": "_train_full_offload",
-              "kind": "raise",
-              "line": 6826
+              "line": 6829
             },
             {
               "in": "_train_full_offload",
               "kind": "raise",
-              "line": 6827
+              "line": 6832
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 6833
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6861
+              "line": 6867
             },
             {
               "in": "_train_full_offload",
               "kind": "except",
-              "line": 6866
+              "line": 6872
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 6949
+              "line": 6955
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 6992
-            },
-            {
-              "in": "save",
-              "kind": "raise",
-              "line": 6993
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 6997
-            },
-            {
-              "in": "save",
-              "kind": "raise",
               "line": 6998
             },
             {
               "in": "save",
-              "kind": "except",
-              "line": 7020
+              "kind": "raise",
+              "line": 6999
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7027
+              "line": 7003
             },
             {
               "in": "save",
               "kind": "raise",
-              "line": 7028
+              "line": 7004
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7083
+              "line": 7026
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7108
-            },
-            {
-              "in": "save",
-              "kind": "except",
-              "line": 7118
+              "line": 7033
             },
             {
               "in": "save",
               "kind": "raise",
+              "line": 7034
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7089
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7114
+            },
+            {
+              "in": "save",
+              "kind": "except",
               "line": 7124
             },
             {
               "in": "save",
-              "kind": "except",
-              "line": 7128
-            },
-            {
-              "in": "save",
               "kind": "raise",
-              "line": 7129
-            },
-            {
-              "in": "save",
-              "kind": "except",
               "line": 7130
             },
             {
               "in": "save",
+              "kind": "except",
+              "line": 7134
+            },
+            {
+              "in": "save",
               "kind": "raise",
-              "line": 7131
+              "line": 7135
             },
             {
               "in": "save",
               "kind": "except",
-              "line": 7187
+              "line": 7136
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7137
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7193
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7245
+              "line": 7251
             },
             {
               "in": "export",
               "kind": "raise",
-              "line": 7299
+              "line": 7305
             },
             {
               "in": "_release_model",
               "kind": "except",
-              "line": 7373
+              "line": 7379
             },
             {
               "in": "push_to_hub",
               "kind": "raise",
-              "line": 7383
+              "line": 7389
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7464
+              "line": 7470
             },
             {
               "in": "multi_run",
               "kind": "raise",
-              "line": 7478
+              "line": 7484
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7533
+              "line": 7539
             },
             {
               "in": "_all_linear_leaf_names",
               "kind": "except",
-              "line": 7541
+              "line": 7547
             },
             {
               "in": "_count_lora_layers",
               "kind": "except",
-              "line": 7580
+              "line": 7586
             },
             {
               "in": "__getattr__",
               "kind": "raise",
-              "line": 7647
+              "line": 7653
             }
           ],
-          "hash": "9568ed9fe1cc0746a63d39e2773c0af718857b0195642c0ec444cb4fe20f18ff",
+          "hash": "c5c4e98d1862b528da4eac51bea76419453b4fa9e2ced2b7fa06769a5868b36c",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
@@ -8837,7 +8837,7 @@
             {
               "calls": [
                 {
-                  "line": 7547,
+                  "line": 7553,
                   "name": "named_modules",
                   "target": null
                 }
@@ -8851,7 +8851,7 @@
               "calls": [
                 {
                   "branch": "target_modules.lower() == \"all-linear\"",
-                  "line": 7547,
+                  "line": 7553,
                   "name": "named_modules",
                   "target": null,
                   "via": "_all_linear_leaf_names"
@@ -8865,7 +8865,7 @@
             {
               "calls": [
                 {
-                  "line": 7579,
+                  "line": 7585,
                   "name": "named_modules",
                   "target": null
                 }
@@ -10125,8 +10125,20 @@
           "path": "docs/ci-gates-triage-plan.md"
         },
         {
+          "hash": "202ed010178571b917a0e62d92256dccc143e45a8e2d986759a8c536ce53a7c2",
+          "path": "docs/consult/consult-brief-full-ft-engines-2026-09-30.md"
+        },
+        {
+          "hash": "5c279720cd126c5e71433b32fec9891a76a01fbde9e12ab12bb1439bbe375652",
+          "path": "docs/consult/consult-response-kimi-k3-2026-09-30.md"
+        },
+        {
           "hash": "8fe123b3430523d19db9edba4c02a763d92450c6b5a454bd90a886ecbb3a3101",
           "path": "docs/full-ft-engines-design-2026-09-30.md"
+        },
+        {
+          "hash": "73688cbe2e64077bd0e17371aa30960e995eaf2253cade4b383dce6bf021b7bb",
+          "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
         },
         {
           "hash": "22b35d565693e762f631b1f1b4ad4bfb6dbec7c49284fd92f75aebc3bb132956",
@@ -10279,11 +10291,11 @@
           "path": ".secrets.baseline"
         },
         {
-          "hash": "1b94dbf0029f868d2b6c0b64ce7db0c0878c49a0030086c0f35aff918d941dbf",
+          "hash": "682be3cc3f36a005618c1378a1b0710164b1d5db4f96bd23f521ee0940310e08",
           "path": "CHANGELOG.md"
         },
         {
-          "hash": "a0577ed3d62db61ba94bec02d20a4f79183446926ecc14a64dc361807356e45b",
+          "hash": "98b60447d089e3cfcde86b44290cc85c8a3630fdb99a46a35cd4c4fbe819ebfe",
           "path": "CITATION.cff"
         },
         {
@@ -10311,35 +10323,35 @@
           "path": "PRODUCTION_READINESS_AUDIT.md"
         },
         {
-          "hash": "d66de115ece6533048f7dbd6ef4825e50e0f8e32cea2b48d0d618f6006366f62",
+          "hash": "1e4ec7aa7c354a1722d05f6861ad7cc7d8139b17815e2e08ad0e579531450bce",
           "path": "README.es.md"
         },
         {
-          "hash": "7284ad9784ad80ba1c581ff364ffbe7c9af1c3faadc4a4ab02b0a2f6668abcc3",
+          "hash": "f84cbc5e4cd366ca877ff62bb2eab5423da32a3b475b321da8076e205636ac3f",
           "path": "README.fr.md"
         },
         {
-          "hash": "d71a762138e071572071dc4b2f006af0b2cb6c5fc26f7eec2a6753a7ff657e8b",
+          "hash": "ca97a78e4bedf1197536aa8d18b277c565fe35a014822ad97eba409d4b2d4622",
           "path": "README.hi.md"
         },
         {
-          "hash": "03be36ff707e66b595cb1be2e67b3b2c26dcfd5cc92f101b3bd55665cbc7b591",
+          "hash": "adcb6b5cfc9a7f08b2a701373e6076d7243f8b7e579e67327c7a76d2e9707826",
           "path": "README.it.md"
         },
         {
-          "hash": "13d6dea859341afeb3a593b84043789c681a5e463fdd1b4c60603b28ca7e7e04",
+          "hash": "843cff592c531c13d1fb0bbbbd35097672c438af90ba808d9cafa59607138715",
           "path": "README.ja.md"
         },
         {
-          "hash": "c38d8169490d37aa26223c747353ed9638c1a3d600d6963c31c511972743081a",
+          "hash": "16fbbef1337bbbe0a9c1ee421ad3232cbdda0a6fdb481178188c71bcc951947b",
           "path": "README.md"
         },
         {
-          "hash": "b07cfadf5dc58f9b24a32d49da712036931519fa1f38ee5078656deedde1fc60",
+          "hash": "0c0856db2ee2d37399562ca397ecc890efafe7733b4f20b1bf70625554349086",
           "path": "README.pt-BR.md"
         },
         {
-          "hash": "50e986ee180d1defc7656e7937c4c83466f470f95133e94e44af6b3f21af3f25",
+          "hash": "983e90822032c285424f6486fb61b30a0436b049a8b22e1bffc4d6bf852bc2ea",
           "path": "README.zh.md"
         },
         {
@@ -10383,15 +10395,15 @@
           "path": "logo.png"
         },
         {
-          "hash": "f13a0a8e53fd574a97a7fab712e40cd587343b14154db1c6a85c749aa35994b6",
+          "hash": "5bc118631c159ff66b85b767cf196b833b6d32285e35d8781be202d894a51821",
           "path": "package.json"
         },
         {
-          "hash": "a3ad62438684f4118474ad1723b3d264c490947cf27b27c963816a058f3593de",
+          "hash": "c52d807f640ae11315b66a3a22c01ed398b1d430db1a8fba36d5e4bf349ef1e6",
           "path": "pyproject.toml"
         },
         {
-          "hash": "8b1db2977d9935aea38a904d560e3d8b11c430d9521a4d6ad2f9484c3d5344e4",
+          "hash": "504aa864a8e7bd901591f49d0f97e6707a96debfd81fc6b1aa26ab562f56907c",
           "path": "uv.lock"
         },
         {
@@ -10413,7 +10425,7 @@
       "dynamicReads": 3,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
-      "dynamicWrites": 0,
+      "dynamicWrites": 2,
       "entryPoints": [],
       "externalNames": [
         "datasets"
@@ -10758,6 +10770,23 @@
           "exports": [
             "main"
           ],
+          "failurePaths": [
+            {
+              "kind": "raise",
+              "line": 48
+            }
+          ],
+          "hash": "f47df04c97d86d703f7b17cd9c23faa9bd4c3250806e69d4e988a06a13a4943a",
+          "path": "scripts/runpod/deadman.py"
+        },
+        {
+          "hash": "6b4d0ebd52e21c9239faffa050a7b1b97e550865d29ea7b240c145711053e11a",
+          "path": "scripts/runpod/pod.sh"
+        },
+        {
+          "exports": [
+            "main"
+          ],
           "hash": "02a23e157c44e40745d8fc9d47ca1f46d00d2abfd2ba9a724bdbe190d67733a1",
           "importsFiles": [
             "backpropagate/gpu_safety.py",
@@ -10831,7 +10860,7 @@
           "path": "site/src/content/docs/handbook/cli-reference.md"
         },
         {
-          "hash": "172a53697373cff52fbed6acf29406321ab1d93409fb72765033ad82b0f74552",
+          "hash": "50e63a6405465d0225b7735a9b90d7c6796a706a46e4782665a38634884aa255",
           "path": "site/src/content/docs/handbook/env-vars.md"
         },
         {
@@ -10839,7 +10868,7 @@
           "path": "site/src/content/docs/handbook/error-codes.md"
         },
         {
-          "hash": "6a2a9d0929447040091de215390445a667ab16efcebbc5df002e5d07bcfe1b50",
+          "hash": "f66d62a5122c90e9a3cbec275b40a53a6682f67a5fca10f828efff86f75afdea",
           "path": "site/src/content/docs/handbook/estimate-vram.md"
         },
         {
@@ -10847,7 +10876,7 @@
           "path": "site/src/content/docs/handbook/export.md"
         },
         {
-          "hash": "1a373aeaf1c42697058b24db61c6700cbd0d507b565c21d5097d7c92f095bf91",
+          "hash": "f2a06b9de85cfc12cc03dbc7ceaad6b62e7559161cf33f8bd0d4137a302d7890",
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
@@ -11312,7 +11341,7 @@
             "test_training_args",
             "test_version"
           ],
-          "hash": "9aee0a340eccb18b5be71cf919ad4f1c6b656f6b2c841772503949c6c8754a08",
+          "hash": "056ec2f44510f28bbb510de30cbd6fe8b3141cc66c055662f7a145211e1cf05d",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/config.py",
@@ -11342,7 +11371,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "55651c235df691c06461575ddfaf7e117420f5f04e66d09156fb9307bab356b3",
+          "hash": "e4b4a62b3f856175a7e6eb6ef654701bafbc741d63add197d9de4ca975e1fcb5",
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/__init__.py"
@@ -14676,8 +14705,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "27eb75c90df945e09c383c2354f16376e01e9619",
-    "tracked": 287
+    "commit": "dfaf4b4b13559339afc0576b0537d00721923890",
+    "tracked": 292
   },
   "landings": [
     {
@@ -14962,6 +14991,62 @@
     },
     {
       "readers": [
+        {
+          "by": "README.es.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.fr.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.hi.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.it.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.ja.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.pt-BR.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
+        {
+          "by": "README.zh.md",
+          "call": "raw-url",
+          "confidence": "text",
+          "ref": "main",
+          "repo": "mcp-tool-shop-org/backpropagate"
+        },
         {
           "by": "scripts/nightly_train_smoke.py",
           "call": "literal",

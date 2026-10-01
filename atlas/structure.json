@@ -132,7 +132,7 @@
       "externalNames": [
         "datasets"
       ],
-      "externals": 6,
+      "externals": 9,
       "files": [
         {
           "hash": "0c8cd4bcf45431e59978209e6e418a51c4da51cfd82dfb2159b1b08c02d04001",
@@ -174,7 +174,8 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/model_card.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
@@ -190,6 +191,7 @@
             "backpropagate/multi_run.py",
             "backpropagate/security.py",
             "backpropagate/slao.py",
+            "backpropagate/trainer.py",
             "backpropagate/ui_security.py"
           ],
           "path": "backpropagate/__init__.py"
@@ -1711,6 +1713,7 @@
             "backpropagate/logging_config.py",
             "backpropagate/multi_run.py",
             "backpropagate/security.py",
+            "backpropagate/trainer.py",
             "backpropagate/ui_app/auth.py",
             "backpropagate/ui_security.py"
           ],
@@ -1745,6 +1748,36 @@
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
+                  }
+                },
+                {
+                  "line": 883,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 901,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 911,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 922,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -2243,6 +2276,36 @@
                   }
                 },
                 {
+                  "line": 3943,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3949,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3950,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3957,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
                   "line": 575,
                   "name": "redact_secrets",
                   "target": {
@@ -2501,6 +2564,36 @@
                   "receiver": "MultiRunTrainer",
                   "target": {
                     "file": "backpropagate/multi_run.py"
+                  }
+                },
+                {
+                  "line": 5128,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5129,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5132,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5138,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -2799,6 +2892,21 @@
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
               "name": "cmd_generate"
+            },
+            {
+              "calls": [
+                {
+                  "line": 6566,
+                  "name": "estimate_vram",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "cmd_estimate_vram"
             },
             {
               "calls": [
@@ -7119,7 +7227,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/logging_config.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "backpropagate/multi_run.py",
           "sequences": []
@@ -7487,6 +7596,1399 @@
             "backpropagate/security.py"
           ],
           "path": "backpropagate/slao.py"
+        },
+        {
+          "entry": "estimate_vram",
+          "entryRule": 4,
+          "exports": [
+            "estimate_vram",
+            "load_dataset",
+            "load_model"
+          ],
+          "failurePaths": [
+            {
+              "in": "_hf_transient_exceptions",
+              "kind": "except",
+              "line": 108
+            },
+            {
+              "in": "_hf_transient_exceptions",
+              "kind": "except",
+              "line": 114
+            },
+            {
+              "in": "_retry_hf_call",
+              "kind": "except",
+              "line": 185
+            },
+            {
+              "in": "_retry_hf_call",
+              "kind": "raise",
+              "line": 192
+            },
+            {
+              "in": "_classify_model_load_cause",
+              "kind": "except",
+              "line": 248
+            },
+            {
+              "in": "_classify_model_load_cause",
+              "kind": "except",
+              "line": 267
+            },
+            {
+              "in": "_compute_dataset_hash",
+              "kind": "except",
+              "line": 328
+            },
+            {
+              "in": "_detect_chat_markers",
+              "kind": "except",
+              "line": 429
+            },
+            {
+              "in": "_detect_chat_markers",
+              "kind": "except",
+              "line": 457
+            },
+            {
+              "in": "_build_trl_bridge_callback",
+              "kind": "except",
+              "line": 545
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 574
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 584
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 593
+            },
+            {
+              "in": "on_epoch_end",
+              "kind": "except",
+              "line": 605
+            },
+            {
+              "in": "on_epoch_end",
+              "kind": "except",
+              "line": 609
+            },
+            {
+              "in": "on_save",
+              "kind": "except",
+              "line": 622
+            },
+            {
+              "in": "on_save",
+              "kind": "except",
+              "line": 626
+            },
+            {
+              "in": "_detect_total_vram_gb",
+              "kind": "except",
+              "line": 824
+            },
+            {
+              "in": "_detect_total_vram_gb",
+              "kind": "except",
+              "line": 826
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "except",
+              "line": 849
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 850
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 855
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 861
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "except",
+              "line": 878
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 879
+            },
+            {
+              "in": "_gather_fsdp_full_state_dict",
+              "kind": "except",
+              "line": 904
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1013
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1015
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1039
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "except",
+              "line": 1093
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "except",
+              "line": 1097
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "raise",
+              "line": 1128
+            },
+            {
+              "in": "_build_sft_config",
+              "kind": "raise",
+              "line": 1536
+            },
+            {
+              "in": "_config_declares",
+              "kind": "except",
+              "line": 1713
+            },
+            {
+              "in": "_require_config_field",
+              "kind": "raise",
+              "line": 1729
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "except",
+              "line": 1820
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "except",
+              "line": 1823
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "raise",
+              "line": 1824
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 1969
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 1972
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "raise",
+              "line": 1973
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2134
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2137
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "raise",
+              "line": 2138
+            },
+            {
+              "in": "_apply_train_on_responses_only",
+              "kind": "except",
+              "line": 2290
+            },
+            {
+              "in": "_apply_train_on_responses_only",
+              "kind": "except",
+              "line": 2293
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2609
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2619
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2626
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2636
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2643
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2650
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2657
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2730
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2775
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2811
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2839
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2898
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3011
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3023
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3038
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3219
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3233
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3254
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3353
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3375
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3391
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3405
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3416
+            },
+            {
+              "in": "__init__",
+              "kind": "except",
+              "line": 3507
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3626
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3631
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3636
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3662
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3693
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3704
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3716
+            },
+            {
+              "in": "_enforce_offload_fit",
+              "kind": "raise",
+              "line": 3826
+            },
+            {
+              "in": "_enforce_offload_fit_for_model",
+              "kind": "except",
+              "line": 3852
+            },
+            {
+              "in": "_detect_optim_for_card",
+              "kind": "except",
+              "line": 3961
+            },
+            {
+              "in": "_detect_optim_for_card",
+              "kind": "except",
+              "line": 3986
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4038
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4056
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4064
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4150
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "raise",
+              "line": 4152
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4185
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4204
+            },
+            {
+              "in": "_detect_optimal_dtype",
+              "kind": "except",
+              "line": 4276
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4411
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4417
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4418
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4420
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4431
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4433
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4434
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4440
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4446
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4449
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4459
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4464
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4469
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4557
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4559
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4565
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4593
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4633
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4638
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "except",
+              "line": 4763
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "raise",
+              "line": 4765
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "raise",
+              "line": 4766
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "except",
+              "line": 4828
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 4915
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 4919
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "raise",
+              "line": 4920
+            },
+            {
+              "in": "_auto_balance_kto_weights",
+              "kind": "except",
+              "line": 5254
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5398
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5404
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5550
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5577
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5599
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5606
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5607
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5777
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5867
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5868
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5869
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5878
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5946
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5966
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5968
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6012
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6074
+            },
+            {
+              "in": "_finite_loss",
+              "kind": "except",
+              "line": 6120
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6152
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6196
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6212
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6233
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6240
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6250
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6254
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6258
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6267
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6272
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6273
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6282
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6293
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6309
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6325
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6334
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6345
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6459
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6543
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6568
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6574
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6584
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6591
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "raise",
+              "line": 6593
+            },
+            {
+              "in": "_require_preference_columns",
+              "kind": "raise",
+              "line": 6686
+            },
+            {
+              "in": "_require_kto_columns",
+              "kind": "raise",
+              "line": 6699
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6754
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6755
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6800
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6801
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6820
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6824
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6828
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6829
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6830
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6831
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6832
+            },
+            {
+              "in": "_token_counter",
+              "kind": "except",
+              "line": 6915
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 6933
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 6954
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 6965
+            },
+            {
+              "in": "tokenize_fn",
+              "kind": "except",
+              "line": 7004
+            },
+            {
+              "in": "tokenize_fn",
+              "kind": "raise",
+              "line": 7005
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "except",
+              "line": 7018
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "raise",
+              "line": 7019
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "except",
+              "line": 7020
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "raise",
+              "line": 7021
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7065
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7085
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7093
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7098
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7101
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7102
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7136
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7141
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7224
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7267
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7268
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7272
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7273
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7295
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7302
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7303
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7358
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7383
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7393
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7399
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7403
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7404
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7405
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7406
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7462
+            },
+            {
+              "in": "export",
+              "kind": "raise",
+              "line": 7520
+            },
+            {
+              "in": "export",
+              "kind": "raise",
+              "line": 7574
+            },
+            {
+              "in": "_release_model",
+              "kind": "except",
+              "line": 7648
+            },
+            {
+              "in": "push_to_hub",
+              "kind": "raise",
+              "line": 7658
+            },
+            {
+              "in": "multi_run",
+              "kind": "raise",
+              "line": 7739
+            },
+            {
+              "in": "multi_run",
+              "kind": "raise",
+              "line": 7753
+            },
+            {
+              "in": "_all_linear_leaf_names",
+              "kind": "except",
+              "line": 7808
+            },
+            {
+              "in": "_all_linear_leaf_names",
+              "kind": "except",
+              "line": 7816
+            },
+            {
+              "in": "_count_lora_layers",
+              "kind": "except",
+              "line": 7855
+            },
+            {
+              "in": "__getattr__",
+              "kind": "raise",
+              "line": 7922
+            }
+          ],
+          "hash": "a609a78a69a74567aab504b0b27df3f67d829722e5739d2e05c495d4131e0a9f",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/offload_engine.py"
+          ],
+          "path": "backpropagate/trainer.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 450,
+                  "name": "apply_chat_template",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_detect_chat_markers"
+            },
+            {
+              "calls": [
+                {
+                  "line": 758,
+                  "name": "detect_host_ram_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                },
+                {
+                  "line": 761,
+                  "name": "offload_param_ceiling_billions",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_full_ft_offload_ceiling_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 850,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "branch": "not torch.cuda.is_available()",
+                  "line": 855,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "branch": "not (dist.is_available() and dist.is_nccl_available())",
+                  "line": 861,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "line": 879,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_ensure_fsdp_runtime"
+            },
+            {
+              "calls": [
+                {
+                  "line": 993,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                },
+                {
+                  "line": 997,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_estimate_param_count_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1085,
+                  "name": "num_parameters",
+                  "target": null
+                },
+                {
+                  "line": 1090,
+                  "name": "parameters",
+                  "target": null
+                },
+                {
+                  "line": 993,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 997,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "branch": "estimated_billions > ceiling_billions",
+                  "line": 1128,
+                  "name": "FullFinetuneModelTooLargeError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_enforce_full_ft_param_ceiling"
+            },
+            {
+              "calls": [
+                {
+                  "line": 993,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 997,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1383,
+                  "name": "offload_host_ram_required_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "estimate_vram"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1729,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_require_config_field"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1824,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_orpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1973,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_cpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 2138,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_kto_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 450,
+                  "name": "apply_chat_template",
+                  "target": null,
+                  "via": "_detect_chat_markers"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_apply_train_on_responses_only"
+            },
+            {
+              "calls": [
+                {
+                  "line": 7822,
+                  "name": "named_modules",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_all_linear_leaf_names"
+            },
+            {
+              "calls": [
+                {
+                  "branch": "target_modules.lower() == \"all-linear\"",
+                  "line": 7822,
+                  "name": "named_modules",
+                  "target": null,
+                  "via": "_all_linear_leaf_names"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_unsloth_target_modules"
+            },
+            {
+              "calls": [
+                {
+                  "line": 7854,
+                  "name": "named_modules",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_count_lora_layers"
+            }
+          ]
         },
         {
           "hash": "ea306e6ea28de2c717afd89428a2997d43cb9ea648b48cb0e6b1be091bd92eb3",
@@ -8641,7 +10143,7 @@
           "where": [
             "caller"
           ],
-          "writes": 11
+          "writes": 16
         },
         {
           "reads": 0,
@@ -8669,30 +10171,20 @@
         }
       ],
       "outsideReads": 51,
-      "outsideWrites": 12,
+      "outsideWrites": 17,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 71,
+      "testedBy": 72,
       "unresolvedNamed": [
         {
-          "path": "backpropagate/__init__.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "backpropagate/cli.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "backpropagate/cli.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
+          "path": "backpropagate/trainer.py",
+          "specifier": null,
+          "why": "dynamic"
         }
       ],
-      "unresolvedSites": 9
+      "unresolvedSites": 1
     },
     {
       "dynamicReads": 0,
@@ -9388,7 +10880,7 @@
           "path": ".secrets.baseline"
         },
         {
-          "hash": "682be3cc3f36a005618c1378a1b0710164b1d5db4f96bd23f521ee0940310e08",
+          "hash": "028849b8cf73d6e7a5c8fca2ec94a14c68896185b9d087167a7ca60ffb6e7333",
           "path": "CHANGELOG.md"
         },
         {
@@ -9770,7 +11262,7 @@
                   "line": 110,
                   "name": "Trainer",
                   "target": {
-                    "file": "backpropagate/__init__.py"
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -9778,7 +11270,7 @@
                   "name": "train",
                   "receiver": "Trainer",
                   "target": {
-                    "file": "backpropagate/__init__.py"
+                    "file": "backpropagate/trainer.py"
                   }
                 }
               ],
@@ -9815,6 +11307,9 @@
             }
           ],
           "hash": "717808b12cb2c4097bc2ddce409a7332798ed60caad6079b43bc9b1fa41281d6",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
           "path": "scripts/offload_probe.py"
         },
         {
@@ -9835,7 +11330,8 @@
           ],
           "hash": "ff9c4e9717038a32ecf013bc15d87801487c470d28764e27f79036057be32bd6",
           "importsFiles": [
-            "backpropagate/datasets.py"
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
           ],
           "path": "scripts/offload_quality.py"
         },
@@ -9945,13 +11441,15 @@
             "backpropagate/datasets.py",
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
             "backpropagate/config.py",
-            "backpropagate/datasets.py"
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
           ],
           "path": "scripts/pod_block_engine.py"
         },
@@ -10033,24 +11531,7 @@
         "pytest"
       ],
       "testedBy": 2,
-      "unresolvedNamed": [
-        {
-          "path": "scripts/offload_probe.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "scripts/offload_quality.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "scripts/pod_block_engine.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        }
-      ],
-      "unresolvedSites": 3
+      "unresolvedSites": 0
     },
     {
       "dynamicReads": 0,
@@ -10082,7 +11563,7 @@
           "path": "site/src/content/docs/handbook/beginners.md"
         },
         {
-          "hash": "85224abc7984f5315be298f8ab813682ec3d3434a3e29a7beee8ae6ee92d89c7",
+          "hash": "4773a0697c9c8a09afc5d897d874fc5e609dd1027b3163297dde62adfb3e03ea",
           "path": "site/src/content/docs/handbook/cli-reference.md"
         },
         {
@@ -10102,7 +11583,7 @@
           "path": "site/src/content/docs/handbook/export.md"
         },
         {
-          "hash": "f2a06b9de85cfc12cc03dbc7ceaad6b62e7559161cf33f8bd0d4137a302d7890",
+          "hash": "22190911d5742794835e8c4c46aaec1054da8a7d25228ad9c3507f20b30f57ca",
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
@@ -10276,6 +11757,7 @@
             "backpropagate/slao.py",
             "backpropagate/multi_run.py",
             "backpropagate/cli.py",
+            "backpropagate/trainer.py",
             "tests/helpers/__init__.py"
           ],
           "importsFiles": [
@@ -10284,6 +11766,7 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
             "backpropagate/slao.py",
+            "backpropagate/trainer.py",
             "tests/helpers/__init__.py"
           ],
           "path": "tests/conftest.py",
@@ -10479,6 +11962,7 @@
             "backpropagate/block_engine.py",
             "backpropagate/exceptions.py",
             "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py",
             "backpropagate/cli.py"
           ],
           "importsFiles": [
@@ -10486,6 +11970,7 @@
             "backpropagate/block_engine.py",
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_block_engine_trainer.py",
@@ -10494,12 +11979,14 @@
         {
           "hash": "95dd4555c3bd84f8370e0426df02c03dc2b8faf30dd3f1b6e9e6254f57a453ca",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/gpu_safety.py"
           ],
           "importsFiles": [
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_callback_integration.py",
           "testFramework": "pytest"
@@ -10711,11 +12198,13 @@
           "hash": "1cd2bda7433dd21c545a811c27ca9cd279f66352048afbba0e8f9d5e2b8c83b2",
           "importOrder": [
             "backpropagate/export.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_e2e_chain.py",
           "testFramework": "pytest"
@@ -10723,6 +12212,7 @@
         {
           "hash": "cc0e2d428c1399626e1b16055652cdfc1906b7dcf8795adb142fd2252db134c2",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "backpropagate/offload_engine.py",
             "backpropagate/cli.py",
@@ -10736,7 +12226,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
             "backpropagate/mlx_backend.py",
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_envelope_v17.py",
           "testFramework": "pytest"
@@ -10827,12 +12318,14 @@
         {
           "hash": "ea62a652da27cf3c3f2080c578d417331d7c2380e0f25120294b11de1bffe4ae",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/gpu_safety.py"
           ],
           "importsFiles": [
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_event_handlers.py",
           "testFramework": "pytest"
@@ -10856,13 +12349,15 @@
             "backpropagate/export.py",
             "backpropagate/exceptions.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py"
           ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_export.py",
           "testFramework": "pytest"
@@ -10883,6 +12378,7 @@
         {
           "hash": "e757caec7847e90bfd954d69441f1541611a1327045cdaec9f77d699764a8cc3",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/__init__.py",
             "backpropagate/exceptions.py"
@@ -10890,7 +12386,8 @@
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/config.py",
-            "backpropagate/exceptions.py"
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_fp8.py",
           "testFramework": "pytest"
@@ -10900,6 +12397,9 @@
             "test_fp8_end_to_end_trains_converts_and_merges"
           ],
           "hash": "56f0cbe04fc53dd7002c92592ac0b27b15ce8fd50f195f9ecb10414136c466a5",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
           "path": "tests/test_fp8_smoke.py",
           "testFramework": "pytest"
         },
@@ -10909,8 +12409,13 @@
             "test_offload_fast_fails_without_nccl"
           ],
           "hash": "2b5a9355856a7d74b677cf9a5b6c5b5a91c273f356147a8a1b2f15a6682f1cfa",
-          "importsFiles": [
+          "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_full_ft_offload_smoke.py",
           "testFramework": "pytest"
@@ -10941,8 +12446,13 @@
             "workdir"
           ],
           "hash": "f27dfd97978538d29aa80e92b2b41b2be3097dfcbd5504c9d0ccaabf1c3a3464",
-          "importsFiles": [
+          "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/export.py"
+          ],
+          "importsFiles": [
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_golden_path_smoke.py",
           "spawns": [
@@ -10980,10 +12490,17 @@
         },
         {
           "hash": "3224122e3dc7d8e9ac284fe5089331f9b09795b80ccc80894463ac30eed820dc",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/config.py",
-            "backpropagate/exceptions.py"
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_init_imports.py",
           "testFramework": "pytest"
@@ -10991,6 +12508,7 @@
         {
           "hash": "0322cd225f474231e3f025c05f7602905c442f30caf5127cc72595cbba869350",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/checkpoints.py",
             "backpropagate/export.py",
@@ -11004,7 +12522,8 @@
             "backpropagate/export.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_integration.py"
         },
@@ -11014,7 +12533,8 @@
           ],
           "hash": "fc86fd6d74af6f14c849b51272cc9fd3bd837e7a373623b23f4b54b3e842b81a",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_kto_smoke.py",
           "testFramework": "pytest"
@@ -11056,7 +12576,8 @@
           "hash": "a52c8de7d0f8c115f1f05876843fdae63f13dcb8cf8f823b73acdedd16009e1f",
           "importsFiles": [
             "backpropagate/exceptions.py",
-            "backpropagate/mlx_backend.py"
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_mlx_backend.py",
           "testFramework": "unittest"
@@ -11068,11 +12589,13 @@
           "hash": "ea62f25963e5ec0bf7353e48d163ea2582177118535991451b4c21703d83bce7",
           "importOrder": [
             "backpropagate/feature_flags.py",
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
-            "backpropagate/feature_flags.py"
+            "backpropagate/feature_flags.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_mlx_smoke.py",
           "testFramework": "pytest"
@@ -11099,6 +12622,7 @@
             "backpropagate/multi_run.py",
             "backpropagate/checkpoints.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/slao.py",
             "backpropagate/eval.py"
           ],
@@ -11109,7 +12633,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "names": [
             "backpropagate/cli.py"
@@ -11130,7 +12655,8 @@
           ],
           "hash": "18d7e13468b7bd8b057e04cd02de530f35cbaf889ef3009d0e65293cf3d71346",
           "importsFiles": [
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_offload_engine.py",
           "testFramework": "pytest"
@@ -11143,11 +12669,13 @@
           "hash": "3673be15025ff522c5252a179ba20471fc3f7c4133b9d6b2d68d818bc19e94c6",
           "importOrder": [
             "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py"
           ],
           "importsFiles": [
             "backpropagate/exceptions.py",
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_offload_fit.py",
           "testFramework": "pytest"
@@ -11157,6 +12685,7 @@
           "importOrder": [
             "tests/helpers/trl_paths.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/checkpoints.py"
@@ -11166,6 +12695,7 @@
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_orpo.py",
@@ -11177,7 +12707,8 @@
           ],
           "hash": "44a4188352413cbc2338639459ea5ccec9c19ce30fd9dde2b8ec8d14f9b151a5",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_orpo_smoke.py",
           "testFramework": "pytest"
@@ -11188,7 +12719,8 @@
           ],
           "hash": "df6d9e637ce2c6a17fcc2f6ff0b5fc0f40ed55c393dc4e00e120061d325fc8ea",
           "importsFiles": [
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_qlora_presets_smoke.py",
           "testFramework": "pytest"
@@ -11351,7 +12883,8 @@
           ],
           "hash": "9d47291ae567c79d89151e50912e521268ede56797a814b834e5649271fcd851",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_simpo_smoke.py",
           "testFramework": "pytest"
@@ -11371,6 +12904,7 @@
           ],
           "hash": "0d24f0cb0c9d81b4272eb4f1805661c0ffb8674b6240ef533ee0ec66e2a17e6a",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
@@ -11392,7 +12926,8 @@
             "backpropagate/export.py",
             "backpropagate/feature_flags.py",
             "backpropagate/logging_config.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_trainer.py",
           "testFramework": "pytest"
@@ -11405,6 +12940,7 @@
           "importOrder": [
             "tests/helpers/trl_paths.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/checkpoints.py",
@@ -11416,6 +12952,7 @@
             "backpropagate/config.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_trainer_simpo_kto.py",
@@ -11429,6 +12966,7 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "backpropagate/__init__.py",
             "backpropagate/feature_flags.py",
             "backpropagate/eval.py",
@@ -11442,7 +12980,8 @@
             "backpropagate/eval.py",
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
-            "backpropagate/mlx_backend.py"
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_trust_remote_code.py",
           "testFramework": "pytest"
@@ -11526,6 +13065,7 @@
         {
           "hash": "aa83ea69df35ece2c6e996f1c90f9a8b9a67afb9b8841f6d46c73639348485d3",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "backpropagate/config.py",
             "backpropagate/__init__.py",
@@ -11541,7 +13081,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_wave6b_features.py",
           "testFramework": "pytest"
@@ -11551,12 +13092,14 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/cli.py",
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/cli.py",
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_wave6b_flags.py",
           "testFramework": "pytest"
@@ -11566,6 +13109,7 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/datasets.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
@@ -11577,7 +13121,8 @@
             "backpropagate/config.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_windows_compat.py",
           "testFramework": "pytest"
@@ -11596,22 +13141,22 @@
       "testedBy": 0,
       "unresolvedNamed": [
         {
-          "path": "tests/conftest.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_fp8_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         },
         {
-          "path": "tests/test_block_engine_trainer.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_full_ft_offload_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         },
         {
-          "path": "tests/test_block_engine_trainer.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_golden_path_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         }
       ],
-      "unresolvedSites": 340
+      "unresolvedSites": 7
     }
   ],
   "doors": [
@@ -12288,7 +13833,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -12824,7 +14369,7 @@
             "file": "backpropagate/__init__.py",
             "from": "scripts/nightly_train_smoke.py"
           },
-          "files": 16
+          "files": 20
         }
       ],
       "readers": [],
@@ -13185,7 +14730,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -13361,7 +14906,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
         },
         {
           "boundary": "root",
@@ -13818,7 +15363,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -13860,7 +15405,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -13909,8 +15454,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "128a3b9487b425722b9f6f3db44c34c02a4c2f2f",
-    "tracked": 415
+    "commit": "7deb5b55cdabe45001c1f90d1c1f86b2b0fe86a4",
+    "tracked": 416
   },
   "landings": [
     {

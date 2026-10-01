@@ -197,15 +197,6 @@ class TestKnownFindings:
         with pytest.raises(UserInputError):
             validate_numeric_input("nan", "learning_rate", min_value=0.0, max_value=1.0)
 
-    @pytest.mark.xfail(strict=True, reason="F8: a space in the user name leaves the surname in the text")
-    def test_f8_redact_paths_hides_a_two_word_user_name(self):
-        from backpropagate.ui_security import _redact_paths
-
-        out = _redact_paths(r"cannot open C:\Users\John Qzx9\data\x.jsonl")
-        assert "Qzx9" not in out
-        out = _redact_paths("cannot open /home/john qzx9/data/x.jsonl")
-        assert "qzx9" not in out
-
     @pytest.mark.xfail(raises=RecursionError, strict=True, reason="F9: streaming loader leaks RecursionError")
     def test_f9_streaming_loader_wraps_deeply_nested_json(self, tmp_path):
         from backpropagate.datasets import StreamingDatasetLoader
@@ -384,6 +375,42 @@ class TestFixedFindings:
         assert safe_path(tmp_path / "sub", allowed_base=tmp_path) == (tmp_path / "sub").resolve()
         with pytest.raises(PathTraversalError, match="escapes allowed directory"):
             safe_path(tmp_path / ".." / "elsewhere", allowed_base=tmp_path)
+
+
+    @pytest.mark.parametrize(
+        ("text", "leaked"),
+        [
+            (r"cannot open C:\Users\John Qzx9\data\x.jsonl", "Qzx9"),  # the reproducer
+            ("cannot open /home/john qzx9/data/x.jsonl", "qzx9"),
+            ("cannot open /Users/Mary Jane Watson/Documents/x.jsonl", "Watson"),
+            (r"cannot open C:\Users\José Sánchez\AppData\x", "Sánchez"),
+            ("cannot open /root/ann lee\\data", "lee"),  # mixed separators
+        ],
+    )
+    def test_f8_redact_paths_hides_a_multi_word_user_name(self, text, leaked):
+        from backpropagate.ui_security import _redact_paths
+
+        out = _redact_paths(text)
+        assert leaked not in out
+        assert "<redacted-path>" in out
+        assert out.startswith("cannot open ")
+
+    def test_f8_redaction_keeps_the_prose_around_a_path(self):
+        from backpropagate.ui_security import _redact_paths
+
+        assert (
+            _redact_paths("see /home/alice/x.txt and /home/bob/y.txt now")
+            == "see <redacted-path> and <redacted-path> now"
+        )
+        assert (
+            _redact_paths(r"open C:\Users\John Smith\data.jsonl failed")
+            == "open <redacted-path> failed"
+        )
+        # No separator after the words: nothing says "Smith" belongs to the name,
+        # so only the first word is taken (unchanged behaviour).
+        assert _redact_paths("failed to open /home/alice because it is gone") == (
+            "failed to open <redacted-path> because it is gone"
+        )
 
 
 class TestPlumbing:

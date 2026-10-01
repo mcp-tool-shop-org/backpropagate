@@ -246,6 +246,8 @@ def check_redaction_leak(root: str, user: str, sep: str, tail: str = "data.jsonl
 def check_redaction(p: Provider) -> None:
     root = p.pick(ROOTS)
     user = "u" + p.pick(("alice", "Bob", "x9", "j.doe", "carol_q")) + str(p.int_in_range(0, 999))
+    for _ in range(p.int_in_range(0, 2)):  # a user name can have spaces ("John Smith")
+        user += " s" + p.pick(("mith", "ánchez", "x9", "o_neil")) + str(p.int_in_range(0, 99))
     check_redaction_leak(root, user, p.pick(SEPS))
 
     text = "".join(p.pick(ROOTS + PROSE) + p.text(4) for _ in range(p.int_in_range(0, 6)))

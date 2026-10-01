@@ -2884,8 +2884,11 @@ def safe_markdown_fence(content: str, language: str = "") -> str:
 # toast component.
 _REDACTED = "<redacted-path>"
 _PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
-    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    # A user name may contain spaces ("John Smith"). The optional group takes up
+    # to three space-separated words as the name segment, but only when a path
+    # separator follows it, so ordinary prose after a bare "/home/alice" is kept.
+    re.compile(r"/(?:home|Users|root)/(?:[^\s/\\'\":]+(?: [^\s/\\'\":]+){1,2}(?=[/\\]))?[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\(?:[^\s/\\'\":]+(?: [^\s/\\'\":]+){1,2}(?=[/\\]))?[^\s'\":]+"),
     re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
     re.compile(r"/tmp/[^\s'\":]+"),  # nosec B108 — regex pattern matches /tmp paths for REDACTION in error messages; not an actual /tmp file write
     re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),

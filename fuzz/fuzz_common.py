@@ -21,28 +21,15 @@ Seeds in ``fuzz/corpus/<target>/`` are raw bytes in each harness's own encoding
 
 Known findings
 --------------
-Fuzzing found real bugs. The library is NOT fixed in the change that added this
-directory, so each harness steps around them with a ``strict`` switch: with
-``strict=False`` (what the fuzzer and the corpus tests use) the known input
-class is tolerated so a run can continue and find *new* bugs; with
+Fuzzing found nine bugs (F1-F9). All are fixed in the library and pinned by
+regression tests in ``tests/test_fuzz_harnesses.py::TestFixedFindings``, except
+the NaN half of F4: ``validate_numeric_input`` accepting NaN inside a min/max
+range, which is fixed by #253. Until that lands, ``fuzz_ui_input`` steps around
+it with a ``strict`` switch: with ``strict=False`` (what the fuzzer and the
+corpus tests use) NaN is tolerated so a run can go on and find *new* bugs; with
 ``strict=True`` (``BP_FUZZ_STRICT=1``, or the ``strict`` input of the fuzz
-workflow) the same property is enforced and the reproducer fails. Each has a
-strict xfail regression test in ``tests/test_fuzz_harnesses.py``. When one is
-fixed, delete its tolerance here and its xfail marker there together.
-
-* F1  ``validate_dataset`` / ``DatasetLoader`` raise ``TypeError`` on an OpenAI
-  message whose ``role`` is a JSON list or object.
-* F2  ``sanitize_filename`` can return ``"."`` or ``".."``.
-* F3  ``sanitize_filename`` can return more than 255 characters.
-* F4  ``validate_numeric_input`` accepts NaN inside any min/max range; F4b: so do
-  the ``TrainingConfig`` "reject non-positive" validators.
-* F5  ``validate_numeric_input`` raises ``OverflowError`` for an int above 1e308.
-* F6  ``deduplicate_exact`` raises ``UnicodeEncodeError`` on a lone surrogate.
-* F7  ``safe_path`` leaks ``RuntimeError`` / ``OSError`` for a symlink loop or a
-  path through a file.
-* F8  ``_redact_paths`` leaves the second word of a two-word user name behind.
-* F9  ``StreamingDatasetLoader`` leaks ``RecursionError`` on deeply nested JSON
-  where ``DatasetLoader`` raises ``ValueError``.
+workflow) the property is enforced and the reproducer fails. Once #253 is in,
+delete that tolerance, the ``strict`` plumbing and ``STRICT_SEEDS`` together.
 """
 
 from __future__ import annotations

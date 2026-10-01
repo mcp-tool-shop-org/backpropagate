@@ -13,11 +13,13 @@ The tests are in four groups:
 * ``TestHarnessesHaveTeeth`` -- sabotage the library function a harness guards
   and check that the harness notices (a property check that cannot fail is not a
   check);
-* ``TestKnownFindings`` -- fuzzing found real bugs that this PR deliberately does
-  not fix. Each is pinned by a ``strict`` xfail regression test (so the day it
-  is fixed the test XPASSes loudly and the marker must be removed) and by a seed
-  in the corpus that the harness tolerates by default and rejects under
-  ``strict=True``;
+* ``TestFixedFindings`` -- regression tests for the bugs the fuzzers found
+  (F1-F9), each with its exact reproducer;
+* ``TestKnownFindings`` -- the one finding still open on this branch, the NaN
+  half of F4 in ``validate_numeric_input`` (fixed by #253). It is pinned by a
+  ``strict`` xfail test (so the day #253 lands the test XPASSes loudly and the
+  marker must be removed) and by a seed in the corpus that the harness
+  tolerates by default and rejects under ``strict=True``;
 * ``TestPlumbing`` -- the import guard, the byte provider, and the workflow and
   requirements-file contracts (manual dispatch only, SHA-pinned actions,
   hash-pinned install).
@@ -175,10 +177,11 @@ STRICT_SEEDS = [
 
 
 class TestKnownFindings:
-    """Bugs the fuzzers found. NOT fixed here; see the PR description.
+    """The finding still open on this branch: NaN through ``validate_numeric_input``.
 
-    When one is fixed, its xfail test XPASSes (strict) -- delete the marker, and
-    delete the matching tolerance in the harness (``strict`` branch) too.
+    It is fixed by #253, not here. When that lands, the xfail test XPASSes
+    (strict) -- delete this class and ``STRICT_SEEDS``, the tolerance in
+    ``fuzz_ui_input`` (``strict`` branch) and the ``strict`` plumbing with it.
     """
 
     @pytest.mark.parametrize(("target", "name", "exc_type"), STRICT_SEEDS)

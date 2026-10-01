@@ -201,8 +201,16 @@ def safe_path(
         logger.warning(f"Path traversal pattern detected in: {user_path}")
 
     # Check existence if required
-    if must_exist and not resolved.exists():
-        raise FileNotFoundError(f"Path does not exist: {resolved}")
+    if must_exist:
+        try:
+            exists = resolved.exists()
+        except OSError:
+            # Path.exists() only swallows "not found"-style errnos; a component
+            # over NAME_MAX (ENAMETOOLONG) raises. A name the OS rejects cannot
+            # exist, so report it as missing rather than leak a raw OSError.
+            exists = False
+        if not exists:
+            raise FileNotFoundError(f"Path does not exist: {resolved}")
 
     return resolved
 

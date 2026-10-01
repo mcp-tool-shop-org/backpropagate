@@ -362,6 +362,27 @@ class TestFixedFindings:
         assert info.value.code == "INPUT_PATH_TRAVERSAL"
         assert isinstance(info.value, ValueError)  # the documented ValueError family
 
+    def test_f7_must_exist_reports_an_over_long_name_as_missing(self, tmp_path):
+        # ENAMETOOLONG escaped Path.exists() as a raw OSError (found once the
+        # harness stopped tolerating OSError from safe_path).
+        from backpropagate.security import safe_path
+
+        with pytest.raises(FileNotFoundError):
+            safe_path(tmp_path / ("a" * 300), must_exist=True)
+        with pytest.raises(FileNotFoundError):
+            safe_path(tmp_path / ("a" * 300), must_exist=True, allowed_base=tmp_path)
+
+    def test_f7_must_exist_turns_an_oserror_from_exists_into_file_not_found(self, monkeypatch, tmp_path):
+        from backpropagate import security
+
+        def boom(self):
+            raise OSError(36, "File name too long")
+
+        monkeypatch.setattr(security.Path, "exists", boom)
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            security.safe_path(tmp_path, must_exist=True)
+        assert security.safe_path(tmp_path) == tmp_path.resolve()  # must_exist=False never asks
+
     def test_f7_ordinary_paths_are_unchanged(self, tmp_path):
         from backpropagate.security import PathTraversalError, safe_path
 

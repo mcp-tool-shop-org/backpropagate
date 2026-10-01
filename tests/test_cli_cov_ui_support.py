@@ -103,8 +103,10 @@ class TestSpawnCloudflared:
         try:
             assert url == "https://quiet-river-1234.trycloudflare.com"
             assert spawned[0][-2:] == ["--url", "http://localhost:7862"]
-            time.sleep(0.9)  # let the reader drain post-URL output without blocking
-            assert proc.poll() is not None
+            # The reader drains post-URL output without blocking, so the child can
+            # finish its two short sleeps and exit. Wait with a deadline instead of
+            # a fixed sleep: under parallel test load the child starts slowly.
+            assert proc.wait(timeout=15) is not None
         finally:
             if proc.poll() is None:
                 proc.kill()

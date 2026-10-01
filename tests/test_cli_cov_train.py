@@ -362,7 +362,9 @@ class TestCmdMultiRun:
                                        final_checkpoint_path="ckpt", failed_runs=0)
 
         monkeypatch.setattr("backpropagate.multi_run.MultiRunTrainer", Strict)
-        argv = ["multi-run", "--data", "d", "--method", "orpo", "--simpo-beta", "2.5"]
+        # --method stays sft: a non-SFT method is refused outright when the trainer
+        # takes no `method` (#254). --simpo-beta still has to be filtered out.
+        argv = ["multi-run", "--data", "d", "--method", "sft", "--simpo-beta", "2.5"]
         assert cli.cmd_multi_run(parse(argv)) == cli.EXIT_OK  # a TypeError here would mean nothing was filtered
         assert seen["ok"]
 

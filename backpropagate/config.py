@@ -626,7 +626,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
             (``CONFIG_INVALID_SETTING``); a non-``ValueError`` from a pydantic
             ``after`` validator propagates as-is, so the code/hint survive.
             """
-            if self.simpo_gamma <= 0:
+            if not self.simpo_gamma > 0:  # NaN-safe
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
@@ -697,7 +697,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
                 ("kto_desirable_weight", self.kto_desirable_weight),
                 ("kto_undesirable_weight", self.kto_undesirable_weight),
             ):
-                if _value <= 0:
+                if not _value > 0:  # NaN-safe
                     from .exceptions import InvalidSettingError
 
                     raise InvalidSettingError(
@@ -740,7 +740,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
             re-wrapped in ``ValidationError``), so the structured code/hint
             survive.
             """
-            if self.orpo_beta <= 0:
+            if not self.orpo_beta > 0:  # NaN-safe: "nan <= 0" is False
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
@@ -1332,7 +1332,7 @@ else:
             # CONFIG_INVALID_SETTING the pydantic _reject_invalid_orpo_beta
             # validator raises. A 0 weight silently degenerates ORPO to SFT;
             # a negative weight trains toward the rejected completion.
-            if self.orpo_beta <= 0:
+            if not self.orpo_beta > 0:  # NaN-safe: "nan <= 0" is False
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
@@ -1351,7 +1351,7 @@ else:
             # byte-for-byte parity with the pydantic
             # _reject_invalid_simpo_gamma validator. A non-positive target
             # margin degenerates the SimPO objective.
-            if self.simpo_gamma <= 0:
+            if not self.simpo_gamma > 0:  # NaN-safe
                 from .exceptions import InvalidSettingError
 
                 raise InvalidSettingError(
@@ -1374,7 +1374,7 @@ else:
                 ("kto_desirable_weight", self.kto_desirable_weight),
                 ("kto_undesirable_weight", self.kto_undesirable_weight),
             ):
-                if _value <= 0:
+                if not _value > 0:  # NaN-safe
                     from .exceptions import InvalidSettingError
 
                     raise InvalidSettingError(

@@ -1,0 +1,2 @@
+# Seed inputs are raw bytes: never normalise line endings or treat them as text.
+* binary

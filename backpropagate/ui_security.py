@@ -911,21 +911,23 @@ def sanitize_filename(filename: str) -> str:
     # Remove path separators
     name = filename.replace("/", "_").replace("\\", "_")
 
-    # Remove null bytes
-    name = name.replace("\x00", "")
+    # Remove null bytes and other control characters. This must come BEFORE the
+    # dot/space strip: otherwise "\x01..\x01" survives the strip and collapses
+    # to ".." once the control characters are gone.
+    name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', name)
 
     # Remove leading/trailing dots and spaces
     name = name.strip(". ")
 
-    # Remove control characters
-    name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', name)
-
     # Limit length
     if len(name) > 255:
-        # Keep extension
+        # Keep a real extension; a "suffix" too long to be one (it would leave
+        # no room for the base, or push the name past the limit through a
+        # negative slice) is truncated like the rest of the name.
         ext = Path(name).suffix
-        base = name[:255 - len(ext)]
-        name = base + ext
+        if len(ext) > 32:
+            ext = ""
+        name = name[:255 - len(ext)].rstrip(". ") + ext
 
     return name or "unnamed_file"
 
@@ -966,6 +968,10 @@ def validate_numeric_input(
 
     try:
         num = float(value)
+    except OverflowError:
+        # float(10**400): an int too large for a double raises OverflowError,
+        # which is neither ValueError nor TypeError.
+        raise UserInputError(f"{name} is too large to be a number")
     except (ValueError, TypeError):
         raise UserInputError(
             f"{name} must be a number, got: {type(value).__name__}"
@@ -2920,8 +2926,11 @@ def safe_markdown_fence(content: str, language: str = "") -> str:
 # toast component.
 _REDACTED = "<redacted-path>"
 _PATH_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"/(?:home|Users|root)/[^\s'\":]+"),
-    re.compile(r"[A-Za-z]:\\Users\\[^\s'\":]+"),
+    # A user name may contain spaces ("John Smith"). The optional group takes up
+    # to three space-separated words as the name segment, but only when a path
+    # separator follows it, so ordinary prose after a bare "/home/alice" is kept.
+    re.compile(r"/(?:home|Users|root)/(?:[^\s/\\'\":]+(?: [^\s/\\'\":]+){1,2}(?=[/\\]))?[^\s'\":]+"),
+    re.compile(r"[A-Za-z]:\\Users\\(?:[^\s/\\'\":]+(?: [^\s/\\'\":]+){1,2}(?=[/\\]))?[^\s'\":]+"),
     re.compile(r"\\\\[^\\\s'\":]+\\[^\s'\":]+"),  # UNC \\server\share\...
     re.compile(r"/tmp/[^\s'\":]+"),  # nosec B108 — regex pattern matches /tmp paths for REDACTION in error messages; not an actual /tmp file write
     re.compile(r"[A-Za-z]:\\Windows\\Temp\\[^\s'\":]+"),

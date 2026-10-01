@@ -1,0 +1,107 @@
+name: Fuzz
+
+# Atheris fuzzing of the untrusted-input parsers: dataset rows and files, the
+# path sandbox, UI input validation and config parsing (see fuzz/).
+#
+# MANUAL ONLY. This workflow has no push, pull_request or schedule trigger, by
+# design (.claude/rules/github-actions.md: CI minutes are finite, and fuzzing has
+# no business running on every change). Run it with:
+#
+#   gh workflow run fuzz.yml --ref <branch> -f seconds=120 -f runs=300000
+#
+# The property code itself runs on every platform on every PR through
+# tests/test_fuzz_harnesses.py (no Atheris needed); this workflow is the part that
+# actually mutates inputs with libFuzzer.
+#
+# requirements/fuzz.txt is hash-pinned. Regenerate it from requirements/fuzz.in:
+#   uvx --from uv@latest uv pip compile --generate-hashes --python-version 3.12 \
+#     --python-platform x86_64-unknown-linux-gnu requirements/fuzz.in -o requirements/fuzz.txt
+# Atheris 3.1 ships Linux wheels for CPython 3.12-3.14 only, hence 3.12 here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Maximum executions per harness"
+        type: string
+        default: "300000"
+      seconds:
+        description: "Wall-clock budget per harness, in seconds"
+        type: string
+        default: "120"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Atheris harnesses
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the fuzzing dependencies (hash-pinned)
+        run: pip install --require-hashes -r requirements/fuzz.txt
+
+      - name: Fuzz each harness
+        env:
+          RUNS: ${{ inputs.runs }}
+          SECONDS_PER_HARNESS: ${{ inputs.seconds }}
+        run: |
+          set -u
+          for v in "$RUNS" "$SECONDS_PER_HARNESS"; do
+            case "$v" in ''|*[!0-9]*) echo "::error::runs and seconds must be whole numbers"; exit 2 ;; esac
+          done
+
+          mkdir -p crashes logs
+          failed=0
+          {
+            echo "| harness | executions | seconds | result |"
+            echo "| --- | ---: | ---: | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for h in datasets dataset_files paths ui_input config; do
+            mkdir -p "work/$h"
+            echo "::group::fuzz_$h"
+            python "fuzz/fuzz_$h.py" \
+              -atheris_runs="$RUNS" -max_total_time="$SECONDS_PER_HARNESS" \
+              -max_len=2048 -timeout=20 \
+              -artifact_prefix="crashes/$h-" \
+              "work/$h" "fuzz/corpus/$h" 2>&1 | tee "logs/$h.txt"
+            status=${PIPESTATUS[0]}
+            echo "::endgroup::"
+
+            # libFuzzer ends with "Done N in S second(s)" (or "Done N runs in ...");
+            # a crash ends early, and the harness prints its own count instead.
+            execs=$(sed -n 's/^Done \([0-9][0-9]*\).* in \([0-9][0-9]*\) second.*/\1/p' "logs/$h.txt" | tail -1)
+            secs=$(sed -n 's/^Done \([0-9][0-9]*\).* in \([0-9][0-9]*\) second.*/\2/p' "logs/$h.txt" | tail -1)
+            if [ -z "$execs" ]; then execs=$(sed -n 's/^bp-fuzz: executions=//p' "logs/$h.txt" | tail -1); fi
+            if [ "$status" -eq 0 ]; then result="clean"; else result="FOUND AN ISSUE (exit $status)"; failed=1; fi
+            echo "| fuzz_$h | ${execs:-?} | ${secs:-?} | $result |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          exit $failed
+
+      - name: Upload crash reproducers and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fuzz-results
+          path: |
+            crashes/
+            logs/
+          if-no-files-found: ignore
+          retention-days: 14

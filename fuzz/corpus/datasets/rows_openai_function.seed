@@ -1,0 +1,1 @@
+{"messages": [{"role": "assistant", "content": null, "function_call": {"name": "f", "arguments": "{}"}}]}

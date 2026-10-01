@@ -12,6 +12,7 @@ Mock boundary: ``unsloth`` (CUDA-only optional library; a fake module whose
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from unittest.mock import patch
@@ -23,7 +24,7 @@ pytest.importorskip("torch")
 from backpropagate import trainer as T  # noqa: E402
 from backpropagate.exceptions import ModelLoadError  # noqa: E402
 from backpropagate.trainer import Trainer  # noqa: E402
-from tests.helpers.tiny_models import tiny_llama, tiny_tokenizer  # noqa: E402
+from tests.helpers.tiny_models import sentences, tiny_llama, tiny_tokenizer  # noqa: E402
 
 
 class _FakeFastLanguageModel:
@@ -104,3 +105,62 @@ def test_non_modelload_unsloth_failures_are_still_wrapped_and_classified(unsloth
             _trainer().load_model()
     assert ei.value.cause_category == "unknown"
     assert isinstance(ei.value.__cause__, KeyError)
+
+
+# ---------------------------------------------------------------------------
+# Single-run resume_from used to hand HF the run's OUTPUT dir
+# ---------------------------------------------------------------------------
+
+def test_resolve_resume_checkpoint_prefers_a_checkpoint_itself_then_newest_child(tmp_path):
+    root = tmp_path / "out"
+    for d in ("checkpoint-2", "checkpoint-10", "checkpoint-9"):
+        (root / d).mkdir(parents=True)
+        (root / d / "trainer_state.json").write_text("{}")
+    assert T._resolve_resume_checkpoint(str(root)).endswith("checkpoint-10")  # numeric, not lexical
+    assert T._resolve_resume_checkpoint(str(root / "checkpoint-2")).endswith("checkpoint-2")
+
+
+def test_resolve_resume_checkpoint_returns_none_when_nothing_to_resume(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert T._resolve_resume_checkpoint(str(empty)) is None
+    f = tmp_path / "a_file"
+    f.write_text("x")
+    assert T._resolve_resume_checkpoint(str(f)) is None
+
+
+def test_single_run_resume_continues_from_the_latest_checkpoint(tmp_path, monkeypatch):
+    """Real CPU LoRA training: train 3 steps, then resume to step 5.
+
+    Before the fix the run history's output-dir path went straight to
+    ``Trainer.train(resume_from_checkpoint=<output_dir>)`` and HF raised
+    ``FileNotFoundError: <output_dir>/trainer_state.json``, so every
+    single-run ``resume_from`` of a finished run failed.
+    """
+    monkeypatch.setenv("UNSLOTH_AUTO_INSTALL", "0")
+    monkeypatch.setattr(T.settings.training, "save_steps", 2)
+    monkeypatch.setattr(T.settings.training, "logging_steps", 1)
+    model_dir = tmp_path / "m"
+    tiny_llama(layers=2).save_pretrained(model_dir)
+    tiny_tokenizer().save_pretrained(model_dir)
+    data = tmp_path / "d.jsonl"
+    with open(data, "w", encoding="utf-8") as fh:
+        for s in sentences(16):
+            fh.write(json.dumps({"messages": [{"role": "user", "content": s},
+                                              {"role": "assistant", "content": s}]}) + "\n")
+    kw = {
+        "model": str(model_dir), "use_unsloth": False, "load_in_4bit": False, "batch_size": 2,
+        "max_seq_length": 32, "output_dir": str(tmp_path / "out"), "learning_rate": 1e-3,
+        "packing": False, "report_to": "none", "lora_r": 4,
+    }
+    first = Trainer(**kw).train(str(data), steps=3)
+    assert len(first.loss_history) == 3
+
+    resumed = Trainer(**kw).train(str(data), steps=5, resume_from=first.run_id)
+    assert resumed.run_id == first.run_id
+    # HF continued from checkpoint-3: its trainer_state carried the first 3 losses
+    # and only 2 new steps ran, so the history grows 3 -> 5 with the old prefix intact.
+    assert len(resumed.loss_history) == 5
+    assert resumed.loss_history[:3] == first.loss_history
+    state = json.loads((tmp_path / "out" / "checkpoint-5" / "trainer_state.json").read_text())
+    assert state["global_step"] == 5

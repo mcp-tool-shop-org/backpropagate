@@ -51,7 +51,7 @@ class TestHostNonLoopbackRefuseToStart:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = _make_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -90,7 +90,7 @@ class TestHostNonLoopbackRefuseToStart:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = _make_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -116,7 +116,7 @@ class TestHostNonLoopbackRefuseToStart:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = _make_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -157,7 +157,7 @@ class TestHostNonLoopbackRefuseToStart:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = _make_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,

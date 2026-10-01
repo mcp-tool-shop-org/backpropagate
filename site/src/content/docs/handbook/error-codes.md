@@ -20,7 +20,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 
 | Code | Raised when | Fix |
 |------|-------------|-----|
-| `INPUT_VALIDATION_FAILED` | A user-supplied argument or flag failed validation (e.g. `steps=0`, malformed `--auth`). | Re-read the suggestion in stderr; fix the offending argument. |
+| `INPUT_VALIDATION_FAILED` | A user-supplied argument or flag failed validation (e.g. `steps=0`, malformed `--auth`), or the `pass_rate` metric was requested without the code-execution opt-in. | Re-read the suggestion in stderr; fix the offending argument. For `pass_rate`, add `--allow-code-exec` (or `BACKPROPAGATE_ALLOW_CODE_EVAL=1`) only if you accept running the model's code on this machine. |
 | `INPUT_AUTH_REQUIRED` | An operation required `--auth` credentials but they were not supplied. | Pass `--auth user:password` on the CLI, or `--auth-file <path>` to keep the password out of shell history. (`backprop ui` ignores an ambient `BACKPROPAGATE_UI_AUTH`.) See [handbook/security.md](/backpropagate/handbook/security/) for the full auth contract. |
 | `INPUT_AUTH_INVALID_SHAPE` | The credentials passed to the UI launcher are not a `username:password` tuple. | Use the format `--auth username:password` (single colon, no spaces). |
 | `INPUT_UNSAFE_CHAT_TEMPLATE` | The model's tokenizer names one of its chat templates with a path, such as `../x`. Saving that tokenizer would write a file outside the output directory (a transformers bug before 5.10, PYSEC-2026-3929). The load is refused before anything is saved. | Don't use this model's tokenizer. Template names must be plain names like `default` or `tool_use`; a repository that ships path-like names is malformed or hostile. |

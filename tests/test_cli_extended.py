@@ -861,7 +861,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_USER_ERROR, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -892,7 +892,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -920,7 +920,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -948,7 +948,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7862,
@@ -989,7 +989,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1015,7 +1015,7 @@ class TestCmdUI:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1042,7 +1042,7 @@ class TestCmdUI:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1063,7 +1063,7 @@ class TestCmdUI:
         """Without --auth or --share, cmd_ui proceeds and launches Reflex."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1083,7 +1083,7 @@ class TestCmdUI:
         """KeyboardInterrupt during UI exits cleanly."""
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run", side_effect=KeyboardInterrupt()):
+        with patch("backpropagate.cli._run_reflex", side_effect=KeyboardInterrupt()):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -1104,7 +1104,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run", side_effect=RuntimeError("Port in use")):
+        with patch("backpropagate.cli._run_reflex", side_effect=RuntimeError("Port in use")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -1125,7 +1125,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run", side_effect=ValueError("Test error")):
+        with patch("backpropagate.cli._run_reflex", side_effect=ValueError("Test error")):
             args = argparse.Namespace(
                 port=7860,
                 share=False,
@@ -1163,7 +1163,7 @@ class TestCmdUI:
 
         monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1188,7 +1188,7 @@ class TestCmdUI:
         """
         from backpropagate.cli import EXIT_OK, cmd_ui
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(MagicMock(), "https://abc.trycloudflare.com"),
         ):
@@ -1227,7 +1227,7 @@ class TestCmdUI:
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "false")
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1254,7 +1254,7 @@ class TestCmdUI:
 
         monkeypatch.setenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", "true")
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1275,7 +1275,7 @@ class TestCmdUI:
 
         monkeypatch.delenv("BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE", raising=False)
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1303,7 +1303,7 @@ class TestCmdUI:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._find_port_in_use", return_value=7860
         ):
             mock_run.return_value = self._mock_subprocess_result(0)
@@ -1336,7 +1336,7 @@ class TestCmdUI:
         from backpropagate.cli import cmd_ui
         from backpropagate.exceptions import BackpropagateError
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel"
         ) as mock_spawn, patch(
             "backpropagate.cli._find_port_in_use", return_value=7861
@@ -1505,7 +1505,7 @@ class TestCloudflaredShutdown:
 
         cloudflared_mock = self._mock_cloudflared_proc()
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
         ):
@@ -1539,7 +1539,7 @@ class TestCloudflaredShutdown:
 
         cloudflared_mock = self._mock_cloudflared_proc()
 
-        with patch("backpropagate.cli.subprocess.run", side_effect=KeyboardInterrupt), patch(
+        with patch("backpropagate.cli._run_reflex", side_effect=KeyboardInterrupt), patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
         ):
@@ -1571,7 +1571,7 @@ class TestCloudflaredShutdown:
         cloudflared_mock = self._mock_cloudflared_proc()
 
         with patch(
-            "backpropagate.cli.subprocess.run",
+            "backpropagate.cli._run_reflex",
             side_effect=RuntimeError("port in use"),
         ), patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
@@ -1607,7 +1607,7 @@ class TestCloudflaredShutdown:
             wait_raises=subprocess.TimeoutExpired(cmd="cloudflared", timeout=5),
         )
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
         ):
@@ -1642,7 +1642,7 @@ class TestCloudflaredShutdown:
         cloudflared_mock = self._mock_cloudflared_proc()
         cloudflared_mock.terminate.side_effect = OSError("already dead")
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(cloudflared_mock, "https://abc.trycloudflare.com"),
         ):
@@ -1677,7 +1677,7 @@ class TestCloudflaredShutdown:
         # this contract (a regression that called the spawn helper
         # unconditionally would burn an extra subprocess on every
         # non-share launch).
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
         ) as mock_spawn:
             mock_run.return_value = self._mock_subprocess_result(0)
@@ -1929,7 +1929,7 @@ class TestCmdUiEnforcementFlipped:
             "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
         )
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -1946,7 +1946,7 @@ class TestCmdUiEnforcementFlipped:
             mock_run.assert_called_once()
 
             # The credentials must reach the Reflex child via env-var.
-            # subprocess.run is called as run(cmd, env=..., cwd=...).
+            # _run_reflex is called as run(cmd, env=..., cwd=...).
             kwargs = mock_run.call_args.kwargs
             child_env = kwargs.get("env", {})
             # The middleware gets a salted scrypt verifier (never the plaintext).
@@ -1969,7 +1969,7 @@ class TestCmdUiEnforcementFlipped:
             "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
         )
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run:
+        with patch("backpropagate.cli._run_reflex") as mock_run:
             mock_run.return_value = self._mock_subprocess_result(0)
             args = argparse.Namespace(
                 port=7860,
@@ -2003,7 +2003,7 @@ class TestCmdUiEnforcementFlipped:
             "backpropagate.ui_app.auth.ENFORCEMENT_AVAILABLE", True
         )
 
-        with patch("backpropagate.cli.subprocess.run") as mock_run, patch(
+        with patch("backpropagate.cli._run_reflex") as mock_run, patch(
             "backpropagate.cli._spawn_cloudflared_tunnel",
             return_value=(MagicMock(), "https://abc.trycloudflare.com"),
         ):

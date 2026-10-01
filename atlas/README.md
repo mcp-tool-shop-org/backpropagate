@@ -1,19 +1,24 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit 2db7f10 by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit 4d93400 by Atlas 1.24.0.
 
 ## What this is
 
-13 parts, mostly Python (217 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+13 parts, mostly Python (221 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (f1eaf8a)
+## What changed since 2026-10-01 (2db7f10)
 
-Nothing structural changed since 2026-10-01; 2 files added and 29 changed content.
+- CI now also checks docker/fetch_bun.py.
+- Publish now also checks docker/fetch_bun.py.
+- .dockerignore is now read by tests/test_container_ui.py.
+- .gitignore is now read by tests/test_container_ui.py.
+- docker/fetch_bun.py is new and belongs to no part, so atlas check fails on it against the previous map.
+- 4 files added, 1 removed and 15 changed content, across 4 parts.
 
 ## What comes in
 
-1. **CI.** On a pull request to main; on a push to main touching 11 paths; or by hand. Runs backpropagate/cli.py, scripts/ci_install_locked.sh, tests/ and 1 more; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, pyproject.toml and 1 more into an image.
-2. **Publish.** When a release is published; when the workflow Release completes; or by hand. Runs backpropagate/cli.py; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, pyproject.toml and 1 more into an image.
+1. **CI.** On a pull request to main; on a push to main touching 11 paths; or by hand. Runs backpropagate/cli.py, scripts/ci_install_locked.sh, tests/ and 1 more; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, docker/fetch_bun.py and 2 more into an image.
+2. **Publish.** When a release is published; when the workflow Release completes; or by hand. Runs backpropagate/cli.py; checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt; packs LICENSE, README.md, docker/fetch_bun.py and 2 more into an image.
 3. **Release.** When a tag matching `v*` is pushed; or by hand. Runs scripts/ci_install_locked.sh; checks pyproject.toml.
 4. **Nightly Train Smoke.** On a schedule (`0 4 * * 1`), Monday at 04:00 UTC; or by hand. Runs scripts/nightly_train_smoke.py.
 5. **Doc Drift Check.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs scripts/check_doc_drift.py.
@@ -28,7 +33,7 @@ Nothing structural changed since 2026-10-01; 2 files added and 29 changed conten
 
 ## What happens through CI
 
-1. The workflow runs backpropagate/cli.py in backpropagate, verify.sh in the repository root, scripts/ci_install_locked.sh in scripts and tests/ in tests; it checks backpropagate/ in backpropagate and requirements/build-backend.txt and requirements/uv.txt in requirements; it packs 4 files in the repository root into an image.
+1. The workflow runs backpropagate/cli.py in backpropagate, verify.sh in the repository root, scripts/ci_install_locked.sh in scripts and tests/ in tests; it checks backpropagate/ in backpropagate and requirements/build-backend.txt and requirements/uv.txt in requirements; it packs 4 files in the repository root and docker/fetch_bun.py into an image.
    1. Inside backpropagate/cli.py, `main` does, in order: `logging_config.py` (5 steps).
 2. That reaches fuzz (6 files).
 3. It uploads coverage to Codecov.
@@ -40,7 +45,7 @@ CI writes nothing this map can see.
 
 ## The other doors
 
-**Publish** runs backpropagate/cli.py, checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt, packs LICENSE, README.md, pyproject.toml and 1 more into an image, publishes to PyPI and a container image, and uploads dist/* and files named at run time to the release.
+**Publish** runs backpropagate/cli.py, checks backpropagate/, requirements/build-backend.txt and requirements/uv.txt, packs LICENSE, README.md, docker/fetch_bun.py and 2 more into an image, publishes to PyPI and a container image, and uploads dist/* and files named at run time to the release.
 
 **Release** runs scripts/ci_install_locked.sh, checks pyproject.toml, publishes to npm, creates a GitHub release, and uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release.
 
@@ -118,5 +123,6 @@ Read those in order to follow one pull request end to end.
 - 1 read goes to the directory the command is run in, not to this repository.
 - 1 read goes to the home directory (.cache/), not to this repository.
 - There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.
+- 1 file belongs to no part: docker/fetch_bun.py.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

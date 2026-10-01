@@ -70,7 +70,7 @@
       "confidence": "full",
       "highWater": 0.328604,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 96,
+      "qualifyingSourceCommits": 97,
       "rebaseline": null
     },
     {
@@ -220,7 +220,7 @@
       "confidence": "full",
       "highWater": 0,
       "name": "tests",
-      "qualifyingSourceCommits": 77,
+      "qualifyingSourceCommits": 79,
       "rebaseline": null
     }
   ],
@@ -238,8 +238,8 @@
         "path": ".commit-msg-tmp"
       },
       {
-        "commits": 3,
-        "lines": 43,
+        "commits": 4,
+        "lines": 50,
         "path": ".dockerignore"
       },
       {
@@ -338,8 +338,8 @@
         "path": ".github/workflows/scorecard.yml"
       },
       {
-        "commits": 6,
-        "lines": 13,
+        "commits": 7,
+        "lines": 17,
         "path": ".gitignore"
       },
       {
@@ -358,8 +358,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 73,
-        "lines": 1416,
+        "commits": 74,
+        "lines": 1430,
         "path": "CHANGELOG.md"
       },
       {
@@ -383,8 +383,8 @@
         "path": "CONTRIBUTING.md"
       },
       {
-        "commits": 9,
-        "lines": 74,
+        "commits": 11,
+        "lines": 109,
         "path": "Dockerfile"
       },
       {
@@ -418,8 +418,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 49,
-        "lines": 1813,
+        "commits": 50,
+        "lines": 1815,
         "path": "README.md"
       },
       {
@@ -478,8 +478,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 11,
-        "lines": 467,
+        "commits": 12,
+        "lines": 479,
         "path": "atlas/README.md"
       },
       {
@@ -488,18 +488,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 11,
-        "lines": 1903,
+        "commits": 12,
+        "lines": 1936,
         "path": "atlas/page.json"
       },
       {
-        "commits": 11,
-        "lines": 10420,
+        "commits": 12,
+        "lines": 10580,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 11,
-        "lines": 39837,
+        "commits": 12,
+        "lines": 40037,
         "path": "atlas/structure.json"
       },
       {
@@ -748,8 +748,8 @@
         "path": "backpropagate/offload_engine.py"
       },
       {
-        "commits": 11,
-        "lines": 327,
+        "commits": 12,
+        "lines": 331,
         "path": "backpropagate/rxconfig.py"
       },
       {
@@ -953,9 +953,14 @@
         "path": "codecov.yml"
       },
       {
-        "commits": 2,
-        "lines": 136,
+        "commits": 3,
+        "lines": 220,
         "path": "compose.yaml"
+      },
+      {
+        "commits": 1,
+        "lines": 52,
+        "path": "docker/fetch_bun.py"
       },
       {
         "commits": 2,
@@ -3328,6 +3333,11 @@
         "path": "tests/test_config_legacy_aliases.py"
       },
       {
+        "commits": 1,
+        "lines": 141,
+        "path": "tests/test_container_ui.py"
+      },
+      {
         "commits": 9,
         "lines": 554,
         "path": "tests/test_crash_robustness.py"
@@ -3828,8 +3838,8 @@
         "path": "tests/test_ui_cov_state_runs.py"
       },
       {
-        "commits": 1,
-        "lines": 442,
+        "commits": 3,
+        "lines": 474,
         "path": "tests/test_ui_e2e_real_reflex.py"
       },
       {
@@ -3913,9 +3923,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-01T14:27:02.050Z",
+  "generatedAt": "2026-10-01T15:43:51.818Z",
   "generatedFrom": {
-    "commit": "2db7f1062aeaf851bcfe9b6ff4d6b385c82ed011"
+    "commit": "4d93400ced5923e962038ba5e72c64cfa7e1b47a"
   },
   "pairs": [
     {
@@ -4104,16 +4114,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-01T09:59:18-04:00",
-    "inScopeFiles": 713,
+    "headDate": "2026-10-01T10:39:49-04:00",
+    "inScopeFiles": 719,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 198,
+    "qualifyingCommits": 201,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-04T13:59:18.000Z",
+    "since": "2026-04-04T14:39:49.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

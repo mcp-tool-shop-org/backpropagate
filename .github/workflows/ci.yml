@@ -334,6 +334,22 @@ jobs:
       # for the long-tail tests that dominate wall-clock). The tests
       # agent owns the per-test `serial` / `xdist_group` marker audit;
       # this YAML is the consumer.
+      # Some hosted Windows VMs advertise CPU features (AVX-512 BF16 / AMX) in
+      # CPUID that the guest OS does not enable, and torch's CPU kernels pick
+      # them anyway: tests/test_block_engine.py::TestPrecision::
+      # test_fp32_block_trains_under_bf16_autocast then dies with "Illegal
+      # instruction" (exit 132). It is intermittent across runs of the same
+      # commit (it hit main, PR and fuzz branches alike, on torch 2.10 and
+      # 2.12), so it follows the runner hardware, not the code. Cap the ISA
+      # that ATen and oneDNN dispatch to on Windows; results are unchanged,
+      # only the kernel choice is.
+      - name: Cap CPU instruction set (Windows runners)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "ATEN_CPU_CAPABILITY=avx2" >> "$GITHUB_ENV"
+          echo "ONEDNN_MAX_CPU_ISA=AVX2" >> "$GITHUB_ENV"
+
       - name: Run tests
         if: matrix.python-version != '3.11'
         shell: bash

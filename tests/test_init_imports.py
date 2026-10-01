@@ -474,18 +474,19 @@ class TestDeprecatedLazyLoadingImports:
 
     In v1.0.x the package exposed lazy-loaded ``launch / create_backpropagate_theme /
     get_theme_info / get_css`` attributes. v1.1.0 migrated the Web UI from
-    Gradio to Reflex and the function-call surface is gone; accessing any of
-    those names raises ImportError with a message pointing at the CLI.
+    Gradio to Reflex and the function-call surface is gone. Through v1.7 the
+    names raised ImportError (a grace period); since v1.8.0 they raise
+    AttributeError, still with a message pointing at the replacement.
     """
 
     @pytest.mark.parametrize(
         "name",
         ["launch", "create_backpropagate_theme", "get_theme_info", "get_css"],
     )
-    def test_removed_attribute_raises_import_error(self, name):
+    def test_removed_attribute_raises_attribute_error_with_hint(self, name):
         import backpropagate
 
-        with pytest.raises(ImportError) as exc_info:
+        with pytest.raises(AttributeError) as exc_info:
             _ = getattr(backpropagate, name)
         error_msg = str(exc_info.value)
         # Each removed name should mention v1.1.0 OR the CLI replacement.
@@ -524,10 +525,10 @@ class TestGetAttrForMissingFeatures:
     """Tests for helpful error messages on missing features."""
 
     def test_missing_feature_error_message(self):
-        """v1.1.0+: accessing removed Gradio launch path raises ImportError with v1.1.0 hint."""
+        """Accessing the removed Gradio launch path raises AttributeError with the CLI hint."""
         import backpropagate
 
-        with pytest.raises(ImportError) as exc_info:
+        with pytest.raises(AttributeError) as exc_info:
             _ = backpropagate.launch
         error_msg = str(exc_info.value)
         # Should mention v1.1.0 or Reflex or the CLI replacement.

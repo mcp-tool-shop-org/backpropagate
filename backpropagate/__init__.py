@@ -343,29 +343,10 @@ except PackageNotFoundError:
 # we keep ``__getattr__`` so callers that import the old names get a clear
 # deprecation error pointing at the CLI.
 
-# BRIDGE-B-015 (Stage C): each entry now carries (message, removed_in)
-# so the warning + ImportError can name the version where the hard removal
-# will happen. The deprecation handler emits a DeprecationWarning BEFORE
-# raising ImportError so code wrapped in ``try: ... except ImportError:``
-# still sees the warning via stderr (the default DeprecationWarning filter
-# behavior is "default once per location" which gives operators a single
-# heads-up without spamming long-running notebooks). Industry convention
-# per PEP 562 examples and numpy / pandas precedent.
-#
-# CLI-A-005 (v1.4 Wave A2): the BRIDGE-B-015 note said the shim would
-# "become a hard AttributeError in v1.4", but at v1.4.0 the shim still
-# raises ImportError (the transition was deferred — the back-compat
-# contract callers wrap as ``except ImportError`` was kept one more cycle).
-# Bumped to the next planned removal (v1.6) so the warning text no longer
-# names a version ahead of the current release. The actual swap to
-# AttributeError happens in __getattr__ at the marker's cut, not here.
-# (History: the marker was v1.4 → v1.5 → v1.6 → v1.7; each cycle the ImportError
-# grace period was extended one more minor release rather than hard-breaking
-# callers. v1.6 shipped the gradio purge + the gradio-named-alias removal but
-# kept these v1.1.0-removed attrs on the ImportError grace one more cycle.)
-_REMOVED_IN_VERSION = "v1.8"
-
-_DEPRECATED_UI_ATTRS = {
+# v1.8.0: the cut every release since v1.1.0 announced ("this shim will become a
+# hard AttributeError in v1.8"). The Gradio-era names raise AttributeError like
+# any other missing attribute, and the message still carries the migration hint.
+_REMOVED_UI_ATTRS = {
     "launch": (
         "backpropagate.launch() is removed in v1.1.0. The Web UI migrated "
         "from Gradio to Reflex and is now subprocess-launched via the CLI. "
@@ -387,28 +368,11 @@ _DEPRECATED_UI_ATTRS = {
 
 
 def __getattr__(name: str) -> Any:
-    """
-    Lazy loading for optional features with helpful error messages.
-
-    BRIDGE-B-015 (Stage C): when a user touches a removed Gradio-era
-    attribute we (1) emit a DeprecationWarning naming the future removal
-    version (currently ``v1.7`` — see CLI-A-005) so callers wrapping the
-    access in ``try: ... except ImportError: pass`` still see the heads-up
-    in stderr, then (2) raise ``ImportError`` with the migration hint so the
-    existing contract is preserved. At the v1.7 cut the ImportError can be
-    swapped for a plain AttributeError to match the rest of
-    ``__getattr__``'s contract.
-    """
-    if name in _DEPRECATED_UI_ATTRS:
-        import warnings as _warnings
-        base_msg = _DEPRECATED_UI_ATTRS[name]
-        full_msg = (
-            f"{base_msg} This shim will become a hard AttributeError in "
-            f"{_REMOVED_IN_VERSION}."
+    """Raise AttributeError for a missing name; removed Gradio-era names get a migration hint."""
+    if name in _REMOVED_UI_ATTRS:
+        raise AttributeError(
+            f"module 'backpropagate' has no attribute '{name}'. {_REMOVED_UI_ATTRS[name]}"
         )
-        _warnings.warn(full_msg, DeprecationWarning, stacklevel=2)
-        raise ImportError(full_msg)
-
     raise AttributeError(f"module 'backpropagate' has no attribute '{name}'")
 
 

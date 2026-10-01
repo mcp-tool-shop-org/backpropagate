@@ -112,6 +112,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - deeply nested JSON gives `INPUT_DATASET_PARSE_FAILED` from the streaming
     loader instead of `RecursionError`.
 
+### Removed
+
+- **The Gradio-era names `backpropagate.launch`, `create_backpropagate_theme`,
+  `get_theme_info` and `get_css` now raise `AttributeError`.** They were
+  removed in v1.1.0 and kept raising `ImportError` with a `DeprecationWarning`
+  as a grace period; every release since said the grace would end in v1.8. The
+  message still names the replacement (`backprop ui --port 7862`, or the
+  `backpropagate.ui_theme` tokens). Code that caught `ImportError` around these
+  names should catch `AttributeError`.
+
 ### Changed
 
 - The lock (what CI and `uv sync` install) moves to torch 2.12.1, unsloth

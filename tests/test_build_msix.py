@@ -9,6 +9,8 @@ and needs the 5090 for the torch gate.
 from __future__ import annotations
 
 import importlib.util
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -133,6 +135,14 @@ class TestManifest:
 
         ET.fromstring(mod.render_manifest("1.8.2.0"))  # raises on malformed
 
+    def test_min_os_version_supports_uap10_parameters(self, mod):
+        m = re.search(r'MinVersion="([\d.]+)"', mod.render_manifest("1.8.2.0"))
+        assert m, "manifest must pin a MinVersion"
+        parts = tuple(int(p) for p in m.group(1).split("."))
+        # uap10:Parameters needs Windows 10 2004 (19041); on older builds it is
+        # silently ignored and the Start tile would open a bare python REPL.
+        assert parts >= (10, 0, 19041, 0)
+
 
 class TestEmbeddedTemplates:
     def test_pth_enables_site(self, mod):
@@ -152,6 +162,14 @@ class TestEmbeddedTemplates:
         assert 'Path.Combine(dir, "python", "python.exe")' in src
         assert "-m backpropagate" in src
         assert "Quote(" in src
+
+    def test_launcher_cs_swallows_ctrlc_for_python_teardown(self, mod):
+        src = mod._LAUNCHER_CS
+        # Ctrl+C reaches python on the same console (its own teardown runs);
+        # the launcher keeps waiting and returns python's exit code.
+        assert "Console.CancelKeyPress" in src
+        assert "e.Cancel = true" in src
+        assert "return p.ExitCode" in src
 
     def test_torch_gate_requires_cuda_13_and_a_real_op(self, mod):
         script = mod.torch_gate_script()
@@ -196,3 +214,60 @@ class TestPayloadProducerBudget:
     def test_model_constants_reasonable(self, prod):
         assert 20 <= prod._U_MAX <= 30
         assert prod.RUNTIME_PREFIX_MODEL == 81
+
+
+class TestSideloadSign:
+    """sideload_sign must destroy the signing key after use and print exact,
+    thumbprint-bearing cleanup commands (the agent never runs trust-store
+    commands itself - a human admin runs them)."""
+
+    THUMB = "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678"
+
+    def _fake_run(self, calls, ok=True):
+        def fake(cmd, **kwargs):
+            calls.append(list(cmd))
+            script = cmd[-1]
+            stdout = ""
+            if "New-SelfSignedCertificate" in script:
+                if ok:
+                    stdout = self.THUMB + "\n"
+                pfx = re.search(r"-FilePath '([^']+\.pfx)'", script).group(1)
+                cer = re.search(r"-FilePath '([^']+\.cer)'", script).group(1)
+                Path(pfx).write_bytes(b"PRIVATE KEY MATERIAL")
+                Path(cer).write_bytes(b"CERT")
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        return fake
+
+    def test_key_destroyed_and_thumbprint_reported(self, mod, tmp_path, monkeypatch, capsys):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(mod.shutil, "which", lambda name: "pwsh")
+        monkeypatch.setattr(mod, "_find_sdk_tool", lambda name: Path("signtool.exe"))
+        monkeypatch.setattr(mod, "_run", lambda cmd: calls.append(list(cmd)))
+        monkeypatch.setattr(mod.subprocess, "run", self._fake_run(calls))
+        msix = tmp_path / "backpropagate_1.8.2.0_x64.msix"
+        msix.write_bytes(b"msix")
+
+        mod.sideload_sign(msix)
+
+        cert_dir = tmp_path / "sideload-cert"
+        assert not (cert_dir / "backpropagate-sideload.pfx").exists()  # key destroyed
+        cer = cert_dir / "backpropagate-sideload.cer"
+        assert cer.read_bytes() == b"CERT"  # public cert kept
+        removals = [c for c in calls if "Remove-Item 'Cert:" in c[-1]]
+        assert len(removals) == 1
+        assert f"My\\{self.THUMB}" in removals[0][-1] and "-DeleteKey" in removals[0][-1]
+        out = capsys.readouterr().out
+        assert self.THUMB in out
+        assert f"certutil -delstore TrustedPeople {self.THUMB}" in out
+        assert f'Remove-Item "{cer}"' in out
+        assert "private" in out and "deleted" in out
+
+    def test_missing_thumbprint_refuses(self, mod, tmp_path, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(mod.shutil, "which", lambda name: "pwsh")
+        monkeypatch.setattr(mod.subprocess, "run", self._fake_run(calls, ok=False))
+        msix = tmp_path / "x.msix"
+        msix.write_bytes(b"msix")
+        with pytest.raises(RuntimeError, match="thumbprint"):
+            mod.sideload_sign(msix)

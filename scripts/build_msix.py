@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -135,6 +136,11 @@ class BackpropLauncher {
             Console.Error.WriteLine("backpropagate: packaged python not found at " + python);
             return 1;
         }
+        // Ctrl+C is delivered to every process attached to this console. Swallow
+        // it here so the launcher survives and keeps waiting on python, whose own
+        // Ctrl+C teardown runs; the shell prompt then returns with python's real
+        // exit code instead of reappearing mid-shutdown.
+        Console.CancelKeyPress += (s, e) => { e.Cancel = true; };
         var sb = new StringBuilder("-m backpropagate");
         foreach (var a in args) { sb.Append(' '); sb.Append(Quote(a)); }
         var psi = new ProcessStartInfo {
@@ -211,7 +217,9 @@ _MANIFEST_TEMPLATE = r"""<?xml version="1.0" encoding="utf-8"?>
   </Properties>
   <Resources><Resource Language="en-us"/></Resources>
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0"/>
+    <!-- uap10:Parameters needs Windows 10 2004 (19041); on older builds it is
+         silently ignored and the tile would open a bare python REPL -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/>
   </Dependencies>
   <Capabilities>
     <rescap:Capability Name="runFullTrust"/>
@@ -644,8 +652,13 @@ def pack(stage: Path, out_dir: Path, unsigned_name: str) -> Path:
 
 def sideload_sign(msix: Path) -> None:
     """Self-sign for LOCAL verification only. The cert subject matches the
-    Partner Center publisher so the signature validates against the manifest;
-    the cert must be imported into TrustedPeople by hand (admin)."""
+    Partner Center publisher so the signature validates against the manifest.
+    The signing key is destroyed immediately after signing (the .pfx is
+    deleted and the cert is removed from Cert:\\CurrentUser\\My with
+    -DeleteKey); only the public .cer remains, for the trust-store import
+    printed below. The trust/import commands are for a human admin to run -
+    this script never touches certificate stores beyond its own throwaway cert.
+    """
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if pwsh is None:
         raise RuntimeError("no pwsh/powershell found for self-signing")
@@ -653,25 +666,47 @@ def sideload_sign(msix: Path) -> None:
     cert_dir.mkdir(exist_ok=True)
     pfx = cert_dir / "backpropagate-sideload.pfx"
     cer = cert_dir / "backpropagate-sideload.cer"
-    password = "sideload-test"  # nosec B105 — throwaway password for the local self-signed test cert, not a shipped secret
-    script = (
+    password = "sideload-test"  # nosec B105 - throwaway password for the local self-signed test cert, not a shipped secret
+    create = (
         "$p = ConvertTo-SecureString -String '" + password + "' -Force -AsPlainText; "
         f"$c = New-SelfSignedCertificate -Type Custom -Subject '{IDENTITY_PUBLISHER}' "
         "-KeyUsage DigitalSignature -FriendlyName 'backpropagate sideload test' "
         "-CertStoreLocation Cert:\\CurrentUser\\My "
         "-TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3'); "
         f"Export-PfxCertificate -Cert $c -FilePath '{pfx}' -Password $p | Out-Null; "
-        f"Export-Certificate -Cert $c -FilePath '{cer}' | Out-Null"
+        f"Export-Certificate -Cert $c -FilePath '{cer}' | Out-Null; "
+        "Write-Output $c.Thumbprint"
     )
-    _run([pwsh, "-NoProfile", "-Command", script])
+    created = subprocess.run(  # nosec B603 - fixed internal argv
+        [pwsh, "-NoProfile", "-Command", create], check=True, capture_output=True, text=True
+    )
+    thumbprints = re.findall(r"\b[0-9A-Fa-f]{40}\b", created.stdout)
+    if not thumbprints:
+        raise RuntimeError(
+            "could not read the self-signed cert thumbprint from pwsh output: "
+            f"{created.stdout!r}"
+        )
+    thumbprint = thumbprints[-1].upper()
     signtool = _find_sdk_tool("signtool.exe")
     _run([str(signtool), "sign", "/fd", "sha256", "/a", "/f", str(pfx), "/p", password, str(msix)])
+    # Destroy the signing key: a usable key for the Store publisher CN must not
+    # remain on disk. -DeleteKey wipes the key material with the cert.
+    pfx.unlink(missing_ok=True)
+    subprocess.run(  # nosec B603 - fixed internal argv; removes only the cert created above
+        [pwsh, "-NoProfile", "-Command",
+         f"Remove-Item 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey -Force"],
+        check=True, capture_output=True, text=True,
+    )
     print(
-        "\nSIGNED FOR SIDELOAD TESTING ONLY. Trust the throwaway cert first (admin):\n"
+        f"\nSIGNED FOR SIDELOAD TESTING ONLY (throwaway cert {thumbprint}; its private\n"
+        "key was deleted right after signing and is unrecoverable).\n"
+        "Have an admin run:\n"
         f"  certutil -addstore TrustedPeople \"{cer}\"\n"
-        "  then: Add-AppxPackage \"" + str(msix) + "\"\n"
-        "  after testing: Remove-AppxPackage -Package (Get-AppxPackage *backpropagate*).PackageFullName;\n"
-        "  certutil -delstore TrustedPeople <thumbprint from the .cer>\n"
+        f"  Add-AppxPackage \"{msix}\"\n"
+        "After testing, remove every trace:\n"
+        "  Remove-AppxPackage -Package (Get-AppxPackage *backpropagate*).PackageFullName\n"
+        f"  certutil -delstore TrustedPeople {thumbprint}\n"
+        f"  Remove-Item \"{cer}\"\n"
         "The Store build is the UNSIGNED .msix -- Partner Center re-signs it.\n"
     )
 

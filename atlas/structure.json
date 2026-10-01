@@ -68,6 +68,10 @@
           "path": ".github/workflows/doc-drift.yml"
         },
         {
+          "hash": "2bc018818463c1b098dc360b255b32917113bf0a9ed09f2ea587d752ec7f1d24",
+          "path": ".github/workflows/fuzz.yml"
+        },
+        {
           "hash": "aff309948fd34d80a0bb162c8a4a55fbc91f57fa34c164ff1ac57782a49db48a",
           "path": ".github/workflows/mutmut.yml"
         },
@@ -140,7 +144,7 @@
       "externalNames": [
         "datasets"
       ],
-      "externals": 6,
+      "externals": 9,
       "files": [
         {
           "hash": "0c8cd4bcf45431e59978209e6e418a51c4da51cfd82dfb2159b1b08c02d04001",
@@ -182,7 +186,8 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/model_card.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
@@ -198,6 +203,7 @@
             "backpropagate/multi_run.py",
             "backpropagate/security.py",
             "backpropagate/slao.py",
+            "backpropagate/trainer.py",
             "backpropagate/ui_security.py"
           ],
           "path": "backpropagate/__init__.py"
@@ -1724,6 +1730,7 @@
             "backpropagate/logging_config.py",
             "backpropagate/multi_run.py",
             "backpropagate/security.py",
+            "backpropagate/trainer.py",
             "backpropagate/ui_app/auth.py",
             "backpropagate/ui_security.py"
           ],
@@ -1758,6 +1765,36 @@
                   "name": "get_logger",
                   "target": {
                     "file": "backpropagate/logging_config.py"
+                  }
+                },
+                {
+                  "line": 883,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 901,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 911,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 922,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -2256,6 +2293,36 @@
                   }
                 },
                 {
+                  "line": 3964,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3970,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3971,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 3978,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
                   "line": 575,
                   "name": "redact_secrets",
                   "target": {
@@ -2514,6 +2581,36 @@
                   "receiver": "MultiRunTrainer",
                   "target": {
                     "file": "backpropagate/multi_run.py"
+                  }
+                },
+                {
+                  "line": 5161,
+                  "name": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5162,
+                  "name": "TrainingCallback",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5165,
+                  "name": "train",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                },
+                {
+                  "line": 5171,
+                  "name": "save",
+                  "receiver": "Trainer",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -2812,6 +2909,21 @@
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
               "name": "cmd_generate"
+            },
+            {
+              "calls": [
+                {
+                  "line": 6599,
+                  "name": "estimate_vram",
+                  "target": {
+                    "file": "backpropagate/trainer.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "cmd_estimate_vram"
             },
             {
               "calls": [
@@ -3136,7 +3248,7 @@
               "line": 2170
             }
           ],
-          "hash": "a5d2c2d4d7b668668bc7fdc6103e141a0acc3d4029dcc6b1add9af7fbcd1c1dc",
+          "hash": "e4461c4f5310418c37e75d07acfd78da2f78b077f30d6a8a95d4c982dcdfb13a",
           "importOrder": [
             "backpropagate/logging_config.py",
             "backpropagate/exceptions.py"
@@ -3533,255 +3645,275 @@
             {
               "in": "filter_by_trace_length",
               "kind": "raise",
-              "line": 1716
+              "line": 1718
             },
             {
               "in": "filter_by_trace_length",
               "kind": "raise",
-              "line": 1723
+              "line": 1725
             },
             {
               "in": "filter_by_trace_length",
               "kind": "raise",
-              "line": 1730
+              "line": 1732
             },
             {
               "in": "deduplicate_minhash",
               "kind": "except",
-              "line": 1968
+              "line": 1973
             },
             {
               "in": "deduplicate_minhash",
               "kind": "raise",
-              "line": 1969
+              "line": 1974
             },
             {
               "in": "deduplicate_minhash",
               "kind": "except",
-              "line": 2055
+              "line": 2060
             },
             {
               "in": "__init__",
               "kind": "except",
-              "line": 2203
+              "line": 2208
             },
             {
               "in": "_load_model",
               "kind": "except",
-              "line": 2216
+              "line": 2221
             },
             {
               "in": "_load_model",
               "kind": "raise",
-              "line": 2217
+              "line": 2222
             },
             {
               "in": "unload",
               "kind": "except",
-              "line": 2282
+              "line": 2287
             },
             {
               "in": "unload",
               "kind": "except",
-              "line": 2286
+              "line": 2291
             },
             {
               "in": "unload",
               "kind": "except",
-              "line": 2296
+              "line": 2301
             },
             {
               "in": "unload",
               "kind": "except",
-              "line": 2298
+              "line": 2303
             },
             {
               "in": "_score_batch",
               "kind": "except",
-              "line": 2408
+              "line": 2413
             },
             {
               "in": "filter",
               "kind": "raise",
-              "line": 2455
+              "line": 2460
             },
             {
               "in": "filter",
               "kind": "raise",
-              "line": 2473
+              "line": 2478
             },
             {
               "in": "_load",
               "kind": "raise",
-              "line": 2763
+              "line": 2768
             },
             {
               "in": "_load",
               "kind": "except",
-              "line": 2790
+              "line": 2795
             },
             {
               "in": "_load",
               "kind": "raise",
-              "line": 2798
+              "line": 2803
             },
             {
               "in": "_load",
               "kind": "except",
-              "line": 2799
+              "line": 2804
             },
             {
               "in": "_load",
               "kind": "raise",
-              "line": 2800
+              "line": 2805
             },
             {
               "in": "_load_jsonl",
               "kind": "except",
-              "line": 2836
+              "line": 2841
             },
             {
               "in": "_load_jsonl",
               "kind": "raise",
-              "line": 2853
+              "line": 2858
             },
             {
               "in": "_load_json",
               "kind": "except",
-              "line": 2917
+              "line": 2922
             },
             {
               "in": "_load_json",
               "kind": "raise",
-              "line": 2918
+              "line": 2923
             },
             {
               "in": "_records_from_df",
               "kind": "except",
-              "line": 2963
+              "line": 2968
             },
             {
               "in": "_load_parquet",
               "kind": "except",
-              "line": 2994
+              "line": 2999
             },
             {
               "in": "_load_parquet",
               "kind": "raise",
-              "line": 2995
+              "line": 3000
             },
             {
               "in": "_load_parquet",
               "kind": "except",
-              "line": 3003
+              "line": 3008
             },
             {
               "in": "_load_parquet",
               "kind": "raise",
-              "line": 3004
+              "line": 3009
             },
             {
               "in": "_load_csv",
               "kind": "except",
-              "line": 3017
+              "line": 3022
             },
             {
               "in": "_load_csv",
               "kind": "raise",
-              "line": 3018
+              "line": 3023
             },
             {
               "in": "to_hf_dataset",
               "kind": "except",
-              "line": 3088
+              "line": 3093
             },
             {
               "in": "to_hf_dataset",
               "kind": "raise",
-              "line": 3089
+              "line": 3094
             },
             {
               "in": "to_preference_dataset",
               "kind": "except",
-              "line": 3129
+              "line": 3134
             },
             {
               "in": "to_preference_dataset",
               "kind": "raise",
-              "line": 3130
+              "line": 3135
             },
             {
               "in": "to_preference_dataset",
               "kind": "raise",
-              "line": 3160
+              "line": 3165
             },
             {
               "in": "to_kto_dataset",
               "kind": "except",
-              "line": 3216
+              "line": 3221
             },
             {
               "in": "to_kto_dataset",
               "kind": "raise",
-              "line": 3217
+              "line": 3222
             },
             {
               "in": "to_kto_dataset",
               "kind": "raise",
-              "line": 3244
+              "line": 3249
             },
             {
               "in": "deduplicate",
               "kind": "raise",
-              "line": 3403
+              "line": 3408
             },
             {
               "in": "from_local",
               "kind": "raise",
-              "line": 3548
+              "line": 3553
             },
             {
               "in": "_stream_hf_dataset",
               "kind": "except",
-              "line": 3652
+              "line": 3677
             },
             {
               "in": "_stream_hf_dataset",
               "kind": "raise",
-              "line": 3653
+              "line": 3678
             },
             {
               "in": "_stream_jsonl",
               "kind": "except",
-              "line": 3718
+              "line": 3743
             },
             {
               "in": "_stream_jsonl",
               "kind": "raise",
-              "line": 3739
+              "line": 3744
+            },
+            {
+              "in": "_stream_jsonl",
+              "kind": "except",
+              "line": 3745
+            },
+            {
+              "in": "_stream_jsonl",
+              "kind": "raise",
+              "line": 3766
             },
             {
               "in": "_stream_json",
               "kind": "except",
-              "line": 3772
+              "line": 3799
             },
             {
               "in": "_stream_json",
               "kind": "raise",
-              "line": 3773
+              "line": 3800
+            },
+            {
+              "in": "_stream_json",
+              "kind": "except",
+              "line": 3801
+            },
+            {
+              "in": "_stream_json",
+              "kind": "raise",
+              "line": 3802
             },
             {
               "in": "split_dataset",
               "kind": "raise",
-              "line": 4303
+              "line": 4332
             },
             {
               "in": "split_dataset",
               "kind": "raise",
-              "line": 4318
+              "line": 4347
             }
           ],
-          "hash": "53dceca2878116e6451ec93bec4b3c59cfcf769ff6550175c646b5a32ace5816",
+          "hash": "60f58ab405c5538b6084b7890d5ff971392f5a01becf05b09b792c8d9ac5e279",
           "importsFiles": [
             "backpropagate/config.py",
             "backpropagate/exceptions.py"
@@ -3834,7 +3966,7 @@
             {
               "calls": [
                 {
-                  "line": 1512,
+                  "line": 1514,
                   "name": "count",
                   "target": null
                 }
@@ -3847,7 +3979,7 @@
             {
               "calls": [
                 {
-                  "line": 1512,
+                  "line": 1514,
                   "name": "count",
                   "target": null,
                   "via": "_count_turns"
@@ -3862,7 +3994,7 @@
               "calls": [
                 {
                   "branch": "min_trace_tokens < 0",
-                  "line": 1716,
+                  "line": 1718,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -3870,7 +4002,7 @@
                 },
                 {
                   "branch": "max_trace_tokens < 0",
-                  "line": 1723,
+                  "line": 1725,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -3878,7 +4010,7 @@
                 },
                 {
                   "branch": "min_trace_tokens > max_trace_tokens",
-                  "line": 1730,
+                  "line": 1732,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -3893,8 +4025,23 @@
             {
               "calls": [
                 {
+                  "line": 3598,
+                  "name": "DatasetParseError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_nesting_parse_error"
+            },
+            {
+              "calls": [
+                {
                   "branch": "not (0.0 < heldout_ratio < 1.0)",
-                  "line": 4303,
+                  "line": 4332,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -3902,7 +4049,7 @@
                 },
                 {
                   "branch": "n < 2",
-                  "line": 4318,
+                  "line": 4347,
                   "name": "InvalidSettingError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -7174,7 +7321,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/logging_config.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "backpropagate/multi_run.py",
           "sequences": []
@@ -7270,61 +7418,76 @@
           ],
           "failurePaths": [
             {
+              "in": "_resolve_or_refuse",
+              "kind": "except",
+              "line": 91
+            },
+            {
+              "in": "_resolve_or_refuse",
+              "kind": "raise",
+              "line": 92
+            },
+            {
               "in": "safe_path",
               "kind": "raise",
-              "line": 126
+              "line": 161
             },
             {
               "in": "safe_path",
               "kind": "except",
-              "line": 138
+              "line": 173
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 139
+              "line": 174
             },
             {
               "in": "safe_path",
               "kind": "except",
-              "line": 156
+              "line": 191
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 163
+              "line": 198
+            },
+            {
+              "in": "safe_path",
+              "kind": "except",
+              "line": 207
             },
             {
               "in": "safe_path",
               "kind": "raise",
-              "line": 170
+              "line": 213
             },
             {
               "in": "check_chat_template_names",
               "kind": "raise",
-              "line": 204
+              "line": 247
             },
             {
               "in": "check_torch_security",
               "kind": "except",
-              "line": 244
+              "line": 287
             },
             {
               "kind": "except",
-              "line": 296
+              "line": 339
             },
             {
               "in": "safe_torch_load",
               "kind": "raise",
-              "line": 346
+              "line": 389
             },
             {
               "in": "safe_torch_load",
               "kind": "except",
-              "line": 380
+              "line": 423
             }
           ],
-          "hash": "2ec93a060948d8b24fe7ad394d0129c83ea82fe5c59043020ee76851fc23d038",
+          "hash": "d638b136b17800e2de492ef6e58aa83e36af19bab767a448535476b868e55a0f",
           "importsFiles": [
             "backpropagate/exceptions.py"
           ],
@@ -7333,8 +7496,35 @@
             {
               "calls": [
                 {
+                  "line": 90,
+                  "name": "resolve",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_resolve_or_refuse"
+            },
+            {
+              "calls": [
+                {
+                  "line": 90,
+                  "name": "resolve",
+                  "target": null,
+                  "via": "_resolve_or_refuse"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "safe_path"
+            },
+            {
+              "calls": [
+                {
                   "branch": "bad",
-                  "line": 204,
+                  "line": 247,
                   "name": "UnsafeChatTemplateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -7349,7 +7539,7 @@
             {
               "calls": [
                 {
-                  "line": 345,
+                  "line": 388,
                   "name": "exists",
                   "target": null
                 }
@@ -7567,6 +7757,1400 @@
             "backpropagate/security.py"
           ],
           "path": "backpropagate/slao.py"
+        },
+        {
+          "entry": "estimate_vram",
+          "entryRule": 4,
+          "exports": [
+            "estimate_vram",
+            "load_dataset",
+            "load_model"
+          ],
+          "failurePaths": [
+            {
+              "in": "_hf_transient_exceptions",
+              "kind": "except",
+              "line": 109
+            },
+            {
+              "in": "_hf_transient_exceptions",
+              "kind": "except",
+              "line": 115
+            },
+            {
+              "in": "_retry_hf_call",
+              "kind": "except",
+              "line": 186
+            },
+            {
+              "in": "_retry_hf_call",
+              "kind": "raise",
+              "line": 193
+            },
+            {
+              "in": "_classify_model_load_cause",
+              "kind": "except",
+              "line": 249
+            },
+            {
+              "in": "_classify_model_load_cause",
+              "kind": "except",
+              "line": 268
+            },
+            {
+              "in": "_compute_dataset_hash",
+              "kind": "except",
+              "line": 329
+            },
+            {
+              "in": "_detect_chat_markers",
+              "kind": "except",
+              "line": 452
+            },
+            {
+              "in": "_detect_chat_markers",
+              "kind": "except",
+              "line": 480
+            },
+            {
+              "in": "_build_trl_bridge_callback",
+              "kind": "except",
+              "line": 568
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 597
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 607
+            },
+            {
+              "in": "on_log",
+              "kind": "except",
+              "line": 616
+            },
+            {
+              "in": "on_epoch_end",
+              "kind": "except",
+              "line": 628
+            },
+            {
+              "in": "on_epoch_end",
+              "kind": "except",
+              "line": 632
+            },
+            {
+              "in": "on_save",
+              "kind": "except",
+              "line": 645
+            },
+            {
+              "in": "on_save",
+              "kind": "except",
+              "line": 649
+            },
+            {
+              "in": "_detect_total_vram_gb",
+              "kind": "except",
+              "line": 847
+            },
+            {
+              "in": "_detect_total_vram_gb",
+              "kind": "except",
+              "line": 849
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "except",
+              "line": 872
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 873
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 878
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 884
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "except",
+              "line": 901
+            },
+            {
+              "in": "_ensure_fsdp_runtime",
+              "kind": "raise",
+              "line": 902
+            },
+            {
+              "in": "_gather_fsdp_full_state_dict",
+              "kind": "except",
+              "line": 927
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1036
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1038
+            },
+            {
+              "in": "_estimate_param_count_billions",
+              "kind": "except",
+              "line": 1062
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "except",
+              "line": 1116
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "except",
+              "line": 1120
+            },
+            {
+              "in": "_enforce_full_ft_param_ceiling",
+              "kind": "raise",
+              "line": 1151
+            },
+            {
+              "in": "_build_sft_config",
+              "kind": "raise",
+              "line": 1559
+            },
+            {
+              "in": "_config_declares",
+              "kind": "except",
+              "line": 1736
+            },
+            {
+              "in": "_require_config_field",
+              "kind": "raise",
+              "line": 1752
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "except",
+              "line": 1843
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "except",
+              "line": 1846
+            },
+            {
+              "in": "_build_orpo_config",
+              "kind": "raise",
+              "line": 1847
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 1992
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "except",
+              "line": 1995
+            },
+            {
+              "in": "_build_cpo_config",
+              "kind": "raise",
+              "line": 1996
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2157
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "except",
+              "line": 2160
+            },
+            {
+              "in": "_build_kto_config",
+              "kind": "raise",
+              "line": 2161
+            },
+            {
+              "in": "_apply_train_on_responses_only",
+              "kind": "except",
+              "line": 2313
+            },
+            {
+              "in": "_apply_train_on_responses_only",
+              "kind": "except",
+              "line": 2316
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2632
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2642
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2649
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2659
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2666
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2673
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2680
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2753
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2798
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2834
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2862
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 2921
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3034
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3046
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3061
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3242
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3256
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3277
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3376
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3398
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3414
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3428
+            },
+            {
+              "in": "__init__",
+              "kind": "raise",
+              "line": 3439
+            },
+            {
+              "in": "__init__",
+              "kind": "except",
+              "line": 3530
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3649
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3654
+            },
+            {
+              "in": "_detect_batch_size",
+              "kind": "except",
+              "line": 3659
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3685
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3716
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3727
+            },
+            {
+              "in": "_resolve_full_ft_engine",
+              "kind": "raise",
+              "line": 3739
+            },
+            {
+              "in": "_enforce_offload_fit",
+              "kind": "raise",
+              "line": 3849
+            },
+            {
+              "in": "_enforce_offload_fit_for_model",
+              "kind": "except",
+              "line": 3875
+            },
+            {
+              "in": "_detect_optim_for_card",
+              "kind": "except",
+              "line": 3984
+            },
+            {
+              "in": "_detect_optim_for_card",
+              "kind": "except",
+              "line": 4009
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4061
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4079
+            },
+            {
+              "in": "_fp8_supported",
+              "kind": "except",
+              "line": 4087
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4173
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "raise",
+              "line": 4175
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4208
+            },
+            {
+              "in": "_apply_fp8_to_base",
+              "kind": "except",
+              "line": 4227
+            },
+            {
+              "in": "_detect_optimal_dtype",
+              "kind": "except",
+              "line": 4299
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4434
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4440
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4441
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4443
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4454
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4461
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4462
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4468
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4474
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4477
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4487
+            },
+            {
+              "in": "load_model",
+              "kind": "except",
+              "line": 4492
+            },
+            {
+              "in": "load_model",
+              "kind": "raise",
+              "line": 4497
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4585
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4587
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4593
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4622
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "except",
+              "line": 4662
+            },
+            {
+              "in": "_load_with_unsloth",
+              "kind": "raise",
+              "line": 4667
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "except",
+              "line": 4792
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "raise",
+              "line": 4794
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "raise",
+              "line": 4795
+            },
+            {
+              "in": "_load_with_transformers",
+              "kind": "except",
+              "line": 4858
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 4945
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "except",
+              "line": 4949
+            },
+            {
+              "in": "_build_trainer",
+              "kind": "raise",
+              "line": 4950
+            },
+            {
+              "in": "_auto_balance_kto_weights",
+              "kind": "except",
+              "line": 5284
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5428
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5434
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5580
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5607
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5629
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5636
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5637
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5807
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5910
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 5911
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5912
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5921
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 5989
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6009
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6011
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6055
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6117
+            },
+            {
+              "in": "_finite_loss",
+              "kind": "except",
+              "line": 6163
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6195
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6239
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6255
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6276
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6283
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6293
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6297
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6301
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6310
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6315
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6316
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6325
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6336
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6352
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6368
+            },
+            {
+              "in": "train",
+              "kind": "except",
+              "line": 6377
+            },
+            {
+              "in": "train",
+              "kind": "raise",
+              "line": 6388
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6502
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6586
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6611
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6617
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6627
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "except",
+              "line": 6634
+            },
+            {
+              "in": "_train_with_mlx",
+              "kind": "raise",
+              "line": 6636
+            },
+            {
+              "in": "_require_preference_columns",
+              "kind": "raise",
+              "line": 6729
+            },
+            {
+              "in": "_require_kto_columns",
+              "kind": "raise",
+              "line": 6742
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6797
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6798
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6843
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6844
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6863
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6867
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6871
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6872
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6873
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "except",
+              "line": 6874
+            },
+            {
+              "in": "_load_dataset",
+              "kind": "raise",
+              "line": 6875
+            },
+            {
+              "in": "_token_counter",
+              "kind": "except",
+              "line": 6958
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 6976
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 6997
+            },
+            {
+              "in": "_filter_reasoning_traces",
+              "kind": "except",
+              "line": 7008
+            },
+            {
+              "in": "tokenize_fn",
+              "kind": "except",
+              "line": 7047
+            },
+            {
+              "in": "tokenize_fn",
+              "kind": "raise",
+              "line": 7048
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "except",
+              "line": 7061
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "raise",
+              "line": 7062
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "except",
+              "line": 7063
+            },
+            {
+              "in": "_pre_tokenize",
+              "kind": "raise",
+              "line": 7064
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7108
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7128
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7136
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7141
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7144
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "raise",
+              "line": 7145
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7179
+            },
+            {
+              "in": "_train_full_offload",
+              "kind": "except",
+              "line": 7184
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7267
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7310
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7311
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7315
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7316
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7338
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7345
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7346
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7401
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7426
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7436
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7442
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7446
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7447
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7448
+            },
+            {
+              "in": "save",
+              "kind": "raise",
+              "line": 7449
+            },
+            {
+              "in": "save",
+              "kind": "except",
+              "line": 7505
+            },
+            {
+              "in": "export",
+              "kind": "raise",
+              "line": 7563
+            },
+            {
+              "in": "export",
+              "kind": "raise",
+              "line": 7617
+            },
+            {
+              "in": "_release_model",
+              "kind": "except",
+              "line": 7691
+            },
+            {
+              "in": "push_to_hub",
+              "kind": "raise",
+              "line": 7701
+            },
+            {
+              "in": "multi_run",
+              "kind": "raise",
+              "line": 7782
+            },
+            {
+              "in": "multi_run",
+              "kind": "raise",
+              "line": 7796
+            },
+            {
+              "in": "_all_linear_leaf_names",
+              "kind": "except",
+              "line": 7851
+            },
+            {
+              "in": "_all_linear_leaf_names",
+              "kind": "except",
+              "line": 7859
+            },
+            {
+              "in": "_count_lora_layers",
+              "kind": "except",
+              "line": 7898
+            },
+            {
+              "in": "__getattr__",
+              "kind": "raise",
+              "line": 7965
+            }
+          ],
+          "hash": "f9b4ffb3e3d00ccc11dd12a6404b05d4aedc55b3f32936fa4b1b34501ea4ece2",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/block_engine.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/export.py",
+            "backpropagate/feature_flags.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/logging_config.py",
+            "backpropagate/mlx_backend.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/offload_engine.py",
+            "backpropagate/security.py"
+          ],
+          "path": "backpropagate/trainer.py",
+          "sequences": [
+            {
+              "calls": [
+                {
+                  "line": 473,
+                  "name": "apply_chat_template",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_detect_chat_markers"
+            },
+            {
+              "calls": [
+                {
+                  "line": 781,
+                  "name": "detect_host_ram_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                },
+                {
+                  "line": 784,
+                  "name": "offload_param_ceiling_billions",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_full_ft_offload_ceiling_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 873,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "branch": "not torch.cuda.is_available()",
+                  "line": 878,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "branch": "not (dist.is_available() and dist.is_nccl_available())",
+                  "line": 884,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                },
+                {
+                  "line": 902,
+                  "name": "FsdpUnavailableError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_ensure_fsdp_runtime"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1016,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                },
+                {
+                  "line": 1020,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_estimate_param_count_billions"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1108,
+                  "name": "num_parameters",
+                  "target": null
+                },
+                {
+                  "line": 1113,
+                  "name": "parameters",
+                  "target": null
+                },
+                {
+                  "line": 1016,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1020,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "branch": "estimated_billions > ceiling_billions",
+                  "line": 1151,
+                  "name": "FullFinetuneModelTooLargeError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_enforce_full_ft_param_ceiling"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1016,
+                  "name": "lookup_model_preset_by_id",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1020,
+                  "name": "items",
+                  "target": {
+                    "file": "backpropagate/config.py"
+                  },
+                  "via": "_estimate_param_count_billions"
+                },
+                {
+                  "line": 1406,
+                  "name": "offload_host_ram_required_gib",
+                  "target": {
+                    "file": "backpropagate/offload_engine.py"
+                  }
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "estimate_vram"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1752,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_require_config_field"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1847,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_orpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 1996,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_cpo_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 2161,
+                  "name": "TrainingError",
+                  "target": {
+                    "file": "backpropagate/exceptions.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_build_kto_config"
+            },
+            {
+              "calls": [
+                {
+                  "line": 473,
+                  "name": "apply_chat_template",
+                  "target": null,
+                  "via": "_detect_chat_markers"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_apply_train_on_responses_only"
+            },
+            {
+              "calls": [
+                {
+                  "line": 7865,
+                  "name": "named_modules",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_all_linear_leaf_names"
+            },
+            {
+              "calls": [
+                {
+                  "branch": "target_modules.lower() == \"all-linear\"",
+                  "line": 7865,
+                  "name": "named_modules",
+                  "target": null,
+                  "via": "_all_linear_leaf_names"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_unsloth_target_modules"
+            },
+            {
+              "calls": [
+                {
+                  "line": 7897,
+                  "name": "named_modules",
+                  "target": null
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_count_lora_layers"
+            }
+          ]
         },
         {
           "hash": "ea306e6ea28de2c717afd89428a2997d43cb9ea648b48cb0e6b1be091bd92eb3",
@@ -8110,27 +9694,27 @@
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 965
+              "line": 967
             },
             {
               "in": "validate_numeric_input",
               "kind": "except",
-              "line": 969
+              "line": 971
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 970
+              "line": 974
+            },
+            {
+              "in": "validate_numeric_input",
+              "kind": "except",
+              "line": 975
             },
             {
               "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 977
-            },
-            {
-              "in": "validate_numeric_input",
-              "kind": "raise",
-              "line": 980
+              "line": 976
             },
             {
               "in": "validate_numeric_input",
@@ -8138,91 +9722,101 @@
               "line": 983
             },
             {
-              "in": "validate_string_input",
+              "in": "validate_numeric_input",
               "kind": "raise",
-              "line": 1020
+              "line": 986
+            },
+            {
+              "in": "validate_numeric_input",
+              "kind": "raise",
+              "line": 989
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1029
+              "line": 1026
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1034
+              "line": 1035
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1037
+              "line": 1040
             },
             {
               "in": "validate_string_input",
               "kind": "raise",
-              "line": 1044
+              "line": 1043
+            },
+            {
+              "in": "validate_string_input",
+              "kind": "raise",
+              "line": 1050
             },
             {
               "in": "_is_localhost",
               "kind": "except",
-              "line": 1193
+              "line": 1199
             },
             {
               "in": "get_health_status",
               "kind": "except",
-              "line": 1284
+              "line": 1290
             },
             {
               "in": "get_health_status",
               "kind": "except",
-              "line": 1311
+              "line": 1317
             },
             {
               "in": "validate_file_magic",
               "kind": "except",
-              "line": 1992
+              "line": 1998
             },
             {
               "kind": "except",
-              "line": 2052
+              "line": 2058
             },
             {
               "in": "create_token",
               "kind": "raise",
-              "line": 2119
+              "line": 2125
             },
             {
               "in": "verify_token",
               "kind": "except",
-              "line": 2188
+              "line": 2194
             },
             {
               "in": "verify_token",
               "kind": "except",
-              "line": 2192
+              "line": 2198
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3044
+              "line": 3053
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3054
+              "line": 3063
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3062
+              "line": 3071
             },
             {
               "in": "validate_auth_shape",
               "kind": "raise",
-              "line": 3073
+              "line": 3082
             }
           ],
-          "hash": "834df39db07ac9572d111eb9b2f448dbdddcafe7f142167dbc23ebf821eda77f",
+          "hash": "c58b39bc68c3625db486084a5f0a002ec5a3107a0b0b7262dbb08ea30cc16c4d",
           "importOrder": [
             "backpropagate/exceptions.py",
             "backpropagate/__init__.py",
@@ -8274,14 +9868,14 @@
               "calls": [
                 {
                   "branch": "value is None",
-                  "line": 965,
+                  "line": 967,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
                   }
                 },
                 {
-                  "line": 970,
+                  "line": 974,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8289,7 +9883,7 @@
                 },
                 {
                   "branch": "not math.isfinite(num)",
-                  "line": 977,
+                  "line": 983,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8297,7 +9891,7 @@
                 },
                 {
                   "branch": "min_value is not None and num < min_value",
-                  "line": 980,
+                  "line": 986,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8305,7 +9899,7 @@
                 },
                 {
                   "branch": "max_value is not None and num > max_value",
-                  "line": 983,
+                  "line": 989,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8321,7 +9915,7 @@
               "calls": [
                 {
                   "branch": "value is None",
-                  "line": 1020,
+                  "line": 1026,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8329,7 +9923,7 @@
                 },
                 {
                   "branch": "len(text) > max_length",
-                  "line": 1029,
+                  "line": 1035,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8337,7 +9931,7 @@
                 },
                 {
                   "branch": "not allow_empty and len(text.strip()) == 0",
-                  "line": 1034,
+                  "line": 1040,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8345,7 +9939,7 @@
                 },
                 {
                   "branch": "len(text) < min_length",
-                  "line": 1037,
+                  "line": 1043,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8353,7 +9947,7 @@
                 },
                 {
                   "branch": "not re.match(pattern, text)",
-                  "line": 1044,
+                  "line": 1050,
                   "name": "UserInputError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8368,7 +9962,7 @@
             {
               "calls": [
                 {
-                  "line": 1291,
+                  "line": 1297,
                   "name": "__version__",
                   "passed": true,
                   "target": {
@@ -8376,7 +9970,7 @@
                   }
                 },
                 {
-                  "line": 1300,
+                  "line": 1306,
                   "name": "get_gpu_status",
                   "target": {
                     "file": "backpropagate/gpu_safety.py"
@@ -8391,7 +9985,7 @@
             {
               "calls": [
                 {
-                  "line": 1980,
+                  "line": 1986,
                   "name": "exists",
                   "target": null
                 }
@@ -8404,12 +9998,12 @@
             {
               "calls": [
                 {
-                  "line": 2831,
+                  "line": 2837,
                   "name": "get_all_security_headers",
                   "target": null
                 },
                 {
-                  "line": 2838,
+                  "line": 2844,
                   "name": "set_header",
                   "target": null
                 }
@@ -8422,7 +10016,7 @@
             {
               "calls": [
                 {
-                  "line": 2864,
+                  "line": 2870,
                   "name": "get_all_security_headers",
                   "target": null
                 }
@@ -8435,7 +10029,7 @@
             {
               "calls": [
                 {
-                  "line": 2972,
+                  "line": 2981,
                   "name": "BackpropagateError",
                   "passed": true,
                   "target": {
@@ -8452,7 +10046,7 @@
               "calls": [
                 {
                   "branch": "not _is_credential_pair(auth)",
-                  "line": 3044,
+                  "line": 3053,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8460,7 +10054,7 @@
                 },
                 {
                   "branch": "not auth",
-                  "line": 3054,
+                  "line": 3063,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8468,7 +10062,7 @@
                 },
                 {
                   "branch": "not _is_credential_pair(entry)",
-                  "line": 3062,
+                  "line": 3071,
                   "name": "BackpropagateError",
                   "over": "enumerate(auth)",
                   "target": {
@@ -8476,7 +10070,7 @@
                   }
                 },
                 {
-                  "line": 3073,
+                  "line": 3082,
                   "name": "BackpropagateError",
                   "target": {
                     "file": "backpropagate/exceptions.py"
@@ -8734,7 +10328,7 @@
           "where": [
             "caller"
           ],
-          "writes": 11
+          "writes": 16
         },
         {
           "reads": 0,
@@ -8762,30 +10356,20 @@
         }
       ],
       "outsideReads": 51,
-      "outsideWrites": 12,
+      "outsideWrites": 17,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 132,
+      "testedBy": 136,
       "unresolvedNamed": [
         {
-          "path": "backpropagate/__init__.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "backpropagate/cli.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "backpropagate/cli.py",
-          "specifier": ".trainer",
-          "why": "unplaced"
+          "path": "backpropagate/trainer.py",
+          "specifier": null,
+          "why": "dynamic"
         }
       ],
-      "unresolvedSites": 9
+      "unresolvedSites": 1
     },
     {
       "dynamicReads": 0,
@@ -9473,6 +11057,1128 @@
       "externals": 0,
       "files": [
         {
+          "hash": "7c566c38b1568ab1ac6482d8860cbd9398a23f1be7b03a538397fbbfcf670ee4",
+          "path": "fuzz/corpus/.gitattributes"
+        },
+        {
+          "hash": "ccf50141e0cab2b2de7fd4abe6799757b337a77f06ffa7e9b7913ed9f5edf7a9",
+          "path": "fuzz/corpus/config/cov-28b83cc0.seed"
+        },
+        {
+          "hash": "44602a999abbebedf7de0ae1318e4f57e3cb1d67e482a65f9657f7541f3fe4bb",
+          "path": "fuzz/corpus/config/cov-34cce324.seed"
+        },
+        {
+          "hash": "0174eaa8f5e96da80a11da0050bfabb66fec3829203dc35df2b28a19219a0ed9",
+          "path": "fuzz/corpus/config/cov-3f545fbc.seed"
+        },
+        {
+          "hash": "1cd74fe726d64af77ecf9125e3ab6d9e4ea932adb71fa5602be081e08c7a8e10",
+          "path": "fuzz/corpus/config/cov-4e9b6d09.seed"
+        },
+        {
+          "hash": "2c87b5d9a3d5abd514efb8cacf98b9ce030f6b383d56eeaea6c3dac6e69b7cb4",
+          "path": "fuzz/corpus/config/cov-5d902957.seed"
+        },
+        {
+          "hash": "3cbed461eaf12984eae3788b63a5d54cd63a6fcd29013d43b99c449c58d3d45e",
+          "path": "fuzz/corpus/config/cov-65d6a132.seed"
+        },
+        {
+          "hash": "1327e89b16e4b65dd7e0b1ecd18fb9baa9ca9d8accb3783cb895d39d5db578a2",
+          "path": "fuzz/corpus/config/cov-6d786427.seed"
+        },
+        {
+          "hash": "f4a44ff6856a4b3664254c0d6d29a378309908ec7b637f460e16f2d7f7956045",
+          "path": "fuzz/corpus/config/cov-765a93e5.seed"
+        },
+        {
+          "hash": "8d33f520a3c4cef80d2453aef81b612bfe1cb44c8b2025630ad38662763f13d3",
+          "path": "fuzz/corpus/config/cov-7e15bb5c.seed"
+        },
+        {
+          "hash": "de79bc1f702216a1441883740d66c02044eec15a71aea2954670f6fd8c56300f",
+          "path": "fuzz/corpus/config/cov-9344b533.seed"
+        },
+        {
+          "hash": "0857a1866c103d92dddc873ebbce930f9ecfe5be96fa93f11d2cba878689f25b",
+          "path": "fuzz/corpus/config/cov-ac3b4dbc.seed"
+        },
+        {
+          "hash": "b804a6931253dd7155200feeae3fb32d99e216a9bc4fe667852c1da927cf62b5",
+          "path": "fuzz/corpus/config/cov-ae9c2e36.seed"
+        },
+        {
+          "hash": "4ffaaa8c2358dd214790561efbda15aeb2f34696bc634b17c510414481ba3b80",
+          "path": "fuzz/corpus/config/cov-b7bf202f.seed"
+        },
+        {
+          "hash": "2243fd4627973919385c8bd32bdb73bf299e27a4b0c47517d365d228120ac5ba",
+          "path": "fuzz/corpus/config/cov-bc68f0c0.seed"
+        },
+        {
+          "hash": "5eb0db1e55d63b912fb0b8b5c62edd1641aa484147ceb83e8f7d25acbc2c7a2b",
+          "path": "fuzz/corpus/config/cov-c62947bc.seed"
+        },
+        {
+          "hash": "f81c21670a47a488ae05f3a040e0275f4c23f444883b9df373af92abf58e851c",
+          "path": "fuzz/corpus/config/cov-ce76a38c.seed"
+        },
+        {
+          "hash": "b19ebd381f0351e9673c0d088f34b4e2fd59372b2d96aab06c1c896f83a11897",
+          "path": "fuzz/corpus/config/cov-d8d2814a.seed"
+        },
+        {
+          "hash": "3b940f16118a27c432bd58159a87abe020bdfd0baeb4d0ea7569be333da01592",
+          "path": "fuzz/corpus/config/cov-de6ae08d.seed"
+        },
+        {
+          "hash": "00b06ea9577c836758e4fd492dcf23f69aa8ccf54abc5788b0c6c29a79a04dc7",
+          "path": "fuzz/corpus/config/cov-deedffb9.seed"
+        },
+        {
+          "hash": "810a6212937579a1bb06c326766ee433deb6dedfd7b2f63bcf5c60cb55ff71ab",
+          "path": "fuzz/corpus/config/cov-e34b6199.seed"
+        },
+        {
+          "hash": "ac4b86aa109c5ba5f2a6d98154f8153016e868fcefab01d70f474acfe6ba643d",
+          "path": "fuzz/corpus/config/cov-f52b691f.seed"
+        },
+        {
+          "hash": "d6b8a72f7811eae4ddecbf7419e99b4106129cfccf0b4789321ca42bf97ed5ff",
+          "path": "fuzz/corpus/config/cov-f790c907.seed"
+        },
+        {
+          "hash": "6ba923b5127f405b8a732009d1690376d11b00dbaa91d5cce2598250177523ab",
+          "path": "fuzz/corpus/config/cov-fb317701.seed"
+        },
+        {
+          "hash": "7393d52d244240bbcaf6af6fd9b9e3e2d57adaa6f1a895ab4c8286efc84c98d9",
+          "path": "fuzz/corpus/config/finding_f4b_kto_desirable_weight.seed"
+        },
+        {
+          "hash": "5459b80197c83a38db8e045665907e6177302f207b6035454ef66ef7036a9630",
+          "path": "fuzz/corpus/config/finding_f4b_orpo_beta.seed"
+        },
+        {
+          "hash": "eaee0bd7e6c154f0e3d36e45a48ebff37bdafbdbc751cc1571e8ed0b97ec8ccd",
+          "path": "fuzz/corpus/config/finding_f4b_simpo_gamma.seed"
+        },
+        {
+          "hash": "30e4c6693a8c353c98ba73c2c488ffe7fc87936b4ef9b7ac3d48e3ea4f428a47",
+          "path": "fuzz/corpus/config/invalid_backend.seed"
+        },
+        {
+          "hash": "8a421d638c4fc4c4a43f737e19ac7db08cf1453e234a5da0f0041138495c73cb",
+          "path": "fuzz/corpus/config/invalid_method.seed"
+        },
+        {
+          "hash": "d0b3244cbfe6112a4e41a85661041b8d9a87433d1911aa0a99c63dc093679b0a",
+          "path": "fuzz/corpus/config/section_DataConfig.seed"
+        },
+        {
+          "hash": "5896c947f34abbb940cdccfc802c0721396f64e6386fcd4909400d688e56f6f5",
+          "path": "fuzz/corpus/config/section_LoRAConfig.seed"
+        },
+        {
+          "hash": "7e03c27640c023a5f904a25a1e3e9ae00ec10904ebbf1a8ac3220f3ece4dc8ef",
+          "path": "fuzz/corpus/config/section_ModelConfig.seed"
+        },
+        {
+          "hash": "462ced8e1a86c5aed8bbedde1eb7da5db17ba19bb41bd0e6ab4d9816dd3c9425",
+          "path": "fuzz/corpus/config/section_MultiRunSettings.seed"
+        },
+        {
+          "hash": "727251dfa395eca4cd71844979794f6325136b92abdf973a4842bb1b23c3681a",
+          "path": "fuzz/corpus/config/section_SecurityConfig.seed"
+        },
+        {
+          "hash": "305c99190d609c26c2dce5e61bb6d884657144c647a137b942765afcd40e2ee3",
+          "path": "fuzz/corpus/config/section_TrainingConfig.seed"
+        },
+        {
+          "hash": "3306c3a8059c937ed840a6a4c170333d849aeecb2288ce0ecf9a0129fa576239",
+          "path": "fuzz/corpus/config/section_UIConfig.seed"
+        },
+        {
+          "hash": "24dbfc6846463bdcdec47bb45155e693c889540232a9bfaa57a023e6e12fbf1c",
+          "path": "fuzz/corpus/config/ui_security_env.seed"
+        },
+        {
+          "hash": "bbcac19fb43843f4f3eca5cc96de6b20633c41e29a3182ac6502973ae61cb246",
+          "path": "fuzz/corpus/dataset_files/all_bad.jsonl"
+        },
+        {
+          "hash": "6d70568cfed7da40a74703e0293630b25660101acb2fbc05e347d54c2cb423f2",
+          "path": "fuzz/corpus/dataset_files/array.json"
+        },
+        {
+          "hash": "06d6c67424e9cd9ec891c52f10b8b0c116c2b6f7070f0eded36e0a6558bf7eec",
+          "path": "fuzz/corpus/dataset_files/bad_utf8.jsonl"
+        },
+        {
+          "hash": "62bd665b4493e3edf689de9dde203b691743c9c812f5f1f6e3b6c2c4e958bad3",
+          "path": "fuzz/corpus/dataset_files/bigint_line.jsonl"
+        },
+        {
+          "hash": "6dc52e9228bf05e4301f79bc7eeb8b813cc60d9afe9302e2c343b143f4a517f9",
+          "path": "fuzz/corpus/dataset_files/bom.jsonl"
+        },
+        {
+          "hash": "8109e18571e6f1a138965d2b0610f5eaaf2c82adf3388f5cdccae63768e85b7c",
+          "path": "fuzz/corpus/dataset_files/crlf_blank.jsonl"
+        },
+        {
+          "hash": "bdf4de9c67ae246408bd39ef6aaae3998c446717f6e847a28ebd33333d9202a6",
+          "path": "fuzz/corpus/dataset_files/deep_nesting.jsonl"
+        },
+        {
+          "hash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "path": "fuzz/corpus/dataset_files/empty.jsonl"
+        },
+        {
+          "hash": "012ee2b4f92f9a8d37b94d62ab26b36326f1b74acd3efef402a776811dafa6af",
+          "path": "fuzz/corpus/dataset_files/finding_f1.jsonl"
+        },
+        {
+          "hash": "e58ed5b84682ff07a8a70d12f1402abf15abf6febba46581188fce5e659727f2",
+          "path": "fuzz/corpus/dataset_files/invalid.json"
+        },
+        {
+          "hash": "07d5a42b217eeaa5ab9d4cd975468f4ef85f5f92df268a11f74ac9260c110005",
+          "path": "fuzz/corpus/dataset_files/mixed_bad_lines.jsonl"
+        },
+        {
+          "hash": "2674c873e8d7f56da1a0b4a5a864d33707fb332d0d810d0147b4497f8b3016f0",
+          "path": "fuzz/corpus/dataset_files/object.json"
+        },
+        {
+          "hash": "18adfc2b6a92ed029ec6bc9b0a8a5591f577fcc98d79345b744cfff7911a8e1b",
+          "path": "fuzz/corpus/dataset_files/ok.jsonl"
+        },
+        {
+          "hash": "9fbb3d070023505d91f419e55febd4b2ba16a40fd914734249bf01081f1a4a5b",
+          "path": "fuzz/corpus/dataset_files/paragraphs.txt"
+        },
+        {
+          "hash": "fbc6affb683398e807a7ca478f8a1f2c517b7b89032e56744290940a88894a10",
+          "path": "fuzz/corpus/dataset_files/single.md"
+        },
+        {
+          "hash": "0a656a31da6ed0c3f3ed29b45632df5ef8f50e712717848776e4061f69e06161",
+          "path": "fuzz/corpus/dataset_files/unknown_ext.dat"
+        },
+        {
+          "hash": "ac951a10753abc321d52d00494e851f3cecaa2ed9bccbf5d8f99ae9d910fbffa",
+          "path": "fuzz/corpus/datasets/finding_f1_unhashable_role.seed"
+        },
+        {
+          "hash": "2488bcdcea18de616e6be31f6987ed11a76590862b2b58977f6943bd4eab0d2e",
+          "path": "fuzz/corpus/datasets/finding_f6_lone_surrogate.seed"
+        },
+        {
+          "hash": "0c8182fcc0a7f3eb34046d69d9cdb29f798712b6e33d3951afed700f01381230",
+          "path": "fuzz/corpus/datasets/notjson.seed"
+        },
+        {
+          "hash": "639ffde12c1b07ea9595cf8d21859d2b3359a15e210b3a33c57d9379a68fc5cd",
+          "path": "fuzz/corpus/datasets/roundtrip_0.seed"
+        },
+        {
+          "hash": "cf57d3ed5658e834fe7dd006b1a740ebe6aac2dbc5eb0d4c159ded64d1708e89",
+          "path": "fuzz/corpus/datasets/roundtrip_1.seed"
+        },
+        {
+          "hash": "37479d04c60977d4474af85a7ba55494868ed9a45ca23e2a8f1a1ac736de6355",
+          "path": "fuzz/corpus/datasets/roundtrip_2.seed"
+        },
+        {
+          "hash": "2e6257d644e0562b5418da627062afb0d9068856f23bd13257a512e9015a23de",
+          "path": "fuzz/corpus/datasets/roundtrip_3.seed"
+        },
+        {
+          "hash": "d76d4bef0c28833771b1d03a70ba21a5d8c21e35e20c63d84bfb7c1194d345b4",
+          "path": "fuzz/corpus/datasets/roundtrip_4.seed"
+        },
+        {
+          "hash": "8cebb20fab85fa040685f5fa73dec546ab58e47a61559f44631d65ca5ae70b31",
+          "path": "fuzz/corpus/datasets/rows_alpaca.seed"
+        },
+        {
+          "hash": "897d09e4895501d31dceef64b86a76a63bbf3ffb60f5ee9ea4e9e7600d59e543",
+          "path": "fuzz/corpus/datasets/rows_chatml.seed"
+        },
+        {
+          "hash": "7520c92b2e4b1d69cde3c0b82f165c596389be66e3d0bbec2caddecaaee040b0",
+          "path": "fuzz/corpus/datasets/rows_empty.seed"
+        },
+        {
+          "hash": "be30faa4d70f7043d663ab658d6c0c79c57dac33326458c1fbe4a3657d1af0e5",
+          "path": "fuzz/corpus/datasets/rows_kto.seed"
+        },
+        {
+          "hash": "2a8be5300777a0398029fbf25973d721191c3537d2114bdb84ee316c7b6ee4b4",
+          "path": "fuzz/corpus/datasets/rows_mixed.seed"
+        },
+        {
+          "hash": "b7a81eae8330bcc53577a55d6010cd5020448fa53a73cbef2d2b70549a784aae",
+          "path": "fuzz/corpus/datasets/rows_openai.seed"
+        },
+        {
+          "hash": "f78a2c0349678f3c021b2ca5ade15710ba30f2b6f8af0e3ec5da55c86b594466",
+          "path": "fuzz/corpus/datasets/rows_openai_function.seed"
+        },
+        {
+          "hash": "36ca4b91a6809a9227f3c217fd9bd8bff0cfb450cd84f6bb5e9c4787b9ce0867",
+          "path": "fuzz/corpus/datasets/rows_preference.seed"
+        },
+        {
+          "hash": "edd95f5230ad8f0a35afa8d4ef808e71a3bb89114555a79deede724b22c0a376",
+          "path": "fuzz/corpus/datasets/rows_sharegpt.seed"
+        },
+        {
+          "hash": "aebc1e19f7d42701c8e7aaeb879963f65a29228f0127a1242947bc1f67ebc1d1",
+          "path": "fuzz/corpus/datasets/split_ngrams.seed"
+        },
+        {
+          "hash": "f7808adaf7eca25273a8550d4200181f420ef7c21bbd94430e773a7ae6050463",
+          "path": "fuzz/corpus/paths/base_backslash.seed"
+        },
+        {
+          "hash": "e88050000eaa7866805ca41b1e5800de84cbd7efd8371e165a264da0f1fa74ce",
+          "path": "fuzz/corpus/paths/base_inside.seed"
+        },
+        {
+          "hash": "f5d8d30db95e66e8fd358694b7aa56244db68e45c88f7fa4033257c2af7944c3",
+          "path": "fuzz/corpus/paths/base_loop.seed"
+        },
+        {
+          "hash": "2cbea037cfc4c5800ea3d24da1f816b1a08a9a3f97accaca172429710a1abdac",
+          "path": "fuzz/corpus/paths/base_nul.seed"
+        },
+        {
+          "hash": "15db89759e103d2517ec5ecf48b9aed2a12a7cff80ce933b9dbc8ffd4eaec9f8",
+          "path": "fuzz/corpus/paths/base_symlink_in.seed"
+        },
+        {
+          "hash": "56e3f9ebb375fc8be6096d7357ba14cd9d950a1ea5281fa4087b638bb3d96239",
+          "path": "fuzz/corpus/paths/base_symlink_out.seed"
+        },
+        {
+          "hash": "ab60b4e58285c35f41093e47265ef0845e329d05450ce0780d3b689a0a99572c",
+          "path": "fuzz/corpus/paths/base_traversal.seed"
+        },
+        {
+          "hash": "c79bb9a39ab119705c14d80609c339b44e7e3fc6729760583e952f283cc8bfa2",
+          "path": "fuzz/corpus/paths/base_unicode_dots.seed"
+        },
+        {
+          "hash": "de7d1b721a1e0632b7cf04edf5032c8ecffa9f9a08492152b926f1a5a7e765d7",
+          "path": "fuzz/corpus/paths/cov-042dc451.seed"
+        },
+        {
+          "hash": "0f2c7f7e50abf7ce2200ae61f3ae429ca9f31d1c7cd57e94248f0b9b5d4fac03",
+          "path": "fuzz/corpus/paths/cov-05836b62.seed"
+        },
+        {
+          "hash": "e7ac0786668e0ff0f02b62bd04f45ff636fd82db63b1104601c975dc005f3a67",
+          "path": "fuzz/corpus/paths/cov-05a79f06.seed"
+        },
+        {
+          "hash": "08eb7a84a1935b1620504303ba70a5eaa9d5a8c0af51ab287e12fa89e2dc869a",
+          "path": "fuzz/corpus/paths/cov-109ffb2c.seed"
+        },
+        {
+          "hash": "4e55e44206d7f1ed89d1b759eb26bd3d62e01424135f04694e0aacf3bb726736",
+          "path": "fuzz/corpus/paths/cov-125f3af0.seed"
+        },
+        {
+          "hash": "587bb38d53a81144fbab043dca47f74ca05a7e6156e5e243520de6d3f74943a8",
+          "path": "fuzz/corpus/paths/cov-267563fd.seed"
+        },
+        {
+          "hash": "f1a5fc565b2d90856051a0c5446b25fb9eaea20a7171532a60eab31443b42051",
+          "path": "fuzz/corpus/paths/cov-3ac09d54.seed"
+        },
+        {
+          "hash": "7c3345deb9df6f04a1f656902d21f413f2cd344fa48f343dad122f4f6ddd8c6e",
+          "path": "fuzz/corpus/paths/cov-46e4409a.seed"
+        },
+        {
+          "hash": "5577547d6b430e072a060ef7047b67ed5c97da23a7ae486020ad246550d5a2d3",
+          "path": "fuzz/corpus/paths/cov-4f5d7b0e.seed"
+        },
+        {
+          "hash": "31ff2916d263036c01aa2d9b67edc35fafb5394851c7a7c185a89a125b80b09d",
+          "path": "fuzz/corpus/paths/cov-5333c70a.seed"
+        },
+        {
+          "hash": "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
+          "path": "fuzz/corpus/paths/cov-5d1be7e9.seed"
+        },
+        {
+          "hash": "d87d01642f47a0d1901b1dfd2331c9def1bcfc69d8835c6cd911fe4165b804e4",
+          "path": "fuzz/corpus/paths/cov-62901032.seed"
+        },
+        {
+          "hash": "15eaa08251f54e4ebfc2618cbe95ca88bc9187adeca2ffc3417eaa0d94ca924d",
+          "path": "fuzz/corpus/paths/cov-7c14c4a0.seed"
+        },
+        {
+          "hash": "c7b99f1c681eaad2096f54c0380b8f950fa5cbe47cb3695ed590167c0dfff315",
+          "path": "fuzz/corpus/paths/cov-7f761f6a.seed"
+        },
+        {
+          "hash": "61ef0aba0e099784c058f2c9886a04405c034d41057b75e5f9e071bd30b7c078",
+          "path": "fuzz/corpus/paths/cov-948c70ab.seed"
+        },
+        {
+          "hash": "f9e46b2fbfe2357a82b710e4d583b8fdd7b7ba98840f0ef4765bf01aac38f906",
+          "path": "fuzz/corpus/paths/cov-958e445c.seed"
+        },
+        {
+          "hash": "fa814cc22ad1c831738f41eabb943d15ada38cbaff3e4269bebd08a07920255a",
+          "path": "fuzz/corpus/paths/cov-97b8a6e3.seed"
+        },
+        {
+          "hash": "52bfb6998542e9d69ce7e68c6ec2fac242529e5f5dd6e4f38a2982496ed6f7d7",
+          "path": "fuzz/corpus/paths/cov-b10e0f26.seed"
+        },
+        {
+          "hash": "f0f719bd51b1c1e6f146038fb64472dbe554445e3ad2e9935236c7606b8df23b",
+          "path": "fuzz/corpus/paths/cov-b25ce80c.seed"
+        },
+        {
+          "hash": "88a570240d07fd1ed883b7b9088e175a70b2ea0dd11295678c248edcbeadea5e",
+          "path": "fuzz/corpus/paths/cov-b3a44633.seed"
+        },
+        {
+          "hash": "df9f188da1208f692545737aa3a6eacae9f3db9f258fdf2bbcb87e3ae9b6c4a2",
+          "path": "fuzz/corpus/paths/cov-b8eee14c.seed"
+        },
+        {
+          "hash": "8dbe14663b47e2476c8c3fcc10066b4f951e988bed0b3b2cb734b9eba74ccc6b",
+          "path": "fuzz/corpus/paths/cov-b8f4970d.seed"
+        },
+        {
+          "hash": "f0337b00fae10fdda7497b729f901dd2ab421ce49f9b5db4f8fc6d65293ea1ba",
+          "path": "fuzz/corpus/paths/cov-c5d68608.seed"
+        },
+        {
+          "hash": "9091e78f78ad4c92f9b16f89432ce7c4f0a785f5c905b8d375be71a0f6529436",
+          "path": "fuzz/corpus/paths/cov-eacc13fc.seed"
+        },
+        {
+          "hash": "48df398788b252f9380e6013bcd48fbc3cf8e25cfcaaae9c92ff2da31b1df314",
+          "path": "fuzz/corpus/paths/cov-f2c1d516.seed"
+        },
+        {
+          "hash": "2d8727ba743375631247d4dbfc434ef6b9dda6665de299614bb7a2766fae1ac5",
+          "path": "fuzz/corpus/paths/cov-f8a3104b.seed"
+        },
+        {
+          "hash": "958c9c4cd8e39888891adb7e0681282025569ca30994af8c398910c7251e4276",
+          "path": "fuzz/corpus/paths/finding_f2_dots_in_controls.seed"
+        },
+        {
+          "hash": "c03d501983dead536179f0dfb623072b67f5f315333bb552d2a2b23a13fad045",
+          "path": "fuzz/corpus/paths/forb_dotdot_ssh.seed"
+        },
+        {
+          "hash": "0a4d79b84bc41b8b62b00651c6cb67e0135d0d9a881f314a136c9b03a8506809",
+          "path": "fuzz/corpus/paths/forb_etc.seed"
+        },
+        {
+          "hash": "eb850883c4c21169ac3579be9cd7edfb0421add38400856e48e827a5d49d081c",
+          "path": "fuzz/corpus/paths/forb_etc_dotdot.seed"
+        },
+        {
+          "hash": "478995f98e62f11c4ee6b318451dfcbc732da8a32acd991cbfbf4cdf0d975811",
+          "path": "fuzz/corpus/paths/forb_ok_work.seed"
+        },
+        {
+          "hash": "428e50338211f6560d0711f3d88d0105f571ba63b4ca85c5e3fce778a93efc87",
+          "path": "fuzz/corpus/paths/forb_proc_self_root.seed"
+        },
+        {
+          "hash": "e59445ae3fdcc8aac3b53f6483cf2a57f6ea9b417244dfc45a862cb877f62a6d",
+          "path": "fuzz/corpus/paths/forb_ssh.seed"
+        },
+        {
+          "hash": "010030d084ea4db622da91e76da5906f75c40d61fa00a7490bf4be5a4c004350",
+          "path": "fuzz/corpus/paths/forb_symlink_ssh.seed"
+        },
+        {
+          "hash": "3b3b00dd0a1bf70ba07ecd67327516dd5f6303fa5bebb86b331cbd2c7786a64d",
+          "path": "fuzz/corpus/paths/must_exist_name_too_long.seed"
+        },
+        {
+          "hash": "6c1232ccb669c8732b6cbfb195abf145bf77f020ad6119f65d6e7081df3b8291",
+          "path": "fuzz/corpus/paths/name_control_mix.seed"
+        },
+        {
+          "hash": "8ea18c0aa3b9b275a6a3184d29ee5e542d75f49e285d142bf3c825f3f43331f9",
+          "path": "fuzz/corpus/paths/name_plain.seed"
+        },
+        {
+          "hash": "4df52f51ba480b8acb3d764c73cf8d7075e0c8bb2467269c2a7d4d4b378603c4",
+          "path": "fuzz/corpus/paths/name_separators.seed"
+        },
+        {
+          "hash": "b0a94a61449f4c5b1876705359c6a6a9ce6ecd27e5aa9e0683d43412734f236f",
+          "path": "fuzz/corpus/paths/nobase_dotdot_abs.seed"
+        },
+        {
+          "hash": "37936817b0f388a5b81667a353870e6182eaaa2eb632bb59c4031a400bb3c9c9",
+          "path": "fuzz/corpus/paths/nobase_dotdot_rel.seed"
+        },
+        {
+          "hash": "a42a847bc4d61813247855880f2bfd856822b3da3372ca4a8fa545cf97f5fb06",
+          "path": "fuzz/corpus/paths/nobase_plain.seed"
+        },
+        {
+          "hash": "972a91944139adaf6ebad92358a9eb1686944fc6cf2921d1235c6a9298e61e3a",
+          "path": "fuzz/corpus/paths/oracle_loop_double_slash.seed"
+        },
+        {
+          "hash": "4a39d877c3ab4e1a21403f0d80f17f59d1ffbd6285077daefc197378abb2947a",
+          "path": "fuzz/corpus/ui_input/cov-0873dd44.seed"
+        },
+        {
+          "hash": "675e9b34e4a0b5c423b538aac1a93ea3814f70d74715c4942cfb59cf142b2406",
+          "path": "fuzz/corpus/ui_input/cov-0a1b3a3e.seed"
+        },
+        {
+          "hash": "45f83d17e10b34fca01eb8f4454dac34a777d9404a464e732cf4abf2c0da94c4",
+          "path": "fuzz/corpus/ui_input/cov-0ad052dd.seed"
+        },
+        {
+          "hash": "2e77d99b2171959a3463981bb795b9140ec5ce80d7c18982976118330332183d",
+          "path": "fuzz/corpus/ui_input/cov-0ed1dfff.seed"
+        },
+        {
+          "hash": "4abe6bbf2899d08cc71d497caa7284d615b8e4500fe1fc100d0c3dbeb5e4ed9a",
+          "path": "fuzz/corpus/ui_input/cov-176e373d.seed"
+        },
+        {
+          "hash": "96232ccaa5da09daaeccf67f39cdf1a0eca5ee7d002a7db6f850cb39e0b6cf74",
+          "path": "fuzz/corpus/ui_input/cov-19b67cd6.seed"
+        },
+        {
+          "hash": "057fda48919071e0508bed578b66f2b44a7b6bd653c4b69a6497f12f25bec1be",
+          "path": "fuzz/corpus/ui_input/cov-1b341f22.seed"
+        },
+        {
+          "hash": "1049050c1b7b4c0a9d15a2a91a69ef2400d9ecc7d082d04b3d38e5fdd5b155bd",
+          "path": "fuzz/corpus/ui_input/cov-1cea2b09.seed"
+        },
+        {
+          "hash": "399a5b7242a75f2e24939277b5b2203ec68363a22ae18c25c7a6f381850a9c11",
+          "path": "fuzz/corpus/ui_input/cov-1d1386ce.seed"
+        },
+        {
+          "hash": "c59a7c6ea3c24e3fe8243dd475821e5cad6442f03983fcc6d2191d608cdeb8c0",
+          "path": "fuzz/corpus/ui_input/cov-2248035a.seed"
+        },
+        {
+          "hash": "781a7ff10005f935502cb02f18e69f494d7300869e156b4a1396cf4d9598b9f9",
+          "path": "fuzz/corpus/ui_input/cov-2436b390.seed"
+        },
+        {
+          "hash": "b9033c5e59187819867a4a1be8b157289fb1ca932324dc8d0e2e3081c2094483",
+          "path": "fuzz/corpus/ui_input/cov-261bc930.seed"
+        },
+        {
+          "hash": "43ca46c77820779603dacef2d2a16c66cb0f3e7205de41e3731d2564b0ca723e",
+          "path": "fuzz/corpus/ui_input/cov-26f597a8.seed"
+        },
+        {
+          "hash": "9071864696bef44c2cb1e9c857c0525c50d16f1840a33d14334d49eb9f62671c",
+          "path": "fuzz/corpus/ui_input/cov-2aebdeb7.seed"
+        },
+        {
+          "hash": "67586e98fad27da0b9968bc039a1ef34c939b9b8e523a8bef89d478608c5ecf6",
+          "path": "fuzz/corpus/ui_input/cov-2d0134ed.seed"
+        },
+        {
+          "hash": "4964aaa5c4fb68feb01cb03f3ac7cfc3be0aad3969b4c27a58bd55a2c6ca8e57",
+          "path": "fuzz/corpus/ui_input/cov-2e760400.seed"
+        },
+        {
+          "hash": "656cc5e6d61969b5acef0e62d798051197021119f38ab87a0d66ef177362d1a0",
+          "path": "fuzz/corpus/ui_input/cov-34739748.seed"
+        },
+        {
+          "hash": "a68998953eb627559fda70e31f0a519a6dc1d703f2989e30816a7ff52689f6c8",
+          "path": "fuzz/corpus/ui_input/cov-362882d1.seed"
+        },
+        {
+          "hash": "97bfe767f72b39599a9ad01f75b9f9be45da30aea282fee8919d614e938aafba",
+          "path": "fuzz/corpus/ui_input/cov-3c59c55e.seed"
+        },
+        {
+          "hash": "0ad6a5741f40957d5f9c17c2c683b510b4ff99b42724d8acee2136168e970229",
+          "path": "fuzz/corpus/ui_input/cov-42bb48f7.seed"
+        },
+        {
+          "hash": "b3cc98b5b6febf5c6854ed61d4b297f64eeabbd13828f7712839df60adb031b3",
+          "path": "fuzz/corpus/ui_input/cov-4fd2dfe6.seed"
+        },
+        {
+          "hash": "5050e69600bedcab842dbccfb70f764fc2b5535a05c5d8061073a6c4c397ffef",
+          "path": "fuzz/corpus/ui_input/cov-52acd09c.seed"
+        },
+        {
+          "hash": "8a1ef2065caa8c198415f04ee0157a9c72c9785e0b13d7b4417fa14e709c5b1e",
+          "path": "fuzz/corpus/ui_input/cov-54110161.seed"
+        },
+        {
+          "hash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "path": "fuzz/corpus/ui_input/cov-5ba93c9d.seed"
+        },
+        {
+          "hash": "c30fa89eecee33dc37a1be0f70f25b87d0194a9c127984feee2914ec47920ba9",
+          "path": "fuzz/corpus/ui_input/cov-5d6020d3.seed"
+        },
+        {
+          "hash": "ae600cbd25fca4c31377405a19ee3281d44eaa118448130fb6f511d3f857c4bb",
+          "path": "fuzz/corpus/ui_input/cov-6218a144.seed"
+        },
+        {
+          "hash": "b2f3790f04a97bfbe2459129c81ea08df30bed1cf52f544cc837ba81f263b491",
+          "path": "fuzz/corpus/ui_input/cov-67308c81.seed"
+        },
+        {
+          "hash": "552d7d672c5bbbccfb210a425e36a1d65bc663d3d3c395114c8ebc9c7cf28394",
+          "path": "fuzz/corpus/ui_input/cov-6dd4ac18.seed"
+        },
+        {
+          "hash": "39d214c9ab0802bc1da60cfd3cf64daa2e3898ee236afdffe8f9c0ebda944a02",
+          "path": "fuzz/corpus/ui_input/cov-6e8d9840.seed"
+        },
+        {
+          "hash": "d3756e46667acef74b91ccc70e1f3e85fef45286a791156004c0122b9688de10",
+          "path": "fuzz/corpus/ui_input/cov-772c8bbb.seed"
+        },
+        {
+          "hash": "4da7a23d0c018bf5865d46ff28cb46e388fe1c4df515aed70fbabc3f588c8c71",
+          "path": "fuzz/corpus/ui_input/cov-7a9bcabf.seed"
+        },
+        {
+          "hash": "a11578e9cdc7fdd071a963779622d6554ddfc59c7079cc67e65b1acac977c4b8",
+          "path": "fuzz/corpus/ui_input/cov-7f66dff2.seed"
+        },
+        {
+          "hash": "aca2f30d873892e58b813b131c81c7e4852f6fb4c2e55cf948ca6aa09dbdd4b2",
+          "path": "fuzz/corpus/ui_input/cov-84f1519b.seed"
+        },
+        {
+          "hash": "06a0350ba2d2fd5546f5a2651227817cd2105c68058c7fccd2acb9df2e73cbc8",
+          "path": "fuzz/corpus/ui_input/cov-8c74383d.seed"
+        },
+        {
+          "hash": "beead77994cf573341ec17b58bbf7eb34d2711c993c1d976b128b3188dc1829a",
+          "path": "fuzz/corpus/ui_input/cov-8d883f15.seed"
+        },
+        {
+          "hash": "45a8e175d7cddbfa89b447bbbe345d17d50b27ee8a3386bef44949c97e2a3c2d",
+          "path": "fuzz/corpus/ui_input/cov-8e6d3a4d.seed"
+        },
+        {
+          "hash": "c2f6483fda8b3dd02b65b80657219dbc95165336d9318123c2697b315cbd858c",
+          "path": "fuzz/corpus/ui_input/cov-918edff5.seed"
+        },
+        {
+          "hash": "55de6706b093ce9e3804f3c0e5f8471926e9abd734ac95c8a131400195f06172",
+          "path": "fuzz/corpus/ui_input/cov-9359a193.seed"
+        },
+        {
+          "hash": "566845c6136dbc12bd8e4632278b877f27fb98a2c83e80c7cce766577c4f63e0",
+          "path": "fuzz/corpus/ui_input/cov-93be2cca.seed"
+        },
+        {
+          "hash": "3a393a862889fd2bcc4a2939b02eab350625a27342e6a8257769839cbd458e5b",
+          "path": "fuzz/corpus/ui_input/cov-93cdc93f.seed"
+        },
+        {
+          "hash": "3372a510bc71853e0264800e95deefc6991e4e0e8cf62d7c009e8daf2b20b833",
+          "path": "fuzz/corpus/ui_input/cov-97704be2.seed"
+        },
+        {
+          "hash": "084fed08b978af4d7d196a7446a86b58009e636b611db16211b65a9aadff29c5",
+          "path": "fuzz/corpus/ui_input/cov-9842926a.seed"
+        },
+        {
+          "hash": "9fa23227e2f0bbf02e7040f55afbfd5c29fc74966c665ce943b43cc6e738c197",
+          "path": "fuzz/corpus/ui_input/cov-a48e37e5.seed"
+        },
+        {
+          "hash": "6da98d25121042e68ff8de9f903d6aac9ead57608b77c2bdd9586cd6e5f41af6",
+          "path": "fuzz/corpus/ui_input/cov-a68c368f.seed"
+        },
+        {
+          "hash": "2d27545849950acecda8ce3c4cb24cb78e7340091e3f7a3ce99ac7e88c0bb523",
+          "path": "fuzz/corpus/ui_input/cov-aec155ee.seed"
+        },
+        {
+          "hash": "57b5d036c6a14d873043088218ce3afdc5bb02490a1a1d7365ba9966bf8df53e",
+          "path": "fuzz/corpus/ui_input/cov-b3d30a8e.seed"
+        },
+        {
+          "hash": "908b31d9e4fa8b94f65840f1d28969cdf2b601edebab038a7586bdea01d57885",
+          "path": "fuzz/corpus/ui_input/cov-b4791206.seed"
+        },
+        {
+          "hash": "a66ef077e16abbdcd19b4c07ff337835246b7013efb5d58ec91bf755b6a41537",
+          "path": "fuzz/corpus/ui_input/cov-b7fff48b.seed"
+        },
+        {
+          "hash": "2f11a3413b4974a0e2c4413ec25896b695ba481651e8cbc3950fb2808dd24fbc",
+          "path": "fuzz/corpus/ui_input/cov-be5d119d.seed"
+        },
+        {
+          "hash": "dabd3aff769f07eb2965401eb029974ebba3407afd02b26ddb564ea5f8efae72",
+          "path": "fuzz/corpus/ui_input/cov-c4dd3c8c.seed"
+        },
+        {
+          "hash": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986",
+          "path": "fuzz/corpus/ui_input/cov-c4ea21bb.seed"
+        },
+        {
+          "hash": "63c22fee763430e0841bd866713573b6480fccc48550509caf510cc406d2edd5",
+          "path": "fuzz/corpus/ui_input/cov-c8a6f2b1.seed"
+        },
+        {
+          "hash": "4650564ca1581868556f224529e81a19b59f588eae9aae847b07d293ab274c1a",
+          "path": "fuzz/corpus/ui_input/cov-ca782708.seed"
+        },
+        {
+          "hash": "f7ddc42e4c3e1c4ca3bb4e155d19da405ee7b814933c34f8f3b008fd0e0fe11c",
+          "path": "fuzz/corpus/ui_input/cov-cb0c3b06.seed"
+        },
+        {
+          "hash": "97c488ff73a2ade7590a3aabbe08636a3bf69038da4eab6a8597da4d179ec83a",
+          "path": "fuzz/corpus/ui_input/cov-d90a3efe.seed"
+        },
+        {
+          "hash": "970bec7483984728e413a0ff65986310f4bbe8fff5f02c58e6064856262d8476",
+          "path": "fuzz/corpus/ui_input/cov-de736e80.seed"
+        },
+        {
+          "hash": "50cff72c8e550546d661ec235431888fb2f9f7bada40c17020d47f6ccc117aae",
+          "path": "fuzz/corpus/ui_input/cov-df9e7e9f.seed"
+        },
+        {
+          "hash": "1702c7fc920c5ef061079a21c78b35e6e3583562fdaa01d1ebff017abaeb0023",
+          "path": "fuzz/corpus/ui_input/cov-e0d8276c.seed"
+        },
+        {
+          "hash": "6d6ce875f7c57cc52c3a76702f1e3f4a4a834c1a017be4591eafef1072ca54a9",
+          "path": "fuzz/corpus/ui_input/cov-e9cf12a2.seed"
+        },
+        {
+          "hash": "b184d29a1c103b5269165d679d2460bdc54ed484d57a4716800bfba78ae036ff",
+          "path": "fuzz/corpus/ui_input/cov-efc92681.seed"
+        },
+        {
+          "hash": "4281736a18ed802e3d20a2199b96682603e2dacfd5daae760f042c66c3260dd2",
+          "path": "fuzz/corpus/ui_input/cov-f5e99144.seed"
+        },
+        {
+          "hash": "fe5c5c13b804e74f4edfff7f2ef101fc9407a83237b327b017cbda8094914854",
+          "path": "fuzz/corpus/ui_input/cov-fe735997.seed"
+        },
+        {
+          "hash": "9fcfeac82830673488bc4a27ec7259fe7b06513e3dc6781ecab9c24b08881086",
+          "path": "fuzz/corpus/ui_input/finding_f4_nan.seed"
+        },
+        {
+          "hash": "5faa4eec3611556812c2d74b437c8c49add3f910f10063d801441f7d75cd5e3b",
+          "path": "fuzz/corpus/ui_input/mode0.seed"
+        },
+        {
+          "hash": "80b88f86575d849a9ead21511514b930f2ceffa6993340f22ba5666938ea1f7d",
+          "path": "fuzz/corpus/ui_input/mode1.seed"
+        },
+        {
+          "hash": "4f5af87bf6dc4845ac866989c652e9a372408059e2727ace6d770d12f179dcb0",
+          "path": "fuzz/corpus/ui_input/mode2.seed"
+        },
+        {
+          "hash": "291724c4c704ec6f0d57d5b7ad5795e6834896258764eb698ddcc449643be9a7",
+          "path": "fuzz/corpus/ui_input/mode3.seed"
+        },
+        {
+          "hash": "578c7fdda14690d19ecbe040de38caccaaca8587212d41d74870f76739cb9daf",
+          "path": "fuzz/corpus/ui_input/mode4.seed"
+        },
+        {
+          "hash": "fbb21152e46dd33a142ed5b1cbe8f7bf8792a505abd8ce25d3962775a8319677",
+          "path": "fuzz/corpus/ui_input/mode5.seed"
+        },
+        {
+          "hash": "d5e599f74d2852e5e6f9f8f66ecee00710f67ab8ebdd6b7fc77916cb08cad6b5",
+          "path": "fuzz/corpus/ui_input/mode6.seed"
+        },
+        {
+          "hash": "21d16c58cfa31883ba94398af059c1c17342be519463fa2a46086a27e4c1d1b2",
+          "path": "fuzz/corpus/ui_input/redaction_truncated_to_slash_home.seed"
+        },
+        {
+          "exports": [
+            "instrument",
+            "main",
+            "patched_environ",
+            "scratch_dir"
+          ],
+          "failurePaths": [
+            {
+              "kind": "except",
+              "line": 51
+            }
+          ],
+          "hash": "8d2035626233700ea7c00a59ca6c0d74f370fcad2c63c59fec99c4888ac0c413",
+          "path": "fuzz/fuzz_common.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_config",
+            "check_section",
+            "check_training_invariants",
+            "check_ui_security_env"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_section",
+              "kind": "except",
+              "line": 106
+            },
+            {
+              "in": "check_section",
+              "kind": "except",
+              "line": 109
+            },
+            {
+              "in": "check_section",
+              "kind": "raise",
+              "line": 111
+            },
+            {
+              "in": "check_ui_security_env",
+              "kind": "except",
+              "line": 147
+            }
+          ],
+          "hash": "feb418f0644c1130002b363ddad1836bc29e7bc470f95a9d83cba0bf7268abd5",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_config.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_dataset_files",
+            "reference"
+          ],
+          "failurePaths": [
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 58
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 66
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 68
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 88
+            },
+            {
+              "in": "reference",
+              "kind": "except",
+              "line": 90
+            },
+            {
+              "in": "_try",
+              "kind": "except",
+              "line": 100
+            }
+          ],
+          "hash": "15c46b4057e923457113263b88404de4ef6cbc3f20f16a5c93ea4a0c862cac77",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_dataset_files.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_datasets",
+            "check_ngrams_and_split",
+            "check_roundtrip",
+            "check_rows",
+            "decode_rows"
+          ],
+          "failurePaths": [
+            {
+              "in": "decode_rows",
+              "kind": "except",
+              "line": 60
+            },
+            {
+              "in": "check_ngrams_and_split",
+              "kind": "except",
+              "line": 162
+            }
+          ],
+          "hash": "694f534a6d53570322069e8dfda7af08f11df7769adb4b85848ec86cf4c3350d",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_datasets.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_forbidden_output_base",
+            "check_paths",
+            "check_safe_path_no_base",
+            "check_safe_path_with_base",
+            "check_sanitize_filename",
+            "check_sanitized",
+            "tree"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_safe_path_with_base",
+              "kind": "except",
+              "line": 121
+            },
+            {
+              "in": "check_safe_path_with_base",
+              "kind": "except",
+              "line": 128
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 159
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 164
+            },
+            {
+              "in": "check_safe_path_no_base",
+              "kind": "except",
+              "line": 167
+            }
+          ],
+          "hash": "f0176725ad4890ab148d7e17cc48c54b1cfc5d4b905c1964f8bfa26dc9edddf6",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_paths.py"
+        },
+        {
+          "exports": [
+            "TestOneInput",
+            "check_auth_shape",
+            "check_error_sanitizing",
+            "check_file_magic",
+            "check_markdown_fence",
+            "check_numeric",
+            "check_numeric_input",
+            "check_redaction",
+            "check_redaction_leak",
+            "check_string_input",
+            "check_ui_input"
+          ],
+          "failurePaths": [
+            {
+              "in": "check_string_input",
+              "kind": "except",
+              "line": 79
+            },
+            {
+              "in": "check_numeric",
+              "kind": "except",
+              "line": 104
+            },
+            {
+              "in": "check_auth_shape",
+              "kind": "except",
+              "line": 166
+            }
+          ],
+          "hash": "f8895a834ae5e17ae24737206da65387b7004c4065fdf600e3e6b68eedd27550",
+          "importOrder": [
+            "fuzz/fuzz_common.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py"
+          ],
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "path": "fuzz/fuzz_ui_input.py"
+        }
+      ],
+      "globs": [
+        "fuzz/**"
+      ],
+      "importConfidence": "full",
+      "name": "fuzz",
+      "origin": "authored",
+      "outsidePlaces": [
+        {
+          "reads": 0,
+          "where": [
+            "temp"
+          ],
+          "writes": 2
+        }
+      ],
+      "outsideWrites": 2,
+      "role": "test",
+      "testRunners": [
+        "pytest"
+      ],
+      "testedBy": 1,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicSpawns": 0,
+      "dynamicSpawnsInTests": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
+          "hash": "55fe27aa0aeac4a1ad0286a6157a7efe4d748f1c4977e9d90479ea693e913366",
+          "path": "requirements/bandit.in"
+        },
+        {
+          "hash": "6fd4e6f4bc599ee120bd6fd952b6590aff9ce644c97043de4955163b94a644b0",
+          "path": "requirements/bandit.txt"
+        },
+        {
+          "hash": "d6573ed0e8b79893c4fed9441ee36090bd89ca21f2981680de7fef32226809d9",
+          "path": "requirements/build-backend.in"
+        },
+        {
+          "hash": "29354a75486371bdee519c6ea71ff860068c9c5b8c5304c189a4f6306046969d",
+          "path": "requirements/build-backend.txt"
+        },
+        {
+          "hash": "fe6503236a817bb738c7c162fb8b4ddf435439ef13f5538ebc12f7b1e87e6ca7",
+          "path": "requirements/build-tools.in"
+        },
+        {
+          "hash": "c3db93513ee159024d441fa46542037548cd28f55961b74b917eb8625a292237",
+          "path": "requirements/build-tools.txt"
+        },
+        {
+          "hash": "55e059ed791ca4e03987eba897067a8a80937bb33ec1b22b6648bd3d2a11f844",
+          "path": "requirements/compile.sh"
+        },
+        {
+          "hash": "c25484124b0bb97975cce6fd43b73a9e3afaa7ae3c974bd8149e55dfff154d9d",
+          "path": "requirements/fuzz.in"
+        },
+        {
+          "hash": "034f528a633971ac7961978fb8a82a1eba1a566d168448609bc95158ece666d4",
+          "path": "requirements/fuzz.txt"
+        },
+        {
+          "hash": "6d1a26e35088557bd93c24d1ef00e58cd791dfac7f54c4ac39dfea282a9a86b3",
+          "path": "requirements/pip-audit.in"
+        },
+        {
+          "hash": "f99ab2ffcf97564f4ad9d45bd8df7d8817b2e4c3d7004828a26ccb1c0583575a",
+          "path": "requirements/pip-audit.txt"
+        },
+        {
+          "hash": "4fe2e7b912b2b03eceea0f68b1fb6ca426d4ea35f2b05e57e807938d82231685",
+          "path": "requirements/sbom.in"
+        },
+        {
+          "hash": "51a67ffe31804228db7da706ce7c95eae3f3759995f378c9f8784589818335b9",
+          "path": "requirements/sbom.txt"
+        },
+        {
+          "hash": "a7852c6447c180890fe6563e7e67816e342e21bf1469372b49c7ddbecd1762a5",
+          "path": "requirements/uv.in"
+        },
+        {
+          "hash": "888986622464fc5e31ef3ab7ce243d6a2f7cdda33b56d97e64d4d5c74e4ddb5a",
+          "path": "requirements/uv.txt"
+        }
+      ],
+      "globs": [
+        "requirements/**"
+      ],
+      "importConfidence": "full",
+      "name": "requirements",
+      "origin": "authored",
+      "role": "config",
+      "testedBy": 0,
+      "unresolvedSites": 0
+    },
+    {
+      "dynamicReads": 0,
+      "dynamicSpawns": 0,
+      "dynamicSpawnsInTests": 0,
+      "dynamicWrites": 0,
+      "entryPoints": [],
+      "externals": 0,
+      "files": [
+        {
           "hash": "ac42164bedd0215395f059933f5838a04f2a1a77d7793cfa4818d3c0ed09f517",
           "path": ".dockerignore"
         },
@@ -9497,7 +12203,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "e2e5ba1672221491efec9ed86d75b06b39109a951de137b33ee1411bcf9aa990",
+          "hash": "5e42d053dafff323209693b6202b4d5f9d6be8c8e36681fab59f0f0682e04b48",
           "path": "CHANGELOG.md"
         },
         {
@@ -9887,7 +12593,7 @@
                   "line": 110,
                   "name": "Trainer",
                   "target": {
-                    "file": "backpropagate/__init__.py"
+                    "file": "backpropagate/trainer.py"
                   }
                 },
                 {
@@ -9895,7 +12601,7 @@
                   "name": "train",
                   "receiver": "Trainer",
                   "target": {
-                    "file": "backpropagate/__init__.py"
+                    "file": "backpropagate/trainer.py"
                   }
                 }
               ],
@@ -9932,6 +12638,9 @@
             }
           ],
           "hash": "717808b12cb2c4097bc2ddce409a7332798ed60caad6079b43bc9b1fa41281d6",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
           "path": "scripts/offload_probe.py"
         },
         {
@@ -9952,7 +12661,8 @@
           ],
           "hash": "ff9c4e9717038a32ecf013bc15d87801487c470d28764e27f79036057be32bd6",
           "importsFiles": [
-            "backpropagate/datasets.py"
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
           ],
           "path": "scripts/offload_quality.py"
         },
@@ -10062,13 +12772,15 @@
             "backpropagate/datasets.py",
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/block_engine.py",
             "backpropagate/config.py",
-            "backpropagate/datasets.py"
+            "backpropagate/datasets.py",
+            "backpropagate/trainer.py"
           ],
           "path": "scripts/pod_block_engine.py"
         },
@@ -10167,24 +12879,7 @@
         "pytest"
       ],
       "testedBy": 2,
-      "unresolvedNamed": [
-        {
-          "path": "scripts/offload_probe.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "scripts/offload_quality.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        },
-        {
-          "path": "scripts/pod_block_engine.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
-        }
-      ],
-      "unresolvedSites": 3
+      "unresolvedSites": 0
     },
     {
       "dynamicReads": 0,
@@ -10410,6 +13105,7 @@
             "backpropagate/slao.py",
             "backpropagate/multi_run.py",
             "backpropagate/cli.py",
+            "backpropagate/trainer.py",
             "tests/helpers/__init__.py"
           ],
           "importsFiles": [
@@ -10418,6 +13114,7 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
             "backpropagate/slao.py",
+            "backpropagate/trainer.py",
             "tests/helpers/__init__.py"
           ],
           "path": "tests/conftest.py",
@@ -10644,6 +13341,7 @@
             "backpropagate/block_engine.py",
             "backpropagate/exceptions.py",
             "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py",
             "backpropagate/cli.py"
           ],
           "importsFiles": [
@@ -10651,6 +13349,7 @@
             "backpropagate/block_engine.py",
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_block_engine_trainer.py",
@@ -10659,12 +13358,14 @@
         {
           "hash": "95dd4555c3bd84f8370e0426df02c03dc2b8faf30dd3f1b6e9e6254f57a453ca",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/gpu_safety.py"
           ],
           "importsFiles": [
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_callback_integration.py",
           "testFramework": "pytest"
@@ -10675,12 +13376,14 @@
             "backpropagate/exceptions.py",
             "backpropagate/security.py",
             "tests/helpers/tiny_models.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/exceptions.py",
             "backpropagate/export.py",
             "backpropagate/security.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_chat_template_guard.py",
@@ -10833,10 +13536,19 @@
             "tiny_adapter"
           ],
           "hash": "504484fff2e27707612787187f0073cc181b21fb9772b6c202fbb92f89ee0dd8",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/cli.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/cli_cov_support.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/cli_cov_support.py",
             "tests/helpers/tiny_models.py"
           ],
@@ -10919,7 +13631,7 @@
             "patch_multi",
             "patch_trainer"
           ],
-          "hash": "df6f013ea3788d1f93a3ea455a435dec73d8f2a3168ed5d0a4141201bd6b08c8",
+          "hash": "2de286266137e6e47445785ffb2441d0df451056193124f625a673d041850519",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/cli.py",
@@ -10947,7 +13659,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "14209067e81a153b976a55b3d031e7e0498b9f11ec7441256a605e22f2558dd8",
+          "hash": "6a8c213fc191c1a859be867a8a8234a0863cefc9cdad3b1a180fc943a463e9ea",
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/cli.py"
@@ -11198,11 +13910,13 @@
           "hash": "1cd2bda7433dd21c545a811c27ca9cd279f66352048afbba0e8f9d5e2b8c83b2",
           "importOrder": [
             "backpropagate/export.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_e2e_chain.py",
           "testFramework": "pytest"
@@ -11210,6 +13924,7 @@
         {
           "hash": "cc0e2d428c1399626e1b16055652cdfc1906b7dcf8795adb142fd2252db134c2",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "backpropagate/offload_engine.py",
             "backpropagate/cli.py",
@@ -11223,7 +13938,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
             "backpropagate/mlx_backend.py",
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_envelope_v17.py",
           "testFramework": "pytest"
@@ -11336,12 +14052,14 @@
         {
           "hash": "ea62a652da27cf3c3f2080c578d417331d7c2380e0f25120294b11de1bffe4ae",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/gpu_safety.py"
           ],
           "importsFiles": [
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_event_handlers.py",
           "testFramework": "pytest"
@@ -11380,13 +14098,15 @@
             "backpropagate/export.py",
             "backpropagate/exceptions.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py"
           ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
-            "backpropagate/export.py"
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_export.py",
           "testFramework": "pytest"
@@ -11522,6 +14242,7 @@
         {
           "hash": "e757caec7847e90bfd954d69441f1541611a1327045cdaec9f77d699764a8cc3",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/__init__.py",
             "backpropagate/exceptions.py"
@@ -11529,7 +14250,8 @@
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/config.py",
-            "backpropagate/exceptions.py"
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_fp8.py",
           "testFramework": "pytest"
@@ -11539,6 +14261,9 @@
             "test_fp8_end_to_end_trains_converts_and_merges"
           ],
           "hash": "56f0cbe04fc53dd7002c92592ac0b27b15ce8fd50f195f9ecb10414136c466a5",
+          "importsFiles": [
+            "backpropagate/trainer.py"
+          ],
           "path": "tests/test_fp8_smoke.py",
           "testFramework": "pytest"
         },
@@ -11548,8 +14273,13 @@
             "test_offload_fast_fails_without_nccl"
           ],
           "hash": "2b5a9355856a7d74b677cf9a5b6c5b5a91c273f356147a8a1b2f15a6682f1cfa",
-          "importsFiles": [
+          "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py"
+          ],
+          "importsFiles": [
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_full_ft_offload_smoke.py",
           "testFramework": "pytest"
@@ -11568,6 +14298,46 @@
         },
         {
           "exports": [
+            "corpus_and_random",
+            "corpus_files",
+            "first_failure",
+            "load",
+            "random_inputs"
+          ],
+          "hash": "138f64a6122a7d920525287fb74d3993f0145a64ab06d1260571829104005701",
+          "importOrder": [
+            "fuzz/fuzz_config.py",
+            "fuzz/fuzz_dataset_files.py",
+            "fuzz/fuzz_datasets.py",
+            "fuzz/fuzz_paths.py",
+            "fuzz/fuzz_ui_input.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/ui_security.py",
+            "backpropagate/datasets.py",
+            "backpropagate/config.py",
+            "backpropagate/security.py",
+            "backpropagate/__init__.py",
+            "fuzz/fuzz_common.py"
+          ],
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/config.py",
+            "backpropagate/datasets.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/security.py",
+            "backpropagate/ui_security.py",
+            "fuzz/fuzz_common.py",
+            "fuzz/fuzz_config.py",
+            "fuzz/fuzz_dataset_files.py",
+            "fuzz/fuzz_datasets.py",
+            "fuzz/fuzz_paths.py",
+            "fuzz/fuzz_ui_input.py"
+          ],
+          "path": "tests/test_fuzz_harnesses.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
             "checkpoint",
             "fallback_gguf",
             "test_default_q4_k_m_to_ollama",
@@ -11580,8 +14350,13 @@
             "workdir"
           ],
           "hash": "f27dfd97978538d29aa80e92b2b41b2be3097dfcbd5504c9d0ccaabf1c3a3464",
-          "importsFiles": [
+          "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/export.py"
+          ],
+          "importsFiles": [
+            "backpropagate/export.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_golden_path_smoke.py",
           "spawns": [
@@ -11641,10 +14416,17 @@
         },
         {
           "hash": "3224122e3dc7d8e9ac284fe5089331f9b09795b80ccc80894463ac30eed820dc",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/config.py",
+            "backpropagate/exceptions.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/config.py",
-            "backpropagate/exceptions.py"
+            "backpropagate/exceptions.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_init_imports.py",
           "testFramework": "pytest"
@@ -11652,6 +14434,7 @@
         {
           "hash": "ff0a95d6aa9411d270176c856f8fbe22fbc72578268875790eb537e2c6a19bde",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/multi_run.py",
             "backpropagate/checkpoints.py",
             "backpropagate/export.py",
@@ -11665,7 +14448,8 @@
             "backpropagate/export.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_integration.py"
         },
@@ -11675,7 +14459,8 @@
           ],
           "hash": "fc86fd6d74af6f14c849b51272cc9fd3bd837e7a373623b23f4b54b3e842b81a",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_kto_smoke.py",
           "testFramework": "pytest"
@@ -11717,7 +14502,8 @@
           "hash": "a52c8de7d0f8c115f1f05876843fdae63f13dcb8cf8f823b73acdedd16009e1f",
           "importsFiles": [
             "backpropagate/exceptions.py",
-            "backpropagate/mlx_backend.py"
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_mlx_backend.py",
           "testFramework": "unittest"
@@ -11729,11 +14515,13 @@
           "hash": "ea62f25963e5ec0bf7353e48d163ea2582177118535991451b4c21703d83bce7",
           "importOrder": [
             "backpropagate/feature_flags.py",
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
-            "backpropagate/feature_flags.py"
+            "backpropagate/feature_flags.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_mlx_smoke.py",
           "testFramework": "pytest"
@@ -11775,6 +14563,7 @@
             "backpropagate/multi_run.py",
             "backpropagate/checkpoints.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/slao.py",
             "backpropagate/eval.py"
           ],
@@ -11785,7 +14574,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "names": [
             "backpropagate/cli.py"
@@ -11876,6 +14666,37 @@
           "testFramework": "pytest"
         },
         {
+          "hash": "1063f569f5ee42c28db9fde1ce6e2d5deb31d7087930421383dd6596bc31f1ec",
+          "importsFiles": [
+            "backpropagate/multi_run.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_peft_extraction.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "env"
+          ],
+          "hash": "492ba58c2dcb24477055bf31ce725533741a56283e67fb17ce729efd407a2f92",
+          "importOrder": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "tests/test_multi_run_cov_support.py",
+            "backpropagate/slao.py"
+          ],
+          "importsFiles": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "tests/test_multi_run_cov_support.py"
+          ],
+          "path": "tests/test_multi_run_cov_resume.py",
+          "testFramework": "pytest"
+        },
+        {
           "exports": [
             "env"
           ],
@@ -11903,11 +14724,20 @@
             "text_dataset"
           ],
           "hash": "3990f5430b926dc23dedf42e717716354c873f5080ada0e76e3cd79bf6915f51",
+          "importOrder": [
+            "backpropagate/checkpoints.py",
+            "backpropagate/gpu_safety.py",
+            "backpropagate/multi_run.py",
+            "backpropagate/slao.py",
+            "tests/helpers/tiny_models.py",
+            "backpropagate/trainer.py"
+          ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/multi_run.py",
             "backpropagate/slao.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_multi_run_cov_support.py",
@@ -11941,7 +14771,8 @@
           ],
           "hash": "18d7e13468b7bd8b057e04cd02de530f35cbaf889ef3009d0e65293cf3d71346",
           "importsFiles": [
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_offload_engine.py",
           "testFramework": "pytest"
@@ -11954,11 +14785,13 @@
           "hash": "3673be15025ff522c5252a179ba20471fc3f7c4133b9d6b2d68d818bc19e94c6",
           "importOrder": [
             "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py"
           ],
           "importsFiles": [
             "backpropagate/exceptions.py",
-            "backpropagate/offload_engine.py"
+            "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_offload_fit.py",
           "testFramework": "pytest"
@@ -11968,6 +14801,7 @@
           "importOrder": [
             "tests/helpers/trl_paths.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/checkpoints.py"
@@ -11977,6 +14811,7 @@
             "backpropagate/checkpoints.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_orpo.py",
@@ -11988,7 +14823,8 @@
           ],
           "hash": "44a4188352413cbc2338639459ea5ccec9c19ce30fd9dde2b8ec8d14f9b151a5",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_orpo_smoke.py",
           "testFramework": "pytest"
@@ -11999,7 +14835,8 @@
           ],
           "hash": "df6d9e637ce2c6a17fcc2f6ff0b5fc0f40ed55c393dc4e00e120061d325fc8ea",
           "importsFiles": [
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_qlora_presets_smoke.py",
           "testFramework": "pytest"
@@ -12162,7 +14999,8 @@
           ],
           "hash": "9d47291ae567c79d89151e50912e521268ede56797a814b834e5649271fcd851",
           "importsFiles": [
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_simpo_smoke.py",
           "testFramework": "pytest"
@@ -12200,6 +15038,7 @@
           ],
           "hash": "0d24f0cb0c9d81b4272eb4f1805661c0ffb8674b6240ef533ee0ec66e2a17e6a",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/cli.py",
             "backpropagate/exceptions.py",
@@ -12221,7 +15060,8 @@
             "backpropagate/export.py",
             "backpropagate/feature_flags.py",
             "backpropagate/logging_config.py",
-            "backpropagate/slao.py"
+            "backpropagate/slao.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_trainer.py",
           "testFramework": "pytest"
@@ -12240,6 +15080,7 @@
           "hash": "8c8eddfc5540c781735a8608e12cca99afd32968bed1c333d0c1d7011c0b2dd6",
           "importOrder": [
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
@@ -12254,6 +15095,7 @@
             "backpropagate/exceptions.py",
             "backpropagate/multi_run.py",
             "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_data_io.py",
@@ -12270,11 +15112,20 @@
             "tiny_dir"
           ],
           "hash": "4d7ff6e0878d09c1e06229457ed41c14bcbdad38b05cadcde91f2461fb8c60cd",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/checkpoints.py",
+            "backpropagate/exceptions.py",
+            "backpropagate/mlx_backend.py",
+            "tests/helpers/tiny_models.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
             "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_edges.py",
@@ -12289,6 +15140,7 @@
           "hash": "79044e2040121a59f28694ae90aa50844ae2d408f9c5496f1390acb648b8444d",
           "importOrder": [
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "tests/helpers/tiny_models.py",
             "backpropagate/offload_engine.py",
@@ -12299,6 +15151,7 @@
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_helpers.py",
@@ -12311,6 +15164,7 @@
           "hash": "288489b15b8ba98b1f81b7a8c23eb642eafdc7c35eb0655ba48ba18fc2c0a20b",
           "importOrder": [
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "backpropagate/config.py",
             "backpropagate/offload_engine.py",
@@ -12321,6 +15175,7 @@
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/offload_engine.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_init.py",
@@ -12334,9 +15189,17 @@
             "tiny_dir"
           ],
           "hash": "556039f2fc53bdb89cd02f437ef6b3dea7355df7c79ec5bcd3f006cc70e055e4",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py",
+            "tests/test_trainer_cov_init.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py",
             "tests/test_trainer_cov_init.py"
           ],
@@ -12355,9 +15218,16 @@
             "unsloth_without_fallback"
           ],
           "hash": "eac578ea43f4c851bcecba8112e04cc3793b22373ad792b434de5b700da88625",
+          "importOrder": [
+            "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
+            "backpropagate/exceptions.py",
+            "tests/helpers/tiny_models.py"
+          ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_regressions.py",
@@ -12374,6 +15244,7 @@
           "hash": "c6bfa8243106a1ca04c41677fe23e5f5834a7bb6c6bf455ec09d63ff314fcdad",
           "importOrder": [
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
             "tests/helpers/tiny_models.py",
@@ -12384,6 +15255,7 @@
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
             "backpropagate/gpu_safety.py",
+            "backpropagate/trainer.py",
             "tests/helpers/tiny_models.py"
           ],
           "path": "tests/test_trainer_cov_train.py",
@@ -12397,6 +15269,7 @@
           "importOrder": [
             "tests/helpers/trl_paths.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
             "backpropagate/checkpoints.py",
@@ -12408,6 +15281,7 @@
             "backpropagate/config.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "tests/helpers/trl_paths.py"
           ],
           "path": "tests/test_trainer_simpo_kto.py",
@@ -12421,6 +15295,7 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/exceptions.py",
+            "backpropagate/trainer.py",
             "backpropagate/__init__.py",
             "backpropagate/feature_flags.py",
             "backpropagate/eval.py",
@@ -12434,7 +15309,8 @@
             "backpropagate/eval.py",
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
-            "backpropagate/mlx_backend.py"
+            "backpropagate/mlx_backend.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_trust_remote_code.py",
           "testFramework": "pytest"
@@ -12718,6 +15594,7 @@
         {
           "hash": "aa83ea69df35ece2c6e996f1c90f9a8b9a67afb9b8841f6d46c73639348485d3",
           "importOrder": [
+            "backpropagate/trainer.py",
             "backpropagate/exceptions.py",
             "backpropagate/config.py",
             "backpropagate/__init__.py",
@@ -12733,7 +15610,8 @@
             "backpropagate/exceptions.py",
             "backpropagate/feature_flags.py",
             "backpropagate/gpu_safety.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_wave6b_features.py",
           "testFramework": "pytest"
@@ -12743,12 +15621,14 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/cli.py",
-            "backpropagate/checkpoints.py"
+            "backpropagate/checkpoints.py",
+            "backpropagate/trainer.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/cli.py",
-            "backpropagate/config.py"
+            "backpropagate/config.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_wave6b_flags.py",
           "testFramework": "pytest"
@@ -12758,6 +15638,7 @@
           "importOrder": [
             "backpropagate/config.py",
             "backpropagate/__init__.py",
+            "backpropagate/trainer.py",
             "backpropagate/datasets.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
@@ -12769,7 +15650,8 @@
             "backpropagate/config.py",
             "backpropagate/datasets.py",
             "backpropagate/exceptions.py",
-            "backpropagate/multi_run.py"
+            "backpropagate/multi_run.py",
+            "backpropagate/trainer.py"
           ],
           "path": "tests/test_windows_compat.py",
           "testFramework": "pytest"
@@ -12788,22 +15670,22 @@
       "testedBy": 0,
       "unresolvedNamed": [
         {
-          "path": "tests/conftest.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_fp8_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         },
         {
-          "path": "tests/test_block_engine_trainer.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_full_ft_offload_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         },
         {
-          "path": "tests/test_block_engine_trainer.py",
-          "specifier": "backpropagate.trainer",
-          "why": "unplaced"
+          "path": "tests/test_golden_path_smoke.py",
+          "specifier": null,
+          "why": "dynamic"
         }
       ],
-      "unresolvedSites": 355
+      "unresolvedSites": 13
     }
   ],
   "doors": [
@@ -13553,7 +16435,12 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
+        },
+        {
+          "boundary": "requirements",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "root",
@@ -13568,7 +16455,16 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 143
+          "files": 146
+        },
+        {
+          "boundary": "fuzz",
+          "depth": 1,
+          "enters": {
+            "file": "fuzz/fuzz_config.py",
+            "from": "tests/test_fuzz_harnesses.py"
+          },
+          "files": 6
         }
       ],
       "readers": [],
@@ -13727,7 +16623,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 143,
+          "files": 146,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -13735,7 +16631,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 143,
+          "files": 146,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -13743,28 +16639,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 143,
+          "files": 146,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 143,
+          "files": 146,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 143,
+          "files": 146,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 143,
+          "files": 146,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -13925,6 +16821,105 @@
       "uses": [
         "actions/checkout",
         "actions/setup-python"
+      ],
+      "usesWorkflowToken": false
+    },
+    {
+      "checksCount": 0,
+      "commands": [
+        {
+          "dir": "",
+          "job": "fuzz",
+          "programs": [
+            "pip"
+          ],
+          "step": "Install the fuzzing dependencies (hash-pinned)"
+        },
+        {
+          "dir": "",
+          "job": "fuzz",
+          "programs": [
+            "1",
+            "echo",
+            "mkdir",
+            "python",
+            "sed",
+            "tail",
+            "tee"
+          ],
+          "step": "Fuzz each harness"
+        }
+      ],
+      "elsewhere": [],
+      "file": ".github/workflows/fuzz.yml",
+      "jobs": [
+        {
+          "basis": "declared",
+          "name": "fuzz",
+          "runsOn": [
+            {
+              "labels": [
+                "ubuntu-latest"
+              ],
+              "platform": {
+                "cpu": "x64",
+                "libc": "glibc",
+                "os": "linux"
+              }
+            }
+          ],
+          "setup": [
+            {
+              "ranges": [
+                {
+                  "from": "3.12",
+                  "range": ">=3.12.0 <3.13.0-0"
+                }
+              ],
+              "step": "Set up Python 3.12",
+              "uses": "actions/setup-python",
+              "version": "3.12"
+            }
+          ]
+        }
+      ],
+      "landings": [],
+      "mentions": [
+        {
+          "job": "fuzz",
+          "path": "requirements/fuzz.txt"
+        }
+      ],
+      "name": "Fuzz",
+      "permissions": [
+        "contents:read"
+      ],
+      "pushes": false,
+      "reach": [],
+      "readers": [],
+      "runs": [],
+      "runsCount": 0,
+      "secrets": [],
+      "sends": {
+        "deploysPages": false,
+        "dispatchesTo": [],
+        "opensIssues": false,
+        "opensIssuesOnFailure": false,
+        "opensPullRequests": false,
+        "publishes": false,
+        "publishesTo": [],
+        "releases": false
+      },
+      "stages": [],
+      "triggers": [
+        {
+          "event": "workflow_dispatch"
+        }
+      ],
+      "uses": [
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact"
       ],
       "usesWorkflowToken": false
     },
@@ -14181,7 +17176,7 @@
             "file": "backpropagate/__init__.py",
             "from": "scripts/nightly_train_smoke.py"
           },
-          "files": 16
+          "files": 20
         }
       ],
       "readers": [],
@@ -14542,7 +17537,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -14828,7 +17823,12 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
+        },
+        {
+          "boundary": "requirements",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "root",
@@ -15341,7 +18341,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -15383,7 +18383,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "readers": [],
@@ -15413,6 +18413,11 @@
   ],
   "edges": [
     {
+      "from": "fuzz",
+      "kind": "file",
+      "to": "backpropagate"
+    },
+    {
       "from": "scripts",
       "kind": "file",
       "to": "backpropagate"
@@ -15427,13 +18432,19 @@
       "from": "tests",
       "fromTests": true,
       "kind": "file",
+      "to": "fuzz"
+    },
+    {
+      "from": "tests",
+      "fromTests": true,
+      "kind": "file",
       "to": "scripts"
     }
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "9bf15fd7a8dc5d2e0047968403079f23ba124690",
-    "tracked": 499
+    "commit": "9d35807a7524916906dc57748edc3b698d324139",
+    "tracked": 704
   },
   "landings": [
     {
@@ -15476,6 +18487,18 @@
         }
       ],
       "target": ".github/workflows/ci.yml",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": ".github/workflows/fuzz.yml",
       "writers": []
     },
     {
@@ -15926,6 +18949,28 @@
     {
       "readers": [
         {
+          "by": ".github/workflows/fuzz.yml",
+          "confidence": "config"
+        },
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "literal",
+          "confidence": "ast",
+          "fromTests": true
+        },
+        {
+          "by": "tests/test_fuzz_harnesses.py",
+          "call": "read_text",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "requirements/fuzz.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
           "by": ".github/workflows/ci.yml",
           "confidence": "config"
         }
@@ -16129,61 +19174,8 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 146,
-  "unassigned": [
-    {
-      "hash": "55fe27aa0aeac4a1ad0286a6157a7efe4d748f1c4977e9d90479ea693e913366",
-      "path": "requirements/bandit.in"
-    },
-    {
-      "hash": "6fd4e6f4bc599ee120bd6fd952b6590aff9ce644c97043de4955163b94a644b0",
-      "path": "requirements/bandit.txt"
-    },
-    {
-      "hash": "d6573ed0e8b79893c4fed9441ee36090bd89ca21f2981680de7fef32226809d9",
-      "path": "requirements/build-backend.in"
-    },
-    {
-      "hash": "29354a75486371bdee519c6ea71ff860068c9c5b8c5304c189a4f6306046969d",
-      "path": "requirements/build-backend.txt"
-    },
-    {
-      "hash": "fe6503236a817bb738c7c162fb8b4ddf435439ef13f5538ebc12f7b1e87e6ca7",
-      "path": "requirements/build-tools.in"
-    },
-    {
-      "hash": "c3db93513ee159024d441fa46542037548cd28f55961b74b917eb8625a292237",
-      "path": "requirements/build-tools.txt"
-    },
-    {
-      "hash": "55e059ed791ca4e03987eba897067a8a80937bb33ec1b22b6648bd3d2a11f844",
-      "path": "requirements/compile.sh"
-    },
-    {
-      "hash": "6d1a26e35088557bd93c24d1ef00e58cd791dfac7f54c4ac39dfea282a9a86b3",
-      "path": "requirements/pip-audit.in"
-    },
-    {
-      "hash": "f99ab2ffcf97564f4ad9d45bd8df7d8817b2e4c3d7004828a26ccb1c0583575a",
-      "path": "requirements/pip-audit.txt"
-    },
-    {
-      "hash": "4fe2e7b912b2b03eceea0f68b1fb6ca426d4ea35f2b05e57e807938d82231685",
-      "path": "requirements/sbom.in"
-    },
-    {
-      "hash": "51a67ffe31804228db7da706ce7c95eae3f3759995f378c9f8784589818335b9",
-      "path": "requirements/sbom.txt"
-    },
-    {
-      "hash": "a7852c6447c180890fe6563e7e67816e342e21bf1469372b49c7ddbecd1762a5",
-      "path": "requirements/uv.in"
-    },
-    {
-      "hash": "888986622464fc5e31ef3ab7ce243d6a2f7cdda33b56d97e64d4d5c74e4ddb5a",
-      "path": "requirements/uv.txt"
-    }
-  ],
+  "testFiles": 149,
+  "unassigned": [],
   "unseen": [
     {
       "files": [

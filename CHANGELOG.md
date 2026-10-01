@@ -85,6 +85,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event instead of probing, which can interrupt processes on the same console.
   Windows now asks the OS for the process's state (`OpenProcess` +
   `GetExitCodeProcess`) and sends nothing.
+- **Bugs found by fuzzing (Atheris, 3.3M inputs).** Malformed or hostile input
+  now gets the documented error instead of a crash or a wrong result:
+  - an OpenAI-format row whose `role` is not a string is reported as an invalid
+    role instead of raising `TypeError`;
+  - `sanitize_filename` never returns `..` or a name longer than 255 characters;
+  - NaN is rejected by the `TrainingConfig` positive-value checks, and an
+    integer too large for a float is rejected by numeric validation;
+  - exact dedupe handles text with lone surrogate characters;
+  - `safe_path` raises `PathTraversalError` on a symlink loop, and
+    `FileNotFoundError` (not a raw `OSError`) on an over-long path;
+  - path redaction hides Windows user names that contain spaces;
+  - deeply nested JSON gives `INPUT_DATASET_PARSE_FAILED` from the streaming
+    loader instead of `RecursionError`.
 
 ## [1.7.2] - 2026-09-30
 

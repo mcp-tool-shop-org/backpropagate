@@ -1,26 +1,21 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-01 from commit 9bf15fd by Atlas 1.24.0.
+Mapped at 2026-10-01 from commit 9d35807 by Atlas 1.24.0.
 
 ## What this is
 
-11 parts, mostly Python (204 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+13 parts, mostly Python (214 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (de66750)
+## What changed since 2026-10-01 (9bf15fd)
 
-- CI's push trigger now also names `requirements/**` and `scripts/ci_install_locked.sh`.
-- CI now also runs backpropagate/cli.py and scripts/ci_install_locked.sh.
-- CI now also checks LICENSE, README.md, pyproject.toml and 3 more.
-- And 4 more changes to doors.
-- .github/release-tools/package-lock.json is now read by .github/workflows/release.yml.
-- .github/release-tools/package.json is now read by .github/workflows/release.yml.
-- requirements/bandit.txt is now read by .github/workflows/ci.yml.
-- And 6 more new writers and readers of places.
-- requirements/bandit.in is new and belongs to no part, so atlas check fails on it against the previous map.
-- requirements/bandit.txt is new and belongs to no part, so atlas check fails on it against the previous map.
-- requirements/build-backend.in is new and belongs to no part, so atlas check fails on it against the previous map.
-- And 10 more new files that belong to no part.
-- 19 files added, 3 removed and 16 changed content, across 6 parts.
+- fuzz now imports backpropagate.
+- tests now imports fuzz.
+- Fuzz (.github/workflows/fuzz.yml) is a new door. It starts by hand. It runs no file this map can see.
+- .github/workflows/fuzz.yml is now read by tests/test_fuzz_harnesses.py.
+- requirements/fuzz.txt is now read by .github/workflows/fuzz.yml and tests/test_fuzz_harnesses.py.
+- fuzz is a new part, drawn from `fuzz/**`.
+- requirements is a new part, drawn from `requirements/**`.
+- 205 files added, 13 moved and 7 changed content, across 6 parts.
 
 ## What comes in
 
@@ -32,17 +27,19 @@ Mapped at 2026-10-01 from commit 9bf15fd by Atlas 1.24.0.
 6. **Mutation testing (mutmut).** By hand. Runs scripts/ci_install_locked.sh.
 7. **Pages deploy.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
 8. **Post-Publish Smoke.** When the workflow Publish completes; or by hand. Runs backpropagate/cli.py.
-9. **OpenSSF Scorecard.** On a `branch_protection_rule` event; on a push to main; on a schedule (`0 6 * * 1`), Monday at 06:00 UTC; or by hand. Runs no file this map can see.
-10. **backprop** (a command people run). Runs backpropagate/cli.py.
-11. **backpropagate** (a command people run, from package.json). Runs bin/backpropagate.js.
-12. **backpropagate** (a command people run, from pyproject.toml). Runs backpropagate/cli.py.
+9. **Fuzz.** By hand. Runs no file this map can see.
+10. **OpenSSF Scorecard.** On a `branch_protection_rule` event; on a push to main; on a schedule (`0 6 * * 1`), Monday at 06:00 UTC; or by hand. Runs no file this map can see.
+11. **backprop** (a command people run). Runs backpropagate/cli.py.
+12. **backpropagate** (a command people run, from package.json). Runs bin/backpropagate.js.
+13. **backpropagate** (a command people run, from pyproject.toml). Runs backpropagate/cli.py.
 
 ## What happens through CI
 
-1. The workflow runs backpropagate/cli.py in backpropagate, verify.sh in the repository root, scripts/ci_install_locked.sh in scripts and tests/ in tests; it checks backpropagate/ in backpropagate, requirements/build-backend.txt and requirements/uv.txt; it packs 4 files in the repository root into an image.
+1. The workflow runs backpropagate/cli.py in backpropagate, verify.sh in the repository root, scripts/ci_install_locked.sh in scripts and tests/ in tests; it checks backpropagate/ in backpropagate and requirements/build-backend.txt and requirements/uv.txt in requirements; it packs 4 files in the repository root into an image.
    1. Inside backpropagate/cli.py, `main` does, in order: `logging_config.py` (5 steps).
-2. It uploads coverage to Codecov.
-3. It scans code with CodeQL.
+2. That reaches fuzz (6 files).
+3. It uploads coverage to Codecov.
+4. It scans code with CodeQL.
 
 ## Who reads the results
 
@@ -64,6 +61,8 @@ CI writes nothing this map can see.
 
 **Post-Publish Smoke** runs backpropagate/cli.py and opens an issue when it fails.
 
+**Fuzz** runs no file this map can see.
+
 **OpenSSF Scorecard** runs no file this map can see and scans code with CodeQL.
 
 **backprop** (a command people run) runs backpropagate/cli.py.
@@ -74,16 +73,18 @@ CI writes nothing this map can see.
 
 ## What breaks what
 
-- **backpropagate** is imported by 1 part (scripts), and by 1 more only from tests; it sits on the path of 6 doors.
+- **backpropagate** is imported by 2 parts (fuzz, scripts), and by 1 more only from tests; it sits on the path of 6 doors.
 - **scripts** is imported only from tests, by 1 part (tests), and sits on the path of 5 doors.
 - **the repository root** is imported by no other part and sits on the path of 3 doors.
+- **requirements** is imported by no other part and sits on the path of 2 doors.
+- **fuzz** is imported only from tests, by 1 part (tests), and sits on the path of 1 door.
 - **CITATION.cff** is written by scripts and read by scripts; a hand edit reaches every reader.
 
 ## What tends to change together
 
 No two source files, other than a file and its own test, changed together often enough to name.
 
-2 files changed together with their own tests, as expected.
+1 file changed together with its own test, as expected.
 
 Window: 180 days; a pair counts from 10 shared commits, since 21 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
 
@@ -105,7 +106,7 @@ No two parts export a helper that looks alike.
 
 ## Hand-authored
 
-People write .claude/, .github/, assets/, docs/, examples/ and site/; 8 writes with paths built at run time may land here.
+People write .claude/, .github/, assets/, docs/, examples/, requirements/ and site/; 8 writes with paths built at run time may land here.
 
 ## Where to start
 
@@ -115,15 +116,14 @@ Read those in order to follow one pull request end to end.
 
 ## What this map cannot see
 
-- 53 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
-- 367 imports could not be resolved: `backpropagate/__init__.py` imports `.trainer`, which is no module on its import path and no declared dependency; `backpropagate/cli.py` imports `.trainer`, which is no module on its import path and no declared dependency, twice; `scripts/offload_probe.py` imports `backpropagate.trainer`, which is no module on its import path and no declared dependency; and 363 more.
+- 56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
+- 14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.
 - 8 writes and 10 reads use paths built at run time and are not named here.
-- 26 writes and 64 reads go to a path their caller passes, not to this repository.
+- 31 writes and 64 reads go to a path their caller passes, not to this repository.
+- 3 writes go to a temporary directory, not to this repository.
 - 1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.
 - 1 read goes to the directory the command is run in, not to this repository.
 - 1 read goes to the home directory (.cache/), not to this repository.
-- 1 write goes to a temporary directory, not to this repository.
 - There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.
-- 13 files belong to no part: requirements/bandit.in, requirements/bandit.txt, requirements/build-backend.in and 10 more.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

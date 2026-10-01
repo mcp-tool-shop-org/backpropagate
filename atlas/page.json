@@ -5,12 +5,14 @@
     "assets/",
     "docs/",
     "examples/",
+    "requirements/",
     "site/"
   ],
   "breaks": [
     {
       "doors": 6,
       "importedBy": [
+        "fuzz",
         "scripts"
       ],
       "importedByTests": [
@@ -39,6 +41,24 @@
       "partLabel": "the repository root"
     },
     {
+      "doors": 2,
+      "importedBy": [],
+      "importedByTests": [],
+      "kind": "part",
+      "name": "requirements",
+      "partLabel": "requirements"
+    },
+    {
+      "doors": 1,
+      "importedBy": [],
+      "importedByTests": [
+        "tests"
+      ],
+      "kind": "part",
+      "name": "fuzz",
+      "partLabel": "fuzz"
+    },
+    {
       "kind": "place",
       "readers": [
         "scripts"
@@ -51,123 +71,88 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 19,
-      "changed": 16,
-      "moved": 0,
+      "added": 205,
+      "changed": 7,
+      "moved": 13,
       "parts": 6,
-      "removed": 3
+      "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "CI's push trigger now also names `requirements/**` and `scripts/ci_install_locked.sh`.",
+        "kind": "import-added",
+        "sentence": "fuzz now imports backpropagate.",
         "subjects": [
-          ".github/workflows/ci.yml"
+          "fuzz",
+          "backpropagate"
+        ]
+      },
+      {
+        "kind": "import-added",
+        "sentence": "tests now imports fuzz.",
+        "subjects": [
+          "tests",
+          "fuzz"
         ]
       },
       {
         "kind": "door",
-        "sentence": "CI now also runs backpropagate/cli.py and scripts/ci_install_locked.sh.",
+        "sentence": "Fuzz (.github/workflows/fuzz.yml) is a new door. It starts by hand. It runs no file this map can see.",
         "subjects": [
-          ".github/workflows/ci.yml",
-          "backpropagate/cli.py",
-          "scripts/ci_install_locked.sh"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "CI now also checks LICENSE, README.md, pyproject.toml and 3 more.",
-        "subjects": [
-          ".github/workflows/ci.yml",
-          "LICENSE",
-          "README.md",
-          "pyproject.toml",
-          "requirements/build-backend.txt",
-          "requirements/uv.txt",
-          "uv.lock"
-        ]
-      },
-      {
-        "kind": "door",
-        "sentence": "And 4 more changes to doors.",
-        "subjects": []
-      },
-      {
-        "kind": "landing",
-        "sentence": ".github/release-tools/package-lock.json is now read by .github/workflows/release.yml.",
-        "subjects": [
-          ".github/release-tools/package-lock.json",
-          ".github/workflows/release.yml"
+          ".github/workflows/fuzz.yml"
         ]
       },
       {
         "kind": "landing",
-        "sentence": ".github/release-tools/package.json is now read by .github/workflows/release.yml.",
+        "sentence": ".github/workflows/fuzz.yml is now read by tests/test_fuzz_harnesses.py.",
         "subjects": [
-          ".github/release-tools/package.json",
-          ".github/workflows/release.yml"
+          ".github/workflows/fuzz.yml",
+          "tests/test_fuzz_harnesses.py"
         ]
       },
       {
         "kind": "landing",
-        "sentence": "requirements/bandit.txt is now read by .github/workflows/ci.yml.",
+        "sentence": "requirements/fuzz.txt is now read by .github/workflows/fuzz.yml and tests/test_fuzz_harnesses.py.",
         "subjects": [
-          "requirements/bandit.txt",
-          ".github/workflows/ci.yml"
+          "requirements/fuzz.txt",
+          ".github/workflows/fuzz.yml",
+          "tests/test_fuzz_harnesses.py"
         ]
       },
       {
-        "kind": "landing",
-        "sentence": "And 6 more new writers and readers of places.",
-        "subjects": []
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "requirements/bandit.in is new and belongs to no part, so atlas check fails on it against the previous map.",
+        "kind": "part",
+        "sentence": "fuzz is a new part, drawn from `fuzz/**`.",
         "subjects": [
-          "requirements/bandit.in"
+          "fuzz"
         ]
       },
       {
-        "kind": "unassigned",
-        "sentence": "requirements/bandit.txt is new and belongs to no part, so atlas check fails on it against the previous map.",
+        "kind": "part",
+        "sentence": "requirements is a new part, drawn from `requirements/**`.",
         "subjects": [
-          "requirements/bandit.txt"
+          "requirements"
         ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "requirements/build-backend.in is new and belongs to no part, so atlas check fails on it against the previous map.",
-        "subjects": [
-          "requirements/build-backend.in"
-        ]
-      },
-      {
-        "kind": "unassigned",
-        "sentence": "And 10 more new files that belong to no part.",
-        "subjects": []
       },
       {
         "kind": "counts",
-        "sentence": "19 files added, 3 removed and 16 changed content, across 6 parts.",
+        "sentence": "205 files added, 13 moved and 7 changed content, across 6 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "de66750e31c64b18cb6faca445c4d06e275239b0",
-      "generatedAt": "2026-10-01T03:45:05.600Z"
+      "commit": "9bf15fd7a8dc5d2e0047968403079f23ba124690",
+      "generatedAt": "2026-10-01T06:12:29.884Z"
     },
     "unchanged": false
   },
   "changesTogether": [],
   "changesTogetherNote": [
-    "2 files changed together with their own tests, as expected.",
+    "1 file changed together with its own test, as expected.",
     "Window: 180 days; a pair counts from 10 shared commits, since 21 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
-  "changesTogetherWithTests": 2,
-  "commit": "9bf15fd7a8dc5d2e0047968403079f23ba124690",
+  "changesTogetherWithTests": 1,
+  "commit": "9d35807a7524916906dc57748edc3b698d324139",
   "defaultBranch": "main",
-  "derived": "11 parts, mostly Python (204 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "13 parts, mostly Python (214 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -192,7 +177,12 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
+        },
+        {
+          "boundary": "requirements",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "root",
@@ -207,7 +197,12 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 143
+          "files": 146
+        },
+        {
+          "boundary": "fuzz",
+          "depth": 1,
+          "files": 6
         }
       ],
       "runs": [
@@ -252,7 +247,12 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 52
+          "files": 53
+        },
+        {
+          "boundary": "requirements",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "root",
@@ -333,7 +333,7 @@
         {
           "boundary": "backpropagate",
           "depth": 1,
-          "files": 16
+          "files": 20
         }
       ],
       "runs": [
@@ -455,7 +455,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "runs": [
@@ -470,6 +470,25 @@
       "triggers": [
         "when the workflow Publish completes",
         "or by hand"
+      ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
+      "file": ".github/workflows/fuzz.yml",
+      "id": ".github/workflows/fuzz.yml",
+      "landings": [],
+      "name": "Fuzz",
+      "pushes": false,
+      "reach": [],
+      "runs": [],
+      "runsCount": 0,
+      "runsMore": 0,
+      "sends": [],
+      "stages": [],
+      "triggers": [
+        "by hand"
       ]
     },
     {
@@ -510,7 +529,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "runs": [
@@ -562,7 +581,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 18
+          "files": 22
         }
       ],
       "runs": [
@@ -580,6 +599,11 @@
   "duplicatesNote": [],
   "edges": [
     {
+      "from": "fuzz",
+      "fromTests": false,
+      "to": "backpropagate"
+    },
+    {
       "from": "scripts",
       "fromTests": false,
       "to": "backpropagate"
@@ -594,18 +618,17 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T06:12:29.884Z",
+  "generatedAt": "2026-10-01T06:30:06.085Z",
   "limits": [
-    "53 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
-    "367 imports could not be resolved: `backpropagate/__init__.py` imports `.trainer`, which is no module on its import path and no declared dependency; `backpropagate/cli.py` imports `.trainer`, which is no module on its import path and no declared dependency, twice; `scripts/offload_probe.py` imports `backpropagate.trainer`, which is no module on its import path and no declared dependency; and 363 more.",
+    "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
+    "14 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 11 more.",
     "8 writes and 10 reads use paths built at run time and are not named here.",
-    "26 writes and 64 reads go to a path their caller passes, not to this repository.",
+    "31 writes and 64 reads go to a path their caller passes, not to this repository.",
+    "3 writes go to a temporary directory, not to this repository.",
     "1 write goes to the home directory (AppData/, Library/ and backpropagate/) or a path its caller passes, not to this repository.",
     "1 read goes to the directory the command is run in, not to this repository.",
     "1 read goes to the home directory (.cache/), not to this repository.",
-    "1 write goes to a temporary directory, not to this repository.",
-    "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.",
-    "13 files belong to no part: requirements/bandit.in, requirements/bandit.txt, requirements/build-backend.in and 10 more."
+    "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page."
   ],
   "mainDoor": ".github/workflows/ci.yml",
   "partLabels": {
@@ -616,12 +639,14 @@
     "bin": "bin",
     "docs": "docs",
     "examples": "examples",
+    "fuzz": "fuzz",
+    "requirements": "requirements",
     "root": "the repository root",
     "scripts": "scripts",
     "site": "site",
     "tests": "tests"
   },
-  "parts": 11,
+  "parts": 13,
   "readers": [],
   "repo": "mcp-tool-shop-org/backpropagate",
   "sequences": [
@@ -651,9 +676,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 146,
+  "testFiles": 149,
   "testedBy": {
-    "backpropagate": 132,
+    "backpropagate": 136,
     "bin": 0,
     "scripts": 2
   },

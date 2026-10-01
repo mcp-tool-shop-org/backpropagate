@@ -4429,8 +4429,13 @@ class Trainer:
                     self._load_with_transformers()
             else:
                 self._load_with_transformers()
-        except TrustRemoteCodeRequiredError:
-            # Already structured (names the model + the exact opt-in).
+        except ModelLoadError:
+            # Already structured at its raise site: TrustRemoteCodeRequiredError
+            # (names the model + the exact opt-in) and the F-019-classified
+            # ModelLoadErrors the Unsloth loader raises (auth / not_found /
+            # network / version). Re-wrapping them below would reset
+            # cause_category to "unknown" and double the message prefix, which
+            # discards the per-category remediation hint F-019 exists to give.
             raise
         except ImportError as e:
             # F-019: ImportError = missing/incompatible upstream package.

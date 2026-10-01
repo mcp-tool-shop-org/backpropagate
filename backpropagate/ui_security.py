@@ -903,14 +903,13 @@ def sanitize_filename(filename: str) -> str:
     # Remove path separators
     name = filename.replace("/", "_").replace("\\", "_")
 
-    # Remove null bytes
-    name = name.replace("\x00", "")
+    # Remove null bytes and other control characters. This must come BEFORE the
+    # dot/space strip: otherwise "\x01..\x01" survives the strip and collapses
+    # to ".." once the control characters are gone.
+    name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', name)
 
     # Remove leading/trailing dots and spaces
     name = name.strip(". ")
-
-    # Remove control characters
-    name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', name)
 
     # Limit length
     if len(name) > 255:

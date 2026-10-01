@@ -170,7 +170,6 @@ class TestHarnessesHaveTeeth:
 
 # Seeds that reproduce a known finding: (target, file, exception under strict=True)
 STRICT_SEEDS = [
-    ("paths", "finding_f2_dots_in_controls.seed", AssertionError),
     ("datasets", "finding_f6_lone_surrogate.seed", UnicodeEncodeError),
     ("ui_input", "finding_f4_nan.seed", AssertionError),
     ("config", "finding_f4b_orpo_beta.seed", AssertionError),
@@ -192,13 +191,6 @@ class TestKnownFindings:
         check(data, strict=False)  # tolerated by default, so fuzzing can go on
         with pytest.raises(exc_type):
             check(data, strict=True)
-
-    @pytest.mark.xfail(strict=True, reason="F2: sanitize_filename can return '..' or '.'")
-    def test_f2_sanitize_filename_never_returns_a_dot_component(self):
-        from backpropagate.ui_security import sanitize_filename
-
-        assert sanitize_filename("\x01..\x01") not in {".", ".."}
-        assert sanitize_filename("\x01.\x01") not in {".", ".."}
 
     @pytest.mark.xfail(strict=True, reason="F3: sanitize_filename can exceed its 255 char limit")
     def test_f3_sanitize_filename_honours_its_length_limit(self):
@@ -297,6 +289,17 @@ class TestFixedFindings:
         path.write_text('{"messages": [{"role": ["user"], "content": "x"}]}\n', encoding="utf-8")
         loader = DatasetLoader(path)
         assert loader.validation_result.warnings[0].error_type == "invalid_role"
+
+
+    @pytest.mark.parametrize(
+        "name",
+        ["\x01..\x01", "\x01.\x01", "..\x00..", " \x7f. ", "\x85.\x85.", "..", ".", "\x1f \x1f"],
+    )
+    def test_f2_sanitize_filename_never_returns_a_dot_component(self, name):
+        from backpropagate.ui_security import sanitize_filename
+
+        assert sanitize_filename(name) not in {".", ".."}
+        assert sanitize_filename("\x01..\x01") == "unnamed_file"
 
 
 class TestPlumbing:

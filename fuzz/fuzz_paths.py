@@ -194,11 +194,7 @@ def check_sanitized(name: str, strict: bool = False) -> None:
     assert "/" not in out and "\\" not in out and chr(0) not in out
     assert not _has_control(out)
 
-    if out in (".", ".."):
-        # Known finding F2: control characters are stripped AFTER the dot/space
-        # strip, so a name that is only dots wrapped in control chars collapses to "..").
-        assert not strict, f"sanitize_filename({name!r}) returned {out!r}"
-        assert _has_control(name)
+    assert out not in (".", ".."), f"sanitize_filename({name!r}) returned {out!r}"
     if len(out) > 255:
         # Known finding F3: an over-long extension makes the slice negative.
         assert not strict, f"sanitize_filename returned {len(out)} chars"

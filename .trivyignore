@@ -1,0 +1,10 @@
+# Advisories Trivy reports that do not affect backpropagate. One entry per ID,
+# each with its reason and a review-by date (mirrors osv-scanner.toml, which
+# carries the full reasoning). Remove an entry once uv.lock moves past the fix.
+#
+# CVE-2026-9856 (PYSEC-2026-3929), transformers < 5.10 save_pretrained path
+# traversal via chat template names. Mitigated in backpropagate:
+# security.check_chat_template_names refuses path-like names at load, before any
+# save (tests/test_chat_template_guard.py). uv.lock is held at transformers 5.5.0
+# by unsloth's own cap. Review by 2027-01-01.
+CVE-2026-9856

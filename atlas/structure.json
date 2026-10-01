@@ -52,7 +52,15 @@
           "path": ".github/dependabot.yml"
         },
         {
-          "hash": "e56e52fa9272a233e351fc2d20f1d1d13bc1340158a874451392bad980f5b5ce",
+          "hash": "4f1e9472ba345a6d69665dcaeb1ea9b833501a536846d5286d9bad19c4519f8e",
+          "path": ".github/release-tools/package-lock.json"
+        },
+        {
+          "hash": "0b1e63695281b6ce047237b7eb3506fd8a0bb1c448a358d6a64eed493fbd2ecf",
+          "path": ".github/release-tools/package.json"
+        },
+        {
+          "hash": "bca1153276caafd311ab284d764e376113c10af291cb41df8b41fb20395bb471",
           "path": ".github/workflows/ci.yml"
         },
         {
@@ -60,11 +68,11 @@
           "path": ".github/workflows/doc-drift.yml"
         },
         {
-          "hash": "84add51a22c8dca94f57b3e40380b64f0a62e849f44200afc1ae50f7edfb7c8c",
+          "hash": "aff309948fd34d80a0bb162c8a4a55fbc91f57fa34c164ff1ac57782a49db48a",
           "path": ".github/workflows/mutmut.yml"
         },
         {
-          "hash": "d2b399e300558dbc9e92d328158b2fdeb0cae891f9ea951fd7e9b4b7cc3d872a",
+          "hash": "57744807b16ac4e14d2ea15a35fb2b8917978283b73462c11150274646b2ca3a",
           "path": ".github/workflows/nightly-train-smoke.yml"
         },
         {
@@ -72,15 +80,15 @@
           "path": ".github/workflows/pages-deploy.yml"
         },
         {
-          "hash": "b2df4392636501f8e76c16ab67c7ef6d36d6ff8fb77fda883abcbe7f56e67f43",
+          "hash": "28562b8305a021a4dd6700e27b04b7d7e035b4e420a6e08909472505cac16d55",
           "path": ".github/workflows/post-publish-smoke.yml"
         },
         {
-          "hash": "1eb455b7f16c117756a0471ea72923dfa99ec8cb8b59374c7e7e86d09c96911d",
+          "hash": "116f5269d9e6a556a2d5bd9320ab36ef388230c25f8f4741bf01109ab7a6ee22",
           "path": ".github/workflows/publish.yml"
         },
         {
-          "hash": "23f819919014188036be46796d4ce2f2220a593f1cbe2832d25bf2cb7609972b",
+          "hash": "6a01a25d9ac6dc6d7f67b2fc831085854f293b6e720d0d3dc56f05c0dd9bb91d",
           "path": ".github/workflows/release.yml"
         },
         {
@@ -10250,7 +10258,7 @@
           "path": "docs/full-ft-engines-design-2026-09-30.md"
         },
         {
-          "hash": "73688cbe2e64077bd0e17371aa30960e995eaf2253cade4b383dce6bf021b7bb",
+          "hash": "c1229a72c764957ca120059407d7275b8ceecc7749ff722a485d4907574dbd88",
           "path": "docs/handoff-2026-09-30-full-ft-experiments.md"
         },
         {
@@ -10872,7 +10880,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "61d91d5f767d64859b754fe228504dd748353303db6ba6fa7ca4f3efca8c29d5",
+          "hash": "ac42164bedd0215395f059933f5838a04f2a1a77d7793cfa4818d3c0ed09f517",
           "path": ".dockerignore"
         },
         {
@@ -10912,7 +10920,7 @@
           "path": "CONTRIBUTING.md"
         },
         {
-          "hash": "f060c709f827b1fb71e7f7f85b9bcf22a7246a2d3cba2938b1dc139d2d41ba18",
+          "hash": "f083db07c6109dc4e7e5e6a16a8dab9529bd42be0738a3d74f4e1d81b36e05d5",
           "path": "Dockerfile"
         },
         {
@@ -11004,7 +11012,7 @@
           "path": "pyproject.toml"
         },
         {
-          "hash": "504aa864a8e7bd901591f49d0f97e6707a96debfd81fc6b1aa26ab562f56907c",
+          "hash": "c1edf3de67c8b80674d701d6e0b58d1e6e49464b6cf7c8ccdbe2f52488bd79c1",
           "path": "uv.lock"
         },
         {
@@ -11232,6 +11240,10 @@
               "name": "check_workflow_severity_drift"
             }
           ]
+        },
+        {
+          "hash": "dda4e5678e2f2d3d35e88244632c08862dffec670881168d75afcfee35b115a7",
+          "path": "scripts/ci_install_locked.sh"
         },
         {
           "exports": [
@@ -11509,14 +11521,14 @@
           "failurePaths": [
             {
               "kind": "raise",
-              "line": 48
+              "line": 53
             }
           ],
-          "hash": "f47df04c97d86d703f7b17cd9c23faa9bd4c3250806e69d4e988a06a13a4943a",
+          "hash": "3b8a33bdc34652476ea887a6d78dd79c7c4af5cf187672c19dd0e849fdf3532d",
           "path": "scripts/runpod/deadman.py"
         },
         {
-          "hash": "6b4d0ebd52e21c9239faffa050a7b1b97e550865d29ea7b240c145711053e11a",
+          "hash": "27475e84b6151813873f29f44fdf9fd4215b83c737a37f116847141a1139eb90",
           "path": "scripts/runpod/pod.sh"
         },
         {
@@ -13190,12 +13202,13 @@
   ],
   "doors": [
     {
-      "checksCount": 1,
+      "checksCount": 7,
       "commands": [
         {
           "dir": "",
           "job": "test",
           "programs": [
+            "bash",
             "echo",
             "pip",
             "python",
@@ -13259,8 +13272,7 @@
           "dir": "",
           "job": "parallel-xdist",
           "programs": [
-            "pip",
-            "python"
+            "bash"
           ],
           "step": "Install dependencies"
         },
@@ -13277,9 +13289,7 @@
           "dir": "",
           "job": "uv-sync-pilot",
           "programs": [
-            "curl",
-            "echo",
-            "sh"
+            "pip"
           ],
           "step": "Install uv"
         },
@@ -13303,8 +13313,7 @@
           "dir": "",
           "job": "ui-compile-smoke",
           "programs": [
-            "pip",
-            "python"
+            "bash"
           ],
           "step": "Install the [ui] extra"
         },
@@ -13321,6 +13330,22 @@
             "sys.exit"
           ],
           "step": "Reflex dry-run compile (all pages)"
+        },
+        {
+          "dir": "",
+          "job": "docker-build-smoke",
+          "programs": [
+            "docker"
+          ],
+          "step": "Build the builder stage"
+        },
+        {
+          "dir": "",
+          "job": "docker-build-smoke",
+          "programs": [
+            "docker"
+          ],
+          "step": "Run the installed entry point"
         },
         {
           "dir": "",
@@ -13351,10 +13376,10 @@
           "dir": "",
           "job": "pip-audit",
           "programs": [
-            "pip",
-            "python"
+            "bash",
+            "pip"
           ],
-          "step": "Install dependencies"
+          "step": "Install pip-audit and export the audit set"
         },
         {
           "dir": "",
@@ -13415,10 +13440,18 @@
           "dir": "",
           "job": "build",
           "programs": [
-            "pip",
-            "python"
+            "pip"
           ],
           "step": "Install build tools"
+        },
+        {
+          "dir": "",
+          "job": "build",
+          "programs": [
+            "pip",
+            "uv"
+          ],
+          "step": "uv.lock is up to date"
         },
         {
           "dir": "",
@@ -13452,8 +13485,8 @@
           "dir": "",
           "job": "verify-smoke",
           "programs": [
-            "pip",
-            "python"
+            "bash",
+            "pip"
           ],
           "step": "Install dependencies"
         },
@@ -13657,6 +13690,22 @@
         },
         {
           "basis": "declared",
+          "name": "docker-build-smoke",
+          "runsOn": [
+            {
+              "labels": [
+                "ubuntu-latest"
+              ],
+              "platform": {
+                "cpu": "x64",
+                "libc": "glibc",
+                "os": "linux"
+              }
+            }
+          ]
+        },
+        {
+          "basis": "declared",
           "name": "bandit",
           "runsOn": [
             {
@@ -13847,7 +13896,35 @@
           "path": "pyproject.toml"
         },
         {
+          "job": "bandit",
+          "path": "requirements/bandit.txt"
+        },
+        {
+          "job": "build",
+          "path": "requirements/build-tools.txt"
+        },
+        {
+          "job": "verify-smoke",
+          "path": "requirements/build-tools.txt"
+        },
+        {
           "job": "pip-audit",
+          "path": "requirements/pip-audit.txt"
+        },
+        {
+          "job": "build",
+          "path": "requirements/uv.txt"
+        },
+        {
+          "job": "uv-sync-pilot",
+          "path": "requirements/uv.txt"
+        },
+        {
+          "job": "pip-audit",
+          "path": "uv.lock"
+        },
+        {
+          "job": "test",
           "path": "uv.lock"
         }
       ],
@@ -13867,25 +13944,35 @@
         {
           "boundary": "root",
           "depth": 0,
-          "files": 1
+          "files": 5
+        },
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "tests",
           "depth": 0,
           "files": 82
-        },
-        {
-          "boundary": "scripts",
-          "depth": 1,
-          "enters": {
-            "file": "scripts/check_doc_drift.py",
-            "from": "tests/test_check_doc_drift.py"
-          },
-          "files": 1
         }
       ],
       "readers": [],
       "runs": [
+        {
+          "job": "docker-build-smoke",
+          "packed": true,
+          "path": "LICENSE",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker-build-smoke",
+          "packed": true,
+          "path": "README.md",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
         {
           "directory": true,
           "job": "bandit",
@@ -13901,6 +13988,14 @@
         },
         {
           "directory": true,
+          "job": "docker-build-smoke",
+          "packed": true,
+          "path": "backpropagate/",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "directory": true,
           "job": "test",
           "path": "backpropagate/",
           "runKind": "checks"
@@ -13911,6 +14006,56 @@
           "path": "backpropagate/",
           "runKind": "checks",
           "via": "verify.sh"
+        },
+        {
+          "job": "docker-build-smoke",
+          "path": "backpropagate/cli.py",
+          "runKind": "executes",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker-build-smoke",
+          "packed": true,
+          "path": "pyproject.toml",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker-build-smoke",
+          "path": "requirements/build-backend.txt",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker-build-smoke",
+          "path": "requirements/uv.txt",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "parallel-xdist",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        },
+        {
+          "job": "pip-audit",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        },
+        {
+          "job": "test",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        },
+        {
+          "job": "ui-compile-smoke",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        },
+        {
+          "job": "verify-smoke",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
         },
         {
           "directory": true,
@@ -13938,12 +14083,19 @@
           "via": "verify.sh"
         },
         {
+          "job": "docker-build-smoke",
+          "packed": true,
+          "path": "uv.lock",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
           "job": "verify-smoke",
           "path": "verify.sh",
           "runKind": "executes"
         }
       ],
-      "runsCount": 3,
+      "runsCount": 11,
       "secrets": [
         "DOCKERHUB_USERNAME"
       ],
@@ -14027,6 +14179,8 @@
             "codecov.yml",
             "pyproject.toml",
             "requirements*.txt",
+            "requirements/**",
+            "scripts/ci_install_locked.sh",
             "tests/**",
             "uv.lock"
           ]
@@ -14167,8 +14321,7 @@
           "dir": "",
           "job": "mutmut",
           "programs": [
-            "pip",
-            "python"
+            "bash"
           ],
           "step": "Install backpropagate (dev extras)"
         },
@@ -14261,20 +14414,37 @@
         {
           "job": "mutmut",
           "path": "pyproject.toml"
+        },
+        {
+          "job": "mutmut",
+          "path": "uv.lock"
         }
       ],
       "name": "Mutation testing (mutmut)",
       "permissions": [
+        "contents:read",
         "contents:write",
         "issues:write",
         "pull-requests:write"
       ],
       "pushes": false,
       "pushesForReview": true,
-      "reach": [],
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
       "readers": [],
-      "runs": [],
-      "runsCount": 0,
+      "runs": [
+        {
+          "job": "mutmut",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        }
+      ],
+      "runsCount": 1,
       "secrets": [
         "GITHUB_TOKEN"
       ],
@@ -14310,10 +14480,9 @@
           "dir": "",
           "job": "smoke",
           "programs": [
-            "pip",
-            "python"
+            "pip"
           ],
-          "step": "Install backpropagate + CPU torch"
+          "step": "Install backpropagate (fresh resolve)"
         },
         {
           "dir": "",
@@ -14806,14 +14975,21 @@
       "usesWorkflowToken": true
     },
     {
-      "checksCount": 4,
+      "checksCount": 7,
       "commands": [
         {
           "dir": "",
           "job": "build",
           "programs": [
-            "pip",
-            "python"
+            "echo"
+          ],
+          "step": "Resolve release tag"
+        },
+        {
+          "dir": "",
+          "job": "build",
+          "programs": [
+            "pip"
           ],
           "step": "Install build tools"
         },
@@ -14835,12 +15011,61 @@
         },
         {
           "dir": "",
+          "job": "build",
+          "programs": [
+            "base64",
+            "cd",
+            "echo",
+            "sha256sum"
+          ],
+          "step": "Hash the distributions"
+        },
+        {
+          "dir": "",
+          "job": "publish-pypi",
+          "programs": [
+            "base64",
+            "cd",
+            "echo",
+            "sha256sum"
+          ],
+          "step": "Verify dist/ matches the build's hashes"
+        },
+        {
+          "dir": "",
           "job": "publish-pypi",
           "programs": [
             "echo",
             "sleep"
           ],
           "step": "Publish to PyPI (attempt 2 — retry after 60s on failure)"
+        },
+        {
+          "dir": "",
+          "job": "attach-dist",
+          "programs": [
+            "base64",
+            "cd",
+            "echo",
+            "sha256sum"
+          ],
+          "step": "Verify dist/ matches the build's hashes"
+        },
+        {
+          "dir": "",
+          "job": "attach-dist",
+          "programs": [
+            "gh"
+          ],
+          "step": "Upload to the Release"
+        },
+        {
+          "dir": "",
+          "job": "provenance-status",
+          "programs": [
+            "echo"
+          ],
+          "step": "Report"
         },
         {
           "dir": "",
@@ -14853,6 +15078,11 @@
           ],
           "step": "Resolve release version"
         }
+      ],
+      "conditional": [
+        "attach-dist",
+        "provenance",
+        "provenance-status"
       ],
       "elsewhere": [],
       "file": ".github/workflows/publish.yml",
@@ -14907,6 +15137,48 @@
         },
         {
           "basis": "declared",
+          "name": "attach-dist",
+          "runsOn": [
+            {
+              "labels": [
+                "ubuntu-latest"
+              ],
+              "platform": {
+                "cpu": "x64",
+                "libc": "glibc",
+                "os": "linux"
+              }
+            }
+          ]
+        },
+        {
+          "basis": "declared",
+          "name": "provenance",
+          "runsOn": [
+            {
+              "labels": [],
+              "unresolved": "called workflow"
+            }
+          ]
+        },
+        {
+          "basis": "declared",
+          "name": "provenance-status",
+          "runsOn": [
+            {
+              "labels": [
+                "ubuntu-latest"
+              ],
+              "platform": {
+                "cpu": "x64",
+                "libc": "glibc",
+                "os": "linux"
+              }
+            }
+          ]
+        },
+        {
+          "basis": "declared",
           "name": "docker",
           "runsOn": [
             {
@@ -14923,10 +15195,17 @@
         }
       ],
       "landings": [],
-      "mentions": [],
+      "mentions": [
+        {
+          "job": "build",
+          "path": "requirements/build-tools.txt"
+        }
+      ],
       "name": "Publish",
       "permissions": [
+        "actions:read",
         "contents:read",
+        "contents:write",
         "id-token:write",
         "packages:write"
       ],
@@ -14940,7 +15219,7 @@
         {
           "boundary": "root",
           "depth": 0,
-          "files": 3
+          "files": 4
         }
       ],
       "readers": [],
@@ -14986,13 +15265,36 @@
           "path": "pyproject.toml",
           "runKind": "checks",
           "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker",
+          "path": "requirements/build-backend.txt",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker",
+          "path": "requirements/uv.txt",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
+        },
+        {
+          "job": "docker",
+          "packed": true,
+          "path": "uv.lock",
+          "runKind": "checks",
+          "via": "docker build Dockerfile"
         }
       ],
-      "runsCount": 5,
+      "runsCount": 8,
       "secrets": [
         "GITHUB_TOKEN"
       ],
       "sends": {
+        "assets": [
+          "file:dist/*",
+          "files"
+        ],
         "deploysPages": false,
         "dispatchesTo": [],
         "opensIssues": false,
@@ -15041,19 +15343,30 @@
       "usesWorkflowToken": true
     },
     {
-      "checksCount": 0,
+      "checksCount": 1,
       "commands": [
         {
           "dir": "",
           "job": "release",
           "programs": [
             "echo",
+            "node",
+            "npm"
+          ],
+          "step": "Require npm >= 11.5 for OIDC trusted-publishing auth"
+        },
+        {
+          "dir": "",
+          "job": "release",
+          "programs": [
+            "cp",
+            "echo",
             "mkdir",
             "npm",
             "popd",
             "pushd"
           ],
-          "step": "Install npm >=11.5 in sandbox for OIDC trusted-publishing auth"
+          "step": "Install pinned release tools"
         },
         {
           "dir": "",
@@ -15079,14 +15392,6 @@
           "programs": [
             "npm"
           ],
-          "step": "Install dependencies"
-        },
-        {
-          "dir": "",
-          "job": "release",
-          "programs": [
-            "npm"
-          ],
           "step": "npm pack dry-run (verify shape)"
         },
         {
@@ -15102,13 +15407,13 @@
           "job": "release",
           "programs": [
             "1",
+            "bash",
             "command",
+            "cyclonedx-npm",
             "cyclonedx-py",
             "echo",
-            "npm",
-            "npx",
-            "pip",
-            "python"
+            "mkdir",
+            "pip"
           ],
           "step": "Generate CycloneDX SBOMs"
         },
@@ -15156,13 +15461,13 @@
             {
               "ranges": [
                 {
-                  "from": "22",
-                  "range": ">=22.0.0 <23.0.0-0"
+                  "from": "24",
+                  "range": ">=24.0.0 <25.0.0-0"
                 }
               ],
               "step": "Setup Node",
               "uses": "actions/setup-node",
-              "version": "22"
+              "version": "24"
             },
             {
               "ranges": [
@@ -15193,6 +15498,14 @@
       "mentions": [
         {
           "job": "release",
+          "path": ".github/release-tools/package-lock.json"
+        },
+        {
+          "job": "release",
+          "path": ".github/release-tools/package.json"
+        },
+        {
+          "job": "release",
           "path": "CHANGELOG.md"
         },
         {
@@ -15201,7 +15514,7 @@
         },
         {
           "job": "release",
-          "path": "pyproject.toml"
+          "path": "requirements/sbom.txt"
         }
       ],
       "name": "Release",
@@ -15210,10 +15523,32 @@
         "id-token:write"
       ],
       "pushes": false,
-      "reach": [],
+      "reach": [
+        {
+          "boundary": "root",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
       "readers": [],
-      "runs": [],
-      "runsCount": 0,
+      "runs": [
+        {
+          "job": "release",
+          "path": "pyproject.toml",
+          "runKind": "checks"
+        },
+        {
+          "job": "release",
+          "path": "scripts/ci_install_locked.sh",
+          "runKind": "executes"
+        }
+      ],
+      "runsCount": 2,
       "secrets": [
         "GITHUB_TOKEN"
       ],
@@ -15483,10 +15818,30 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
-    "tracked": 421
+    "commit": "3037ef09a23ee2fb47dd6a50cc2dff7ea0058502",
+    "tracked": 437
   },
   "landings": [
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/release.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": ".github/release-tools/package-lock.json",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/release.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": ".github/release-tools/package.json",
+      "writers": []
+    },
     {
       "readers": [
         {
@@ -15883,10 +16238,6 @@
           "confidence": "config"
         },
         {
-          "by": ".github/workflows/release.yml",
-          "confidence": "config"
-        },
-        {
           "by": ".pre-commit-config.yaml",
           "call": "configuration",
           "confidence": "config"
@@ -15915,6 +16266,76 @@
         }
       ],
       "target": "pyproject.toml",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": "requirements/bandit.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "scripts/ci_install_locked.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "requirements/build-backend.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml",
+          "confidence": "config"
+        },
+        {
+          "by": ".github/workflows/publish.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": "requirements/build-tools.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": "requirements/pip-audit.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/release.yml",
+          "confidence": "config"
+        }
+      ],
+      "target": "requirements/sbom.txt",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": ".github/workflows/ci.yml",
+          "confidence": "config"
+        },
+        {
+          "by": "scripts/ci_install_locked.sh",
+          "call": "literal",
+          "confidence": "text"
+        }
+      ],
+      "target": "requirements/uv.txt",
       "writers": []
     },
     {
@@ -16064,6 +16485,10 @@
         {
           "by": ".github/workflows/ci.yml",
           "confidence": "config"
+        },
+        {
+          "by": ".github/workflows/mutmut.yml",
+          "confidence": "config"
         }
       ],
       "target": "uv.lock",
@@ -16085,7 +16510,60 @@
   "submodules": [],
   "symlinks": [],
   "testFiles": 85,
-  "unassigned": [],
+  "unassigned": [
+    {
+      "hash": "55fe27aa0aeac4a1ad0286a6157a7efe4d748f1c4977e9d90479ea693e913366",
+      "path": "requirements/bandit.in"
+    },
+    {
+      "hash": "6fd4e6f4bc599ee120bd6fd952b6590aff9ce644c97043de4955163b94a644b0",
+      "path": "requirements/bandit.txt"
+    },
+    {
+      "hash": "d6573ed0e8b79893c4fed9441ee36090bd89ca21f2981680de7fef32226809d9",
+      "path": "requirements/build-backend.in"
+    },
+    {
+      "hash": "29354a75486371bdee519c6ea71ff860068c9c5b8c5304c189a4f6306046969d",
+      "path": "requirements/build-backend.txt"
+    },
+    {
+      "hash": "fe6503236a817bb738c7c162fb8b4ddf435439ef13f5538ebc12f7b1e87e6ca7",
+      "path": "requirements/build-tools.in"
+    },
+    {
+      "hash": "c3db93513ee159024d441fa46542037548cd28f55961b74b917eb8625a292237",
+      "path": "requirements/build-tools.txt"
+    },
+    {
+      "hash": "55e059ed791ca4e03987eba897067a8a80937bb33ec1b22b6648bd3d2a11f844",
+      "path": "requirements/compile.sh"
+    },
+    {
+      "hash": "6d1a26e35088557bd93c24d1ef00e58cd791dfac7f54c4ac39dfea282a9a86b3",
+      "path": "requirements/pip-audit.in"
+    },
+    {
+      "hash": "f99ab2ffcf97564f4ad9d45bd8df7d8817b2e4c3d7004828a26ccb1c0583575a",
+      "path": "requirements/pip-audit.txt"
+    },
+    {
+      "hash": "4fe2e7b912b2b03eceea0f68b1fb6ca426d4ea35f2b05e57e807938d82231685",
+      "path": "requirements/sbom.in"
+    },
+    {
+      "hash": "51a67ffe31804228db7da706ce7c95eae3f3759995f378c9f8784589818335b9",
+      "path": "requirements/sbom.txt"
+    },
+    {
+      "hash": "a7852c6447c180890fe6563e7e67816e342e21bf1469372b49c7ddbecd1762a5",
+      "path": "requirements/uv.in"
+    },
+    {
+      "hash": "888986622464fc5e31ef3ab7ce243d6a2f7cdda33b56d97e64d4d5c74e4ddb5a",
+      "path": "requirements/uv.txt"
+    }
+  ],
   "unseen": [
     {
       "files": [

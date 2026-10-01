@@ -154,35 +154,79 @@ def _current_host() -> str:
 def _pid_alive(pid: int) -> bool:
     """Return True if a process with ``pid`` is currently alive on THIS host.
 
-    Cross-platform: POSIX uses ``os.kill(pid, 0)`` (signal 0 probes existence
-    without delivering a signal); Windows lacks reliable signal-0 semantics so
-    we fall back to ``os.kill`` and treat its specific errnos the same way
-    Python's signal layer does. On any ambiguity we return True (fail-safe:
-    "assume live" means we DON'T steal a possibly-live run_id — the worse
-    failure mode here is corrupting a live session, so we bias toward caution).
+    POSIX: ``os.kill(pid, 0)`` probes existence without delivering a signal.
+    Windows: query the process handle instead (:func:`_pid_alive_windows`).
+    ``os.kill(pid, 0)`` must never run there: ``signal.CTRL_C_EVENT == 0``, so
+    it SENDS Ctrl+C (``GenerateConsoleCtrlEvent``) rather than probing, which
+    can interrupt processes sharing the console, the caller included.
+    On any ambiguity return True (fail-safe: "assume live" means we DON'T
+    steal a possibly-live run_id; corrupting a live session is the worse
+    failure).
     """
     if pid is None or pid <= 0:
         return False
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
+    return _pid_alive_posix(pid)
+
+
+def _pid_alive_posix(pid: int) -> bool:
+    """POSIX liveness: ``os.kill(pid, 0)`` delivers nothing and only checks existence."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        # POSIX: no such process — definitively dead.
+        # No such process: definitively dead.
         return False
     except PermissionError:
-        # Process exists but is owned by another user — definitively alive.
+        # Process exists but is owned by another user: definitively alive.
         return True
     except OSError as exc:
-        # Windows raises OSError with errno EINVAL for a dead PID and
-        # ESRCH-equivalents vary; be conservative and treat "invalid" as dead,
-        # everything else as alive.
         import errno
 
-        if getattr(exc, "winerror", None) == 87:  # ERROR_INVALID_PARAMETER
-            return False
-        # ESRCH = no such process; any other errno → assume alive (cautious).
+        # ESRCH = no such process; any other errno -> assume alive (cautious).
         return exc.errno != errno.ESRCH
     return True
 
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows liveness via ``OpenProcess`` + ``GetExitCodeProcess``; sends nothing.
+
+    ``ERROR_INVALID_PARAMETER`` (87) from ``OpenProcess`` means no such PID.
+    ``ERROR_ACCESS_DENIED`` (5) means it exists but belongs to someone else.
+    A process that has exited but whose handle is still held somewhere reports
+    an exit code other than ``STILL_ACTIVE`` (259).
+    """
+    import sys
+
+    if sys.platform != "win32":  # also lets mypy skip the Windows-only ctypes API on Linux
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_INVALID_PARAMETER = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        err: int = ctypes.get_last_error()
+        # ERROR_INVALID_PARAMETER: no such PID. ERROR_ACCESS_DENIED: it exists
+        # but belongs to someone else. Anything else: cannot tell, assume live.
+        return err != ERROR_INVALID_PARAMETER
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True  # cannot tell: assume live
+        alive: bool = code.value == STILL_ACTIVE
+        return alive
+    finally:
+        kernel32.CloseHandle(handle)
 
 def _build_abort_callback(trainer: "MultiRunTrainer") -> Any:
     """BACKEND-F-001: bridge ``MultiRunTrainer._should_abort`` into HF's

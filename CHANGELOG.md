@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extras still looked missing).
 - A model-load failure through Unsloth keeps its auth / network / version
   category and hint (it was wrapped a second time, losing both).
+- **Windows: multi-run auto-resume no longer sends Ctrl+C.** The check for
+  whether an earlier run's process is still alive used `os.kill(pid, 0)`. On
+  Windows signal 0 is `CTRL_C_EVENT`, so the check sent a Ctrl+C console
+  event instead of probing, which can interrupt processes on the same console.
+  Windows now asks the OS for the process's state (`OpenProcess` +
+  `GetExitCodeProcess`) and sends nothing.
 
 ## [1.7.2] - 2026-09-30
 

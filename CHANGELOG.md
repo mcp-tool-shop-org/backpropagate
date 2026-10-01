@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`ui_security.SecureSessionHandler`: one CSRF slot per session, and logout
+  now revokes.** It keyed CSRF tokens and its session registry on the first 32
+  characters of the access token. Every HS256 JWT starts with the same encoded
+  header, so all users shared one CSRF slot (one user's CSRF token validated
+  another's request), and `logout()` revoked nothing. Sessions are now keyed by
+  a SHA-256 of the whole token, and a token is honoured only while its session
+  is registered. The class is a public helper; the bundled web UI does not use
+  it.
+- `CSRFProtection.validate_token` returns invalid for a non-ASCII or non-string
+  token instead of raising `TypeError`.
+- `FileValidator.validate()` given a `pathlib.Path` now runs the size cap and
+  magic-byte checks (it looked up the bare file name and skipped them).
+- `validate_numeric_input` and the UI's numeric fields reject NaN and infinity.
 - **Tokenizers with path-like chat template names are refused at load**
   (new stable code `INPUT_UNSAFE_CHAT_TEMPLATE`). transformers before 5.10
   saves each named chat template to a file named after it without checking
@@ -30,6 +43,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lockfile: gitpython 3.2.0, virtualenv 21.14.1 and accelerate 1.15.0 clear
   9 advisories. Six more are documented as not affecting backpropagate in
   `osv-scanner.toml`, each with its reason and an expiry date.
+
+### Fixed
+
+- **Multi-run (SLAO) no longer stops at startup on transformers 5.x.**
+  transformers 5 gives every model a `get_adapter_state_dict` method that
+  raises "No adapter loaded" for an adapter attached with PEFT, and the
+  startup check turned that into `PEFT_API_INCOMPATIBLE`. LoRA weights are
+  now read from the model's parameters when that call fails. Found by new
+  tests on a real tiny PEFT model.
+- **Resuming a multi-run session keeps the SLAO merge state.** The session
+  restore ran before the SLAO merger existed, so a resumed session dropped
+  its saved merge accumulator and started merging again from its first run.
+- Web UI `/runs`: the Model and Dataset columns showed "-" for every run (they
+  read field names the run store does not write); the dataset path is shown
+  redacted. The "Interrupted" filter, which the store rejects, is removed.
+- **`backprop multi-run --method orpo|simpo|kto` is refused instead of
+  silently ignored.** The multi-run backend trains SFT only and takes no
+  `method`, so the CLI dropped the flag and every run trained SFT. It now
+  exits with an error that points at `backprop train --method ...`.
+- `backprop runs --json` no longer crashes on a loss value too large for a
+  float in a hand-edited or corrupted run history.
 
 ## [1.7.2] - 2026-09-30
 

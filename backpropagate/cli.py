@@ -1121,6 +1121,27 @@ def cmd_multi_run(args: argparse.Namespace) -> int:
                 _multi_trainer_params = set(_multi_sig.parameters)
         except (TypeError, ValueError):
             _multi_trainer_params = set()
+        # --method is accepted by the parser for parity with `train`, but the
+        # multi-run backend trains SFT only: neither MultiRunConfig nor
+        # MultiRunTrainer takes a ``method``, so the filters below would drop it
+        # and an ORPO / SimPO / KTO request would silently run SFT. Refuse it
+        # instead, until the backend grows the parameter.
+        _method = getattr(args, "method", "sft") or "sft"
+        _method_supported = (
+            "method" in _multi_cfg_fields
+            or _multi_trainer_params is None
+            or "method" in _multi_trainer_params
+        )
+        if _method != "sft" and not _method_supported:
+            _print_error(
+                f"--method {_method} is not supported by multi-run yet: "
+                "multi-run trains with SFT only."
+            )
+            _print_info(
+                "Drop --method, or run a single preference-tuning job with "
+                f"`backprop train --method {_method} ...`."
+            )
+            return EXIT_USER_ERROR
         wave6b_candidate_kwargs: dict[str, Any] = {
             "use_dora": bool(getattr(args, "use_dora", False)),
             "packing": not bool(getattr(args, "no_packing", False)),
@@ -4244,6 +4265,16 @@ EVAL_METRIC_CHOICES = [
 ]
 
 
+def _float_or_none(value: Any) -> float | None:
+    """``float(value)`` for an int or float, else None (also for an int too large for a float)."""
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return float(value)
+    except OverflowError:
+        return None
+
+
 def _build_runs_payload(
     runs: list[dict[str, Any]],
     output_dir: Path,
@@ -4283,7 +4314,9 @@ def _build_runs_payload(
                 numeric = [float(x) for x in loss_history if isinstance(x, (int, float))]
                 if numeric:
                     min_loss = min(numeric)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                # OverflowError: an int too large for a float (> ~1e308) in a
+                # hand-edited or corrupted history must not crash `runs --json`.
                 min_loss = None
 
         # Duration: explicit field wins; otherwise compute from timestamps.
@@ -4310,7 +4343,7 @@ def _build_runs_payload(
             "completed_at": entry.get("completed_at"),
             "checkpoint_path": entry.get("checkpoint_path"),
             "loss": {
-                "final": float(final_loss) if isinstance(final_loss, (int, float)) else None,
+                "final": _float_or_none(final_loss),
                 "min": min_loss,
             },
         })
@@ -7677,10 +7710,10 @@ Tips:
         choices=["sft", "orpo", "simpo", "kto"],
         default="sft",
         help=(
-            "Training objective for each run. 'sft' (default) = supervised "
-            "fine-tuning; 'orpo'/'simpo' = reference-free preference tuning "
-            "({prompt, chosen, rejected}); 'kto' = prospect-theory tuning on "
-            "unpaired {prompt, completion, label}. See `backprop train --help`."
+            "Training objective for each run. Multi-run supports only 'sft' "
+            "(the default) today; 'orpo', 'simpo' and 'kto' are refused with an "
+            "error until the multi-run backend supports them. Use "
+            "`backprop train --method ...` for a single preference-tuning run."
         ),
     )
     multi_parser.add_argument(

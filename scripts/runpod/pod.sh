@@ -5,6 +5,15 @@
 # Needs: RUNPOD_API_KEY in the environment (never printed), curl, python,
 # and an SSH public key (default ~/.ssh/runpod_rustline.pub).
 #
+# Disk (env, optional):
+#   RUNPOD_CONTAINER_DISK_GB  container disk, default 100. The HF cache belongs
+#                             here: /workspace is often a slow network mount.
+#                             Size it to the models the run downloads (the
+#                             14B/24B/32B QLoRA presets are bf16 repos, ~140 GB
+#                             together: use 200, or delete each model after use).
+#   RUNPOD_VOLUME_GB          pod volume at /workspace, default 0 (none). A
+#                             one-shot experiment pod needs no persistent volume.
+#
 # Lessons this script encodes (2026-09-30):
 #   * Use curl. Cloudflare rejects Python's urllib on rest.runpod.io with
 #     HTTP 403 / "error code: 1010".
@@ -30,21 +39,26 @@ API=https://rest.runpod.io/v1
 IMAGE="${RUNPOD_IMAGE:-runpod/pytorch:1.4.0-cu1281-torch280-ubuntu2404}"
 PUBKEY_FILE="${RUNPOD_PUBKEY:-$HOME/.ssh/runpod_rustline.pub}"
 SSH_KEY="${RUNPOD_SSH_KEY:-$HOME/.ssh/runpod_rustline}"
+DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-100}"
+VOLUME_GB="${RUNPOD_VOLUME_GB:-0}"
 AUTH=(-H "Authorization: Bearer ${RUNPOD_API_KEY}")
 
 _create_once() {  # gpu cloud min_ram name -> prints pod id or nothing
   local body
-  body=$(python - "$1" "$2" "$3" "$4" "$IMAGE" "$PUBKEY_FILE" <<'PY'
+  body=$(python - "$1" "$2" "$3" "$4" "$IMAGE" "$PUBKEY_FILE" "$DISK_GB" "$VOLUME_GB" <<'PY'
 import json, os, sys
-gpu, cloud, ram, name, image, pub = sys.argv[1:7]
-print(json.dumps({
+gpu, cloud, ram, name, image, pub, disk, volume = sys.argv[1:9]
+body = {
     "name": name, "imageName": image, "cloudType": cloud,
     "gpuTypeIds": [gpu], "gpuCount": 1,
     "minRAMPerGPU": int(ram), "minVCPUPerGPU": 8,
-    "containerDiskInGb": 60, "volumeInGb": 150, "volumeMountPath": "/workspace",
+    "containerDiskInGb": int(disk), "volumeInGb": int(volume),
     "ports": ["22/tcp"], "env": {"PUBLIC_KEY": open(os.path.expanduser(pub)).read().strip()},
     "supportPublicIp": True,
-}))
+}
+if int(volume) > 0:
+    body["volumeMountPath"] = "/workspace"
+print(json.dumps(body))
 PY
 )
   curl -s -X POST "$API/pods" "${AUTH[@]}" -H "Content-Type: application/json" --data "$body" \
@@ -77,11 +91,11 @@ case "$cmd" in
     # ssh-info prints "ssh -i KEY -p PORT root@IP"; take PORT and HOST from it.
     read -r _ _ _ _ port host <<<"$("$0" ssh-info "$1")"
     ssh -i "$SSH_KEY" -p "$port" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=25 "$host" \
-      "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader; free -g | sed -n 2p; df -h / /workspace | tail -2; python -c 'import torch;print(torch.__version__, torch.cuda.is_available())'" ;;
+      "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader; free -g | sed -n 2p; df -h / /workspace 2>/dev/null | tail -n +2; python -c 'import torch;print(torch.__version__, torch.cuda.is_available())'" ;;
   list)
     curl -s "$API/pods" "${AUTH[@]}" | python -c "import json,sys; [print(p['id'], p.get('name'), p.get('desiredStatus'), p.get('costPerHr')) for p in json.load(sys.stdin)]" ;;
   delete)
     curl -s -o /dev/null -w "DELETE $1 -> HTTP %{http_code}\n" -X DELETE "$API/pods/$1" "${AUTH[@]}" ;;
   *)
-    sed -n '2,26p' "$0"; exit 2 ;;
+    sed -n '2,34p' "$0"; exit 2 ;;
 esac

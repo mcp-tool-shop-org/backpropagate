@@ -1,4 +1,4 @@
-"""Dead-man's switch: delete a RunPod pod at a deadline, no matter what else happens.
+"""Dead-man's switch: delete a RunPod pod at a deadline, whatever happens to the session.
 
 Start it right after creating a pod, detached from the session that created
 it, so an interrupted session can never leave a pod billing:
@@ -11,6 +11,11 @@ it, so an interrupted session can never leave a pod billing:
 
 Arguments: pod id, hours until deletion, log file. Needs RUNPOD_API_KEY.
 A 404 at the deadline means the pod was already deleted, which is fine.
+
+The timer runs on the machine that started it. If that machine sleeps or
+hibernates past the deadline, the delete fires on wake (the loop compares
+wall-clock time) and the pod bills until then. Keep the machine awake while a
+pod is up, or run `scripts/runpod/pod.sh list` after a sleep.
 """
 
 from __future__ import annotations

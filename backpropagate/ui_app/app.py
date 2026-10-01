@@ -158,21 +158,32 @@ def _with_tokens(page: rx.Component) -> rx.Component:
 #     (security_headers, request_logging, basic_auth, rate_limit, healthz)
 #       innermost first ──────────────────────────────────────► outermost last
 #
-# FRONTEND-F-001 (Wave 5.5): bind ``appearance`` to ``rx.color_mode`` so
+# FRONTEND-F-001 (Wave 5.5): ``appearance`` follows the live colour mode so
 # the Radix theme re-tints whenever the operator toggles theme OR the
 # ``prefers-color-scheme`` media query flips. Reflex's color-mode provider
 # writes ``class="light"`` / ``class="dark"`` on ``<html>`` (next-themes
 # with attribute="class"), which fires the ``.light, .light-theme,
 # [data-theme="light"]`` selector in TOKENS_CSS. The v1.2 bug was that
 # ``RADIX_THEME`` hard-coded ``appearance="dark"`` which stranded the
-# header toggle button — it flipped server-side state but never wrote
+# header toggle button - it flipped server-side state but never wrote
 # the DOM mutation needed to swap the active CSS variable set.
+#
+# The fix is ``appearance="inherit"`` (Radix does not impose its own
+# light/dark class, so the ``<html>`` class set by Reflex's provider wins),
+# NOT ``appearance=rx.color_mode``. On Reflex 0.9.3 / 0.9.5 the compiler
+# writes the appearance expression verbatim into ``.web/utils/context.js``
+# as ``export const defaultColorMode = <appearance>``; a ``rx.color_mode``
+# Var renders as the bare identifier ``rawColorMode``, which is undefined at
+# module scope, so the frontend threw ``ReferenceError: rawColorMode is not
+# defined`` on load (dev: blank page; ``--env prod``: the build's prerender
+# step failed). Reflex 0.9.12 papers over a non-literal appearance; "inherit"
+# is correct on every version.
 #
 # The toggle button in ``BpHeader`` reads/writes via ``rx.color_mode`` +
 # ``rx.toggle_color_mode`` (the documented Reflex 0.9 surface); see
 # ``ui_app/chrome.py``.
 app = rx.App(
-    theme=rx.theme(appearance=rx.color_mode, **RADIX_THEME),
+    theme=rx.theme(appearance="inherit", **RADIX_THEME),
     stylesheets=STYLESHEETS,
     api_transformer=(
         security_headers_middleware,

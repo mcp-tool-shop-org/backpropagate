@@ -809,7 +809,7 @@ class TestCmdUI:
         """CLIUI-B-004: neutralise the port pre-flight for the launch-path
         tests in this class.
 
-        ``cmd_ui`` now bind-probes ``--port`` and ``--port + 1`` before handing
+        ``cmd_ui`` now bind-probes ``--port`` before handing
         off to the Reflex subprocess (so a busy port surfaces a structured
         EADDRINUSE error instead of a 30-60s-deferred traceback). The existing
         happy-path tests assert ``subprocess.run`` is reached; without this
@@ -1294,8 +1294,8 @@ class TestCmdUI:
 
         Before the fix, a port already bound by a previous `backprop ui` (or any
         other dev server) surfaced only as a bare Reflex traceback + non-zero
-        exit, 30-60s into the launch. The pre-flight now bind-probes --port and
-        --port+1 and raises a structured ``RUNTIME_UI_PORT_IN_USE`` BEFORE any
+        exit, 30-60s into the launch. The pre-flight now bind-probes --port
+        and raises a structured ``RUNTIME_UI_PORT_IN_USE`` BEFORE any
         subprocess is spawned. This test forces the probe to report the
         frontend port busy and pins the raised code + that the subprocess is
         never launched.

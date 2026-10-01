@@ -1,9 +1,11 @@
 """Reflex configuration — read by ``reflex run`` / ``reflex export``.
 
-The CLI in ``backpropagate/cli.py``'s ``cmd_ui`` runs ``reflex run`` from
-inside the ``backpropagate/`` package directory (the directory containing
+The CLI in ``backpropagate/cli.py``'s ``cmd_ui`` runs ``reflex run --env prod``
+from inside the ``backpropagate/`` package directory (the directory containing
 this file), so Reflex picks up ``ui_app/`` as the app package and loads
-``ui_app.app`` for the ``app = rx.App(...)`` instance.
+``ui_app.app`` for the ``app = rx.App(...)`` instance. Production mode (one
+port) is deliberate: Reflex's dev backend refuses this layout because this
+directory is a package with a non-empty ``__init__.py`` (see ``cmd_ui``).
 
 Reflex's ``app_name`` must match ``^[a-zA-Z][a-zA-Z0-9_]*$`` (no dots), so
 we use the flat name ``ui_app`` — cwd-based resolution finds the ``ui_app``

@@ -1027,7 +1027,7 @@ class TestAppStateTheme:
 
     def test_radix_theme_omits_hardcoded_appearance(self):
         """RADIX_THEME must NOT lock ``appearance`` — that goes at the
-        rx.theme() call site bound to ``rx.color_mode``.
+        rx.theme() call site as ``"inherit"`` (follow the <html> colour-mode class).
 
         FRONTEND-F-001: hard-coding ``appearance="dark"`` here was the
         v1.2 bug — it overrode the per-render binding and the toggle
@@ -1038,9 +1038,9 @@ class TestAppStateTheme:
         assert "appearance" not in RADIX_THEME, (
             "RADIX_THEME contains a hard-coded 'appearance' — that strands "
             "the theme toggle button (the v1.2 FRONTEND-F-001 bug). The "
-            "appearance binding must live at the rx.theme() call site in "
-            "ui_app/app.py, where it is wired to rx.color_mode so DOM "
-            "mutation actually fires."
+            "appearance must be set at the rx.theme() call site in "
+            "ui_app/app.py (\"inherit\", so the <html> colour-mode class "
+            "written by Reflex's provider takes effect)."
         )
 
 

@@ -52,11 +52,13 @@ from __future__ import annotations
 # surfaces so the UI breathes deeper than Radix's stock slate.
 #
 # FRONTEND-F-001 (Wave 5.5): ``appearance`` is INTENTIONALLY OMITTED here.
-# ``ui_app/app.py`` passes ``appearance=rx.color_mode`` at the call site so
+# ``ui_app/app.py`` passes ``appearance="inherit"`` at the call site so
 # the Radix theme re-tints whenever Reflex's next-themes provider flips
 # (operator click on the header toggle OR ``prefers-color-scheme`` change on
-# first load). Hard-coding ``"dark"`` here would override that binding and
+# first load). Hard-coding ``"dark"`` here would override that and
 # strand the toggle button — the v1.2 bug FRONTEND-F-001 was caught for.
+# (Not ``appearance=rx.color_mode``: on Reflex 0.9.3 / 0.9.5 that compiles to
+# ``defaultColorMode = rawColorMode``, a ReferenceError at page load.)
 RADIX_THEME: dict[str, object] = {
     "accent_color": "teal",        # Ocean Mist primary
     "gray_color": "slate",         # cool neutrals; matches bg #0F1316

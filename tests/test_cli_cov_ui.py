@@ -123,7 +123,11 @@ class TestAuthFile:
         assert run.env["BACKPROPAGATE_UI_PORT"] == "7900"
         assert run.env["BACKPROPAGATE_UI_HOST_BIND"] == "127.0.0.1"
         assert run.cmd[-2:] == ["--backend-host", "127.0.0.1"]
-        assert "--frontend-port" in run.cmd and "7900" in run.cmd and "7901" in run.cmd
+        # production mode on ONE port: the dev backend cannot start on this package layout
+        assert run.cmd[run.cmd.index("--env") + 1] == "prod"
+        assert run.cmd[run.cmd.index("--frontend-port") + 1] == "7900"
+        assert run.cmd[run.cmd.index("--backend-port") + 1] == "7900"
+        assert "7901" not in run.cmd
         out = capsys.readouterr().out
         assert "lock-file" not in out  # credentials are never persisted, so no lock file
         assert "inline" not in out  # the --auth-file path never prints the inline-credential warning
@@ -235,11 +239,27 @@ class TestGates:
         assert ui["run"] == []
 
     def test_port_in_use_raises(self, ui, monkeypatch):
-        monkeypatch.setattr(cli, "_find_port_in_use", lambda host, ports: ports[1])
+        probed: list[list[int]] = []
+
+        def busy(host, ports):
+            probed.append(list(ports))
+            return ports[0]
+
+        monkeypatch.setattr(cli, "_find_port_in_use", busy)
         with pytest.raises(BackpropagateError) as ei:
             cli.cmd_ui(parse(["ui", "--port", "7950"]))
         assert ei.value.code == "RUNTIME_UI_PORT_IN_USE"
-        assert "backend (--port + 1)" in ei.value.message
+        assert "7950" in ei.value.message
+        assert probed == [[7950]]  # one port: there is no N+1 backend any more
+        assert "+ 1" not in ei.value.message and "N+1" not in (ei.value.suggestion or "")
+
+    def test_reflex_runs_in_prod_mode_on_a_single_port(self, ui):
+        assert cli.cmd_ui(parse(["ui", "--port", "7940"])) == cli.EXIT_OK
+        cmd = ui["run"][0].cmd
+        assert cmd[1:4] == ["-m", "reflex", "run"]
+        assert cmd[cmd.index("--env") + 1] == "prod"
+        assert cmd[cmd.index("--frontend-port") + 1] == cmd[cmd.index("--backend-port") + 1] == "7940"
+        assert "7941" not in cmd
 
 
 class _FakeTunnelProc:

@@ -3084,11 +3084,9 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     we never block a launch that might actually have succeeded.
 
     Args:
-        host: The interface the Reflex subprocess will bind (frontend +
-            backend share the host; only the port differs).
-        ports: Candidate ports to probe — typically ``[port, port + 1]``
-            (Reflex serves the frontend on ``--port`` and the backend on
-            ``--port + 1``).
+        host: The interface the Reflex subprocess will bind.
+        ports: Candidate ports to probe. ``backprop ui`` runs Reflex in
+            production mode on ONE port, so this is just ``[port]``.
 
     Returns:
         The first occupied port, or ``None`` if all candidates are free.
@@ -3096,11 +3094,9 @@ def _find_port_in_use(host: str, ports: list[int]) -> int | None:
     import errno
     import socket
 
-    # Reflex binds the frontend host to 0.0.0.0 regardless of --backend-host
-    # (see the cmd() comment block), but the backend honors the requested
-    # host. Probe on the requested host; fall back to 127.0.0.1 if the host
-    # string isn't bindable here (e.g. a LAN IP not assigned to this box) so a
-    # mis-probe never turns into a false EADDRINUSE.
+    # Probe on the requested host; a host string that isn't bindable here
+    # (e.g. a LAN IP not assigned to this box) is skipped below (EADDRNOTAVAIL)
+    # so a mis-probe never turns into a false EADDRINUSE.
     probe_host = host or "127.0.0.1"
     for port in ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -3128,8 +3124,9 @@ def cmd_ui(args: argparse.Namespace) -> int:
     Execute the ui command to launch the Reflex web interface.
 
     The Web UI migrated from Gradio to Reflex in v1.1.0 (2026-05-21). This
-    handler subprocess-launches ``reflex run`` from the directory containing
-    ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
+    handler subprocess-launches ``reflex run --env prod`` (one port; the
+    backend serves the compiled frontend, so the auth middleware fronts every
+    request) from the directory containing ``rxconfig.py``. All validation runs BEFORE the subprocess launch — auth
     shape, share-without-auth refuse-to-start, host-without-auth refuse-to-
     start — so misconfigured launches fail loudly on the CLI side regardless
     of what the UI framework does.
@@ -3415,25 +3412,24 @@ def cmd_ui(args: argparse.Namespace) -> int:
         )
         return EXIT_RUNTIME_ERROR
 
-    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex serves the
-    # frontend on --port and the backend on --port+1; if EITHER is already
-    # bound, the subprocess dies 30-60s in with a bare traceback. Probe both
-    # here so the operator gets a structured EADDRINUSE error naming the port
-    # + the --port remedy BEFORE we spawn cloudflared or print "Launching...".
+    # CLIUI-B-004 (Stage C proactive): port pre-flight. Reflex runs in
+    # production mode on the single --port (the backend serves the compiled
+    # frontend itself); if it is already bound, the subprocess dies 30-60s in
+    # with a bare traceback. Probe it here so the operator gets a structured
+    # EADDRINUSE error naming the port + the --port remedy BEFORE we spawn
+    # cloudflared or print "Launching...".
     # Done after the auth/host gates so a misconfigured launch still fails on
     # the auth axis first (the higher-severity contract), and before the
     # cloudflared spawn so a busy port doesn't leak a public tunnel.
     _preflight_host = getattr(args, "host", None) or "127.0.0.1"
-    _busy_port = _find_port_in_use(_preflight_host, [args.port, args.port + 1])
+    _busy_port = _find_port_in_use(_preflight_host, [args.port])
     if _busy_port is not None:
-        _which = "frontend" if _busy_port == args.port else "backend (--port + 1)"
         raise BackpropagateError(
-            f"Port {_busy_port} ({_which}) is already in use on "
-            f"{_preflight_host}; the Reflex UI needs both {args.port} and "
-            f"{args.port + 1} free.",
+            f"Port {_busy_port} is already in use on {_preflight_host}; "
+            "the Reflex UI needs it free.",
             suggestion=(
-                f"Pick a free port with --port <N> (the backend uses N+1, so "
-                f"leave a gap), or stop whatever is holding {_busy_port} "
+                "Pick a free port with --port <N>, or stop whatever is "
+                f"holding {_busy_port} "
                 "(a previous `backprop ui` that didn't exit is the usual "
                 "culprit — check `lsof -i :%d` on POSIX or "
                 "`netstat -ano | findstr :%d` on Windows)."
@@ -3555,43 +3551,46 @@ def cmd_ui(args: argparse.Namespace) -> int:
                 "will need to copy the token from the startup banner URL."
             )
 
-    # Reflex's port convention: the frontend serves on --frontend-port and
-    # the backend on --backend-port. We map --port to the frontend (what
-    # users hit in the browser) and the backend gets port+1.
+    # Port model: ONE port, production mode.
     #
-    # BRIDGE-B-001 (Wave 3.5, v1.3): pass --backend-host through to the
-    # Reflex subprocess so the operator-requested bind actually takes effect.
-    # Without this, Reflex's default backend_host="0.0.0.0" (reflex_base.config)
-    # silently bound the FastAPI backend to ALL interfaces regardless of the
-    # operator's --host value — making --host advertise control it didn't
-    # deliver. The CLI's refuse-to-start gates (loopback-only without --auth)
-    # were the only thing standing between a default install and a LAN-exposed
-    # backend; passing --backend-host here makes the bind match what the
-    # operator asked for.
+    # ``reflex run`` in dev mode starts a Vite frontend on --frontend-port and
+    # a separate backend on --backend-port. That cannot work for this package:
+    # the dev backend calls ``reflex.utils.exec.get_reload_paths()``, which
+    # walks up from the app module and raises ``RuntimeError: There should not
+    # be an __init__.py file in your app root directory`` because the app root
+    # (``backpropagate/``, the cwd that holds rxconfig.py) is a real package
+    # with a non-empty ``__init__.py`` (checked on Reflex 0.9.3, 0.9.5 and
+    # 0.9.12). It also leaves the auth middleware on the backend port while
+    # the browser opens the frontend port, so a ``?token=`` URL on the
+    # frontend port never reaches it, and the Vite dev server binds 0.0.0.0
+    # regardless of --backend-host.
     #
-    # Default (no --host): resolves to "127.0.0.1" so the backend is loopback
-    # by default — matches the loopback-first posture the CLI documents.
-    # When --host LAN-IP --auth user:pass passes the gate, the operator-
-    # supplied host flows through.
+    # ``reflex run --env prod`` has none of these problems: the compiled
+    # frontend is mounted INTO the backend ASGI app (``get_frontend_mount``
+    # appends it before the ``api_transformer`` chain is applied), so the auth
+    # / Host / rate-limit middleware fronts every byte on a single port, and
+    # there is a single listener bound to the requested host. The prod path
+    # never calls ``get_reload_paths``. Reflex requires the two ports to be
+    # equal in prod, so both flags carry the same number.
     #
-    # Frontend bind caveat: the Reflex-generated .web/package.json uses
-    # `react-router dev --host` which binds 0.0.0.0 regardless of this
-    # backend-host knob. That is a frontend-domain follow-up — the load-
-    # bearing security on the backend (the FastAPI/uvicorn process where
-    # the API and WebSocket live) is now bound as the operator requested,
-    # and the auth middleware's Host-header allowlist + HTTP Basic check
-    # (BACKPROPAGATE_UI_HOST_BIND-driven) is the enforcement layer in either
-    # case.
+    # BRIDGE-B-001 (Wave 3.5, v1.3): --backend-host carries the operator's
+    # --host so the bind matches what was asked. Default (no --host) is
+    # 127.0.0.1, the loopback-first posture. When --host LAN-IP --auth
+    # user:pass passes the gate, the operator-supplied host flows through;
+    # the middleware's Host-header allowlist (BACKPROPAGATE_UI_HOST_BIND) and
+    # the credential check remain the enforcement layer either way.
     backend_host = requested_host or "127.0.0.1"
     cmd = [
         sys.executable,
         "-m",
         "reflex",
         "run",
+        "--env",
+        "prod",
         "--frontend-port",
         str(args.port),
         "--backend-port",
-        str(args.port + 1),
+        str(args.port),
         "--backend-host",
         backend_host,
     ]
@@ -3651,9 +3650,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
         # banners. The structured-log peer event 'ui_subprocess_phase_launching'
         # fires alongside so JSON consumers see the same lifecycle marker.
         _print_info(
-            "==> Reflex compiling frontend (first start may take 30-60s; "
-            "subsequent starts are cached). Open the URL after the "
-            "'App running at' line appears."
+            "==> Reflex building the production frontend (first start "
+            "installs and builds, up to a minute or two; later starts take "
+            "about 20s). Open the URL after the 'App running at' line "
+            "appears."
         )
         try:
             _ui_logger.info(

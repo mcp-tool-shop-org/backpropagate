@@ -349,7 +349,7 @@ chmod 600 ~/.config/backpropagate/auth
 backprop ui --share --auth-file ~/.config/backpropagate/auth
 ```
 
-The CLI reads the file, validates the shape with the same `validate_auth_shape` used for `--auth`, and threads the credential into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. The file is never logged; the credential is redacted from any error output. `--auth` and `--auth-file` are mutually exclusive — passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`.
+The CLI reads the file, validates the shape with the same `validate_auth_shape` used for `--auth`, and hands the Reflex subprocess the username and a salted scrypt verifier of the password, never the password itself (1.8.1+). The file is never logged; the credential is redacted from any error output. `--auth` and `--auth-file` are mutually exclusive — passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`.
 
 `--auth-file` satisfies the same `--share` / `--host <non-loopback>` requirement that `--auth` does — passing it means the four-layer defense is satisfied. See [security → auth middleware](/backpropagate/handbook/security/#auth-middleware-v120) for the full mode matrix.
 

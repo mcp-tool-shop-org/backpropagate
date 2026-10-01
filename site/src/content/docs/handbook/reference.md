@@ -50,13 +50,13 @@ See [CLI reference](/backpropagate/handbook/cli-reference/) for every flag, ever
 
 ### `--share` / `--host` require `--auth` post-v1.2.0
 
-The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape` and into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. What refuses to start:
+The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape`; the Reflex subprocess gets the username and a salted scrypt verifier, never the password (1.8.1+). Without `--auth`, each launch generates a token and prints it in the banner URL. What refuses to start:
 
 - `backprop ui --share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]` (a public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h)).
 - `backprop ui --host <non-loopback>` without `--auth` → same code (DNS-rebinding defense).
 - `backprop ui --auth user:pass` when `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra install) → same code.
 
-The refuse-to-start contract is enforced one layer deeper too — `python -m reflex run` from the package directory refuses unless the legitimate `backprop ui` bridge sets its bypass env var. For remote access without a public URL, SSH port-forwarding (`ssh -L 7860:localhost:7860 <host>`) stays the lower-friction option. Full rationale + the four-layer defense chain in [the security page](/backpropagate/handbook/security/#four-layer-defense-in-depth) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
+The refuse-to-start contract is enforced one layer deeper too — `python -m reflex run` from the package directory refuses unless the legitimate `backprop ui` bridge sets its bypass env var. For remote access without a public URL, SSH port-forwarding (`ssh -L 7862:localhost:7862 <host>`, then open the banner URL) stays the lower-friction option. Full rationale + the four-layer defense chain in [the security page](/backpropagate/handbook/security/#four-layer-defense-in-depth) and the project [SECURITY.md](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/SECURITY.md).
 
 ## Windows support
 

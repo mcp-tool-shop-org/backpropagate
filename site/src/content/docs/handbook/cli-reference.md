@@ -302,17 +302,19 @@ Launch the Reflex (Radix UI) web interface.
 backprop ui --port 7862
 ```
 
+Open the URL the banner prints, `http://127.0.0.1:7862/?token=...`. Without `--auth`, each launch generates a new token, and the UI answers `401` to anything that has neither the token nor the session cookie it sets. `backprop ui` runs Reflex in production mode on that one port: the first start installs the frontend toolchain and builds it, which can take a minute or two; later starts take about 20 seconds. Wait for the `App running at` line.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port`, `-p` | `7862` | Port to bind (1..65535). |
+| `--port`, `-p` | `7862` | The one port the UI listens on (1..65535). 1.8.0 and earlier also needed `port + 1`. |
 | `--host` | `127.0.0.1` | Bind host. Non-loopback values (e.g. `0.0.0.0`, LAN IP) require `--auth user:pass` post-v1.2.0; otherwise the runtime exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. **v1.3:** the value is now actually threaded to the Reflex backend via `--backend-host` (v1.1.0 → v1.2.x silently stayed loopback-only). |
 | `--share` | off | Publish via a public tunnel. Requires `--auth user:pass` post-v1.2.0; otherwise the runtime exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. The v1.2.0 FastAPI middleware enforces the credential on every request and the `/_event` WebSocket upgrade. **v1.3:** implemented as a real `cloudflared` tunnel (v1.1.0 → v1.2.x was a silent no-op). Requires `cloudflared` on `PATH` — install from <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>. The announced `https://*.trycloudflare.com` URL is added to the auth middleware's Host + Origin allowlist via `BACKPROPAGATE_UI_SHARE_HOST`. The CLI waits up to `BACKPROPAGATE_CLOUDFLARED_TIMEOUT` seconds (default `30`) for the URL to appear. |
-| `--auth USER:PASS` | unset | Enable HTTP Basic auth on the Reflex UI. Required when `--share` or non-loopback `--host` is passed. Validated by `validate_auth_shape` — malformed values (missing colon, empty user or pass, etc.) exit `1` with `INPUT_AUTH_INVALID_SHAPE`. The credential flows into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. Inline `--auth` lands in shell history — see `--auth-file` for the shell-history-safe alternative. |
+| `--auth USER:PASS` | unset | Enable HTTP Basic auth on the Reflex UI. Required when `--share` or non-loopback `--host` is passed. Validated by `validate_auth_shape` — malformed values (missing colon, empty user or pass, etc.) exit `1` with `INPUT_AUTH_INVALID_SHAPE`. The Reflex subprocess gets the username and a salted scrypt verifier of the password (`BACKPROPAGATE_UI_AUTH_USER`, `BACKPROPAGATE_UI_AUTH_VERIFIER`), never the password itself (1.8.1+). Inline `--auth` lands in shell history — see `--auth-file` for the shell-history-safe alternative. |
 | `--auth-file PATH` | unset | **v1.3+** — read `user:pass` from `PATH` instead of taking `--auth` on the command line. Same shape validation as `--auth`. Mutually exclusive with `--auth` (passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`). On POSIX, the file mode is checked: a mode wider than `0600` (group / other readable) emits a warning at startup. Create with `printf 'user:pass' > path && chmod 600 path`. Satisfies the `--share` / non-loopback `--host` gate. Recommended for repeat invocations and shell-history-sensitive deployments. See [recipes → --auth-file](/backpropagate/handbook/recipes/#use---auth-file-for-shell-history-safe-auth). |
 
 ### `--share` / `--host` require `--auth` (v1.2.0 contract)
 
-The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape` and into the Reflex subprocess via `BACKPROPAGATE_UI_AUTH`. The CLI rails refuse to start in these cases:
+The v1.2.0 FastAPI auth middleware (`backpropagate/ui_app/auth.py::basic_auth_transformer`, wired in `ui_app/app.py` via `rx.App(api_transformer=...)`) enforces credentials on every HTTP route and the `/_event` WebSocket upgrade. `--auth user:pass` flows through `validate_auth_shape`; the Reflex subprocess gets the username and a salted scrypt verifier, never the password (1.8.1+). The CLI rails refuse to start in these cases:
 
 - `backprop ui --share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A public URL with no credentials is the v1.1.x bug closed by [GHSA-f65r-h4g3-3h9h](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/GHSA-f65r-h4g3-3h9h) (CVSS 9.8, 2026-05-23).
 - `backprop ui --host <non-loopback>` without `--auth` → same code (DNS-rebinding defense per CVE-2024-28224 / CVE-2025-49596 lineage).
@@ -323,8 +325,8 @@ The refuse-to-start contract is enforced one layer deeper inside `ui_app/app.py`
 **For remote access without a public URL, SSH port-forwarding stays the lower-friction option:**
 
 ```bash
-ssh -L 7860:localhost:7860 you@gpu-host
-# Then on your laptop, visit http://localhost:7860
+ssh -L 7862:localhost:7862 you@gpu-host
+# Then on your laptop, open the banner URL: http://127.0.0.1:7862/?token=...
 ```
 
 SSH already handles auth, encryption, and audit — the runtime stays bound to `127.0.0.1` on the remote box and only your forwarded tunnel can reach it.

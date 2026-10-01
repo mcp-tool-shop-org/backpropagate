@@ -143,8 +143,8 @@ backprop ui --host 0.0.0.0 --auth user:pass
 **Fix (recommended when you don't actually need a public URL): SSH port-forwarding.**
 
 ```bash
-ssh -L 7860:localhost:7860 you@gpu-host
-# Then on your laptop: http://localhost:7860
+ssh -L 7862:localhost:7862 you@gpu-host
+# Then on your laptop, open the banner URL: http://127.0.0.1:7862/?token=...
 ```
 
 SSH already handles auth, encryption, and audit. The UI stays bound to `127.0.0.1` on the remote box; only your forwarded tunnel can reach it. No middleware required.

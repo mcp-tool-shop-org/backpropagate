@@ -394,14 +394,14 @@ def _auth_credential(value: str) -> str:
     if not isinstance(value, str) or not value:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got an empty value. "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
     if ":" not in value:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass — no colon separator found. "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -411,7 +411,7 @@ def _auth_credential(value: str) -> str:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got: empty username "
             "(format was ':<pass>'). "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -419,7 +419,7 @@ def _auth_credential(value: str) -> str:
         raise argparse.ArgumentTypeError(
             "--auth requires user:pass (both non-empty). Got: empty password "
             "(format was '<user>:'). "
-            "Use `BACKPROPAGATE_UI_AUTH=user:pass` env var to avoid shell "
+            "Use `--auth-file <path>` to keep the password out of shell "
             "history."
         )
 
@@ -8594,7 +8594,7 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
         "--port", "-p",
         type=_port_int,
         default=7862,
-        help="Port to run the server on (default: 7862; must be in range 1..65535)",
+        help="The one port the UI listens on (default: 7862; must be in range 1..65535)",
     )
     ui_parser.add_argument(
         "--host",

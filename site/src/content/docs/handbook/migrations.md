@@ -7,6 +7,16 @@ sidebar:
 
 Operator-facing migration narratives. Each section covers one upgrade hop with breaking changes, behavioural fixes, and the recommended migration steps. For older transitions (v1.0 → v1.1, the Gradio → Reflex pivot) see the [v1.1.0 CHANGELOG section](https://github.com/mcp-tool-shop-org/backpropagate/blob/main/CHANGELOG.md#110---2026-05-21).
 
+## v1.8.0 → v1.8.1
+
+A patch release. If you use the web UI, three things change:
+
+- **`backprop ui` starts.** On the Reflex 0.9.x versions the `[ui]` extra installs, 1.8.0 and earlier could not start the UI at all: Reflex's development server refuses this package's layout (`There should not be an __init__.py file in your app root directory`). `backprop ui` now runs Reflex in production mode. The first start installs the frontend toolchain and builds it, which can take a minute or two; later starts take about 20 seconds.
+- **One port.** The UI, its assets and its WebSocket are all served on `--port` (default `7862`). Nothing listens on `port + 1` any more, so an SSH tunnel or firewall rule needs only the one port: `ssh -L 7862:localhost:7862 <host>`.
+- **Open the banner URL.** Without `--auth`, every launch generates a token and prints `http://127.0.0.1:<port>/?token=...`; a bare `http://localhost:<port>` answers `401`. The first request swaps the token for a session cookie. With `--auth`, the password is checked against a scrypt verifier and never reaches the UI process or the lock file. Sessions end when the UI restarts, so sign in again after one.
+
+Nothing changes for training, export or the Python API.
+
 ## v1.5 → v1.6
 
 A feature release that also closes the deprecation cycle opened in v1.4. New preference methods (SimPO, KTO), deterministic eval task-metrics, two new CLI verbs, and the final removal of the legacy Gradio-era / `TRAINING_PRESETS` aliases.

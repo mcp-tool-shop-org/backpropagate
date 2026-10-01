@@ -143,7 +143,7 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     },
     "INPUT_AUTH_REQUIRED": {
         "description": "An operation required --auth credentials but they were not supplied.",
-        "default_hint": "Pass --auth user:pass on the CLI, or set BACKPROPAGATE_UI_AUTH=user:pass in the environment. See handbook/security.md for the full auth contract.",
+        "default_hint": "Pass --auth user:pass on the CLI, or --auth-file <path> to keep the password out of shell history. See handbook/security.md for the full auth contract.",
         "retryable": "no",
     },
     "INPUT_AUTH_INVALID_SHAPE": {

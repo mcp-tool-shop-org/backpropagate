@@ -552,9 +552,10 @@ class TestCmdInfoErrorCodes:
 
         The pre-fix hint pointed at the legacy ``backpropagate.launch()``
         Python API which was removed in v1.1.0. The corrected v1.3 hint
-        must reference ``--auth user:pass`` (the CLI surface) +
-        ``BACKPROPAGATE_UI_AUTH`` (the env-var surface) since those are
-        the two actually-supported auth-supply mechanisms in v1.2.0+.
+        must reference ``--auth user:pass`` (the CLI surface). Since 1.8.1 the
+        shell-history-safe route it names is ``--auth-file``: ``backprop ui``
+        strips an ambient ``BACKPROPAGATE_UI_AUTH``, so recommending that
+        variable sent people to a launch without their credential.
         """
         from backpropagate.exceptions import ERROR_CODES
 
@@ -568,9 +569,13 @@ class TestCmdInfoErrorCodes:
             f"the legacy backpropagate.launch() Python API which was removed "
             f"in v1.1.0."
         )
-        assert "BACKPROPAGATE_UI_AUTH" in hint, (
-            f"INPUT_AUTH_REQUIRED hint should reference BACKPROPAGATE_UI_AUTH "
-            f"(the env-var surface). Current hint: {hint!r}."
+        assert "--auth-file" in hint, (
+            f"INPUT_AUTH_REQUIRED hint should reference --auth-file (the "
+            f"shell-history-safe surface). Current hint: {hint!r}."
+        )
+        assert "BACKPROPAGATE_UI_AUTH=" not in hint, (
+            f"INPUT_AUTH_REQUIRED hint must not recommend BACKPROPAGATE_UI_AUTH: "
+            f"backprop ui strips it. Current hint: {hint!r}."
         )
         # The hint must NOT mention the deleted legacy API.
         assert "launch(" not in hint and "backpropagate.launch" not in hint, (

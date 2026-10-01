@@ -4,15 +4,14 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.5.x   | :white_check_mark: (current; v1.5.0 shipped 2026-05-31) |
-| 1.4.x   | :white_check_mark: (security-fix-only until v1.6.0; operators should plan migration to v1.5) |
-| 1.3.x   | :x: (EOL with v1.5.0) |
-| 1.2.x   | :x: (EOL with v1.4.0) |
+| 1.8.x   | :white_check_mark: (current; v1.8.0 shipped 2026-10-01) |
+| 1.7.x   | :white_check_mark: (security fixes only, until v1.9.0) |
+| 1.2.x – 1.6.x | :x: |
 | 1.1.x   | :x: (EOL with v1.2.0 — see GHSA-f65r-h4g3-3h9h below for the auth-bypass advisory affecting 1.1.0 / 1.1.1) |
 | 1.0.x   | :x: (EOL with v1.1.0) |
 | < 1.0   | :x:                |
 
-Now that v1.5.0 has shipped, 1.4.x moves to security-fix-only support for one minor cycle (until v1.6.0); operators should plan migration to v1.5 within that window. The current minor + one back is always supported; older minors get security-only patches for one cycle, then EOL.
+The current minor is supported. The minor before it gets security fixes only, until the next minor ships; older minors are end of life.
 
 ## Published Security Advisories
 
@@ -27,10 +26,8 @@ CVE IDs are requested at publish time and attached to the GHSA when GitHub Secur
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue — the report is visible to anyone the moment it's filed.
-2. Open a [private security advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) via GitHub's Security tab.
-3. Or email the maintainer directly if the GitHub flow is blocked for you.
-
-**Email:** 64996768+mcp-tool-shop@users.noreply.github.com
+2. Open a [private security advisory](https://github.com/mcp-tool-shop-org/backpropagate/security/advisories/new) via GitHub's Security tab. This is the project's private reporting channel; only the maintainer and you can see it.
+3. If that form is unavailable to you, open a public issue titled **"Security contact requested"** with **no details** of the problem. The maintainer will open a private advisory and invite you to it.
 
 When reporting, please include:
 

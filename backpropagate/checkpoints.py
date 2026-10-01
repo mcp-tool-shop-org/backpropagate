@@ -63,6 +63,8 @@ __all__ = [
     "CheckpointStats",
     "CheckpointManager",
     "RunHistoryManager",
+    "promote_partial_dir",
+    "recover_interrupted_promote",
 ]
 
 
@@ -2008,3 +2010,179 @@ class RunHistoryManager:
                 f"{len(live)} live."
             )
         return live
+
+
+# =============================================================================
+# CRASH-SAFE PROMOTE OF A STAGED SAVE DIRECTORY
+# =============================================================================
+#
+# Trainer.save / export_lora / SLAOMerger.save stage their output in a sibling
+# ``<target>.partial`` directory and promote it here. Pre-fix each of them
+# replaced the WHOLE target directory (rename-aside or rmtree, then move). The
+# CLI saves into the same directory the Trainer uses as ``output_dir``, so
+# every ``backprop train --output X`` deleted X's run_history.json, its
+# checkpoint-N/ dirs and any unrelated files the operator kept there.
+#
+# The promote now replaces only the top-level entries the save produced.
+# Crash safety is kept with a journal: before anything moves, the list of
+# entries is written to ``<target>.backup.json``; each prior entry is renamed
+# into ``<target>.backup/`` before the new one moves in. Deleting the journal
+# is the commit point. If the process dies before that,
+# recover_interrupted_promote() (called at the start of the next save) rolls
+# every journaled entry back, so the target holds the complete prior save,
+# never a mix of old and new files.
+
+
+def _promote_backup_path(target: Path) -> Path:
+    return target.with_name(target.name + ".backup")
+
+
+def _promote_journal_path(target: Path) -> Path:
+    return target.with_name(target.name + ".backup.json")
+
+
+def _remove_entry(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _rollback_promote(target: Path, backup: Path, entries: list[dict[str, Any]]) -> None:
+    """Undo a promote: restore each backed-up prior entry, drop new ones."""
+    for entry in entries:
+        name = entry["name"]
+        dst = target / name
+        bak = backup / name
+        if os.path.lexists(bak):
+            if os.path.lexists(dst):
+                _remove_entry(dst)
+            os.rename(bak, dst)
+        elif not entry["had_prior"] and os.path.lexists(dst):
+            _remove_entry(dst)
+
+
+def recover_interrupted_promote(target: str | Path) -> None:
+    """Resolve what an interrupted :func:`promote_partial_dir` left behind.
+
+    * A journal means the promote never committed: roll it back so ``target``
+      holds the complete prior save again.
+    * A ``.backup`` without a journal and with no ``target`` is a whole-dir
+      backup left by a pre-1.8.2 save that crashed mid-promote: move it back.
+    * A ``.backup`` without a journal next to a live ``target`` is a committed
+      promote whose cleanup did not finish: delete it.
+
+    Never raises; a failure is logged and the leftovers stay on disk, where
+    the next :func:`promote_partial_dir` refuses to run until they are dealt
+    with.
+    """
+    target = Path(target)
+    backup = _promote_backup_path(target)
+    journal = _promote_journal_path(target)
+    try:
+        if journal.exists():
+            entries = json.loads(journal.read_text(encoding="utf-8"))["entries"]
+            logger.warning(
+                "Rolling back an interrupted save into %s: restoring the prior "
+                "files from %s.", target, backup,
+            )
+            _rollback_promote(target, backup, entries)
+            journal.unlink()
+            shutil.rmtree(backup, ignore_errors=True)
+        elif backup.exists():
+            if not target.exists():
+                logger.warning(
+                    "Recovering checkpoint from a previous crashed save: "
+                    "promoting %s back to %s (the active checkpoint was missing).",
+                    backup, target,
+                )
+                shutil.move(str(backup), str(target))
+            else:
+                shutil.rmtree(backup, ignore_errors=True)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning(
+            "Could not resolve the leftovers of an interrupted save into %s "
+            "(%s). The prior files are in %s; journal: %s.",
+            target, e, backup, journal,
+        )
+
+
+def promote_partial_dir(
+    partial: str | Path,
+    target: str | Path,
+    owned_names: tuple[str, ...] = (),
+) -> None:
+    """Move every top-level entry of ``partial`` into ``target``, crash-safely.
+
+    Entries already in ``target`` that ``partial`` does not contain (run
+    history, ``checkpoint-N/`` dirs, the operator's own files) are left
+    untouched, except those named in ``owned_names``: files the save owns
+    but did not write this time (e.g. Trainer.save's ``run_id``), which are
+    removed so a stale one cannot describe the new files. A same-named entry
+    is replaced as a whole. On an exception
+    the prior entries are restored before it propagates; on a crash the
+    journal lets :func:`recover_interrupted_promote` restore them.
+
+    ``partial`` is consumed (moved or emptied) on success.
+
+    Raises:
+        NotADirectoryError: ``target`` exists and is not a directory.
+        FileExistsError: an unresolved earlier promote is still on disk.
+        OSError: a move failed (the prior entries have been restored).
+    """
+    partial = Path(partial)
+    target = Path(target)
+    if not os.path.lexists(target):
+        shutil.move(str(partial), str(target))
+        return
+    if not target.is_dir():
+        raise NotADirectoryError(f"Save target exists and is not a directory: {target}")
+
+    backup = _promote_backup_path(target)
+    journal = _promote_journal_path(target)
+    if os.path.lexists(backup) or os.path.lexists(journal):
+        raise FileExistsError(
+            f"An earlier interrupted save left {backup} / {journal} behind and "
+            f"it could not be resolved automatically. Check whether {target} "
+            f"holds the files you expect, then remove the leftovers."
+        )
+
+    entries: list[dict[str, Any]] = [
+        {"name": p.name, "had_prior": os.path.lexists(target / p.name)}
+        for p in sorted(partial.iterdir())
+    ]
+    staged = {entry["name"] for entry in entries}
+    entries += [
+        {"name": name, "had_prior": True, "remove": True}
+        for name in owned_names
+        if name not in staged and os.path.lexists(target / name)
+    ]
+    backup.mkdir()
+    tmp_journal = journal.with_name(journal.name + ".tmp")
+    tmp_journal.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    os.replace(tmp_journal, journal)
+
+    try:
+        for entry in entries:
+            name = entry["name"]
+            if entry["had_prior"]:
+                os.rename(target / name, backup / name)
+            if not entry.get("remove"):
+                shutil.move(str(partial / name), str(target / name))
+    except BaseException:
+        try:
+            _rollback_promote(target, backup, entries)
+            journal.unlink()
+            shutil.rmtree(backup, ignore_errors=True)
+            logger.warning("Save into %s failed; restored the prior files.", target)
+        except OSError as restore_err:
+            logger.error(
+                "Save into %s failed AND restoring the prior files failed: %s. "
+                "They are in %s; the next save retries the restore.",
+                target, restore_err, backup,
+            )
+        raise
+
+    # Commit point: from here on the new files are the save.
+    journal.unlink()
+    shutil.rmtree(backup, ignore_errors=True)

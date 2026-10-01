@@ -95,7 +95,7 @@ class TestExportLora:
         # same adapter -> same function (base weights equal because same seed)
         assert torch.allclose(_logits(reloaded), _logits(model), atol=1e-5)
 
-    def test_re_export_replaces_previous_output_and_stale_partial(self, tmp_path):
+    def test_re_export_keeps_other_files_and_wipes_stale_partial(self, tmp_path):
         out = tmp_path / "lora"
         out.mkdir()
         (out / "old.txt").write_text("stale", encoding="utf-8")
@@ -103,7 +103,8 @@ class TestExportLora:
         stale.mkdir()
         (stale / "junk").write_text("junk", encoding="utf-8")
         export.export_lora(make_peft(), out, emit_model_card=False)
-        assert not (out / "old.txt").exists()
+        # Only the adapter files are replaced; the operator's file survives.
+        assert (out / "old.txt").read_text(encoding="utf-8") == "stale"
         assert (out / "adapter_config.json").is_file()
         assert not stale.exists()
 

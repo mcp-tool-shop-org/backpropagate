@@ -7200,15 +7200,18 @@ class Trainer:
         never sees a half-written PEFT directory (config.json present, weights
         missing — which raises a cryptic 'state_dict missing keys' on the next
         resume attempt). Promotion is crash-safe even when overwriting an
-        existing checkpoint: the prior checkpoint is renamed aside to
-        ``<path>.backup`` (a fast same-directory rename) BEFORE the new one is
-        moved into place, and the backup is deleted only after the promote
-        succeeds. A crash at any point therefore leaves a recoverable
-        checkpoint — the new one at ``<path>``, or the prior one at
-        ``<path>.backup`` (auto-recovered on the next ``save``). This closes
-        the pre-fix window where ``rmtree(output); move(partial)`` could leave
-        NOTHING on disk if the process died mid-promote (a window widened on
-        cross-filesystem moves, where ``shutil.move`` degrades to copy+delete).
+        existing checkpoint: each prior file the save replaces is renamed
+        aside to ``<path>.backup/`` before the new one moves in, under a
+        journal that lets the next ``save`` roll an interrupted promote back
+        (see :func:`checkpoints.promote_partial_dir`). A crash at any point
+        therefore leaves either the complete new save or the complete prior
+        one.
+
+        Only the files the save writes are replaced. Everything else in
+        ``<path>`` survives: the CLI saves into the Trainer's own
+        ``output_dir``, which also holds ``run_history.json``, the
+        ``checkpoint-N/`` dirs and whatever the operator keeps there. (Pre-fix
+        the promote replaced the whole directory and deleted all of them.)
 
         BACKEND-F-007 (Wave 6a): on success the saved checkpoint is also
         registered with a :class:`CheckpointManager` rooted at
@@ -7295,13 +7298,10 @@ class Trainer:
                 "first, call trainer.train(dataset=...) before save()."
             )
 
+        from .checkpoints import promote_partial_dir, recover_interrupted_promote
+
         output_path = Path(path or self.output_dir / "lora")
         partial_path = output_path.with_name(output_path.name + ".partial")
-        # TRAINER-A-004: sibling holding the PRIOR checkpoint while the new one
-        # is promoted into place, so a crash mid-promote leaves a recoverable
-        # checkpoint (either the new one at output_path or the prior one here)
-        # rather than nothing.
-        backup_path = output_path.with_name(output_path.name + ".backup")
 
         # Ensure parent exists; the atomic promote at the end places the
         # leaf directory.
@@ -7321,24 +7321,9 @@ class Trainer:
         # Wipe any leftover .partial from a previous crash.
         if partial_path.exists():
             shutil.rmtree(partial_path, ignore_errors=True)
-        # TRAINER-A-004: a stale .backup means a PRIOR save crashed after it
-        # renamed the old checkpoint aside but before it could delete the
-        # backup. If output_path is missing, that backup is the only surviving
-        # copy — recover it rather than wiping it. Only wipe the backup when a
-        # live output_path already exists (the prior promote actually finished).
-        if backup_path.exists():
-            if not output_path.exists():
-                logger.warning(
-                    "Recovering checkpoint from a previous crashed save: "
-                    "promoting %s back to %s (the active checkpoint was missing).",
-                    backup_path, output_path,
-                )
-                try:
-                    shutil.move(str(backup_path), str(output_path))
-                except OSError as e:
-                    logger.warning(f"Failed to recover stale backup checkpoint: {e}")
-            else:
-                shutil.rmtree(backup_path, ignore_errors=True)
+        # TRAINER-A-004: a stale .backup means a PRIOR save crashed mid-
+        # promote. Restore the prior checkpoint from it rather than wiping it.
+        recover_interrupted_promote(output_path)
 
         try:
             partial_path.mkdir(parents=True, exist_ok=False)
@@ -7401,48 +7386,12 @@ class Trainer:
                 except OSError as e:
                     logger.warning(f"Failed to write run_id file: {e}")
 
-            # TRAINER-A-004: crash-safe promote that keeps a recoverable
-            # checkpoint through the entire window. Pre-fix the sequence was
-            # ``rmtree(output_path); move(partial -> output)`` — between those
-            # two statements (a window WIDENED on cross-filesystem moves, where
-            # ``shutil.move`` degrades to copy-then-delete) a crash left NO
-            # checkpoint at all: the prior one deleted, the new one half-copied.
-            # New sequence: rename the prior checkpoint ASIDE (fast same-dir
-            # rename), move the new one in, then delete the backup. A crash
-            # after the rename but before the move leaves the prior checkpoint
-            # at ``backup_path`` (recovered on the next save by the stale-backup
-            # handler above); a crash mid-move leaves the new (partial) at
-            # output_path AND the prior intact at backup_path.
-            had_prior = output_path.exists()
-            if had_prior:
-                # Clear any leftover backup target first (defensive — the
-                # stale-backup handler above already dealt with the common
-                # case, but a same-process double-save could re-create it).
-                if backup_path.exists():
-                    shutil.rmtree(backup_path, ignore_errors=True)
-                os.rename(str(output_path), str(backup_path))
-            try:
-                shutil.move(str(partial_path), str(output_path))
-            except Exception:
-                # Promote failed — restore the prior checkpoint so the operator
-                # is never left WORSE off than before the save attempt.
-                if had_prior and not output_path.exists() and backup_path.exists():
-                    try:
-                        os.rename(str(backup_path), str(output_path))
-                        logger.warning(
-                            "Promote failed; restored the prior checkpoint at %s.",
-                            output_path,
-                        )
-                    except OSError as restore_err:
-                        logger.error(
-                            "Promote failed AND prior-checkpoint restore failed: "
-                            "%s. The prior checkpoint is at %s.",
-                            restore_err, backup_path,
-                        )
-                raise
-            # Promote succeeded — the prior checkpoint is now safe to delete.
-            if had_prior and backup_path.exists():
-                shutil.rmtree(backup_path, ignore_errors=True)
+            # TRAINER-A-004: crash-safe promote. Replaces only the files this
+            # save wrote; run_history.json, checkpoint-N/ and the operator's
+            # own files in output_path are left alone. A failed or interrupted
+            # promote restores the prior files. A prior run_id file goes even
+            # when this save writes none, so it cannot label the new weights.
+            promote_partial_dir(partial_path, output_path, owned_names=("run_id",))
         except CheckpointError:
             raise
         except Exception as e:

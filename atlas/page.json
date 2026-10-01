@@ -21,7 +21,7 @@
       "partLabel": "backpropagate"
     },
     {
-      "doors": 3,
+      "doors": 5,
       "importedBy": [],
       "importedByTests": [
         "tests"
@@ -31,7 +31,7 @@
       "partLabel": "scripts"
     },
     {
-      "doors": 2,
+      "doors": 3,
       "importedBy": [],
       "importedByTests": [],
       "kind": "part",
@@ -51,24 +51,113 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 0,
+      "added": 16,
+      "changed": 12,
       "moved": 0,
-      "parts": 0,
+      "parts": 4,
       "removed": 0
     },
     "items": [
       {
+        "kind": "door",
+        "sentence": "CI's push trigger now also names `requirements/**` and `scripts/ci_install_locked.sh`.",
+        "subjects": [
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "CI now also runs backpropagate/cli.py and scripts/ci_install_locked.sh.",
+        "subjects": [
+          ".github/workflows/ci.yml",
+          "backpropagate/cli.py",
+          "scripts/ci_install_locked.sh"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "CI now also checks LICENSE, README.md, pyproject.toml and 3 more.",
+        "subjects": [
+          ".github/workflows/ci.yml",
+          "LICENSE",
+          "README.md",
+          "pyproject.toml",
+          "requirements/build-backend.txt",
+          "requirements/uv.txt",
+          "uv.lock"
+        ]
+      },
+      {
+        "kind": "door",
+        "sentence": "And 4 more changes to doors.",
+        "subjects": []
+      },
+      {
+        "kind": "landing",
+        "sentence": ".github/release-tools/package-lock.json is now read by .github/workflows/release.yml.",
+        "subjects": [
+          ".github/release-tools/package-lock.json",
+          ".github/workflows/release.yml"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": ".github/release-tools/package.json is now read by .github/workflows/release.yml.",
+        "subjects": [
+          ".github/release-tools/package.json",
+          ".github/workflows/release.yml"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "requirements/bandit.txt is now read by .github/workflows/ci.yml.",
+        "subjects": [
+          "requirements/bandit.txt",
+          ".github/workflows/ci.yml"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "And 6 more new writers and readers of places.",
+        "subjects": []
+      },
+      {
+        "kind": "unassigned",
+        "sentence": "requirements/bandit.in is new and belongs to no part, so atlas check fails on it against the previous map.",
+        "subjects": [
+          "requirements/bandit.in"
+        ]
+      },
+      {
+        "kind": "unassigned",
+        "sentence": "requirements/bandit.txt is new and belongs to no part, so atlas check fails on it against the previous map.",
+        "subjects": [
+          "requirements/bandit.txt"
+        ]
+      },
+      {
+        "kind": "unassigned",
+        "sentence": "requirements/build-backend.in is new and belongs to no part, so atlas check fails on it against the previous map.",
+        "subjects": [
+          "requirements/build-backend.in"
+        ]
+      },
+      {
+        "kind": "unassigned",
+        "sentence": "And 10 more new files that belong to no part.",
+        "subjects": []
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-10-01; no file changed.",
+        "sentence": "16 files added and 12 changed content, across 4 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "bfbbe1d5eb2f3e66ea0f8c09b605d2b56cbd9c60",
-      "generatedAt": "2026-10-01T00:32:05.011Z"
+      "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
+      "generatedAt": "2026-10-01T00:33:05.173Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
   "changesTogether": [
     {
@@ -92,20 +181,28 @@
     "Window: 180 days; a pair counts from 10 shared commits, since 20 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 2,
-  "commit": "16e6e3790870c15f3b6db81456e02b1e818b8193",
+  "commit": "128cb5511a22c4f11bae860505e7ec83a7b662d3",
   "defaultBranch": "main",
-  "derived": "11 parts, mostly Python (144 files), shell (9), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "11 parts, mostly Python (144 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 12 doors; the busiest is CI, which reaches 4 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
-        "backpropagate/"
+        "backpropagate/",
+        "requirements/build-backend.txt",
+        "requirements/uv.txt"
       ],
-      "checksCount": 1,
+      "checksCount": 3,
       "checksMore": 0,
       "file": ".github/workflows/ci.yml",
       "id": ".github/workflows/ci.yml",
       "landings": [],
       "name": "CI",
+      "packs": [
+        "LICENSE",
+        "README.md",
+        "pyproject.toml",
+        "uv.lock"
+      ],
       "pushes": false,
       "reach": [
         {
@@ -116,25 +213,27 @@
         {
           "boundary": "root",
           "depth": 0,
-          "files": 1
+          "files": 5
+        },
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 2
         },
         {
           "boundary": "tests",
           "depth": 0,
           "files": 82
-        },
-        {
-          "boundary": "scripts",
-          "depth": 1,
-          "files": 1
         }
       ],
       "runs": [
+        "backpropagate/cli.py",
+        "scripts/ci_install_locked.sh",
         "tests/",
         "verify.sh"
       ],
-      "runsCount": 2,
-      "runsMore": 0,
+      "runsCount": 4,
+      "runsMore": 1,
       "sends": [
         "uploads coverage to Codecov",
         "scans code with CodeQL"
@@ -142,15 +241,17 @@
       "stages": [],
       "triggers": [
         "on a pull request to main",
-        "on a push to main touching 9 paths",
+        "on a push to main touching 11 paths",
         "or by hand"
       ]
     },
     {
       "checks": [
-        "backpropagate/"
+        "backpropagate/",
+        "requirements/build-backend.txt",
+        "requirements/uv.txt"
       ],
-      "checksCount": 1,
+      "checksCount": 3,
       "checksMore": 0,
       "file": ".github/workflows/publish.yml",
       "id": ".github/workflows/publish.yml",
@@ -159,7 +260,8 @@
       "packs": [
         "LICENSE",
         "README.md",
-        "pyproject.toml"
+        "pyproject.toml",
+        "uv.lock"
       ],
       "pushes": false,
       "reach": [
@@ -171,7 +273,7 @@
         {
           "boundary": "root",
           "depth": 0,
-          "files": 3
+          "files": 4
         }
       ],
       "runs": [
@@ -180,12 +282,52 @@
       "runsCount": 1,
       "runsMore": 0,
       "sends": [
-        "publishes to PyPI and a container image"
+        "publishes to PyPI and a container image",
+        "uploads dist/* and files named at run time to the release"
       ],
       "stages": [],
       "triggers": [
         "when a release is published",
         "when the workflow Release completes",
+        "or by hand"
+      ]
+    },
+    {
+      "checks": [
+        "pyproject.toml"
+      ],
+      "checksCount": 1,
+      "checksMore": 0,
+      "file": ".github/workflows/release.yml",
+      "id": ".github/workflows/release.yml",
+      "landings": [],
+      "name": "Release",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "root",
+          "depth": 0,
+          "files": 1
+        },
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
+      "runs": [
+        "scripts/ci_install_locked.sh"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [
+        "publishes to npm",
+        "creates a GitHub release",
+        "uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a tag matching `v*` is pushed",
         "or by hand"
       ]
     },
@@ -257,6 +399,38 @@
       "checks": [],
       "checksCount": 0,
       "checksMore": 0,
+      "file": ".github/workflows/mutmut.yml",
+      "id": ".github/workflows/mutmut.yml",
+      "landings": [],
+      "name": "Mutation testing (mutmut)",
+      "pushes": false,
+      "pushesForReview": true,
+      "reach": [
+        {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 1
+        }
+      ],
+      "runs": [
+        "scripts/ci_install_locked.sh"
+      ],
+      "runsCount": 1,
+      "runsMore": 0,
+      "sends": [
+        "opens a pull request"
+      ],
+      "stages": [
+        ".github/mutmut-baseline.txt"
+      ],
+      "triggers": [
+        "by hand"
+      ]
+    },
+    {
+      "checks": [],
+      "checksCount": 0,
+      "checksMore": 0,
       "file": ".github/workflows/pages-deploy.yml",
       "id": ".github/workflows/pages-deploy.yml",
       "landings": [],
@@ -318,30 +492,6 @@
       "checks": [],
       "checksCount": 0,
       "checksMore": 0,
-      "file": ".github/workflows/mutmut.yml",
-      "id": ".github/workflows/mutmut.yml",
-      "landings": [],
-      "name": "Mutation testing (mutmut)",
-      "pushes": false,
-      "pushesForReview": true,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "runsMore": 0,
-      "sends": [
-        "opens a pull request"
-      ],
-      "stages": [
-        ".github/mutmut-baseline.txt"
-      ],
-      "triggers": [
-        "by hand"
-      ]
-    },
-    {
-      "checks": [],
-      "checksCount": 0,
-      "checksMore": 0,
       "file": ".github/workflows/scorecard.yml",
       "id": ".github/workflows/scorecard.yml",
       "landings": [],
@@ -359,30 +509,6 @@
         "on a `branch_protection_rule` event",
         "on a push to main",
         "on a schedule (`0 6 * * 1`), Monday at 06:00 UTC",
-        "or by hand"
-      ]
-    },
-    {
-      "checks": [],
-      "checksCount": 0,
-      "checksMore": 0,
-      "file": ".github/workflows/release.yml",
-      "id": ".github/workflows/release.yml",
-      "landings": [],
-      "name": "Release",
-      "pushes": false,
-      "reach": [],
-      "runs": [],
-      "runsCount": 0,
-      "runsMore": 0,
-      "sends": [
-        "publishes to npm",
-        "creates a GitHub release",
-        "uploads backpropagate-npm-sbom.cdx.json and backpropagate-sbom.cdx.json to the release"
-      ],
-      "stages": [],
-      "triggers": [
-        "when a tag matching `v*` is pushed",
         "or by hand"
       ]
     },
@@ -484,7 +610,7 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-01T00:33:05.173Z",
+  "generatedAt": "2026-10-01T02:39:07.940Z",
   "limits": [
     "43 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "8 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 5 more.",
@@ -494,7 +620,8 @@
     "1 read goes to the directory the command is run in, not to this repository.",
     "1 read goes to the home directory (.cache/), not to this repository.",
     "1 write goes to a temporary directory, not to this repository.",
-    "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page."
+    "There is a compose.yaml that no workflow runs; what deploys from it does so from outside this repository, and is not on this page.",
+    "13 files belong to no part: requirements/bandit.in, requirements/bandit.txt, requirements/build-backend.in and 10 more."
   ],
   "mainDoor": ".github/workflows/ci.yml",
   "partLabels": {
@@ -513,13 +640,31 @@
   "parts": 11,
   "readers": [],
   "repo": "mcp-tool-shop-org/backpropagate",
-  "sequences": [],
-  "startDoor": "pyproject.toml#backprop",
+  "sequences": [
+    {
+      "entry": "main",
+      "file": "backpropagate/cli.py",
+      "inner": [],
+      "part": "backpropagate",
+      "partLabel": "backpropagate",
+      "phrase": "`main`",
+      "steps": [
+        {
+          "count": 5,
+          "name": null,
+          "part": "backpropagate",
+          "partLabel": "backpropagate",
+          "phrase": "`logging_config.py`"
+        }
+      ]
+    }
+  ],
+  "startDoor": ".github/workflows/ci.yml",
   "startHere": [
+    ".github/workflows/ci.yml",
     "backpropagate/cli.py",
     "backpropagate/logging_config.py"
   ],
-  "startReason": "This path follows backprop (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": null,
   "summaryFrom": null,
   "testFiles": 85,

@@ -88,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the training form and take you there. The same checks are available from
   Python as `backpropagate.dataset_prep` (`inspect_dataset`,
   `prepare_dataset`).
+- **A tour of the web UI in the handbook**, with screenshots of each page,
+  linked from the landing page's new "Or use it in your browser" section.
 - **The LoRA shape in the web UI follows your GPU.** Three cards (Quality,
   Balanced, Fast) show what each shape needs for the chosen model. The form
   opens on the largest one that fits the memory that is free, marks it

@@ -14544,7 +14544,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "1d4b7fa2ee4ef0b8085e60bb2d4a8cad2785b214c3e010aeeedc4258c9d84bff",
+          "hash": "6db68c819792e1919267fab63f9aff9e7d375b5fdae903ad8ad4fcce1a777863",
           "path": "CHANGELOG.md"
         },
         {
@@ -15408,6 +15408,34 @@
           "path": "site/package.json"
         },
         {
+          "hash": "b8c5b3530f741fdccab8e7fd92e2e80d227ada29da6a31956ad80fd99cd3c4e5",
+          "path": "site/src/assets/web-ui/dataset-cleanup.png"
+        },
+        {
+          "hash": "2e9ce253f4150fe9fd4bc30c068f8db18f077ec9091646b09073a7badb676c9a",
+          "path": "site/src/assets/web-ui/dataset-preview.png"
+        },
+        {
+          "hash": "47f35799c71751638d3d0548e92fe20023dbac82778deb79a1ad46bbcae52868",
+          "path": "site/src/assets/web-ui/export.png"
+        },
+        {
+          "hash": "b44bf50e2bc0b2011acc4056985f977ce8e0f0422b56d6bb1999060d2417ed5b",
+          "path": "site/src/assets/web-ui/runs.png"
+        },
+        {
+          "hash": "94859e0e75249c62ccf99bd11e753576eb40b884d252148dfc09edb90570a7d9",
+          "path": "site/src/assets/web-ui/single-run.png"
+        },
+        {
+          "hash": "f57171028c822d499446ba28c70ffa3b1fde16709b0a33beef4bedd0522f7009",
+          "path": "site/src/assets/web-ui/tip.png"
+        },
+        {
+          "hash": "84c147118bbda5360587068fb0641e90a4f3a35e64c5fc43099e25c5ef9eb960",
+          "path": "site/src/assets/web-ui/training.png"
+        },
+        {
           "constantOnly": true,
           "hash": "ee756dfba4122d2acc94a39b2555d9f200fff56a87a8c0b10f9cd01df26a8b62",
           "path": "site/src/content.config.ts"
@@ -15441,11 +15469,11 @@
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
-          "hash": "663c6e2e4471147fb120bce401d1b540ede19e2b1838fbc36e037bd9ab7ec9ca",
+          "hash": "3960644230b33ad3f9a0f070ef342b01f4eebcca2246931799d9f53f55439003",
           "path": "site/src/content/docs/handbook/getting-started.md"
         },
         {
-          "hash": "5bb51dd9fdc33cb23995d9d3eb8f9567c256061b9e99ea9cb26ecb458f571060",
+          "hash": "8ca164d421713ffe2432931d6c9424826a7b4571257f886c05b09b713e6cb1d3",
           "path": "site/src/content/docs/handbook/index.md"
         },
         {
@@ -15485,6 +15513,10 @@
           "path": "site/src/content/docs/handbook/troubleshooting.md"
         },
         {
+          "hash": "0ef51cb6c0dd6d6a8f1f8358df4c8059ebb073506e135cc5c2f08387ca918461",
+          "path": "site/src/content/docs/handbook/web-ui.md"
+        },
+        {
           "hash": "d792291cd042ecb2dac7519e6e4688011fde62d29d3000f715e2e8c8b4aabaad",
           "importOrder": [
             "site/src/styles/global.css",
@@ -15497,12 +15529,15 @@
           "path": "site/src/pages/404.astro"
         },
         {
-          "hash": "391533713539035d3c92282579d43de0f137067867fdb502d7eaea3c74601d2a",
+          "constantOnly": true,
+          "hash": "cd90e08f36587e5d3728f7c5ffabfd6b5dd566fb55d9c6496c3ba020d791c3f3",
           "importOrder": [
             "site/src/styles/global.css",
-            "site/src/site-config.ts"
+            "site/src/site-config.ts",
+            "site/src/assets/web-ui/training.png"
           ],
           "importsFiles": [
+            "site/src/assets/web-ui/training.png",
             "site/src/site-config.ts",
             "site/src/styles/global.css"
           ],
@@ -15510,7 +15545,7 @@
         },
         {
           "constantOnly": true,
-          "hash": "a6ab51c3ec26b258b0edef51592e7bbd5404391c27349afa2cdcb70a0ad856f8",
+          "hash": "c0f3748b7b3b21bf61a9460bfc6738409941fe64ec6fe46e8e71492381412d28",
           "path": "site/src/site-config.ts"
         },
         {
@@ -20912,7 +20947,7 @@
         {
           "boundary": "site",
           "depth": 0,
-          "files": 6
+          "files": 7
         }
       ],
       "readers": [],
@@ -22061,8 +22096,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "a39ee2cfba0831d2e62f48abafd29b4857c014c5",
-    "tracked": 766
+    "commit": "5fbeab504ae2837d0b8689b63211598b8287d042",
+    "tracked": 774
   },
   "landings": [
     {

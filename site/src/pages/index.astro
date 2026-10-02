@@ -7,7 +7,16 @@ import FeatureGrid from '@mcptoolshop/site-theme/components/FeatureGrid.astro';
 import DataTable from '@mcptoolshop/site-theme/components/DataTable.astro';
 import CodeCardGrid from '@mcptoolshop/site-theme/components/CodeCardGrid.astro';
 import ApiList from '@mcptoolshop/site-theme/components/ApiList.astro';
+import { Image } from 'astro:assets';
 import { config } from '../site-config';
+import webUiShot from '../assets/web-ui/training.png';
+
+// The web UI section sits right under the hero; it is the one section with a
+// picture, so it is written here and not in site-config's typed section list.
+const nav = [
+  { href: '#web-ui', label: 'Web UI' },
+  ...config.sections.map(s => ({ href: `#${s.id}`, label: s.title })),
+];
 ---
 
 <BaseLayout
@@ -18,9 +27,39 @@ import { config } from '../site-config';
   repoUrl={config.repoUrl}
   npmUrl={config.npmUrl}
   footerText={config.footerText}
-  nav={config.sections.map(s => ({ href: `#${s.id}`, label: s.title }))}
+  nav={nav}
 >
   <Hero {...config.hero} />
+
+  <Section
+    id="web-ui"
+    title="Or use it in your browser"
+    subtitle="The same training, with no code. Drop in your examples, pick a model, press Start, and watch it learn. Every setting explains itself."
+  >
+    <a
+      href="handbook/web-ui/"
+      class="mt-8 block overflow-hidden rounded-2xl border border-edge focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      <Image
+        src={webUiShot}
+        alt="The Backpropagate web UI during a training run: step 40 of 60, the loss falling, GPU memory and temperature, and an estimate that says the run fits."
+        widths={[720, 1080, 1440]}
+        sizes="(min-width: 1152px) 1088px, 100vw"
+        class="block w-full"
+      />
+    </a>
+    <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <a
+        href="handbook/web-ui/"
+        class="inline-flex items-center justify-center rounded-xl bg-action px-5 py-3 text-sm font-medium text-action-text hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+      >
+        Take the tour
+      </a>
+      <p class="text-sm text-dim">
+        <code>pip install "backpropagate[standard]"</code>, then <code>backprop ui --open-browser</code>. It runs on your computer; your data stays there.
+      </p>
+    </div>
+  </Section>
 
   {config.sections.map((s) => (
     <Section id={s.id} title={s.title} subtitle={s.subtitle}>

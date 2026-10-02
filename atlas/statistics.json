@@ -201,7 +201,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "site",
-      "qualifyingSourceCommits": 10,
+      "qualifyingSourceCommits": 11,
       "rebaseline": null
     },
     {
@@ -355,8 +355,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 95,
-        "lines": 1858,
+        "commits": 96,
+        "lines": 1860,
         "path": "CHANGELOG.md"
       },
       {
@@ -475,8 +475,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 15,
-        "lines": 550,
+        "commits": 17,
+        "lines": 570,
         "path": "atlas/README.md"
       },
       {
@@ -485,18 +485,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 15,
-        "lines": 2150,
+        "commits": 17,
+        "lines": 2200,
         "path": "atlas/page.json"
       },
       {
-        "commits": 15,
-        "lines": 11667,
+        "commits": 17,
+        "lines": 11814,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 15,
-        "lines": 48043,
+        "commits": 17,
+        "lines": 48462,
         "path": "atlas/structure.json"
       },
       {
@@ -3040,6 +3040,41 @@
         "path": "site/package.json"
       },
       {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/dataset-cleanup.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/dataset-preview.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/export.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/runs.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/single-run.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/tip.png"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/web-ui/training.png"
+      },
+      {
         "commits": 9,
         "lines": 112,
         "path": "site/src/content/docs/handbook/beginners.md"
@@ -3075,13 +3110,13 @@
         "path": "site/src/content/docs/handbook/full-fine-tuning.md"
       },
       {
-        "commits": 17,
-        "lines": 244,
+        "commits": 18,
+        "lines": 246,
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
-        "commits": 13,
-        "lines": 45,
+        "commits": 14,
+        "lines": 46,
         "path": "site/src/content/docs/handbook/index.md"
       },
       {
@@ -3130,13 +3165,23 @@
         "path": "site/src/content/docs/handbook/troubleshooting.md"
       },
       {
+        "commits": 1,
+        "lines": 80,
+        "path": "site/src/content/docs/handbook/web-ui.md"
+      },
+      {
         "commits": 4,
         "lines": 140,
         "path": "site/src/pages/404.astro"
       },
       {
-        "commits": 14,
-        "lines": 76,
+        "commits": 1,
+        "lines": 41,
+        "path": "site/src/pages/index.astro"
+      },
+      {
+        "commits": 15,
+        "lines": 78,
         "path": "site/src/site-config.ts"
       },
       {
@@ -4205,9 +4250,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-02T20:43:00.522Z",
+  "generatedAt": "2026-10-02T21:24:04.209Z",
   "generatedFrom": {
-    "commit": "a39ee2cfba0831d2e62f48abafd29b4857c014c5"
+    "commit": "5fbeab504ae2837d0b8689b63211598b8287d042"
   },
   "pairs": [
     {
@@ -4360,43 +4405,43 @@
     {
       "a": "atlas/README.md",
       "b": "atlas/page.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/statistics.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
       "a": "atlas/README.md",
       "b": "atlas/structure.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/statistics.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
       "a": "atlas/page.json",
       "b": "atlas/structure.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
       "a": "atlas/statistics.json",
       "b": "atlas/structure.json",
-      "either": 11,
-      "shared": 11,
+      "either": 13,
+      "shared": 13,
       "strength": 1
     },
     {
@@ -4424,16 +4469,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-02T16:42:36-04:00",
-    "inScopeFiles": 771,
+    "headDate": "2026-10-02T17:23:39-04:00",
+    "inScopeFiles": 779,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 226,
+    "qualifyingCommits": 227,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-05T20:42:36.000Z",
+    "since": "2026-04-05T21:23:39.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -4449,7 +4494,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 34,
+    "sourceFilesReachingStrongFloor": 35,
     "strength": 0.5,
     "windowDays": 180
   },

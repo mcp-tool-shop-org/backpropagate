@@ -48,6 +48,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -286,7 +287,17 @@ def calibrate(
     )
     result: dict[str, Any] | None = None
     tail: list[str] = []
-    deadline = time.monotonic() + timeout_s
+    # A timer, not a check in the read loop: a child that hangs silently
+    # produces no line to wake the loop, and must still be stopped.
+    timed_out = threading.Event()
+
+    def _expire() -> None:
+        timed_out.set()
+        proc.kill()
+
+    timer = threading.Timer(timeout_s, _expire)
+    timer.daemon = True
+    timer.start()
     assert proc.stdout is not None
     for line in proc.stdout:
         line = line.rstrip("\n")
@@ -301,10 +312,12 @@ def calibrate(
                 on_event(row)
         else:
             tail = [*tail[-39:], line]
-        if time.monotonic() > deadline:
-            proc.kill()
-            raise CalibrationError("Calibration timed out and was stopped.")
     rc = proc.wait()
+    timer.cancel()
+    if timed_out.is_set():
+        raise CalibrationError(
+            f"Calibration did not finish within {timeout_s / 60:.0f} minutes and was stopped."
+        )
     if result is None:
         detail = " | ".join(t for t in tail[-6:] if t.strip())[-600:]
         raise CalibrationError(

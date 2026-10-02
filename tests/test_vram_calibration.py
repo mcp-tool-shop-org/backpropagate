@@ -221,6 +221,33 @@ def test_calibrate_raises_on_a_child_error_or_no_result(monkeypatch, store):
     assert not store.exists()
 
 
+def test_calibrate_stops_a_silent_child(monkeypatch, store):
+    """A child that hangs without printing anything is killed by the timer."""
+    import threading
+
+    class _Hung:
+        def __init__(self):
+            self._killed = threading.Event()
+            self.stdout = self
+
+        def __iter__(self):
+            self._killed.wait(10)  # no output until killed
+            return iter(())
+
+        def wait(self):
+            return -9
+
+        def kill(self):
+            self._killed.set()
+
+    hung = _Hung()
+    monkeypatch.setattr(vc, "machine_fingerprint", lambda: MACHINE)
+    monkeypatch.setattr(vc.subprocess, "Popen", lambda *a, **k: hung)
+    with pytest.raises(vc.CalibrationError, match="did not finish"):
+        vc.calibrate("org/m-1B", timeout_s=0.2)
+    assert hung._killed.is_set() and not store.exists()
+
+
 def test_calibrate_needs_a_gpu(monkeypatch, store):
     monkeypatch.setattr(vc, "machine_fingerprint", lambda: None)
     with pytest.raises(vc.CalibrationError, match="No CUDA GPU"):

@@ -187,6 +187,6 @@ def test_measure_on_this_gpu_button(tmp_path):
         assert entry["model"] == SMALL and entry["load_gib"] > 0
         job = sorted((out_dir / "jobs").glob("run_*"))[-1]
         argv = json.loads((job / "job.json").read_text(encoding="utf-8"))["argv_tail"]
-        assert argv[:2] == [SMALL, "--calibrate"]  # argv_tail starts after the subcommand
+        assert argv[0] == "--calibrate" and argv[-2:] == ["--", SMALL]  # the model follows "--"
     finally:
         launch.stop()

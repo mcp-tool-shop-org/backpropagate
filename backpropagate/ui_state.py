@@ -3959,7 +3959,6 @@ class ModelsState(rx.State):
     """Models surface state — local HF cache inventory."""
 
     models: list[dict] = []
-    total_size_mb: str = "0"
     total_size_label: str = ""
     # UI-A-002 (Wave A2): the HF cache dir is ``~/.cache/huggingface/hub`` —
     # it embeds the operator's home dir + username. Held in a backend-only
@@ -4016,7 +4015,7 @@ class ModelsState(rx.State):
             self._cache_dir = str(cache_dir)
             if not cache_dir.exists():
                 self.models = []
-                self.total_size_mb = "0"
+                self.total_size_label = ""
                 # UI-A-002: ``error`` is a public var; redact the cache path.
                 self.error = (
                     f"No Hugging Face cache at {_home_relative(str(cache_dir))} yet. "
@@ -4063,13 +4062,12 @@ class ModelsState(rx.State):
                 # UI-A-002: the OSError repr embeds the cache path.
                 self.error = _redact_action(f"Cannot walk HF cache: {exc}")
                 self.models = []
-                self.total_size_mb = "0"
+                self.total_size_label = ""
                 return
 
             # Sort by size descending — heaviest cache offenders first.
             model_rows.sort(key=lambda r: r["size_bytes"], reverse=True)
             self.models = model_rows
-            self.total_size_mb = f"{total_bytes / (1024**2):.1f}"
             self.total_size_label = _fmt_bytes(total_bytes)
             self.last_loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.last_loaded_label = _fmt_local_time()

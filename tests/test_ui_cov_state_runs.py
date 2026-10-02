@@ -757,7 +757,7 @@ class TestModelsStateLoad:
     def test_missing_cache_reports_a_redacted_message(self, sandbox):
         s = us.ModelsState()
         s.load_models()
-        assert s.models == [] and s.total_size_mb == "0" and s.loading is False
+        assert s.models == [] and s.total_size_label == "" and s.loading is False
         assert s.error.startswith("No Hugging Face cache at ~/") and str(sandbox.home) not in s.error
         assert s.cache_dir_display and str(sandbox.home) not in s.cache_dir_display
         assert s._cache_dir == str(sandbox.cache)
@@ -773,7 +773,7 @@ class TestModelsStateLoad:
         assert [m["name"] for m in s.models] == ["meta-llama/Llama-3.1-8B", "org/small"]
         assert s.models[0]["dir_name"] == "models--meta-llama--Llama-3.1-8B"
         assert s.models[0]["size_mb"] == "3.0" and s.models[1]["size_mb"] == "0.0"
-        assert s.total_size_mb == "3.0" and s.last_loaded_at
+        assert s.total_size_label == "3.0 MB" and s.last_loaded_at
         assert s.models[0]["last_modified"] != "-"
 
     def test_name_with_single_separator_unmangles_once(self, sandbox):
@@ -796,7 +796,7 @@ class TestModelsStateLoad:
         s = us.ModelsState()
         s.load_models()
         assert s.error.startswith("Cannot walk HF cache") and str(sandbox.home) not in s.error
-        assert s.models == [] and s.total_size_mb == "0" and s.loading is False
+        assert s.models == [] and s.total_size_label == "" and s.loading is False
 
     def test_unstatable_entries_count_as_zero_bytes_and_unknown_mtime(self, sandbox, monkeypatch):
         """Mocked: after the model dir is recognised, ``Path.rglob`` raises and ``Path.stat``

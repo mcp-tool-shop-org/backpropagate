@@ -35,9 +35,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure shows its error code with the last lines of the log. Run pages
   gain **Export the model**. The UI was restyled (rounded cards, one spacing
   scale, two columns on wide screens) and opens in dark mode.
+- **Every training setting in the web UI** (ui-v2 P3). Single run gains a
+  model preset (fills the model and its recommended LoRA rank), the method
+  (SFT, ORPO, SimPO, KTO, each with its own settings), the mode (QLoRA,
+  LoRA on a 16-bit base, or full fine-tuning), LoRA shape quick picks
+  (Quality, Fast) and an Advanced section. Multi-run gets the same settings
+  plus learning rate, batch size and LoRA shape. Every field becomes a real
+  CLI flag on the job it starts, and the forms open on the CLI's defaults.
+- **Estimated VRAM next to Start training**: "Fits", "Tight" or "Won't fit"
+  for the chosen model, mode, LoRA rank and batch, against your card. The
+  number is exactly `backprop estimate-vram`'s.
+- **New `backprop train` and `backprop multi-run` flags**: `--lora-alpha`,
+  `--lora-dropout`, `--target-modules`, `--no-4bit` (LoRA on a 16-bit base),
+  `--run-name`, `--no-gradient-checkpointing`, and `--gpu-max-temp C`, which
+  saves a checkpoint and stops the run (a whole multi-run, too) when the GPU
+  stays at or above C °C. `backprop multi-run` also gains `--lr`,
+  `--batch-size` and `--lora-r`. `backprop estimate-vram` gains `--no-4bit`
+  and `--no-gradient-checkpointing`.
 - **`--report-to {auto,none,wandb,tensorboard,mlflow}`** on `backprop train`
   and `backprop multi-run` (#276), default `auto`. Until now the CLI had no
   way to turn experiment tracking off.
+
+### Changed
+
+- **`backprop estimate-vram` (and the UI's estimate) are closer to real use.**
+  Full fine-tuning is priced with a 16-bit base (it was priced as 4-bit, a
+  4x undercount of the weights); LoRA activations account for gradient
+  checkpointing, which is on by default; the model's own shape comes from
+  its `config.json` when it is in the Hugging Face cache or a local folder
+  (never downloaded), otherwise from its size class; and ids that name their
+  size in millions (`SmolLM2-135M`) are no longer priced as 7B. Estimates
+  change accordingly.
+- **The web UI's training forms open on the CLI's defaults** (the Quality
+  LoRA shape: rank 256, alpha 512, every linear layer; 4-bit base; SFT). They
+  used to show rank 16 on four attention layers, which the job never used.
+- **Removed two UI controls that did nothing**: the 8-bit quantization option
+  and the flash-attention checkbox (training has neither setting).
+- **Web UI accessibility**: text meets WCAG AA contrast in dark and light
+  mode, including primary buttons and muted captions, and every control
+  shows a focus ring.
 
 ### Fixed
 

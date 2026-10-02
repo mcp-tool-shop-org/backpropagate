@@ -189,6 +189,9 @@ class _FakeProc:
     def wait(self):
         return self._rc
 
+    def poll(self):
+        return self._rc
+
     def kill(self):
         pass
 
@@ -215,7 +218,8 @@ def test_calibrate_fits_stores_and_reports_progress(monkeypatch, store):
     assert [e["event"] for e in events] == ["loading", "loaded", "probe", "probe"]
     assert cal.quad_bytes == 0.0
     assert cal.lin_bytes == pytest.approx(max(512.0 * 2048 + 70_000.0, 512.0 * 1024 + 70_000.0))
-    assert cal.version == 2
+    assert cal.version == vc.CALIBRATION_VERSION == 3
+    assert (cal.seq_min, cal.seq_max, cal.fixed_gib) == (1024, 2048, 0.0)
     assert cal.machine == MACHINE and cal.probe_trainable_params == 851_968
     assert vc.lookup("org/m-1B", machine=MACHINE).floor_gib == 0.98  # stored
 
@@ -252,6 +256,9 @@ def test_calibrate_stops_a_silent_child(monkeypatch, store):
 
         def wait(self):
             return -9
+
+        def poll(self):
+            return -9 if self._killed.is_set() else None
 
         def kill(self):
             self._killed.set()

@@ -76,13 +76,21 @@ The per-token cost that is stored is the **highest** any probe showed. Unsloth c
 
 **It is built not to hurt the machine:**
 
-- The probe process caps its own GPU memory below what is free. On Windows a run that needs slightly more VRAM than the card has does not fail: the driver spills into system memory and the whole desktop stutters. Capped, it fails cleanly instead.
-- Each probe runs only if it is predicted to fit.
+- The probe process caps its own GPU memory below what is free, less a headroom of 1.5 GiB or 8% of the card, whichever is larger. On Windows a run that needs slightly more VRAM than the card has does not fail: the driver spills into system memory and the whole desktop stutters. Capped, it fails cleanly instead. With less than 1.5 GiB left after the headroom, nothing is run.
+- The probes always train with the non-paged `adamw_8bit`. A paged optimizer keeps its state in memory the cap does not cover, and on Windows that memory can stall the desktop.
+- Each probe runs only if it is predicted to fit, including the gradients and optimizer state of a full fine-tune.
+- The probe process cannot outlive the command that started it: closing the terminal, Ctrl+C or a crash ends it too.
 - If no informative probe fits (a big model on a small card), the load size is still measured and the per-row cost stays the formula's.
 
-Use `--mode full` or `--no-4bit` to measure those modes; each is stored separately. One measurement covers every LoRA rank and target-module choice, because the adapter is an exact parameter count.
+Use `--mode full` or `--no-4bit` to measure those modes; each is stored separately. One measurement covers every LoRA rank and target-module choice, because the adapter is an exact parameter count. For a full fine-tune the measurement stores the gradients and optimizer state as one fixed cost and prices the rows with the formula.
 
-Measurements live in `~/.backpropagate/vram-calibration.json` (`BACKPROPAGATE_VRAM_CALIBRATION` moves it), one entry per GPU, model, mode and library versions. A new card or a PyTorch upgrade starts clean. `--no-calibration` ignores a stored measurement, and so does `--vram-gb`, since a measurement belongs to the GPU it was made on. If nothing can be measured the command exits `2` with `RUNTIME_VRAM_CALIBRATION_FAILED`.
+**When a measurement is not used.** The estimate falls back to the formula, and says so, for:
+
+- rows more than twice as long as the longest row the probes ran (2,048 tokens today, so beyond 4,096);
+- the preference methods (ORPO, SimPO, KTO), which process two sequences per example;
+- gradient checkpointing off, and `--full-ft-offload`.
+
+Measurements live in `~/.backpropagate/vram-calibration.json` (`BACKPROPAGATE_VRAM_CALIBRATION` moves it), one entry per GPU, model, mode and library versions. A new card or a PyTorch upgrade starts clean. A store that cannot be read is moved aside to `vram-calibration.json.unreadable`, never overwritten. `--no-calibration` ignores a stored measurement, and so does `--vram-gb`, since a measurement belongs to the GPU it was made on. If nothing can be measured the command exits `2` with `RUNTIME_VRAM_CALIBRATION_FAILED`.
 
 ## CLI: `backprop estimate-vram`
 

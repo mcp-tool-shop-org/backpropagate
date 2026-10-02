@@ -54,10 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before the 6% margin a measured estimate adds. The cost kept is the
   highest any probe showed, which is what a fresh run peaks like. It is
   built not to hurt the machine: the process caps its own
-  GPU memory below what is free, so an overrun fails cleanly instead of
-  spilling into system RAM, and each probe runs only if it is predicted to
-  fit. When no informative probe fits (a big model on a small card), the
-  load size is still measured. Stored in `~/.backpropagate/vram-calibration.json`
+  GPU memory below what is free (less 1.5 GiB or 8% of the card), so an
+  overrun fails cleanly instead of spilling into system RAM; each probe
+  runs only if it is predicted to fit; the probes never use a paged
+  optimizer, whose memory the cap does not cover; and the probe process
+  ends with the command that started it. When no informative probe fits (a
+  big model on a small card), the load size is still measured. A
+  measurement is used for SFT and for rows up to twice the length it
+  probed; otherwise the estimate says it is the formula's. Stored in `~/.backpropagate/vram-calibration.json`
   (`BACKPROPAGATE_VRAM_CALIBRATION`); `--no-calibration` ignores it. New
   error code `RUNTIME_VRAM_CALIBRATION_FAILED`.
 - **Storage on the Runs page**: how much disk the UI's job folders use,

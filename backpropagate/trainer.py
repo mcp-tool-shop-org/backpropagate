@@ -49,6 +49,7 @@ from .config import settings
 from .datasets import DatasetLoader
 from .exceptions import (
     BackpropagateError,
+    ConfigurationError,
     DatasetError,
     DatasetNotFoundError,
     DatasetParseError,
@@ -2318,6 +2319,55 @@ def _apply_train_on_responses_only(
         return sft_trainer, None
 
 
+# W&B modes in which ``wandb.init()`` runs without an API key.
+_WANDB_KEYLESS_MODES = frozenset({"offline", "disabled", "dryrun"})
+
+
+def _wandb_credential_source() -> str | None:
+    """Name where W&B would get its credentials from, or ``None`` if nowhere.
+
+    ``report_to="auto"`` used to add W&B whenever the package was importable,
+    so a ``[monitoring]`` / ``[full]`` install that never ran ``wandb login``
+    crashed at the first step with wandb's ``UsageError: No API key
+    configured``. This mirrors the lookup wandb itself does at ``wandb.init()``
+    (env vars, then the netrc file ``wandb login`` writes) using only the
+    standard library: no wandb import, no network call, no prompt.
+
+    Returns the source (``"WANDB_MODE=offline"``, ``"WANDB_API_KEY"``,
+    ``"WANDB_IDENTITY_TOKEN_FILE"``, or the netrc path), or ``None``.
+    """
+    mode = os.environ.get("WANDB_MODE", "").strip().lower()
+    if mode in _WANDB_KEYLESS_MODES:
+        return f"WANDB_MODE={mode}"
+    for var in ("WANDB_API_KEY", "WANDB_IDENTITY_TOKEN_FILE"):
+        if os.environ.get(var, "").strip():
+            return var
+
+    import netrc
+    from urllib.parse import urlsplit
+
+    base_url = os.environ.get("WANDB_BASE_URL", "").strip() or "https://api.wandb.ai"
+    host = urlsplit(base_url).netloc
+    if not host:
+        return None
+    # Same search order as wandb: $NETRC, then ~/.netrc, then ~/_netrc.
+    candidates: list[Path] = []
+    if os.environ.get("NETRC"):
+        candidates.append(Path(os.environ["NETRC"]).expanduser())
+    candidates += [Path("~/.netrc").expanduser(), Path("~/_netrc").expanduser()]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            creds = netrc.netrc(str(path)).authenticators(host)
+        except (netrc.NetrcParseError, OSError) as exc:
+            logger.debug(f"could not read netrc file {path}: {exc}")
+            continue
+        if creds and creds[2]:
+            return str(path)
+    return None
+
+
 class Trainer:
     """
     Headless LLM fine-tuning trainer with smart defaults.
@@ -2417,10 +2467,12 @@ class Trainer:
         unsloth_fallback: bool = True,
         # F-005: experiment-tracker wiring. Default "auto" detects installed
         # trackers via feature_flags (wandb / tensorboard / mlflow) and wires
-        # them all. Pass "none" or None to disable. Pass a list of strings
-        # (e.g. ["wandb"]) to force a specific tracker set; we DO NOT
-        # validate that the tracker is installed in that branch — TRL will
-        # raise a clean ImportError if it isn't.
+        # them all, except W&B when it has no credentials (see
+        # _wandb_credential_source). Pass "none" or None to disable. Pass a
+        # list of strings (e.g. ["wandb"]) to force a specific tracker set; we
+        # DO NOT validate that the tracker is installed in that branch — TRL
+        # will raise a clean ImportError if it isn't. An explicit W&B request
+        # with W&B installed but not logged in raises CONFIG_INVALID_SETTING.
         report_to: str | list[str] | None = "auto",
         # F-014: explicit override for the (instruction_marker, response_marker)
         # pair fed into Unsloth's train_on_responses_only. Default ``None`` ⇒
@@ -3460,6 +3512,8 @@ class Trainer:
         # invoked lazily at train()-time so feature detection picks up
         # late-installed trackers (e.g. tracker installed after import).
         self._report_to_intent: str | list[str] | None = report_to
+        # Log the auto-mode "wandb skipped" line once, not once per multi-run run.
+        self._wandb_skip_logged = False
 
         # Internal state
         self._model: Any = None
@@ -3551,9 +3605,16 @@ class Trainer:
            will raise a clean error if a name is bogus).
         3. The intent is the string ``"auto"`` (the default) → detect
            installed trackers via feature_flags; return a list of the
-           ones present, or ``"none"`` if none are.
+           ones present, or ``"none"`` if none are. W&B is left out, with
+           one INFO line, when it has no credentials
+           (:func:`_wandb_credential_source`).
         4. Otherwise the intent is a single tracker name as a string
            → wrap it in a list.
+
+        An explicit W&B request (rules 2 and 4) with W&B installed but no
+        credentials raises :class:`ConfigurationError`
+        (``CONFIG_INVALID_SETTING``) here, at the start of ``train()``,
+        instead of wandb's ``UsageError`` at the first step.
         """
         intent = self._report_to_intent
         if intent is None:
@@ -3564,11 +3625,23 @@ class Trainer:
                 return "none"
             if normalized != "auto":
                 # Single named tracker (e.g. "wandb").
-                return [normalized]
-            # Auto-resolve: pick up everything that's installed.
+                return self._require_wandb_credentials([normalized])
+            # Auto-resolve: pick up everything that's installed. W&B also
+            # needs credentials; TensorBoard and MLflow (default ./mlruns
+            # store) write locally and need none.
             trackers: list[str] = []
             if check_feature("wandb"):
-                trackers.append("wandb")
+                if _wandb_credential_source() is not None:
+                    trackers.append("wandb")
+                elif not self._wandb_skip_logged:
+                    self._wandb_skip_logged = True
+                    logger.info(
+                        "Experiment tracking: wandb is installed but not logged "
+                        "in, so it is skipped. Run `wandb login` (or set "
+                        "WANDB_API_KEY) and the default report_to=auto picks it "
+                        "up; set WANDB_MODE=offline to log locally without an "
+                        "account, or pass --report-to none to turn tracking off."
+                    )
             if check_feature("tensorboard"):
                 trackers.append("tensorboard")
             if check_feature("mlflow"):
@@ -3577,13 +3650,38 @@ class Trainer:
         if isinstance(intent, list):
             # Operator-supplied list — pass through unchanged. Lower-case
             # names so trivial case mismatches don't make TRL choke.
-            return [str(t).strip().lower() for t in intent if t]
+            return self._require_wandb_credentials(
+                [str(t).strip().lower() for t in intent if t]
+            )
         # Unknown type — fall back to "none" defensively.
         logger.warning(
             f"Trainer.report_to has unexpected type {type(intent).__name__}; "
             "falling back to 'none'."
         )
         return "none"
+
+    def _require_wandb_credentials(self, trackers: list[str]) -> list[str]:
+        """Fail fast on an explicit W&B request that wandb would reject.
+
+        Only checked when wandb is installed; a missing package keeps the
+        existing contract (TRL raises its own ImportError).
+        """
+        if (
+            "wandb" in trackers
+            and check_feature("wandb")
+            and _wandb_credential_source() is None
+        ):
+            raise ConfigurationError(
+                "report_to includes 'wandb', but W&B has no API key configured.",
+                details={"setting": "report_to", "value": trackers},
+                suggestion=(
+                    "Run `wandb login` or set WANDB_API_KEY; set "
+                    "WANDB_MODE=offline to log locally without an account; or "
+                    "turn tracking off with --report-to none (report_to=\"none\")."
+                ),
+                code="CONFIG_INVALID_SETTING",
+            )
+        return trackers
 
     def _apply_windows_fixes(self) -> None:
         """Apply Windows-specific environment variables."""
@@ -5459,6 +5557,15 @@ class Trainer:
             _ensure_fsdp_runtime()
             self._enforce_offload_fit_for_model(steps_batch=self.batch_size)
 
+        # F-005: resolve report_to once for this train() call. The auto-mode
+        # picks up wandb / tensorboard / mlflow if their packages are installed
+        # (which the [monitoring] extra installs by default); W&B only joins
+        # when it has credentials, so a user who ran ``wandb login`` gets W&B
+        # wiring for free and one who didn't is not crashed at step 1. Done
+        # before load_model() so an explicit W&B request without credentials
+        # fails before the model download / load, not after it.
+        report_to = self._resolve_report_to()
+
         # Load model if not loaded
         if not self._is_loaded:
             self.load_model()
@@ -5527,14 +5634,9 @@ class Trainer:
                 len(train_dataset),
             )
 
-        # F-005: resolve report_to once for this train() call. The auto-mode
-        # picks up wandb / tensorboard / mlflow if their packages are installed
-        # (which the [monitoring] extra installs by default), so a user who
-        # ran ``pip install backpropagate[monitoring]`` AND ``wandb login``
-        # gets W&B wiring for free without re-passing it on every call.
-        # We pre-mint the run_id so the W&B run_name can correlate with our
-        # internal correlation token (see B-001 below).
-        report_to = self._resolve_report_to()
+        # F-005: report_to was resolved before load_model() above. We pre-mint
+        # the run_id so the W&B run_name can correlate with our internal
+        # correlation token (see B-001 below).
         # F-002: reuse the run_id when resuming so the on-disk history record
         # is updated in place rather than producing a duplicate row.
         # F-017: ALSO recover the checkpoint path so the inner SFTTrainer can

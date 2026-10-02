@@ -142,7 +142,9 @@ class TestCmdTrainHappyPath:
         monkeypatch.setattr(inspect, "signature", fake_sig)
         assert cli.cmd_train(parse(["train", "--data", "d", "--use-dora"])) == cli.EXIT_OK
         assert "use_dora" not in seen["kw"]
-        assert seen["kw"]["lora_r"] == 256
+        # No --lora-r: the CLI passes None and the trainer resolves the rank
+        # (the LoRA preset that fits the GPU, or the settings value).
+        assert seen["kw"]["lora_r"] is None
 
     def test_var_keyword_trainer_gets_everything(self, monkeypatch):
         seen: dict = {}

@@ -178,6 +178,6 @@ def BpSparkline(
         header_row,
         svg,
         direction="column",
-        gap="1",
+        gap="var(--space-1)",
         width="100%",
     )

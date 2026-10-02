@@ -76,6 +76,6 @@ def BpVramBar(used_gb: float = 0.0, total_gb: float = 16.0) -> rx.Component:
             width="100%",
         ),
         direction="column",
-        gap="1",
+        gap="var(--space-1)",
         width="100%",
     )

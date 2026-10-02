@@ -80,7 +80,7 @@ def BpHeader() -> rx.Component:
                 color_scheme="teal",
                 size="1",
             ),
-            gap="3",
+            gap="var(--space-3)",
             align="center",
         ),
         rx.spacer(),
@@ -109,7 +109,7 @@ def BpHeader() -> rx.Component:
                             "font_size": "12px",
                         },
                     ),
-                    gap="2",
+                    gap="var(--space-2)",
                     align="center",
                 ),
                 rx.fragment(),
@@ -165,7 +165,7 @@ def BpHeader() -> rx.Component:
                 aria_label="GitHub repository",
                 style={"color": "var(--bp-muted)"},
             ),
-            gap="2",
+            gap="var(--space-2)",
             align="center",
         ),
         padding_x="24px",
@@ -207,7 +207,7 @@ def _nav_link(key: str, label: str, href: str, icon_name: str, active_key: str) 
                     "color": "var(--bp-text)" if is_active else "var(--bp-muted)",
                 },
             ),
-            gap="3",
+            gap="var(--space-3)",
             align="center",
             width="100%",
             style={
@@ -247,13 +247,13 @@ def BpLeftNav(active: str = "train") -> rx.Component:
         rx.flex(
             *(_nav_link(key, label, href, icon, active) for key, label, href, icon in _NAV_ITEMS),
             direction="column",
-            gap="1",
+            gap="var(--space-1)",
             width="100%",
         ),
         rx.spacer(),
         direction="column",
         width="208px",
-        padding="4",
+        padding="var(--space-4)",
         height="100%",
         style={
             "background": "var(--bp-surface)",
@@ -282,8 +282,8 @@ def _rail_section(*children: rx.Component, first: bool = False) -> rx.Component:
     return rx.flex(
         *children,
         direction="column",
-        gap="3",
-        padding="4",
+        gap="var(--space-3)",
+        padding="var(--space-4)",
         width="100%",
         style={
             "background": "var(--bp-surface)",
@@ -297,14 +297,12 @@ def _rail_section(*children: rx.Component, first: bool = False) -> rx.Component:
 def BpSideRail() -> rx.Component:
     """296px right-side rail — status / sparkline / GPU + VRAM / log."""
     return rx.flex(
-        # Status pill bound to TrainState
-        _rail_section(
-            BpStatusPill(
-                state=TrainState.run_state,
-                label="Run state",
-                detail=TrainState.run_state,
-            ),
-            first=True,
+        # Status pill bound to TrainState. The pill is its own tinted card:
+        # wrapping it in a rail card drew a box inside a box.
+        BpStatusPill(
+            state=TrainState.run_state,
+            label="Run state",
+            detail=TrainState.run_state,
         ),
         # Loss chart section — FRONTEND-6 (Wave 6b): wire to TrainState.
         # loss_history (via loss_chart_data computed Var) so the side-rail
@@ -333,7 +331,7 @@ def BpSideRail() -> rx.Component:
                         style={"color": "var(--bp-muted-2)"},
                     ),
                     direction="column",
-                    gap="1",
+                    gap="var(--space-1)",
                 ),
                 rx.flex(
                     rx.text(
@@ -353,28 +351,33 @@ def BpSideRail() -> rx.Component:
                         ema_label="ema",
                     ),
                     direction="column",
-                    gap="1",
+                    gap="var(--space-1)",
                 ),
             ),
-            rx.flex(
-                rx.text(
-                    "step " + TrainState.current_step.to_string(),
-                    size="2",
-                    weight="medium",
-                    class_name="bp-num bp-tick",
-                    style={"color": "var(--bp-text)", "letter_spacing": "-0.02em"},
+            # Hidden until the first step: an idle "step 0" read as a stuck run.
+            rx.cond(
+                TrainState.loss_history.length() > 0,
+                rx.flex(
+                    rx.text(
+                        "step " + TrainState.current_step.to_string(),
+                        size="2",
+                        weight="medium",
+                        class_name="bp-num bp-tick",
+                        style={"color": "var(--bp-text)", "letter_spacing": "-0.02em"},
+                    ),
+                    rx.spacer(),
+                    rx.text(
+                        # ui-v2 P1 fix: formatted (4 decimals), not the raw repr.
+                        TrainState.loss_label,
+                        size="2",
+                        class_name="bp-num",
+                        style={"color": "var(--bp-teal)"},
+                    ),
+                    direction="row",
+                    align="baseline",
+                    width="100%",
                 ),
-                rx.spacer(),
-                rx.text(
-                    # ui-v2 P1 fix: formatted (4 decimals), not the raw repr.
-                    TrainState.loss_label,
-                    size="2",
-                    class_name="bp-num",
-                    style={"color": "var(--bp-teal)"},
-                ),
-                direction="row",
-                align="baseline",
-                width="100%",
+                rx.fragment(),
             ),
         ),
         # GPU ring + VRAM bar — ui-v2 P1: LIVE-bound to TrainState's live
@@ -447,10 +450,10 @@ def BpSideRail() -> rx.Component:
                     ),
                     direction="column",
                     flex_grow="1",
-                    gap="2",
+                    gap="var(--space-2)",
                 ),
                 direction="row",
-                gap="3",
+                gap="var(--space-3)",
                 align="center",
                 width="100%",
             ),
@@ -470,9 +473,9 @@ def BpSideRail() -> rx.Component:
             BpEventLog(events=TrainState.events, max_n=6, show_view_full=True),
         ),
         direction="column",
-        gap="3",
+        gap="var(--space-3)",
         width="300px",
-        padding="4",
+        padding="var(--space-4)",
         height="100%",
         style={
             "border_left": "1px solid var(--bp-border)",
@@ -526,7 +529,7 @@ def BpFooter() -> rx.Component:
                 size="1",
                 style={"color": "var(--bp-muted-2)"},
             ),
-            gap="2",
+            gap="var(--space-2)",
             align="center",
         ),
         rx.spacer(),
@@ -556,7 +559,7 @@ def BpFooter() -> rx.Component:
                 size="1",
                 style={"color": "var(--bp-muted)"},
             ),
-            gap="3",
+            gap="var(--space-3)",
             align="center",
         ),
         padding_x="20px",

@@ -65,7 +65,7 @@ def BpRecoveryBanner(
                 # ``TrainState.latest_recovery_ok_msg``), so render it directly.
                 # The old ``" " + body if body else ""`` branched on the Var's
                 # truthiness in Python → VarTypeError at compile. Lead↔body
-                # spacing is carried by the parent flex ``gap="1"`` below (no
+                # spacing is carried by the parent flex ``gap="var(--space-1)"`` below (no
                 # manual leading space needed), and the sole caller
                 # (``train._recovery_banners``) already guards each banner on
                 # ``... != ""`` so ``body`` is non-empty whenever this renders.
@@ -76,13 +76,13 @@ def BpRecoveryBanner(
                 ),
                 direction="row",
                 wrap="wrap",
-                gap="1",
+                gap="var(--space-1)",
             ),
-            gap="2",
+            gap="var(--space-2)",
             align="start",
             width="100%",
         ),
-        padding="3",
+        padding="var(--space-3)",
         width="100%",
         style={
             "background": f"color-mix(in srgb, {color} 8%, var(--bp-surface))",

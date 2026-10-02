@@ -52,7 +52,7 @@ def _model_group() -> rx.Component:
                 ),
             ),
             columns="1fr",
-            gap="4",
+            gap="var(--space-4)",
             width="100%",
         ),
         title="Model",
@@ -108,7 +108,7 @@ def _sweep_shape_group() -> rx.Component:
                 ),
             ),
             columns="repeat(3, 1fr)",
-            gap="4",
+            gap="var(--space-4)",
             width="100%",
         ),
         title="Sweep shape",
@@ -121,7 +121,7 @@ def _model_sweep_grid() -> rx.Component:
         _model_group(),
         _sweep_shape_group(),
         columns=rx.breakpoints(initial="1", md="2"),
-        gap="6",
+        gap="var(--space-6)",
         width="100%",
         align="start",
     )
@@ -179,7 +179,7 @@ def _runs_table() -> rx.Component:
                                         style={"color": "var(--bp-muted)"},
                                     ),
                                     direction="column",
-                                    gap="2",
+                                    gap="var(--space-2)",
                                     align="center",
                                 ),
                                 col_span=len(headers),
@@ -282,8 +282,8 @@ def _cli_notice() -> rx.Component:
                 ),
                 direction="row",
                 align="center",
-                gap="2",
-                padding="3",
+                gap="var(--space-2)",
+                padding="var(--space-3)",
                 style={
                     "background": "var(--bp-surface-2)",
                     "border": "1px solid var(--bp-border)",
@@ -293,7 +293,7 @@ def _cli_notice() -> rx.Component:
             role="status",
             aria_live="polite",
             aria_atomic="true",
-            margin_top="2",
+            margin_top="var(--space-2)",
         ),
         rx.fragment(),
     )
@@ -319,20 +319,25 @@ def multi_run_page() -> rx.Component:
             BpLeftNav(active="multi-run"),
             rx.scroll_area(
                 rx.flex(
-                    rx.heading(
-                        "Multi-run",
-                        size="7",
-                        style={
-                            "color": "var(--bp-text)",
-                            "font_weight": "600",
-                            "letter_spacing": "-0.02em",
-                        },
-                    ),
-                    rx.text(
-                        "SLAO sweep — train multiple runs and merge the LoRA "
-                        "adapters to defeat catastrophic forgetting.",
-                        size="2",
-                        style={"color": "var(--bp-muted)"},
+                    rx.flex(
+                        rx.heading(
+                            "Multi-run",
+                            size="7",
+                            style={
+                                "color": "var(--bp-text)",
+                                "font_weight": "600",
+                                "letter_spacing": "-0.02em",
+                            },
+                        ),
+                        rx.text(
+                            "SLAO sweep — train multiple runs and merge the LoRA "
+                            "adapters to defeat catastrophic forgetting.",
+                            size="2",
+                            style={"color": "var(--bp-muted)"},
+                        ),
+                        direction="column",
+                        gap="var(--space-2)",
+                        width="100%",
                     ),
                     _model_sweep_grid(),
                     _runs_table(),
@@ -363,16 +368,16 @@ def multi_run_page() -> rx.Component:
                                 "shell command for now"
                             ),
                         ),
-                        gap="3",
-                        margin_top="2",
+                        gap="var(--space-3)",
+                        margin_top="var(--space-2)",
                         align="center",
-                        justify="center",
+                        justify="end",
                     ),
                     _cli_notice(),
                     direction="column",
-                    gap="6",
-                    padding="7",
-                    max_width="1080px",
+                    gap="var(--space-6)",
+                    padding="var(--space-7)",
+                    max_width="1320px",
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

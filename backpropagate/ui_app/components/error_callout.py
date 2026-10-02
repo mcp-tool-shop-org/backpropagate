@@ -161,7 +161,7 @@ def BpErrorCallout(
         rx.flex(
             *children,
             direction="column",
-            gap="1",
+            gap="var(--space-1)",
             width="100%",
         ),
         color_scheme="red",

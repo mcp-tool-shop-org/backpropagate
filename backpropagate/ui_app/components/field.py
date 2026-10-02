@@ -53,7 +53,7 @@ def bp_field(label: str, control: rx.Component, error_var=None) -> rx.Component:
     children = [bp_label(label), control]
     if error_var is not None:
         children.append(bp_err_text(error_var))
-    return rx.flex(*children, direction="column", gap="1", width="100%")
+    return rx.flex(*children, direction="column", gap="var(--space-1)", width="100%")
 
 
 __all__ = ["FIELD_STYLE", "bp_label", "bp_err_text", "bp_field"]

@@ -123,9 +123,15 @@ def test_p1_training_flow_via_browser(ui):
 
         # The progress card appears; step counter begins to advance; the
         # config form is LOCKED while the run is live (director fix #9).
-        page.wait_for_selector("text=TRAINING", timeout=180_000)
-        assert page.get_by_label("HuggingFace model id").is_disabled(), (
-            "model field must be disabled while a run is active"
+        # (Not "text=TRAINING": Playwright text selectors are case-insensitive
+        # substring matches, and the idle page's "Training shape" heading
+        # already satisfies it.) The Stop button only renders while active.
+        stop_button = page.get_by_role("button", name="Stop and save checkpoint")
+        stop_button.wait_for(timeout=180_000)
+        _wait_until(
+            lambda: page.get_by_label("HuggingFace model id").is_disabled(),
+            15.0,
+            "model field disabled while a run is active",
         )
 
         def step_advanced() -> bool:
@@ -138,11 +144,11 @@ def test_p1_training_flow_via_browser(ui):
 
         # Reload mid-run: the banner/pill reattaches from on-disk state.
         page.reload()
-        page.wait_for_selector("text=TRAINING", timeout=30_000)
+        stop_button.wait_for(timeout=30_000)
 
         # Stop and save: cooperative stop writes control.json; the child
         # saves a checkpoint and exits; the banner shows the final state.
-        page.get_by_role("button", name="Stop and save checkpoint").click()
+        stop_button.click()
 
         def run_terminal() -> bool:
             rows = _read_all_events(sandbox)

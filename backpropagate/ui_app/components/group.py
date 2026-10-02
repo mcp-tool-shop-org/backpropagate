@@ -76,13 +76,13 @@ def Group(
         ``"Model"`` / ``"Training shape"`` / ``"LoRA tuning"`` default open;
         ``"Advanced"`` defaults closed.
     """
-    body = rx.flex(*children, direction="column", gap="5", width="100%")
+    body = rx.flex(*children, direction="column", gap="var(--space-5)", width="100%")
 
     if not collapsible:
         return rx.box(
             _section_title(title),
-            rx.box(body, margin_top="4"),
-            padding="5",
+            rx.box(body, margin_top="var(--space-4)"),
+            padding="var(--space-5)",
             style=_card_style(),
             width="100%",
         )
@@ -115,7 +115,7 @@ def Group(
     if default_open:
         return rx.el.details(
             summary,
-            rx.box(body, padding_top="4"),
+            rx.box(body, padding_top="var(--space-4)"),
             open=True,
             class_name="bp-accordion",
             width="100%",
@@ -123,7 +123,7 @@ def Group(
         )
     return rx.el.details(
         summary,
-        rx.box(body, padding_top="4"),
+        rx.box(body, padding_top="var(--space-4)"),
         class_name="bp-accordion",
         width="100%",
         style={**_card_style(), "padding": "16px 20px"},

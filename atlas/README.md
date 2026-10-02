@@ -1,19 +1,14 @@
 # backpropagate: how it works
 
-Mapped at 2026-10-02 from commit 1ca3e26 by Atlas 1.24.0.
+Mapped at 2026-10-02 from commit c89c4f4 by Atlas 1.24.0.
 
 ## What this is
 
-13 parts, mostly Python (265 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
+13 parts, mostly Python (268 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.
 
-## What changed since 2026-10-01 (34b2e8e)
+## What changed since 2026-10-02 (fb38a8d)
 
-- LICENSE is now read by scripts/build_msix.py.
-- assets/icons is now read by backpropagate/ui_app/components/icon.py.
-- backpropagate/rxconfig.py is now also read by scripts/build_ui_frontend.py.
-- And 4 more new writers and readers of places.
-- In backpropagate/cli.py, `main` gained a step, `add_argument`, before `configure_logging`.
-- 47 files added and 72 changed content, across 6 parts.
+Nothing structural changed since 2026-10-02; 3 files added and 2 changed content.
 
 ## What comes in
 
@@ -82,7 +77,7 @@ CI writes nothing this map can see.
 
 No two source files changed together often enough to name.
 
-Window: 180 days; a pair counts from 10 shared commits, since 32 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
+Window: 180 days; a pair counts from 10 shared commits, since 34 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do.
 
 ## What no test touches
 
@@ -115,7 +110,7 @@ Read those in order to follow one pull request end to end.
 - 56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.
 - 15 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 12 more.
 - 13 writes and 19 reads use paths built at run time and are not named here.
-- 50 writes and 105 reads go to a path their caller passes, not to this repository.
+- 51 writes and 106 reads go to a path their caller passes, not to this repository.
 - 5 writes and 4 reads go to the home directory (.backpropagate/, .cache/ and AppData/), not to this repository.
 - 4 writes go to a temporary directory, not to this repository.
 - 2 reads go to the directory the command is run in, not to this repository.

@@ -77,6 +77,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handbook. The same words are in the page for screen readers. The page
   text and the choice cards are rewritten in plain words; no control was
   removed.
+- **The Dataset page cleans a dataset and hands it to training.** Upload
+  a `.jsonl` or `.json` file and the page shows its layout, the first five
+  examples laid out as a conversation, how many examples there are, how
+  many repeat, and how long they are. The **Clean up** settings (remove
+  repeats, remove empty examples, shortest and longest length, order from
+  short to long) say what they would keep as you change them, and **Save a
+  cleaned copy** writes exactly that to a new file; the upload is never
+  changed. **Use in Single run** and **Use in Multi-run** put the file in
+  the training form and take you there. The same checks are available from
+  Python as `backpropagate.dataset_prep` (`inspect_dataset`,
+  `prepare_dataset`).
 - **The LoRA shape in the web UI follows your GPU.** Three cards (Quality,
   Balanced, Fast) show what each shape needs for the chosen model. The form
   opens on the largest one that fits the memory that is free, marks it
@@ -153,6 +164,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Uploading a dataset in the web UI works.** Every upload on the Dataset
+  page failed with a server error, in 1.8.1 and earlier: the upload handler
+  was declared in a way the UI framework refuses, so the file never
+  arrived. The page's preview and its duplicate count were never filled
+  either, and its filter settings (dedup, drop empty, curriculum, token
+  limits) were stored and applied to nothing. All of it now does what it
+  shows (see Added). The longest-length limit starts at "no limit" rather
+  than 2,048, so nothing is removed for length unless you ask.
 - **Training without flash-attention or xFormers uses far less memory.**
   That is every Windows install (flash-attn has no Windows build, and
   xFormers is disabled on RTX 40/50 cards). Attention there runs through

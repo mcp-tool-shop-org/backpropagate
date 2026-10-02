@@ -29,9 +29,12 @@ import re
 import tempfile
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import reflex as rx
+
+if TYPE_CHECKING:
+    from .dataset_prep import DatasetSummary
 
 # Hub tokens typed into the Export page, by browser session. Process memory
 # only, on purpose: see the comment on ``ExportState.hub_token_set``.
@@ -74,6 +77,16 @@ MergeMode = Literal["slao", "simple", "ties"]
 # ui-v2 P2: exactly `backprop export --quantization` choices.
 GgufQuant = Literal["f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"]
 DatasetFormatHint = Literal["auto", "sharegpt", "alpaca", "openai", "jsonl"]
+# How a detected layout is named on the Dataset page (``DatasetFormat`` values).
+_FORMAT_NAMES = {
+    "sharegpt": "ShareGPT",
+    "alpaca": "Alpaca",
+    "openai": "OpenAI",
+    "chatml": "ChatML",
+    "raw_text": "Plain text",
+    "preference": "Preference pairs",
+    "kto": "Feedback (KTO)",
+}
 
 # Constants for the setters' clamps. Centralised so an operator can read the
 # bounds in one place — they also appear in the operator-facing error strings.
@@ -518,6 +531,11 @@ def _coerce_float(value: object) -> float | None:
             return None
         return None if math.isnan(f) else f
     return None
+
+
+def _count(n: int, noun: str) -> str:
+    """``1 example`` / ``1,234 examples``."""
+    return f"{n:,} {noun}" + ("" if n == 1 else "s")
 
 
 def _clamp_int(name: str, raw: object, lo: int, hi: int) -> tuple[int | None, str]:
@@ -2872,6 +2890,36 @@ class ExportState(rx.State):
         self.hub_message = ""
 
 
+# The uploaded file, read once (``dataset_prep.DatasetSummary``), so a changed
+# clean-up setting recounts without reading the file again. It is kept here and
+# not in the Reflex state on purpose: the state is written to disk after every
+# event, and the summary of a large file is megabytes. The key is the file's
+# identity, so a new upload under the same name is read again.
+_SUMMARY_CACHE: dict[tuple[str, int, int, str], DatasetSummary] = {}
+_SUMMARY_CACHE_MAX = 4
+_SUMMARY_LOCK = threading.Lock()
+
+
+def _dataset_summary(path: str, format_hint: str) -> DatasetSummary:
+    """The summary of ``path`` read as ``format_hint``. Raises what
+    ``dataset_prep.summarise_dataset`` raises, or ``OSError`` for a file that
+    is gone."""
+    from .dataset_prep import summarise_dataset
+
+    stat = Path(path).stat()
+    key = (path, stat.st_mtime_ns, stat.st_size, format_hint)
+    with _SUMMARY_LOCK:
+        hit = _SUMMARY_CACHE.get(key)
+    if hit is not None:
+        return hit
+    summary = summarise_dataset(path, format_hint)
+    with _SUMMARY_LOCK:
+        while len(_SUMMARY_CACHE) >= _SUMMARY_CACHE_MAX:
+            _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
+        _SUMMARY_CACHE[key] = summary
+    return summary
+
+
 class DatasetState(rx.State):
     """Dataset surface state: upload, format detect, preview, dedup config."""
 
@@ -2886,7 +2934,11 @@ class DatasetState(rx.State):
     upload_error: str = ""
     upload_count: int = 0  # per-session cap
     detected_format: str = ""
-    preview_records: list[dict] = []
+    # The first examples as the trainer reads them: ``number`` / ``tokens`` /
+    # ``text`` (see ``dataset_prep.DatasetSummary.preview``).
+    preview_records: list[dict[str, str]] = []
+    # Why the page cannot look inside the uploaded file (it is still uploaded).
+    inspect_note: str = ""
 
     # FRONTEND-B-013 / UI-A-002: backend-computed basename so the UI never has
     # to split the full path on the client AND the full path (with home
@@ -2910,23 +2962,112 @@ class DatasetState(rx.State):
     # Format hint — operator can override the auto-detect when it guesses wrong.
     format_hint: DatasetFormatHint = "auto"
 
-    # Dedup + filter knobs.
+    # The clean-up settings. They decide what "Save a cleaned copy" writes;
+    # the counts below update as they change. ``max_tokens`` 0 means no upper
+    # limit, so nothing is removed for length until the user asks for it.
     dedup_enabled: bool = True
     drop_empty: bool = True
     apply_curriculum: bool = False
     min_tokens: int = 0
     min_tokens_error: str = ""
-    max_tokens: int = 2048
+    max_tokens: int = 0
     max_tokens_error: str = ""
 
+    # What the uploaded file contains (``dataset_prep.DatasetSummary``, the
+    # same token figure ``backprop validate-dataset`` reports).
     record_count: int = 0
     dedup_hits: int = 0
-    # FRONTEND-F-005 (v1.4 Wave 6b features): plumb the Stats-grid value
-    # that dataset.py was hardcoding as '—'. The figure comes from
-    # ``backpropagate.datasets.get_dataset_stats`` during the upload
-    # handler — same computation the CLI emits, just thread it to the UI
-    # state so the grid doesn't drift from the backend truth.
     avg_tokens: int = 0
+    shortest_tokens: int = 0
+    longest_tokens: int = 0
+    skipped_lines: int = 0
+
+    # What the clean-up settings would do to it.
+    kept_count: int = 0
+    removed_duplicate: int = 0
+    removed_empty: int = 0
+    removed_short: int = 0
+    removed_long: int = 0
+
+    # The cleaned copy. Its path is backend-only for the same reason the
+    # upload's is (UI-A-002); the client sees the file name and the count.
+    _prepared_path: str = ""
+    prepared_count: int = 0
+    prepare_error: str = ""
+
+    @rx.var
+    def prepared_name(self) -> str:
+        """The cleaned copy's file name, or "" when there is none."""
+        return Path(self._prepared_path).name if self._prepared_path else ""
+
+    @rx.var
+    def removed_count(self) -> int:
+        return (
+            self.removed_duplicate + self.removed_empty + self.removed_short + self.removed_long
+        )
+
+    @rx.var
+    def stat_text(self) -> dict[str, str]:
+        """The Stats numbers as they are shown: thousands separated."""
+        return {
+            "examples": f"{self.record_count:,}",
+            "repeats": f"{self.dedup_hits:,}",
+            "average": f"{self.avg_tokens:,}",
+            "shortest": f"{self.shortest_tokens:,}",
+            "longest": f"{self.longest_tokens:,}",
+        }
+
+    @rx.var
+    def skipped_note(self) -> str:
+        """Lines of the file that are not an example, or "" when all are."""
+        if not self.skipped_lines:
+            return ""
+        was = "line was" if self.skipped_lines == 1 else "lines were"
+        return (
+            f"{self.skipped_lines:,} {was} skipped: not a JSON example. "
+            "Training skips them too."
+        )
+
+    @rx.var
+    def cleanup_summary(self) -> str:
+        """One sentence: what the settings keep, and what they remove."""
+        if not self._uploaded_path:
+            return "Upload a file to see what these settings would remove."
+        if self.inspect_note or self.record_count == 0:
+            return ""
+        total = f"{self.record_count:,}"
+        parts = []
+        if self.removed_duplicate:
+            parts.append(_count(self.removed_duplicate, "repeat"))
+        if self.removed_empty:
+            parts.append(f"{self.removed_empty:,} empty")
+        if self.removed_short:
+            parts.append(f"{self.removed_short:,} shorter than {self.min_tokens:,} tokens")
+        if self.removed_long:
+            parts.append(f"{self.removed_long:,} longer than {self.max_tokens:,} tokens")
+        if not parts:
+            return f"All {total} examples are kept. These settings remove nothing."
+        return f"{self.kept_count:,} of {total} examples are kept. Removed: {', '.join(parts)}."
+
+    @rx.var
+    def can_save_copy(self) -> bool:
+        """A copy is worth writing: something is left, and it would differ."""
+        return self.kept_count > 0 and (self.removed_count > 0 or self.apply_curriculum)
+
+    @rx.var
+    def training_file_name(self) -> str:
+        """The file "Use in ..." hands to the training form."""
+        return self.prepared_name or self.uploaded_basename
+
+    @rx.var
+    def training_file_note(self) -> str:
+        if self._prepared_path:
+            return f"The cleaned copy: {_count(self.prepared_count, 'example')}."
+        if not self._uploaded_path:
+            return ""
+        if self.record_count:
+            return f"The file as you uploaded it: {_count(self.record_count, 'example')}."
+        return "The file as you uploaded it."
 
     # Per-session upload cap. Reflex state is per-WebSocket-connection so this
     # is effectively per-tab; an unauthenticated abuser can still open many
@@ -2934,7 +3075,7 @@ class DatasetState(rx.State):
     _MAX_UPLOADS_PER_SESSION: int = 5
 
     @rx.event
-    async def handle_upload(self, files: list) -> None:  # type: ignore[type-arg]
+    async def handle_upload(self, files: list[rx.UploadFile]) -> None:
         """Validate and persist uploaded dataset files (FRONTEND-A-003).
 
         The handler is wired to ``rx.upload``'s ``on_drop``. Each file goes
@@ -3121,105 +3262,195 @@ class DatasetState(rx.State):
             self._uploaded_path = str(target)
             self.upload_count += 1
 
-            # FRONTEND-F-005 (v1.4 Wave 6b features): compute dataset stats
-            # via the canonical backend API + thread them into state so the
-            # Stats grid (record_count / avg_tokens / dedup_hits) and the
-            # Format badge bind to live values rather than hardcoded '—'
-            # placeholders. The computation matches what
-            # `backprop validate-dataset` emits, so UI + CLI stay in
-            # lockstep. Failure here is non-fatal — the file is already
-            # persisted; we just leave the Stats grid empty and surface a
-            # one-line note inside the same upload_error channel.
-            try:
-                import json as _json
-
-                from .datasets import (
-                    DatasetFormat,
-                    _detect_format_from_file,
-                    get_dataset_stats,
-                )
-
-                samples: list[dict | str] = []
-                suffix = target.suffix.lower()
-                if suffix == ".jsonl":
-                    with target.open(encoding="utf-8") as fh:
-                        for line in fh:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    samples.append(_json.loads(line))
-                                except _json.JSONDecodeError:
-                                    # Skip malformed lines in stats —
-                                    # the strict validate-dataset
-                                    # surface catches these.
-                                    continue
-                elif suffix == ".json":
-                    with target.open(encoding="utf-8") as fh:
-                        parsed = _json.load(fh)
-                        if isinstance(parsed, list):
-                            samples = parsed
-                        else:
-                            samples = [parsed]
-                # Other extensions: leave samples empty → stats render 0s.
-
-                detected = _detect_format_from_file(target)
-                stats = get_dataset_stats(samples, format_type=detected)
-                self.record_count = int(stats.total_samples)
-                # avg_tokens_per_sample is float; round to int for the
-                # 4-size big-number cell. Sub-token resolution isn't
-                # operator-useful at this glance-level.
-                self.avg_tokens = int(round(stats.avg_tokens_per_sample))
-                if detected != DatasetFormat.UNKNOWN:
-                    # Map enum to a short human badge — the Format group
-                    # already binds ``detected_format`` and is None-safe.
-                    self.detected_format = str(detected.value).capitalize()
-            except Exception:  # noqa: BLE001  # nosec B110 — stats are advisory, never block upload
-                # Leave the grid empty rather than raising. The upload
-                # itself succeeded; a stats failure shouldn't surface as
-                # an upload error.
-                pass
+            # What the file contains, and what the clean-up settings would do.
+            self._inspect()
 
         self.upload_error = ""
+
+    # ---- what the file contains, and what the settings would do ---------------
+
+    def _settings(self):  # type: ignore[no-untyped-def]
+        from .dataset_prep import PrepSettings
+
+        return PrepSettings(
+            dedup=self.dedup_enabled,
+            drop_empty=self.drop_empty,
+            min_tokens=self.min_tokens,
+            max_tokens=self.max_tokens,
+            curriculum=self.apply_curriculum,
+            format_hint=self.format_hint,
+        )
+
+    def _forget_copy(self) -> None:
+        """A cleaned copy no longer matches: the file or a setting changed.
+        The copy stays on disk; the page just stops offering it."""
+        self._prepared_path = ""
+        self.prepared_count = 0
+        self.prepare_error = ""
+
+    def _inspect(self) -> None:
+        """Read the uploaded file once and fill the page from it.
+
+        Never raises: the upload has already succeeded, so a file this page
+        cannot look inside (a .csv, say) leaves a note, not an error.
+        """
+        from .dataset_prep import DatasetPrepError
+
+        self._forget_copy()
+        self.inspect_note = ""
+        self.detected_format = ""
+        self.preview_records = []
+        self.record_count = self.dedup_hits = self.avg_tokens = 0
+        self.shortest_tokens = self.longest_tokens = self.skipped_lines = 0
+        if not self._uploaded_path:
+            self._recount()
+            return
+        try:
+            summary = _dataset_summary(self._uploaded_path, self.format_hint)
+        except DatasetPrepError as exc:
+            self.inspect_note = (
+                f"{exc} The file is uploaded and can still be used for training."
+            )
+        except Exception:  # noqa: BLE001 - the preview is advisory, never an upload failure
+            self.inspect_note = (
+                "This file could not be read for a preview. "
+                "It is uploaded and can still be used for training."
+            )
+        else:
+            if summary.format != "unknown":
+                self.detected_format = _FORMAT_NAMES.get(
+                    summary.format, summary.format.capitalize()
+                )
+            self.preview_records = summary.preview
+            self.skipped_lines = summary.malformed
+        self._recount()
+
+    def _recount(self) -> None:
+        """What the current settings keep and remove.
+
+        Uses the summary made when the file was uploaded, so it reads no file
+        (unless the server restarted since: then the file is read once more).
+        Never raises into the page.
+        """
+        self.kept_count = 0
+        self.removed_duplicate = self.removed_empty = 0
+        self.removed_short = self.removed_long = 0
+        if not self._uploaded_path or self.inspect_note:
+            return
+        try:
+            report = _dataset_summary(self._uploaded_path, self.format_hint).report(
+                self._settings()
+            )
+        except Exception:  # noqa: BLE001 - the file went away, or limits set out of order by hand
+            return
+        self.record_count = report.total
+        self.dedup_hits = report.duplicates
+        self.avg_tokens = report.avg_tokens
+        self.shortest_tokens = report.shortest_tokens
+        self.longest_tokens = report.longest_tokens
+        self.kept_count = report.kept
+        self.removed_duplicate = report.removed_duplicate
+        self.removed_empty = report.removed_empty
+        self.removed_short = report.removed_short
+        self.removed_long = report.removed_long
+
+    def _settings_changed(self) -> None:
+        self._forget_copy()
+        self._recount()
 
     @rx.event
     def set_format_hint(self, value: str) -> None:
         if value in ("auto", "sharegpt", "alpaca", "openai", "jsonl"):
             self.format_hint = value  # type: ignore[assignment]
+            self._inspect()  # the examples are read differently: read again
 
     @rx.event
     def set_dedup_enabled(self, value: bool) -> None:
         self.dedup_enabled = bool(value)
+        self._settings_changed()
 
     @rx.event
     def set_drop_empty(self, value: bool) -> None:
         self.drop_empty = bool(value)
+        self._settings_changed()
 
     @rx.event
     def set_apply_curriculum(self, value: bool) -> None:
         self.apply_curriculum = bool(value)
+        self._settings_changed()
 
     @rx.event
     def set_min_tokens(self, value: str | int) -> None:
-        n, err = _clamp_int("Min tokens", value, _TOKENS_MIN, _TOKENS_MAX)
+        n, err = _clamp_int("Shortest", value, _TOKENS_MIN, _TOKENS_MAX)
         if n is not None:
             self.min_tokens = n
-            # Re-clamp max if min would exceed it.
-            if self.max_tokens < n:
+            # A longest-length limit below the new minimum would remove
+            # everything: raise it with the minimum. 0 (no limit) stays.
+            if 0 < self.max_tokens < n:
                 self.max_tokens = n
+            self._settings_changed()
         self.min_tokens_error = err
 
     @rx.event
     def set_max_tokens(self, value: str | int) -> None:
-        n, err = _clamp_int("Max tokens", value, _TOKENS_MIN, _TOKENS_MAX)
+        n, err = _clamp_int("Longest", value, _TOKENS_MIN, _TOKENS_MAX)
         if n is not None:
+            if 0 < n < self.min_tokens:
+                n = self.min_tokens
+                err = f"Longest cannot be below Shortest ({self.min_tokens:,}); raised to match."
             self.max_tokens = n
+            self._settings_changed()
         self.max_tokens_error = err
 
+    # ---- the cleaned copy, and handing a file to the training form ---------------
+
     @rx.event
-    def detect_format_stub(self) -> None:
-        """Stub handler — placeholder for the upload->detect flow."""
-        if self._uploaded_path:
-            self.detected_format = "alpaca"
+    def save_cleaned_copy(self) -> None:
+        """Write what the settings keep to ``<UI output dir>/datasets/``.
+
+        The uploaded file is left as it is. Failures land in ``prepare_error``
+        with paths stripped; nothing raises into the page.
+        """
+        from .dataset_prep import DatasetPrepError, prepare_dataset
+        from .ui_security import get_ui_output_dir, sanitize_error_for_user
+
+        self._forget_copy()
+        if not self._uploaded_path:
+            self.prepare_error = "Upload a file first."
+            return
+        try:
+            result = prepare_dataset(
+                self._uploaded_path, get_ui_output_dir() / "datasets", self._settings()
+            )
+        except DatasetPrepError as exc:
+            self.prepare_error = str(exc)
+            return
+        except Exception as exc:  # noqa: BLE001 - shown to the user with paths stripped
+            message, suggestion = sanitize_error_for_user(
+                exc, operation="saving the cleaned copy"
+            )
+            self.prepare_error = message + (f" Try: {suggestion}" if suggestion else "")
+            return
+        self._prepared_path = str(result.path)
+        self.prepared_count = result.report.kept
+
+    async def _hand_over(self, form_state: type[rx.State], route: str):  # type: ignore[no-untyped-def]
+        path = self._prepared_path or self._uploaded_path
+        if not path:
+            return None
+        form = await self.get_state(form_state)
+        form.dataset_path, form.dataset_path_error = _validate_ui_path(path)  # type: ignore[attr-defined]
+        return rx.redirect(route)
+
+    @rx.event
+    async def use_in_single_run(self):  # type: ignore[no-untyped-def]
+        """Put the cleaned copy (or the upload) in the Single run form and go there."""
+        return await self._hand_over(TrainState, "/")
+
+    @rx.event
+    async def use_in_multi_run(self):  # type: ignore[no-untyped-def]
+        """Put the cleaned copy (or the upload) in the Multi-run form and go there."""
+        return await self._hand_over(MultiRunState, "/multi-run")
 
 
 # ---------------------------------------------------------------------------

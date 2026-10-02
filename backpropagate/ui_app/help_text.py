@@ -368,9 +368,10 @@ TIPS: dict[str, Tip] = {
         "Look at your examples before you train",
         (
             "Drop a file here to see what it contains: which layout it uses, the "
-            "first examples, and how many there are.",
-            "Your file is not changed, and it stays on this computer.",
-            "To train on a file, give its path on the Single run page.",
+            "first examples, how many there are and how long they are.",
+            "You can save a cleaned copy without repeats or empty examples, then "
+            "send it straight to a training form.",
+            "Your file is never changed, and it stays on this computer.",
         ),
         link="/training/#dataset-formats",
     ),
@@ -382,6 +383,8 @@ TIPS: dict[str, Tip] = {
             "with a role and content.",
             "The layout is recognised from the file. Change it only if the "
             "preview below looks wrong.",
+            "The choice changes how this page reads the file. Training "
+            "recognises the layout by itself.",
         ),
         start="auto-detect.",
         link="/training/#dataset-formats",
@@ -396,11 +399,56 @@ TIPS: dict[str, Tip] = {
     "dataset_stats": Tip(
         "How much data this is",
         (
-            "Records are the examples in the file. Dedup hits are examples that "
-            "appear more than once.",
-            "Average tokens is the typical length of an example. A token is a "
-            "piece of a word: about three quarters of an English word.",
-            "Training cuts off anything beyond 2,048 tokens in one example.",
+            "Examples is how many the file holds. Repeats are examples whose "
+            "conversation already appeared earlier in the file.",
+            "Lengths are in tokens. A token is a piece of a word: about three "
+            "quarters of an English word. Here it is estimated as four "
+            "characters, which is close enough to compare examples.",
+            "Training cuts an example off at the run's maximum length, 2,048 "
+            "tokens unless you change it.",
+        ),
+    ),
+    "dataset_cleanup": Tip(
+        "Leave out what does not help",
+        (
+            "Repeats teach nothing new and make the model favour them. Empty "
+            "examples have no question or no answer to learn from.",
+            "The line below the settings says what they would keep. Nothing "
+            "happens to any file until you save a cleaned copy.",
+            "The copy holds the kept examples exactly as they were, in a new "
+            "file next to your uploads.",
+        ),
+        start="repeats and empty examples removed, no length limits.",
+    ),
+    "cleanup_order": Tip(
+        "Easy examples first",
+        (
+            "Writes the copy with the shortest examples first and the longest "
+            "last.",
+            "This matters for a multi-run: its rounds take examples in file "
+            "order, so early rounds get the short ones. A single run shuffles "
+            "its examples, so the order makes no difference there.",
+        ),
+        start="off.",
+    ),
+    "cleanup_length": Tip(
+        "Too short or too long to be useful",
+        (
+            "Shortest removes examples below that many tokens, such as one-word "
+            "exchanges. Longest removes examples above it.",
+            "An example longer than the run's maximum length is cut off during "
+            "training, and what is lost is usually the end of the answer. "
+            "Removing those examples can be better than training on half of one.",
+        ),
+        start="0 and 0, which removes nothing.",
+    ),
+    "dataset_use": Tip(
+        "Send the file to a training form",
+        (
+            "Fills in the dataset on the Single run or Multi-run page and takes "
+            "you there. Nothing starts until you press Start.",
+            "If you saved a cleaned copy, that is the file used. Otherwise it is "
+            "the file as you uploaded it.",
         ),
     ),
     # ---- runs and models -----------------------------------------------------

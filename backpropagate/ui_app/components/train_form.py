@@ -278,9 +278,9 @@ def dataset_card(S, extra: rx.Component | None = None) -> rx.Component:
         ),
         _muted(S.method_data_hint),
         rx.text(
-            "Not sure what is in a file? ",
-            rx.link("Open it on the Dataset page", href="/dataset", style={"color": "var(--bp-teal)"}),
-            " to see the first examples and the detected format.",
+            "No path to hand? ",
+            rx.link("Upload a file on the Dataset page", href="/dataset", style={"color": "var(--bp-teal)"}),
+            ": it shows the first examples, can clean them up, and fills this in for you.",
             size="1",
             style={"color": "var(--bp-muted)", "font_size": "13px", "line_height": "1.5"},
         ),

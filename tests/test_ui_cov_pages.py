@@ -616,7 +616,7 @@ _PAGE_SPECS = {
 
 _PAGE_COPY = {
     "train": {"HuggingFace model id", "Start training"},
-    "multi_run": {"Multi-run", "Sweep shape", "Merge mode", "Steps per run", "Start multi-run"},
+    "multi_run": {"Multi-run", "Rounds", "Merge mode", "Steps per run", "Start multi-run"},
     "export": {"Source", "GGUF quantization", "Register with Ollama", "Push to HF Hub"},
     "dataset": {"Upload", "Detected format", "Enable dedup", "Min tokens", "Max tokens"},
     "runs": {"Run history", "Could not load run history", "No training runs recorded yet.",

@@ -149,11 +149,29 @@ TrainState = [
     # read by the vram_est_heading / vram_est_measured / vram_est_detail
     # computed vars ("measured on this GPU" vs "estimate")
     "vram_est_source",
+    # what the estimate is compared with and the batch before it was lowered:
+    # read by the vram_est_label / _pct / _detail computed vars
+    "vram_est_tier_batch",
+    "vram_est_budget",
+    "vram_est_against",
+    # the LoRA shape that follows the GPU (TrainState and MultiRunState): read
+    # by the lora_caption / lora_gb_* / lora_can_follow_gpu / vram_fix_label
+    # computed vars, which the LoRA card binds instead of the raw fields
+    "lora_follow_gpu",
+    "lora_recommended_fits",
+    "lora_shape_gb",
+    "lora_free_gb",
 ]
 
 # MultiRunState — fields declared for the form but read only by handlers
 # (ui-v2 P3 put every training field on the form; these remain).
 MultiRunState = [
+    # the LoRA shape that follows the GPU: read by the lora_caption /
+    # lora_gb_* / lora_can_follow_gpu computed vars the LoRA card binds
+    "lora_follow_gpu",
+    "lora_recommended_fits",
+    "lora_shape_gb",
+    "lora_free_gb",
     "replay_fraction",
     "replay_fraction_error",
     "current_run_index",

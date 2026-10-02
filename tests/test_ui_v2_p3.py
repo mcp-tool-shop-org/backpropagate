@@ -351,14 +351,18 @@ def test_form_fields_map_to_spec_fields():
     JobSpec(kind="sft", **fields)  # every key is a JobSpec field
 
 
-def test_preset_fills_model_and_rank():
+def test_preset_fills_the_model_and_leaves_the_shape_to_the_gpu():
+    """A preset used to set its own LoRA rank. The shape now follows the GPU
+    for the chosen model (refresh_estimate), so the preset only picks the
+    model and the form's shape is untouched until that refresh."""
     from backpropagate import ui_state as us
 
     s = us.TrainState()
-    s.set_preset("llama-3.2-1b")
+    follow_up = s.set_preset("llama-3.2-1b")
     assert s.model == "meta-llama/Llama-3.2-1B-Instruct"
-    assert (s.lora_r, s.lora_alpha) == (64, 128)
-    assert s.lora_shape == "custom"
+    assert (s.lora_r, s.lora_alpha, s.lora_shape) == (256, 512, "quality")
+    assert s.lora_follow_gpu is True
+    assert follow_up is us.TrainState.refresh_estimate
     s.set_model("someone/else")
     assert s.preset == "custom"
 

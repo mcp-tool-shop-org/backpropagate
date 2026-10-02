@@ -1,17 +1,23 @@
-"""Shared training-form cards (ui-v2 P3 CLI parity).
+"""Shared training-form cards.
 
-The Single run and Multi-run pages carry the same training knobs, and every
-one of them reaches a real ``backprop train`` / ``multi-run`` flag (see
+The Single run and Multi-run pages carry the same training settings, and
+every one of them reaches a real ``backprop train`` / ``multi-run`` flag (see
 ``ui_jobs._training_flags``). The cards here are parameterised by the state
 class (``TrainState`` or ``MultiRunState``: same field and setter names) so
 the two pages stay in lockstep.
 
-- **Start from**: a model preset (``config.MODEL_PRESETS``) or a custom id;
-  the preset fills the model and its recommended LoRA rank.
-- **Method**: SFT / ORPO / SimPO / KTO with each method's own knobs.
+The form is written for someone who is curious and may be new to this: every
+section and field has an "i" tip (``info_tip`` / ``help_text.TIPS``) that says
+what it is, what changing it does and where to start. Nothing an expert
+expects is hidden; the explanation is added, the control is not removed.
+
+- **Model**: a preset (``config.MODEL_PRESETS``) or any model id.
+- **Method**: SFT / ORPO / SimPO / KTO with each method's own settings.
 - **Mode**: QLoRA (4-bit base, the CLI default) / LoRA (16-bit base,
   ``--no-4bit``) / Full fine-tune (``--mode full``, Single run only).
-- **LoRA**: Quality / Fast shape picks plus rank, alpha, dropout, targets.
+- **LoRA**: Quality / Balanced / Fast shapes. On Single run each shows what
+  it needs for the chosen model, and the form keeps the largest one that
+  fits the GPU until the user picks their own.
 - **Advanced**: GPU temperature limit, run name, gradient checkpointing.
 """
 
@@ -23,15 +29,18 @@ from backpropagate.ui_state import TrainState, model_preset_options
 
 from .field import FIELD_STYLE, bp_field
 from .group import Group
+from .info_tip import info_tip
 
 _LOCKED = TrainState.form_disabled
 
 
-def _muted(text, **style) -> rx.Component:
+def _muted(text, id: str | None = None, **style) -> rx.Component:  # noqa: A002 - the HTML id
+    extra = {"id": id} if id else {}
     return rx.text(
         text,
         size="1",
         style={"color": "var(--bp-muted)", "font_size": "13px", "line_height": "1.5", **style},
+        **extra,
     )
 
 
@@ -76,7 +85,7 @@ def _number(value, on_change, placeholder: str, aria_label: str, *, as_int: bool
     )
 
 
-# ---- Start from (preset + model) --------------------------------------------------
+# ---- Model ------------------------------------------------------------------------
 
 
 def start_from_card(S) -> rx.Component:
@@ -115,19 +124,20 @@ def start_from_card(S) -> rx.Component:
         ),
         _muted(S.preset_note),
         title="Model",
+        info="model",
     )
 
 
 # ---- Method -------------------------------------------------------------------------
 
 _METHODS = (
-    ("SFT", "sft", "Supervised fine-tuning on examples."),
-    ("ORPO", "orpo", "Preference pairs, no reference model."),
-    ("SimPO", "simpo", "Preference pairs, length-normalised reward."),
-    ("KTO", "kto", "Thumbs-up / thumbs-down feedback."),
+    ("SFT", "sft", "Learn from examples of good answers. The standard choice."),
+    ("ORPO", "orpo", "Learn to prefer a better answer over a worse one."),
+    ("SimPO", "simpo", "Preferences too, fair to short and long answers alike."),
+    ("KTO", "kto", "Learn from single answers marked good or bad."),
 )
 
-# (field, label, aria) per method knob.
+# (field, label, aria) per method setting.
 _METHOD_FIELDS = {
     "orpo": (("orpo_beta", "Beta (odds-ratio weight)", "ORPO beta"),),
     "simpo": (
@@ -161,8 +171,9 @@ def _method_knobs(S, method: str) -> rx.Component:
                     style={**FIELD_STYLE, "width": "100%"},
                     aria_label=aria,
                 ),
+                info="method_knobs" if index == 0 else None,
             )
-            for key, label, aria in fields
+            for index, (key, label, aria) in enumerate(fields)
         ),
         columns="repeat(auto-fit, minmax(140px, 1fr))",
         gap="var(--space-4)",
@@ -197,6 +208,7 @@ def method_card(S) -> rx.Component:
             rx.fragment(),
         ),
         title="Method",
+        info="method",
     )
 
 
@@ -206,18 +218,18 @@ def method_card(S) -> rx.Component:
 def mode_card(S, *, allow_full: bool) -> rx.Component:
     cards = [
         choice_card(
-            "QLoRA", "qlora", "LoRA on a 4-bit base. Least memory; the default.",
+            "QLoRA", "qlora", "A small adapter on a compressed model. Least memory; the usual choice.",
             S.set_train_mode("qlora"),
         ),
         choice_card(
-            "LoRA", "lora", "LoRA on a 16-bit base. More memory, no quantization.",
+            "LoRA", "lora", "The same adapter on the uncompressed model. About three times the memory.",
             S.set_train_mode("lora"),
         ),
     ]
     if allow_full:
         cards.append(
             choice_card(
-                "Full fine-tune", "full", "Trains every weight. SFT only; small models.",
+                "Full fine-tune", "full", "Changes every weight. Most memory; for small models.",
                 S.set_train_mode("full"),
             )
         )
@@ -236,12 +248,13 @@ def mode_card(S, *, allow_full: bool) -> rx.Component:
         ),
         rx.cond(
             S.method != "sft",
-            _muted("Full fine-tuning supports SFT only; preference methods train a LoRA adapter.")
+            _muted("Full fine-tuning works with SFT only; the preference methods train an adapter.")
             if allow_full
             else rx.fragment(),
             rx.fragment(),
         ),
         title="Mode",
+        info="mode",
     )
 
 
@@ -264,8 +277,16 @@ def dataset_card(S, extra: rx.Component | None = None) -> rx.Component:
             S.dataset_path_error,
         ),
         _muted(S.method_data_hint),
+        rx.text(
+            "Not sure what is in a file? ",
+            rx.link("Open it on the Dataset page", href="/dataset", style={"color": "var(--bp-teal)"}),
+            " to see the first examples and the detected format.",
+            size="1",
+            style={"color": "var(--bp-muted)", "font_size": "13px", "line_height": "1.5"},
+        ),
         *([extra] if extra is not None else []),
         title="Dataset",
+        info="dataset",
     )
 
 
@@ -280,6 +301,7 @@ def training_shape_card(S, *, steps_label: str = "Steps", with_steps: bool = Tru
                 steps_label,
                 _number(S.steps, S.set_steps, "100", "Number of training steps"),
                 S.steps_error,
+                info="steps",
             )
         )
     cells += [
@@ -296,6 +318,7 @@ def training_shape_card(S, *, steps_label: str = "Steps", with_steps: bool = Tru
                 aria_label="Batch size (number or auto)",
             ),
             S.batch_size_error,
+            info="batch_size",
         ),
         bp_field(
             "Learning rate",
@@ -310,68 +333,129 @@ def training_shape_card(S, *, steps_label: str = "Steps", with_steps: bool = Tru
                 aria_label="Learning rate",
             ),
             S.learning_rate_error,
+            info="learning_rate",
         ),
     ]
     return Group(
         rx.grid(
             *cells,
-            columns="repeat(auto-fit, minmax(90px, 1fr))",
+            columns="repeat(auto-fit, minmax(120px, 1fr))",
             gap="var(--space-4)",
             width="100%",
         ),
-        title="Training shape",
+        title="Training",
     )
 
 
 # ---- LoRA -----------------------------------------------------------------------------------
 
+#: (name, label, what it is). The order is largest to smallest.
+_SHAPES = (
+    ("quality", "Quality", "Rank 256 · every layer"),
+    ("balanced", "Balanced", "Rank 64 · every layer"),
+    ("fast", "Fast", "Rank 16 · two layers per block"),
+)
 
-def _shape_pill(S, label: str, value: str) -> rx.Component:
-    selected = S.lora_shape == value
-    return rx.button(
-        label,
-        size="2",
-        variant=rx.cond(selected, "soft", "outline"),
-        color_scheme=rx.cond(selected, "teal", "gray"),
-        on_click=S.apply_lora_shape(value),
+
+def _shape_card(S, name: str, label: str, what: str, *, recommend: bool) -> rx.Component:
+    """One LoRA shape as a pressable card.
+
+    A toggle button (``aria-pressed``), named by its label so "Quality",
+    "Balanced" and "Fast" are what assistive tech and tests find. On Single
+    run it also shows what the shape needs for the chosen model and marks
+    the one that fits this GPU.
+    """
+    selected = S.lora_shape == name
+    lines: list[rx.Component] = [
+        rx.text(label, weight="medium", style={"font_size": "14px", "color": "var(--bp-text)"}),
+        rx.text(what, style={"font_size": "12px", "color": "var(--bp-muted)", "line_height": "1.4"}),
+    ]
+    if recommend:
+        gb = getattr(S, f"lora_gb_{name}")
+        lines.append(
+            rx.cond(
+                gb != "",
+                rx.text(
+                    "about " + gb,
+                    class_name="bp-num",
+                    style={"font_size": "12px", "color": "var(--bp-text-2)"},
+                ),
+                rx.fragment(),
+            )
+        )
+        # Last line, so the three cards keep the same first lines.
+        lines.append(
+            rx.cond(
+                S.lora_recommended == name,
+                rx.el.span("Recommended", class_name="bp-shape-badge"),
+                rx.fragment(),
+            )
+        )
+    return rx.el.button(
+        rx.flex(*lines, direction="column", gap="4px", align="start"),
+        type="button",
+        class_name="bp-shape",
+        on_click=S.apply_lora_shape(name),
         disabled=_LOCKED,
         aria_pressed=rx.cond(selected, "true", "false"),
-        style={"border_radius": "var(--bp-r-pill)"},
+        aria_label=label,
     )
 
 
-def lora_card(S) -> rx.Component:
-    body = rx.flex(
-        rx.flex(
-            _shape_pill(S, "Quality", "quality"),
-            _shape_pill(S, "Fast", "fast"),
-            rx.cond(
-                S.lora_shape == "custom",
-                rx.badge("Custom", variant="surface", color_scheme="gray", radius="full"),
-                rx.fragment(),
-            ),
-            gap="var(--space-2)",
-            align="center",
-            wrap="wrap",
-        ),
-        _muted(
+def lora_card(S, *, recommend: bool = False) -> rx.Component:
+    """The LoRA card. ``recommend`` (Single run) adds each shape's memory
+    need for the chosen model, the "Recommended" mark and the reason."""
+    caption = (
+        _muted(S.lora_caption, id="bp-lora-caption")
+        if recommend
+        else _muted(
             rx.match(
                 S.lora_shape,
-                ("quality", "Rank 256 on every linear layer: close to full fine-tuning quality."),
-                ("fast", "Rank 16 on the attention q and v projections: fastest, least memory."),
+                ("quality", "Rank 256 on every layer: the largest adapter, close to full fine-tuning."),
+                ("balanced", "Rank 64 on every layer: a quarter of the size."),
+                ("fast", "Rank 16 on two attention layers per block: small and quick."),
                 "Your own rank, alpha and target modules.",
             )
+        )
+    )
+    follow = (
+        rx.cond(
+            S.lora_can_follow_gpu,
+            rx.button(
+                "Use the recommended shape",
+                variant="ghost",
+                color_scheme="teal",
+                size="1",
+                on_click=S.follow_gpu_shape,
+                disabled=_LOCKED,
+            ),
+            rx.fragment(),
+        )
+        if recommend
+        else rx.fragment()
+    )
+    body = rx.flex(
+        rx.grid(
+            *(_shape_card(S, name, label, what, recommend=recommend) for name, label, what in _SHAPES),
+            columns="repeat(auto-fit, minmax(150px, 1fr))",
+            gap="var(--space-3)",
+            width="100%",
+            role="group",
+            aria_label="LoRA shape",
         ),
+        rx.flex(caption, follow, direction="column", gap="6px", align="start"),
         rx.grid(
             bp_field(
                 "Rank",
                 _number(S.lora_r, S.set_lora_r, "256", "LoRA rank (r)"),
                 S.lora_r_error,
+                info="rank",
             ),
             bp_field(
                 "Alpha",
                 _number(S.lora_alpha, S.set_lora_alpha, "512", "LoRA alpha"),
                 S.lora_alpha_error,
+                info="alpha",
             ),
             bp_field(
                 "Dropout",
@@ -379,8 +463,9 @@ def lora_card(S) -> rx.Component:
                     S.lora_dropout, S.set_lora_dropout, "0.05", "LoRA dropout (0 to 1)", as_int=False
                 ),
                 S.lora_dropout_error,
+                info="dropout",
             ),
-            columns="repeat(auto-fit, minmax(90px, 1fr))",
+            columns="repeat(auto-fit, minmax(120px, 1fr))",
             gap="var(--space-4)",
             width="100%",
         ),
@@ -396,6 +481,7 @@ def lora_card(S) -> rx.Component:
                 aria_label="LoRA target modules: all-linear or comma-separated layer names",
             ),
             S.target_modules_error,
+            info="target_modules",
         ),
         direction="column",
         gap="var(--space-4)",
@@ -404,10 +490,11 @@ def lora_card(S) -> rx.Component:
     return Group(
         rx.cond(
             S.is_full_ft,
-            _muted("Full fine-tuning trains every weight, so there is no LoRA adapter to shape."),
+            _muted("Full fine-tuning changes every weight, so there is no adapter to shape."),
             body,
         ),
-        title="LoRA",
+        title="LoRA adapter",
+        info="lora",
     )
 
 
@@ -426,6 +513,7 @@ def advanced_card(S) -> rx.Component:
                     "GPU temperature limit in Celsius (stop and save above this)",
                 ),
                 S.gpu_temp_threshold_error,
+                info="gpu_temp",
             ),
             bp_field(
                 "Run name",
@@ -439,20 +527,22 @@ def advanced_card(S) -> rx.Component:
                     aria_label="Run name for experiment trackers (optional)",
                 ),
                 S.wandb_run_name_error,
+                info="run_name",
             ),
             columns="repeat(auto-fit, minmax(200px, 1fr))",
             gap="var(--space-4)",
             width="100%",
         ),
-        _muted(
-            "If the GPU stays above the limit, the run saves a checkpoint and stops, "
-            "just like pressing Stop. The run name labels the run in W&B, TensorBoard or MLflow."
-        ),
-        rx.checkbox(
-            "Gradient checkpointing (less memory, slightly slower)",
-            checked=S.gradient_checkpointing,
-            on_change=S.set_gradient_checkpointing,
-            disabled=_LOCKED,
+        rx.flex(
+            rx.checkbox(
+                "Gradient checkpointing (less memory, slightly slower)",
+                checked=S.gradient_checkpointing,
+                on_change=S.set_gradient_checkpointing,
+                disabled=_LOCKED,
+            ),
+            info_tip("gradient_checkpointing"),
+            align="center",
+            gap="6px",
         ),
         title="Advanced",
         collapsible=True,
@@ -475,7 +565,9 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
 
     One compact docked row: the number, the bar, the verdict and (when given)
     the page's primary ``action`` button, with one line of detail under it.
-    The numbers are ``backprop estimate-vram``'s (ui_jobs.vram_verdict).
+    When the setup is Tight or Won't fit, a one-click fix sits next to the
+    verdict. The numbers are ``backprop estimate-vram``'s
+    (ui_jobs.vram_verdict).
     """
     S = TrainState
     color = rx.match(
@@ -487,9 +579,14 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
     )
     row = [
         rx.flex(
-            rx.text(
-                S.vram_est_heading,
-                style={"color": "var(--bp-text-2)", "font_size": "12px", "white_space": "nowrap"},
+            rx.flex(
+                rx.text(
+                    S.vram_est_heading,
+                    style={"color": "var(--bp-text-2)", "font_size": "12px", "white_space": "nowrap"},
+                ),
+                info_tip("vram", side="top"),
+                align="center",
+                gap="4px",
             ),
             rx.text(
                 S.vram_est_label,
@@ -517,8 +614,8 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
             ),
             style={
                 "height": "8px",
-                "flex": "1 1 140px",
-                "min_width": "100px",
+                "flex": "1 1 60px",
+                "min_width": "70px",
                 "background": "var(--bp-field-bg)",
                 "border_radius": "var(--bp-r-pill)",
                 "overflow": "hidden",
@@ -539,22 +636,35 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
             },
             id="bp-vram-verdict",
         ),
-    ]
-    row.append(
-        rx.button(
-            rx.cond(S.vram_est_measured, "Measure again", "Measure on this GPU"),
-            variant="outline",
-            color_scheme="gray",
-            size="2",
-            on_click=S.start_calibration,
-            disabled=S.form_disabled,
-            style={"border_radius": "var(--bp-r-pill)", "white_space": "nowrap"},
-            title=(
-                "Runs a few short training probes of this model (a minute or "
-                "two), each only if it is predicted to fit, and saves the result."
+        rx.cond(
+            S.vram_fix_label != "",
+            rx.button(
+                S.vram_fix_label,
+                variant="soft",
+                color_scheme="teal",
+                size="2",
+                on_click=S.apply_vram_fix,
+                disabled=S.form_disabled,
+                id="bp-vram-fix",
+                style={"border_radius": "var(--bp-r-pill)", "white_space": "nowrap"},
             ),
-        )
-    )
+            rx.fragment(),
+        ),
+        rx.flex(
+            rx.button(
+                rx.cond(S.vram_est_measured, "Measure again", "Measure on this GPU"),
+                variant="outline",
+                color_scheme="gray",
+                size="2",
+                on_click=S.start_calibration,
+                disabled=S.form_disabled,
+                style={"border_radius": "var(--bp-r-pill)", "white_space": "nowrap"},
+            ),
+            info_tip("measure", side="top"),
+            align="center",
+            gap="4px",
+        ),
+    ]
     if action is not None:
         row.append(action)
     return rx.box(

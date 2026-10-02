@@ -368,6 +368,104 @@ code, pre, .mono {
   opacity: 0.6;
 }
 
+/* LoRA shape cards (components/train_form.py): three pressable cards. The
+   pressed one takes the teal edge, like a checked choice card. */
+.bp-shape {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--bp-surface-2);
+  border: 1px solid var(--bp-border);
+  border-radius: var(--bp-r-md);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.bp-shape:hover {
+  border-color: var(--bp-border-2);
+}
+.bp-shape[aria-pressed="true"] {
+  border-color: var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 10%, var(--bp-surface-2));
+}
+.bp-shape:focus-visible {
+  border-radius: var(--bp-r-md);
+}
+.bp-shape:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.bp-shape-badge {
+  margin-top: 4px;
+  padding: 1px 8px;
+  border-radius: var(--bp-r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 16%, transparent);
+  white-space: nowrap;
+}
+
+/* Info tips: the small "i" beside a label (components/info_tip.py). A real
+   button with a 24px target (WCAG 2.5.8); muted until hovered or focused. */
+.bp-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--bp-muted);
+  cursor: help;
+  flex: none;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.bp-tip:hover,
+.bp-tip:focus-visible,
+.bp-tip[data-state="open"] {
+  color: var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 14%, transparent);
+}
+.bp-tip:focus-visible {
+  border-radius: 50%;
+}
+.bp-tip-card {
+  background: var(--bp-surface-2) !important;
+  border: 1px solid var(--bp-border-2);
+  border-radius: var(--bp-r-md) !important;
+  box-shadow: var(--bp-shadow-pop) !important;
+  padding: 14px 16px !important;
+}
+.bp-tip-start {
+  margin-top: 2px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--bp-teal);
+  background: color-mix(in srgb, var(--bp-teal) 8%, transparent);
+  border-radius: 0 var(--bp-r-2) var(--bp-r-2) 0;
+}
+/* Text that is in the page for screen readers and not drawn. */
+.bp-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* WCAG 2.4.7 — preserve focus rings for keyboard users.
    Tailored after the Stage C theme.py contract; this stays so accessibility
    audits keep passing across the framework migration. */

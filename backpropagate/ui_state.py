@@ -709,11 +709,19 @@ def _fmt_local_time(ts: float | None = None) -> str:
 # ---- ui-v2 P3: presets, LoRA shapes, methods, the VRAM estimate ----------------
 
 #: LoRA shape quick picks: (rank, alpha, target modules). Exactly
-#: ``config.LORA_PRESETS`` -- "quality" is the CLI default.
+#: ``config.LORA_PRESETS``, from the largest adapter to the smallest.
 LORA_SHAPES: dict[str, tuple[int, int, str]] = {
     "quality": (256, 512, "all-linear"),
+    "balanced": (64, 128, "all-linear"),
     "fast": (16, 32, "q_proj, v_proj"),
 }
+#: What each shape is, in one line (the LoRA card's caption).
+LORA_SHAPE_NOTES: dict[str, str] = {
+    "quality": "Rank 256 on every layer: the largest adapter, close to full fine-tuning.",
+    "balanced": "Rank 64 on every layer: a quarter of the size, for a 7B model on a 16 GB card.",
+    "fast": "Rank 16 on two attention layers per block: small and quick, good for trying things out.",
+}
+_LORA_SHAPE_ORDER = ("quality", "balanced", "fast")
 
 #: Method knob defaults (the config defaults the CLI falls back to).
 METHOD_DEFAULTS: dict[str, float] = {
@@ -771,6 +779,37 @@ def _preset_for_model(model: str) -> str:
         if opt["model_id"].lower() == (model or "").strip().lower():
             return opt["key"]
     return "custom"
+
+
+def _lora_caption(
+    shape: str, follow: bool, rec: str, rec_fits: bool, gb: dict, free_gb: float
+) -> str:
+    """The line under the LoRA shape cards: what is selected and why."""
+    note = LORA_SHAPE_NOTES.get(shape, "Your own rank, alpha and target modules.")
+    if not rec or free_gb <= 0:
+        return note
+    need = float(gb.get(rec, 0.0) or 0.0)
+    if follow and shape == rec:
+        if not rec_fits:
+            return (
+                f"No shape is estimated to fit this model in the {free_gb:.1f} GB free on "
+                "your GPU. Fast is selected; a smaller model is the real fix."
+            )
+        why = (
+            f"Chosen for your GPU: the largest shape that fits this model "
+            f"(about {need:.1f} GB of the {free_gb:.1f} GB free)."
+        )
+        if rec != "quality" and gb.get("quality"):
+            why += f" Quality would need about {float(gb['quality']):.1f} GB."
+        return why
+    if shape != rec and rec_fits:
+        return f"{note} Your GPU fits {rec.capitalize()} for this model."
+    return note
+
+
+def _fmt_shape_gb(value: float | None) -> str:
+    """A shape's estimate for its card: "17.0 GB", or "" when unknown."""
+    return f"{float(value):.1f} GB" if value else ""
 
 
 def _lora_shape_of(r: int, alpha: int, targets: str) -> str:
@@ -895,6 +934,21 @@ class TrainState(rx.State):
     vram_est_batch: int = 0
     vram_est_note: str = ""
     vram_est_source: str = "estimate"  # "measured" once calibrated on this GPU
+    # What the card's size alone would pick for "auto" (0: batch is explicit).
+    vram_est_tier_batch: int = 0
+    # What the estimate is compared with: the GPU memory that is free now
+    # ("free"), or the whole card when there is no reading ("card").
+    vram_est_budget: float = 0.0
+    vram_est_against: str = "card"
+
+    # ---- The LoRA shape follows the GPU --------------------------------------
+    # True until the user picks a shape or edits rank / alpha / targets: the
+    # form then keeps the largest shape that fits this GPU for the model.
+    lora_follow_gpu: bool = True
+    lora_recommended: str = ""  # "quality" | "balanced" | "fast" | "" (no GPU reading)
+    lora_recommended_fits: bool = True
+    lora_shape_gb: dict[str, float] = {}  # each shape's estimate at batch 1
+    lora_free_gb: float = 0.0
     # Latest refresh wins: refreshes run concurrently off the event loop and
     # the first one (which imports the trainer module) can finish last.
     _vram_est_seq: int = 0
@@ -1040,15 +1094,16 @@ class TrainState(rx.State):
         """"15.4 GB of 31.8 GB" (both GiB, like `backprop estimate-vram`)."""
         if self.vram_est_total <= 0:
             return ""
-        if self.vram_total_gb > 0:
-            return f"{self.vram_est_total:.1f} GB of {self.vram_total_gb:.1f} GB"
+        if self.vram_est_budget > 0:
+            free = " free" if self.vram_est_against == "free" else ""
+            return f"{self.vram_est_total:.1f} GB of {self.vram_est_budget:.1f} GB{free}"
         return f"{self.vram_est_total:.1f} GB"
 
     @rx.var
     def vram_est_pct(self) -> str:
-        if self.vram_est_total <= 0 or self.vram_total_gb <= 0:
+        if self.vram_est_total <= 0 or self.vram_est_budget <= 0:
             return "0%"
-        return f"{min(100.0, 100.0 * self.vram_est_total / self.vram_total_gb):.1f}%"
+        return f"{min(100.0, 100.0 * self.vram_est_total / self.vram_est_budget):.1f}%"
 
     @rx.var
     def vram_est_detail(self) -> str:
@@ -1059,17 +1114,75 @@ class TrainState(rx.State):
             if self.vram_est_source == "measured"
             else "An estimate for"
         )
-        batch = (
-            f"batch auto picks {self.vram_est_batch} on this card"
-            if self.batch_size == "auto" and self.vram_est_batch
-            else f"batch {self.vram_est_batch}"
-        )
+        if self.batch_size == "auto" and self.vram_est_batch:
+            batch = f"batch {self.vram_est_batch}, chosen automatically for this model and GPU"
+            if self.vram_est_tier_batch > self.vram_est_batch:
+                batch += f" (lowered from {self.vram_est_tier_batch} to fit)"
+        else:
+            batch = f"batch {self.vram_est_batch}"
+        at_one = self.vram_est_batch <= 1
         advice = {
             "fits": "",
-            "tight": " Close to the limit: lower the batch or the LoRA rank if it runs out of memory.",
-            "wont_fit": " Try a lower batch size first, then QLoRA, a lower LoRA rank or a smaller model.",
+            "tight": (
+                " Close to the limit: a smaller LoRA shape gives it room."
+                if at_one
+                else " Close to the limit: a smaller batch or LoRA shape gives it room."
+            ),
+            "wont_fit": (
+                " It needs a smaller LoRA shape or a smaller model."
+                if at_one
+                else " Try a smaller batch first, then a smaller LoRA shape or a smaller model."
+            ),
         }.get(self.vram_est_verdict, "")
-        return f"{lead} {batch} with full 2,048-token rows; shorter data uses less.{advice}"
+        pairs = (
+            f" {self.method.upper()} compares two answers per example, so expect more than this."
+            if self.method != "sft"
+            else ""
+        )
+        return (
+            f"{lead} {batch}, with examples as long as the 2,048-token limit; "
+            f"shorter examples use less.{pairs}{advice}"
+        )
+
+    @rx.var
+    def vram_fix_label(self) -> str:
+        """The one-click fix offered when the estimate is Tight or Won't fit."""
+        if self.vram_est_verdict not in ("tight", "wont_fit"):
+            return ""
+        if self.train_mode != "full" and self.lora_recommended in _LORA_SHAPE_ORDER:
+            current = self.lora_shape
+            rank_now = int(self.lora_r)
+            if current != self.lora_recommended and rank_now > LORA_SHAPES[self.lora_recommended][0]:
+                return f"Use {self.lora_recommended.capitalize()}"
+        if self.batch_size != "auto":
+            return "Use automatic batch"
+        return ""
+
+    @rx.var
+    def lora_caption(self) -> str:
+        """The line under the LoRA shape cards: what is selected and why."""
+        return _lora_caption(
+            self.lora_shape, self.lora_follow_gpu, self.lora_recommended,
+            self.lora_recommended_fits, self.lora_shape_gb, self.lora_free_gb,
+        )
+
+    @rx.var
+    def lora_gb_quality(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("quality"))
+
+    @rx.var
+    def lora_gb_balanced(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("balanced"))
+
+    @rx.var
+    def lora_gb_fast(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("fast"))
+
+    @rx.var
+    def lora_can_follow_gpu(self) -> bool:
+        """Show "Use the recommended shape": the user chose their own and a
+        recommendation exists."""
+        return (not self.lora_follow_gpu) and self.lora_recommended != ""
 
     @rx.var
     def vram_est_heading(self) -> str:
@@ -1204,14 +1317,12 @@ class TrainState(rx.State):
 
     @rx.event
     def set_preset(self, key: str):
-        """Fill the model and its recommended LoRA rank (alpha = 2 x rank)."""
+        """Fill the model. The LoRA shape then follows the GPU for that
+        model (``refresh_estimate``), unless the user chose their own."""
         for opt in model_preset_options():
             if opt["key"] == key:
                 self.preset = key
                 self.model, self.model_error = opt["model_id"], ""
-                self.lora_r = int(opt["lora_r"])
-                self.lora_alpha = 2 * self.lora_r
-                self.lora_r_error = self.lora_alpha_error = ""
                 return TrainState.refresh_estimate
         self.preset = "custom"
 
@@ -1236,6 +1347,7 @@ class TrainState(rx.State):
         self.method_param_error = ""
         if value != "sft" and self.train_mode == "full":
             self.train_mode = "qlora"
+        return TrainState.refresh_estimate
 
     @rx.event
     def set_method_param(self, key: str, value: str | float) -> None:
@@ -1248,16 +1360,40 @@ class TrainState(rx.State):
 
     @rx.event
     def apply_lora_shape(self, shape: str):
+        """The user picked a shape: it stays, whatever the GPU would fit."""
         if shape not in LORA_SHAPES:
             return
+        self.lora_follow_gpu = False
         self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[shape]
         self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
+        return TrainState.refresh_estimate
+
+    @rx.event
+    def follow_gpu_shape(self):
+        """Back to the shape that follows the GPU."""
+        self.lora_follow_gpu = True
+        return TrainState.refresh_estimate
+
+    @rx.event
+    def apply_vram_fix(self):
+        """The one-click fix next to a Tight / Won't fit estimate."""
+        label = self.vram_fix_label
+        if label.startswith("Use ") and self.lora_recommended in LORA_SHAPES and (
+            label == f"Use {self.lora_recommended.capitalize()}"
+        ):
+            self.lora_follow_gpu = True
+        elif label == "Use automatic batch":
+            self.batch_size, self.batch_size_error = "auto", ""
+        else:
+            return
         return TrainState.refresh_estimate
 
     @rx.event
     def set_target_modules(self, value: str):
         new, err = _apply_target_modules(value)
         if new is not None:
+            if new != self.target_modules:
+                self.lora_follow_gpu = False
             self.target_modules = new
         self.target_modules_error = err
         return TrainState.refresh_estimate
@@ -1292,46 +1428,76 @@ class TrainState(rx.State):
     def set_lora_r(self, value: str | int):
         n, err = _clamp_int("LoRA rank", value, _LORA_R_MIN, _LORA_R_MAX)
         if n is not None:
+            if n != self.lora_r:
+                self.lora_follow_gpu = False
             self.lora_r = n
         self.lora_r_error = err
         return TrainState.refresh_estimate
 
     @rx.event(background=True)
     async def refresh_estimate(self):
-        """Recompute the inline VRAM estimate off the event loop (the
-        estimator's first import loads the trainer module)."""
+        """Recompute the LoRA shape that fits this GPU and the inline VRAM
+        estimate, off the event loop (the estimator's first import loads the
+        trainer module).
+
+        While the shape follows the GPU (``lora_follow_gpu``), the largest
+        shape that fits is applied first, and the estimate is then made for
+        it: the form opens on a setup that fits the user's card.
+        """
         import asyncio
 
-        from .ui_jobs import vram_verdict
+        from .ui_jobs import lora_shape_options, vram_verdict
 
         async with self:
             self._vram_est_seq += 1
             seq = self._vram_est_seq
-            args = (
-                self.model,
-                "full" if self.train_mode == "full" else "lora",
-                int(self.lora_r),
-                str(self.batch_size),
-                self.train_mode != "lora",
-                bool(self.gradient_checkpointing),
-                float(self.vram_total_gb or 0.0),
-                str(self.target_modules).replace(" ", ""),
+            model = self.model
+            follow = bool(self.lora_follow_gpu) and self.train_mode != "full"
+            base_4bit = self.train_mode != "lora"
+            checkpointing = bool(self.gradient_checkpointing)
+            args = self._estimate_args()
+
+        def work() -> tuple[dict, dict, str]:
+            options = (
+                lora_shape_options(
+                    model, base_4bit=base_4bit, gradient_checkpointing=checkpointing
+                )
+                if args["mode"] == "lora"
+                else {"shapes": {}, "free_gb": None, "recommended": "", "fits": True}
             )
-        result = await asyncio.to_thread(
-            lambda: vram_verdict(
-                args[0], mode=args[1], lora_r=args[2], batch=args[3],
-                base_4bit=args[4], gradient_checkpointing=args[5], card_gb=args[6],
-                target_modules=args[7],
-            )
-        )
+            applied = ""
+            recommended = str(options.get("recommended") or "")
+            if follow and recommended in LORA_SHAPES:
+                rank, _alpha, targets = LORA_SHAPES[recommended]
+                args["lora_r"] = rank
+                args["target_modules"] = targets.replace(" ", "")
+                applied = recommended
+            return options, vram_verdict(model, **args), applied
+
+        options, result, applied = await asyncio.to_thread(work)
         async with self:
             if seq != self._vram_est_seq:
                 return  # a newer refresh started; it owns the numbers
-            self.vram_est_verdict = str(result.get("verdict") or "unknown")
-            self.vram_est_total = float(result.get("total_gb") or 0.0)
-            self.vram_est_batch = int(result.get("batch") or 0)
-            self.vram_est_note = str(result.get("note") or "")
-            self.vram_est_source = str(result.get("source") or "estimate")
+            self.lora_shape_gb = {
+                str(k): float(v) for k, v in (options.get("shapes") or {}).items()
+            }
+            self.lora_free_gb = float(options.get("free_gb") or 0.0)
+            self.lora_recommended = str(options.get("recommended") or "")
+            self.lora_recommended_fits = bool(options.get("fits", True))
+            if applied and self.lora_follow_gpu:
+                self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[applied]
+                self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
+            self._apply_verdict(result)
+
+    def _apply_verdict(self, result: dict) -> None:
+        self.vram_est_verdict = str(result.get("verdict") or "unknown")
+        self.vram_est_total = float(result.get("total_gb") or 0.0)
+        self.vram_est_batch = int(result.get("batch") or 0)
+        self.vram_est_tier_batch = int(result.get("tier_batch") or 0)
+        self.vram_est_budget = float(result.get("budget_gb") or 0.0)
+        self.vram_est_against = str(result.get("against") or "card")
+        self.vram_est_note = str(result.get("note") or "")
+        self.vram_est_source = str(result.get("source") or "estimate")
 
     def _estimate_args(self) -> dict:
         return {
@@ -1342,6 +1508,7 @@ class TrainState(rx.State):
             "gradient_checkpointing": bool(self.gradient_checkpointing),
             "card_gb": float(self.vram_total_gb or 0.0),
             "target_modules": str(self.target_modules).replace(" ", ""),
+            "method": str(self.method),
         }
 
     def _refresh_estimate_now(self) -> None:
@@ -1350,11 +1517,7 @@ class TrainState(rx.State):
 
         result = vram_verdict(self.model, **self._estimate_args())
         self._vram_est_seq += 1
-        self.vram_est_verdict = str(result.get("verdict") or "unknown")
-        self.vram_est_total = float(result.get("total_gb") or 0.0)
-        self.vram_est_batch = int(result.get("batch") or 0)
-        self.vram_est_note = str(result.get("note") or "")
-        self.vram_est_source = str(result.get("source") or "estimate")
+        self._apply_verdict(result)
 
     @rx.event
     def start_calibration(self):
@@ -1378,6 +1541,8 @@ class TrainState(rx.State):
     def set_lora_alpha(self, value: str | int) -> None:
         n, err = _clamp_int("LoRA alpha", value, _LORA_ALPHA_MIN, _LORA_ALPHA_MAX)
         if n is not None:
+            if n != self.lora_alpha:
+                self.lora_follow_gpu = False
             self.lora_alpha = n
         self.lora_alpha_error = err
 
@@ -2017,6 +2182,14 @@ class MultiRunState(rx.State):
     wandb_run_name_error: str = ""
     gradient_checkpointing: bool = True
 
+    # ---- The LoRA shape follows the GPU (as on Single run) -------------------
+    lora_follow_gpu: bool = True
+    lora_recommended: str = ""
+    lora_recommended_fits: bool = True
+    lora_shape_gb: dict[str, float] = {}
+    lora_free_gb: float = 0.0
+    _shape_seq: int = 0
+
     # ---- Multi-Run specific ------------------------------------------------
     num_runs: int = 3
     num_runs_error: str = ""
@@ -2035,28 +2208,90 @@ class MultiRunState(rx.State):
     # ---- Setters (shared logic with TrainState via _apply_* helpers) -------
 
     @rx.event
-    def set_model(self, value: str) -> None:
+    def set_model(self, value: str):
         self.model, self.model_error = _apply_model(value)
         self.preset = _preset_for_model(self.model)
+        return MultiRunState.refresh_shape
 
     @rx.event
-    def set_preset(self, key: str) -> None:
-        """Fill the model and its recommended LoRA rank (alpha = 2 x rank)."""
+    def set_preset(self, key: str):
+        """Fill the model. The LoRA shape then follows the GPU for it."""
         for opt in model_preset_options():
             if opt["key"] == key:
                 self.preset = key
                 self.model, self.model_error = opt["model_id"], ""
-                self.lora_r = int(opt["lora_r"])
-                self.lora_alpha = 2 * self.lora_r
-                self.lora_r_error = self.lora_alpha_error = ""
-                return
+                return MultiRunState.refresh_shape
         self.preset = "custom"
 
     @rx.event
-    def set_train_mode(self, value: str) -> None:
+    def set_train_mode(self, value: str):
         # A multi-run merges LoRA adapters: QLoRA or LoRA, never full.
         if value in ("qlora", "lora"):
             self.train_mode = value  # type: ignore[assignment]
+            return MultiRunState.refresh_shape
+
+    @rx.event(background=True)
+    async def refresh_shape(self):
+        """What each LoRA shape needs for this model and which one fits the
+        GPU; applied while the shape follows the GPU."""
+        import asyncio
+
+        from .ui_jobs import lora_shape_options
+
+        async with self:
+            self._shape_seq += 1
+            seq = self._shape_seq
+            model = self.model
+            base_4bit = self.train_mode != "lora"
+            checkpointing = bool(self.gradient_checkpointing)
+        options = await asyncio.to_thread(
+            lambda: lora_shape_options(
+                model, base_4bit=base_4bit, gradient_checkpointing=checkpointing
+            )
+        )
+        async with self:
+            if seq != self._shape_seq:
+                return
+            self.lora_shape_gb = {
+                str(k): float(v) for k, v in (options.get("shapes") or {}).items()
+            }
+            self.lora_free_gb = float(options.get("free_gb") or 0.0)
+            self.lora_recommended = str(options.get("recommended") or "")
+            self.lora_recommended_fits = bool(options.get("fits", True))
+            if self.lora_follow_gpu and self.lora_recommended in LORA_SHAPES:
+                self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[
+                    self.lora_recommended
+                ]
+                self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
+
+    @rx.event
+    def follow_gpu_shape(self):
+        """Back to the shape that follows the GPU."""
+        self.lora_follow_gpu = True
+        return MultiRunState.refresh_shape
+
+    @rx.var
+    def lora_caption(self) -> str:
+        return _lora_caption(
+            self.lora_shape, self.lora_follow_gpu, self.lora_recommended,
+            self.lora_recommended_fits, self.lora_shape_gb, self.lora_free_gb,
+        )
+
+    @rx.var
+    def lora_gb_quality(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("quality"))
+
+    @rx.var
+    def lora_gb_balanced(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("balanced"))
+
+    @rx.var
+    def lora_gb_fast(self) -> str:
+        return _fmt_shape_gb(self.lora_shape_gb.get("fast"))
+
+    @rx.var
+    def lora_can_follow_gpu(self) -> bool:
+        return (not self.lora_follow_gpu) and self.lora_recommended != ""
 
     @rx.event
     def set_method(self, value: str) -> None:
@@ -2075,7 +2310,9 @@ class MultiRunState(rx.State):
 
     @rx.event
     def apply_lora_shape(self, shape: str) -> None:
+        """The user picked a shape: it stays, whatever the GPU would fit."""
         if shape in LORA_SHAPES:
+            self.lora_follow_gpu = False
             self.lora_r, self.lora_alpha, self.target_modules = LORA_SHAPES[shape]
             self.lora_r_error = self.lora_alpha_error = self.target_modules_error = ""
 
@@ -2127,6 +2364,8 @@ class MultiRunState(rx.State):
     def set_lora_r(self, value: str | int) -> None:
         n, err = _clamp_int("LoRA rank", value, _LORA_R_MIN, _LORA_R_MAX)
         if n is not None:
+            if n != self.lora_r:
+                self.lora_follow_gpu = False
             self.lora_r = n
         self.lora_r_error = err
 
@@ -2134,6 +2373,8 @@ class MultiRunState(rx.State):
     def set_lora_alpha(self, value: str | int) -> None:
         n, err = _clamp_int("LoRA alpha", value, _LORA_ALPHA_MIN, _LORA_ALPHA_MAX)
         if n is not None:
+            if n != self.lora_alpha:
+                self.lora_follow_gpu = False
             self.lora_alpha = n
         self.lora_alpha_error = err
 
@@ -2150,6 +2391,8 @@ class MultiRunState(rx.State):
     def set_target_modules(self, value: str) -> None:
         new, err = _apply_target_modules(value)
         if new is not None:
+            if new != self.target_modules:
+                self.lora_follow_gpu = False
             self.target_modules = new
         self.target_modules_error = err
 

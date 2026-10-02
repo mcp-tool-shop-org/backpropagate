@@ -56,11 +56,19 @@ def _card_style() -> dict[str, str]:
     }
 
 
+def _titled(title: str, info: str | None) -> rx.Component:
+    """The section title, with its "i" tip when ``info`` names one."""
+    from .info_tip import with_tip
+
+    return with_tip(_section_title(title), info)
+
+
 def Group(
     *children: rx.Component,
     title: str = "",
     collapsible: bool = False,
     default_open: bool = True,
+    info: str | None = None,
 ) -> rx.Component:
     """A titled section. Pass children positionally.
 
@@ -75,12 +83,15 @@ def Group(
         Initial accordion state. Ignored in plain mode. Per the design digest,
         ``"Model"`` / ``"Training shape"`` / ``"LoRA tuning"`` default open;
         ``"Advanced"`` defaults closed.
+    info:
+        A ``help_text.TIPS`` key. The title then carries an "i" that explains
+        the section.
     """
     body = rx.flex(*children, direction="column", gap="var(--space-5)", width="100%")
 
     if not collapsible:
         return rx.box(
-            _section_title(title),
+            _titled(title, info),
             rx.box(body, margin_top="var(--space-4)"),
             padding="var(--space-5)",
             style=_card_style(),
@@ -94,7 +105,7 @@ def Group(
     # tokens: surface card, left-aligned eyebrow, chevron at the right.
     summary = rx.el.summary(
         rx.flex(
-            _section_title(title),
+            _titled(title, info),
             rx.spacer(),
             rx.html(
                 "<svg width='14' height='14' viewBox='0 0 24 24' fill='none' "

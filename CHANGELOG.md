@@ -69,6 +69,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and measurement jobs (logs and progress files) after a confirmation. A
   folder that holds a saved model, adapter, checkpoint or GGUF is never
   removed there, nor is a running job. Nothing is deleted automatically.
+- **The web UI explains itself.** Every section and field on the Single
+  run and Multi-run pages, and each block of the side panel, has an "i".
+  Hover it, or reach it with the keyboard, and a card says what the thing
+  is, what changing it does and where to start, with a link to the
+  handbook. The same words are in the page for screen readers. The page
+  text and the choice cards are rewritten in plain words; no control was
+  removed.
+- **The LoRA shape in the web UI follows your GPU.** Three cards (Quality,
+  Balanced, Fast) show what each shape needs for the chosen model. The form
+  opens on the largest one that fits the memory that is free, marks it
+  "Recommended" and says why. A shape you pick, or numbers you type, stay
+  as they are, with one click back to the recommended shape. Picking a
+  model preset no longer changes the rank.
+- **The estimate next to Start is compared with the memory that is free**,
+  not with the whole card, so another program using the GPU can no longer
+  turn "Fits" into a refused run. The batch it shows for "auto" is the
+  batch the trainer will pick. When a setup is Tight or Won't fit, a button
+  next to the verdict applies the fix (the recommended shape, or the
+  automatic batch).
 - **The default LoRA shape follows the GPU, and a `balanced` preset**
   (rank 64, alpha 128, every linear layer). With no rank, alpha or target
   modules set, the trainer uses the largest of `quality` (rank 256),

@@ -655,22 +655,15 @@ class TestHelperFunctions:
             # use unsloth aren't impacted.
             sys.modules.update(cached_unsloth)
 
-        # Real-environment branch: now call without patches to verify the
-        # function returns a bool either way (this is what the prior test
-        # actually asserted; we keep it as a smoke check + the platform
-        # skips for hosts where unsloth import raises non-ImportError).
-        try:
-            result = _has_unsloth()
-            assert isinstance(result, bool)
-        except (RuntimeError, Exception) as e:
-            # May fail on Python 3.14 (torch.compile) or CI (no GPU)
-            error_msg = str(e).lower()
-            if "torch.compile" in error_msg or "3.14" in error_msg:
-                pytest.skip("Unsloth incompatible with Python 3.14")
-            elif "accelerator" in error_msg or "gpu" in error_msg:
-                pytest.skip("Unsloth requires GPU")
-            else:
-                raise
+        # Import-success branch: a stub module stands in for unsloth. Importing
+        # the real package is not hermetic: on a CUDA host it patches
+        # transformers model classes process-wide, and every later test that
+        # trains a tiny model through the plain transformers path then runs
+        # Unsloth's fused loss and fails.
+        import types
+
+        with patch.dict(sys.modules, {"unsloth": types.ModuleType("unsloth")}):
+            assert _has_unsloth() is True
 
 
 # =============================================================================
@@ -2279,27 +2272,37 @@ class TestStageCListOllamaWarns:
 class TestStageCHfTokenCap:
     """DATA-B-007: cached HF token read is size-capped + single-line."""
 
-    def test_oversized_token_file_is_capped(self, temp_dir, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _hermetic_hf_env(self, temp_dir, monkeypatch):
+        # A dev machine can carry a real token in HF_TOKEN / HUGGING_FACE_HUB_TOKEN
+        # or in its HF cache; env tokens win over the cache file, so without this
+        # the test reads the real one. Clear every source and point home + HF_HOME
+        # at the temp dir.
+        for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN_PATH"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("HF_HOME", str(Path(temp_dir) / "hf_home"))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path(temp_dir)))
+
+    def test_oversized_token_file_is_capped(self, temp_dir):
         from backpropagate import export
 
-        home = Path(temp_dir)
-        cache = home / ".cache" / "huggingface"
+        cache = Path(temp_dir) / ".cache" / "huggingface"
         cache.mkdir(parents=True)
         # First line is a valid-looking token; then a huge junk tail.
-        (cache / "token").write_text("hf_realtoken\n" + ("X" * 1_000_000), encoding="utf-8")
-        monkeypatch.setattr(export.Path, "home", staticmethod(lambda: home))
+        (cache / "token").write_text("hf_fixturetoken\n" + ("X" * 1_000_000), encoding="utf-8")
 
         token = export._resolve_hf_token(None)
-        assert token == "hf_realtoken"  # only the first line, capped read
+        # Compare into a bool so pytest cannot render the value: if isolation
+        # ever breaks, a real token must not land in the assertion diff.
+        is_fixture_line = token == "hf_fixturetoken"
+        assert is_fixture_line, "resolved token is not the fixture's first line"
 
-    def test_no_token_file_returns_none(self, temp_dir, monkeypatch):
+    def test_no_token_file_returns_none(self):
         from backpropagate import export
 
-        monkeypatch.setattr(export.Path, "home", staticmethod(lambda: Path(temp_dir)))
         # No env token, no cache file.
-        monkeypatch.delenv("HF_TOKEN", raising=False)
-        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-        assert export._resolve_hf_token(None) is None
+        resolved_none = export._resolve_hf_token(None) is None
+        assert resolved_none, "a token was resolved with no source set"
 
 
 class TestStageCExportProgressLogged:

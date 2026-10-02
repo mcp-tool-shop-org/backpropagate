@@ -170,6 +170,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Web UI job runner hardened** after an external review (all in unreleased
+  code). A signed-in remote client (`--share` / `--auth`) could previously:
+  point a training or calibration job at any folder the server can read as
+  its "model"; and send values of the wrong type or starting with `-`. Now a
+  local model must be inside the UI output folder or the Hugging Face cache,
+  model ids must look like `org/name`, every job field is type-checked with
+  a short error, no text field may start with `-`, and the export and
+  calibration commands put their path after `--` so it can never be read as
+  a flag. `trust_remote_code` is refused for every job kind, including
+  export.
+- **A link cannot redirect a job's files.** The jobs folder is resolved
+  right before each job folder is created and must stay inside the UI
+  output folder, so a symlink or Windows junction planted at
+  `<output>/jobs` is refused. Dataset and adapter paths reach the job
+  already resolved.
+- **Job processes no longer inherit the UI's sign-in secrets** (the launch
+  token and the password verifier).
+- **One job at a time now holds until the previous process has exited**, not
+  only until it reported "done" (it can still be holding the GPU). On Linux
+  and macOS, a job left running by a crashed UI is detected and a second
+  job is refused. Starting a job no longer runs the VRAM check inside the
+  lock that Stop needs.
+- **Job event files are read in bounded slices**, and rows that are not
+  objects are ignored, so a huge or malformed file cannot exhaust memory or
+  crash the status panel.
+- A finished measurement no longer reports its store file, which lives
+  outside the UI output folder, as the job's output.
 - **A web UI client can no longer choose where a job writes.** The handler
   that starts multi-run and export jobs copied every job field from the
   browser's request, including the output folder and the job folder, so an

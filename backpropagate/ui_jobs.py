@@ -34,7 +34,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -93,7 +93,132 @@ _OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 #: ``max(STOP_GRACE_FLOOR_S, 3 * last_step_s + 20)``.
 STOP_GRACE_FLOOR_S = 60.0
 
-_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$")
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*/[A-Za-z0-9][A-Za-z0-9_.\-]*$")
+
+#: Auth secrets of the UI server that a job child has no use for.
+_CHILD_ENV_DROP_PREFIXES = ("BACKPROPAGATE_UI_AUTH",)
+_CHILD_ENV_DROP = frozenset({"BACKPROPAGATE_UI_LAUNCH_TOKEN"})
+
+#: Bytes of events.jsonl read per poll, and the tail window that holds the
+#: terminal event.
+MAX_EVENT_READ_BYTES = 4 * 1024 * 1024
+_EVENT_TAIL_BYTES = 256 * 1024
+
+_INT_FIELDS = ("steps", "lora_r", "runs")
+_OPTIONAL_INT_FIELDS = ("samples", "lora_alpha")
+_OPTIONAL_REAL_FIELDS = ("lora_dropout", "gpu_max_temp")
+_BOOL_FIELDS = ("base_4bit", "gradient_checkpointing", "trust_remote_code")
+#: String fields and their length caps. None of them may start with "-":
+#: every one ends up as an argv value.
+_STR_FIELDS: dict[str, int] = {
+    "kind": 32, "model": 256, "dataset_path": 4096, "batch": 16, "mode": 32,
+    "merge": 32, "source_path": 4096, "export_format": 32, "quantization": 32,
+    "ollama_name": 128, "target_modules": 1024, "method": 32, "run_name": 128,
+}
+
+
+def _short(value: Any) -> str:
+    """A bounded repr for error messages (a client controls the value)."""
+    text = repr(value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _require_types(spec: JobSpec) -> None:
+    """Every field has the type the argv builders assume.
+
+    The spec can come from a browser payload, where an int field may arrive
+    as a bool, a list or a dict. Refuse here, with a bounded message, rather
+    than fail inside ``int()`` or emit ``True`` as an argv value.
+    """
+
+    def is_int(v: Any) -> bool:
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    def is_real(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    for name in _INT_FIELDS:
+        if not is_int(getattr(spec, name)):
+            raise JobValidationError(f"{name} must be a whole number (got {_short(getattr(spec, name))}).")
+    for name in _OPTIONAL_INT_FIELDS:
+        value = getattr(spec, name)
+        if value is not None and not is_int(value):
+            raise JobValidationError(f"{name} must be a whole number (got {_short(value)}).")
+    if not is_real(spec.lr):
+        raise JobValidationError(f"lr must be a number (got {_short(spec.lr)}).")
+    for name in _OPTIONAL_REAL_FIELDS:
+        value = getattr(spec, name)
+        if value is not None and not is_real(value):
+            raise JobValidationError(f"{name} must be a number (got {_short(value)}).")
+    for name in _BOOL_FIELDS:
+        if not isinstance(getattr(spec, name), bool):
+            raise JobValidationError(f"{name} must be true or false (got {_short(getattr(spec, name))}).")
+    for name, cap in _STR_FIELDS.items():
+        value = getattr(spec, name)
+        if not isinstance(value, str):
+            raise JobValidationError(f"{name} must be text (got {_short(value)}).")
+        if len(value) > cap:
+            raise JobValidationError(f"{name} is too long ({len(value)} characters; the limit is {cap}).")
+        if value.strip().startswith("-"):
+            raise JobValidationError(f"{name} cannot start with '-' (got {_short(value)}).")
+    for name in ("scratch_root", "output_dir"):
+        value = getattr(spec, name)
+        if value is not None and not isinstance(value, str):
+            raise JobValidationError(f"{name} must be text (got {_short(value)}).")
+    params = spec.method_params
+    if not isinstance(params, dict) or len(params) > 16:
+        raise JobValidationError(f"method_params must be a small mapping (got {_short(params)}).")
+    for key, value in params.items():
+        if not isinstance(key, str) or not is_real(value):
+            raise JobValidationError(f"method_params must map names to numbers (got {_short({key: value})}).")
+
+
+def _hf_cache_root() -> Path | None:
+    try:
+        from huggingface_hub import constants
+
+        return Path(constants.HF_HUB_CACHE).expanduser().resolve()
+    except Exception:  # noqa: BLE001 - hub not installed / odd config
+        return None
+
+
+def _validate_model(model_text: str) -> str:
+    """A Hugging Face id (``org/name``), or a local folder inside the UI
+    output sandbox or the Hugging Face cache. Returns the value to put in
+    argv: the id, or the RESOLVED local path.
+
+    Before this, any existing local path was accepted, so a remote client
+    could point a job at any directory the server can read.
+    """
+    model = (model_text or "").strip()
+    if not model or len(model) > 256:
+        raise JobValidationError("Model id is empty or overlong.")
+    if _MODEL_ID_RE.match(model):
+        return model
+    path = Path(model).expanduser()
+    if not path.exists():
+        raise JobValidationError(
+            f"Model {_short(model)} is neither a HuggingFace id (org/name) nor an "
+            "existing local path."
+        )
+    try:
+        from .ui_security import get_ui_output_dir
+
+        resolved = path.resolve()
+        roots = [Path(get_ui_output_dir()).resolve()]
+    except Exception as exc:
+        raise JobValidationError(
+            f"Could not verify the UI sandbox for the model path; refusing to start ({exc!r})."
+        ) from exc
+    cache = _hf_cache_root()
+    if cache is not None:
+        roots.append(cache)
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise JobValidationError(
+            "A local model must be inside the UI output folder or the Hugging Face "
+            f"cache (got {_short(str(resolved))})."
+        )
+    return str(resolved)
 
 
 class JobValidationError(ValueError):
@@ -312,7 +437,6 @@ def _build_export_argv(spec: JobSpec, run_dir: Path) -> list[str]:
         "-m",
         "backpropagate",
         "export",
-        spec.source_path,
         "--format",
         spec.export_format,
         "--output",
@@ -324,7 +448,8 @@ def _build_export_argv(spec: JobSpec, run_dir: Path) -> list[str]:
         argv += ["--quantization", spec.quantization]
         if spec.ollama_name:
             argv += ["--ollama", "--ollama-name", spec.ollama_name]
-    return argv
+    # The positional goes last, after "--": it can never be read as a flag.
+    return [*argv, "--", spec.source_path]
 
 
 def _build_calibrate_argv(spec: JobSpec, run_dir: Path) -> list[str]:
@@ -334,7 +459,6 @@ def _build_calibrate_argv(spec: JobSpec, run_dir: Path) -> list[str]:
         "-m",
         "backpropagate",
         "estimate-vram",
-        spec.model,
         "--calibrate",
         "--mode",
         spec.mode,
@@ -343,7 +467,8 @@ def _build_calibrate_argv(spec: JobSpec, run_dir: Path) -> list[str]:
     ]
     if spec.mode == "lora" and not spec.base_4bit:
         argv += ["--no-4bit"]
-    return argv
+    # The positional goes last, after "--": it can never be read as a flag.
+    return [*argv, "--", spec.model]
 
 
 def _build_argv(spec: JobSpec, run_dir: Path) -> list[str]:
@@ -411,7 +536,7 @@ def _validate_export_spec(spec: JobSpec) -> None:
         raise JobValidationError(
             "No adapter or model path. Pick a run's output folder from Runs."
         )
-    _check_in_sandbox(source, "Adapter or model path")
+    spec.source_path = str(_check_in_sandbox(source, "Adapter or model path"))
     if spec.export_format not in UI_EXPORT_FORMATS:
         raise JobValidationError(
             f"Unknown export format {spec.export_format!r}; "
@@ -432,8 +557,15 @@ def _validate_export_spec(spec: JobSpec) -> None:
 def _validate_spec(spec: JobSpec) -> None:
     """Server-side caps + sandbox checks (handoff rules 6-7). Raises
     JobValidationError with an operator-facing message."""
+    _require_types(spec)
     if spec.kind not in ("sft", "multi_run", "export", "calibrate"):
         raise NotImplementedError(f"Unknown job kind {spec.kind!r}.")
+    # Before any per-kind return: no UI job runs a model's own code.
+    if spec.trust_remote_code:
+        raise JobValidationError(
+            "trust_remote_code is not available from the UI; run models that "
+            "need it from the CLI."
+        )
     # Where a job writes is never the client's choice: both overrides must
     # stay inside the sandbox (they exist for tests and server-side callers).
     if spec.output_dir:
@@ -444,14 +576,7 @@ def _validate_spec(spec: JobSpec) -> None:
         _validate_export_spec(spec)
         return
     if spec.kind == "calibrate":
-        model = (spec.model or "").strip()
-        if not model or len(model) > 256:
-            raise JobValidationError("Model id is empty or overlong.")
-        if not (_MODEL_ID_RE.match(model) or Path(model).exists()):
-            raise JobValidationError(
-                f"Model {model!r} is neither a HuggingFace id (org/name) nor an "
-                "existing local path."
-            )
+        spec.model = _validate_model(spec.model)
         if spec.mode not in ("lora", "full"):
             raise JobValidationError(f"Unknown mode {spec.mode!r}.")
         return
@@ -466,18 +591,13 @@ def _validate_spec(spec: JobSpec) -> None:
         raise JobValidationError(
             f"samples must be 1..{MAX_UI_SAMPLES} (got {spec.samples})."
         )
-    model = (spec.model or "").strip()
-    if not model or len(model) > 256:
-        raise JobValidationError("Model id is empty or overlong.")
-    if not (_MODEL_ID_RE.match(model) or Path(model).exists()):
-        raise JobValidationError(
-            f"Model {model!r} is neither a HuggingFace id (org/name) nor an "
-            "existing local path."
-        )
+    spec.model = _validate_model(spec.model)
     data = (spec.dataset_path or "").strip()
     if not data:
         raise JobValidationError("No dataset path. Pick one from the Dataset Hub.")
-    _check_in_sandbox(data, "Dataset")
+    # The child gets the RESOLVED path: a link swapped after this check
+    # cannot point the run somewhere else.
+    spec.dataset_path = str(_check_in_sandbox(data, "Dataset"))
     if not (1 <= int(spec.steps) <= MAX_UI_STEPS):
         raise JobValidationError(f"steps must be 1..{MAX_UI_STEPS} (got {spec.steps}).")
     if spec.batch != "auto":
@@ -494,11 +614,6 @@ def _validate_spec(spec: JobSpec) -> None:
     if spec.mode not in ("lora", "full"):
         raise JobValidationError(f"Unknown mode {spec.mode!r}.")
     _validate_training_knobs(spec)
-    if spec.trust_remote_code:
-        raise JobValidationError(
-            "trust_remote_code is not available from the UI; run models that "
-            "need it from the CLI."
-        )
 
 
 def _validate_training_knobs(spec: JobSpec) -> None:
@@ -662,6 +777,28 @@ def _vram_preflight(spec: JobSpec) -> tuple[bool, str]:
         return True, "preflight-skipped"
 
 
+def _posix_process_is_ours(pid: int) -> bool:
+    """True when ``pid`` is alive and looks like a backpropagate job.
+
+    POSIX only. ``os.kill(pid, 0)`` probes without signalling; where /proc
+    exists the command line must mention backpropagate, so a recycled pid
+    that now belongs to something else is not mistaken for the job.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False  # alive, but not ours
+    except OSError:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return True  # no /proc (macOS, BSD): liveness is all we have
+    return b"backpropagate" in cmdline
+
+
 class JobManager:
     """Owns the single active UI job. Process-global (the Reflex app shares
     one instance across tabs).
@@ -677,6 +814,9 @@ class JobManager:
         clock: Callable[[], float] | None = None,
     ) -> None:
         self.jobs_root = Path(jobs_root) if jobs_root else _default_jobs_root()
+        # The default root is inside the sandbox and is re-checked at every
+        # start; an explicit root is a server-side / test choice.
+        self._default_root = jobs_root is None
         self._spawn = spawn or self._default_spawn
         self._clock = clock or time.time
         self._lock = threading.Lock()
@@ -689,6 +829,16 @@ class JobManager:
     def start(self, spec: JobSpec) -> JobHandle:
         """Validate, refuse when busy, spawn, and return the handle."""
         _validate_spec(spec)
+        # Outside the lock: the estimate can be slow, and Stop must never
+        # wait on it. Export loads the model briefly or not at all, and a
+        # calibration gates each of its own probes against free VRAM.
+        ok, note = (
+            (True, spec.kind)
+            if spec.kind in ("export", "calibrate")
+            else _vram_preflight(spec)
+        )
+        if not ok:
+            raise JobValidationError(note)
         with self._lock:
             active = self._active_handle_locked()
             if active is not None:
@@ -696,19 +846,22 @@ class JobManager:
                     f"A job is already running ({active.job_id}). "
                     "Stop it or wait for it to finish before starting another."
                 )
-            # Export loads the model briefly or not at all; the training
-            # estimator does not describe it.
-            # A calibration gates each of its own probes against free VRAM.
-            ok, note = (
-                (True, spec.kind)
-                if spec.kind in ("export", "calibrate")
-                else _vram_preflight(spec)
-            )
-            if not ok:
-                raise JobValidationError(note)
+            orphan = self._running_orphan()
+            if orphan is not None:
+                raise JobRefusedError(
+                    "A job started by an earlier UI session is still running "
+                    f"(process {orphan.get('pid')}, {orphan.get('job_id')}). Wait for it "
+                    "to finish, or stop that process, before starting another."
+                )
 
             job_id = _mint_job_id(self._clock)
-            root = Path(spec.scratch_root) if spec.scratch_root else self.jobs_root
+            # Resolve the root right before creating the folder: a symlink or
+            # Windows junction planted at <sandbox>/jobs must not redirect
+            # the job's files outside the sandbox.
+            root = (Path(spec.scratch_root) if spec.scratch_root else self.jobs_root).expanduser()
+            root = root.resolve()
+            if spec.scratch_root or self._default_root:
+                _require_inside_sandbox(str(root), "Job folder")
             run_dir = root / job_id
             run_dir.mkdir(parents=True, exist_ok=False)
             try:
@@ -716,7 +869,15 @@ class JobManager:
                 writer.write({"kind": "phase", "phase": "queued", "note": note})
                 log_fh = open(run_dir / OUTPUT_LOG, "ab")  # noqa: SIM115 — owned by proc lifetime
                 argv = _build_argv(spec, run_dir)
-                env = dict(os.environ)
+                # The child gets the server's environment minus its auth
+                # secrets (launch token, password verifier): a training
+                # process has no use for them, and its log is shown in the UI.
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in _CHILD_ENV_DROP
+                    and not key.startswith(_CHILD_ENV_DROP_PREFIXES)
+                }
                 # W&B: #276's report_to=auto now skips an un-configured W&B
                 # and honors an opted-in user (wandb login / WANDB_API_KEY);
                 # don't force-disable tracking for UI-spawned runs.
@@ -746,9 +907,30 @@ class JobManager:
             return self._active_handle_locked()
 
     def _active_handle_locked(self) -> JobHandle | None:
+        # Busy until the process has EXITED, not merely until it wrote its
+        # terminal event: a finishing job still holds the GPU while it saves
+        # and tears down, and a second job must not start on top of it.
         for job_id, handle in list(self._handles.items()):
-            if self._is_alive(job_id) and not self._terminal_seen(handle):
+            if self._is_alive(job_id):
                 return handle
+        return None
+
+    def _running_orphan(self) -> dict[str, Any] | None:
+        """A job from an earlier UI session whose process is still alive.
+
+        POSIX only: there a UI crash leaves the child running (it has its own
+        session), and this manager starts with no memory of it. On Windows the
+        Job Object ends the child with the UI server.
+        """
+        if os.name == "nt":
+            return None
+        for record in self.scan_orphans():
+            job_id = str(record.get("job_id") or "")
+            pid = record.get("pid")
+            if job_id in self._handles or not isinstance(pid, int) or pid <= 0:
+                continue
+            if _posix_process_is_ours(pid):
+                return record
         return None
 
     # ---- stop -------------------------------------------------------------
@@ -867,15 +1049,34 @@ class JobManager:
         except Exception:  # noqa: BLE001 — fake procs in tests
             return bool(getattr(proc, "_alive", False))
 
+    def _tail_rows(self, handle: JobHandle) -> list[dict]:
+        """The last rows of events.jsonl (a fixed window). The terminal event
+        is the last thing a job writes, so this is enough to find it without
+        reading a long run's whole file."""
+        try:
+            size = handle.events_path.stat().st_size
+        except OSError:
+            return []
+        # Starting mid-file cuts the first line; it fails to parse and is skipped.
+        rows, _ = self.tail_events(handle, max(0, size - _EVENT_TAIL_BYTES))
+        return rows
+
+    def _iter_events(self, handle: JobHandle) -> Iterator[dict]:
+        """Every row of events.jsonl, read a bounded slice at a time."""
+        offset = 0
+        while True:
+            rows, new_offset = self.tail_events(handle, offset)
+            yield from rows
+            if new_offset <= offset:
+                return
+            offset = new_offset
+
     def _terminal_seen(self, handle: JobHandle) -> bool:
-        for row in self._read_events(handle, limit=None):
-            if row.get("kind") in ("done", "error"):
-                return True
-        return False
+        return any(row.get("kind") in ("done", "error") for row in self._tail_rows(handle))
 
     def _terminal_status(self, handle: JobHandle) -> str:
         status = "crashed"
-        for row in self._read_events(handle, limit=None):
+        for row in self._tail_rows(handle):
             if row.get("kind") == "done":
                 status = str(row.get("status") or "done")
             elif row.get("kind") == "error":
@@ -890,17 +1091,18 @@ class JobManager:
             handle = self._handles[list(self._handles)[-1]] if self._handles else None
         if handle is None:
             return {"status": "idle"}
-        rows = self._read_events(handle, limit=None)
         latest: dict[str, Any] = {}
         phase = "queued"
-        for row in rows:
+        terminal = False
+        for row in self._iter_events(handle):  # streamed: constant memory
             kind = row.get("kind")
             if kind == "phase":
                 phase = str(row.get("phase", phase))
             elif kind == "step" or kind in ("done", "error"):
                 latest = row
+                terminal = terminal or kind in ("done", "error")
         alive = self._is_alive(handle.job_id)
-        if not alive and not any(r.get("kind") in ("done", "error") for r in rows):
+        if not alive and not terminal:
             state = "crashed"
         elif latest.get("kind") == "done":
             state = str(latest.get("status") or "done")
@@ -948,7 +1150,9 @@ class JobManager:
         try:
             with open(path, "rb") as fh:
                 fh.seek(offset)
-                chunk = fh.read()
+                # Bounded: a very long (or hostile) file is read a slice per
+                # poll; the next poll continues from the returned offset.
+                chunk = fh.read(MAX_EVENT_READ_BYTES)
         except FileNotFoundError:
             return [], offset
         except OSError:
@@ -967,17 +1171,24 @@ class JobManager:
             if not raw:
                 continue
             try:
-                rows.append(json.loads(raw.decode("utf-8", "replace")))
+                row = json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 logger.debug("ui job event parse skipped: %r", raw[:120])
+                continue
+            # Every consumer treats a row as a mapping; anything else in the
+            # file (a list, a bare string) is not an event.
+            if isinstance(row, dict):
+                rows.append(row)
         new_offset = offset + (len(chunk) if tail_complete else consumed)
         return rows, new_offset
 
     def _read_events(self, handle: JobHandle, limit: int | None = 200) -> list[dict]:
-        rows, _ = self.tail_events(handle, 0)
-        if limit is not None and len(rows) > limit:
-            return rows[-limit:]
-        return rows
+        """The last ``limit`` rows (from the tail window), or every row when
+        ``limit`` is None (streamed; avoid on hot paths)."""
+        if limit is None:
+            return list(self._iter_events(handle))
+        rows = self._tail_rows(handle)
+        return rows[-limit:] if len(rows) > limit else rows
 
     def _last_step_time_ms(self, handle: JobHandle) -> float | None:
         for row in reversed(self._read_events(handle, limit=50)):

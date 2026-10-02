@@ -67,6 +67,7 @@ def _sweep_shape_group() -> rx.Component:
                     "Number of runs in the sweep",
                 ),
                 MultiRunState.num_runs_error,
+                info="runs",
             ),
             _field(
                 "Steps per run",
@@ -77,6 +78,7 @@ def _sweep_shape_group() -> rx.Component:
                     "Training steps in each run",
                 ),
                 MultiRunState.steps_error,
+                info="steps",
             ),
             _field(
                 "Samples per run",
@@ -87,6 +89,7 @@ def _sweep_shape_group() -> rx.Component:
                     "Training samples in each run",
                 ),
                 MultiRunState.samples_per_run_error,
+                info="samples_per_run",
             ),
             columns="repeat(3, 1fr)",
             gap="var(--space-5)",
@@ -109,6 +112,7 @@ def _sweep_shape_group() -> rx.Component:
                 on_change=MultiRunState.set_merge_mode,
                 disabled=TrainState.form_disabled,
             ),
+            info="merge_mode",
         ),
         rx.text(
             "Each run trains on a fresh slice of the dataset, and the runs' "
@@ -116,7 +120,7 @@ def _sweep_shape_group() -> rx.Component:
             size="1",
             style={"color": "var(--bp-muted)", "font_size": "13px"},
         ),
-        title="Sweep shape",
+        title="Rounds",
     )
 
 
@@ -168,7 +172,7 @@ def multi_run_page() -> rx.Component:
                 _sweep_shape_group(),
                 mode_card(MultiRunState, allow_full=False),
                 training_shape_card(MultiRunState, with_steps=False),
-                lora_card(MultiRunState),
+                lora_card(MultiRunState, recommend=True),
             ),
             columns=rx.breakpoints(initial="1", lg="2"),
             gap="var(--space-6)",
@@ -189,8 +193,13 @@ def multi_run_page() -> rx.Component:
         active="multi-run",
         title="Multi-run",
         description=(
-            "SLAO sweep: train several short runs and merge their LoRA adapters, "
-            "which keeps earlier learning from being overwritten."
+            "Train in several short rounds and merge the result after each one, "
+            "so the model keeps what it learned earlier while it learns more."
         ),
-        on_mount=[TrainState.refresh_gpu, TrainState.attach_active_job],
+        info="page_multi_run",
+        on_mount=[
+            TrainState.refresh_gpu,
+            TrainState.attach_active_job,
+            MultiRunState.refresh_shape,
+        ],
     )

@@ -65,7 +65,7 @@ def _start_stop_button() -> rx.Component:
             size="3",
             on_click=TrainState.stop_training,
             disabled=TrainState.stop_requested,
-            style={"border_radius": "var(--bp-r-pill)", "min_width": "200px"},
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "170px"},
             aria_label="Stop and save checkpoint",
         ),
         rx.button(
@@ -74,7 +74,7 @@ def _start_stop_button() -> rx.Component:
             color_scheme="teal",
             size="3",
             disabled=TrainState.form_disabled,
-            style={"border_radius": "var(--bp-r-pill)", "min_width": "200px"},
+            style={"border_radius": "var(--bp-r-pill)", "min_width": "170px"},
             on_click=TrainState.start_training,
             aria_label="Start training",
         ),
@@ -103,7 +103,7 @@ def train_page() -> rx.Component:
             _column(
                 mode_card(TrainState, allow_full=True),
                 training_shape_card(TrainState),
-                lora_card(TrainState),
+                lora_card(TrainState, recommend=True),
             ),
             columns=rx.breakpoints(initial="1", lg="2"),
             gap="var(--space-6)",
@@ -117,10 +117,11 @@ def train_page() -> rx.Component:
         active="train",
         title="Single run",
         description=(
-            "Fine-tune a model in one run. The form starts on the same defaults as "
-            "backprop train. Training runs in its own process, and the panel on "
-            "the right shows live progress."
+            "Teach a model from your own examples. Pick a model, point to a "
+            "dataset and press Start. The settings open on values that fit your "
+            "GPU, and the panel on the right shows progress while it trains."
         ),
+        info="page_single_run",
         on_mount=[
             TrainState.refresh_gpu,
             TrainState.attach_active_job,

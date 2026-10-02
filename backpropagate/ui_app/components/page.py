@@ -17,17 +17,22 @@ from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 CONTENT_MAX_WIDTH = "1320px"
 
 
-def page_title(title: str, description: Any = None) -> rx.Component:
+def page_title(title: str, description: Any = None, info: str | None = None) -> rx.Component:
+    from .info_tip import with_tip
+
     children = [
-        rx.heading(
-            title,
-            size="7",
-            as_="h1",
-            style={
-                "color": "var(--bp-text)",
-                "font_weight": "600",
-                "letter_spacing": "-0.02em",
-            },
+        with_tip(
+            rx.heading(
+                title,
+                size="7",
+                as_="h1",
+                style={
+                    "color": "var(--bp-text)",
+                    "font_weight": "600",
+                    "letter_spacing": "-0.02em",
+                },
+            ),
+            info,
         )
     ]
     if description is not None:
@@ -48,6 +53,7 @@ def bp_page(
     description: Any = None,
     on_mount: Any = None,
     rail: bool = True,
+    info: str | None = None,
 ) -> rx.Component:
     """One page: header, nav, the content column, the rail and the footer."""
     content_kwargs: dict[str, Any] = {}
@@ -57,7 +63,7 @@ def bp_page(
         BpLeftNav(active=active),
         rx.scroll_area(
             rx.flex(
-                page_title(title, description),
+                page_title(title, description, info),
                 *body,
                 direction="column",
                 gap="var(--space-6)",

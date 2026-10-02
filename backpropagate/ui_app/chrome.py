@@ -19,6 +19,7 @@ from backpropagate.ui_state import AppState, AuthBadgeState, TrainState
 from .components.auth_badge import BpAuthBadge
 from .components.event_log import BpEventLog
 from .components.icon import bp_icon
+from .components.info_tip import info_tip
 from .components.loss_chart import BpLossChart
 from .components.status_pill import BpStatusPill
 
@@ -315,15 +316,20 @@ def BpSideRail() -> rx.Component:
             rx.cond(
                 TrainState.loss_history.length() == 0,
                 rx.flex(
-                    rx.text(
-                        "Loss · last 80 steps",
-                        size="1",
-                        style={
-                            "color": "var(--bp-text-2)",
-                            "text_transform": "uppercase",
-                            "letter_spacing": "0.06em",
-                            "font_size": "10px",
-                        },
+                    rx.flex(
+                        rx.text(
+                            "Loss · last 80 steps",
+                            size="1",
+                            style={
+                                "color": "var(--bp-text-2)",
+                                "text_transform": "uppercase",
+                                "letter_spacing": "0.06em",
+                                "font_size": "10px",
+                            },
+                        ),
+                        info_tip("loss", side="left"),
+                        align="center",
+                        gap="4px",
                     ),
                     rx.text(
                         "Start a run to see the curve.",
@@ -334,15 +340,20 @@ def BpSideRail() -> rx.Component:
                     gap="var(--space-1)",
                 ),
                 rx.flex(
-                    rx.text(
-                        "Loss · live",
-                        size="1",
-                        style={
-                            "color": "var(--bp-text-2)",
-                            "text_transform": "uppercase",
-                            "letter_spacing": "0.06em",
-                            "font_size": "10px",
-                        },
+                    rx.flex(
+                        rx.text(
+                            "Loss · live",
+                            size="1",
+                            style={
+                                "color": "var(--bp-text-2)",
+                                "text_transform": "uppercase",
+                                "letter_spacing": "0.06em",
+                                "font_size": "10px",
+                            },
+                        ),
+                        info_tip("loss", side="left"),
+                        align="center",
+                        gap="4px",
                     ),
                     BpLossChart(
                         TrainState.loss_chart_data,
@@ -442,11 +453,16 @@ def BpSideRail() -> rx.Component:
                         role="progressbar",
                         aria_label="VRAM used",
                     ),
-                    rx.text(
-                        TrainState.vram_label,
-                        size="1",
-                        class_name="bp-num",
-                        style={"color": "var(--bp-text-2)"},
+                    rx.flex(
+                        rx.text(
+                            TrainState.vram_label,
+                            size="1",
+                            class_name="bp-num",
+                            style={"color": "var(--bp-text-2)"},
+                        ),
+                        info_tip("gpu", side="left"),
+                        align="center",
+                        gap="4px",
                     ),
                     direction="column",
                     flex_grow="1",
@@ -460,15 +476,20 @@ def BpSideRail() -> rx.Component:
         ),
         # Event log
         _rail_section(
-            rx.text(
-                "Events",
-                size="1",
-                style={
-                    "color": "var(--bp-text-2)",
-                    "text_transform": "uppercase",
-                    "letter_spacing": "0.06em",
-                    "font_size": "10px",
-                },
+            rx.flex(
+                rx.text(
+                    "Events",
+                    size="1",
+                    style={
+                        "color": "var(--bp-text-2)",
+                        "text_transform": "uppercase",
+                        "letter_spacing": "0.06em",
+                        "font_size": "10px",
+                    },
+                ),
+                info_tip("events", side="left"),
+                align="center",
+                gap="4px",
             ),
             BpEventLog(events=TrainState.events, max_n=6, show_view_full=True),
         ),

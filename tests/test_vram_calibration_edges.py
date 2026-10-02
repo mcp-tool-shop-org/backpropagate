@@ -328,6 +328,7 @@ def test_estimate_args_follow_the_form(train_state):
     assert s._estimate_args() == {
         "mode": "lora", "lora_r": 16, "batch": "2", "base_4bit": False,
         "gradient_checkpointing": False, "card_gb": 24.0, "target_modules": "q_proj,v_proj",
+        "method": "sft",
     }
 
 

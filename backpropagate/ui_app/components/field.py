@@ -48,9 +48,17 @@ def bp_err_text(error_var) -> rx.Component:
     )
 
 
-def bp_field(label: str, control: rx.Component, error_var=None) -> rx.Component:
-    """A labelled form field (6px label gap, optional error slot)."""
-    children = [bp_label(label), control]
+def bp_field(
+    label: str, control: rx.Component, error_var=None, info: str | None = None
+) -> rx.Component:
+    """A labelled form field (6px label gap, optional error slot).
+
+    ``info`` is a ``help_text.TIPS`` key: the label then carries an "i" that
+    explains the field.
+    """
+    from .info_tip import with_tip
+
+    children = [with_tip(bp_label(label), info), control]
     if error_var is not None:
         children.append(bp_err_text(error_var))
     return rx.flex(*children, direction="column", gap="var(--space-1)", width="100%")

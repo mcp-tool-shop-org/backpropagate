@@ -675,6 +675,7 @@ def vram_verdict(
     gradient_checkpointing: bool = True,
     target_modules: str = "",
     card_gb: float | None = None,
+    method: str = "sft",
 ) -> dict[str, Any]:
     """The inline "fits / tight / won't fit" estimate for the training forms.
 
@@ -682,9 +683,16 @@ def vram_verdict(
     --lora-r <r> --batch-size <b> [--target-modules <t>] [--no-4bit]
     [--no-gradient-checkpointing]``: the same
     :func:`backpropagate.trainer.estimate_vram` call, and for ``batch="auto"``
-    the batch the CLI's tier table recommends for this card (what the
-    trainer's auto batch picks). Verdict: ``fits`` up to 85 % of the card,
-    ``tight`` up to 100 %, ``wont_fit`` above. Never raises: ``unknown``
+    the batch the trainer's auto batch picks: the CLI's tier table for this
+    card, lowered to the largest batch that fits within 90% of the GPU
+    memory that is free (``Trainer._fit_auto_batch``).
+
+    The estimate is compared with the GPU memory that is free NOW when there
+    is a reading (``against="free"``): another program on the card leaves
+    less than the card's size, and a verdict against the whole card said
+    "Fits" for runs the preflight then refused. Verdict: ``fits`` up to 90 %
+    of free, ``tight`` up to 100 %, ``wont_fit`` above. Without a reading it
+    falls back to the whole card (``against="card"``, ``fits`` up to 85 %). Never raises: ``unknown``
     with a reason when there is no card or no estimate.
     """
     out: dict[str, Any] = {
@@ -694,6 +702,9 @@ def vram_verdict(
         "batch": None,
         "note": "",
         "source": "estimate",  # "measured" once this model is calibrated here
+        "tier_batch": None,  # what the card's size alone would pick for "auto"
+        "budget_gb": card_gb,  # what total_gb is compared with
+        "against": "card",  # "free" when the free-memory reading is used
     }
     try:
         if not card_gb or card_gb <= 0:
@@ -709,29 +720,102 @@ def vram_verdict(
                     break
         else:
             resolved = int(batch)
-        out["batch"] = resolved
-        from .trainer import estimate_vram
+        from .trainer import (
+            _AUTO_BATCH_SHARE,
+            _AUTO_BATCH_SIZES,
+            _free_vram_gib,
+            estimate_vram,
+        )
 
-        kwargs: dict[str, Any] = {"mode": mode, "lora_r": int(lora_r), "batch_size": resolved}
+        kwargs: dict[str, Any] = {"mode": mode, "lora_r": int(lora_r), "method": method}
         if not base_4bit and mode == "lora":
             kwargs["quantize_base"] = False
         if not gradient_checkpointing:
             kwargs["gradient_checkpointing"] = False
         if target_modules and mode == "lora":
             kwargs["target_modules"] = target_modules
-        estimate = estimate_vram(model, **kwargs)
+        free_gib = _free_vram_gib()
+        if batch == "auto":
+            # The trainer lowers the tier's batch to one that fits what is
+            # free; show that batch, so the number is the run's number.
+            out["tier_batch"] = resolved
+            if free_gib:
+                for candidate in _AUTO_BATCH_SIZES:
+                    if candidate > resolved:
+                        continue
+                    need = estimate_vram(model, batch_size=candidate, **kwargs).total_gb
+                    if need <= free_gib * _AUTO_BATCH_SHARE or candidate == 1:
+                        resolved = candidate
+                        break
+        out["batch"] = resolved
+        estimate = estimate_vram(model, batch_size=resolved, **kwargs)
         total = float(getattr(estimate, "total_gb", 0.0) or 0.0)
         if total <= 0:
             out["note"] = "No estimate for this model."
             return out
         out["total_gb"] = round(total, 2)
         out["source"] = str(getattr(estimate, "source", "estimate"))
-        ratio = total / card_gb
-        out["verdict"] = "fits" if ratio <= 0.85 else "tight" if ratio <= 1.0 else "wont_fit"
+        if free_gib:
+            out["budget_gb"], out["against"] = round(float(free_gib), 1), "free"
+            ratio = total / float(free_gib)
+            out["verdict"] = (
+                "fits" if ratio <= _AUTO_BATCH_SHARE else "tight" if ratio <= 1.0 else "wont_fit"
+            )
+        else:
+            ratio = total / card_gb
+            out["verdict"] = "fits" if ratio <= 0.85 else "tight" if ratio <= 1.0 else "wont_fit"
     except Exception as exc:  # noqa: BLE001 — the estimate is advisory
         logger.debug("vram_verdict failed: %r", exc)
         out["verdict"] = "unknown"
         out["note"] = "The estimate is unavailable for this model."
+    return out
+
+
+def lora_shape_options(
+    model: str,
+    *,
+    base_4bit: bool = True,
+    gradient_checkpointing: bool = True,
+) -> dict[str, Any]:
+    """What each LoRA shape needs for ``model`` at batch 1, and which one
+    fits this GPU.
+
+    For the LoRA card of the training form: the three shapes of
+    ``config.LORA_PRESETS`` with their estimate, the GPU memory that is free
+    now, and the shape the trainer itself would choose
+    (:func:`backpropagate.trainer.resolve_lora_shape`). Never raises;
+    ``recommended`` is "" when there is no GPU reading or no estimate.
+    """
+    out: dict[str, Any] = {"shapes": {}, "free_gb": None, "recommended": "", "fits": True}
+    try:
+        from .config import LORA_PRESET_ORDER, LORA_PRESETS
+        from .trainer import _free_vram_gib, estimate_vram, resolve_lora_shape
+
+        for name in LORA_PRESET_ORDER:
+            preset = LORA_PRESETS[name]
+            estimate = estimate_vram(
+                model,
+                lora_r=preset.r,
+                batch_size=1,
+                quantize_base=bool(base_4bit),
+                gradient_checkpointing=bool(gradient_checkpointing),
+                target_modules=preset.target_modules,
+            )
+            out["shapes"][name] = round(float(estimate.total_gb), 1)
+        free_gib = _free_vram_gib()
+        if free_gib:
+            out["free_gb"] = round(float(free_gib), 1)
+            shape = resolve_lora_shape(
+                model,
+                quantize_base=bool(base_4bit),
+                gradient_checkpointing=bool(gradient_checkpointing),
+                free_gib=free_gib,
+            )
+            if shape.preset in LORA_PRESETS:
+                out["recommended"] = shape.preset
+                out["fits"] = bool(shape.fits)
+    except Exception as exc:  # noqa: BLE001 — advisory, like the estimate itself
+        logger.debug("lora_shape_options failed: %r", exc)
     return out
 
 

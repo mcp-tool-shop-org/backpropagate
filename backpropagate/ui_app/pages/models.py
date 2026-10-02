@@ -26,6 +26,7 @@ from backpropagate.ui_state import ModelsState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.error_callout import BpErrorCallout
+from ..components.info_tip import with_tip
 
 
 def _eyebrow_style() -> dict:
@@ -258,19 +259,22 @@ def models_page() -> rx.Component:
             rx.scroll_area(
                 rx.flex(
                     rx.flex(
-                        rx.heading(
-                            "Local models",
-                            size="7",
-                            style={
-                                "color": "var(--bp-text)",
-                                "font_weight": "600",
-                                "letter_spacing": "-0.02em",
-                            },
+                        with_tip(
+                            rx.heading(
+                                "Local models",
+                                size="7",
+                                style={
+                                    "color": "var(--bp-text)",
+                                    "font_weight": "600",
+                                    "letter_spacing": "-0.02em",
+                                },
+                            ),
+                            "page_models",
                         ),
                         rx.text(
-                            "Models in the Hugging Face cache this machine uses "
-                            "(it follows HF_HOME). Delete one to free disk; it "
-                            "downloads again the next time a run needs it.",
+                            "The base models already downloaded to this computer. "
+                            "Delete one to free disk space; it downloads again the "
+                            "next time a run needs it.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),

@@ -300,10 +300,20 @@ def BpSideRail() -> rx.Component:
     return rx.flex(
         # Status pill bound to TrainState. The pill is its own tinted card:
         # wrapping it in a rail card drew a box inside a box.
-        BpStatusPill(
-            state=TrainState.run_state,
-            label="Run state",
-            detail=TrainState.run_state,
+        rx.box(
+            BpStatusPill(
+                state=TrainState.run_state,
+                label="Run state",
+                detail=TrainState.run_state,
+            ),
+            # The pill swaps its whole body per state, so its tip sits on the
+            # wrapper: one button, top right, whatever the state.
+            rx.box(
+                info_tip("run_state", side="left"),
+                style={"position": "absolute", "top": "14px", "right": "12px"},
+            ),
+            width="100%",
+            style={"position": "relative"},
         ),
         # Loss chart section — FRONTEND-6 (Wave 6b): wire to TrainState.
         # loss_history (via loss_chart_data computed Var) so the side-rail

@@ -294,6 +294,150 @@ TIPS: dict[str, Tip] = {
         ),
         link="/estimate-vram/#measure-on-your-own-gpu",
     ),
+    # ---- export --------------------------------------------------------------
+    "page_export": Tip(
+        "Turn a run into something you can use",
+        (
+            "A finished run leaves an adapter: a small add-on to the base model. "
+            "Export turns it into the form you need.",
+            "Keep it as an adapter, merge it into a full model, or make a single "
+            "GGUF file to chat with in Ollama, LM Studio or llama.cpp.",
+            "The run itself is not changed. Every export goes to a new folder.",
+        ),
+        start="GGUF at Q4_K_M, registered with Ollama, to try the model right away.",
+        link="/export/",
+    ),
+    "export_source": Tip(
+        "Which run to export",
+        (
+            "The folder a run saved its result in. The easy way to fill it: open "
+            "the run on the Runs page and press Export the model.",
+        ),
+    ),
+    "export_format": Tip(
+        "What kind of file you get",
+        (
+            "LoRA is the adapter alone: tens to hundreds of megabytes. Whoever "
+            "uses it also needs the base model.",
+            "Merged is the base model with your adapter built in: a full model "
+            "of several gigabytes that loads like any other.",
+            "GGUF is one compressed file that Ollama, LM Studio and llama.cpp "
+            "can run.",
+        ),
+        start="GGUF, to chat with the model on this computer.",
+        link="/export/",
+    ),
+    "gguf_quant": Tip(
+        "How much to compress the file",
+        (
+            "A smaller file loads faster and needs less memory, and loses a "
+            "little quality. Q4_K_M is the usual balance.",
+            "Q8_0 and F16 stay close to the original and are much larger. Q2_K "
+            "is the smallest and noticeably weaker.",
+        ),
+        start="Q4_K_M.",
+    ),
+    "ollama": Tip(
+        "Chat with it in Ollama",
+        (
+            "Adds the exported file to Ollama under the name you choose. You can "
+            "then start it with: ollama run, followed by that name.",
+            "Ollama has to be installed on this computer.",
+        ),
+    ),
+    "hub": Tip(
+        "Share it on Hugging Face",
+        (
+            "Uploads the result to a repository on your Hugging Face account. "
+            "It stays private unless you untick that.",
+            "It needs an access token with write permission, from your Hugging "
+            "Face settings. The token is kept in memory only and is forgotten "
+            "after the upload.",
+        ),
+        link="/export/",
+    ),
+    "export_output": Tip(
+        "Where the result goes",
+        (
+            "Every export is written to a new folder inside the UI's output "
+            "folder. The path is shown here when the export finishes.",
+        ),
+    ),
+    # ---- dataset page --------------------------------------------------------
+    "page_dataset": Tip(
+        "Look at your examples before you train",
+        (
+            "Drop a file here to see what it contains: which layout it uses, the "
+            "first examples, and how many there are.",
+            "Your file is not changed, and it stays on this computer.",
+            "To train on a file, give its path on the Single run page.",
+        ),
+        link="/training/#dataset-formats",
+    ),
+    "dataset_format": Tip(
+        "How the examples are laid out",
+        (
+            "ShareGPT stores a conversation as a list of turns. Alpaca has an "
+            "instruction, an optional input and an output. OpenAI uses messages "
+            "with a role and content.",
+            "The layout is recognised from the file. Change it only if the "
+            "preview below looks wrong.",
+        ),
+        start="auto-detect.",
+        link="/training/#dataset-formats",
+    ),
+    "dataset_preview": Tip(
+        "The first examples",
+        (
+            "The first five examples as the trainer will read them. Check that "
+            "the questions and the answers are where you expect them.",
+        ),
+    ),
+    "dataset_stats": Tip(
+        "How much data this is",
+        (
+            "Records are the examples in the file. Dedup hits are examples that "
+            "appear more than once.",
+            "Average tokens is the typical length of an example. A token is a "
+            "piece of a word: about three quarters of an English word.",
+            "Training cuts off anything beyond 2,048 tokens in one example.",
+        ),
+    ),
+    # ---- runs and models -----------------------------------------------------
+    "page_runs": Tip(
+        "Everything you have trained",
+        (
+            "Each row is one run. Open it to see its loss curve and its log, to "
+            "export the model, or to delete it.",
+            "Runs started from the command line appear here too, when their "
+            "output is inside the UI's output folder.",
+        ),
+    ),
+    "runs_status": Tip(
+        "What the status means",
+        (
+            "Completed ran all its steps. Stopped was ended early and saved what "
+            "it had. Failed hit an error; open the run to see which. Running is "
+            "still going.",
+        ),
+    ),
+    "runs_storage": Tip(
+        "Disk space used by runs",
+        (
+            "Each run keeps its log and progress files, and a finished one keeps "
+            "its model. Clean up removes only folders that hold no model: "
+            "failed, cancelled and measurement jobs.",
+        ),
+    ),
+    "page_models": Tip(
+        "Models stored on this computer",
+        (
+            "A base model is downloaded the first time a run uses it and kept "
+            "here, so the next run starts sooner.",
+            "Deleting one frees disk space and nothing else: it downloads again "
+            "when a run needs it. The adapters you trained are not kept here.",
+        ),
+    ),
     # ---- the side panel ------------------------------------------------------
     "run_state": Tip(
         "What is happening now",

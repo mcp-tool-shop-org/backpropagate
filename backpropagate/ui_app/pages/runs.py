@@ -34,6 +34,7 @@ from backpropagate.ui_state import RunsState, TrainState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.error_callout import BpErrorCallout
+from ..components.info_tip import with_tip
 from ..components.job_panel import job_progress_card
 
 
@@ -60,7 +61,7 @@ def _filter_bar() -> rx.Component:
     """
     return rx.flex(
         rx.flex(
-            _label("Status"),
+            with_tip(_label("Status"), "runs_status"),
             rx.select.root(
                 rx.select.trigger(
                     placeholder="All statuses",
@@ -357,9 +358,12 @@ def _storage_row() -> rx.Component:
         rx.box(
             rx.flex(
                 rx.flex(
-                    rx.text(
-                        "Storage",
-                        style={"color": "var(--bp-text-2)", "font_size": "12px"},
+                    with_tip(
+                        rx.text(
+                            "Storage",
+                            style={"color": "var(--bp-text-2)", "font_size": "12px"},
+                        ),
+                        "runs_storage",
                     ),
                     rx.text(
                         RunsState.storage_label,
@@ -463,19 +467,21 @@ def runs_page() -> rx.Component:
             rx.scroll_area(
                 rx.flex(
                     rx.flex(
-                        rx.heading(
-                            "Run history",
-                            size="7",
-                            style={
-                                "color": "var(--bp-text)",
-                                "font_weight": "600",
-                                "letter_spacing": "-0.02em",
-                            },
+                        with_tip(
+                            rx.heading(
+                                "Run history",
+                                size="7",
+                                style={
+                                    "color": "var(--bp-text)",
+                                    "font_weight": "600",
+                                    "letter_spacing": "-0.02em",
+                                },
+                            ),
+                            "page_runs",
                         ),
                         rx.text(
-                            "Every run in the UI output folder, newest first: the "
-                            "same list as backprop list-runs. Open one for its loss "
-                            "curve, log and export.",
+                            "Every run you have made, newest first. Open one for its "
+                            "loss curve and log, and to export the model.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),

@@ -710,53 +710,38 @@ class TestExportStateSetters:
 
 
 class TestExportStateHubTokenFilePath:
-    """UI-A-001: ``set_hub_token_file_path`` validates a credential READ path.
+    """The token-file field accepts a file inside ``~/.backpropagate/``.
 
-    The HF token-file path is a path to read an *existing user-owned secret
-    file* — NOT a path the UI writes into. Pre-fix it was validated against
-    the UI OUTPUT sandbox (``~/.backpropagate/ui-outputs``) via
-    ``_validate_ui_path`` → ``safe_path(allowed_base=get_ui_output_dir())``.
-    That sandbox is mutually exclusive with the documented / placeholder
-    location ``~/.config/backpropagate/hf-token`` (``~/.config`` is on the
-    UI-output forbidden-base denylist), so the documented path could NEVER
-    be entered — the shipped ``--token-file`` UI field was unusable.
-
-    Post-fix the path is validated for the READ-a-credential intent (mirrors
-    the CLI ``_read_hub_token_file``): expanduser + resolve, require an
-    existing regular file, reject NUL bytes / directories / missing files —
-    but ALLOW standard user locations like ``~/.config/...``.
+    The page shows the file name. The resolved path stays on the backend
+    var. A file outside that folder, including ``~/.config``, is refused
+    and the error text does not contain the path.
     """
 
-    def test_documented_config_location_is_accepted(self, tmp_path, monkeypatch):
-        """A real file under ``~/.config/backpropagate/`` is ACCEPTED.
+    def test_file_inside_backpropagate_is_accepted_by_name(self, tmp_path, monkeypatch):
+        from pathlib import Path
 
-        The regression this pins: the documented placeholder path
-        (``~/.config/backpropagate/hf-token``) lives inside a UI-output
-        FORBIDDEN base, so the pre-fix sandbox validator rejected it
-        outright (``Invalid path: ...``). The fix must accept it.
-        """
         from backpropagate.ui_state import ExportState
 
-        # Point HOME at a temp dir so ~/.config resolves under tmp_path and
-        # the test never touches the operator's real ~/.config tree.
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        token_file = tmp_path / ".config" / "backpropagate" / "hf-token"
-        token_file.parent.mkdir(parents=True, exist_ok=True)
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        token_file = home / ".backpropagate" / "hf-token"
+        token_file.parent.mkdir(parents=True)
         token_file.write_text("hf_" + "a" * 40, encoding="utf-8")
 
         state = ExportState()
         state.set_hub_token_file_path(str(token_file))
-        assert state.hub_token_file_path_error == "", (
-            "UI-A-001: the documented ~/.config/backpropagate/hf-token "
-            f"location must be accepted; got error {state.hub_token_file_path_error!r}"
-        )
-        assert state.hub_token_file_path != "", (
-            "UI-A-001: a valid existing token file must be staged"
-        )
-        # The staged value points at the same file (resolved form).
-        from pathlib import Path
-
-        assert Path(state.hub_token_file_path) == token_file.resolve()
+        assert state.hub_token_file_path_error == ""
+        assert state.hub_token_file_path == "hf-token"
+        assert state._hub_token_file_path == str(token_file.resolve())
+        config_file = home / ".config" / "backpropagate" / "hf-token"
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text("hf_" + "b" * 40, encoding="utf-8")
+        state.set_hub_token_file_path(str(config_file))
+        assert state.hub_token_file_path == ""
+        assert str(config_file.resolve()) not in state.hub_token_file_path_error
 
     def test_nonexistent_path_is_rejected(self, tmp_path):
         """A path that does not exist is rejected with a clear error."""
@@ -1877,28 +1862,40 @@ class TestRunsStateOutputDirOverrideReadGuard:
         )
 
     def test_load_runs_allows_benign_override(self, monkeypatch, tmp_path):
-        """A benign (non-forbidden) override still works — the guard must not
-        over-block legitimate operator dirs.
+        """An override inside the UI output folder still loads.
+
+        ``Path.home`` is pointed at the temp dir so the sandbox check does
+        not create a directory under the real home.
         """
+        from pathlib import Path as _Path
+
         from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunsState
 
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(_Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+
         class _FakeManager:
             def __init__(self, _dir):
-                pass
+                self.directory = _dir
 
             def list_runs(self, status=None, limit=50):
                 return []
 
         monkeypatch.setattr(_ck, "RunHistoryManager", _FakeManager)
 
+        inside = home / ".backpropagate" / "ui-outputs" / "custom"
+        inside.mkdir(parents=True)
         state = RunsState()
-        state.output_dir_override = str(tmp_path)
+        state.output_dir_override = str(inside)
         state.load_runs()
 
-        # No refusal error — empty list is fine (no runs on disk).
         assert state.runs == []
-        assert "credential" not in state.error.lower()
+        assert state.error == ""
 
 
 # =============================================================================
@@ -2214,8 +2211,10 @@ class TestExportStateHubTokenNotClientSerialized:
             "UI-A-001: set_hub_token must keep the raw token for the push."
         )
 
-    def test_push_to_hub_reads_and_clears_backend_token(self, monkeypatch):
+    def test_push_to_hub_reads_and_clears_backend_token(self, monkeypatch, tmp_path):
         """``push_to_hub`` reads the backend token and clears it on success."""
+        from pathlib import Path
+
         from backpropagate.ui_state import ExportState
 
         captured: dict[str, object] = {}
@@ -2229,9 +2228,17 @@ class TestExportStateHubTokenNotClientSerialized:
 
         monkeypatch.setattr(_export_mod, "push_to_hub", _fake_push, raising=False)
 
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+        adapter = home / ".backpropagate" / "ui-outputs" / "adapter"
+        adapter.mkdir(parents=True)
+
         state = ExportState()
-        state.set_source_model_path("model-out")  # sandboxed-validated path
-        state.source_model_path = "model-out"  # ensure populated regardless of validator
+        state.set_source_model_path(str(adapter))
         state.set_hub_repo_id("owner/repo")
         state.set_hub_token("hf_" + "b" * 40)
 
@@ -2772,6 +2779,8 @@ class TestRunsStateErrorSuggestionSplit:
         dedicated ``error_suggestion`` var; ``error`` carries only the message
         (no "Try:" run-on tail).
         """
+        from pathlib import Path
+
         from backpropagate import checkpoints as _ck
         from backpropagate.exceptions import BackpropagateError
         from backpropagate.ui_state import RunsState
@@ -2787,10 +2796,18 @@ class TestRunsStateErrorSuggestionSplit:
                     suggestion="delete the index and reload",
                 )
 
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+        inside = home / ".backpropagate" / "ui-outputs"
+        inside.mkdir(parents=True)
         monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
 
         state = RunsState()
-        state.output_dir_override = str(tmp_path)
+        state.output_dir_override = str(inside)
         state.load_runs()
 
         # The remedy lives on its own var, scannable as a distinct hint line.
@@ -2806,6 +2823,8 @@ class TestRunsStateErrorSuggestionSplit:
         ``error_suggestion`` empty so the callout hint collapses to a fragment
         (backward-compatible).
         """
+        from pathlib import Path
+
         from backpropagate import checkpoints as _ck
         from backpropagate.ui_state import RunsState
 
@@ -2816,10 +2835,18 @@ class TestRunsStateErrorSuggestionSplit:
             def list_runs(self, status=None, limit=50):
                 raise RuntimeError("opaque internal failure")
 
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("BACKPROPAGATE_UI__OUTPUT_DIR", raising=False)
+        inside = home / ".backpropagate" / "ui-outputs"
+        inside.mkdir(parents=True)
         monkeypatch.setattr(_ck, "RunHistoryManager", _RaisingManager)
 
         state = RunsState()
-        state.output_dir_override = str(tmp_path)
+        state.output_dir_override = str(inside)
         state.load_runs()
 
         assert state.error_suggestion == ""

@@ -25,6 +25,7 @@ scan, per 2026-05-22 verification). The setters route through module-level
 from __future__ import annotations
 
 import math
+import os
 import re
 import tempfile
 import threading
@@ -339,7 +340,7 @@ def _validate_ui_path(value: str) -> tuple[str, str]:
         resolved = safe_path(candidate, allowed_base=base, allow_relative=True)
         return str(resolved), ""
     except Exception as exc:  # noqa: BLE001 — surface as operator-facing string
-        return "", f"Invalid path: {exc}"
+        return "", _redact_action(f"Invalid path: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -394,68 +395,59 @@ def _validate_run_id(value: str) -> tuple[str, str]:
 #
 # The HF token-file path field (``set_hub_token_file_path``, mirroring the
 # ``--token-file`` CLI flag) is a path to READ an EXISTING user-owned secret
-# file — NOT a path the UI writes into. It must NOT be validated against the
-# UI OUTPUT sandbox (``get_ui_output_dir()`` → ``~/.backpropagate/ui-outputs``):
-# that sandbox is mutually exclusive with the documented / placeholder token
-# location ``~/.config/backpropagate/hf-token`` (``~/.config`` sits on the
-# UI-output forbidden-base denylist). Routing this READ path through the WRITE
-# sandbox made the documented path impossible to enter and the shipped
-# ``--token-file`` UI field unusable.
-#
-# The correct validation mirrors the CLI's ``_read_hub_token_file``
-# (cli.py ~1115): expanduser + resolve, then require the target to be an
-# EXISTING regular file (a credential the operator already created). We add a
-# basic hostile-input guard (reject NUL bytes) and reject directories /
-# missing files with clear, operator-facing messages. The file is NEVER read
-# or written here — only its shape is validated; ``push_to_hub`` reads it at
-# push time via the CLI helper so the mode-0600 warning + empty-file error
-# stay in one place. Standard user locations (``~/.config/...``,
-# ``~/.hf-token``, an absolute path under the operator's home, etc.) are
-# allowed by design — this is the operator's own credential, not a UI write.
+# file — NOT a path the UI writes into. It is not the UI output sandbox
+# (``~/.backpropagate/ui-outputs``). It must resolve inside
+# ``~/.backpropagate/`` (the parent of that sandbox). ``~/.config`` is not
+# accepted: a path outside that folder, and any symlink or junction below
+# the home folder, is the same refusal, and the message carries no path.
+# The full path stays in ``_hub_token_file_path``. The public field is the
+# file name.
+_TOKEN_FILE_REFUSAL = (
+    "Token file must be an existing file inside the .backpropagate folder."
+)
+
+
 def _validate_token_file_path(value: str) -> tuple[str, str]:
-    """Validate a user-supplied HF token-FILE path for READING a credential.
+    """Validate a HF token-file path for reading a credential.
 
-    Returns a ``(cleaned_value, error_message)`` tuple mirroring
-    ``_validate_ui_path`` / ``_validate_run_id``: on success the error is the
-    empty string and ``cleaned_value`` is the resolved path; on failure
-    ``cleaned_value`` is the empty string and the error carries a short
-    operator-facing message. Empty input is a pass-through (no error, no
-    value) so the field can be cleared.
-
-    Unlike ``_validate_ui_path`` this does NOT constrain the path to the UI
-    output sandbox — the token file is a pre-existing user-owned secret the
-    operator points us at (e.g. ``~/.config/backpropagate/hf-token``), not a
-    UI write target. We require an existing regular file and reject NUL bytes,
-    directories, and missing paths.
+    Returns ``(resolved_path, "")`` when the file resolves inside
+    ``~/.backpropagate/`` with no symlink or junction on the way. Otherwise
+    ``("", fixed message)``. The message contains no path. Empty input is a
+    pass-through so the field can be cleared.
     """
     if not value or not value.strip():
         return "", ""
     candidate = value.strip()
-    # Reject obviously hostile input before touching the filesystem.
     if "\x00" in candidate:
         return "", "Invalid token-file path: contains a NUL byte."
     try:
+        from .ui_security import _is_symlink_or_junction
+
         path = Path(candidate).expanduser()
+        home = Path.home()
+        for ancestor in (path, *path.parents):
+            try:
+                below_home = ancestor.is_relative_to(home) and ancestor != home
+            except (ValueError, OSError):
+                below_home = False
+            if not below_home:
+                break
+            if _is_symlink_or_junction(ancestor):
+                return "", _TOKEN_FILE_REFUSAL
         try:
             resolved = path.resolve()
+            root = (home / ".backpropagate").resolve()
         except (OSError, RuntimeError):
-            # Fall back to the un-resolved expansion if resolve() blows up
-            # (e.g. a symlink loop); existence checks below still apply.
-            resolved = path
-        if not resolved.exists():
-            return "", (
-                f"Token-file path does not exist: {resolved}. Create the file "
-                "(e.g. `printf 'hf_xxx' > ~/.config/backpropagate/hf-token`) "
-                "and point this field at it."
-            )
-        if not resolved.is_file():
-            return "", (
-                f"Token-file path is not a regular file: {resolved}. "
-                "Point this field at the token FILE, not a directory."
-            )
+            return "", _TOKEN_FILE_REFUSAL
+        try:
+            inside = resolved.is_relative_to(root) and resolved != root
+        except (ValueError, OSError):
+            inside = False
+        if not inside or not resolved.is_file():
+            return "", _TOKEN_FILE_REFUSAL
         return str(resolved), ""
-    except (OSError, ValueError) as exc:
-        return "", f"Invalid token-file path: {exc}"
+    except (OSError, ValueError):
+        return "", _TOKEN_FILE_REFUSAL
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +483,61 @@ def _redact_action(text: str) -> str:
         return _redact_paths(text)
     except Exception:  # noqa: BLE001 — redaction is best-effort, never fatal
         return text
+
+
+# A refusal is a public string. Cap it so a client-supplied message cannot
+# fill the WebSocket state, and run it through the same redactor as the
+# other client-visible strings.
+_REFUSAL_MAX = 400
+
+
+def _clip_refusal(text: object) -> str:
+    """Redact a refusal and cap it at ``_REFUSAL_MAX`` characters."""
+    cleaned = _redact_action(str(text or ""))
+    if len(cleaned) <= _REFUSAL_MAX:
+        return cleaned
+    return cleaned[: _REFUSAL_MAX - 1] + "…"
+
+
+def _display_output_path(path: str) -> str:
+    """Client-visible form of a job output path.
+
+    A relative label (``out/run_x``) is kept. An absolute path inside the
+    UI output folder is shown relative to that folder. Anything else is the
+    file name. The result goes through the redactor.
+    """
+    raw = str(path or "")
+    if not raw:
+        return ""
+    try:
+        candidate = Path(raw)
+    except (OSError, ValueError):
+        return _redact_action(raw)
+    if not candidate.is_absolute():
+        return _redact_action(raw)
+    try:
+        from .ui_security import get_ui_output_dir
+
+        base = get_ui_output_dir().resolve()
+        resolved = candidate.expanduser().resolve()
+        if resolved.is_relative_to(base):
+            rel = resolved.relative_to(base).as_posix()
+            return _redact_action(rel or resolved.name)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return _redact_action(candidate.name)
+
+
+def _resolves_inside_output(path: Path) -> bool:
+    """True when ``path`` resolves inside ``get_ui_output_dir()``."""
+    try:
+        from .ui_security import get_ui_output_dir
+
+        base = get_ui_output_dir().resolve()
+        resolved = path.expanduser().resolve()
+        return bool(resolved.is_relative_to(base))
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def _coerce_int(value: object) -> int | None:
@@ -1406,7 +1453,7 @@ class TrainState(rx.State):
         if value not in ("qlora", "lora", "full"):
             return
         if value == "full" and self.method != "sft":
-            self.job_refusal = (
+            self.job_refusal = _clip_refusal(
                 f"{self.method.upper()} trains a LoRA adapter; switch the method "
                 "to SFT for full fine-tuning."
             )
@@ -1602,7 +1649,9 @@ class TrainState(rx.State):
 
         self.job_refusal = ""
         if self.model_error:
-            self.job_refusal = "Fix the model field first: " + self.model_error
+            self.job_refusal = _clip_refusal(
+                "Fix the model field first: " + self.model_error
+            )
             return
         spec = JobSpec(
             kind="calibrate",
@@ -1663,6 +1712,9 @@ class TrainState(rx.State):
     job_error_message: str = ""
     job_error_hint: str = ""
     job_output_path: str = ""
+    # Full path kept for the Export hand-off. The public field is the
+    # sandbox-relative (or file-name) string the page shows.
+    _job_output_path: str = ""
     job_stalled: bool = False
     # ui-v2 P2: TrainState follows EVERY UI job (one at a time), so the
     # multi-run and export pages share the progress card, rail and reattach.
@@ -1688,9 +1740,21 @@ class TrainState(rx.State):
     # ---- Event handlers (stubs; backend hookup in Phase 3) -----------------
 
     @rx.event
+    def set_job_refusal(self, message: str) -> None:
+        """Cap and redact a refusal.
+
+        A hand-written setter replaces Reflex's auto setter, so a client
+        that sets this field still goes through the cap.
+        """
+        if not message:
+            self.job_refusal = ""
+            return
+        self.job_refusal = _clip_refusal(message)
+
+    @rx.event
     def refuse(self, message: str) -> None:
         """Show a start refusal from another page's form (ui-v2 P2)."""
-        self.job_refusal = str(message)
+        self.set_job_refusal(message)
 
     @rx.event
     def dismiss_refusal(self) -> None:
@@ -1747,7 +1811,9 @@ class TrainState(rx.State):
         self.job_refusal = ""
         form_errors = _form_errors(self)
         if form_errors:
-            self.job_refusal = "Fix the highlighted fields first: " + "; ".join(form_errors)
+            self.job_refusal = _clip_refusal(
+                "Fix the highlighted fields first: " + "; ".join(form_errors)
+            )
             return
         # ui-v2 P3: every field maps to a real `backprop train` flag
         # (ui_jobs._training_flags); the form shows the CLI's defaults.
@@ -1773,7 +1839,7 @@ class TrainState(rx.State):
         try:
             spec = JobSpec(**spec_kwargs)
         except TypeError as exc:
-            self.job_refusal = f"Could not start: {exc}"
+            self.job_refusal = _clip_refusal(f"Could not start: {exc}")
             return None
         return self._begin_job(spec)
 
@@ -1788,10 +1854,10 @@ class TrainState(rx.State):
         try:
             handle = get_job_manager().start(spec)
         except (JobValidationError, JobRefusedError, NotImplementedError) as exc:
-            self.job_refusal = str(exc)
+            self.job_refusal = _clip_refusal(str(exc))
             return None
         except Exception as exc:  # noqa: BLE001 — spawn failure lands on screen
-            self.job_refusal = f"Could not start: {exc}"
+            self.job_refusal = _clip_refusal(f"Could not start: {exc}")
             return None
         self.job_id = handle.job_id
         self.job_kind = spec.kind
@@ -1808,6 +1874,7 @@ class TrainState(rx.State):
         self.job_error_message = ""
         self.job_error_hint = ""
         self.job_output_path = ""
+        self._job_output_path = ""
         self.job_log_tail = []
         self.job_safety_reason = ""
         self.job_stalled = False
@@ -2113,9 +2180,13 @@ class TrainState(rx.State):
         self.eta_label = ""
         out_path = str(status.get("output_path") or "")
         if out_path:
-            self.job_output_path = out_path
+            self._job_output_path = out_path
+            self.job_output_path = _display_output_path(out_path)
         if outcome in ("failed", "crashed"):
-            self.job_log_tail = _read_log_tail(str(status.get("log_path") or ""))
+            self.job_log_tail = [
+                _redact_action(line)
+                for line in _read_log_tail(str(status.get("log_path") or ""))
+            ]
         if self.job_kind == "calibrate":
             labels = {
                 "done": "Measured. The estimate now uses this GPU's own numbers.",
@@ -2593,7 +2664,9 @@ class ExportState(rx.State):
     # the inline ``--token`` argument). The token-file path is mutually
     # exclusive with ``hub_token``; ``push_to_hub`` enforces the precedence.
     hub_include_base: bool = False
+    # File name only. The resolved path is ``_hub_token_file_path``.
     hub_token_file_path: str = ""
+    _hub_token_file_path: str = ""
     hub_token_file_path_error: str = ""
 
     # ---- Validated path / name setters (FRONTEND-A-002) --------------------
@@ -2746,16 +2819,10 @@ class ExportState(rx.State):
         the file-mode check + POSIX-warning + empty-file error stay in one
         place.
 
-        UI-A-001: this is the path to READ an existing user-owned credential
-        file, NOT a UI WRITE target — so it is validated via
-        ``_validate_token_file_path`` (expanduser + resolve + require an
-        existing regular file + reject NUL bytes), NOT against the UI output
-        sandbox (``get_ui_output_dir()``). The prior ``_validate_ui_path``
-        forced the file under ``~/.backpropagate/ui-outputs``, which made the
-        documented placeholder location ``~/.config/backpropagate/hf-token``
-        (a UI-output forbidden base) impossible to enter — the field was
-        unusable. Mirrors the CLI's ``_read_hub_token_file`` intent, which
-        does a plain ``Path(path_str).expanduser()`` with no write-sandbox.
+        The file must resolve inside ``~/.backpropagate/`` with no link on
+        the way. The public field stores the file name only; the resolved
+        path stays in ``_hub_token_file_path`` and is what ``push_to_hub``
+        reads. Error text contains no path.
 
         Mutual exclusion with ``hub_token`` is enforced at push time
         (the inline token wins the field-clear when both are set; the
@@ -2763,11 +2830,18 @@ class ExportState(rx.State):
         """
         if not value or not value.strip():
             self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+            self._hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
             self.hub_token_file_path_error = ""  # nosec B105 — error-message sentinel, not a password
             return
         cleaned, err = _validate_token_file_path(value)
-        self.hub_token_file_path = cleaned
-        self.hub_token_file_path_error = err
+        if err or not cleaned:
+            self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+            self._hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+            self.hub_token_file_path_error = err
+            return
+        self._hub_token_file_path = cleaned
+        self.hub_token_file_path = Path(cleaned).name
+        self.hub_token_file_path_error = ""  # nosec B105 — error-message clear, not a credential
 
     def _hub_session(self) -> str:
         """The browser session this state belongs to (the token store's key)."""
@@ -2853,7 +2927,7 @@ class ExportState(rx.State):
             return
         inline_token_set = bool(inline_token) and not self.hub_token_error
         token_file_set = (
-            bool(self.hub_token_file_path) and not self.hub_token_file_path_error
+            bool(self._hub_token_file_path) and not self.hub_token_file_path_error
         )
         if inline_token_set and token_file_set:
             self.hub_status = "error"
@@ -2878,6 +2952,24 @@ class ExportState(rx.State):
             self.hub_status = "error"
             self.hub_message = "Fix the Token-file path error before pushing."
             return
+        # Re-check at push time. The setter's answer can go stale if the
+        # directory is replaced with a link after it was accepted.
+        if not _resolves_inside_output(Path(self.source_model_path)):
+            self.hub_status = "error"
+            self.hub_message = (
+                "The source folder must stay inside the UI output folder."
+            )
+            return
+        if token_file_set:
+            checked, token_err = _validate_token_file_path(self._hub_token_file_path)
+            if token_err or not checked:
+                self._hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+                self.hub_token_file_path = ""  # nosec B105 — path sentinel, not a password
+                self.hub_token_file_path_error = token_err or _TOKEN_FILE_REFUSAL
+                self.hub_status = "error"
+                self.hub_message = self.hub_token_file_path_error
+                return
+            self._hub_token_file_path = checked
 
         self.hub_status = "pushing"
         self.hub_message = (
@@ -2895,7 +2987,7 @@ class ExportState(rx.State):
                 from .cli import _read_hub_token_file
 
                 resolved_token = _read_hub_token_file(
-                    self.hub_token_file_path,
+                    self._hub_token_file_path,
                     flag_name="--token-file (UI)",
                 )
             else:
@@ -2981,6 +3073,58 @@ def _dataset_summary(path: str, format_hint: str) -> DatasetSummary:
             _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
         _SUMMARY_CACHE[key] = summary
     return summary
+
+
+# How many ``name``, ``name-2``, ``name-3`` ... attempts before an upload
+# with a colliding name is refused. Tests patch this down.
+_UPLOAD_NAME_ATTEMPTS = 100
+
+
+def _exclusive_write(path: Path, data: bytes) -> bool:
+    """Create ``path`` and write ``data``. False if the name is already taken.
+
+    ``O_EXCL`` so two uploads of the same name cannot overwrite each other.
+    A write error removes the partial file and is re-raised.
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    try:
+        fd = os.open(os.fspath(path), flags)
+    except FileExistsError:
+        return False
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                break
+            view = view[written:]
+    except OSError:
+        os.close(fd)
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    return True
+
+
+def _store_upload(upload_dir: Path, safe_name: str, data: bytes) -> Path | None:
+    """Store ``data`` under ``safe_name``, or ``stem-2.suffix`` and so on.
+
+    Returns the path written, or None when every attempt found an existing
+    file. The visible name stays a real file name, never a random hash.
+    """
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    for index in range(1, _UPLOAD_NAME_ATTEMPTS + 1):
+        candidate_name = safe_name if index == 1 else f"{stem}-{index}{suffix}"
+        candidate = upload_dir / candidate_name
+        if _exclusive_write(candidate, data):
+            return candidate
+    return None
 
 
 class DatasetState(rx.State):
@@ -3318,8 +3462,12 @@ class DatasetState(rx.State):
                 except OSError:
                     pass
 
-            target = upload_dir / safe_name
-            target.write_bytes(data)
+            target = _store_upload(upload_dir, safe_name, data)
+            if target is None:
+                self.upload_error = (
+                    f"Could not store {filename}: too many files already use that name."
+                )
+                return
             # UI-A-002: store the full path in the backend-only var; the
             # client receives only the basename via ``uploaded_basename``.
             self._uploaded_path = str(target)
@@ -3584,18 +3732,16 @@ class RunsState(rx.State):
             # Resolve the history directory. Use the override if set, otherwise
             # fall back to the UI's own output dir (the default training sink).
             if self.output_dir_override.strip():
-                # UI-A-005 (Wave A2): ``output_dir_override`` is a PUBLIC
-                # (client-serialized) Reflex var. ``set_output_dir_override``
-                # validates via ``_validate_ui_path`` — but a malicious WS
-                # client can write the public var directly, bypassing the
-                # setter. Re-validate the forbidden-base guard HERE, at the
-                # read sink, so a value pointing at a system / credential dir
-                # (``/etc``, ``~/.ssh``, ``C:\\Windows`` …) is refused even if
-                # it never passed through the setter. This mirrors the env-var
-                # guard ``get_ui_output_dir()`` applies to its override.
+                # ``set_output_dir_override`` is a hand-written setter, and
+                # Reflex 0.9 does not let a WebSocket client skip one. The
+                # read still checks: the directory must resolve inside the
+                # UI output folder, and must not be a forbidden base.
                 history_dir = _Path(self.output_dir_override).expanduser()
                 try:
-                    from .ui_security import _is_forbidden_output_base
+                    from .ui_security import (
+                        _is_forbidden_output_base,
+                        get_ui_output_dir,
+                    )
 
                     if _is_forbidden_output_base(history_dir):
                         self.runs = []
@@ -3605,6 +3751,16 @@ class RunsState(rx.State):
                             "Point the override at a non-system directory."
                         )
                         return
+                    sandbox_dir = get_ui_output_dir().resolve()
+                    resolved_history = history_dir.resolve()
+                    if not resolved_history.is_relative_to(sandbox_dir):
+                        self.runs = []
+                        self.error = (
+                            "Refusing to read run history from outside the "
+                            "UI output folder."
+                        )
+                        return
+                    history_dir = resolved_history
                 except Exception:  # noqa: BLE001 — guard import/resolve must
                     # fail closed: if we can't validate, refuse the override
                     # and fall back to the sandbox default rather than reading
@@ -4213,13 +4369,25 @@ class RunDetailState(rx.State):
             # UI-A-002: full path into the backend-only var; the client reads
             # the redacted ``checkpoint_path_display`` computed var.
             self._checkpoint_path = str(entry.get("checkpoint_path") or "-")
+            checkpoint = None
+            if entry.get("checkpoint_path"):
+                checkpoint = _Path(str(entry["checkpoint_path"])).expanduser()
+            # A history row can name a folder outside the sandbox. Do not
+            # list it, read the log beside it, or offer it for export.
+            checkpoint_inside = (
+                checkpoint is not None and _resolves_inside_output(checkpoint)
+            )
             export_source = ""
             if job_dir is not None and (_Path(str(job_dir)) / "output").is_dir():
-                export_source = str(_Path(str(job_dir)) / "output")
-            elif entry.get("checkpoint_path") and _Path(
-                str(entry["checkpoint_path"])
-            ).expanduser().is_dir():
-                export_source = str(_Path(str(entry["checkpoint_path"])).expanduser())
+                job_out = _Path(str(job_dir)) / "output"
+                if _resolves_inside_output(job_out):
+                    export_source = str(job_out)
+            elif (
+                checkpoint_inside
+                and checkpoint is not None
+                and checkpoint.is_dir()
+            ):
+                export_source = str(checkpoint.resolve())
             self._export_source = export_source
             self.can_export_model = bool(export_source)
 
@@ -4262,8 +4430,8 @@ class RunDetailState(rx.State):
 
             # Checkpoint list — walk the checkpoint_path directory.
             self.checkpoints = []
-            if entry.get("checkpoint_path"):
-                cp_dir = _Path(str(entry["checkpoint_path"])).expanduser()
+            if checkpoint_inside and checkpoint is not None:
+                cp_dir = checkpoint
                 if cp_dir.exists() and cp_dir.is_dir():
                     try:
                         for child in sorted(cp_dir.iterdir()):
@@ -4294,11 +4462,11 @@ class RunDetailState(rx.State):
             # UI job: the child's stdout/stderr is <job>/output.log.
             log_candidates = []
             if job_dir is not None:
-                log_candidates.append(_Path(str(job_dir)) / "output.log")
-            if entry.get("checkpoint_path"):
-                log_candidates.append(
-                    _Path(str(entry["checkpoint_path"])).expanduser() / "training.log"
-                )
+                job_log = _Path(str(job_dir)) / "output.log"
+                if _resolves_inside_output(job_log):
+                    log_candidates.append(job_log)
+            if checkpoint_inside and checkpoint is not None:
+                log_candidates.append(checkpoint / "training.log")
             for log_path in log_candidates:
                 if log_path.exists() and log_path.is_file():
                     try:
@@ -4374,10 +4542,10 @@ class RunDetailState(rx.State):
                 check=False,
             )
             if result.returncode == 0:
-                self.action_result = result.stdout[:5000]
+                self.action_result = _redact_action(result.stdout[:5000])
                 self.action_error = ""
             else:
-                self.action_error = (result.stderr or result.stdout)[:1000]
+                self.action_error = _redact_action((result.stderr or result.stdout)[:1000])
                 self.action_result = ""
         except (subprocess.TimeoutExpired, OSError) as exc:
             # V2-a (sibling): the OSError / TimeoutExpired repr can embed the
@@ -4457,7 +4625,7 @@ class RunDetailState(rx.State):
                 return
             model = entry.get("model_name") or "(default model)"
             session_kind = entry.get("session_kind") or "single_run"
-            self.action_result = (
+            self.action_result = _redact_action(
                 f"Dry-run OK — run {self.current_run_id} is replayable "
                 f"(session={session_kind}, model={model}, "
                 f"dataset={entry.get('dataset_info')}). To actually replay: "
@@ -4860,6 +5028,8 @@ class ModelsState(rx.State):
         """
         import shutil
 
+        from .ui_security import _is_symlink_or_junction
+
         cache_dir = _hf_hub_cache_dir()
         if not dir_name or not dir_name.startswith("models--") or "/" in dir_name or "\\" in dir_name or ".." in dir_name:
             self.error = f"Invalid model directory name: {dir_name!r}"
@@ -4874,12 +5044,12 @@ class ModelsState(rx.State):
         target = cache_dir / dir_name
         self.deleting_dir = dir_name
         try:
-            # UI-A-006: refuse symlinks BEFORE resolving so a malicious
-            # ``models--*`` symlink can't redirect the rmtree outside the
-            # cache. Check the unresolved path.
-            if target.is_symlink():
+            # Refuse a symlink or a junction BEFORE resolving. A junction is
+            # not a symlink, and resolve follows it. Also refuse the cache
+            # root itself: ``is_relative_to`` is true for a path and itself.
+            if _is_symlink_or_junction(target):
                 self.error = _redact_action(
-                    f"Refusing to delete a symlinked cache entry: {target}"
+                    f"Refusing to delete a symlink or junction: {target}"
                 )
                 return
             target_resolved = target.resolve()
@@ -4887,7 +5057,10 @@ class ModelsState(rx.State):
             # UI-A-006: path-component confinement (is_relative_to), not a
             # string-prefix test. ``is_relative_to`` returns False for a
             # sibling dir that merely shares the prefix string.
-            if not target_resolved.is_relative_to(cache_resolved):
+            if (
+                target_resolved == cache_resolved
+                or not target_resolved.is_relative_to(cache_resolved)
+            ):
                 self.error = _redact_action(
                     f"Refusing to delete outside HF cache: {target_resolved}"
                 )

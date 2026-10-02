@@ -191,8 +191,8 @@ class TestRunsStateLoad:
 
 
 class TestRunsStateOverride:
-    def test_benign_override_directory_is_read(self, sandbox, tmp_path):
-        other = tmp_path / "elsewhere"
+    def test_benign_override_directory_is_read(self, sandbox):
+        other = sandbox.out / "elsewhere"
         mgr = RunHistoryManager(str(other))
         mgr.record_run({"run_id": "from-override", "status": "completed",
                         "started_at": "2026-01-01T00:00:00"})
@@ -270,11 +270,24 @@ class TestRunsStateOverride:
         s.set_output_dir_override(ok)
         assert s.output_dir_override == ok
 
-    def test_override_with_no_history_dir_reports_missing(self, sandbox, tmp_path):
+    def test_override_with_no_history_dir_reports_missing(self, sandbox):
         s = us.RunsState()
-        s.output_dir_override = str(tmp_path / "does-not-exist")
+        s.output_dir_override = str(sandbox.out / "does-not-exist")
         s.load_runs()
         assert s.error.startswith("No run history at")
+
+    def test_override_outside_the_sandbox_is_refused(self, sandbox, tmp_path):
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        RunHistoryManager(str(outside)).record_run(
+            {"run_id": "hidden", "status": "completed", "started_at": "2026-01-01"}
+        )
+        s = us.RunsState()
+        s.output_dir_override = str(outside)
+        s.load_runs()
+        assert s.runs == []
+        assert "outside the UI output folder" in s.error
+        assert str(outside) not in s.error
 
 
 class TestRunsStateFilterAndErrors:
@@ -319,8 +332,8 @@ class TestRunDetailLoad:
         (root / "training.log").write_text(
             "step 1 loaded /home/alice/.cache/huggingface/hub/model\nplain line\n", encoding="utf-8")
 
-    def test_full_run_populates_every_section(self, sandbox, monkeypatch, tmp_path):
-        cp = tmp_path / "ckpts"
+    def test_full_run_populates_every_section(self, sandbox, monkeypatch):
+        cp = sandbox.out / "ckpts"
         self._make_checkpoints(cp)
         _seed(sandbox, run_id="runfull1", checkpoint_path=str(cp),
               loss_history=[1.0, 0.5, "x", True, None], steps=100,
@@ -434,10 +447,10 @@ class TestRunDetailLoad:
         s.load_run()
         assert (s.duration, s.final_loss) == ("-", "-") and s.loss_history == []
 
-    def test_checkpoint_dir_walk_failure_is_tolerated(self, sandbox, monkeypatch, tmp_path):
+    def test_checkpoint_dir_walk_failure_is_tolerated(self, sandbox, monkeypatch):
         """Mocked: ``Path.iterdir`` raises ``OSError`` for the checkpoint dir."""
-        cp = tmp_path / "ck"
-        cp.mkdir()
+        cp = sandbox.out / "ck"
+        cp.mkdir(parents=True)
         _seed(sandbox, run_id="walkfail", checkpoint_path=str(cp))
         real = Path.iterdir
 
@@ -451,10 +464,10 @@ class TestRunDetailLoad:
         s.load_run()
         assert s.checkpoints == [] and s.status == "completed" and s.error == ""
 
-    def test_unreadable_log_is_tolerated(self, sandbox, monkeypatch, tmp_path):
+    def test_unreadable_log_is_tolerated(self, sandbox, monkeypatch):
         """Mocked: ``open`` raises ``OSError`` for training.log."""
-        cp = tmp_path / "ck2"
-        cp.mkdir()
+        cp = sandbox.out / "ck2"
+        cp.mkdir(parents=True)
         (cp / "training.log").write_text("hello", encoding="utf-8")
         _seed(sandbox, run_id="logfail", checkpoint_path=str(cp))
         real_open = builtins.open
@@ -469,14 +482,27 @@ class TestRunDetailLoad:
         s.load_run()
         assert s.log_lines == [] and s.status == "completed"
 
-    def test_log_tail_is_capped_at_200_lines(self, sandbox, monkeypatch, tmp_path):
-        cp = tmp_path / "ck3"
-        cp.mkdir()
+    def test_log_tail_is_capped_at_200_lines(self, sandbox, monkeypatch):
+        cp = sandbox.out / "ck3"
+        cp.mkdir(parents=True)
         (cp / "training.log").write_text("\n".join(f"line {i}" for i in range(500)), encoding="utf-8")
         _seed(sandbox, run_id="biglog", checkpoint_path=str(cp))
         s = _detail_state("biglog")
         s.load_run()
         assert len(s.log_lines) == 200 and s.log_lines[-1] == "line 499"
+
+    def test_checkpoint_outside_the_sandbox_is_not_listed_or_read(self, sandbox, tmp_path):
+        outside = tmp_path / "outside-ck"
+        outside.mkdir()
+        (outside / "child").mkdir()
+        (outside / "training.log").write_text("SECRET-LOG\n", encoding="utf-8")
+        _seed(sandbox, run_id="outsiderun", checkpoint_path=str(outside))
+        s = _detail_state("outsiderun")
+        s.load_run()
+        assert s.status == "completed" and s.error == ""
+        assert s.checkpoints == [] and s.log_lines == []
+        assert s._export_source == ""
+        assert "SECRET-LOG" not in " ".join(s.log_lines)
 
 
 # =============================================================================
@@ -879,7 +905,7 @@ class TestModelsStateDelete:
             pytest.skip("symlink creation not permitted on this host")
         s = us.ModelsState()
         s.delete_model("models--evil--link")
-        assert "symlinked cache entry" in s.error and str(sandbox.home) not in s.error
+        assert "symlink or junction" in s.error and str(sandbox.home) not in s.error
         assert (victim / "keep.txt").read_text(encoding="utf-8") == "precious"
         assert s.deleting_dir == ""
 
@@ -1033,6 +1059,35 @@ class TestHandleUploadHappyPaths:
         assert "Only .jsonl and .json" in s.inspect_note
         assert "can still be used for training" in s.inspect_note
         assert (s.record_count, s.preview_records, s.cleanup_summary) == (0, [], "")
+
+    def test_txt_and_parquet_upload_with_content_sniffing_on(self, sandbox):
+        text = us.DatasetState()
+        _upload(text, [_Reader(b"plain notes\n", "notes.txt")])
+        assert text.upload_error == "" and text.uploaded_basename == "notes.txt"
+        table = us.DatasetState()
+        _upload(table, [_Reader(b"PAR1" + b"\x00" * 12, "rows.parquet")])
+        assert table.upload_error == "" and table.uploaded_basename == "rows.parquet"
+
+    def test_a_second_upload_of_the_same_name_keeps_the_first_bytes(self, sandbox):
+        s = us.DatasetState()
+        _upload(s, [_Reader(b'{"text": "first"}\n', "data.jsonl")])
+        first = Path(s._uploaded_path)
+        before = first.read_bytes()
+        _upload(s, [_Reader(b'{"text": "second"}\n', "data.jsonl")])
+        assert first.read_bytes() == before
+        assert s.uploaded_basename == "data-2.jsonl"
+        assert Path(s._uploaded_path).read_bytes().startswith(b'{"text": "second"')
+
+    def test_upload_name_exhaustion_leaves_the_existing_file(self, sandbox, monkeypatch):
+        monkeypatch.setattr(us, "_UPLOAD_NAME_ATTEMPTS", 1)
+        s = us.DatasetState()
+        _upload(s, [_Reader(b'{"text": "first"}\n', "data.jsonl")])
+        first = Path(s._uploaded_path)
+        before = first.read_bytes()
+        _upload(s, [_Reader(b'{"text": "second"}\n', "data.jsonl")])
+        assert "too many files" in s.upload_error
+        assert first.read_bytes() == before
+        assert s.upload_count == 1
 
     def test_missing_filename_falls_back_to_unnamed(self, sandbox):
         s = us.DatasetState()

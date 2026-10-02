@@ -109,6 +109,37 @@ def _ensure_stub_rxconfig(package_dir: Path, workdir: Path) -> None:
     target.write_text(source, encoding="utf-8")
 
 
+def sync_ui_assets(package_dir: Path, workdir: Path) -> None:
+    """Mirror the package's ``assets/`` (logo, icons) into the working directory.
+
+    Reflex serves an app's static files from ``<app root>/assets`` (copied into
+    ``.web/public`` at build time). Since 1.8.2 the app root is the per-user
+    working directory, not the package, so without this copy every image the
+    UI references (``/logo.png``, ``/icons/*.svg``) was a 404 and rendered as
+    a broken image. Files are only rewritten when their size or mtime differ,
+    so warm launches cost a stat per file.
+    """
+    source = Path(package_dir) / "assets"
+    if not source.is_dir():
+        return
+    target = Path(workdir) / "assets"
+    for src in source.rglob("*"):
+        rel = src.relative_to(source)
+        dst = target / rel
+        if src.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+            continue
+        try:
+            s = src.stat()
+            d = dst.stat()
+            if d.st_size == s.st_size and int(d.st_mtime) == int(s.st_mtime):
+                continue
+        except FileNotFoundError:
+            pass
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 def _prune_stale_siblings(
     base: Path, *, current: str, key: str, warn: Callable[[str], None]
 ) -> None:
@@ -159,6 +190,7 @@ def ensure_ui_workdir(
         workdir = Path(override).expanduser()
         workdir.mkdir(parents=True, exist_ok=True)
         _ensure_stub_rxconfig(package_dir, workdir)
+        sync_ui_assets(package_dir, workdir)
         return workdir
 
     key = package_dir_key(package_dir)
@@ -166,4 +198,5 @@ def ensure_ui_workdir(
     workdir.mkdir(parents=True, exist_ok=True)
     _prune_stale_siblings(workdir.parent, current=workdir.name, key=key, warn=warn)
     _ensure_stub_rxconfig(package_dir, workdir)
+    sync_ui_assets(package_dir, workdir)
     return workdir

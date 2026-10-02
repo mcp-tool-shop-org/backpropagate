@@ -123,12 +123,14 @@ def _fetch_bun(dest_dir: Path) -> str:
 
 def _build_web(staging: Path) -> None:
     """Run a production build in the staging dir and stop once serving."""
-    from backpropagate.ui_workdir import render_stub_rxconfig
+    from backpropagate.ui_workdir import render_stub_rxconfig, sync_ui_assets
 
     (staging / "rxconfig.py").write_text(
         render_stub_rxconfig(REPO_ROOT / "backpropagate" / "rxconfig.py"),
         encoding="utf-8",
     )
+    # The logo and icons: without them the bundled frontend 404s every image.
+    sync_ui_assets(REPO_ROOT / "backpropagate", staging)
     port = _free_port()
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", str(REPO_ROOT))

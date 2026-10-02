@@ -85,6 +85,23 @@ async def _stub_http_app(scope: dict, receive, send) -> None:
             await send({"type": "websocket.close", "code": 1000})
 
 
+async def _stub_rejecting_app(scope: dict, receive, send) -> None:
+    """Inner app that rejects like ``ui_app/auth.py``: 401 / pre-accept 4401.
+
+    Since 1.8.2 only REJECTED auth attempts count toward the limit, so the
+    enforcement tests drive the middleware with this stub.
+    """
+    if scope["type"] == "http":
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [(b"content-type", b"text/plain")],
+        })
+        await send({"type": "http.response.body", "body": b"unauthorized"})
+    elif scope["type"] == "websocket":
+        await send({"type": "websocket.close", "code": 4401})
+
+
 def _make_http_scope(path: str = "/", client_ip: str = "127.0.0.1") -> dict:
     """Build an ASGI HTTP scope dict for direct middleware invocation.
 
@@ -319,14 +336,14 @@ async def test_http_cap_exceeded_returns_429(monkeypatch):
     """
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "3")
 
-    middleware = rate_limit_middleware(_stub_http_app)
+    middleware = rate_limit_middleware(_stub_rejecting_app)
 
-    # First 3 requests should pass (200).
+    # The first 3 rejected attempts reach the auth layer (401).
     for i in range(3):
         recorder = _AsgiRecorder()
         await middleware(_make_http_scope(), _empty_receive, recorder.send)
-        assert recorder.status == 200, (
-            f"Request {i + 1} under cap should pass; got status={recorder.status}"
+        assert recorder.status == 401, (
+            f"Attempt {i + 1} under cap should reach auth; got status={recorder.status}"
         )
 
     # 4th request should be 429.
@@ -347,7 +364,7 @@ async def test_429_response_includes_retry_after_header(monkeypatch):
     """
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "1")
 
-    middleware = rate_limit_middleware(_stub_http_app)
+    middleware = rate_limit_middleware(_stub_rejecting_app)
 
     # Burn the budget.
     await middleware(_make_http_scope(), _empty_receive, _AsgiRecorder().send)
@@ -382,7 +399,8 @@ async def test_per_ip_buckets_isolated(monkeypatch):
     """
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "2")
 
-    middleware = rate_limit_middleware(_stub_http_app)
+    middleware = rate_limit_middleware(_stub_rejecting_app)
+    healthy = rate_limit_middleware(_stub_http_app)
 
     # Burn IP A's full budget + push it over.
     for _ in range(3):
@@ -395,7 +413,7 @@ async def test_per_ip_buckets_isolated(monkeypatch):
 
     # IP B's 1st request should still pass (200) — buckets are isolated.
     recorder_b = _AsgiRecorder()
-    await middleware(_make_http_scope(client_ip="10.0.0.2"), _empty_receive, recorder_b.send)
+    await healthy(_make_http_scope(client_ip="10.0.0.2"), _empty_receive, recorder_b.send)
     assert recorder_b.status == 200, (
         f"IP B must not inherit IP A's rate-limit state; got status={recorder_b.status}"
     )
@@ -475,7 +493,8 @@ async def test_ws_cap_separate_from_http_cap(monkeypatch):
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "1")
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN", "5")
 
-    middleware = rate_limit_middleware(_stub_http_app)
+    middleware = rate_limit_middleware(_stub_rejecting_app)
+    healthy = rate_limit_middleware(_stub_http_app)
     ip = "10.0.0.7"
 
     # Burn the HTTP budget.
@@ -486,7 +505,7 @@ async def test_ws_cap_separate_from_http_cap(monkeypatch):
 
     # WS upgrade from the same IP should still succeed (separate bucket).
     ws_rec = _AsgiRecorder()
-    await middleware(_make_ws_scope(client_ip=ip), _empty_receive, ws_rec.send)
+    await healthy(_make_ws_scope(client_ip=ip), _empty_receive, ws_rec.send)
     # The stub accepts the WS, so we should see websocket.accept,
     # NOT a 4429 pre-accept close.
     assert ws_rec.ws_close_code != _WS_CLOSE_CODE_RATE_LIMIT, (
@@ -506,10 +525,10 @@ async def test_ws_cap_exceeded_closes_pre_accept_with_4429(monkeypatch):
     """
     monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN", "2")
 
-    middleware = rate_limit_middleware(_stub_http_app)
+    middleware = rate_limit_middleware(_stub_rejecting_app)
     ip = "10.0.0.8"
 
-    # First 2 WS upgrades from this IP should pass (cap=2).
+    # The first 2 rejected upgrades from this IP reach auth (cap=2).
     for _ in range(2):
         await middleware(_make_ws_scope(client_ip=ip), _empty_receive, _AsgiRecorder().send)
 
@@ -528,6 +547,106 @@ async def test_ws_cap_exceeded_closes_pre_accept_with_4429(monkeypatch):
         f"Rate-limit reject must close PRE-accept (DESIGN_BRIEF anti-pattern: "
         f"validation after accept). Got message types={types}"
     )
+
+
+# =============================================================================
+# ONLY REJECTED ATTEMPTS COUNT (1.8.2)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_authenticated_traffic_never_counts(monkeypatch):
+    """An authenticated browser can load the UI's assets without a 429.
+
+    Regression: 1.8.1 served the compiled frontend through this middleware
+    and counted every request, so one or two page loads (dozens of asset
+    GETs each) tripped the 100/min cap and the UI rendered broken icons.
+    """
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "100")
+    middleware = rate_limit_middleware(_stub_http_app)
+    for i in range(500):
+        recorder = _AsgiRecorder()
+        await middleware(_make_http_scope(path=f"/assets/chunk-{i}.js"), _empty_receive, recorder.send)
+        assert recorder.status == 200, f"asset GET {i} was limited: {recorder.status}"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_websockets_never_count(monkeypatch):
+    """Page reloads open a fresh WebSocket each; accepted ones never count."""
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN", "10")
+    middleware = rate_limit_middleware(_stub_http_app)
+    for _ in range(50):
+        recorder = _AsgiRecorder()
+        await middleware(_make_ws_scope(), _empty_receive, recorder.send)
+        assert recorder.ws_close_code != _WS_CLOSE_CODE_RATE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_over_limit_ip_is_refused_before_auth(monkeypatch):
+    """Once an IP is over the failure limit, it is refused before auth runs."""
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "3")
+    attacker = rate_limit_middleware(_stub_rejecting_app)
+    for _ in range(3):
+        await attacker(_make_http_scope(client_ip="10.9.9.9"), _empty_receive, _AsgiRecorder().send)
+
+    reached = []
+
+    async def _inner(scope, receive, send):
+        reached.append(scope["path"])
+        await _stub_http_app(scope, receive, send)
+
+    recorder = _AsgiRecorder()
+    await rate_limit_middleware(_inner)(_make_http_scope(client_ip="10.9.9.9"), _empty_receive, recorder.send)
+    assert recorder.status == 429
+    assert reached == [], "an over-limit IP must not reach the auth layer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 421])
+async def test_each_auth_rejection_status_counts(monkeypatch, status):
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "1")
+
+    async def _reject(scope, receive, send):
+        await send({"type": "http.response.start", "status": status, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    mw = rate_limit_middleware(_reject)
+    await mw(_make_http_scope(client_ip="10.8.8.8"), _empty_receive, _AsgiRecorder().send)
+    recorder = _AsgiRecorder()
+    await mw(_make_http_scope(client_ip="10.8.8.8"), _empty_receive, recorder.send)
+    assert recorder.status == 429
+
+
+@pytest.mark.asyncio
+async def test_not_found_does_not_count(monkeypatch):
+    """A 404 is not an auth failure: a missing asset must not lock a user out."""
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_HTTP_PER_MIN", "1")
+
+    async def _missing(scope, receive, send):
+        await send({"type": "http.response.start", "status": 404, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    mw = rate_limit_middleware(_missing)
+    for _ in range(20):
+        recorder = _AsgiRecorder()
+        await mw(_make_http_scope(client_ip="10.7.7.7"), _empty_receive, recorder.send)
+        assert recorder.status == 404
+
+
+@pytest.mark.asyncio
+async def test_ws_http_style_denial_counts(monkeypatch):
+    """A WebSocket denied with an HTTP-style 403 response also counts."""
+    monkeypatch.setenv("BACKPROPAGATE_UI_RATE_LIMIT_WS_PER_MIN", "1")
+
+    async def _deny(scope, receive, send):
+        await send({"type": "websocket.http.response.start", "status": 403, "headers": []})
+        await send({"type": "websocket.http.response.body", "body": b""})
+
+    mw = rate_limit_middleware(_deny)
+    await mw(_make_ws_scope(client_ip="10.6.6.6"), _empty_receive, _AsgiRecorder().send)
+    recorder = _AsgiRecorder()
+    await mw(_make_ws_scope(client_ip="10.6.6.6"), _empty_receive, recorder.send)
+    assert recorder.ws_close_code == _WS_CLOSE_CODE_RATE_LIMIT
 
 
 # =============================================================================

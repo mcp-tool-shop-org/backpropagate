@@ -17,15 +17,20 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Least privilege: the workflow default is read-only; the one job below
+# elevates what it needs (OpenSSF Scorecard Token-Permissions: no top-level
+# write scopes).
 permissions:
-  contents: write       # for GitHub Release creation
-  id-token: write       # for npm provenance via Sigstore OIDC
+  contents: read
 
 jobs:
   release:
     name: Publish to npm + GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write       # for GitHub Release creation
+      id-token: write       # for npm provenance via Sigstore OIDC
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -71,6 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed package, so read-only and root-owned installs work. Set
   `BACKPROPAGATE_UI_WORKDIR` to choose the folder.
 
+### Security
+
+- **Docs-site dependency `devalue` 5.9.2 -> 5.9.4** (`site/package-lock.json`,
+  transitive via Astro). Closes GHSA-j22f-vq7h-c4qm, GHSA-hx4r-w6wj-j8fg,
+  GHSA-mcm9-63f2-9j32, GHSA-wf3x-273g-mvxv, GHSA-x5rw-q4pp-hg5g and
+  GHSA-4q55-j62x-fr9h (patched in 5.9.3). The docs site only; the Python
+  package does not ship it.
+- **`release.yml` runs with read-only token permissions by default.** The
+  workflow-level grant was `contents: write` + `id-token: write`; it is now
+  `contents: read`, and the single release job asks for the two write scopes
+  it needs (GitHub Release creation, npm provenance). Same permissions at run
+  time; closes the OpenSSF Scorecard Token-Permissions finding.
+- **Still open, by design:** transformers GHSA-xrqw-3rrv-vx5w and
+  GHSA-x9r9-c232-4q39, setuptools GHSA-h35f-9h28-mq5c and torch
+  GHSA-rrmf-rvhw-rf47 stay in `uv.lock` because every current unsloth caps
+  `transformers<=5.5.0` and `torch<2.13`, and torch 2.12 caps
+  `setuptools<82`. Each has its reason in `osv-scanner.toml`; the transformers
+  path-traversal one is refused in code by `check_chat_template_names`.
+
 ## [1.8.1] - 2026-10-01
 
 ### Fixed

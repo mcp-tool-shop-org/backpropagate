@@ -1227,12 +1227,13 @@ class TrainState(rx.State):
                 int(self.lora_r),
                 str(self.batch_size),
                 self.train_mode != "lora",
+                bool(self.gradient_checkpointing),
                 float(self.vram_total_gb or 0.0),
             )
         result = await asyncio.to_thread(
             lambda: vram_verdict(
                 args[0], mode=args[1], lora_r=args[2], batch=args[3],
-                base_4bit=args[4], card_gb=args[5],
+                base_4bit=args[4], gradient_checkpointing=args[5], card_gb=args[6],
             )
         )
         async with self:
@@ -1281,8 +1282,9 @@ class TrainState(rx.State):
         self.wandb_run_name_error = err
 
     @rx.event
-    def set_gradient_checkpointing(self, value: bool) -> None:
+    def set_gradient_checkpointing(self, value: bool):
         self.gradient_checkpointing = bool(value)
+        return TrainState.refresh_estimate
 
     # ---- Live-run plumbing (ui-v2 P1) -----------------------------------------
     # Populated by the background poller from the job's events.jsonl. The job

@@ -7456,6 +7456,8 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
             if not cli_quantize_base:
                 # Only forwarded when set, so the default call is unchanged.
                 _estimate_kwargs["quantize_base"] = False
+            if getattr(args, "no_gradient_checkpointing", False):
+                _estimate_kwargs["gradient_checkpointing"] = False
             estimate = _estimate_vram(
                 model=args.model,
                 mode=mode,
@@ -9687,6 +9689,16 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "default 4-bit nf4 QLoRA base, matching `backprop train --no-4bit`. "
             "Also triggers the per-config estimate. Adds quantize_base to the "
             "--json output."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--no-gradient-checkpointing",
+        action="store_true",
+        help=(
+            "Estimate LoRA activations without gradient checkpointing (every "
+            "layer's activations kept), matching `backprop train "
+            "--no-gradient-checkpointing`. Ignored with --mode=full, which "
+            "always checkpoints."
         ),
     )
     estimate_vram_parser.add_argument(

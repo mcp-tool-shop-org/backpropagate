@@ -1047,6 +1047,13 @@ def _estimate_param_count_billions(model_id: str) -> float | None:
     #    prevents that collision).
     pattern = re.compile(r"(\d+(?:\.\d+)?)\s*[Bb](?:[^a-zA-Z]|$)")
     matches = pattern.findall(model_id)
+    if not matches:
+        # Sub-billion ids name their size in millions ("SmolLM2-135M",
+        # "SmolLM2-360M-Instruct"): 135M -> 0.135B.
+        millions = re.findall(r"(\d+(?:\.\d+)?)\s*[Mm](?:[^a-zA-Z]|$)", model_id)
+        sizes = [float(m) / 1000.0 for m in millions if 10.0 <= float(m) < 1000.0]
+        if sizes:
+            return max(sizes)
     if matches:
         try:
             # Pick the largest match — handles "phi-4-mini-3.8b" by
@@ -1064,6 +1071,74 @@ def _estimate_param_count_billions(model_id: str) -> float | None:
             pass
 
     return None
+
+
+#: (max params in billions, hidden, layers, heads): typical decoder shapes
+#: per size class, used by :func:`estimate_vram` when the model's own
+#: config.json is not on disk. The 7B row is the estimator's historical
+#: default (4096 / 32 / 32).
+_SHAPE_BY_SIZE: tuple[tuple[float, int, int, int], ...] = (
+    (0.25, 576, 30, 9),
+    (0.6, 960, 32, 15),
+    (1.5, 2048, 16, 32),
+    (4.5, 3072, 28, 24),
+    (9.5, 4096, 32, 32),
+    (16.0, 5120, 48, 40),
+    (40.0, 5120, 64, 40),
+    (float("inf"), 8192, 80, 64),
+)
+
+
+def _cached_model_config(model: str) -> dict[str, Any] | None:
+    """The model's config.json from a local folder or the Hugging Face cache.
+
+    Never touches the network (``try_to_load_from_cache`` only reads the
+    cache), so the estimate stays instant and offline-safe.
+    """
+    import json as _json
+
+    path: Path | None = None
+    try:
+        local = Path(model).expanduser()
+        if local.is_dir() and (local / "config.json").is_file():
+            path = local / "config.json"
+    except (OSError, ValueError):
+        path = None
+    if path is None and "/" in model and not Path(model).is_absolute():
+        try:
+            from huggingface_hub import try_to_load_from_cache
+
+            hit = try_to_load_from_cache(model, "config.json")
+            if isinstance(hit, str):
+                path = Path(hit)
+        except Exception:  # noqa: BLE001 — hub missing or odd id: no config
+            path = None
+    if path is None:
+        return None
+    try:
+        cfg = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    cfg = cfg.get("text_config", cfg) if isinstance(cfg, dict) else None
+    return cfg if isinstance(cfg, dict) else None
+
+
+def _params_from_config(cfg: dict[str, Any]) -> float | None:
+    """Parameter count (billions) of a decoder from its config.json."""
+    try:
+        h = int(cfg["hidden_size"])
+        layers = int(cfg["num_hidden_layers"])
+        heads = int(cfg.get("num_attention_heads") or 1)
+        kv = int(cfg.get("num_key_value_heads") or heads)
+        inter = int(cfg.get("intermediate_size") or 4 * h)
+        vocab = int(cfg.get("vocab_size") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    head_dim = h // max(1, heads)
+    attn = h * h * 2 + 2 * h * kv * head_dim
+    mlp = 3 * h * inter
+    embed = vocab * h * (1 if cfg.get("tie_word_embeddings") else 2)
+    return (layers * (attn + mlp) + embed) / 1e9
 
 
 def _enforce_full_ft_param_ceiling(
@@ -1250,13 +1325,14 @@ def estimate_vram(
     max_seq_length: int = 2048,
     bytes_per_param: int = 2,  # bf16 / fp16 default; 4 for fp32, 1 for int8, 0.5 for nf4
     quantize_base: bool = True,  # nf4 base + bf16 adapter (the trainer default)
-    hidden_dim: int = 4096,  # 7B-class default; operator can override
-    num_layers: int = 32,  # 7B-class default; operator can override
-    num_heads: int = 32,  # 7B-class default
+    hidden_dim: int | None = None,  # None: the model's config, else its size class
+    num_layers: int | None = None,
+    num_heads: int | None = None,
     overhead_fraction: float = 0.15,
     param_count_billions: float | None = None,
     offload: bool = False,
-    vocab_size: int = 152064,  # offload VRAM model only; Qwen2.5-class default
+    vocab_size: int | None = None,  # offload VRAM model only; None: config, else 152064
+    gradient_checkpointing: bool = True,  # the trainer default in both modes
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1281,9 +1357,14 @@ def estimate_vram(
             ``load_in_4bit=True``), the base model is in nf4 (0.5 bytes
             per param) and the LoRA adapter is in bf16 (2 bytes per
             param). When False, the base model uses ``bytes_per_param``.
-        hidden_dim: Model hidden dim (default 4096 — 7B-class).
-        num_layers: Model num_layers (default 32 — 7B-class).
-        num_heads: Model num_heads (default 32 — 7B-class).
+        hidden_dim / num_layers / num_heads / vocab_size: Model shape. When
+            None they come from the model's own config.json if it is on disk
+            (a local folder or the Hugging Face cache; never downloaded),
+            otherwise from the typical shape of its size class
+            (``_SHAPE_BY_SIZE``; 7B-class = 4096 / 32 / 32).
+        gradient_checkpointing: True (the trainer default, LoRA and full)
+            stores activations for ~sqrt(num_layers) layers; False
+            (``--no-gradient-checkpointing``, LoRA only) for every layer.
         overhead_fraction: Fragmentation + framework overhead (default 15%).
         param_count_billions: Optional explicit parameter count. When
             None, estimated via :func:`_estimate_param_count_billions`.
@@ -1293,8 +1374,23 @@ def estimate_vram(
     """
     notes: list[str] = []
 
+    if mode == "full" and quantize_base:
+        # Full fine-tuning never loads a 4-bit base (the trainer trains every
+        # weight in 16-bit), so pricing it as nf4 understated the weights 4x.
+        quantize_base = False
+        notes.append("mode='full' trains a 16-bit base (no nf4)")
+
+    cfg = (
+        _cached_model_config(model)
+        if None in (hidden_dim, num_layers, num_heads, vocab_size, param_count_billions)
+        else None
+    )
     if param_count_billions is None:
         param_count_billions = _estimate_param_count_billions(model)
+    if param_count_billions is None and cfg is not None:
+        param_count_billions = _params_from_config(cfg)
+        if param_count_billions is not None:
+            notes.append(f"param count {param_count_billions:.2f}B from the model's config.json")
     if param_count_billions is None:
         # Defensive default: 7B is the v1.3 canonical 16GB target. Surface
         # the assumption in notes so operators see the imputation.
@@ -1303,6 +1399,23 @@ def estimate_vram(
             f"param_count_billions not provided and could not be estimated "
             f"from model={model!r}; assumed 7.0B (v1.3 canonical 16GB target)."
         )
+
+    if cfg is not None and all(k in cfg for k in ("hidden_size", "num_hidden_layers")):
+        hidden_dim = hidden_dim or int(cfg["hidden_size"])
+        num_layers = num_layers or int(cfg["num_hidden_layers"])
+        num_heads = num_heads or int(cfg.get("num_attention_heads") or 32)
+        vocab_size = vocab_size or int(cfg.get("vocab_size") or 152064)
+        notes.append("shape from the model's config.json")
+    elif None in (hidden_dim, num_layers, num_heads):
+        _limit, s_h, s_l, s_n = next(
+            row for row in _SHAPE_BY_SIZE if param_count_billions <= row[0]
+        )
+        hidden_dim, num_layers, num_heads = hidden_dim or s_h, num_layers or s_l, num_heads or s_n
+    # Every shape value is resolved by now; the fallbacks only narrow types.
+    hidden_dim = int(hidden_dim or 4096)
+    num_layers = int(num_layers or 32)
+    num_heads = int(num_heads or 32)
+    vocab_size = int(vocab_size or 152064)
 
     params = param_count_billions * 1e9
     bytes_to_gb = 1.0 / (1024 ** 3)
@@ -1351,8 +1464,9 @@ def estimate_vram(
     #    scales as sqrt(num_layers) instead of linearly. Mode='full'
     #    enables gradient_checkpointing=True by default; mode='lora'
     #    inherits the setting from settings.lora.use_gradient_checkpointing.
+    # Full mode always checkpoints; LoRA does unless it was turned off.
     activation_layer_factor = (
-        max(1.0, num_layers ** 0.5) if mode == "full"
+        max(1.0, num_layers ** 0.5) if (mode == "full" or gradient_checkpointing)
         else float(num_layers)
     )
     activations_gb = (

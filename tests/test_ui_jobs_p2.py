@@ -108,9 +108,10 @@ def test_multi_run_argv_maps_merge_choice_to_cli_flags(
     else:
         assert "--merge-strategy" not in argv
     assert _flag(argv, "--ui-run-dir") == str(job.run_dir)
-    # Flags the multi-run CLI does not have must never be sent.
-    for absent in ("--lr", "--lora-r", "--batch-size"):
-        assert absent not in argv
+    # ui-v2 P3: multi-run gained --lr / --lora-r; "auto" batch sends nothing.
+    assert _flag(argv, "--lr") == "0.0002"
+    assert _flag(argv, "--lora-r") == "256"
+    assert "--batch-size" not in argv
 
 
 def test_export_gguf_argv_with_ollama(tmp_path):

@@ -492,12 +492,14 @@ def vram_verdict(
     lora_r: int = 256,
     batch: str = "auto",
     base_4bit: bool = True,
+    gradient_checkpointing: bool = True,
     card_gb: float | None = None,
 ) -> dict[str, Any]:
     """The inline "fits / tight / won't fit" estimate for the training forms.
 
     The numbers are exactly ``backprop estimate-vram <model> --mode <mode>
-    --lora-r <r> --batch-size <b> [--no-4bit]``: the same
+    --lora-r <r> --batch-size <b> [--no-4bit] [--no-gradient-checkpointing]``:
+    the same
     :func:`backpropagate.trainer.estimate_vram` call, and for ``batch="auto"``
     the batch the CLI's tier table recommends for this card (what the
     trainer's auto batch picks). Verdict: ``fits`` up to 85 % of the card,
@@ -531,6 +533,8 @@ def vram_verdict(
         kwargs: dict[str, Any] = {"mode": mode, "lora_r": int(lora_r), "batch_size": resolved}
         if not base_4bit and mode == "lora":
             kwargs["quantize_base"] = False
+        if not gradient_checkpointing:
+            kwargs["gradient_checkpointing"] = False
         estimate = estimate_vram(model, **kwargs)
         total = float(getattr(estimate, "total_gb", 0.0) or 0.0)
         if total <= 0:
@@ -568,6 +572,7 @@ def _vram_preflight(spec: JobSpec) -> tuple[bool, str]:
             lora_r=int(spec.lora_r),
             batch_size=1 if spec.batch == "auto" else int(spec.batch),
             quantize_base=bool(spec.base_4bit) or spec.mode != "lora",
+            gradient_checkpointing=bool(spec.gradient_checkpointing),
         )
         estimate_gb = float(getattr(estimate, "total_gb", 0.0) or 0.0)
         if estimate_gb <= 0:

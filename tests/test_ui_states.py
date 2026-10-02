@@ -81,21 +81,18 @@ class TestTrainStateDefaults:
         assert state.steps == 100
         assert state.batch_size == "auto"
         assert state.learning_rate == 2e-4
-        # TESTS-A-006 (v1.4 Wave 2 amend): TrainState.lora_r defaults to 16
-        # here, but the CLI argparse default is 256 (v1.3 BACKEND-1 quality
-        # preset per Biderman 2024 + Thinking Machines 2025). This divergence
-        # is intentional pending a product decision on whether ui_state.py
-        # defaults should be bumped to match the CLI quality preset. Tracked
-        # in WAVE_6A_TODO.md as a v1.5 candidate for the Wave 5 feature audit.
-        # The test pins the as-shipped UI default; do not silently update to
-        # 256 without the product-side change in ui_state.py:314 / :508.
-        assert state.lora_r == 16
-        assert state.lora_alpha == 32
+        # ui-v2 P3 (resolves TESTS-A-006): the form opens on the CLI's own
+        # defaults, the v1.3 "quality" LoRA shape (r 256, alpha 512, all
+        # linear layers) on a 4-bit base with SFT.
+        assert state.preset == "qwen2.5-7b"
+        assert state.lora_r == 256
+        assert state.lora_alpha == 512
         assert state.lora_dropout == 0.05
-        assert state.quantization == "4-bit"
-        assert state.gpu_temp_threshold == 85
+        assert state.target_modules == "all-linear"
+        assert state.train_mode == "qlora"
+        assert state.method == "sft"
+        assert state.gpu_temp_threshold == 90
         assert state.gradient_checkpointing is True
-        assert state.flash_attention is True
 
     def test_initial_runtime_state_is_idle(self):
         """The live-run telemetry fields start at zero/idle."""
@@ -241,29 +238,29 @@ class TestTrainStateSetters:
         assert state.target_modules == prior  # unchanged
         assert state.target_modules_error != ""
 
-    def test_set_quantization_accepts_documented_values(self):
-        """Quantization clamps to {4-bit, 8-bit, 16-bit}."""
+    def test_set_train_mode_accepts_documented_values(self):
+        """ui-v2 P3: the mode picker is qlora | lora | full."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
-        state.set_quantization("8-bit")
-        assert state.quantization == "8-bit"
+        state.set_train_mode("lora")
+        assert state.train_mode == "lora"
 
-    def test_set_quantization_rejects_invalid_silently(self):
-        """Invalid quantization is silently rejected (value unchanged)."""
+    def test_set_train_mode_rejects_invalid_silently(self):
+        """Invalid mode is silently rejected (value unchanged)."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
-        state.set_quantization("32-bit")
-        assert state.quantization == "4-bit"  # default preserved
+        state.set_train_mode("8-bit")
+        assert state.train_mode == "qlora"  # default preserved
 
     def test_set_gpu_temp_threshold_clamps_above_max(self):
-        """GPU temp threshold clamps to [40, 110]."""
+        """GPU temp threshold clamps to the CLI's --gpu-max-temp range [50, 105]."""
         from backpropagate.ui_state import TrainState
 
         state = TrainState()
         state.set_gpu_temp_threshold(200)
-        assert state.gpu_temp_threshold == 110  # _GPU_TEMP_MAX
+        assert state.gpu_temp_threshold == 105  # _GPU_TEMP_MAX
         assert "clamped" in state.gpu_temp_threshold_error.lower()
 
     def test_set_gradient_checkpointing_coerces_bool(self):
@@ -276,13 +273,12 @@ class TestTrainStateSetters:
         state.set_gradient_checkpointing(True)
         assert state.gradient_checkpointing is True
 
-    def test_set_flash_attention_coerces_bool(self):
-        """flash_attention setter coerces any truthy to bool."""
+    def test_no_flash_attention_toggle(self):
+        """ui-v2 P3: the trainer has no flash-attention knob, so the form has
+        no checkbox that would do nothing."""
         from backpropagate.ui_state import TrainState
 
-        state = TrainState()
-        state.set_flash_attention(False)
-        assert state.flash_attention is False
+        assert not hasattr(TrainState, "set_flash_attention")
 
 
 class TestTrainStateEventHandlers:
@@ -469,14 +465,10 @@ class TestMultiRunStateDefaults:
         assert state.steps == 100
         assert state.batch_size == "auto"
         assert state.learning_rate == 2e-4
-        # TESTS-A-006 (v1.4 Wave 2 amend): MultiRunState.lora_r defaults
-        # to 16 here, but the CLI argparse default is 256 (v1.3 BACKEND-1
-        # quality preset). The UI surface intentionally lags the CLI
-        # default pending a product decision (see test_ui_states.py:84
-        # for the same context on TrainState). Tracked in WAVE_6A_TODO.md
-        # as a v1.5 candidate for the Wave 5 feature audit.
-        assert state.lora_r == 16
-        assert state.lora_alpha == 32
+        # ui-v2 P3: same CLI defaults as TrainState (quality LoRA shape).
+        assert state.lora_r == 256
+        assert state.lora_alpha == 512
+        assert state.train_mode == "qlora"
         # Multi-Run specific
         assert state.num_runs == 3
         assert state.samples_per_run == 500

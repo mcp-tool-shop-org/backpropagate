@@ -57,6 +57,16 @@ MAX_UI_BATCH = 256
 MAX_UI_SEQ_LENGTH = 131_072
 MAX_UI_LORA_R = 512
 MAX_UI_LR = 1.0
+MAX_UI_RUNS = 50
+MAX_UI_SAMPLES = 1_000_000
+
+#: Export formats / GGUF levels the UI may request: exactly the CLI's
+#: ``backprop export --format`` / ``--quantization`` choices.
+UI_EXPORT_FORMATS = ("lora", "merged", "gguf")
+UI_GGUF_QUANTS = ("f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k")
+#: Multi-run merge choices the UI offers, mapped to CLI flags in the argv.
+UI_MERGE_CHOICES = ("slao", "simple", "ties")
+_OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 #: Cooperative-stop grace floor; the live window is
 #: ``max(STOP_GRACE_FLOOR_S, 3 * last_step_s + 20)``.
@@ -83,7 +93,7 @@ class JobSpec:
     are a P3 CLI-parity item, not smuggled through the back door.
     """
 
-    kind: str  # "sft" (P1); "export_gguf" / "export_ollama" land in P2
+    kind: str  # "sft" (P1); "multi_run" / "export" (P2)
     model: str = ""
     dataset_path: str = ""
     steps: int = 100
@@ -95,6 +105,14 @@ class JobSpec:
     scratch_root: str | None = None  # override for tests; default sandboxed
     output_dir: str | None = None  # default: <run_dir>/output
     trust_remote_code: bool = False
+    # ---- multi_run (P2) ------------------------------------------------
+    runs: int = 3
+    merge: str = "slao"  # one of UI_MERGE_CHOICES
+    # ---- export (P2) ---------------------------------------------------
+    source_path: str = ""  # adapter / model dir, inside the UI sandbox
+    export_format: str = "lora"  # one of UI_EXPORT_FORMATS
+    quantization: str = "q4_k_m"  # one of UI_GGUF_QUANTS (gguf only)
+    ollama_name: str = ""  # non-empty: register with Ollama (gguf only)
 
 
 _ABS_PATH_RE = re.compile(r"^([A-Za-z]:[\\/]|\\\\|/)")
@@ -189,13 +207,137 @@ def _build_train_argv(spec: JobSpec, run_dir: Path) -> list[str]:
     return argv
 
 
+def _build_multi_run_argv(spec: JobSpec, run_dir: Path) -> list[str]:
+    output_dir = Path(spec.output_dir) if spec.output_dir else run_dir / "output"
+    argv = [
+        sys.executable,
+        "-m",
+        "backpropagate",
+        "multi-run",
+        "--model",
+        spec.model,
+        "--data",
+        spec.dataset_path,
+        "--runs",
+        str(spec.runs),
+        "--steps",
+        str(spec.steps),
+        "--mode",
+        spec.mode,
+        "--output",
+        str(output_dir),
+        "--ui-run-dir",
+        str(run_dir),
+    ]
+    if spec.samples:
+        argv += ["--samples", str(spec.samples)]
+    if spec.merge == "simple":
+        argv += ["--merge-mode", "simple"]
+    else:
+        argv += ["--merge-mode", "slao"]
+        if spec.merge == "ties":
+            argv += ["--merge-strategy", "ties"]
+    return argv
+
+
+def _build_export_argv(spec: JobSpec, run_dir: Path) -> list[str]:
+    output_dir = Path(spec.output_dir) if spec.output_dir else run_dir / "output"
+    argv = [
+        sys.executable,
+        "-m",
+        "backpropagate",
+        "export",
+        spec.source_path,
+        "--format",
+        spec.export_format,
+        "--output",
+        str(output_dir),
+        "--ui-run-dir",
+        str(run_dir),
+    ]
+    if spec.export_format == "gguf":
+        argv += ["--quantization", spec.quantization]
+        if spec.ollama_name:
+            argv += ["--ollama", "--ollama-name", spec.ollama_name]
+    return argv
+
+
+def _build_argv(spec: JobSpec, run_dir: Path) -> list[str]:
+    if spec.kind == "multi_run":
+        return _build_multi_run_argv(spec, run_dir)
+    if spec.kind == "export":
+        return _build_export_argv(spec, run_dir)
+    return _build_train_argv(spec, run_dir)
+
+
+def _check_in_sandbox(path_text: str, what: str) -> Path:
+    """Resolve ``path_text`` and require it inside the UI output sandbox
+    (``get_ui_output_dir()``). Fails CLOSED when the sandbox cannot be
+    verified (P1 fix-round review)."""
+    path = Path(path_text).expanduser()
+    if not path.exists():
+        raise JobValidationError(f"{what} not found: {path}")
+    try:
+        from .ui_security import get_ui_output_dir
+
+        base = Path(get_ui_output_dir()).resolve()
+        resolved = path.resolve()
+        if not (str(resolved) + os.sep).startswith(str(base) + os.sep) and resolved != base:
+            raise JobValidationError(
+                f"The UI only reads files inside {base} ({what.lower()}: {resolved})."
+            )
+    except JobValidationError:
+        raise
+    except Exception as exc:
+        raise JobValidationError(
+            f"Could not verify the UI sandbox for the {what.lower()}; refusing "
+            f"to start ({exc!r})."
+        ) from exc
+    return resolved
+
+
+def _validate_export_spec(spec: JobSpec) -> None:
+    source = (spec.source_path or "").strip()
+    if not source:
+        raise JobValidationError(
+            "No adapter or model path. Pick a run's output folder from Runs."
+        )
+    _check_in_sandbox(source, "Adapter or model path")
+    if spec.export_format not in UI_EXPORT_FORMATS:
+        raise JobValidationError(
+            f"Unknown export format {spec.export_format!r}; "
+            f"one of {', '.join(UI_EXPORT_FORMATS)}."
+        )
+    if spec.export_format == "gguf" and spec.quantization not in UI_GGUF_QUANTS:
+        raise JobValidationError(
+            f"Unknown GGUF quantization {spec.quantization!r}; "
+            f"one of {', '.join(UI_GGUF_QUANTS)}."
+        )
+    if spec.ollama_name:
+        if spec.export_format != "gguf":
+            raise JobValidationError("Ollama registration needs the GGUF format.")
+        if not _OLLAMA_NAME_RE.match(spec.ollama_name) or ".." in spec.ollama_name:
+            raise JobValidationError(f"Invalid Ollama model name {spec.ollama_name!r}.")
+
+
 def _validate_spec(spec: JobSpec) -> None:
     """Server-side caps + sandbox checks (handoff rules 6-7). Raises
     JobValidationError with an operator-facing message."""
-    if spec.kind != "sft":
-        raise NotImplementedError(
-            f"Job kind {spec.kind!r} is not wired yet (P1 ships 'sft'; "
-            "export kinds land in P2)."
+    if spec.kind not in ("sft", "multi_run", "export"):
+        raise NotImplementedError(f"Unknown job kind {spec.kind!r}.")
+    if spec.kind == "export":
+        _validate_export_spec(spec)
+        return
+    if spec.kind == "multi_run":
+        if not (1 <= int(spec.runs) <= MAX_UI_RUNS):
+            raise JobValidationError(f"runs must be 1..{MAX_UI_RUNS} (got {spec.runs}).")
+        if spec.merge not in UI_MERGE_CHOICES:
+            raise JobValidationError(
+                f"Unknown merge {spec.merge!r}; one of {', '.join(UI_MERGE_CHOICES)}."
+            )
+    if spec.samples is not None and not (1 <= int(spec.samples) <= MAX_UI_SAMPLES):
+        raise JobValidationError(
+            f"samples must be 1..{MAX_UI_SAMPLES} (got {spec.samples})."
         )
     model = (spec.model or "").strip()
     if not model or len(model) > 256:
@@ -208,30 +350,7 @@ def _validate_spec(spec: JobSpec) -> None:
     data = (spec.dataset_path or "").strip()
     if not data:
         raise JobValidationError("No dataset path. Pick one from the Dataset Hub.")
-    data_path = Path(data).expanduser()
-    if not data_path.exists():
-        raise JobValidationError(f"Dataset not found: {data_path}")
-    try:
-        from .ui_security import get_ui_output_dir
-
-        base = Path(get_ui_output_dir()).resolve()
-        resolved = data_path.resolve()
-        if not (str(resolved) + os.sep).startswith(str(base) + os.sep) and resolved != base:
-            raise JobValidationError(
-                "UI training only reads datasets inside "
-                f"{base} (use the Dataset Hub upload). Got: {resolved}"
-            )
-    except JobValidationError:
-        raise
-    except Exception as exc:
-        # Fail CLOSED: if the sandbox cannot be verified (import error,
-        # resolve error), the dataset location is unproven and the run must
-        # not start. (Fix-round review: the pre-fix behavior swallowed every
-        # exception and passed the candidate through.)
-        raise JobValidationError(
-            "Could not verify the UI dataset sandbox; refusing to start "
-            f"({exc!r})."
-        ) from exc
+    _check_in_sandbox(data, "Dataset")
     if not (1 <= int(spec.steps) <= MAX_UI_STEPS):
         raise JobValidationError(f"steps must be 1..{MAX_UI_STEPS} (got {spec.steps}).")
     if spec.batch != "auto":
@@ -335,7 +454,9 @@ class JobManager:
                     f"A job is already running ({active.job_id}). "
                     "Stop it or wait for it to finish before starting another."
                 )
-            ok, note = _vram_preflight(spec)
+            # Export loads the model briefly or not at all; the training
+            # estimator does not describe it.
+            ok, note = (True, "export") if spec.kind == "export" else _vram_preflight(spec)
             if not ok:
                 raise JobValidationError(note)
 
@@ -347,7 +468,7 @@ class JobManager:
                 writer = JobEventWriter(run_dir)
                 writer.write({"kind": "phase", "phase": "queued", "note": note})
                 log_fh = open(run_dir / OUTPUT_LOG, "ab")  # noqa: SIM115 — owned by proc lifetime
-                argv = _build_train_argv(spec, run_dir)
+                argv = _build_argv(spec, run_dir)
                 env = dict(os.environ)
                 # W&B: #276's report_to=auto now skips an un-configured W&B
                 # and honors an opted-in user (wandb login / WANDB_API_KEY);
@@ -430,6 +551,14 @@ class JobManager:
         if handle is None:
             return STOP_GRACE_FLOOR_S
         return self._grace_window(handle, None)
+
+    def cancel(self, job_id: str) -> None:
+        """Kill a job that has no cooperative stop (export) and record it as
+        stopped, so the page reads "cancelled", not "crashed"."""
+        handle = self.get(job_id)
+        self.hard_kill(job_id)
+        if handle is not None and not self._terminal_seen(handle):
+            JobEventWriter(handle.run_dir).done(status="stopped", steps_done=0)
 
     def hard_kill(self, job_id: str) -> None:
         handle = self.get(job_id)
@@ -537,6 +666,7 @@ class JobManager:
         last_step_ms = latest.get("step_time_ms")
         out: dict[str, Any] = {
             "job_id": handle.job_id,
+            "kind": getattr(handle.spec, "kind", "sft"),
             "status": state,
             "phase": phase,
             "step": int(latest.get("step") or latest.get("steps_done") or 0),
@@ -773,10 +903,15 @@ __all__ = [
     "MAX_UI_BATCH",
     "MAX_UI_LORA_R",
     "MAX_UI_LR",
+    "MAX_UI_RUNS",
+    "MAX_UI_SAMPLES",
     "MAX_UI_SEQ_LENGTH",
     "MAX_UI_STEPS",
     "OUTPUT_LOG",
     "STOP_GRACE_FLOOR_S",
+    "UI_EXPORT_FORMATS",
+    "UI_GGUF_QUANTS",
+    "UI_MERGE_CHOICES",
     "JobHandle",
     "JobManager",
     "JobRefusedError",

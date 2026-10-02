@@ -20,12 +20,10 @@ This file establishes the contract for the four state classes:
    happy-path value (asserts the field updated) and one error-path value
    (asserts the error string is populated AND the field either stays at the
    prior value or is clamped to a documented bound).
-3. **Start handlers (CLIUI-B-001 UI honesty floor)** — ``start_training``,
-   ``start_multi_run``, ``start_export`` do NOT fake a loading spinner /
-   in-progress run (UI-driven training is not wired yet; the real
-   background-task hookup is CLIUI-B-002, deferred to the feature pass). They
-   stay ``idle`` and surface ``cli_notice`` pointing at the matching
-   ``backprop`` shell command. ``detect_format_stub`` remains a stub. These
+3. **Start handlers** — since ui-v2 P1/P2 ``start_training``,
+   ``start_multi_run`` and ``start_export`` start real jobs through the
+   JobManager (a child process; never training in the server). The
+   multi-run and export pages hand their job to ``TrainState.start_job``. ``detect_format_stub`` remains a stub. These
    pin the honesty contract; a regression that re-grew the fake loading
    spinner — or, worse, wired a real subprocess call here — fails loudly.
 
@@ -527,12 +525,14 @@ class TestMultiRunStateSetters:
         assert state.samples_per_run_error == ""
 
     def test_set_merge_mode_accepts_documented_values(self):
-        """merge_mode clamps to {slao, weighted, ties}."""
+        """merge_mode clamps to {slao, simple, ties} (the CLI's choices)."""
         from backpropagate.ui_state import MultiRunState
 
         state = MultiRunState()
-        state.set_merge_mode("weighted")
-        assert state.merge_mode == "weighted"
+        state.set_merge_mode("simple")
+        assert state.merge_mode == "simple"
+        state.set_merge_mode("weighted")  # not a CLI merge mode
+        assert state.merge_mode == "simple"
         state.set_merge_mode("ties")
         assert state.merge_mode == "ties"
 
@@ -564,37 +564,17 @@ class TestMultiRunStateSetters:
 
 
 class TestMultiRunStateEventHandlers:
-    """Exercise the Multi-Run Start event handler (CLIUI-B-001 honesty floor)."""
+    """The Multi-Run Start button hands a job to the shared job state (P2)."""
 
-    def test_start_multi_run_does_not_enter_loading_and_surfaces_cli_notice(self):
-        """``start_multi_run`` stays idle (no fake spinner) + sets ``cli_notice``.
-
-        CLIUI-B-001: mirrors ``start_training`` — no permanent loading state,
-        an operator-facing notice pointing at ``backprop multi-run``.
-        """
+    def test_start_multi_run_returns_a_start_job_event_and_fakes_nothing(self):
         from backpropagate.ui_state import MultiRunState
 
         state = MultiRunState()
+        spec = state.start_multi_run()
+        assert spec.handler.fn.__name__ in ("start_job", "refuse")
+        # No local fake progress: the job state (TrainState) owns the run.
         assert state.run_state == "idle"
-        assert state.cli_notice == ""
-        state.start_multi_run()
-        assert state.run_state == "idle"
-        assert state.cli_notice != ""
-        assert "backprop multi-run" in state.cli_notice
-        # CLIUI-B-009: event handling is now consistent with start_training —
-        # append a single info breadcrumb (pre-fix it overwrote the log).
-        assert len(state.events) == 1
-        assert state.events[0]["level"] == "info"
-        assert "multi-run" in state.events[0]["msg"].lower()
-
-    def test_start_multi_run_appends_does_not_overwrite_prior_events(self):
-        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
-        from backpropagate.ui_state import MultiRunState
-
-        state = MultiRunState()
-        state.start_multi_run()
-        state.start_multi_run()
-        assert len(state.events) == 2
+        assert state.events == []
 
 
 # =============================================================================
@@ -606,13 +586,13 @@ class TestExportStateDefaults:
     """Default field values for the Export surface."""
 
     def test_initial_defaults_match_design(self):
-        """Export surface defaults: empty path, lora format, q4_K_M quant."""
+        """Export surface defaults: empty path, lora format, q4_k_m quant."""
         from backpropagate.ui_state import ExportState
 
         state = ExportState()
         assert state.source_model_path == ""
         assert state.format == "lora"
-        assert state.gguf_quant == "q4_K_M"
+        assert state.gguf_quant == "q4_k_m"
         assert state.ollama_register is False
         assert state.ollama_name == ""
         assert state.export_state == "idle"
@@ -654,7 +634,7 @@ class TestExportStateSetters:
         from backpropagate.ui_state import ExportState
 
         state = ExportState()
-        for valid in ("q2_K", "q3_K_M", "q4_K_M", "q5_K_M", "q6_K", "q8_0"):
+        for valid in ("f16", "q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"):
             state.set_gguf_quant(valid)
             assert state.gguf_quant == valid
 
@@ -664,7 +644,7 @@ class TestExportStateSetters:
 
         state = ExportState()
         state.set_gguf_quant("q1_INVALID")
-        assert state.gguf_quant == "q4_K_M"  # default preserved
+        assert state.gguf_quant == "q4_k_m"  # default preserved
 
     def test_set_ollama_register_coerces_bool(self):
         """ollama_register setter coerces to bool."""
@@ -844,36 +824,16 @@ class TestExportStateHubTokenFilePath:
 
 
 class TestExportStateEventHandlers:
-    """Exercise the Export Start event handler (CLIUI-B-001 honesty floor)."""
+    """The Export button hands a job to the shared job state (P2)."""
 
-    def test_start_export_does_not_enter_loading_and_surfaces_cli_notice(self):
-        """``start_export`` stays idle (no fake spinner) + sets ``cli_notice``.
-
-        CLIUI-B-001: mirrors ``start_training`` — no permanent loading state,
-        an operator-facing notice pointing at ``backprop export``.
-        """
+    def test_start_export_returns_a_start_job_event_and_fakes_nothing(self):
         from backpropagate.ui_state import ExportState
 
         state = ExportState()
+        spec = state.start_export()
+        assert spec.handler.fn.__name__ == "start_job"
         assert state.export_state == "idle"
-        assert state.cli_notice == ""
-        state.start_export()
-        assert state.export_state == "idle"
-        assert state.cli_notice != ""
-        assert "backprop export" in state.cli_notice
-        # CLIUI-B-009: consistent append-one-event shape with start_training.
-        assert len(state.events) == 1
-        assert state.events[0]["level"] == "info"
-        assert "export" in state.events[0]["msg"].lower()
-
-    def test_start_export_appends_does_not_overwrite_prior_events(self):
-        """Repeated clicks append rather than erase the prior log (CLIUI-B-009)."""
-        from backpropagate.ui_state import ExportState
-
-        state = ExportState()
-        state.start_export()
-        state.start_export()
-        assert len(state.events) == 2
+        assert state.events == []
 
 
 # =============================================================================

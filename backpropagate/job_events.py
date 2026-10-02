@@ -26,6 +26,9 @@ Event kinds written by this module:
                   PER-PROCESS (torch); ``vram_device_*`` + ``temp_c`` are
                   device-wide via gpu_safety.get_system_gpu_readings (pynvml
                   when present, else the driver-bundled nvidia-smi).
+- ``run``        ``{ts, kind, run, runs}`` — multi-run only: run ``run`` of
+                  ``runs`` is starting. Step events then carry the session-wide
+                  step (``(run - 1) * steps_per_run + local step``).
 - ``checkpoint`` ``{ts, kind, path}`` — from ``on_save``.
 - ``done``       ``{ts, kind, status, steps_done}`` — terminal record, written
                   by ``cli.py`` (which owns the outcome) via
@@ -106,6 +109,10 @@ class JobEventWriter:
         self._last_phase = phase
         self.write({"kind": "phase", "phase": phase, **extra})
 
+    def run_marker(self, run: int, runs: int) -> None:
+        """Multi-run: run ``run`` of ``runs`` (1-based) is starting."""
+        self.write({"kind": "run", "run": int(run), "runs": int(runs)})
+
     def checkpoint(self, path: str | Path) -> None:
         self.write({"kind": "checkpoint", "path": str(path)})
 
@@ -179,6 +186,16 @@ class UiFileEventCallback(_BASE):  # type: ignore[misc, valid-type]
         gpu_poll_s: Minimum seconds between ``get_gpu_status()`` temperature
             polls (NVML is system-wide but not free). VRAM figures come from
             ``torch.cuda.memory_*`` every logged step.
+        total_steps: Overall step total to report. ``None`` uses the HF
+            ``state.max_steps`` (single run). Multi-run passes
+            ``runs * steps_per_run`` so the UI shows one bar for the session.
+        on_stop: Called once when a stop is requested. Multi-run passes
+            ``MultiRunTrainer.abort`` so the run loop ends after the current
+            run unwinds, instead of starting the next run.
+
+    ``step_offset`` (attribute) is added to every reported step. Multi-run
+    sets it to ``(run - 1) * steps_per_run`` at each run start, because the
+    inner HF ``global_step`` restarts at 0 for every run.
     """
 
     def __init__(
@@ -186,8 +203,13 @@ class UiFileEventCallback(_BASE):  # type: ignore[misc, valid-type]
         run_dir: str | Path,
         writer: JobEventWriter | None = None,
         gpu_poll_s: float = 1.0,
+        total_steps: int | None = None,
+        on_stop: Any = None,
     ) -> None:
         super().__init__()
+        self.total_steps = total_steps
+        self.on_stop = on_stop
+        self.step_offset: int = 0
         self.run_dir = Path(run_dir)
         self.writer = writer if writer is not None else JobEventWriter(self.run_dir)
         self._gpu_poll_s = float(gpu_poll_s)
@@ -299,8 +321,10 @@ class UiFileEventCallback(_BASE):  # type: ignore[misc, valid-type]
             lr = None
         row: dict[str, Any] = {
             "kind": "step",
-            "step": step,
-            "total_steps": int(getattr(state, "max_steps", 0) or 0),
+            "step": self.step_offset + step,
+            "total_steps": int(
+                self.total_steps or getattr(state, "max_steps", 0) or 0
+            ),
             "phase": "training",
             "loss": loss,
             "ema_loss": self._push_ema(loss),
@@ -312,7 +336,7 @@ class UiFileEventCallback(_BASE):  # type: ignore[misc, valid-type]
         self.writer.write(row)
 
     def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:  # noqa: ARG002
-        step = int(getattr(state, "global_step", 0) or 0)
+        step = self.step_offset + int(getattr(state, "global_step", 0) or 0)
         if step > self.last_step:
             self.last_step = step
         if read_stop_request(self.run_dir):
@@ -325,6 +349,11 @@ class UiFileEventCallback(_BASE):  # type: ignore[misc, valid-type]
             if not self._stop_signaled:
                 self._stop_signaled = True
                 self.writer.phase("saving")
+                if self.on_stop is not None:
+                    try:
+                        self.on_stop("Stopped from the web UI")
+                    except Exception as exc:  # noqa: BLE001 — the HF stop above still applies
+                        logger.warning("UI stop hook failed: %r", exc)
         return control
 
     def on_save(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:  # noqa: ARG002

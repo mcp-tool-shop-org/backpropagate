@@ -1,34 +1,48 @@
-"""Export page — ``/export`` — adapter / merged / GGUF export.
+"""Export page — ``/export`` — adapter / merged / GGUF export (ui-v2 P2).
+
+The Export button starts a real ``backprop export`` job through the
+JobManager; the shared progress card shows its phase, and Cancel kills it
+(an export has no step boundary to save at).
 
 Component tree:
 
-- Group "Source"            — adapter or merged model path
+- Group "Source"            — adapter or merged model path (inside the UI
+                              output folder; the server refuses others)
 - Group "Format"            — 3-way radio: LoRA · merged · GGUF
-- Group "GGUF quantization" — grid of quant choices (q4_K_M default)
-- Group "Ollama"            — register checkbox + model name
-- Group "Output"            — destination + preview text
-- Export button
+- Group "GGUF quantization" — the CLI's six levels (q4_k_m default); GGUF only
+- Group "Ollama"            — register checkbox + model name; GGUF only
+- Group "HuggingFace Hub"   — the separate push form
+- Group "Output"            — where the export goes
+- Export / Cancel export
 """
 
 from __future__ import annotations
 
 import reflex as rx
 
-from backpropagate.ui_state import ExportState
+from backpropagate.ui_state import ExportState, TrainState
 
 from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.field import FIELD_STYLE as _FIELD_STYLE
 from ..components.field import bp_label as _label
 from ..components.group import Group
+from ..components.job_panel import (
+    job_error_callout,
+    job_next_steps_panel,
+    job_progress_card,
+    job_reattach_banner,
+    job_refusal_callout,
+)
 
-# GGUF quant grid — q4_K_M is the recommended default (per the design canvas).
+# GGUF levels: exactly `backprop export --quantization` (ui-v2 P2; the old
+# grid offered q3_K_M / q6_K, which the CLI rejects). (label, value, note)
 _GGUF_QUANTS = [
-    ("q2_K",   "smallest · lowest quality"),
-    ("q3_K_M", "small · low quality"),
-    ("q4_K_M", "default · recommended"),
-    ("q5_K_M", "larger · higher quality"),
-    ("q6_K",   "near-original quality"),
-    ("q8_0",   "lossless 8-bit"),
+    ("Q2_K", "q2_k", "smallest · lowest quality"),
+    ("Q4_0", "q4_0", "4-bit · older format"),
+    ("Q4_K_M", "q4_k_m", "default · recommended"),
+    ("Q5_K_M", "q5_k_m", "larger · higher quality"),
+    ("Q8_0", "q8_0", "8-bit · near-original"),
+    ("F16", "f16", "unquantized 16-bit · largest"),
 ]
 
 
@@ -37,10 +51,11 @@ def _source_group() -> rx.Component:
         rx.flex(
             _label("Adapter or model path"),
             rx.input(
-                placeholder="runs/run-2026-05-21/adapter",
+                placeholder="~/.backpropagate/ui-outputs/jobs/<run>/output",
                 default_value=ExportState.source_model_path,
                 on_change=ExportState.set_source_model_path,
                 size="2",
+                disabled=TrainState.form_disabled,
                 style={**_FIELD_STYLE, "width": "100%"},
                 aria_label="Source adapter or merged-model path",
             ),
@@ -101,11 +116,11 @@ def _format_group() -> rx.Component:
 
 
 def _quant_grid() -> rx.Component:
-    """The GGUF quant grid. ``q4_K_M`` flagged as the default."""
+    """The GGUF quant grid. ``q4_k_m`` flagged as the default."""
     return Group(
         rx.radio.root(
             rx.grid(
-                *(_choice_card(quant, quant, note) for quant, note in _GGUF_QUANTS),
+                *(_choice_card(label, value, note) for label, value, note in _GGUF_QUANTS),
                 columns="repeat(3, 1fr)",
                 gap="var(--space-3)",
                 width="100%",
@@ -438,45 +453,6 @@ def _hub_group() -> rx.Component:
     )
 
 
-def _cli_notice() -> rx.Component:
-    """Inline "use the CLI" notice — CLIUI-B-001 (Stage C UI honesty floor).
-
-    Surfaces ``ExportState.cli_notice`` (set on the "coming soon" Export
-    click) as a neutral, NON-error callout pointing at `backprop export`.
-    Renders nothing until the notice is set.
-    """
-    return rx.cond(
-        ExportState.cli_notice != "",
-        rx.box(
-            rx.flex(
-                rx.text(
-                    ExportState.cli_notice,
-                    size="1",
-                    style={
-                        "color": "var(--bp-text-2)",
-                        "font_size": "12px",
-                        "flex_grow": "1",
-                    },
-                ),
-                direction="row",
-                align="center",
-                gap="var(--space-2)",
-                padding="var(--space-3)",
-                style={
-                    "background": "var(--bp-surface-2)",
-                    "border": "1px solid var(--bp-border)",
-                    "border_radius": "var(--bp-r-2)",
-                },
-            ),
-            role="status",
-            aria_live="polite",
-            aria_atomic="true",
-            margin_top="var(--space-2)",
-        ),
-        rx.fragment(),
-    )
-
-
 def _output_group() -> rx.Component:
     """Output path + (FRONTEND-9 Wave 6b) empty-state guidance.
 
@@ -489,9 +465,13 @@ def _output_group() -> rx.Component:
             _label("Output path"),
             rx.text(
                 rx.cond(
-                    ExportState.output_path != "",
-                    ExportState.output_path,
-                    "(will be written to ./exports/<format>/<timestamp>)",
+                    TrainState.job_kind == "export",
+                    rx.cond(
+                        TrainState.job_output_path != "",
+                        TrainState.job_output_path,
+                        "A new folder inside the UI output folder (shown here when the export finishes).",
+                    ),
+                    "A new folder inside the UI output folder (shown here when the export finishes).",
                 ),
                 size="2",
                 style={"font_family": "var(--bp-mono)", "color": "var(--bp-text-2)"},
@@ -505,10 +485,10 @@ def _output_group() -> rx.Component:
                         style={"color": "var(--bp-text-2)"},
                     ),
                     rx.text(
-                        "Paste an adapter path (e.g. ~/.backpropagate/ui-outputs/"
-                        "runs/run-abc12345/adapter) into the Source field above, "
-                        "pick a format, then Export. Open the Runs tab to find "
-                        "a recent adapter path. From the shell: "
+                        "Paste a run's output folder into the Source field above "
+                        "(UI runs save to ~/.backpropagate/ui-outputs/jobs/<run>/"
+                        "output; the run's page shows its path), pick a format, "
+                        "then Export. From the shell: "
                         "`backprop export <adapter> --format gguf`.",
                         size="1",
                         style={"color": "var(--bp-muted)"},
@@ -555,38 +535,41 @@ def export_page() -> rx.Component:
                         gap="var(--space-2)",
                         width="100%",
                     ),
+                    job_reattach_banner(),
+                    job_refusal_callout(),
+                    job_error_callout(),
+                    job_progress_card(),
+                    job_next_steps_panel(),
                     _source_group(),
                     _format_group(),
-                    _quant_grid(),
-                    _ollama_group(),
+                    # Quantization and Ollama only apply to GGUF.
+                    rx.cond(ExportState.format == "gguf", _quant_grid(), rx.fragment()),
+                    rx.cond(ExportState.format == "gguf", _ollama_group(), rx.fragment()),
                     _hub_group(),
                     _output_group(),
-                    # CLIUI-B-001 (Stage C UI honesty floor): the LOCAL
-                    # export-to-disk path is not wired from the UI yet, so the
-                    # Export button is marked "coming soon" and clicking it
-                    # surfaces an inline notice pointing at `backprop export`.
-                    # The HuggingFace Hub push above (_hub_group) is a SEPARATE,
-                    # fully-wired handler and is unaffected.
-                    # ui-v2: badge points at the shell command instead of
-                    # promising a date — web export lands in P2.
                     rx.flex(
-                        rx.button(
-                            rx.text("Export"),
-                            rx.badge(
-                                "CLI only in 1.8.2",
-                                color_scheme="gray",
+                        rx.cond(
+                            (TrainState.run_state == "active")
+                            & (TrainState.job_kind == "export"),
+                            rx.button(
+                                "Cancel export",
                                 variant="soft",
-                                size="1",
+                                color_scheme="red",
+                                size="3",
+                                on_click=TrainState.stop_training,
+                                disabled=TrainState.stop_requested,
+                                style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+                                aria_label="Cancel export",
                             ),
-                            variant="solid",
-                            color_scheme="teal",
-                            size="3",
-                            on_click=ExportState.start_export,
-                            style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
-                            aria_label=(
-                                "Export — web-UI export ships in a future "
-                                "release; use the backprop export shell command "
-                                "for now"
+                            rx.button(
+                                "Export",
+                                variant="solid",
+                                color_scheme="teal",
+                                size="3",
+                                on_click=ExportState.start_export,
+                                disabled=TrainState.form_disabled,
+                                style={"border_radius": "var(--bp-r-pill)", "min_width": "220px"},
+                                aria_label="Export",
                             ),
                         ),
                         gap="var(--space-3)",
@@ -594,11 +577,12 @@ def export_page() -> rx.Component:
                         align="center",
                         justify="end",
                     ),
-                    _cli_notice(),
                     direction="column",
                     gap="var(--space-6)",
                     padding="var(--space-7)",
                     max_width="1320px",
+                    width="100%",
+                    on_mount=[TrainState.refresh_gpu, TrainState.attach_active_job],
                 ),
                 flex_grow="1",
                 style={"height": "100%"},

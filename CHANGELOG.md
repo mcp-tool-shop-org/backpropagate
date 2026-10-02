@@ -42,6 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Quality, Fast) and an Advanced section. Multi-run gets the same settings
   plus learning rate, batch size and LoRA shape. Every field becomes a real
   CLI flag on the job it starts, and the forms open on the CLI's defaults.
+- **Measure VRAM on your own GPU**: `backprop estimate-vram <model>
+  --calibrate`, or **Measure on this GPU** next to the estimate in the web
+  UI. It runs a few very short real training probes of that model (a minute
+  or two) and stores what they cost on this card, driver and library stack.
+  Estimates for that model then come from the measurement and say so
+  ("measured on this GPU"; `source: measured` in `--json`). On an RTX 5090,
+  after calibrating Llama 3.2 1B and Qwen2.5 7B, the predictions were within
+  0.4% of seven real runs the probes never ran (batch 8, 4,096-token rows,
+  rank 256). It is built not to hurt the machine: the process caps its own
+  GPU memory below what is free, so an overrun fails cleanly instead of
+  spilling into system RAM, and each probe runs only if it is predicted to
+  fit. When no informative probe fits (a big model on a small card), the
+  load size is still measured. Stored in `~/.backpropagate/vram-calibration.json`
+  (`BACKPROPAGATE_VRAM_CALIBRATION`); `--no-calibration` ignores it. New
+  error code `RUNTIME_VRAM_CALIBRATION_FAILED`.
 - **Estimated VRAM next to Start training**: "Fits", "Tight" or "Won't fit"
   for the chosen model, mode, LoRA rank and batch, against your card. The
   number is exactly `backprop estimate-vram`'s.
@@ -71,8 +86,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fine-tuning. The model's own shape comes from its `config.json` when it
   is in the Hugging Face cache or a local folder (never downloaded), and ids
   that name their size in millions (`SmolLM2-135M`) are no longer priced as
-  7B. It is still an estimate: another GPU, driver or attention backend
-  shifts it. `estimate-vram` gains `--target-modules`.
+  7B. It also counts a floor every run pays: a temporary full-precision copy
+  of the embedding table (0.98 GiB on Llama 3.2 1B, 2.03 GiB on Qwen2.5 7B).
+  It is still an estimate: another GPU, driver or attention backend shifts
+  it (use `--calibrate` to measure). `estimate-vram` gains
+  `--target-modules`.
 - **The web UI's training forms open on the CLI's defaults** (the Quality
   LoRA shape: rank 256, alpha 512, every linear layer; 4-bit base; SFT). They
   used to show rank 16 on four attention layers, which the job never used.

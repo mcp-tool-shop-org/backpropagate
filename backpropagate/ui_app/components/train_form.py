@@ -488,8 +488,8 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
     row = [
         rx.flex(
             rx.text(
-                "Estimated VRAM",
-                style={"color": "var(--bp-text-2)", "font_size": "12px"},
+                S.vram_est_heading,
+                style={"color": "var(--bp-text-2)", "font_size": "12px", "white_space": "nowrap"},
             ),
             rx.text(
                 S.vram_est_label,
@@ -540,6 +540,21 @@ def vram_estimate_card(action: rx.Component | None = None) -> rx.Component:
             id="bp-vram-verdict",
         ),
     ]
+    row.append(
+        rx.button(
+            rx.cond(S.vram_est_measured, "Measure again", "Measure on this GPU"),
+            variant="outline",
+            color_scheme="gray",
+            size="2",
+            on_click=S.start_calibration,
+            disabled=S.form_disabled,
+            style={"border_radius": "var(--bp-r-pill)", "white_space": "nowrap"},
+            title=(
+                "Runs a few short training probes of this model (a minute or "
+                "two), each only if it is predicted to fit, and saves the result."
+            ),
+        )
+    )
     if action is not None:
         row.append(action)
     return rx.box(

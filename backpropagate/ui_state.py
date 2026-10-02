@@ -868,6 +868,7 @@ class TrainState(rx.State):
     vram_est_total: float = 0.0
     vram_est_batch: int = 0
     vram_est_note: str = ""
+    vram_est_source: str = "estimate"  # "measured" once calibrated on this GPU
     # Latest refresh wins: refreshes run concurrently off the event loop and
     # the first one (which imports the trainer module) can finish last.
     _vram_est_seq: int = 0
@@ -942,9 +943,11 @@ class TrainState(rx.State):
     @rx.var
     def job_chip_label(self) -> str:
         """The progress card's state chip."""
-        return {"multi_run": "MULTI-RUN", "export": "EXPORTING"}.get(
-            self.job_kind, "TRAINING"
-        )
+        return {
+            "multi_run": "MULTI-RUN",
+            "export": "EXPORTING",
+            "calibrate": "MEASURING",
+        }.get(self.job_kind, "TRAINING")
 
     @rx.var
     def job_run_label(self) -> str:
@@ -955,14 +958,24 @@ class TrainState(rx.State):
 
     @rx.var
     def job_has_steps(self) -> bool:
-        """Export has phases, not steps: the card shows the phase instead."""
-        return self.job_kind != "export"
+        """Export and calibration have phases, not steps: the card shows the
+        phase instead."""
+        return self.job_kind not in ("export", "calibrate")
+
+    @rx.var
+    def job_is_training(self) -> bool:
+        """True for jobs that leave a trained model (single run, multi-run)."""
+        return self.job_kind not in ("export", "calibrate")
 
     @rx.var
     def done_title(self) -> str:
         """Heading of the post-job panel."""
         if self.job_kind == "export":
             return "Export complete"
+        if self.job_kind == "calibrate":
+            return (
+                "Measured on this GPU" if self.run_state == "done" else "Measurement stopped"
+            )
         if self.run_state == "stopped":
             return "Stopped · what next?"
         return "Run complete · what next?"
@@ -1015,6 +1028,11 @@ class TrainState(rx.State):
     def vram_est_detail(self) -> str:
         if self.vram_est_note:
             return self.vram_est_note
+        lead = (
+            "Measured on this GPU for"
+            if self.vram_est_source == "measured"
+            else "An estimate for"
+        )
         batch = (
             f"batch auto picks {self.vram_est_batch} on this card"
             if self.batch_size == "auto" and self.vram_est_batch
@@ -1025,10 +1043,19 @@ class TrainState(rx.State):
             "tight": " Close to the limit: lower the batch or the LoRA rank if it runs out of memory.",
             "wont_fit": " Try a lower batch size first, then QLoRA, a lower LoRA rank or a smaller model.",
         }.get(self.vram_est_verdict, "")
+        return f"{lead} {batch} with full 2,048-token rows; shorter data uses less.{advice}"
+
+    @rx.var
+    def vram_est_heading(self) -> str:
         return (
-            f"An estimate for {batch} with full 2,048-token rows; shorter data "
-            f"uses less.{advice}"
+            "VRAM · measured on this GPU"
+            if self.vram_est_source == "measured"
+            else "VRAM · estimate"
         )
+
+    @rx.var
+    def vram_est_measured(self) -> bool:
+        return self.vram_est_source == "measured"
 
     @rx.var
     def vram_fill_pct(self) -> str:
@@ -1278,6 +1305,48 @@ class TrainState(rx.State):
             self.vram_est_total = float(result.get("total_gb") or 0.0)
             self.vram_est_batch = int(result.get("batch") or 0)
             self.vram_est_note = str(result.get("note") or "")
+            self.vram_est_source = str(result.get("source") or "estimate")
+
+    def _estimate_args(self) -> dict:
+        return {
+            "mode": "full" if self.train_mode == "full" else "lora",
+            "lora_r": int(self.lora_r),
+            "batch": str(self.batch_size),
+            "base_4bit": self.train_mode != "lora",
+            "gradient_checkpointing": bool(self.gradient_checkpointing),
+            "card_gb": float(self.vram_total_gb or 0.0),
+            "target_modules": str(self.target_modules).replace(" ", ""),
+        }
+
+    def _refresh_estimate_now(self) -> None:
+        """Recompute the estimate in place (after a calibration finishes)."""
+        from .ui_jobs import vram_verdict
+
+        result = vram_verdict(self.model, **self._estimate_args())
+        self._vram_est_seq += 1
+        self.vram_est_verdict = str(result.get("verdict") or "unknown")
+        self.vram_est_total = float(result.get("total_gb") or 0.0)
+        self.vram_est_batch = int(result.get("batch") or 0)
+        self.vram_est_note = str(result.get("note") or "")
+        self.vram_est_source = str(result.get("source") or "estimate")
+
+    @rx.event
+    def start_calibration(self):
+        """Measure this model on this GPU (``estimate-vram --calibrate``) as a
+        job: one at a time, with the log, the phase and Stop like any other."""
+        from .ui_jobs import JobSpec
+
+        self.job_refusal = ""
+        if self.model_error:
+            self.job_refusal = "Fix the model field first: " + self.model_error
+            return
+        spec = JobSpec(
+            kind="calibrate",
+            model=self.model,
+            mode="full" if self.train_mode == "full" else "lora",
+            base_4bit=self.train_mode != "lora",
+        )
+        return self._begin_job(spec)
 
     @rx.event
     def set_lora_alpha(self, value: str | int) -> None:
@@ -1465,7 +1534,7 @@ class TrainState(rx.State):
         self.job_phase = "queued"
         if spec.kind == "multi_run":
             self.job_total_steps = int(spec.runs) * int(spec.steps)
-        elif spec.kind == "export":
+        elif spec.kind in ("export", "calibrate"):
             self.job_total_steps = 0
         else:
             self.job_total_steps = int(spec.steps)
@@ -1492,7 +1561,11 @@ class TrainState(rx.State):
         import time as _time
 
         self._last_step_epoch = _time.time()
-        what = {"multi_run": "Multi-run", "export": "Export"}.get(spec.kind, "Run")
+        what = {
+            "multi_run": "Multi-run",
+            "export": "Export",
+            "calibrate": "Measurement",
+        }.get(spec.kind, "Run")
         self.events = [
             *self.events,
             {
@@ -1777,7 +1850,16 @@ class TrainState(rx.State):
             self.job_output_path = out_path
         if outcome in ("failed", "crashed"):
             self.job_log_tail = _read_log_tail(str(status.get("log_path") or ""))
-        if self.job_kind == "export":
+        if self.job_kind == "calibrate":
+            labels = {
+                "done": "Measured. The estimate now uses this GPU's own numbers.",
+                "stopped": "Measurement cancelled.",
+                "failed": "The measurement could not be completed.",
+                "crashed": "The measurement process died unexpectedly (crashed).",
+            }
+            if outcome == "done":
+                self._refresh_estimate_now()
+        elif self.job_kind == "export":
             labels = {
                 "done": "Export finished.",
                 "stopped": "Export cancelled.",
@@ -1799,7 +1881,11 @@ class TrainState(rx.State):
                 "crashed": "The training process died unexpectedly (crashed).",
             }
         label = labels.get(outcome, outcome)
-        if outcome == "stopped" and self.job_safety_reason and self.job_kind != "export":
+        if (
+            outcome == "stopped"
+            and self.job_safety_reason
+            and self.job_kind not in ("export", "calibrate")
+        ):
             label = (
                 f"Stopped by the GPU temperature limit ({self.job_safety_reason}). "
                 "The checkpoint was saved."
@@ -1827,14 +1913,19 @@ class TrainState(rx.State):
         from .ui_jobs import get_job_manager
 
         manager = get_job_manager()
-        if self.job_kind == "export" and self.job_id and manager.is_alive(self.job_id):
-            # An export has no step boundary to save at: cancel kills the
-            # process tree now and records the outcome as stopped.
+        if (
+            self.job_kind in ("export", "calibrate")
+            and self.job_id
+            and manager.is_alive(self.job_id)
+        ):
+            # No step boundary to save at: cancel kills the process tree now
+            # and records the outcome as stopped.
             manager.cancel(self.job_id)
             self.stop_requested = True
+            what = "export" if self.job_kind == "export" else "measurement"
             self.events = [
                 *self.events,
-                {"t": _ts_now(), "level": "warn", "msg": "Cancelling the export."},
+                {"t": _ts_now(), "level": "warn", "msg": f"Cancelling the {what}."},
             ]
             return
         if self.job_id and manager.is_alive(self.job_id):

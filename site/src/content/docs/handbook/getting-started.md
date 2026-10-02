@@ -104,7 +104,7 @@ backprop ui --port 7862
 
 The UI opens in dark mode. From it you can:
 
-- **Train** (Single run): pick a model preset or any model, a dataset, the method (SFT, ORPO, SimPO, KTO) and the mode (QLoRA, LoRA, or full fine-tuning). The estimate next to **Start training** says whether it fits your card. Then watch steps, loss (raw and smoothed), time left and the GPU. **Stop and save checkpoint** finishes the current step and saves. Every setting is a `backprop train` flag, and the form opens on the same defaults.
+- **Train** (Single run): pick a model preset or any model, a dataset, the method (SFT, ORPO, SimPO, KTO) and the mode (QLoRA, LoRA, or full fine-tuning). The estimate next to **Start training** says whether it fits your card, and **Measure on this GPU** replaces the estimate with a measurement of that model on your own card (a minute or two). Then watch steps, loss (raw and smoothed), time left and the GPU. **Stop and save checkpoint** finishes the current step and saves. Every setting is a `backprop train` flag, and the form opens on the same defaults.
 - **Multi-run**: a SLAO sweep of several short runs merged as it goes, with one progress bar for the whole sweep. Stop ends the sweep after the current run and keeps what was merged.
 - **Export** a run's adapter as LoRA, merged weights or GGUF (and register it with Ollama). A run's page has **Export the model**, which opens Export with that run filled in. GGUF needs llama.cpp's converter, as on the CLI.
 - **Runs** lists past runs with their real outcome (completed, stopped, failed); **Models** lists your Hugging Face cache (it follows `HF_HOME`).

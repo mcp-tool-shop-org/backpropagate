@@ -151,6 +151,16 @@ SSH already handles auth, encryption, and audit. The UI stays bound to `127.0.0.
 
 **The old `BACKPROPAGATE_SECURITY__REQUIRE_AUTH_FOR_SHARE=false` flag from the Gradio era stays a no-op.** The refuse-to-start contract is enforced at both the CLI layer (`cli.py:cmd_ui`) and the app layer (`ui_app/app.py` + `rxconfig.py`), so `python -m reflex run` from the package directory also refuses unless the legitimate `backprop ui` bridge has set its bypass env var. Full chain in [the security page → Four-layer defense in depth](/backpropagate/handbook/security/#four-layer-defense-in-depth).
 
+## "The UI working directory is too deep" / path errors on the first `backprop ui` (Windows)
+
+Since 1.8.2, `backprop ui` builds the web frontend in a per-user folder, `%LOCALAPPDATA%\backpropagate\ui\<version>-<hash>`. The frontend's `node_modules` tree is deep, and Windows limits paths to 260 characters unless long paths are enabled. With a long user name, `backprop ui` warns before unpacking.
+
+**Fix:** point the UI at a short folder, for example `$env:BACKPROPAGATE_UI_WORKDIR = "C:\bp-ui"` in PowerShell (`set BACKPROPAGATE_UI_WORKDIR=C:\bp-ui` in cmd), or enable long paths (`LongPathsEnabled` in the registry, then sign out and in). See [env vars](/backpropagate/handbook/env-vars/).
+
+## "Permission denied" writing `.web` / `reflex.lock` in the install folder
+
+Before 1.8.2, `backprop ui` ran Reflex inside the installed package, so a read-only or root-owned install (a system-wide pip install, a Docker image, the Store package) failed. Upgrade to 1.8.2 or later: the UI now writes to a per-user folder.
+
 ## "What does the `Run ID:` line at startup mean?"
 
 Every training run prints `run_started run_id=<uuid>` in the structured log envelope (and binds the same id to checkpoint manifests and SLAO merge history). When something fails, quoting that `run_id` in a bug report lets a maintainer correlate every log line, checkpoint, and merge across the entire run. See [Reporting bugs](/backpropagate/handbook/reference/#reporting-bugs).
@@ -185,6 +195,7 @@ Every training run prints `run_started run_id=<uuid>` in the structured log enve
 
 ## See also
 
+- [Privacy](/backpropagate/handbook/privacy/): what the app stores, what it sends, and how to remove it.
 - [Error codes](/backpropagate/handbook/error-codes/) — full catalog of structured codes.
 - [Environment variables](/backpropagate/handbook/env-vars/) — every knob.
 - [Reporting bugs](/backpropagate/handbook/reference/#reporting-bugs) — what to include in an issue.

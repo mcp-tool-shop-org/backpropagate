@@ -28,6 +28,12 @@ loudly instead of guessing.
 Set ``BACKPROPAGATE_UI_WORKDIR`` to bypass all of the above: the value is
 used verbatim as the working directory (no ``<version>-<hash8>`` suffix, no
 sibling pruning). Tests and sandboxed launchers use this.
+
+When that per-user folder cannot be created and the package directory is
+not writable (the Store layout), :func:`prepare_ui_cwd` raises
+``RUNTIME_UI_WORKDIR_UNAVAILABLE`` and does not write into the package.
+A writable source checkout still falls back to the package directory so
+``backprop ui`` can run from a checkout whose profile directory is blocked.
 """
 
 from __future__ import annotations
@@ -54,6 +60,36 @@ _STUB_HEADER = (
 
 def _default_warn(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+class UiWorkdirCreateError(OSError):
+    """The per-user UI working directory could not be created."""
+
+    def __init__(self, workdir: Path, reason: BaseException):
+        self.workdir = Path(workdir)
+        super().__init__(
+            f"Could not create the per-user UI working folder {self.workdir}: {reason}"
+        )
+
+
+def package_dir_writable(package_dir: Path) -> bool:
+    """Whether the package directory can host Reflex's writes.
+
+    Uses ``os.access`` so a read-only install (the Store layout under
+    WindowsApps) is refused without creating a probe file there.
+    """
+    try:
+        path = Path(package_dir)
+        return path.is_dir() and os.access(path, os.W_OK)
+    except OSError:
+        return False
+
+
+def _create_workdir(workdir: Path) -> None:
+    try:
+        workdir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise UiWorkdirCreateError(workdir, exc) from exc
 
 
 def package_dir_key(package_dir: Path) -> str:
@@ -207,7 +243,7 @@ def ensure_ui_workdir(
     override = os.environ.get(WORKDIR_ENV_VAR, "").strip()
     if override:
         workdir = Path(override).expanduser()
-        workdir.mkdir(parents=True, exist_ok=True)
+        _create_workdir(workdir)
         clear_saved_ui_state(workdir, warn)
         _ensure_stub_rxconfig(package_dir, workdir)
         sync_ui_assets(package_dir, workdir)
@@ -215,9 +251,49 @@ def ensure_ui_workdir(
 
     key = package_dir_key(package_dir)
     workdir = default_ui_work_root() / f"{version}-{key}"
-    workdir.mkdir(parents=True, exist_ok=True)
+    _create_workdir(workdir)
     _prune_stale_siblings(workdir.parent, current=workdir.name, key=key, warn=warn)
     clear_saved_ui_state(workdir, warn)
     _ensure_stub_rxconfig(package_dir, workdir)
     sync_ui_assets(package_dir, workdir)
     return workdir
+
+
+def prepare_ui_cwd(
+    package_dir: Path,
+    *,
+    version: str | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> Path:
+    """Return the directory ``reflex run`` should use as its cwd.
+
+    The per-user folder wins. If it cannot be created and ``package_dir``
+    is writable, return ``package_dir`` without rewriting the package's
+    ``rxconfig.py`` (that template is already right when the cwd is the
+    package). If the package directory is not writable, raise
+    ``RUNTIME_UI_WORKDIR_UNAVAILABLE`` and do not write there.
+    """
+    from .exceptions import BackpropagateError
+
+    warn = warn or _default_warn
+    package_dir = Path(package_dir)
+    try:
+        return ensure_ui_workdir(package_dir, version=version, warn=warn)
+    except UiWorkdirCreateError as exc:
+        if package_dir_writable(package_dir):
+            warn(
+                f"Could not prepare the per-user UI working directory {exc.workdir} "
+                f"({exc}); running Reflex from the package directory instead "
+                "(this checkout is writable)."
+            )
+            return package_dir
+        raise BackpropagateError(
+            f"Could not create the per-user UI working folder {exc.workdir}.",
+            suggestion=(
+                "Choose another folder by setting BACKPROPAGATE_UI_WORKDIR to a "
+                "directory your account can create. The installed package folder "
+                "is not writable, so the UI will not run from it."
+            ),
+            code="RUNTIME_UI_WORKDIR_UNAVAILABLE",
+            cause=exc,
+        ) from exc

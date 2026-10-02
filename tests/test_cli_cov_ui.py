@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -149,8 +150,23 @@ class TestAuthFile:
                 return getattr(os, item)
 
         monkeypatch.setattr(cli, "os", PosixOs())
-        monkeypatch.setattr(Path, "stat", lambda self, **k: SimpleNamespace(st_mode=0o100644))
-        monkeypatch.setattr(Path, "exists", lambda self: True)
+        # Only the credential file is fictional. A blanket stat/exists makes
+        # the per-user rxconfig stub look present, then the real read fails.
+        real_stat = Path.stat
+        real_exists = Path.exists
+
+        def stat(self, **k):
+            if self.name == "creds":
+                return SimpleNamespace(st_mode=0o100644)
+            return real_stat(self, **k)
+
+        def exists(self):
+            if self.name == "creds":
+                return True
+            return real_exists(self)
+
+        monkeypatch.setattr(Path, "stat", stat)
+        monkeypatch.setattr(Path, "exists", exists)
         # Only the credential file may come back as "alice:pw" — other paths
         # (the rxconfig stub template read that cmd_ui now performs, v1.8.2)
         # must hit the real read_text.
@@ -467,14 +483,55 @@ class TestUiWorkdir:
         stub = (cwd / "rxconfig.py").read_text(encoding="utf-8")
         assert 'app_module_import="backpropagate.ui_app.app"' in stub
 
-    def test_workdir_failure_falls_back_to_package_dir(self, ui, monkeypatch, capsys):
-        def boom(*a, **k):
-            raise OSError("profile locked")
+    def test_writable_package_falls_back_when_user_dir_uncreatable(
+        self, ui, monkeypatch, tmp_path, capsys
+    ):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "rxconfig.py").write_text("sentinel-rxconfig", encoding="utf-8")
+        monkeypatch.setattr(cli, "__file__", str(pkg / "cli.py"))
+        monkeypatch.delenv("BACKPROPAGATE_UI_WORKDIR", raising=False)
+        blocker = tmp_path / "localappdata"
+        blocker.write_text("nope", encoding="utf-8")
+        monkeypatch.setenv("LOCALAPPDATA", str(blocker))
 
-        monkeypatch.setattr("backpropagate.ui_workdir.ensure_ui_workdir", boom)
         assert cli.cmd_ui(parse(["ui"])) == cli.EXIT_OK
-        assert ui["run"][0].cwd == str(Path(cli.__file__).resolve().parent)
-        assert "running Reflex from the package directory" in capsys.readouterr().out
+
+        assert Path(ui["run"][0].cwd) == pkg
+        assert "package directory" in capsys.readouterr().out
+        assert (pkg / "rxconfig.py").read_text(encoding="utf-8") == "sentinel-rxconfig"
+
+    def test_readonly_package_workdir_failure_does_not_launch(
+        self, ui, monkeypatch, tmp_path
+    ):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "rxconfig.py").write_bytes(b"template")
+        monkeypatch.setattr(cli, "__file__", str(pkg / "cli.py"))
+        monkeypatch.delenv("BACKPROPAGATE_UI_WORKDIR", raising=False)
+        blocker = tmp_path / "localappdata"
+        blocker.write_text("nope", encoding="utf-8")
+        monkeypatch.setenv("LOCALAPPDATA", str(blocker))
+        real_access = os.access
+
+        def access(path, mode, *args, **kwargs):
+            try:
+                if Path(path).resolve() == pkg.resolve() and mode & os.W_OK:
+                    return False
+            except OSError:
+                pass
+            return real_access(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr("backpropagate.ui_workdir.os.access", access)
+        with pytest.raises(BackpropagateError) as exc:
+            cli.cmd_ui(parse(["ui"]))
+
+        assert exc.value.code == "RUNTIME_UI_WORKDIR_UNAVAILABLE"
+        assert str(blocker) in exc.value.message
+        assert "BACKPROPAGATE_UI_WORKDIR" in (exc.value.suggestion or "")
+        assert ui["run"] == []
+        assert (pkg / "rxconfig.py").read_bytes() == b"template"
+        assert [p.relative_to(pkg) for p in pkg.rglob("*")] == [Path("rxconfig.py")]
 
 
 class TestOfflineFrontend:

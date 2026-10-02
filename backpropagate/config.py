@@ -21,6 +21,7 @@ Features:
 import dataclasses
 import json
 import os
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass as dc_dataclass
@@ -168,14 +169,49 @@ __all__ = [
     "get_recommended_warmup",
     # Constants
     "PYDANTIC_SETTINGS_AVAILABLE",
+    "STORE_EDITION_MARKER_NAME",
+    "is_store_edition",
 ]
 
 try:
-    from pydantic import Field, model_validator
+    from pydantic import Field, field_validator, model_validator
     from pydantic_settings import BaseSettings, SettingsConfigDict
     PYDANTIC_SETTINGS_AVAILABLE = True
 except ImportError:
     PYDANTIC_SETTINGS_AVAILABLE = False
+
+
+# Marker written by scripts/build_msix.py next to the embedded python.exe.
+# The Store package is read-only, so a caller cannot remove this file or
+# unset it the way they can unset an environment variable. A pip install
+# has no marker, and the opt-in keeps working there.
+STORE_EDITION_MARKER_NAME = "backpropagate-store-edition"
+
+
+def is_store_edition() -> bool:
+    """True when this interpreter is the Microsoft Store package.
+
+    The marker sits next to ``sys.executable`` (``App/python/`` in the
+    MSIX layout). ``sitecustomize.py`` also overwrites
+    ``BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE`` at startup; this check is
+    what still wins if the caller sets that variable again, or sets it
+    from a ``.env`` file, after startup.
+    """
+    try:
+        marker = Path(sys.executable).resolve().parent / STORE_EDITION_MARKER_NAME
+    except OSError:
+        return False
+    try:
+        return marker.is_file()
+    except OSError:
+        return False
+
+
+def _lock_trust_remote_code(value: object) -> object:
+    """Store edition never runs code shipped inside a model repository."""
+    if is_store_edition():
+        return False
+    return value
 
 
 # =============================================================================
@@ -328,7 +364,19 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # (``trust_remote_code`` in transformers). Default OFF: loading a repo
         # that needs it raises CONFIG_TRUST_REMOTE_CODE_REQUIRED naming the
         # opt-in (``BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true``).
+        # The Store edition ignores the opt-in (environment, ``.env``, and
+        # later assignment). See :func:`is_store_edition`.
         trust_remote_code: bool = False
+
+        @field_validator("trust_remote_code", mode="before")
+        @classmethod
+        def _store_edition_disables_remote_code(cls, value: object) -> object:
+            return _lock_trust_remote_code(value)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "trust_remote_code":
+                value = _lock_trust_remote_code(value)
+            super().__setattr__(name, value)
 
     class LoRAConfig(BaseSettings):
         """LoRA/QLoRA configuration.
@@ -1051,6 +1099,16 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         version: str = Field(default_factory=_safe_pkg_version)
         name: str = "backpropagate"
 
+        @model_validator(mode="after")
+        def _store_edition_refuses_model_code(self) -> "Settings":
+            # ``.env`` is a source on this object. Nested ModelConfig also
+            # locks the field; assigning here covers a value that arrived
+            # through this object's own sources after the nested model
+            # was built.
+            if is_store_edition():
+                self.model.trust_remote_code = False
+            return self
+
         def to_dict(self) -> dict:
             """Export settings as dictionary."""
             return {
@@ -1227,8 +1285,15 @@ else:
         load_in_4bit: bool = True
         max_seq_length: int = 2048
         dtype: str | None = None
-        # Default OFF; parity with the pydantic branch above.
+        # Default OFF; parity with the pydantic branch above. The Store
+        # edition ignores the opt-in, including an explicit constructor
+        # argument and a later assignment.
         trust_remote_code: bool = False
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "trust_remote_code":
+                value = _lock_trust_remote_code(value)
+            object.__setattr__(self, name, value)
 
     @_env_dataclass("BACKPROPAGATE_LORA__")
     class LoRAConfig:  # type: ignore[no-redef]

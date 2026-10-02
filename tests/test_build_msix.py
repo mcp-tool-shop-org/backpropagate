@@ -8,9 +8,12 @@ and needs the 5090 for the torch gate.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import re
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -321,3 +324,211 @@ class TestSideloadSign:
         assert not (cert_dir / "backpropagate-sideload.pfx").exists()  # key destroyed despite the failure
         removals = [c for c in calls if "Remove-Item 'Cert:" in c[-1]]
         assert len(removals) == 1 and self.THUMB in removals[0][-1]
+
+
+def _zip_members(path: Path, tag: str, files: dict[str, bytes]) -> None:
+    root = f"llama.cpp-{tag}/"
+    with zipfile.ZipFile(path, "w") as zf:
+        for rel, data in files.items():
+            zf.writestr(root + rel, data)
+
+
+class _Body:
+    def __init__(self, data: bytes):
+        self._data = data
+        self._off = 0
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            n = len(self._data) - self._off
+        chunk = self._data[self._off:self._off + n]
+        self._off += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestStoreEditionMarker:
+    def test_marker_is_staged_next_to_the_interpreter(self, mod, tmp_path):
+        python_home = tmp_path / "App" / "python"
+        python_home.mkdir(parents=True)
+        dest = mod.stage_store_edition_marker(python_home)
+        assert dest == python_home / mod.STORE_EDITION_MARKER_NAME
+        assert dest.read_text(encoding="utf-8") == mod.STORE_EDITION_MARKER_TEXT
+
+    def test_sitecustomize_overwrites_the_opt_in_from_the_marker(self, mod):
+        import backpropagate.config as cfg
+
+        src = mod._SITECUSTOMIZE
+        assert f'"{mod.STORE_EDITION_MARKER_NAME}"' in src
+        assert mod.STORE_EDITION_MARKER_NAME == cfg.STORE_EDITION_MARKER_NAME
+        assert '_os.environ["BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE"] = "false"' in src
+        assert 'setdefault("BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE"' not in src
+        assert "Program Files" not in src
+
+
+class TestLlamaCppManifest:
+    """Every copied llama.cpp file is pinned, cached archive or not."""
+
+    def _synthetic(self):
+        files = {
+            "LICENSE": b"license-body",
+            "convert_hf_to_gguf.py": b"converter",
+            "gguf-py/gguf/__init__.py": b"init",
+        }
+        manifest = {
+            rel: hashlib.sha256(data).hexdigest() for rel, data in files.items()
+        }
+        return files, manifest
+
+    def test_matching_set_passes(self, mod):
+        files, manifest = self._synthetic()
+        mod.verify_llamacpp_manifest(files, manifest)
+
+    def test_changed_file_fails(self, mod, tmp_path):
+        files, manifest = self._synthetic()
+        files = dict(files)
+        files["LICENSE"] = b"tampered"
+        archive = tmp_path / "changed.zip"
+        _zip_members(archive, mod.LLAMACPP_TAG, files)
+        with zipfile.ZipFile(archive) as zf:
+            got = mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+        with pytest.raises(RuntimeError, match="changed: LICENSE"):
+            mod.verify_llamacpp_manifest(got, manifest)
+
+    def test_extra_gguf_file_fails_and_unrelated_files_do_not(self, mod, tmp_path):
+        files, manifest = self._synthetic()
+        archive = tmp_path / "extra.zip"
+        _zip_members(
+            archive,
+            mod.LLAMACPP_TAG,
+            {
+                **files,
+                "README.md": b"not copied",
+                "gguf-py/gguf/extra.py": b"extra",
+            },
+        )
+        with zipfile.ZipFile(archive) as zf:
+            got = mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+        assert "README.md" not in got
+        with pytest.raises(RuntimeError, match="not in manifest: gguf-py/gguf/extra.py"):
+            mod.verify_llamacpp_manifest(got, manifest)
+
+    def test_missing_file_fails(self, mod, tmp_path):
+        files, manifest = self._synthetic()
+        files = dict(files)
+        del files["gguf-py/gguf/__init__.py"]
+        archive = tmp_path / "missing.zip"
+        _zip_members(archive, mod.LLAMACPP_TAG, files)
+        with zipfile.ZipFile(archive) as zf:
+            got = mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+        with pytest.raises(RuntimeError, match="missing: gguf-py/gguf/__init__.py"):
+            mod.verify_llamacpp_manifest(got, manifest)
+
+    def test_unsafe_member_is_refused(self, mod, tmp_path):
+        archive = tmp_path / "unsafe.zip"
+        _zip_members(archive, mod.LLAMACPP_TAG, {"gguf-py/gguf/../../LICENSE": b"x"})
+        with zipfile.ZipFile(archive) as zf:
+            with pytest.raises(RuntimeError, match="unsafe"):
+                mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+
+    def test_cached_archive_is_checked_without_network(self, mod, tmp_path, monkeypatch):
+        downloads = tmp_path / "downloads"
+        downloads.mkdir()
+        stage = tmp_path / "stage"
+        files, _manifest = self._synthetic()
+        files = dict(files)
+        files["LICENSE"] = b"not-the-pin"
+        archive = downloads / f"llama.cpp-{mod.LLAMACPP_TAG}.zip"
+        _zip_members(archive, mod.LLAMACPP_TAG, files)
+
+        def boom(*_a, **_k):
+            raise AssertionError("cached archive must not be fetched again")
+
+        monkeypatch.setattr(mod.urllib.request, "urlopen", boom)
+        with pytest.raises(RuntimeError, match="manifest mismatch"):
+            mod.stage_llamacpp(downloads, stage)
+
+    def test_manifest_text_is_sorted_path_sha_lines(self, mod, tmp_path):
+        files, manifest = self._synthetic()
+        archive = tmp_path / "ok.zip"
+        _zip_members(archive, "b99999", files)
+        text = mod.llamacpp_manifest_text(archive, "b99999", commit="abc")
+        lines = [ln for ln in text.splitlines() if not ln.startswith("#")]
+        assert lines == sorted(lines)
+        assert lines[0].startswith("LICENSE ")
+        assert manifest["LICENSE"] in lines[0]
+        assert text.startswith("# tag b99999 commit abc\n")
+
+    def test_print_flag_writes_the_manifest_and_does_not_need_out(self, mod, monkeypatch, capsys):
+        monkeypatch.setattr(
+            mod,
+            "render_llamacpp_manifest_for_tag",
+            lambda tag: f"# tag {tag} commit x\nLICENSE abc\n",
+        )
+        assert mod.main(["--print-llamacpp-manifest"]) == 0
+        assert "LICENSE abc" in capsys.readouterr().out
+        assert mod.main(["--print-llamacpp-manifest", "--llamacpp-tag", "b99999"]) == 0
+        assert "b99999" in capsys.readouterr().out
+
+    def test_manifest_constant_matches_pinned_tag(self, mod):
+        """The constant was computed from the b11323 tag archive.
+
+        See the comment on LLAMACPP_MANIFEST. A cache hit in the system temp
+        directory is reused; a miss downloads the tag (commit-checked) once.
+        """
+        cache = Path(tempfile.gettempdir()) / f"llama.cpp-{mod.LLAMACPP_TAG}.zip"
+        if not cache.is_file():
+            mod.fetch_llamacpp_archive(
+                cache, mod.LLAMACPP_TAG, commit=mod.LLAMACPP_COMMIT
+            )
+        with zipfile.ZipFile(cache) as zf:
+            files = mod.llamacpp_archive_members(zf, mod.LLAMACPP_TAG)
+        mod.verify_llamacpp_manifest(files, mod.LLAMACPP_MANIFEST)
+        assert "LICENSE" in mod.LLAMACPP_MANIFEST
+        assert "convert_hf_to_gguf.py" in mod.LLAMACPP_MANIFEST
+        assert "gguf-py/gguf/__init__.py" in mod.LLAMACPP_MANIFEST
+
+
+class TestNoticePins:
+    def test_changed_body_fails(self, mod, tmp_path, monkeypatch):
+        digest = hashlib.sha256(b"correct license\n").hexdigest()
+        monkeypatch.setattr(
+            mod,
+            "NOTICES",
+            [("Example (MIT)", "https://example.invalid/LICENSE", digest)],
+        )
+        monkeypatch.setattr(
+            mod.urllib.request, "urlopen", lambda *_a, **_k: _Body(b"tampered license\n")
+        )
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        with pytest.raises(RuntimeError, match="SHA-256"):
+            mod.stage_notices(tmp_path, stage, tmp_path / "downloads")
+        assert not (stage / "THIRD_PARTY_NOTICES.txt").exists()
+
+    def test_matching_body_and_local_license_are_written(self, mod, tmp_path, monkeypatch):
+        body = b"the license text\n"
+        digest = hashlib.sha256(body).hexdigest()
+        monkeypatch.setattr(
+            mod,
+            "NOTICES",
+            [
+                ("backpropagate (MIT)", None, None),
+                ("Example (MIT)", "https://example.invalid/LICENSE", digest),
+            ],
+        )
+        monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *_a, **_k: _Body(body))
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "LICENSE").write_text("our license", encoding="utf-8")
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        mod.stage_notices(repo, stage, tmp_path / "downloads")
+        text = (stage / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
+        assert "our license" in text
+        assert "the license text" in text

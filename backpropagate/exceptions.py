@@ -341,6 +341,18 @@ ERROR_CODES: dict[str, dict[str, str]] = {
         ),
         "retryable": "no",
     },
+    "RUNTIME_UI_WORKDIR_UNAVAILABLE": {
+        "description": (
+            "The per-user UI working folder could not be created, and the "
+            "installed package folder is not writable, so the UI stopped "
+            "instead of trying to write there."
+        ),
+        "default_hint": (
+            "Set BACKPROPAGATE_UI_WORKDIR to a directory your account can "
+            "create. The message names the folder that could not be created."
+        ),
+        "retryable": "no",
+    },
     "UI_OUTPUT_DIR_FORBIDDEN": {
         "description": "BACKPROPAGATE_UI__OUTPUT_DIR points at a forbidden base path (e.g., /etc, ~/.ssh).",
         "default_hint": "Set BACKPROPAGATE_UI__OUTPUT_DIR to a writable directory under your home or workspace.",
@@ -1100,19 +1112,24 @@ class TrustRemoteCodeRequiredError(ModelLoadError):
     def __init__(self, model_name: str):
         import os
 
+        from .config import is_store_edition
+
         where = (
             f"the files in {os.path.abspath(model_name)}"
             if os.path.isdir(model_name)
             else f"https://huggingface.co/{model_name}"
         )
-        super().__init__(
-            model_name,
-            (
-                "loading it would execute Python code from the model "
-                "repository (custom modeling code), and trust_remote_code is "
-                "off (the default)"
-            ),
-            suggestion=(
+        if is_store_edition():
+            # Do not name the opt-in variable. This edition cannot honour it,
+            # and the hint must not send a reviewer looking for a switch.
+            suggestion = (
+                "This edition does not run code that ships inside a model "
+                "repository. Install backpropagate with pip "
+                "(`pip install backpropagate`) to use a model that needs "
+                "that code, or pick a model transformers supports natively."
+            )
+        else:
+            suggestion = (
                 f"Read the code first ({where}). To opt in, set "
                 "BACKPROPAGATE_MODEL__TRUST_REMOTE_CODE=true in the "
                 "environment (this also applies to the CLI, e.g. "
@@ -1121,7 +1138,15 @@ class TrustRemoteCodeRequiredError(ModelLoadError):
                 "settings.model.trust_remote_code = True` before creating the "
                 "Trainer. Otherwise pick a model transformers supports "
                 "natively."
+            )
+        super().__init__(
+            model_name,
+            (
+                "loading it would execute Python code from the model "
+                "repository (custom modeling code), and trust_remote_code is "
+                "off (the default)"
             ),
+            suggestion=suggestion,
         )
 
 

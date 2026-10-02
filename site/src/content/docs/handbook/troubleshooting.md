@@ -64,13 +64,36 @@ Or install Ollama from <https://ollama.com/download>. The default endpoint is `l
 
 **Symptom:** Training crashes during a save with `STATE_CHECKPOINT_INVALID` and a disk-full IOError underneath.
 
-**What Backpropagate does for you:** Checkpoints write atomically (write to `<path>.partial`, fsync, rename to `<path>`). If a write is interrupted, you get a stale `.partial` directory but the previous good checkpoint is intact.
+**What Backpropagate does for you:** a save writes into `<path>.partial` first. Since 1.8.2 it then moves only the files it wrote into `<path>`, one by one. Each file it replaces is moved aside into `<path>.backup/` first, and `<path>.backup.json` lists them. If the save stops partway, the next save into the same folder puts the previous files back before it starts, so you always have either the complete new save or the complete previous one. A save keeps everything else in the folder: `run_history.json`, the `checkpoint-N/` folders and your own files. It does remove model and tokenizer files that an earlier save left there and this one did not rewrite (for example an old LoRA adapter under merged weights), because transformers would otherwise load them instead of the new ones.
 
 **Fix:**
 
 1. Free space (delete old checkpoints in `./output/`).
 2. Remove any leftover `.partial` directories (they are safe to delete — they represent a half-written write that did not complete).
-3. Resume training from the previous good checkpoint.
+3. Leave `<path>.backup/` and `<path>.backup.json` alone: they hold your previous files, and the next save restores them. Delete them by hand only if a save says it cannot resolve them, after checking that `<path>` holds the files you expect.
+4. Resume training from the previous good checkpoint.
+
+## `backprop runs` shows no runs after training (1.8.1 and earlier)
+
+**Symptom:** `backprop runs` / `backprop list-runs` and the UI's Runs page say no training runs were recorded, although the run logged "Recorded run completed".
+
+**Why:** up to 1.8.1, saving the model replaced the whole `--output` folder, which also held `run_history.json` and the intermediate `checkpoint-N/` folders, so every `backprop train` deleted its own run history. Fixed in 1.8.2.
+
+**Fix:** upgrade to 1.8.2. Runs recorded before the upgrade can't be recovered; new runs are kept.
+
+## `UsageError: No API key configured` at the first training step, or `CONFIG_INVALID_SETTING` naming `report_to`
+
+**Symptom:** up to 1.8.1, training stopped at step 1 with wandb's `UsageError: No API key configured`. Since 1.8.2, asking for W&B by name stops the run before the model loads with `CONFIG_INVALID_SETTING`.
+
+**Why:** the `wandb` package is installed (the `[monitoring]` extra and the `[full]` bundles install it) but nobody ran `wandb login`. Since 1.8.2 the default `--report-to auto` skips W&B in that case and logs one line saying so; only an explicit `--report-to wandb` (or `report_to="wandb"` in Python) is an error.
+
+**Fix:** one of:
+
+```bash
+wandb login                                  # log to your W&B account
+WANDB_MODE=offline backprop train ...        # log locally, no account
+backprop train --report-to none ...          # no experiment tracking
+```
 
 ## "GPU temperature critical" pause
 

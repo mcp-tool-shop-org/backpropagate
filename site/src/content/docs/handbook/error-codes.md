@@ -81,7 +81,7 @@ You will see codes printed in stderr as `[CODE_NAME]: message` and in the struct
 
 | Code | Raised when | Fix |
 |------|-------------|-----|
-| `STATE_CHECKPOINT_INVALID` | A checkpoint file could not be saved or loaded — missing manifest, corrupt safetensors, mid-write crash. | Delete the offending checkpoint directory; if it was written via atomic-rename, look for stray `.partial` files and remove them. |
+| `STATE_CHECKPOINT_INVALID` | A checkpoint file could not be saved or loaded — missing manifest, corrupt safetensors, mid-write crash. | Delete the offending checkpoint directory; stray `.partial` directories are safe to remove. Leave `<path>.backup/` and `<path>.backup.json` (1.8.2+): they hold the previous save, which the next save restores. See [troubleshooting](/backpropagate/handbook/troubleshooting/#disk-full-mid-checkpoint). |
 | `STATE_SLAO_CHECKPOINT_INVALID` | A SLAO checkpoint snapshot is corrupt. | Same fix — remove the bad snapshot and re-run. SLAO will rebuild from the previous good snapshot. |
 
 ## PARTIAL_*  (mixed success/failure)

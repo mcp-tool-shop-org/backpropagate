@@ -283,6 +283,20 @@ ERROR_CODES: dict[str, dict[str, str]] = {
     # load, held-out forward pass, or generation crashed. Surfaced via the
     # cli.py catch-all exit-code mapper (model/OOM/Hub buckets) the same way
     # training failures are.
+    "RUNTIME_VRAM_CALIBRATION_FAILED": {
+        "description": (
+            "`backprop estimate-vram --calibrate` could not measure the model "
+            "on this GPU: no CUDA GPU, too little free VRAM for even the "
+            "smallest probe, the model failed to load, or too few probes "
+            "fitted in memory to fit a result. Nothing is stored."
+        ),
+        "default_hint": (
+            "Close other GPU programs and retry, or measure a smaller model. "
+            "Estimates fall back to the built-in formula until a measurement "
+            "exists."
+        ),
+        "retryable": "yes",
+    },
     "RUNTIME_EVAL_FAILED": {
         "description": (
             "`backprop eval` failed to complete the evaluation — the model "

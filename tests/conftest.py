@@ -147,6 +147,18 @@ except ImportError:  # pragma: no cover — hypothesis is a test-only dep
 
 
 @pytest.fixture(autouse=True)
+def _no_machine_vram_calibration(tmp_path_factory, monkeypatch):
+    """Point the VRAM calibration store at an empty temp file for every test.
+
+    ``estimate_vram`` prefers a measurement made on this GPU for the model
+    (backpropagate.vram_calibration). A developer rig that has calibrated real
+    models would otherwise see different numbers than CI.
+    """
+    store = tmp_path_factory.getbasetemp() / "vram-calibration-empty.json"
+    monkeypatch.setenv("BACKPROPAGATE_VRAM_CALIBRATION", str(store))
+
+
+@pytest.fixture(autouse=True)
 def _default_backend_to_cuda(request, monkeypatch):
     """Default the training backend to CUDA for the whole suite.
 

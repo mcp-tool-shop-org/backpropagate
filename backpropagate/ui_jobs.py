@@ -327,11 +327,32 @@ def _build_export_argv(spec: JobSpec, run_dir: Path) -> list[str]:
     return argv
 
 
+def _build_calibrate_argv(spec: JobSpec, run_dir: Path) -> list[str]:
+    """``backprop estimate-vram <model> --calibrate``: measure on this GPU."""
+    argv = [
+        sys.executable,
+        "-m",
+        "backpropagate",
+        "estimate-vram",
+        spec.model,
+        "--calibrate",
+        "--mode",
+        spec.mode,
+        "--ui-run-dir",
+        str(run_dir),
+    ]
+    if spec.mode == "lora" and not spec.base_4bit:
+        argv += ["--no-4bit"]
+    return argv
+
+
 def _build_argv(spec: JobSpec, run_dir: Path) -> list[str]:
     if spec.kind == "multi_run":
         return _build_multi_run_argv(spec, run_dir)
     if spec.kind == "export":
         return _build_export_argv(spec, run_dir)
+    if spec.kind == "calibrate":
+        return _build_calibrate_argv(spec, run_dir)
     return _build_train_argv(spec, run_dir)
 
 
@@ -388,10 +409,22 @@ def _validate_export_spec(spec: JobSpec) -> None:
 def _validate_spec(spec: JobSpec) -> None:
     """Server-side caps + sandbox checks (handoff rules 6-7). Raises
     JobValidationError with an operator-facing message."""
-    if spec.kind not in ("sft", "multi_run", "export"):
+    if spec.kind not in ("sft", "multi_run", "export", "calibrate"):
         raise NotImplementedError(f"Unknown job kind {spec.kind!r}.")
     if spec.kind == "export":
         _validate_export_spec(spec)
+        return
+    if spec.kind == "calibrate":
+        model = (spec.model or "").strip()
+        if not model or len(model) > 256:
+            raise JobValidationError("Model id is empty or overlong.")
+        if not (_MODEL_ID_RE.match(model) or Path(model).exists()):
+            raise JobValidationError(
+                f"Model {model!r} is neither a HuggingFace id (org/name) nor an "
+                "existing local path."
+            )
+        if spec.mode not in ("lora", "full"):
+            raise JobValidationError(f"Unknown mode {spec.mode!r}.")
         return
     if spec.kind == "multi_run":
         if not (1 <= int(spec.runs) <= MAX_UI_RUNS):
@@ -513,6 +546,7 @@ def vram_verdict(
         "card_gb": card_gb,
         "batch": None,
         "note": "",
+        "source": "estimate",  # "measured" once this model is calibrated here
     }
     try:
         if not card_gb or card_gb <= 0:
@@ -544,6 +578,7 @@ def vram_verdict(
             out["note"] = "No estimate for this model."
             return out
         out["total_gb"] = round(total, 2)
+        out["source"] = str(getattr(estimate, "source", "estimate"))
         ratio = total / card_gb
         out["verdict"] = "fits" if ratio <= 0.85 else "tight" if ratio <= 1.0 else "wont_fit"
     except Exception as exc:  # noqa: BLE001 — the estimate is advisory
@@ -634,7 +669,12 @@ class JobManager:
                 )
             # Export loads the model briefly or not at all; the training
             # estimator does not describe it.
-            ok, note = (True, "export") if spec.kind == "export" else _vram_preflight(spec)
+            # A calibration gates each of its own probes against free VRAM.
+            ok, note = (
+                (True, spec.kind)
+                if spec.kind in ("export", "calibrate")
+                else _vram_preflight(spec)
+            )
             if not ok:
                 raise JobValidationError(note)
 

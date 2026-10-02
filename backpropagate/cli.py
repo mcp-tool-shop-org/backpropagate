@@ -2735,6 +2735,12 @@ def _enumerate_env_vars() -> list[dict[str, str]]:
             "Override the Reflex UI working directory entirely: the value is used verbatim (no <version>-<hash> suffix, no stale-sibling pruning). Unset by default: since v1.8.2 the UI runs from %LOCALAPPDATA%/backpropagate/ui/<version>-<hash> on Windows or $XDG_CACHE_HOME/backpropagate/ui/<version>-<hash> elsewhere, so read-only install locations (Store MSIX) work. Tests and sandboxed launchers set this.",
         ),
         (
+            "BACKPROPAGATE_VRAM_CALIBRATION",
+            "",
+            "path",
+            "Where `backprop estimate-vram --calibrate` stores its measurements. Unset by default: ~/.backpropagate/vram-calibration.json. One entry per GPU, model, mode and library versions.",
+        ),
+        (
             "BACKPROPAGATE_UI_PAYLOAD_DIR",
             "",
             "path",
@@ -7381,6 +7387,88 @@ _VRAM_BATCH_SIZE_TIERS: list[tuple[float, int, str]] = [
 _VRAM_TIER_TOLERANCE_GB: float = 1.5
 
 
+def _cmd_calibrate_body(args: argparse.Namespace) -> int:
+    """``backprop estimate-vram <model> --calibrate``: measure this model's
+    training memory on the GPU that is running and store the result.
+
+    Exit codes: 0 measured and saved; 2 the measurement could not run or be
+    fitted (``RUNTIME_VRAM_CALIBRATION_FAILED``).
+    """
+    from . import vram_calibration as vc
+
+    mode = getattr(args, "mode", "lora")
+    base_4bit = not bool(getattr(args, "no_4bit", False))
+    job = getattr(args, "_ui_job", None)
+    as_json = bool(getattr(args, "json", False))
+
+    def say(text: str) -> None:
+        if not as_json:
+            _print_info(text)
+
+    def on_event(row: dict[str, Any]) -> None:
+        event = row.get("event")
+        if event == "loading":
+            say(f"Loading {args.model} (GPU budget {row.get('budget_gib', 0):.1f} GB)...")
+        elif event == "loaded":
+            say(
+                f"Loaded: {row.get('load_gib', 0):.2f} GB "
+                f"(every run also needs {row.get('floor_gib', 0):.2f} GB while training)"
+            )
+            if job is not None:
+                job.writer.phase("measuring")
+        elif event == "probe":
+            label = f"batch {row.get('batch')} x {row.get('seq')} tokens"
+            if row.get("oom"):
+                say(f"{label}: ran out of memory (recorded; stopping here)")
+            else:
+                say(f"{label}: peak {row.get('peak_gib', 0):.2f} GB")
+            if job is not None:
+                job.writer.phase(f"measured {label}")
+        elif event == "skipped":
+            say(
+                f"batch {row.get('batch')} x {row.get('seq')} tokens: skipped, "
+                f"predicted {row.get('predicted_gib', 0):.1f} GB is over the budget"
+            )
+
+    if not as_json:
+        _print_header("Backpropagate VRAM calibration")
+        _print_kv("Model", args.model)
+        _print_kv("Mode", "full" if mode == "full" else ("QLoRA (4-bit)" if base_4bit else "LoRA (16-bit)"))
+    try:
+        cal = vc.calibrate(args.model, mode=mode, base_4bit=base_4bit, on_event=on_event)
+    except vc.CalibrationError as exc:
+        _print_error(f"[RUNTIME_VRAM_CALIBRATION_FAILED] {exc}")
+        return EXIT_RUNTIME_ERROR
+    if job is not None:
+        job.output_path = str(vc.calibration_path())
+    if as_json:
+        import json
+        from dataclasses import asdict
+
+        print(json.dumps({"schema_version": CLI_JSON_SCHEMA_VERSION, "calibration": asdict(cal)}, indent=2))
+        return EXIT_OK
+    print()
+    _print_success(f"Measured on {cal.machine.get('gpu', 'this GPU')}")
+    _print_kv("Loaded model", f"{cal.load_gib:.2f} GB")
+    _print_kv("Training floor", f"{cal.floor_gib:.2f} GB")
+    if cal.rows_measured:
+        _print_kv("Each row of 1,024 tokens", f"{cal.rows_gib(1, 1024):.2f} GB")
+        _print_kv("Each row of 2,048 tokens", f"{cal.rows_gib(1, 2048):.2f} GB")
+        _print_kv("Probe fit", f"within {cal.max_residual_pct:.0f}%")
+    else:
+        _print_warning(
+            "No probe large enough to measure the per-row cost fitted in the "
+            "free VRAM. The load size is measured; the per-row cost stays the "
+            "built-in formula's."
+        )
+    _print_kv("Saved to", str(vc.calibration_path()))
+    _print_info(
+        "`backprop estimate-vram` and the web UI now use this measurement for "
+        "this model on this GPU."
+    )
+    return EXIT_OK
+
+
 def cmd_estimate_vram(args: argparse.Namespace) -> int:
     """Execute the ``backprop estimate-vram <model>`` subcommand (BRIDGE-F-008).
 
@@ -7393,6 +7481,9 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
         0   table printed
         1   --vram-gb out of plausible range
     """
+    if getattr(args, "calibrate", False):
+        return _run_as_ui_job(args, _cmd_calibrate_body, "loading")
+
     # Resolve VRAM: explicit override > torch query > error.
     vram_gb: float | None = None
     detected_via = "unknown"
@@ -7460,6 +7551,10 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                 _estimate_kwargs["gradient_checkpointing"] = False
             if getattr(args, "target_modules", None):
                 _estimate_kwargs["target_modules"] = _parse_target_modules(args.target_modules)
+            if getattr(args, "no_calibration", False) or args.vram_gb is not None:
+                # A stored measurement belongs to THIS GPU; --vram-gb
+                # simulates another card, so it uses the formula.
+                _estimate_kwargs["use_calibration"] = False
             estimate = _estimate_vram(
                 model=args.model,
                 mode=mode,
@@ -7488,6 +7583,7 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
                         "param_count_billions",
                         "mode",
                         "notes",
+                        "source",
                     )
                 }
         except Exception as exc:  # noqa: BLE001 — best effort
@@ -7535,6 +7631,12 @@ def cmd_estimate_vram(args: argparse.Namespace) -> int:
     if per_config_estimate is not None:
         print(f"\n{Colors.BOLD}Per-config estimate ({mode}){Colors.RESET}")
         _format = lambda v: (f"{v:.2f} GB" if isinstance(v, (int, float)) else "-")  # noqa: E731
+        _measured = per_config_estimate.get("source") == "measured"
+        _print_kv(
+            "Source",
+            "measured on this GPU" if _measured
+            else "built-in formula (run with --calibrate to measure on this GPU)",
+        )
         _print_kv("Total VRAM (est.)", _format(per_config_estimate.get("total_gb")))
         _print_kv("Model weights", _format(per_config_estimate.get("model_weights_gb")))
         if mode == "lora":
@@ -9703,6 +9805,27 @@ Extend cloudflared timeout:   BACKPROPAGATE_CLOUDFLARED_TIMEOUT=60 backprop ui -
             "`backprop train --target-modules`. Sizes the adapter."
         ),
     )
+    estimate_vram_parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help=(
+            "Measure this model's training memory on the GPU that is running: "
+            "a few very short real training probes (batch 1-2, up to 1,024 "
+            "tokens), each run only if it is predicted to fit, with the "
+            "process capped below the free VRAM. The result is stored per GPU "
+            "and model and used by later estimates. Uses --mode and --no-4bit."
+        ),
+    )
+    estimate_vram_parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help=(
+            "Ignore a stored measurement for this model and use the built-in "
+            "formula. (--vram-gb does this too: a measurement belongs to the "
+            "GPU it was made on.)"
+        ),
+    )
+    estimate_vram_parser.add_argument("--ui-run-dir", default=None, help=argparse.SUPPRESS)
     estimate_vram_parser.add_argument(
         "--no-gradient-checkpointing",
         action="store_true",

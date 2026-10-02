@@ -19,6 +19,9 @@ A symptoms-first reverse index. If you already know the error code, jump to [Err
 2. Reduce `--max-seq-length` (most VRAM is spent on attention over sequence length).
 3. Pick a smaller model preset (Qwen 2.5 3B fits in ~8 GB).
 4. If you want OOM to be a hard failure (e.g. you're benchmarking), pass `Trainer(oom_recovery=False)` in the Python API.
+5. Check before you start: `backprop estimate-vram <model> --lora-r <r> --batch-size <n>` shows what a config needs, and `--calibrate` measures that model on your own GPU first (a minute or two), which makes the number exact for your card. In the web UI the same estimate sits next to **Start training**, with **Measure on this GPU**.
+
+**On Windows, running out of VRAM can look like a freeze instead of an error.** When a run needs slightly more than the card has, the NVIDIA driver can spill into shared system memory: training keeps going, very slowly, and the whole desktop stutters. If that happens, stop the run and lower the batch size. (`estimate-vram --calibrate` protects itself from this by capping its own GPU memory.)
 
 ## "HF Hub 401" / gated model / model not found
 

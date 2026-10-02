@@ -1310,6 +1310,9 @@ class VRAMEstimate:
     # the GPU-resident working set + activations.
     host_ram_gb: float = 0.0
     notes: list[str] = field(default_factory=list)
+    # "measured": from a calibration run on this GPU for this model
+    # (backpropagate.vram_calibration); "estimate": the shipped formula.
+    source: str = "estimate"
 
     def fits_on_card(self, vram_gb: float) -> bool:
         """Will this config fit on a card with ``vram_gb`` total VRAM?"""
@@ -1356,6 +1359,7 @@ def estimate_vram(
     gradient_checkpointing: bool = True,  # the trainer default in both modes
     target_modules: str | list[str] | None = None,  # None: all-linear (the default)
     varlen_attention: bool | None = None,  # None: detect flash-attn / xFormers
+    use_calibration: bool = True,  # prefer a measurement made on this GPU
 ) -> VRAMEstimate:
     """v1.4 BACKEND-F-002: pre-flight VRAM estimator.
 
@@ -1372,6 +1376,8 @@ def estimate_vram(
       layers in 16-bit);
     * LoRA adapter: 4 bytes per trainable param, plus ~6.3 bytes per trainable
       param while training (gradients + optimizer state);
+    * a floor every run pays: one transient fp32 copy of the embedding table
+      (``4 * vocab * hidden`` bytes);
     * per row, with gradient checkpointing: one layer's attention scores,
       ``16 * heads * seq^2`` bytes, when attention runs through PyTorch SDPA
       (no flash-attention / xFormers, i.e. every Windows install), or the
@@ -1411,6 +1417,11 @@ def estimate_vram(
             (``--no-gradient-checkpointing``, LoRA only) keeps every layer's.
         target_modules: LoRA targets, ``"all-linear"`` (default) or a list /
             comma-separated names; sizes the adapter.
+        use_calibration: when True (default) and this model was measured on
+            this GPU (``backprop estimate-vram <model> --calibrate``), the
+            result comes from that measurement and ``source`` is
+            ``"measured"``. Not used with ``offload``, with gradient
+            checkpointing off, or when ``varlen_attention`` is forced.
         varlen_attention: whether a variable-length attention kernel
             (flash-attention, or xFormers on the Unsloth path) is in use, in
             which case the quadratic attention term is dropped. None detects
@@ -1423,6 +1434,7 @@ def estimate_vram(
         :class:`VRAMEstimate` carrying the headline number + breakdown.
     """
     notes: list[str] = []
+    _varlen_forced = varlen_attention is not None
 
     if mode == "full" and quantize_base:
         # Full fine-tuning never loads a 4-bit base (the trainer trains every
@@ -1528,7 +1540,11 @@ def estimate_vram(
             attention_bytes *= num_layers
             notes.append("gradient checkpointing off: every layer's attention is kept")
     row_bytes = max(attention_bytes, logits_bytes) + 35.0 * hidden_dim * seq
-    activations_gb = batch_size * row_bytes * bytes_to_gb
+    # A floor every run pays: one transient fp32 copy of the embedding table
+    # (measured: 0.98 GiB on Llama 3.2 1B, 2.03 GiB on Qwen2.5 7B). Small
+    # batches of short rows cost this much and no less.
+    floor_bytes = 4.0 * vocab_size * hidden_dim
+    activations_gb = max(floor_bytes, batch_size * row_bytes) * bytes_to_gb
     if attention_bytes > logits_bytes:
         notes.append(
             "attention through PyTorch SDPA (no flash-attention / xFormers): "
@@ -1575,6 +1591,49 @@ def estimate_vram(
             f"(PCIe-bound: ~14.7 s/step at 7.6B)"
         )
 
+    source = "estimate"
+    if use_calibration and not offload and gradient_checkpointing and not _varlen_forced:
+        try:
+            from . import vram_calibration as _cal
+
+            measured = _cal.lookup(model, mode, bool(quantize_base))
+        except Exception as exc:  # noqa: BLE001 - a bad store never breaks the estimate
+            logger.debug("vram calibration lookup failed: %r", exc)
+            measured = None
+        if measured is not None:
+            # This model was measured on this GPU: its own load size and
+            # per-row cost replace the formula's; the adapter is still an
+            # exact parameter count.
+            extra = (
+                float(trainable_params) - measured.probe_trainable_params
+                if mode == "lora"
+                else 0.0
+            )
+            model_weights_gb = measured.load_gib
+            lora_adapter_gb = extra * _cal.ADAPTER_BYTES_LOADED * bytes_to_gb
+            optimizer_state_gb = (
+                extra * _cal.ADAPTER_BYTES_TRAINING * bytes_to_gb
+                if mode == "lora"
+                else optimizer_state_gb
+            )
+            rows_gb = measured.rows_gib(batch_size, seq)
+            if rows_gb is None:
+                # The card had no room for an informative probe: the load
+                # size and the floor are measured, the row cost is the formula's.
+                rows_gb = batch_size * row_bytes * bytes_to_gb
+            activations_gb = max(measured.floor_gib, rows_gb)
+            kv_cache_gb = 0.0
+            source = "measured"
+            notes = [
+                f"measured on this GPU ({measured.machine.get('gpu', 'GPU')}, "
+                f"{measured.measured_at})"
+                + (
+                    f"; probes fitted within {measured.max_residual_pct:.0f}%"
+                    if measured.rows_measured
+                    else "; load size measured, per-row cost from the formula"
+                )
+            ]
+
     subtotal = (
         model_weights_gb
         + lora_adapter_gb
@@ -1601,6 +1660,7 @@ def estimate_vram(
         lora_r=lora_r,
         host_ram_gb=host_ram_gb,
         notes=notes,
+        source=source,
     )
 
 

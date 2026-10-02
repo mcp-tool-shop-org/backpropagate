@@ -397,7 +397,7 @@ def _next_steps_panel() -> rx.Component:
                 style={"color": "var(--bp-text)", "font_size": "16px"},
             ),
             rx.cond(
-                TrainState.job_kind != "export",
+                TrainState.job_is_training,
                 rx.flex(
                     rx.link(
                         rx.button(

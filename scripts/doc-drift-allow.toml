@@ -146,6 +146,9 @@ TrainState = [
     "vram_est_note",
     # consumed by _finalize_job's stopped label (the GPU temperature stop)
     "job_safety_reason",
+    # read by the vram_est_heading / vram_est_measured / vram_est_detail
+    # computed vars ("measured on this GPU" vs "estimate")
+    "vram_est_source",
 ]
 
 # MultiRunState — fields declared for the form but read only by handlers

@@ -645,8 +645,8 @@ def _kill_tree(proc: Any) -> None:
                 os.getpgid(pid),  # type: ignore[attr-defined,unused-ignore]
                 getattr(signal, "SIGKILL", signal.SIGTERM),
             )
-    except Exception:  # noqa: BLE001 - fall back to the one process
-        pass
+    except Exception as exc:  # noqa: BLE001 - fall back to the one process
+        logger.debug("tree kill failed, killing the process itself: %r", exc)
     try:
         proc.kill()
     except Exception:  # noqa: BLE001  # nosec B110

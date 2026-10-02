@@ -199,14 +199,21 @@ def test_full_mode_prices_a_16_bit_base():
 
 
 def test_gradient_checkpointing_off_raises_lora_activations():
-    on = estimate_vram("org/m-7B", lora_r=16, batch_size=2)
-    off = estimate_vram("org/m-7B", lora_r=16, batch_size=2, gradient_checkpointing=False)
+    # varlen_attention=False: the SDPA path, where the setting matters (a
+    # machine with flash-attention / xFormers has no per-layer attention term).
+    kw = {"lora_r": 16, "batch_size": 2, "varlen_attention": False}
+    on = estimate_vram("org/m-7B", **kw)
+    off = estimate_vram("org/m-7B", gradient_checkpointing=False, **kw)
     assert off.activations_gb > on.activations_gb * 4
+    flash = {"lora_r": 16, "batch_size": 2, "varlen_attention": True}
+    assert estimate_vram("org/m-7B", gradient_checkpointing=False, **flash).activations_gb == (
+        estimate_vram("org/m-7B", **flash).activations_gb
+    )
 
 
 def test_small_models_use_their_size_class_shape():
-    small = estimate_vram("org/m-1B", lora_r=16, batch_size=4)
-    big = estimate_vram("org/m-7B", lora_r=16, batch_size=4)
+    small = estimate_vram("org/m-1B", lora_r=16, batch_size=4, varlen_attention=False)
+    big = estimate_vram("org/m-7B", lora_r=16, batch_size=4, varlen_attention=False)
     assert small.activations_gb < big.activations_gb
 
 

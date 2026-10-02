@@ -26,6 +26,7 @@ from ..chrome import BpFooter, BpHeader, BpLeftNav, BpSideRail
 from ..components.field import FIELD_STYLE as _FIELD_STYLE
 from ..components.field import bp_label as _label
 from ..components.group import Group
+from ..components.info_tip import with_tip
 from ..components.job_panel import (
     job_error_callout,
     job_next_steps_panel,
@@ -73,6 +74,7 @@ def _source_group() -> rx.Component:
             width="100%",
         ),
         title="Source",
+        info="export_source",
     )
 
 
@@ -87,15 +89,15 @@ def _format_group() -> rx.Component:
         rx.radio.root(
             rx.grid(
                 _choice_card(
-                    "LoRA", "lora", "Just the adapter weights: small and portable.",
+                    "LoRA", "lora", "The adapter alone: small; needs the base model to run.",
                     ExportState.set_format("lora"),
                 ),
                 _choice_card(
-                    "Merged", "merged", "The adapter merged into the base: a full model.",
+                    "Merged", "merged", "The base model with your adapter built in: a full model.",
                     ExportState.set_format("merged"),
                 ),
                 _choice_card(
-                    "GGUF", "gguf", "A quantized file for Ollama and llama.cpp.",
+                    "GGUF", "gguf", "One compressed file for Ollama, LM Studio and llama.cpp.",
                     ExportState.set_format("gguf"),
                 ),
                 columns="repeat(3, 1fr)",
@@ -106,6 +108,7 @@ def _format_group() -> rx.Component:
             on_change=ExportState.set_format,
         ),
         title="Format",
+        info="export_format",
     )
 
 
@@ -126,6 +129,7 @@ def _quant_grid() -> rx.Component:
             on_change=ExportState.set_gguf_quant,
         ),
         title="GGUF quantization",
+        info="gguf_quant",
     )
 
 
@@ -164,6 +168,7 @@ def _ollama_group() -> rx.Component:
             width="100%",
         ),
         title="Ollama",
+        info="ollama",
     )
 
 
@@ -448,6 +453,7 @@ def _hub_group() -> rx.Component:
             rx.fragment(),
         ),
         title="HuggingFace Hub",
+        info="hub",
     )
 
 
@@ -505,6 +511,7 @@ def _output_group() -> rx.Component:
             width="100%",
         ),
         title="Output",
+        info="export_output",
     )
 
 
@@ -517,18 +524,21 @@ def export_page() -> rx.Component:
             rx.scroll_area(
                 rx.flex(
                     rx.flex(
-                        rx.heading(
-                            "Export",
-                            size="7",
-                            style={
-                                "color": "var(--bp-text)",
-                                "font_weight": "600",
-                                "letter_spacing": "-0.02em",
-                            },
+                        with_tip(
+                            rx.heading(
+                                "Export",
+                                size="7",
+                                style={
+                                    "color": "var(--bp-text)",
+                                    "font_weight": "600",
+                                    "letter_spacing": "-0.02em",
+                                },
+                            ),
+                            "page_export",
                         ),
                         rx.text(
-                            "Convert a trained adapter into LoRA / merged / GGUF "
-                            "and optionally register with Ollama.",
+                            "Turn a finished run into a file you can use: an adapter, "
+                            "a full model, or a GGUF file to chat with in Ollama.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),

@@ -20,6 +20,7 @@ from ..components.field import FIELD_STYLE as _FIELD_STYLE
 from ..components.field import bp_label as _label
 from ..components.group import Group
 from ..components.icon import bp_icon
+from ..components.info_tip import with_tip
 
 
 def _upload_group() -> rx.Component:
@@ -151,6 +152,7 @@ def _format_group() -> rx.Component:
             gap="var(--space-1)",
         ),
         title="Format",
+        info="dataset_format",
     )
 
 
@@ -231,6 +233,7 @@ def _preview_group() -> rx.Component:
             ),
         ),
         title="Preview",
+        info="dataset_preview",
     )
 
 
@@ -293,6 +296,7 @@ def _stats_group() -> rx.Component:
             width="100%",
         ),
         title="Stats",
+        info="dataset_stats",
     )
 
 
@@ -386,18 +390,21 @@ def dataset_page() -> rx.Component:
             rx.scroll_area(
                 rx.flex(
                     rx.flex(
-                        rx.heading(
-                            "Dataset",
-                            size="7",
-                            style={
-                                "color": "var(--bp-text)",
-                                "font_weight": "600",
-                                "letter_spacing": "-0.02em",
-                            },
+                        with_tip(
+                            rx.heading(
+                                "Dataset",
+                                size="7",
+                                style={
+                                    "color": "var(--bp-text)",
+                                    "font_weight": "600",
+                                    "letter_spacing": "-0.02em",
+                                },
+                            ),
+                            "page_dataset",
                         ),
                         rx.text(
-                            "Upload a dataset, auto-detect the format, preview "
-                            "records, and configure dedup / filtering.",
+                            "See what a dataset file contains before you train on it: "
+                            "its layout, its first examples and how long they are.",
                             size="2",
                             style={"color": "var(--bp-muted)"},
                         ),

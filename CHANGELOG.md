@@ -69,8 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and measurement jobs (logs and progress files) after a confirmation. A
   folder that holds a saved model, adapter, checkpoint or GGUF is never
   removed there, nor is a running job. Nothing is deleted automatically.
-- **The web UI explains itself.** Every section and field on the Single
-  run and Multi-run pages, and each block of the side panel, has an "i".
+- **The web UI explains itself.** Every section and field on every page
+  (Single run, Multi-run, Export, Dataset, Runs, Models), and each block of
+  the side panel, has an "i".
   Hover it, or reach it with the keyboard, and a card says what the thing
   is, what changing it does and where to start, with a link to the
   handbook. The same words are in the page for screen readers. The page

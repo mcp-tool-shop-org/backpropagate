@@ -58,11 +58,20 @@ def _rendered(page_path: str) -> str:
     return str(component.render())
 
 
+def _tips_on(page_path: str) -> set[str]:
+    """The tip keys a page renders (the triggers' ``data-tip`` attribute)."""
+    return set(re.findall(r'data-tip[\\"\':= ]+([a-z_]+)', _rendered(page_path)))
+
+
 @pytest.mark.parametrize(
     "page",
     [
         "backpropagate.ui_app.pages.train:train_page",
         "backpropagate.ui_app.pages.multi_run:multi_run_page",
+        "backpropagate.ui_app.pages.export:export_page",
+        "backpropagate.ui_app.pages.dataset:dataset_page",
+        "backpropagate.ui_app.pages.runs:runs_page",
+        "backpropagate.ui_app.pages.models:models_page",
     ],
 )
 def test_every_tip_a_page_uses_exists(page):
@@ -85,6 +94,30 @@ def test_multi_run_explains_its_own_settings():
     used = set(re.findall(r'data-tip[\\"\':= ]+([a-z_]+)', _rendered(
         "backpropagate.ui_app.pages.multi_run:multi_run_page")))
     assert {"page_multi_run", "runs", "samples_per_run", "merge_mode", "lora", "rank"} <= used
+
+
+@pytest.mark.parametrize(
+    ("page", "expected"),
+    [
+        ("export:export_page", {"page_export", "export_source", "export_format", "hub",
+                                "export_output"}),
+        ("dataset:dataset_page", {"page_dataset", "dataset_format", "dataset_preview",
+                                  "dataset_stats"}),
+        ("runs:runs_page", {"page_runs", "runs_status", "runs_storage"}),
+        ("models:models_page", {"page_models"}),
+    ],
+)
+def test_the_other_pages_explain_their_areas(page, expected):
+    used = _tips_on("backpropagate.ui_app.pages." + page)
+    assert expected <= used, expected - used
+
+
+def test_every_tip_is_used_by_some_page():
+    used: set[str] = set()
+    for page in ("train:train_page", "multi_run:multi_run_page", "export:export_page",
+                 "dataset:dataset_page", "runs:runs_page", "models:models_page"):
+        used |= _tips_on("backpropagate.ui_app.pages." + page)
+    assert set(TIPS) - used == set(), set(TIPS) - used
 
 
 @pytest.mark.parametrize("key", sorted(TIPS))

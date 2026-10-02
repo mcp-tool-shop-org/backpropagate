@@ -16,10 +16,10 @@ Run (rig):
 
     BACKPROPAGATE_UI_FLOW=1 PYTHONPATH=. python -m pytest tests/test_vram_calibration_gpu.py -v -s
 
-Last run on the RTX 5090 (2026-10-02, after the efficient-attention fix): both
-passed in 3 min 44 s; the held-out batch 3 x 2,048 run peaked at 4.27 GiB
-against 4.25 GiB predicted (-0.3%). Before that fix the same run peaked at
-7.47 GiB.
+Last run on the RTX 5090 (2026-10-02, with the calibration safety changes):
+both passed in 4 min 50 s; the held-out batch 3 x 2,048 run peaked at 4.27 GiB
+against 4.25 GiB predicted (-0.3%), and the stored row records adamw_8bit.
+Before the efficient-attention fix the same run peaked at 7.47 GiB.
 """
 
 from __future__ import annotations
@@ -118,6 +118,7 @@ def test_cli_calibration_predicts_a_held_out_run(tmp_path):
     cal = _last_json(proc.stdout, "calibration")["calibration"]
     assert store.exists()
     assert cal["quad_bytes"] == 0.0 and cal["lin_bytes"] > 0
+    assert cal["optim"] == "adamw_8bit" and cal["seq_max"] == 2048 and cal["version"] == 3
     assert len([p for p in cal["probes"] if not p.get("oom")]) >= 2
     assert 0.5 < cal["load_gib"] < 2.0 and 0.9 < cal["floor_gib"] < 1.1
 

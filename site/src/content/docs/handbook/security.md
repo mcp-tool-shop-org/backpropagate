@@ -52,7 +52,7 @@ Every layer keys off the single boolean `backpropagate/ui_app/auth.py::ENFORCEME
 
 These gates fire even with the middleware live, because they catch contract violations the middleware is not the right place to reject:
 
-- `--share` without `--auth` → exits `1` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A public URL with no credentials is the v1.1.x bug v1.2.0 closed; refusing keeps the contract intact even if a future tunnel provider is wired up.
+- `--share` without `--auth` → exits `2` with `[RUNTIME_UI_AUTH_NOT_ENFORCED]`. A public URL with no credentials is the v1.1.x bug v1.2.0 closed; refusing keeps the contract intact even if a future tunnel provider is wired up.
 - `--host <non-loopback>` without `--auth` → same code. DNS-rebinding defense per CVE-2024-28224 / CVE-2025-49596 lineage.
 - `--auth` requested while `ENFORCEMENT_AVAILABLE=False` (degraded `[ui]` extra) → same code. Stops the runtime before the v1.1.x false-promise re-emerges.
 
@@ -77,7 +77,7 @@ The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_t
 | Default | `backprop ui` | 127.0.0.1 | per-launch random token in the banner URL, then a session cookie; lock file | `127.0.0.1`, `localhost` | `Local · token` |
 | Basic | `backprop ui --auth user:pass` (or `--auth-file <path>`) | 127.0.0.1 | HTTP Basic | `127.0.0.1`, `localhost` | `Local · Basic` |
 | Shared | `backprop ui --share --auth user:pass` (or `--auth-file <path>`) | cloudflared tunnel (v1.3) | HTTP Basic | `127.0.0.1` + tunnel host | `Shared · Basic` |
-| Network | `backprop ui --host 0.0.0.0 --auth user:pass` (or `--auth-file <path>`) | network | HTTP Basic | `127.0.0.1` + LAN IPs | `Network · Basic` |
+| Network | `backprop ui --host <this machine's address> --auth user:pass` (or `--auth-file <path>`) | network | HTTP Basic | `127.0.0.1`, `localhost` + the address you gave | `Network · Basic` |
 
 **`--auth-file` (v1.3 alternative to `--auth`):** reads `user:pass` from a file instead of taking it on the command line — keeps the credential out of shell history and out of `ps aux`. Mutually exclusive with `--auth` (passing both exits `1` with `INPUT_AUTH_INVALID_SHAPE`). The file mode is checked on POSIX: a mode wider than `0600` emits a warning at startup. Create with `printf 'user:pass' > path && chmod 600 path`. Satisfies the same gate as `--auth`. See [recipes → --auth-file](/backpropagate/handbook/recipes/#use---auth-file-for-shell-history-safe-auth).
 
@@ -89,7 +89,7 @@ The middleware is wired in `ui_app/app.py` via Reflex's documented `rx.App(api_t
 
 **One port (1.8.1):** `backprop ui` runs Reflex in production mode. The backend serves the compiled frontend, its assets and the `/_event` WebSocket on the single `--port`, so the middleware fronts every request. Before 1.8.1 it asked Reflex for dev mode, which has a separate frontend server on its own port, bound to `0.0.0.0` and outside the middleware (and on Reflex 0.9.x refused to start at all; see the changelog).
 
-**Host-header allowlist** — every request validates `Host` against the mode's allowlist. DNS-rebinding defense; backpropagate is in the same exposure class as Ollama (CVE-2024-28224), MCP Inspector (CVE-2025-49596 CVSS 9.4), and Claude Code VS Code (CVE-2025-52882).
+**Host-header allowlist** — requests validate `Host` against the mode's allowlist. Name the address the UI should answer on: `--host 0.0.0.0` binds every interface, but a wildcard is never a valid `Host`, so only the loopback names are accepted with it. The health checks (`/healthz`, `/ping`), the static assets under `/_next/` and the favicon are served before this check and without a cookie; none of them starts a job or returns your data. DNS-rebinding defense; backpropagate is in the same exposure class as Ollama (CVE-2024-28224), MCP Inspector (CVE-2025-49596 CVSS 9.4), and Claude Code VS Code (CVE-2025-52882).
 
 **Origin allowlist** — state-changing methods (POST/PUT/PATCH/DELETE) and the WS upgrade validate `Origin` against the same allowlist. CSWSH defense; rejects with 403 (HTTP) or close code 4403 (WS).
 

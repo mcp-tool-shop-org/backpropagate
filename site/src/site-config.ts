@@ -12,7 +12,7 @@ export const config: SiteConfig = {
     badge: 'Python · PyPI',
     headline: 'Fine-tune LLMs',
     headlineAccent: 'in 3 lines.',
-    description: 'Headless LLM fine-tuning with smart defaults. Automatic hyperparameter tuning, VRAM-aware batch sizing, multi-run SLAO training to prevent catastrophic forgetting, and one-click GGUF export for Ollama. First-class Windows and CUDA support. Prefer not to write code? <a href="#web-ui" style="text-decoration:underline">Use it in your browser</a>.',
+    description: 'Headless LLM fine-tuning with smart defaults. Adapter and batch sizes chosen to fit your GPU, multi-run SLAO training to prevent catastrophic forgetting, and one-click GGUF export for Ollama. First-class Windows and CUDA support. Prefer not to write code? <a href="#web-ui" style="text-decoration:underline">Use it in your browser</a>.',
     primaryCta: { href: '#get-started', label: 'Get started' },
     secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
@@ -40,15 +40,15 @@ export const config: SiteConfig = {
       features: [
         {
           title: 'Smart defaults',
-          desc: 'Automatically configures learning rate, batch size, gradient accumulation, and LoRA rank based on your hardware and dataset size. No hyperparameter guesswork.',
+          desc: 'Learning rate, batch size and LoRA adapter size start from values that suit your model, method and GPU. Change any of them; none is required.',
         },
         {
           title: 'VRAM-aware training',
-          desc: 'Auto batch sizing and gradient checkpointing keep training stable on any GPU. Built-in VRAM monitoring with warnings before OOM. Works from 8GB up to multi-GPU setups.',
+          desc: 'The adapter size and batch size are chosen to fit the memory free on your GPU, and an estimate says whether a run fits before it starts. Works from 8 GB cards (1B to 3B models) to 32 GB (up to 32B with QLoRA).',
         },
         {
           title: 'First-class Windows',
-          desc: 'Tested and optimized for Windows + CUDA. Avoids the common PyTorch/Unsloth pitfalls on Windows. If it runs on Linux, it runs on Windows too.',
+          desc: 'Developed on Windows with CUDA. It handles the usual PyTorch and Unsloth pitfalls there for you. One feature, full fine-tuning with offload, needs Linux or WSL2.',
         },
       ],
     },
@@ -67,7 +67,7 @@ export const config: SiteConfig = {
         ['[monitoring]', 'WandB + system monitoring', 'wandb, psutil'],
         ['[logging]', 'Structured logging (2026 best practices)', 'structlog'],
         ['[security]', 'JWT auth + secure token generation', 'PyJWT, cryptography'],
-        ['[standard]', 'unsloth + ui (recommended)', 'all of the above'],
+        ['[standard]', 'unsloth + ui (recommended)', 'unsloth, reflex'],
         ['[production]', 'unsloth + ui + validation + logging + security', 'production deployment'],
         ['[full]', 'Everything', 'all extras'],
       ],
@@ -111,7 +111,7 @@ export const config: SiteConfig = {
         },
         {
           title: 'LoRA + QLoRA + full FT + Unsloth',
-          desc: 'Supports LoRA, QLoRA (4-bit), and (v1.4) full fine-tuning for ≤3B models on consumer 16GB GPUs. Unsloth-accelerated training. Mix quantization levels per layer. Export to GGUF at any quantization: q2_k, q4_k_m, q8_0, or f16.',
+          desc: 'LoRA, QLoRA (4-bit) and full fine-tuning: up to about 6B on a 32 GB card, and a 7B-class model with offload on Linux or WSL2. Unsloth-accelerated when installed. Export to GGUF at q2_k, q4_k_m, q8_0 or f16.',
         },
       ],
     },

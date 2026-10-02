@@ -361,6 +361,29 @@ def _check_in_sandbox(path_text: str, what: str) -> Path:
     return resolved
 
 
+#: JobSpec fields a browser client must never set: where the job writes and
+#: whether model code runs. ``TrainState.start_job`` drops them, and
+#: ``_validate_spec`` refuses a spec that points them outside the sandbox.
+SERVER_ONLY_SPEC_FIELDS = frozenset({"scratch_root", "output_dir", "trust_remote_code"})
+
+
+def _require_inside_sandbox(path_text: str, what: str) -> None:
+    """Require ``path_text`` (which need not exist yet) to resolve inside the
+    UI output sandbox. Fails CLOSED when the sandbox cannot be verified."""
+    try:
+        from .ui_security import get_ui_output_dir
+
+        base = Path(get_ui_output_dir()).resolve()
+        resolved = Path(path_text).expanduser().resolve()
+    except Exception as exc:
+        raise JobValidationError(
+            f"Could not verify the UI sandbox for the {what.lower()}; refusing "
+            f"to start ({exc!r})."
+        ) from exc
+    if resolved != base and base not in resolved.parents:
+        raise JobValidationError(f"The UI only writes inside {base} ({what.lower()}: {resolved}).")
+
+
 def _validate_export_spec(spec: JobSpec) -> None:
     source = (spec.source_path or "").strip()
     if not source:
@@ -390,6 +413,12 @@ def _validate_spec(spec: JobSpec) -> None:
     JobValidationError with an operator-facing message."""
     if spec.kind not in ("sft", "multi_run", "export"):
         raise NotImplementedError(f"Unknown job kind {spec.kind!r}.")
+    # Where a job writes is never the client's choice: both overrides must
+    # stay inside the sandbox (they exist for tests and server-side callers).
+    if spec.output_dir:
+        _require_inside_sandbox(spec.output_dir, "Output folder")
+    if spec.scratch_root:
+        _require_inside_sandbox(spec.scratch_root, "Job folder")
     if spec.kind == "export":
         _validate_export_spec(spec)
         return

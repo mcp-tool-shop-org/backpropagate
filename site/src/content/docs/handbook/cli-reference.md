@@ -49,6 +49,7 @@ backprop train --data my_data.jsonl --model Qwen/Qwen2.5-7B-Instruct --steps 100
 | `--lora-r` | `256` | LoRA rank (must be > 0). v1.3 default; pass `--lora-preset=fast` for the v1.2.x rank-16 footprint. |
 | `--output`, `-o` | `./output` | Output directory. |
 | `--no-unsloth` | off | Disable Unsloth even if available. |
+| `--report-to` | `auto` | **1.8.2** — experiment tracker: `auto` / `none` / `wandb` / `tensorboard` / `mlflow`. `auto` uses every tracker that is installed, and W&B only when it is logged in (`wandb login` or `WANDB_API_KEY`) or `WANDB_MODE` is `offline` / `disabled`. `none` turns tracking off. Naming `wandb` when it is installed but not logged in stops the run with `CONFIG_INVALID_SETTING` before the model loads. |
 | `--lora-preset` | `quality` | One of `quality` / `fast`. `quality` = rank 256 + all-linear + 10× LR (v1.3 default, matches full fine-tuning per Biderman 2024). `fast` = rank 16 + q+v + 1× LR (v1.2.x footprint). |
 | `--use-dora` | off | Enable DoRA (Weight-Decomposed Low-Rank Adaptation). Rank-8 DoRA ≈ rank-32 LoRA quality, zero inference overhead. Requires `peft>=0.10`. |
 | `--no-packing` | (packing ON by default) | Disable sample packing. Default ON gives 1.7-3× throughput; disable only if you hit packing-incompatible behavior. |
@@ -98,6 +99,7 @@ backprop multi-run --data my_data.jsonl --runs 5 --steps 100
 | `--no-packing` | (packing ON by default) | Same as `backprop train`. |
 | `--init-lora-weights` | `default` | Same as `backprop train`. |
 | `--optim` | auto | Same as `backprop train`. |
+| `--report-to` | `auto` | **1.8.2** — same as `backprop train`; applies to every run. |
 | `--mode` | `lora` | **v1.4** — same `lora` / `full` semantics as `backprop train`. The mode applies to every run in the multi-run loop. Same 4B parameter ceiling + `RUNTIME_FULL_FT_MODEL_TOO_LARGE` gate. |
 | `--method` | `sft` | Multi-run trains with SFT only. `orpo`, `simpo` and `kto` are refused with an error (exit 1) until the multi-run backend supports them; through v1.7.2 they were accepted and silently ignored, so the runs trained SFT. For a single preference-tuning run use `backprop train --method ...`. |
 | `--merge-strategy` | `qiao_mahdavi` | **v1.5** — per-tensor LoRA merge rule. `qiao_mahdavi` (default) = the v1.4 SLAO merge (behavior-preserving). `linear` = plain weighted average. `ties` = trim + elect-sign + disjoint-merge (uses `--ties-trim`). `dare` = Bernoulli-drop + rescale (uses `--dare-drop-rate`). All stay mergeable with zero inference cost. Applies only with `--merge-mode slao`. |

@@ -25,6 +25,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before use. Pip installs are unchanged.
 - **Handbook privacy page**: what the app stores, what it sends and when,
   and how to remove it all.
+- **`--report-to {auto,none,wandb,tensorboard,mlflow}`** on `backprop train`
+  and `backprop multi-run` (#276), default `auto`. Until now the CLI had no
+  way to turn experiment tracking off.
+
+### Fixed
+
+- **Training no longer deletes its own output folder** (#278, data loss).
+  `backprop train --output X` saves the model into X, and the save replaced
+  the whole folder, so every run deleted X's `run_history.json` (the Runs
+  page and `backprop runs` were always empty), its intermediate
+  `checkpoint-N/` folders and any other files kept there. `export_lora` and
+  `SLAOMerger.save` did the same. A save now moves in only the files it
+  wrote, each prior one set aside under `<path>.backup/` with a journal
+  (`<path>.backup.json`), so an interrupted save is rolled back by the next
+  one. Model and tokenizer files that an earlier save left and this one did
+  not rewrite are removed, because transformers would load them instead of
+  the new weights. A `.backup` that appears while a save is running now
+  fails that save instead of being deleted.
+- **Training no longer crashes at step 1 when wandb is installed but not
+  logged in** (#276). The default `report_to="auto"` adds W&B only when it
+  has credentials (`WANDB_API_KEY`, `WANDB_IDENTITY_TOKEN_FILE`, a
+  `wandb login` netrc entry, or `WANDB_MODE` offline / disabled) and
+  otherwise logs one line saying it skipped it. Naming W&B explicitly
+  without credentials raises `CONFIG_INVALID_SETTING` before the model
+  loads.
+- **The UI's images and icons load again** (#279). The rate limiter counted
+  every request, so after a few page reloads the logo and icons got 429s
+  and showed as broken images; it now counts only rejected auth attempts
+  (HTTP 401 / 403 / 421, WebSocket 4401 / 4403 / 4404), and brute-force
+  attempts are still refused from the 101st per minute at the default cap. The per-user UI
+  folder (#271) also lacked the `assets/` folder, so it is now copied in.
+- **Setting `BACKPROPAGATE_UI__OUTPUT_DIR` no longer crashes every
+  command** (#277): the UI settings had no `output_dir` field, so loading
+  the settings failed validation (`Extra inputs are not permitted`).
+- **The Store build's sideload signing destroys its throwaway key on every
+  exit path** (#274), including a failed signing, a missing Windows SDK and
+  an unreadable certificate thumbprint.
 
 ### Changed
 

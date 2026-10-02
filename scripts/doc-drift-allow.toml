@@ -92,12 +92,6 @@ cli_flags_grandfathered = [
     "--token",          # backprop push --token
     "--verbose",        # top-level --verbose / -v
     "--version",        # top-level --version / -V
-    # report_to W&B fix (2026-10-01): experiment-tracker choice for train and
-    # multi-run (auto|none|wandb|tensorboard|mlflow). The cli-reference.md
-    # rows (train + multi-run tables) are on the lead's doc-change list
-    # (public docs are lead-written); this bridges the drift gate until that
-    # docs PR lands.
-    "--report-to",      # backprop train / multi-run --report-to
 ]
 
 # ---------------------------------------------------------------------------

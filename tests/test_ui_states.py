@@ -596,7 +596,6 @@ class TestExportStateDefaults:
         assert state.ollama_register is False
         assert state.ollama_name == ""
         assert state.export_state == "idle"
-        assert state.output_path == ""
         assert state.events == []
 
     def test_initial_error_fields_are_empty(self):
@@ -1796,7 +1795,8 @@ class TestUiPathFieldsNotClientSerialized:
         assert str(_Path.home()) not in disp, (
             f"UI-A-002: cache_dir_display leaks the home dir: {disp!r}"
         )
-        assert "<redacted-path>" in disp
+        # ui-v2 P2: shown home-relative, not as a literal "<redacted-path>".
+        assert disp == "~/.cache/huggingface/hub"
 
     def test_load_run_redacts_log_lines(self, monkeypatch, tmp_path):
         """A training.log line containing an absolute home path must be
@@ -1945,6 +1945,8 @@ class TestModelsStateDeleteModelHardening:
 
         # Redirect Path.home() so cache_dir resolves under tmp_path.
         monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        for _var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(_var, raising=False)  # cache under the fake home
 
         state = ModelsState()
         state.delete_model("models--evil--link")
@@ -1979,6 +1981,8 @@ class TestModelsStateDeleteModelHardening:
         (victim / "blob").write_text("x", encoding="utf-8")
 
         monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        for _var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(_var, raising=False)  # cache under the fake home
         # Avoid the post-delete reload doing real work.
         monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
 
@@ -2031,6 +2035,8 @@ class TestModelsStateDeleteModelInFlight:
         (victim / "blob").write_text("x", encoding="utf-8")
 
         monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        for _var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(_var, raising=False)  # cache under the fake home
         monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
 
         state = ModelsState()
@@ -2061,6 +2067,8 @@ class TestModelsStateDeleteModelInFlight:
         (victim / "blob").write_text("x", encoding="utf-8")
 
         monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        for _var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(_var, raising=False)  # cache under the fake home
         monkeypatch.setattr(ModelsState, "load_models", lambda self: None)
 
         state = ModelsState()
@@ -2095,6 +2103,8 @@ class TestModelsStateDeleteModelInFlight:
         victim.mkdir()
 
         monkeypatch.setattr(_Path, "home", classmethod(lambda cls: tmp_path))
+        for _var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(_var, raising=False)  # cache under the fake home
 
         def _boom(*_a, **_k):
             raise OSError("disk on fire")

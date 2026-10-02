@@ -1322,6 +1322,88 @@ class JobManager:
 
     # ---- orphan scan (UI restart while a child outlives us) ----------------
 
+    def _storage_root(self) -> Path | None:
+        """The resolved jobs folder, or None when it does not exist or (for the
+        default root) is not inside the sandbox."""
+        root = self.jobs_root.expanduser()
+        if not root.exists():
+            return None
+        root = root.resolve()
+        if self._default_root:
+            try:
+                _require_inside_sandbox(str(root), "Job folder")
+            except JobValidationError:
+                return None
+        return root
+
+    def _removable(self, folder: Path) -> bool:
+        """True for a job folder the clean-up may remove: no saved model, not
+        the job that is running, not a job an earlier UI session left running."""
+        with self._lock:
+            active = self._active_handle_locked()
+        if active is not None and folder.name == active.job_id:
+            return False
+        if _has_saved_model(folder):
+            return False
+        if os.name != "nt":
+            try:
+                record = json.loads((folder / JOB_FILENAME).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                record = {}
+            pid = record.get("pid") if isinstance(record, dict) else None
+            if (
+                isinstance(record, dict)
+                and record.get("status") == "running"
+                and isinstance(pid, int)
+                and pid > 0
+                and _posix_process_is_ours(pid)
+            ):
+                return False
+        return True
+
+    def storage_summary(self) -> dict[str, Any]:
+        """What the job folders use on disk, and how much the clean-up would
+        free. Nothing is ever removed automatically."""
+        out: dict[str, Any] = {
+            "folders": 0, "bytes": 0, "removable_folders": 0, "removable_bytes": 0,
+        }
+        root = self._storage_root()
+        if root is None:
+            return out
+        for folder in _job_folders(root):
+            size = _folder_bytes(folder)
+            out["folders"] += 1
+            out["bytes"] += size
+            if self._removable(folder):
+                out["removable_folders"] += 1
+                out["removable_bytes"] += size
+        return out
+
+    def clean_up(self) -> dict[str, Any]:
+        """Remove job folders that hold no saved model (failed, cancelled and
+        measurement jobs). A folder with a model is never touched here; neither
+        is a running job, a link, or anything outside the jobs folder."""
+        import shutil
+
+        out: dict[str, Any] = {"removed": 0, "bytes": 0, "errors": 0}
+        root = self._storage_root()
+        if root is None:
+            return out
+        for folder in _job_folders(root):
+            if folder.parent != root or not self._removable(folder):
+                continue
+            size = _folder_bytes(folder)
+            try:
+                shutil.rmtree(folder)
+            except OSError:
+                out["errors"] += 1
+                continue
+            self._handles.pop(folder.name, None)
+            self._jobs.pop(folder.name, None)
+            out["removed"] += 1
+            out["bytes"] += size
+        return out
+
     def scan_orphans(self) -> list[dict[str, Any]]:
         """List run dirs whose job.json claims a running job. The caller
         checks pid liveness (psutil where available) and marks dead pids
@@ -1341,6 +1423,85 @@ class JobManager:
             if record.get("status") == "running":
                 out.append(record)
         return out
+
+
+# ---- storage: what the job folders use, and a clean-up that never removes a model ----
+
+#: A job folder that holds any of these has a saved model and is never
+#: removed by the clean-up (delete such a run from its own page).
+_MODEL_FILE_SUFFIXES = (".safetensors", ".gguf")
+_MODEL_FILE_NAMES = ("adapter_config.json", "adapter_model.bin", "pytorch_model.bin")
+
+
+def _is_link(path: Path) -> bool:
+    """A symlink or (Windows) junction. Never followed, never removed."""
+    try:
+        if path.is_symlink():
+            return True
+        isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+        if isjunction is not None and isjunction(path):
+            return True
+        # Older Pythons: a junction resolves somewhere other than its own path.
+        return path.resolve() != path.parent.resolve() / path.name
+    except OSError:
+        return True
+
+
+def _own_files(folder: Path) -> Iterator[Path]:
+    """Every file under ``folder``, without entering a symlink or junction.
+
+    Not ``os.walk``: with ``followlinks=False`` it still descends into Windows
+    junctions, which would count (and judge the folder by) files that live
+    somewhere else.
+    """
+    stack = [folder]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if _is_link(child):
+                continue
+            try:
+                if child.is_dir():
+                    stack.append(child)
+                else:
+                    yield child
+            except OSError:
+                continue
+
+
+def _folder_bytes(folder: Path) -> int:
+    total = 0
+    for path in _own_files(folder):
+        try:
+            total += path.lstat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _has_saved_model(folder: Path) -> bool:
+    for path in _own_files(folder):
+        lower = path.name.lower()
+        if lower.endswith(_MODEL_FILE_SUFFIXES) or lower in _MODEL_FILE_NAMES:
+            return True
+    return False
+
+
+def _job_folders(root: Path) -> list[Path]:
+    """Real ``run_*`` directories directly under ``root`` (links skipped)."""
+    try:
+        children = sorted(root.iterdir())
+    except OSError:
+        return []
+    return [
+        child
+        for child in children
+        if child.name.startswith("run_") and not _is_link(child) and child.is_dir()
+    ]
 
 
 _MANAGER_SINGLETON: JobManager | None = None

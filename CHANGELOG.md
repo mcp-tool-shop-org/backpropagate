@@ -130,6 +130,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Docs match the code.** The README's Web UI section (it still said runs
+  are launched from the CLI), the model tables (memory by adapter size, not
+  one figure per model), the automatic batch size, the `--lora-preset`
+  default, and several landing-page claims are corrected. The privacy page
+  now says that a cached model still asks the Hub whether its files
+  changed, and that `OLLAMA_HOST` is followed; the security page gives the
+  right exit code for a refused `--share` and says what `--host 0.0.0.0`
+  does to the Host allowlist.
 - **`backprop estimate-vram` (and the UI's estimate) now track measured
   memory.** The old formula was 3 to 10 times low: it estimated 2.5 GB for a
   run that peaked at 6.5 GiB. The new one is fitted to 24 real QLoRA and

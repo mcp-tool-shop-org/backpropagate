@@ -65,7 +65,7 @@ Backpropagate is designed to work on Windows out of the box:
 - Pre-tokenization to avoid multiprocessing crashes
 - Automatic xformers disable for RTX 40/50 series
 - Safe dataloader settings
-- Tested on RTX 5080 (16GB VRAM)
+- Developed on an RTX 5090 (32 GB); earlier releases on an RTX 5080 (16 GB)
 
 ## Privacy
 
@@ -78,7 +78,7 @@ All settings can be overridden via environment variables with the `BACKPROPAGATE
 ```bash
 BACKPROPAGATE_MODEL__NAME=Qwen/Qwen2.5-7B-Instruct
 BACKPROPAGATE_TRAINING__LEARNING_RATE=2e-4
-BACKPROPAGATE_LORA__R=256  # v1.3+ quality preset default; pass 16 for the v1.2.x footprint
+BACKPROPAGATE_LORA__R=256  # setting a rank turns the automatic adapter-size choice off
 ```
 
 Backpropagate also reads from a `.env` file if present. Install the `[validation]` extra for full Pydantic-powered config with type checking.

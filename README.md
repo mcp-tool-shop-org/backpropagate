@@ -17,7 +17,7 @@
 
 # Fine-tune a 32B QLoRA — or a 7B end to end — on one GPU. Ship it to Ollama.
 
-Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–32B model on one 32 GB consumer card (RTX 5090). One flag, `--full-ft-offload`, full-fine-tunes a 7B-class model by keeping its weights and gradients in host RAM (Linux or WSL2; slow, and measured below). One more command exports to Ollama, then `ollama run` your finetune. Scales down to 16 GB. First-class on Windows.
+Backpropagate fine-tunes large language models on a **single** GPU, sized for the card you actually have. Three lines of Python QLoRA a 7B–32B model on one 32 GB consumer card (RTX 5090). One flag, `--full-ft-offload`, full-fine-tunes a 7B-class model by keeping its weights and gradients in host RAM (Linux or WSL2; slow, and measured below). One more command exports to Ollama, then `ollama run` your finetune. Scales down to 16 GB. First-class on Windows. Prefer a browser to Python? `backprop ui` does all of it with no code ([take the tour](https://mcp-tool-shop-org.github.io/backpropagate/handbook/web-ui/)).
 
 ```python
 from backpropagate import Trainer
@@ -65,7 +65,7 @@ There are several good libraries for fine-tuning LLMs. They're each great at dif
 - **[Unsloth](https://github.com/unslothai/unsloth)** — if you need the fastest possible training and you're on a supported model family
 - **[torchtune](https://github.com/pytorch/torchtune)** — if you want Meta's first-party PyTorch-native recipes you can edit
 
-Backpropagate is the missing option: **a 3-line Python API for solo operators on a single consumer GPU who want to train an adapter and ship it.** No YAML, no GUI, no online RL (PPO/GRPO), no multi-node. Just the loop everyone actually needs and the export step that gets in the way.
+Backpropagate is the missing option: **a 3-line Python API for solo operators on a single consumer GPU who want to train an adapter and ship it.** No YAML, no online RL (PPO/GRPO), no multi-node. There is a browser UI for the same loop if you would rather not write code. Just the loop everyone actually needs and the export step that gets in the way.
 
 If you tried one of the libraries above and bounced off the config-file ceremony, or hit a model-family gap, or wanted Windows-first defaults — Backpropagate is for you.
 
@@ -100,7 +100,7 @@ A model that does not fit exits with `RUNTIME_FULL_FT_MODEL_TOO_LARGE` and names
 
 ### Scales down to 16 GB
 
-The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA, and true full fine-tuning of a ~3B model (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) via `mode="full"`, (22.0 GiB measured on a 32 GB card at 3B, of which 7.5 GiB is paged optimizer state that can spill to host RAM; whether that runs acceptably on a 16 GB card has not been tested). With `--full-ft-offload` the GPU holds far less: with VRAM capped on the test card, a 3B model trained under a 6 GiB cap and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps on a 32 GB card, not runs on real 8 GB hardware. The same code picks the batch size and ceiling that fit whatever card it detects.
+The 16 GB envelope (RTX 4080 / 5080 / 4070 Ti Super) is still first-class: 7B QLoRA (the adapter size is picked to fit: rank 64 on a 16 GB card, where rank 256 needs about 17 GB), and true full fine-tuning of a ~3B model (SmolLM3-3B, Qwen2.5-3B, Llama-3.2-3B/1B) via `mode="full"`, (22.0 GiB measured on a 32 GB card at 3B, of which 7.5 GiB is paged optimizer state that can spill to host RAM; whether that runs acceptably on a 16 GB card has not been tested). With `--full-ft-offload` the GPU holds far less: with VRAM capped on the test card, a 3B model trained under a 6 GiB cap and 4B and 7.6B models under an 8 GiB cap. Those are emulated caps on a 32 GB card, not runs on real 8 GB hardware. The same code picks the batch size and ceiling that fit whatever card it detects.
 
 2-bit quantization (AQLM / QuIP#) stays **out of scope** — a 2-bit base can't be cleanly merged back into full-precision weights, which breaks the mergeable-adapter → GGUF → Ollama export contract (the whole point of the pipeline). The headroom levers Backpropagate ships instead — QLoRA, `mode="full"`, `--full-ft-offload`, and the FP8 compute path (`--fp8`, Blackwell/Hopper) — all stay mergeable and exportable.
 
@@ -124,7 +124,7 @@ Four things, in one install:
 The snippet at the top of this README runs end-to-end. No `accelerate config`, no YAML, no Hydra overrides. Just `Trainer(model).train(data)` and you have a finetune.
 
 **2. Windows that actually works.**
-Most ML libraries treat Windows like an afterthought. Backpropagate is tested first-class on Windows + RTX 5080. The library handles the runtime quirks for you — it knows how to pre-tokenize your data so Windows multiprocessing doesn't crash, it automatically disables xformers on RTX 40/50 cards where it would break, and it picks dataloader settings that don't blow up. You don't have to know any of this. It just runs.
+Most ML libraries treat Windows like an afterthought. Backpropagate is developed and tested on Windows 11 with RTX 50-series cards. The library handles the runtime quirks for you — it knows how to pre-tokenize your data so Windows multiprocessing doesn't crash, it automatically disables xformers on RTX 40/50 cards where it would break, and it picks dataloader settings that don't blow up. You don't have to know any of this. It just runs.
 
 **3. Built for unattended runs.**
 Training takes hours. You don't want to babysit it. Backpropagate is designed to be left running:
@@ -255,7 +255,7 @@ pipx install "backpropagate[ui]"
 backprop ui --port 7862
 ```
 
-Open the URL it prints, `http://127.0.0.1:7862/?token=...` (each launch makes a new token; the first start builds the frontend and can take a minute or two). It is a local web interface for training: start a run, a multi-run sweep or an export, watch it live (steps, loss, time left, GPU temperature and memory), and stop it with a saved checkpoint. Each job runs in its own process, one at a time, and a page reload picks a running job back up. It also previews datasets and lists past runs and the models in your Hugging Face cache. The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
+Open the URL it prints, `http://127.0.0.1:7862/?token=...` (each launch makes a new token; the first start builds the frontend and can take a minute or two). It is a local web interface for training: start a run, a multi-run sweep or an export, watch it live (steps, loss, time left, GPU temperature and memory), and stop it with a saved checkpoint. Each job runs in its own process, one at a time, and a page reload picks a running job back up. The Dataset page shows what a file contains, saves a cleaned copy (repeats and empty examples removed) and hands it to the training form. Past runs and the models in your Hugging Face cache have their own pages, and every setting has an "i" that explains it. The [web UI tour](https://mcp-tool-shop-org.github.io/backpropagate/handbook/web-ui/) shows each page. The UI is local-only by default. To expose it to other devices, see [Web UI](#web-ui) below for the `--share` + `--auth` security contract.
 
 ## Multi-run training
 
@@ -325,7 +325,7 @@ The Reflex web interface is opt-in — install with `pipx install "backpropagate
 backprop ui --port 7862
 ```
 
-The UI runs locally: open the URL it prints, `http://127.0.0.1:7862/?token=...`. Without `--auth`, every launch generates a new token and the UI refuses requests that lack it. Today it covers the **browse / validate / configure** half of the workflow — point it at a dataset, check the auto-detected format and stats, pick a model, and assemble a run config. **Launching the run is done from the CLI** (`backprop train` / `backprop multi-run`); the in-UI Start button surfaces a note pointing there. UI-driven training is a planned follow-up — until then the UI is the on-ramp and the CLI is the trigger.
+The UI runs locally: open the URL it prints, `http://127.0.0.1:7862/?token=...`. Without `--auth`, every launch generates a new token and the UI refuses requests that lack it. From it you can look at and clean a dataset, train (a single run or a multi-run), watch the run live, stop it with a saved checkpoint, and export the result. Each job runs in its own process, one at a time, and closing the UI stops it. The [web UI tour](https://mcp-tool-shop-org.github.io/backpropagate/handbook/web-ui/) walks through every page with screenshots.
 
 To expose it to other devices (other people on your network, a public URL, etc.) you must pair `--share` (or `--host`) with `--auth`:
 
@@ -353,7 +353,7 @@ Filesystem writes from the UI are sandboxed to a single directory:
 
 ## Platform notes
 
-**Requirements:** Python 3.10+ · CUDA GPU (8GB+ VRAM) · PyTorch 2.0+
+**Requirements:** Python 3.10+ · NVIDIA GPU with CUDA · PyTorch 2.0+. An 8 GB card trains the 1B to 3B presets, 16 GB a 7B, and 32 GB up to 32B with QLoRA.
 
 Python 3.10 is supported through at least v1.6; it reaches upstream end-of-life in October 2026 and is scheduled for removal in the first release after that. For new installs, prefer Python 3.11 or 3.12 — 3.11 is the most-tested floor.
 
@@ -397,29 +397,29 @@ Every setting can be overridden with an environment variable using the `BACKPROP
 | `BACKPROPAGATE_LOG_JSON` | auto | Force JSON or console logs |
 | `BACKPROPAGATE_MODEL__NAME` | `Qwen/Qwen2.5-7B-Instruct` | Default model |
 | `BACKPROPAGATE_TRAINING__LEARNING_RATE` | `2e-4` | Learning rate |
-| `BACKPROPAGATE_LORA__R` | `256` | LoRA rank (v1.3 default; pass `--lora-preset=fast` for the v1.2.x default of 16) |
+| `BACKPROPAGATE_LORA__R` | `256` | LoRA rank. Setting it turns the automatic adapter-size choice off (see `--lora-preset` under [Model presets](#model-presets)). |
 | `BACKPROPAGATE_UI__OUTPUT_DIR` | `~/.backpropagate/ui-outputs` | UI filesystem sandbox |
 
 Nested keys use double underscore (`MODEL__NAME`, not `MODEL_NAME`). The full reference is at [the env-vars handbook page](https://mcp-tool-shop-org.github.io/backpropagate/handbook/env-vars/).
 
 ## Model presets
 
-| Preset | VRAM | License | Notes |
+| Preset | GPU memory | License | Notes |
 |---|---|---|---|
-| Qwen-3.5-4B | ~8GB | Apache 2.0 | Recommended default for sub-5B. Best quality at this size. |
-| Phi-4-mini-3.8B | ~8GB | MIT | Strong on reasoning / math / code. Strict license-clean. |
-| SmolLM3-3B | ~6GB | Apache 2.0 | Fully open recipe. Native 64K context. |
-| Qwen 2.5 7B | ~12GB | Apache 2.0 | Existing default. Best quality of the legacy 7B presets. |
-| Qwen 2.5 3B | ~8GB | Qwen-Research | ⚠ research license — see Qwen license terms before commercial use. |
-| Llama 3.2 3B | ~8GB | Llama Community | Solid alternative to Qwen 3B with permissive caveats. |
-| Llama 3.2 1B | ~6GB | Llama Community | For quick experiments on small cards. |
-| Mistral 7B | ~12GB | Apache 2.0 | Comparable to Qwen 7B, different chat template. |
-| Llama-3.1-8B | ~7-8GB (QLoRA) | Llama-3.1-Community | 8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license). |
+| Qwen-3.5-4B | 6 / 7 / 11 GB | Apache 2.0 | Recommended default for sub-5B. Best quality at this size. |
+| Phi-4-mini-3.8B | 6 / 7 / 12 GB | MIT | Strong on reasoning / math / code. Strict license-clean. |
+| SmolLM3-3B | 4 / 5 / 10 GB | Apache 2.0 | Fully open recipe. Native 64K context. |
+| Qwen 2.5 7B | 9 / 11 / 17 GB | Apache 2.0 | Existing default. Best quality of the legacy 7B presets. |
+| Qwen 2.5 3B | 4 / 6 / 10 GB | Qwen-Research | ⚠ research license — see Qwen license terms before commercial use. |
+| Llama 3.2 3B | 4 / 6 / 9 GB | Llama Community | Solid alternative to Qwen 3B with permissive caveats. |
+| Llama 3.2 1B | 2 / 3 / 5 GB | Llama Community | For quick experiments on small cards. |
+| Mistral 7B | 6 / 8 / 14 GB | Apache 2.0 | Comparable to Qwen 7B, different chat template. |
+| Llama-3.1-8B | 9 / 11 / 18 GB | Llama-3.1-Community | 8B QLoRA, 128K native context (the >700M-MAU clause needs a separate Meta license). |
 | **Qwen2.5-14B** | 25 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | **The 32 GB daily driver.** rank/alpha 32, 8-bit AdamW. The 4-bit weights alone are about 8.5 GB; a full 4096-token window needs the rest. |
 | Mistral-Small-24B | 26.5 GiB peak at 4096 ctx (QLoRA) | Apache 2.0 | 24B QLoRA on a 32 GB card. The 4-bit weights alone are about 18 GB. |
 | **Qwen2.5-32B** | 28.8 GiB peak at 2048 ctx (QLoRA) | Apache 2.0 | **Top of the 32 GB envelope.** Just fits at `max_len 2048` with 8-bit AdamW. |
 
-Other models often work; the rows above are the curated presets — the 14B–32B tier is QLoRA-tuned for a 32 GB card (the measured envelope). Pass `--lora-preset=quality` (default) for rank-256 / all-linear targets per Biderman 2024 + Thinking Machines 2025, or `--lora-preset=fast` for the legacy rank-16 / q+v target if you need the v1.2.x footprint.
+Other models often work; the rows above are the curated presets — the 14B–32B tier is QLoRA-tuned for a 32 GB card (the measured envelope). For the presets up to 8B, the three figures are QLoRA estimates for the `fast`, `balanced` and `quality` adapter sizes at batch 1 with 2,048-token examples; they err on the high side, and shorter examples use less. The adapter size is chosen for your card: `--lora-preset auto` (the default) takes the largest of `quality` (rank 256 on every linear layer, per Biderman 2024 and Thinking Machines 2025), `balanced` (rank 64 on every linear layer) and `fast` (rank 16 on two layers per block) that fits the memory free on your GPU. Name one to force it. `backprop estimate-vram` prints the estimate for any model and settings.
 
 ## Troubleshooting
 

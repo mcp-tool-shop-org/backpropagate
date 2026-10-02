@@ -123,17 +123,17 @@ The `train()` method returns a `TrainingRun` dataclass with the following fields
 
 ## VRAM-aware batch sizing
 
-When `batch_size="auto"` (the default), Backpropagate queries your GPU VRAM and picks a safe batch size: 4 for 24GB+ cards, 2 for 16GB+, and 1 for smaller GPUs. Combined with gradient accumulation, this keeps effective batch size high without OOM.
+When `batch_size="auto"` (the default), Backpropagate starts from a batch size for the size of your card (8 at 48 GB and up, 6 at 32 GB, 4 at 24 GB, 2 at 16 GB, 1 below that) and lowers it until the estimated memory for your model and settings fits in 90% of the memory free on the GPU. It never raises it. Gradient accumulation keeps the effective batch size up when the batch is small.
 
 ## Model presets
 
-| Preset | VRAM | Speed | Quality |
+| Preset | GPU memory (fast / balanced / quality adapter) | Speed | Quality |
 |--------|------|-------|---------|
-| Qwen 2.5 7B | ~12GB | Medium | Best |
-| Qwen 2.5 3B | ~8GB | Fast | Good |
-| Llama 3.2 3B | ~8GB | Fast | Good |
-| Llama 3.2 1B | ~6GB | Fastest | Basic |
-| Mistral 7B | ~12GB | Medium | Good |
+| Qwen 2.5 7B | 9 / 11 / 17 GB | Medium | Best |
+| Qwen 2.5 3B | 4 / 6 / 10 GB | Fast | Good |
+| Llama 3.2 3B | 4 / 6 / 9 GB | Fast | Good |
+| Llama 3.2 1B | 2 / 3 / 5 GB | Fastest | Basic |
+| Mistral 7B | 6 / 8 / 14 GB | Medium | Good |
 
 ## Training methods
 

@@ -16,7 +16,7 @@ Large language models (LLMs) like Qwen and Llama are trained on broad internet t
 Before you start, make sure you have:
 
 - **Python 3.10 or newer** -- check with `python --version`
-- **A CUDA GPU with 8GB+ VRAM** -- NVIDIA RTX 3060 or better. Check with `nvidia-smi`
+- **An NVIDIA GPU with 8 GB of memory or more** -- RTX 3060 or better. 8 GB trains the 1B to 3B models; a 7B wants 16 GB. Check with `nvidia-smi`
 - **PyTorch 2.0+** with CUDA support -- install from [pytorch.org](https://pytorch.org/)
 - **Ollama** (optional) -- for running your exported model locally. Install from [ollama.com](https://ollama.com)
 

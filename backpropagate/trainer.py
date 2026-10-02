@@ -1384,9 +1384,10 @@ def estimate_vram(
       fp32 logits ``4 * vocab * seq`` bytes if larger; plus ``35 * hidden *
       seq`` bytes of activations. Without gradient checkpointing every
       layer's attention is kept (``* num_layers``);
-    * full fine-tuning: 2 bytes/param of weights plus ~3 bytes/param for
-      gradients and the 8-bit optimizer, and the logits + activations per
-      row (measured on one model; treat as a guide).
+    * full fine-tuning: 2 bytes/param of weights plus ~5.3 bytes/param for
+      gradients and the paged 8-bit optimizer, counted system-wide (PyTorch's
+      counters miss the optimizer's managed memory and read ~40% lower), and
+      the logits + activations per row. Fitted on two runs; treat as a guide.
 
     A different GPU, driver or attention backend shifts these numbers; they
     are an estimate, not a measurement.
@@ -1521,8 +1522,12 @@ def estimate_vram(
     else:
         trainable_params = params
         lora_adapter_gb = 0.0
-        # Gradients (16-bit) + the paged 8-bit optimizer full mode forces.
-        optimizer_state_gb = trainable_params * 3.0 * bytes_to_gb
+        # Gradients (16-bit) + the paged 8-bit optimizer full mode forces:
+        # 5.3 bytes/param SYSTEM-WIDE. PyTorch's own counters see only ~2 of
+        # them (bitsandbytes keeps the paged optimizer state in CUDA managed
+        # memory): SmolLM3-3B, batch 4 x 512, measured 22.0 GiB on the device
+        # against 12.6 GiB reported by torch (RTX 5090, 2026-09-30).
+        optimizer_state_gb = trainable_params * 5.3 * bytes_to_gb
 
     # 4. Per-row cost. The attention scores of the layer being differentiated
     #    (SDPA with a dense mask) or the fp32 logits, whichever is larger,
@@ -1551,7 +1556,10 @@ def estimate_vram(
             "memory grows with seq^2 per row"
         )
     if mode == "full":
-        notes.append("mode='full': measured on one model (135M); treat as a guide")
+        notes.append(
+            "mode='full': fitted on two runs (135M, 3B); the total is system-wide "
+            "(torch's own counters read lower)"
+        )
 
     # 5. Kept for the breakdown's shape; training holds no KV cache.
     kv_cache_gb = 0.0

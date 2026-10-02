@@ -7439,8 +7439,8 @@ def _cmd_calibrate_body(args: argparse.Namespace) -> int:
     except vc.CalibrationError as exc:
         _print_error(f"[RUNTIME_VRAM_CALIBRATION_FAILED] {exc}")
         return EXIT_RUNTIME_ERROR
-    if job is not None:
-        job.output_path = str(vc.calibration_path())
+    # No output_path for the UI job: the measurement store lives outside the
+    # UI sandbox (and is not something to export). The card shows "measured".
     if as_json:
         import json
         from dataclasses import asdict

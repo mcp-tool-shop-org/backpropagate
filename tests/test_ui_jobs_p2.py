@@ -127,7 +127,8 @@ def test_export_gguf_argv_with_ollama(tmp_path):
         )
     )
     argv = captured["argv"]
-    assert argv[3:5] == ["export", source]
+    assert argv[3] == "export"
+    assert argv[-2:] == ["--", source]  # the positional goes last, after "--"
     assert _flag(argv, "--format") == "gguf"
     assert _flag(argv, "--quantization") == "q4_k_m"
     assert _flag(argv, "--ollama-name") == "my-model"

@@ -170,7 +170,7 @@ def test_cli_body_reports_every_event_and_feeds_the_ui_job(monkeypatch, capsys):
     assert job.writer.phases == [
         "measuring", "measured batch 2 x 2048 tokens", "measured batch 4 x 2048 tokens",
     ]
-    assert job.output_path == str(vc.calibration_path())
+    assert job.output_path is None  # the store is outside the sandbox: never the job output
 
 
 def test_cli_body_says_when_only_the_load_size_was_measured(monkeypatch, capsys):

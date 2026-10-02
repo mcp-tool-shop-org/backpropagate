@@ -325,7 +325,8 @@ def test_ui_calibrate_job_argv_and_validation(tmp_path):
     spec = JobSpec(kind="calibrate", model="org/m-1B", mode="lora", base_4bit=False)
     ui_jobs._validate_spec(spec)  # no dataset needed
     argv = ui_jobs._build_argv(spec, tmp_path / "run")
-    assert argv[3:6] == ["estimate-vram", "org/m-1B", "--calibrate"]
+    assert argv[3:5] == ["estimate-vram", "--calibrate"]
+    assert argv[-2:] == ["--", "org/m-1B"]  # the positional goes last, after "--"
     assert "--no-4bit" in argv and argv[argv.index("--mode") + 1] == "lora"
     assert argv[argv.index("--ui-run-dir") + 1] == str(tmp_path / "run")
     with pytest.raises(JobValidationError):

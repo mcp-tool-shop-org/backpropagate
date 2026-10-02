@@ -164,6 +164,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Small things in the web UI.** The Events panel shows local time (it
+  showed UTC, hours away from the Runs page next to it). The Runs page says
+  "1 run", not "1 runs". The training forms name the selected dataset file
+  under the path field, which is too narrow to show the end of a long path.
+  The note under each model preset says what the model is good for in
+  plain words.
 - **Uploading a dataset in the web UI works.** Every upload on the Dataset
   page failed with a server error, in 1.8.1 and earlier: the upload handler
   was declared in a way the UI framework refuses, so the file never

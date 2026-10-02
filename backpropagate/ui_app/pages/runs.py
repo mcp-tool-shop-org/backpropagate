@@ -557,7 +557,8 @@ def runs_page() -> rx.Component:
                     rx.cond(
                         RunsState.last_loaded_at != "",
                         rx.text(
-                            f"{RunsState.runs.length()} runs · updated "
+                            RunsState.runs_count_label
+                            + " · updated "
                             + RunsState.last_loaded_label,
                             size="1",
                             style={"color": "var(--bp-muted-2)", "font_size": "10px"},

@@ -276,6 +276,26 @@ def dataset_card(S, extra: rx.Component | None = None) -> rx.Component:
             ),
             S.dataset_path_error,
         ),
+        # The field cannot show the end of a long path, so name the file.
+        rx.cond(
+            S.dataset_file_name != "",
+            rx.text(
+                "File: ",
+                rx.text.span(
+                    S.dataset_file_name,
+                    style={"font_family": "var(--bp-mono)", "color": "var(--bp-text-2)"},
+                ),
+                size="1",
+                id="bp-dataset-file",
+                style={
+                    "color": "var(--bp-muted)",
+                    "font_size": "13px",
+                    "line_height": "1.5",
+                    "word_break": "break-all",
+                },
+            ),
+            rx.fragment(),
+        ),
         _muted(S.method_data_hint),
         rx.text(
             "No path to hand? ",

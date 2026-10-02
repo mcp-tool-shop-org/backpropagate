@@ -50,6 +50,28 @@ A Claude Design pass in May 2026 produced the design system and mockups of every
 - **The original prompts:** `.../stage-d/claude-design-prompt-1-REFLEX.md` and `claude-design-prompts.md`.
 
 The tokens reached `backpropagate/ui_theme.py`; the layouts and polish did not. **Close that gap.**
+
+**The Director's visual direction (2026-10-02, after reviewing P1).** He judged the P1 look dated and boxy, like a late-90s form, and asked for a modern app with curves, proper spacing and room to breathe. Where it conflicts with the old mockups, this direction wins. It applies to every phase:
+- **Curves:** cards 12–16 px radius, inputs and selects 8–10 px, buttons pill-shaped or 10 px. No square boxes, and no hard 1 px grid lines between every field.
+- **Spacing:** one scale (4/8/12/16/24/32/48) used everywhere:
+  - 24–32 px gutter between the sidebar and the content;
+  - 6–8 px from a label to its input;
+  - 20–24 px between fields, 32–48 px between sections.
+- **Layout:**
+  - content grouped in rounded cards on a slightly different page background, with a soft shadow or subtle elevation;
+  - a maximum content width;
+  - two columns on wide screens, never a crowded form next to half an empty screen.
+- **Type:** page title 28–32 px, section titles 16–18 px semibold, labels 13–14 px. Numbers formatted, e.g. loss to 3–4 decimals.
+- **Icons:** nav and header icons 20 px, with comfortable hit areas.
+- **Sidebar:** the active page shown as a rounded pill highlight.
+- **Run progress:** its own card with:
+  - a large step counter ("26 / 400");
+  - a rounded progress bar;
+  - the heartbeat and ETA;
+  - the loss chart in a card.
+- **Motion:** short, subtle transitions on hover, focus and state changes.
+- **References:** current dashboards such as Linear, Vercel and Raycast. Keep the Ocean Mist palette and Geist if they fit this direction.
+- **Light and dark** must both look finished.
 - **You may improve on the mockups.** You own the design.
 - **Keep:** the token system, WCAG AA contrast and the visible focus ring.
 - **Make it fit real screens:** 1366×768 (the Store's minimum screenshot size) through 2560+ wide, and a narrow window.

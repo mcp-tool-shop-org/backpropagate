@@ -463,11 +463,16 @@ class TestFp8GateLadder:
         assert "disabling packing" not in caplog.text  # packing was already off
 
     def test_degrade_keeps_default_4bit_and_does_not_raise(self, caplog):
-        with caplog.at_level(logging.WARNING, logger=LOGGER):
-            t = make(fp8=True)  # CPU host: unsupported
+        # Pin the CPU host instead of relying on the machine running the
+        # tests: on a Hopper/Blackwell card with torchao installed the real
+        # probe says FP8 is supported and nothing degrades.
+        no_cuda = patch("torch.cuda.is_available", return_value=False)
+        with no_cuda, caplog.at_level(logging.WARNING, logger=LOGGER):
+            t = make(fp8=True)
         assert t._fp8_effective is False
         assert t._load_in_4bit is True
         assert "fp8=True requested but unavailable on this host" in caplog.text
+        assert "CUDA is not available" in caplog.text
 
     @pytest.mark.parametrize("kw,setting", [
         ({"mode": "full"}, "fp8+mode"),

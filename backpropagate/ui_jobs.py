@@ -48,6 +48,9 @@ from .job_events import (
 logger = logging.getLogger(__name__)
 
 JOB_FILENAME = "job.json"
+#: How long a job that wrote its terminal event may keep reading "active"
+#: while its process is still exiting.
+EXIT_GRACE_S = 120.0
 OUTPUT_LOG = "output.log"
 
 #: Server-side caps (handoff rule 7). The UI form enforces tighter values;
@@ -823,6 +826,9 @@ class JobManager:
         self._jobs: dict[str, subprocess.Popen | Any] = {}
         self._handles: dict[str, JobHandle] = {}
         self._win_jobs: dict[str, Any] = {}
+        # job id -> when status() first saw its terminal event with the
+        # process still alive (see _still_exiting).
+        self._exit_wait_since: dict[str, float] = {}
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -1085,6 +1091,15 @@ class JobManager:
             return "crashed"
         return status
 
+    def _still_exiting(self, job_id: str) -> bool:
+        """True while a job that wrote its terminal event may still be
+        tearing down (saving, releasing the GPU). Bounded: after
+        ``EXIT_GRACE_S`` the job is reported by its terminal event anyway, so
+        a process that never exits cannot hold the page in "active"."""
+        now = time.monotonic()
+        first = self._exit_wait_since.setdefault(job_id, now)
+        return now - first < EXIT_GRACE_S
+
     def status(self) -> dict[str, Any]:  # noqa: C901 — small presentation gather
         """Latest status dict for the side rail / progress banner."""
         with self._lock:
@@ -1102,8 +1117,14 @@ class JobManager:
                 latest = row
                 terminal = terminal or kind in ("done", "error")
         alive = self._is_alive(handle.job_id)
+        finishing = alive and terminal and self._still_exiting(handle.job_id)
         if not alive and not terminal:
             state = "crashed"
+        elif finishing:
+            # Reported finished only once the process is gone: start()
+            # refuses a new job until then, so saying "done" earlier offered
+            # Start for a moment and then refused the click.
+            state = "active"
         elif latest.get("kind") == "done":
             state = str(latest.get("status") or "done")
         elif latest.get("kind") == "error":
@@ -1130,6 +1151,7 @@ class JobManager:
             "started_at": handle.started_at,
             "log_path": str(handle.log_path),
             "events_path": str(handle.events_path),
+            "finishing": finishing,
         }
         for key in ("code", "message", "hint", "output_path"):
             if latest.get(key) is not None:

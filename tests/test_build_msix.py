@@ -475,11 +475,13 @@ class TestLlamaCppManifest:
         assert mod.main(["--print-llamacpp-manifest", "--llamacpp-tag", "b99999"]) == 0
         assert "b99999" in capsys.readouterr().out
 
+    @pytest.mark.integration  # reaches github.com; run by hand, never in CI
     def test_manifest_constant_matches_pinned_tag(self, mod):
         """The constant was computed from the b11323 tag archive.
 
         See the comment on LLAMACPP_MANIFEST. A cache hit in the system temp
         directory is reused; a miss downloads the tag (commit-checked) once.
+        Marked integration: unit tests stay off the network.
         """
         cache = Path(tempfile.gettempdir()) / f"llama.cpp-{mod.LLAMACPP_TAG}.zip"
         if not cache.is_file():

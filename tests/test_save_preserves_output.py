@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backpropagate.checkpoints import (
+    HF_SAVE_ARTIFACT_PATTERNS,
     RunHistoryManager,
     promote_partial_dir,
     recover_interrupted_promote,
@@ -49,6 +50,14 @@ def _assert_seed_intact(out: Path) -> None:
 
 def _no_leftovers(out: Path) -> None:
     for suffix in (".partial", ".backup", ".backup.json", ".backup.json.tmp"):
+        leftover = out.with_name(out.name + suffix)
+        assert not leftover.exists(), f"{leftover} left behind"
+
+
+def _no_promote_leftovers(out: Path) -> None:
+    """For direct promote calls: the caller, not the promote, removes the
+    emptied ``.partial``."""
+    for suffix in (".backup", ".backup.json", ".backup.json.tmp"):
         leftover = out.with_name(out.name + suffix)
         assert not leftover.exists(), f"{leftover} left behind"
 
@@ -260,6 +269,138 @@ class TestPromoteCrashRecovery:
         with pytest.raises(NotADirectoryError):
             promote_partial_dir(partial, target)
         assert target.read_text(encoding="utf-8") == "a file"
+
+
+# =============================================================================
+# An earlier save's model files must not shadow the new save
+# =============================================================================
+
+
+class TestStaleModelArtifactsRetired:
+    """Keeping every file the save did not write would keep an earlier save's
+    model files too, and transformers loads those without an error: a leftover
+    adapter_config.json makes it load the old adapter instead of merged
+    weights, and a leftover model.safetensors wins over a newer sharded
+    index. A save therefore retires the model / tokenizer files it owns."""
+
+    def test_merged_save_over_lora_retires_the_adapter(self, temp_dir):
+        out = temp_dir / "output"
+        _seed_output_dir(out)
+        trainer = _make_trainer(out, weights=b"LORA")
+        trainer.save(str(out), run_id="run-lora")
+        assert (out / "adapter_config.json").exists()
+
+        def write_merged(path, *args, **kwargs):
+            (Path(path) / "config.json").write_text("{}", encoding="utf-8")
+            (Path(path) / "model.safetensors").write_bytes(b"MERGED")
+
+        trainer._model.save_pretrained.side_effect = write_merged
+        trainer.save(str(out), run_id="run-merged")
+
+        assert not (out / "adapter_config.json").exists(), (
+            "a stale adapter_config.json makes transformers load the old LoRA"
+        )
+        assert not (out / "adapter_model.safetensors").exists()
+        assert (out / "model.safetensors").read_bytes() == b"MERGED"
+        assert (out / "tokenizer.json").exists()
+        assert (out / "run_id").read_text(encoding="utf-8") == "run-merged"
+        _assert_seed_intact(out)
+        _no_leftovers(out)
+
+    def test_sharded_save_retires_single_file_weights(self, temp_dir):
+        target = temp_dir / "out"
+        _seed_output_dir(target)
+        (target / "config.json").write_text("OLD", encoding="utf-8")
+        (target / "model.safetensors").write_bytes(b"OLD-SINGLE")
+        partial = temp_dir / "out.partial"
+        partial.mkdir()
+        (partial / "config.json").write_text("NEW", encoding="utf-8")
+        for i in (1, 2):
+            (partial / f"model-0000{i}-of-00002.safetensors").write_bytes(b"NEW")
+        (partial / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+
+        promote_partial_dir(partial, target, owned_names=HF_SAVE_ARTIFACT_PATTERNS)
+
+        assert not (target / "model.safetensors").exists(), (
+            "transformers loads model.safetensors before a sharded index"
+        )
+        assert (target / "model-00002-of-00002.safetensors").exists()
+        assert (target / "config.json").read_text(encoding="utf-8") == "NEW"
+        _assert_seed_intact(target)
+        _no_promote_leftovers(target)
+
+    def test_failed_promote_restores_retired_files(self, temp_dir):
+        """Retiring the SECOND stale file fails: the first one, already moved
+        aside, comes back, and the new files go."""
+        import os
+
+        target = temp_dir / "out"
+        _seed_output_dir(target)
+        (target / "adapter_config.json").write_text("OLD-ADAPTER", encoding="utf-8")
+        (target / "adapter_model.safetensors").write_bytes(b"OLD-WEIGHTS")
+        partial = temp_dir / "out.partial"
+        partial.mkdir()
+        (partial / "config.json").write_text("NEW", encoding="utf-8")
+        (partial / "model.safetensors").write_bytes(b"NEW")
+
+        real_rename = os.rename
+        aside = []
+
+        def flaky_rename(src, dst, *args, **kwargs):
+            # shutil.move renames too; only fail retiring the stale weights.
+            if Path(src) == target / "adapter_model.safetensors":
+                raise PermissionError("[WinError 32] file in use")
+            if Path(src) == target / "adapter_config.json":
+                aside.append(src)
+            return real_rename(src, dst, *args, **kwargs)
+
+        with patch.object(os, "rename", side_effect=flaky_rename), \
+             pytest.raises(PermissionError):
+            promote_partial_dir(partial, target, owned_names=HF_SAVE_ARTIFACT_PATTERNS)
+
+        assert aside, "the first retired file was never moved aside"
+        assert (target / "adapter_config.json").read_text(encoding="utf-8") == "OLD-ADAPTER"
+        assert (target / "adapter_model.safetensors").read_bytes() == b"OLD-WEIGHTS"
+        assert not (target / "config.json").exists()
+        assert not (target / "model.safetensors").exists()
+        _assert_seed_intact(target)
+        _no_promote_leftovers(target)
+
+    def test_operator_files_that_look_similar_are_kept(self, temp_dir):
+        target = temp_dir / "out"
+        _seed_output_dir(target)
+        (target / "my-config.json").write_text("mine", encoding="utf-8")
+        (target / "model-notes.txt").write_text("mine", encoding="utf-8")
+        partial = temp_dir / "out.partial"
+        partial.mkdir()
+        (partial / "adapter_model.safetensors").write_bytes(b"NEW")
+
+        promote_partial_dir(partial, target, owned_names=HF_SAVE_ARTIFACT_PATTERNS)
+
+        assert (target / "my-config.json").read_text(encoding="utf-8") == "mine"
+        assert (target / "model-notes.txt").read_text(encoding="utf-8") == "mine"
+        _assert_seed_intact(target)
+
+    def test_export_lora_retires_merged_weights(self, temp_dir):
+        from backpropagate.export import export_lora
+
+        src = temp_dir / "adapter"
+        src.mkdir()
+        (src / "adapter_model.safetensors").write_bytes(b"NEW-WEIGHTS")
+        (src / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+        out = temp_dir / "export"
+        _seed_output_dir(out)
+        (out / "config.json").write_text("{}", encoding="utf-8")
+        (out / "model.safetensors").write_bytes(b"OLD-MERGED")
+
+        export_lora(str(src), out, emit_model_card=False)
+
+        assert not (out / "model.safetensors").exists()
+        assert not (out / "config.json").exists()
+        assert (out / "adapter_model.safetensors").read_bytes() == b"NEW-WEIGHTS"
+        _assert_seed_intact(out)
+        _no_leftovers(out)
 
 
 # =============================================================================

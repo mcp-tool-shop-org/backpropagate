@@ -7212,6 +7212,10 @@ class Trainer:
         ``output_dir``, which also holds ``run_history.json``, the
         ``checkpoint-N/`` dirs and whatever the operator keeps there. (Pre-fix
         the promote replaced the whole directory and deleted all of them.)
+        The exception is an earlier save's model and tokenizer files
+        (:data:`checkpoints.HF_SAVE_ARTIFACT_PATTERNS`): ones this save did not
+        rewrite are removed, so a LoRA left over from an earlier save cannot
+        shadow merged weights saved over it.
 
         BACKEND-F-007 (Wave 6a): on success the saved checkpoint is also
         registered with a :class:`CheckpointManager` rooted at
@@ -7298,7 +7302,11 @@ class Trainer:
                 "first, call trainer.train(dataset=...) before save()."
             )
 
-        from .checkpoints import promote_partial_dir, recover_interrupted_promote
+        from .checkpoints import (
+            HF_SAVE_ARTIFACT_PATTERNS,
+            promote_partial_dir,
+            recover_interrupted_promote,
+        )
 
         output_path = Path(path or self.output_dir / "lora")
         partial_path = output_path.with_name(output_path.name + ".partial")
@@ -7390,8 +7398,15 @@ class Trainer:
             # save wrote; run_history.json, checkpoint-N/ and the operator's
             # own files in output_path are left alone. A failed or interrupted
             # promote restores the prior files. A prior run_id file goes even
-            # when this save writes none, so it cannot label the new weights.
-            promote_partial_dir(partial_path, output_path, owned_names=("run_id",))
+            # when this save writes none, so it cannot label the new weights,
+            # and so do earlier model / tokenizer files this save did not
+            # rewrite (a stale adapter_config.json would make transformers
+            # load the old adapter instead of these weights).
+            promote_partial_dir(
+                partial_path,
+                output_path,
+                owned_names=("run_id", *HF_SAVE_ARTIFACT_PATTERNS),
+            )
         except CheckpointError:
             raise
         except Exception as e:

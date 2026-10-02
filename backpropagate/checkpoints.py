@@ -27,6 +27,7 @@ Usage:
 """
 
 import contextlib
+import fnmatch
 import json
 import logging
 import os
@@ -63,6 +64,7 @@ __all__ = [
     "CheckpointStats",
     "CheckpointManager",
     "RunHistoryManager",
+    "HF_SAVE_ARTIFACT_PATTERNS",
     "promote_partial_dir",
     "recover_interrupted_promote",
 ]
@@ -2032,6 +2034,36 @@ class RunHistoryManager:
 # every journaled entry back, so the target holds the complete prior save,
 # never a mix of old and new files.
 
+# Top-level model / tokenizer artefacts a Hugging Face save may write. A save
+# owns all of them, so the ones it did not write this time are retired with
+# the promote: otherwise a merged or full save into a folder that held an
+# earlier LoRA keeps adapter_config.json (transformers then loads the OLD
+# adapter on top of the base model), and a sharded save keeps an earlier
+# single-file model.safetensors (which transformers loads before the index).
+# Both load without an error, which is why they cannot be left to the user.
+HF_SAVE_ARTIFACT_PATTERNS: tuple[str, ...] = (
+    "adapter_config.json",
+    "adapter_model.safetensors",
+    "adapter_model.bin",
+    "config.json",
+    "generation_config.json",
+    "model.safetensors",
+    "model-*-of-*.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model-*-of-*.bin",
+    "pytorch_model.bin.index.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "tokenizer.model",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "vocab.json",
+    "merges.txt",
+    "chat_template.jinja",
+    "chat_template.json",
+)
+
 
 def _promote_backup_path(target: Path) -> Path:
     return target.with_name(target.name + ".backup")
@@ -2116,9 +2148,11 @@ def promote_partial_dir(
 
     Entries already in ``target`` that ``partial`` does not contain (run
     history, ``checkpoint-N/`` dirs, the operator's own files) are left
-    untouched, except those named in ``owned_names``: files the save owns
-    but did not write this time (e.g. Trainer.save's ``run_id``), which are
-    removed so a stale one cannot describe the new files. A same-named entry
+    untouched, except those matching ``owned_names`` (``fnmatch`` patterns,
+    case-sensitive): files the save owns but did not write this time (e.g.
+    Trainer.save's ``run_id``, or an earlier save's model files — see
+    :data:`HF_SAVE_ARTIFACT_PATTERNS`), which are removed so a stale one
+    cannot describe or shadow the new files. A same-named entry
     is replaced as a whole. On an exception
     the prior entries are restored before it propagates; on a crash the
     journal lets :func:`recover_interrupted_promote` restore them.
@@ -2153,9 +2187,10 @@ def promote_partial_dir(
     ]
     staged = {entry["name"] for entry in entries}
     entries += [
-        {"name": name, "had_prior": True, "remove": True}
-        for name in owned_names
-        if name not in staged and os.path.lexists(target / name)
+        {"name": p.name, "had_prior": True, "remove": True}
+        for p in sorted(target.iterdir())
+        if p.name not in staged
+        and any(fnmatch.fnmatchcase(p.name, pattern) for pattern in owned_names)
     ]
     backup.mkdir()
     tmp_journal = journal.with_name(journal.name + ".tmp")

@@ -1314,7 +1314,11 @@ def export_lora(
     Raises:
         ExportError: If export fails
     """
-    from .checkpoints import promote_partial_dir, recover_interrupted_promote
+    from .checkpoints import (
+        HF_SAVE_ARTIFACT_PATTERNS,
+        promote_partial_dir,
+        recover_interrupted_promote,
+    )
 
     start_time = time.time()
     output_path = Path(output_dir)
@@ -1378,9 +1382,12 @@ def export_lora(
                 suggestion="Expected PeftModel or path to saved adapter"
             )
 
-        # Crash-safe promote that replaces only the adapter files; the
-        # operator's other files in output_path survive.
-        promote_partial_dir(partial_path, output_path)
+        # Crash-safe promote that replaces only the adapter files (and
+        # retires model files an earlier save left, which would otherwise
+        # shadow the adapter); the operator's other files survive.
+        promote_partial_dir(
+            partial_path, output_path, owned_names=HF_SAVE_ARTIFACT_PATTERNS
+        )
     except ExportError:
         raise
     except Exception as e:

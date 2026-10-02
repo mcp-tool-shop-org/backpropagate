@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Microsoft Store packaging** (`scripts/build_msix.py`, #273). Builds a
+  self-contained MSIX: embedded CPython 3.12, PyTorch 2.12.1 with CUDA 13
+  (needs an NVIDIA driver 580 or newer; older drivers train on the CPU), the
+  web UI with its frontend prebuilt, a pinned bun, and llama.cpp's GGUF
+  converter (tag b11323). Every download is pinned by SHA-256. The build
+  refuses to pack unless torch runs a CUDA operation, the version maps to
+  `X.Y.Z.0`, the package stays under 20 GiB, and no path exceeds Windows'
+  260-character limit under the install folder. The Start-menu tile opens
+  the UI; `backprop` and `backpropagate` work in any terminal.
+- **`backprop ui --open-browser`** (#272): opens your browser at the startup
+  URL, token included, once the UI is ready.
+- **The UI can start with no network** when a prebuilt frontend ships with
+  it (the Store package, #272). Its archive and bun are checked by SHA-256
+  before use. Pip installs are unchanged.
+- **Handbook privacy page**: what the app stores, what it sends and when,
+  and how to remove it all.
+
+### Changed
+
+- **`backprop ui` runs from a per-user folder** (#271):
+  `%LOCALAPPDATA%\backpropagate\ui\<version>-<hash>` on Windows,
+  `~/.cache/backpropagate/ui/<version>-<hash>` elsewhere, instead of the
+  installed package, so read-only and root-owned installs work. Set
+  `BACKPROPAGATE_UI_WORKDIR` to choose the folder.
+
 ## [1.8.1] - 2026-10-01
 
 ### Fixed

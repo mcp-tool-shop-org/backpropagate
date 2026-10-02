@@ -18,7 +18,7 @@ from backpropagate import vram_calibration as vc
 from backpropagate.trainer import estimate_vram
 
 MACHINE = {"gpu": "Test GPU", "vram_gib": 24.0, "torch": "2.10", "transformers": "5.5",
-           "unsloth": "2026.5", "varlen_attention": False}
+           "unsloth": "2026.5", "attention": "sdpa-efficient"}
 
 
 def _cal(**kw) -> vc.Calibration:
@@ -61,7 +61,8 @@ def test_machine_fingerprint_with_cuda(monkeypatch):
     fp = vc.machine_fingerprint()
     assert fp is not None
     assert fp["gpu"] == "Test GPU" and fp["vram_gib"] == 24.0
-    assert set(fp) == {"gpu", "vram_gib", "torch", "transformers", "unsloth", "varlen_attention"}
+    assert set(fp) == {"gpu", "vram_gib", "torch", "transformers", "unsloth", "attention"}
+    assert fp["attention"] in ("varlen", "sdpa-efficient")
 
 
 def test_machine_fingerprint_survives_a_broken_cuda(monkeypatch):
@@ -83,9 +84,22 @@ def test_lookup_ignores_an_entry_with_unknown_fields(tmp_path, monkeypatch):
     assert vc.lookup("org/m-1B", machine=MACHINE) is None
 
 
-def test_fit_returns_none_when_nothing_can_be_scaled():
-    probe = {"batch": 2, "seq": 2048, "overhead_gib": 1.0}
-    assert vc.fit_rows([probe], formula_quad=0.0, formula_lin=0.0) is None
+def test_fit_returns_none_when_no_probe_is_usable():
+    assert vc.fit_rows([{"batch": 2, "seq": 2048, "overhead_gib": 0.0}]) is None
+    assert vc.fit_rows([{"batch": 0, "seq": 2048, "overhead_gib": 1.0}]) is None
+    assert vc.fit_rows([{"batch": 2, "seq": 2048, "overhead_gib": 1.0, "oom": True}]) is None
+
+
+def test_a_calibration_stored_by_the_older_fit_is_ignored(monkeypatch, tmp_path):
+    path = tmp_path / "cal.json"
+    monkeypatch.setenv("BACKPROPAGATE_VRAM_CALIBRATION", str(path))
+    vc.save(_cal())
+    assert vc.lookup("org/m-1B", machine=MACHINE) is not None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for entry in data.values():
+        entry["version"] = 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert vc.lookup("org/m-1B", machine=MACHINE) is None
 
 
 def test_probe_dataset_rows_are_longer_than_the_row_length(tmp_path):
@@ -207,7 +221,7 @@ def test_estimate_survives_a_failing_lookup(monkeypatch):
         raise OSError("store unreadable")
 
     monkeypatch.setattr(vc, "lookup", boom)
-    est = estimate_vram("org/m-1B", lora_r=16, batch_size=1, varlen_attention=None)
+    est = estimate_vram("org/m-1B", lora_r=16, batch_size=1)
     assert est.source == "estimate" and est.total_gb > 0
 
 

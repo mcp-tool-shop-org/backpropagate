@@ -473,9 +473,13 @@ class TestEstimateParamCount:
 class TestEstimateVRAM:
     """v1.4 BACKEND-F-002: VRAM pre-flight estimator."""
 
-    def test_returns_structured_estimate(self):
+    def test_returns_structured_estimate(self, monkeypatch):
+        import backpropagate.trainer as trainer_mod
         from backpropagate.trainer import VRAMEstimate, estimate_vram
 
+        # No config.json on disk: the size comes from the name. (A machine
+        # with this model in its Hugging Face cache reads 7.62B from it.)
+        monkeypatch.setattr(trainer_mod, "_cached_model_config", lambda model: None)
         est = estimate_vram(
             model="Qwen/Qwen2.5-7B-Instruct",
             mode="lora",

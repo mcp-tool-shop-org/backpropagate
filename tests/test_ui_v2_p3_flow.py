@@ -19,6 +19,7 @@ P2 flow tests.
    weights rather than an adapter.
 
 Gating: ``playwright`` + Chrome, CUDA, and ``BACKPROPAGATE_UI_FLOW=1``.
+``BACKPROPAGATE_UI_FLOW_SKIP_FULL=1`` skips part 3 (the full fine-tune).
 Optional: ``BACKPROPAGATE_UI_SHOT_DIR=<dir>`` saves screenshots.
 
 Run (rig):
@@ -288,6 +289,13 @@ def test_p3_new_controls_reach_the_run(ui):
         assert "--no-4bit" not in argv
 
         # ---- 3. Full fine-tune (SFT) ----------------------------------------
+        # BACKPROPAGATE_UI_FLOW_SKIP_FULL=1 stops here. Full mode uses the
+        # paged 8-bit optimizer; on the Windows dev rig a 1B full fine-tune
+        # stalled the desktop twice (2026-10-02), so full-mode runs there are
+        # started deliberately, not as part of every pass.
+        if os.environ.get("BACKPROPAGATE_UI_FLOW_SKIP_FULL") == "1":
+            browser.close()
+            return
         page.goto(base + "/")
         page.wait_for_load_state("networkidle")
         page.get_by_label("HuggingFace model id").fill(SMALL)

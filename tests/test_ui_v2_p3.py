@@ -199,46 +199,87 @@ def test_full_mode_prices_a_16_bit_base():
 
 
 def test_gradient_checkpointing_off_raises_lora_activations():
-    # varlen_attention=False: the SDPA path, where the setting matters (a
-    # machine with flash-attention / xFormers has no per-layer attention term).
-    kw = {"lora_r": 16, "batch_size": 2, "varlen_attention": False}
+    kw = {"lora_r": 16, "batch_size": 2}
     on = estimate_vram("org/m-7B", **kw)
     off = estimate_vram("org/m-7B", gradient_checkpointing=False, **kw)
     assert off.activations_gb > on.activations_gb * 4
-    flash = {"lora_r": 16, "batch_size": 2, "varlen_attention": True}
-    assert estimate_vram("org/m-7B", gradient_checkpointing=False, **flash).activations_gb == (
-        estimate_vram("org/m-7B", **flash).activations_gb
-    )
+    assert any("every layer's activations" in n for n in off.notes)
+    assert not any("every layer" in n for n in on.notes)
 
 
 def test_small_models_use_their_size_class_shape():
-    small = estimate_vram("org/m-1B", lora_r=16, batch_size=4, varlen_attention=False)
-    big = estimate_vram("org/m-7B", lora_r=16, batch_size=4, varlen_attention=False)
+    small = estimate_vram("org/m-1B", lora_r=16, batch_size=4)
+    big = estimate_vram("org/m-7B", lora_r=16, batch_size=4)
     assert small.activations_gb < big.activations_gb
 
 
-# Measured peaks (RTX 5090, 2026-10-02): (label, kwargs, measured GiB).
-_L1 = {"param_count_billions": 1.236, "hidden_dim": 2048, "num_layers": 16, "num_heads": 32, "vocab_size": 128256}
-_Q7 = {"param_count_billions": 7.616, "hidden_dim": 3584, "num_layers": 28, "num_heads": 28, "vocab_size": 152064}
-_SM = {"param_count_billions": 0.1345, "hidden_dim": 576, "num_layers": 30, "num_heads": 9, "vocab_size": 49152}
+# Measured peaks (RTX 5090, torch 2.10, unsloth 2026.5, 2026-10-02, after the
+# efficient-attention fix): each model's real config, kwargs, PyTorch's peak
+# allocation in GiB. Rows are full: every row holds max_seq_length tokens
+# (3,241 where the limit was 4,096: the probe rows were that long).
+_L1 = {"hidden_size": 2048, "num_hidden_layers": 16, "num_attention_heads": 32,
+       "num_key_value_heads": 8, "intermediate_size": 8192, "vocab_size": 128256,
+       "tie_word_embeddings": True}
+_L3 = {"hidden_size": 3072, "num_hidden_layers": 28, "num_attention_heads": 24,
+       "num_key_value_heads": 8, "intermediate_size": 8192, "vocab_size": 128256,
+       "tie_word_embeddings": True}
+_Q7 = {"hidden_size": 3584, "num_hidden_layers": 28, "num_attention_heads": 28,
+       "num_key_value_heads": 4, "intermediate_size": 18944, "vocab_size": 152064,
+       "tie_word_embeddings": False}
+_SM = {"hidden_size": 576, "num_hidden_layers": 30, "num_attention_heads": 9,
+       "num_key_value_heads": 3, "intermediate_size": 1536, "vocab_size": 49152,
+       "tie_word_embeddings": True}
 _QV = {"target_modules": "q_proj,v_proj", "lora_r": 16}
+_ALL = {"target_modules": "all-linear", "lora_r": 256}
+_NO_GC = {"gradient_checkpointing": False, "max_seq_length": 1024}
 _MEASURED = [
-    ("llama1b qlora b1", dict(**_L1, **_QV, batch_size=1), 3.22),
-    ("llama1b qlora b4", dict(**_L1, **_QV, batch_size=4), 9.59),
-    ("llama1b qlora b8", dict(**_L1, **_QV, batch_size=8), 18.09),
-    ("llama1b qlora b4 s1024", dict(**_L1, **_QV, batch_size=4, max_seq_length=1024), 3.34),
-    ("llama1b qlora b2 s4096", dict(**_L1, **_QV, batch_size=2, max_seq_length=4096), 17.59),
-    ("llama1b lora16bit b4", dict(**_L1, **_QV, batch_size=4, quantize_base=False), 10.87),
-    ("qwen7b qlora b2", dict(**_Q7, **_QV, batch_size=2), 10.69),
-    ("smol135m qlora b8", dict(**_SM, **_QV, batch_size=8), 4.92),
+    ("llama1b qlora b1", _L1, dict(**_QV, batch_size=1), 2.14),
+    ("llama1b qlora b4", _L1, dict(**_QV, batch_size=4), 5.35),
+    ("llama1b qlora b8", _L1, dict(**_QV, batch_size=8), 9.86),
+    ("llama1b qlora b4 s1024", _L1, dict(**_QV, batch_size=4, max_seq_length=1024), 3.19),
+    ("llama1b qlora b2 s3241", _L1, dict(**_QV, batch_size=2, max_seq_length=3241), 4.44),
+    ("llama1b lora16bit b4", _L1, dict(**_QV, batch_size=4, quantize_base=False), 6.63),
+    ("llama1b r256 all-linear b4", _L1, dict(**_ALL, batch_size=4), 7.35),
+    ("llama1b no-gc b2 s1024", _L1, dict(**_QV, **_NO_GC, batch_size=2), 4.74),
+    ("llama3b qlora b4", _L3, dict(**_QV, batch_size=4), 6.69),
+    ("llama3b r256 all-linear b2", _L3, dict(**_ALL, batch_size=2), 9.00),
+    ("llama3b no-gc b1 s1024", _L3, dict(**_QV, **_NO_GC, batch_size=1), 5.65),
+    ("qwen7b qlora b1", _Q7, dict(**_QV, batch_size=1), 8.75),
+    ("qwen7b qlora b2", _Q7, dict(**_QV, batch_size=2), 9.31),
+    ("qwen7b qlora b4", _Q7, dict(**_QV, batch_size=4), 11.91),
+    ("qwen7b r256 all-linear b2", _Q7, dict(**_ALL, batch_size=2), 16.61),
 ]
 
 
-@pytest.mark.parametrize(("label", "kwargs", "measured"), _MEASURED, ids=[m[0] for m in _MEASURED])
-def test_estimate_tracks_measured_peaks(label, kwargs, measured):
-    """The cost model stays within 12% of peaks measured on real training."""
-    est = estimate_vram("org/x", overhead_fraction=0.0, varlen_attention=False, **kwargs)
-    assert est.total_gb == pytest.approx(measured, rel=0.12), label
+@pytest.mark.parametrize(
+    ("label", "config", "kwargs", "measured"), _MEASURED, ids=[m[0] for m in _MEASURED]
+)
+def test_estimate_tracks_measured_peaks(monkeypatch, label, config, kwargs, measured):
+    """Never below a peak measured on real training, and at most 20% above."""
+    import backpropagate.trainer as trainer_mod
+
+    monkeypatch.setattr(trainer_mod, "_cached_model_config", lambda model: dict(config))
+    est = estimate_vram("org/x", **kwargs)
+    assert measured <= est.total_gb <= measured * 1.20, (label, est.total_gb)
+
+
+@pytest.mark.parametrize(
+    ("label", "kwargs", "measured"),
+    [
+        ("smol135m qlora b4", dict(**_QV, batch_size=4), 1.08),
+        ("smol135m qlora b8", dict(**_QV, batch_size=8), 2.28),
+        ("smol135m no-gc b4", dict(**_QV, batch_size=4, gradient_checkpointing=False), 5.55),
+    ],
+)
+def test_models_with_the_lighter_compiled_loss_read_high_not_low(monkeypatch, label, kwargs, measured):
+    """On SmolLM2 135M (also SmolLM3 3B, Qwen2.5 3B) Unsloth's compiled loss
+    needs about half the logits memory. The formula prices the full figure, so
+    it reads high there; ``--calibrate`` gives the real number."""
+    import backpropagate.trainer as trainer_mod
+
+    monkeypatch.setattr(trainer_mod, "_cached_model_config", lambda model: dict(_SM))
+    est = estimate_vram("org/x", **kwargs)
+    assert measured <= est.total_gb <= measured * 1.80, (label, est.total_gb)
 
 
 def test_full_fine_tune_is_priced_system_wide():
@@ -253,12 +294,27 @@ def test_full_fine_tune_is_priced_system_wide():
     assert est.total_gb == pytest.approx(22.0, rel=0.10)
 
 
-def test_batch_cost_is_linear_and_flash_drops_the_quadratic_term():
-    one = estimate_vram("org/x", **_L1, **_QV, batch_size=1, varlen_attention=False)
-    four = estimate_vram("org/x", **_L1, **_QV, batch_size=4, varlen_attention=False)
+_L1_SHAPE = {"param_count_billions": 1.236, "hidden_dim": 2048, "num_layers": 16,
+             "num_heads": 32, "vocab_size": 128256}
+
+
+def test_cost_is_linear_in_the_batch_and_in_the_row_length():
+    one = estimate_vram("org/x", **_L1_SHAPE, **_QV, batch_size=1)
+    four = estimate_vram("org/x", **_L1_SHAPE, **_QV, batch_size=4)
     assert four.activations_gb == pytest.approx(4 * one.activations_gb)
-    flash = estimate_vram("org/x", **_L1, **_QV, batch_size=4, varlen_attention=True)
-    assert flash.activations_gb < four.activations_gb
+    # No seq^2 term: doubling the row length doubles the cost, no more.
+    long_rows = estimate_vram("org/x", **_L1_SHAPE, **_QV, batch_size=4, max_seq_length=4096)
+    assert long_rows.activations_gb == pytest.approx(2 * four.activations_gb)
+    per_token = 4 * 128256 + 30 * 2048
+    assert four.activations_gb == pytest.approx(4 * 2048 * per_token / 1024**3)
+
+
+def test_the_number_of_attention_heads_does_not_change_the_estimate():
+    few = estimate_vram("org/x", **{**_L1_SHAPE, "num_heads": 8}, lora_r=16, batch_size=4,
+                        target_modules="q_proj")
+    many = estimate_vram("org/x", **{**_L1_SHAPE, "num_heads": 64}, lora_r=16, batch_size=4,
+                         target_modules="q_proj")
+    assert few.total_gb == pytest.approx(many.total_gb)
 
 
 def test_shape_comes_from_a_local_config(tmp_path):

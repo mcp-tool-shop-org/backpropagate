@@ -2143,18 +2143,19 @@ class TestExportStateHubTokenNotClientSerialized:
             "serialized into the WS state bundle sent to the browser."
         )
 
-    def test_hub_token_held_in_backend_var(self):
-        """The secret is held in a backend-only var (``_hub_token``)."""
+    def test_hub_token_is_not_a_state_var_of_any_kind(self):
+        """The secret is in no state var: Reflex pickles backend vars to disk too."""
         from backpropagate.ui_state import ExportState
 
-        assert "_hub_token" in ExportState.backend_vars, (
-            "UI-A-001: the raw token must be held in the backend-only "
-            "var ExportState._hub_token (in backend_vars, not base_vars)."
-        )
-        assert "_hub_token" not in ExportState.base_vars, (
-            "UI-A-001: the backend token var must NOT also appear in "
-            "base_vars."
-        )
+        assert "_hub_token" not in ExportState.backend_vars
+        assert "_hub_token" not in ExportState.base_vars
+        assert not [
+            name
+            for name in (*ExportState.backend_vars, *ExportState.base_vars)
+            if "token" in name.lower() and "file" not in name and name not in (
+                "hub_token_set", "hub_token_error"
+            )
+        ]
 
     def test_no_public_state_var_holds_a_secret(self):
         """Sibling probe: NO public (client-serialized) Reflex var across
@@ -2204,7 +2205,7 @@ class TestExportStateHubTokenNotClientSerialized:
     def test_set_hub_token_writes_backend_var(self, monkeypatch):
         """The write-only setter populates the backend var, not a public one.
 
-        Post-fix, ``set_hub_token`` writes ``_hub_token`` (backend). The
+        ``set_hub_token`` writes the process-memory store. The
         public mirror that the form binds ``value=`` to (if any) must NOT
         contain the raw secret.
         """
@@ -2213,9 +2214,8 @@ class TestExportStateHubTokenNotClientSerialized:
         state = ExportState()
         state.set_hub_token("hf_" + "a" * 40)
 
-        assert state._hub_token == "hf_" + "a" * 40, (
-            "UI-A-001: set_hub_token must store the raw token in the "
-            "backend-only _hub_token var."
+        assert state._hub_token_value() == "hf_" + "a" * 40, (
+            "UI-A-001: set_hub_token must keep the raw token for the push."
         )
 
     def test_push_to_hub_reads_and_clears_backend_token(self, monkeypatch):
@@ -2245,7 +2245,7 @@ class TestExportStateHubTokenNotClientSerialized:
             "UI-A-001: push_to_hub must resolve the token from the "
             f"backend var and pass it to export.push_to_hub; got {captured!r}."
         )
-        assert state._hub_token == "", (
+        assert state._hub_token_value() == "", (
             "UI-A-001: push_to_hub must clear the backend token after a "
             "successful push so it doesn't sit in state for the WS session."
         )

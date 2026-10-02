@@ -12,7 +12,7 @@ export const config: SiteConfig = {
     badge: 'Python · PyPI',
     headline: 'Fine-tune LLMs',
     headlineAccent: 'in 3 lines.',
-    description: 'Headless LLM fine-tuning with smart defaults. Automatic hyperparameter tuning, VRAM-aware batch sizing, multi-run SLAO training to prevent catastrophic forgetting, and one-click GGUF export for Ollama. First-class Windows and CUDA support.',
+    description: 'Headless LLM fine-tuning with smart defaults. Automatic hyperparameter tuning, VRAM-aware batch sizing, multi-run SLAO training to prevent catastrophic forgetting, and one-click GGUF export for Ollama. First-class Windows and CUDA support. Prefer not to write code? <a href="#web-ui" style="text-decoration:underline">Use it in your browser</a>.',
     primaryCta: { href: '#get-started', label: 'Get started' },
     secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [

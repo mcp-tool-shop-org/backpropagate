@@ -85,17 +85,17 @@
       }
     ],
     "since": {
-      "commit": "c89c4f41e6e55d2388e01311713c7b4e0620064c",
-      "generatedAt": "2026-10-02T20:08:43.751Z"
+      "commit": "0c7f37c570771ff107d12f91a84bfb9dfc609d91",
+      "generatedAt": "2026-10-02T20:27:21.041Z"
     },
     "unchanged": true
   },
   "changesTogether": [],
   "changesTogetherNote": [
-    "Window: 180 days; a pair counts from 10 shared commits, since 34 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
+    "Window: 180 days; a pair counts from 10 shared commits, since 35 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "a39ee2cfba0831d2e62f48abafd29b4857c014c5",
+  "commit": "5fbeab504ae2837d0b8689b63211598b8287d042",
   "defaultBranch": "main",
   "derived": "13 parts, mostly Python (269 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
@@ -366,7 +366,7 @@
         {
           "boundary": "site",
           "depth": 0,
-          "files": 6
+          "files": 7
         }
       ],
       "runs": [
@@ -560,7 +560,7 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-02T20:43:00.522Z",
+  "generatedAt": "2026-10-02T21:24:04.209Z",
   "limits": [
     "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "16 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 13 more.",

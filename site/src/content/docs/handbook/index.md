@@ -10,6 +10,7 @@ Welcome to the Backpropagate handbook. This is the complete operator guide — e
 ## What's inside
 
 - **[Getting Started](/backpropagate/handbook/getting-started/)** — Install and train your first model in under 5 minutes
+- **[Web UI tour](/backpropagate/handbook/web-ui/)** — The browser interface page by page, with screenshots: bring your examples, set up a run, watch it train, export the result
 - **[Training](/backpropagate/handbook/training/)** — Basic training, multi-run SLAO, callbacks, dataset formats, and model presets
 - **[Preference tuning (ORPO / SimPO / KTO)](/backpropagate/handbook/preference-tuning/)** — v1.6 — when to use each method, paired vs unpaired data, the VRAM envelope, hyperparameters, and the cited papers
 - **[Full fine-tuning (`mode="full"`)](/backpropagate/handbook/full-fine-tuning/)** — v1.4 — when to use full FT, the 4B parameter ceiling, and the LoRA-vs-full quality math

@@ -69,7 +69,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 117,
+      "qualifyingSourceCommits": 119,
       "rebaseline": null
     },
     {
@@ -217,7 +217,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 100,
+      "qualifyingSourceCommits": 103,
       "rebaseline": null
     }
   ],
@@ -355,8 +355,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 92,
-        "lines": 1828,
+        "commits": 94,
+        "lines": 1852,
         "path": "CHANGELOG.md"
       },
       {
@@ -475,8 +475,8 @@
         "path": "assets/logo.png"
       },
       {
-        "commits": 13,
-        "lines": 500,
+        "commits": 15,
+        "lines": 548,
         "path": "atlas/README.md"
       },
       {
@@ -485,18 +485,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 13,
-        "lines": 1983,
+        "commits": 15,
+        "lines": 2138,
         "path": "atlas/page.json"
       },
       {
-        "commits": 13,
-        "lines": 10901,
+        "commits": 15,
+        "lines": 11602,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 13,
-        "lines": 41633,
+        "commits": 15,
+        "lines": 47844,
         "path": "atlas/structure.json"
       },
       {
@@ -705,6 +705,11 @@
         "path": "backpropagate/config.py"
       },
       {
+        "commits": 1,
+        "lines": 382,
+        "path": "backpropagate/dataset_prep.py"
+      },
+      {
         "commits": 7,
         "lines": 2028,
         "path": "backpropagate/dataset_report.py"
@@ -820,8 +825,8 @@
         "path": "backpropagate/ui_app/auth.py"
       },
       {
-        "commits": 21,
-        "lines": 1766,
+        "commits": 22,
+        "lines": 1784,
         "path": "backpropagate/ui_app/chrome.py"
       },
       {
@@ -900,8 +905,8 @@
         "path": "backpropagate/ui_app/components/status_pill.py"
       },
       {
-        "commits": 3,
-        "lines": 867,
+        "commits": 4,
+        "lines": 873,
         "path": "backpropagate/ui_app/components/train_form.py"
       },
       {
@@ -910,8 +915,8 @@
         "path": "backpropagate/ui_app/components/vram_bar.py"
       },
       {
-        "commits": 1,
-        "lines": 340,
+        "commits": 3,
+        "lines": 548,
         "path": "backpropagate/ui_app/help_text.py"
       },
       {
@@ -945,18 +950,18 @@
         "path": "backpropagate/ui_app/pages/__init__.py"
       },
       {
-        "commits": 19,
-        "lines": 1138,
+        "commits": 21,
+        "lines": 1608,
         "path": "backpropagate/ui_app/pages/dataset.py"
       },
       {
-        "commits": 22,
-        "lines": 1961,
+        "commits": 23,
+        "lines": 1997,
         "path": "backpropagate/ui_app/pages/export.py"
       },
       {
-        "commits": 18,
-        "lines": 945,
+        "commits": 19,
+        "lines": 971,
         "path": "backpropagate/ui_app/pages/models.py"
       },
       {
@@ -970,8 +975,8 @@
         "path": "backpropagate/ui_app/pages/run_detail.py"
       },
       {
-        "commits": 22,
-        "lines": 1515,
+        "commits": 23,
+        "lines": 1551,
         "path": "backpropagate/ui_app/pages/runs.py"
       },
       {
@@ -1005,8 +1010,8 @@
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 44,
-        "lines": 9336,
+        "commits": 45,
+        "lines": 9713,
         "path": "backpropagate/ui_state.py"
       },
       {
@@ -2940,8 +2945,8 @@
         "path": "scripts/convert_validated_pairs.py"
       },
       {
-        "commits": 19,
-        "lines": 603,
+        "commits": 20,
+        "lines": 618,
         "path": "scripts/doc-drift-allow.toml"
       },
       {
@@ -3070,8 +3075,8 @@
         "path": "site/src/content/docs/handbook/full-fine-tuning.md"
       },
       {
-        "commits": 16,
-        "lines": 243,
+        "commits": 17,
+        "lines": 244,
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
@@ -3090,8 +3095,8 @@
         "path": "site/src/content/docs/handbook/preference-tuning.md"
       },
       {
-        "commits": 1,
-        "lines": 56,
+        "commits": 2,
+        "lines": 58,
         "path": "site/src/content/docs/handbook/privacy.md"
       },
       {
@@ -3465,6 +3470,11 @@
         "path": "tests/test_crash_robustness.py"
       },
       {
+        "commits": 1,
+        "lines": 352,
+        "path": "tests/test_dataset_prep.py"
+      },
+      {
         "commits": 6,
         "lines": 1394,
         "path": "tests/test_dataset_report.py"
@@ -3560,8 +3570,8 @@
         "path": "tests/test_exceptions_cov_extra.py"
       },
       {
-        "commits": 21,
-        "lines": 4083,
+        "commits": 22,
+        "lines": 4140,
         "path": "tests/test_export.py"
       },
       {
@@ -3910,8 +3920,8 @@
         "path": "tests/test_trainer_cov_init.py"
       },
       {
-        "commits": 1,
-        "lines": 460,
+        "commits": 2,
+        "lines": 466,
         "path": "tests/test_trainer_cov_load.py"
       },
       {
@@ -3960,8 +3970,8 @@
         "path": "tests/test_ui_cov_middleware.py"
       },
       {
-        "commits": 6,
-        "lines": 1014,
+        "commits": 7,
+        "lines": 1022,
         "path": "tests/test_ui_cov_pages.py"
       },
       {
@@ -3975,19 +3985,24 @@
         "path": "tests/test_ui_cov_security_bugs.py"
       },
       {
-        "commits": 2,
-        "lines": 157,
+        "commits": 3,
+        "lines": 158,
         "path": "tests/test_ui_cov_state_bugs.py"
       },
       {
-        "commits": 5,
-        "lines": 1092,
+        "commits": 6,
+        "lines": 1109,
         "path": "tests/test_ui_cov_state_forms.py"
       },
       {
-        "commits": 3,
-        "lines": 1188,
+        "commits": 4,
+        "lines": 1202,
         "path": "tests/test_ui_cov_state_runs.py"
+      },
+      {
+        "commits": 1,
+        "lines": 422,
+        "path": "tests/test_ui_dataset_page.py"
       },
       {
         "commits": 3,
@@ -4000,8 +4015,8 @@
         "path": "tests/test_ui_extended.py"
       },
       {
-        "commits": 1,
-        "lines": 396,
+        "commits": 3,
+        "lines": 432,
         "path": "tests/test_ui_for_everyone.py"
       },
       {
@@ -4080,8 +4095,8 @@
         "path": "tests/test_ui_security_legacy_aliases.py"
       },
       {
-        "commits": 21,
-        "lines": 6918,
+        "commits": 22,
+        "lines": 6958,
         "path": "tests/test_ui_states.py"
       },
       {
@@ -4185,9 +4200,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-02T19:33:21.803Z",
+  "generatedAt": "2026-10-02T20:08:43.751Z",
   "generatedFrom": {
-    "commit": "1ca3e2605fd3e9a2cfdd1fbaa908318c5df4db19"
+    "commit": "c89c4f41e6e55d2388e01311713c7b4e0620064c"
   },
   "pairs": [
     {
@@ -4338,6 +4353,48 @@
       "strength": 1
     },
     {
+      "a": "atlas/README.md",
+      "b": "atlas/page.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
+      "a": "atlas/README.md",
+      "b": "atlas/statistics.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
+      "a": "atlas/README.md",
+      "b": "atlas/structure.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
+      "a": "atlas/page.json",
+      "b": "atlas/statistics.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
+      "a": "atlas/page.json",
+      "b": "atlas/structure.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
+      "a": "atlas/statistics.json",
+      "b": "atlas/structure.json",
+      "either": 11,
+      "shared": 11,
+      "strength": 1
+    },
+    {
       "a": "backpropagate/exceptions.py",
       "b": "site/src/content/docs/handbook/error-codes.md",
       "either": 26,
@@ -4362,16 +4419,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-02T15:23:13-04:00",
-    "inScopeFiles": 767,
+    "headDate": "2026-10-02T16:07:13-04:00",
+    "inScopeFiles": 770,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 222,
+    "qualifyingCommits": 225,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-05T19:23:13.000Z",
+    "since": "2026-04-05T20:07:13.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -4387,7 +4444,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 32,
+    "sourceFilesReachingStrongFloor": 34,
     "strength": 0.5,
     "windowDays": 180
   },

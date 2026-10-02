@@ -4068,6 +4068,86 @@
           "path": "backpropagate/config.py"
         },
         {
+          "exports": [
+            "inspect_dataset",
+            "load_records",
+            "prepare_dataset",
+            "summarise_dataset"
+          ],
+          "failurePaths": [
+            {
+              "in": "load_records",
+              "kind": "raise",
+              "line": 144
+            },
+            {
+              "in": "load_records",
+              "kind": "except",
+              "line": 149
+            },
+            {
+              "in": "load_records",
+              "kind": "raise",
+              "line": 150
+            },
+            {
+              "in": "load_records",
+              "kind": "except",
+              "line": 151
+            },
+            {
+              "in": "load_records",
+              "kind": "raise",
+              "line": 152
+            },
+            {
+              "in": "load_records",
+              "kind": "except",
+              "line": 163
+            },
+            {
+              "in": "load_records",
+              "kind": "except",
+              "line": 174
+            },
+            {
+              "in": "load_records",
+              "kind": "raise",
+              "line": 175
+            },
+            {
+              "in": "_row",
+              "kind": "except",
+              "line": 203
+            },
+            {
+              "in": "_pinned_format",
+              "kind": "raise",
+              "line": 240
+            },
+            {
+              "in": "select",
+              "kind": "raise",
+              "line": 270
+            },
+            {
+              "in": "select",
+              "kind": "raise",
+              "line": 272
+            },
+            {
+              "in": "prepare_dataset",
+              "kind": "raise",
+              "line": 365
+            }
+          ],
+          "hash": "a14b4486ae57b07335b0d57e347a863828409abb3aa6b14a23691e353d07cdb2",
+          "importsFiles": [
+            "backpropagate/datasets.py"
+          ],
+          "path": "backpropagate/dataset_prep.py"
+        },
+        {
           "entry": "analyze_dataset",
           "entryRule": 4,
           "exports": [
@@ -10413,7 +10493,7 @@
             "BpLeftNav",
             "BpSideRail"
           ],
-          "hash": "9b91ac741fa1090e90470cea58cff887eff567d7db090236efa92884405f7e3c",
+          "hash": "c0fe4d70e587806d479b094831e9544bdc95b58b8782dae6066435c0ef683b82",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -10594,7 +10674,7 @@
             "training_shape_card",
             "vram_estimate_card"
           ],
-          "hash": "764b3b9b55fc5e634918033c54a7a06f9da8129d7f537dfb1658f4d6f571657e",
+          "hash": "55bf84d5ddde621ba54da6be9b4a85fc8cfbb4003b7279d932d01d26d7535907",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_app/components/field.py",
@@ -10620,7 +10700,7 @@
           "exports": [
             "tip"
           ],
-          "hash": "eaa9109a5c017ec7428afb859bbab4e1cc9739adf699384b743f0be316fe7f63",
+          "hash": "f0c26203af7103c19865e754303ab2de76e7a67d89ce75cdf17fd6e83cfbc673",
           "path": "backpropagate/ui_app/help_text.py"
         },
         {
@@ -10743,19 +10823,21 @@
           "exports": [
             "dataset_page"
           ],
-          "hash": "f85684998981775657f9fc1e8c7f3505f5f9d751c3df4cecee34b55cce72c485",
+          "hash": "2980728a445508c929760b1d4711ae15e755298f8b1211547227de25a063be74",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/field.py",
             "backpropagate/ui_app/components/group.py",
-            "backpropagate/ui_app/components/icon.py"
+            "backpropagate/ui_app/components/icon.py",
+            "backpropagate/ui_app/components/info_tip.py"
           ],
           "importsFiles": [
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/field.py",
             "backpropagate/ui_app/components/group.py",
             "backpropagate/ui_app/components/icon.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_state.py"
           ],
           "path": "backpropagate/ui_app/pages/dataset.py"
@@ -10764,12 +10846,13 @@
           "exports": [
             "export_page"
           ],
-          "hash": "ab504d4305ca4e80af0e5672928c5430fc67947f8170d4472b10afc2a2c699d2",
+          "hash": "763dc61687104ba8d4d7d5cb986ba690232b647de7ace0200f1ca0392ec3ce63",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/field.py",
             "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_app/components/job_panel.py",
             "backpropagate/ui_app/components/train_form.py"
           ],
@@ -10777,6 +10860,7 @@
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/field.py",
             "backpropagate/ui_app/components/group.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_app/components/job_panel.py",
             "backpropagate/ui_app/components/train_form.py",
             "backpropagate/ui_state.py"
@@ -10787,15 +10871,17 @@
           "exports": [
             "models_page"
           ],
-          "hash": "bdd9f152b5a5463df2586d8e683ce316011dfbdd212a97096e765fe49dd252c6",
+          "hash": "ed6eb42ffa0aa04aafcdc4c4589431f4e824d67cd7162404f5e00aee700a18ca",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_app/chrome.py",
-            "backpropagate/ui_app/components/error_callout.py"
+            "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/info_tip.py"
           ],
           "importsFiles": [
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_state.py"
           ],
           "path": "backpropagate/ui_app/pages/models.py"
@@ -10846,16 +10932,18 @@
           "exports": [
             "runs_page"
           ],
-          "hash": "160d65949e7651e2e6e8fb4c3db25d03a36ba0bc3fa10f51c4aa99f429bf00d5",
+          "hash": "214c83b7486afbef89f43d1a5b829ff6a5e71d102c5dad5d945b19b5092604c2",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_app/components/job_panel.py"
           ],
           "importsFiles": [
             "backpropagate/ui_app/chrome.py",
             "backpropagate/ui_app/components/error_callout.py",
+            "backpropagate/ui_app/components/info_tip.py",
             "backpropagate/ui_app/components/job_panel.py",
             "backpropagate/ui_state.py"
           ],
@@ -11975,291 +12063,307 @@
             {
               "in": "_merge_job_history_rows",
               "kind": "except",
-              "line": 135
+              "line": 148
             },
             {
               "in": "_job_status_override",
               "kind": "except",
-              "line": 169
+              "line": 182
             },
             {
               "in": "_locate_run_history_dir",
               "kind": "except",
-              "line": 191
+              "line": 204
             },
             {
               "in": "_job_loss_curve",
               "kind": "except",
-              "line": 211
+              "line": 224
             },
             {
               "in": "_job_loss_curve",
               "kind": "except",
-              "line": 216
+              "line": 229
             },
             {
               "in": "_fmt_started",
               "kind": "except",
-              "line": 233
+              "line": 246
             },
             {
               "in": "_validate_ui_path",
               "kind": "except",
-              "line": 314
+              "line": 327
             },
             {
               "in": "_validate_token_file_path",
               "kind": "except",
-              "line": 414
+              "line": 427
             },
             {
               "in": "_validate_token_file_path",
               "kind": "except",
-              "line": 430
+              "line": 443
             },
             {
               "in": "_redact_action",
               "kind": "except",
-              "line": 465
+              "line": 478
             },
             {
               "in": "_coerce_int",
               "kind": "except",
-              "line": 489
+              "line": 502
             },
             {
               "in": "_coerce_int",
               "kind": "except",
-              "line": 492
+              "line": 505
             },
             {
               "in": "_coerce_float",
               "kind": "except",
-              "line": 517
+              "line": 530
             },
             {
               "in": "_read_log_tail",
               "kind": "except",
-              "line": 685
+              "line": 703
             },
             {
               "in": "model_preset_options",
               "kind": "except",
-              "line": 756
+              "line": 774
             },
             {
               "in": "refresh_gpu",
               "kind": "except",
-              "line": 1659
+              "line": 1677
             },
             {
               "in": "start_job",
               "kind": "except",
-              "line": 1700
-            },
-            {
-              "in": "_begin_job",
-              "kind": "except",
-              "line": 1715
-            },
-            {
-              "in": "_begin_job",
-              "kind": "except",
               "line": 1718
+            },
+            {
+              "in": "_begin_job",
+              "kind": "except",
+              "line": 1733
+            },
+            {
+              "in": "_begin_job",
+              "kind": "except",
+              "line": 1736
             },
             {
               "in": "_hub_session",
               "kind": "except",
-              "line": 2695
+              "line": 2713
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 2844
+              "line": 2862
             },
             {
               "in": "push_to_hub",
               "kind": "except",
-              "line": 2856
+              "line": 2874
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 2980
+              "line": 3121
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3050
+              "line": 3191
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3056
+              "line": 3197
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3076
+              "line": 3217
             },
             {
               "in": "handle_upload",
               "kind": "except",
-              "line": 3114
+              "line": 3255
             },
             {
-              "in": "handle_upload",
+              "in": "_inspect",
               "kind": "except",
-              "line": 3151
+              "line": 3310
             },
             {
-              "in": "handle_upload",
+              "in": "_inspect",
               "kind": "except",
-              "line": 3176
+              "line": 3314
             },
             {
-              "in": "load_runs",
+              "in": "_recount",
               "kind": "except",
-              "line": 3309
+              "line": 3344
             },
             {
-              "in": "load_runs",
+              "in": "save_cleaned_copy",
               "kind": "except",
-              "line": 3317
+              "line": 3425
             },
             {
-              "in": "load_runs",
+              "in": "save_cleaned_copy",
               "kind": "except",
-              "line": 3324
-            },
-            {
-              "in": "load_runs",
-              "kind": "except",
-              "line": 3340
+              "line": 3428
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3355
+              "line": 3540
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3361
+              "line": 3548
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3397
+              "line": 3555
             },
             {
               "in": "load_runs",
               "kind": "except",
-              "line": 3405
+              "line": 3571
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3586
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3592
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3628
+            },
+            {
+              "in": "load_runs",
+              "kind": "except",
+              "line": 3636
             },
             {
               "in": "_load_storage",
               "kind": "except",
-              "line": 3437
+              "line": 3668
             },
             {
               "in": "clean_up_storage",
               "kind": "except",
-              "line": 3466
+              "line": 3697
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3829
+              "line": 4060
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3860
+              "line": 4091
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3871
+              "line": 4102
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3904
+              "line": 4135
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3912
+              "line": 4143
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3956
+              "line": 4187
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 3986
+              "line": 4217
             },
             {
               "in": "load_run",
               "kind": "except",
-              "line": 4019
+              "line": 4250
             },
             {
               "in": "diff_against",
               "kind": "except",
-              "line": 4083
+              "line": 4314
             },
             {
               "in": "replay",
               "kind": "except",
-              "line": 4168
+              "line": 4399
             },
             {
               "in": "_resolve_history_dir",
               "kind": "except",
-              "line": 4192
+              "line": 4423
             },
             {
               "in": "delete_run",
               "kind": "except",
-              "line": 4251
+              "line": 4482
             },
             {
               "in": "export_run",
               "kind": "except",
-              "line": 4324
+              "line": 4555
             },
             {
               "in": "_home_relative",
               "kind": "except",
-              "line": 4401
+              "line": 4632
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4490
+              "line": 4721
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4496
+              "line": 4727
             },
             {
               "in": "load_models",
               "kind": "except",
-              "line": 4509
+              "line": 4740
             },
             {
               "in": "delete_model",
               "kind": "except",
-              "line": 4602
+              "line": 4833
             }
           ],
-          "hash": "4705f1729302ad6161d433344319550d7b240aeeda21c65d79342e4e0526f08b",
+          "hash": "e2e38bf8c3ee0689030f7f2f7952cf6d116fde88e03033cdce2d012b0679f523",
           "importOrder": [
+            "backpropagate/dataset_prep.py",
             "backpropagate/security.py",
             "backpropagate/ui_security.py",
             "backpropagate/config.py",
@@ -12267,14 +12371,13 @@
             "backpropagate/gpu_safety.py",
             "backpropagate/export.py",
             "backpropagate/cli.py",
-            "backpropagate/datasets.py",
             "backpropagate/checkpoints.py"
           ],
           "importsFiles": [
             "backpropagate/checkpoints.py",
             "backpropagate/cli.py",
             "backpropagate/config.py",
-            "backpropagate/datasets.py",
+            "backpropagate/dataset_prep.py",
             "backpropagate/export.py",
             "backpropagate/gpu_safety.py",
             "backpropagate/security.py",
@@ -12532,11 +12635,11 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 75,
+          "reads": 76,
           "where": [
             "caller"
           ],
-          "writes": 19
+          "writes": 20
         },
         {
           "reads": 0,
@@ -12585,13 +12688,13 @@
           "writes": 1
         }
       ],
-      "outsideReads": 81,
-      "outsideWrites": 26,
+      "outsideReads": 82,
+      "outsideWrites": 27,
       "role": "code",
       "testRunners": [
         "pytest"
       ],
-      "testedBy": 171,
+      "testedBy": 173,
       "unresolvedNamed": [
         {
           "path": "backpropagate/trainer.py",
@@ -14441,7 +14544,7 @@
           "path": ".trivyignore"
         },
         {
-          "hash": "dc8000887b25b6e16bce1b28420bb9cd67ba004fdbc75c17a806082f4790b4af",
+          "hash": "750a0c182efd4af267a4f6f661dc816cac87bf1c2a7980508fcf82fd0d215f99",
           "path": "CHANGELOG.md"
         },
         {
@@ -14971,7 +15074,7 @@
           "path": "scripts/convert_validated_pairs.py"
         },
         {
-          "hash": "60375fad12dda7b036e5b6d81238daff87db9c815b744e83f121434fc229c491",
+          "hash": "faae5e57d600aa3db70a13517327131bdfd1174614d898aa0fe798ae190c7f49",
           "path": "scripts/doc-drift-allow.toml"
         },
         {
@@ -15338,7 +15441,7 @@
           "path": "site/src/content/docs/handbook/full-fine-tuning.md"
         },
         {
-          "hash": "a90914fb3b5382201771d98a1afde6dd7b5b104d8ac8513343b3b4d5f5d951c1",
+          "hash": "663c6e2e4471147fb120bce401d1b540ede19e2b1838fbc36e037bd9ab7ec9ca",
           "path": "site/src/content/docs/handbook/getting-started.md"
         },
         {
@@ -15354,7 +15457,7 @@
           "path": "site/src/content/docs/handbook/preference-tuning.md"
         },
         {
-          "hash": "d94b2f19191eb11d12feb0c8fefda3f39933ed26a470fe450d4c03e22055c1be",
+          "hash": "c06da84d7ba55386d5c2c59c347657b1b6271a14785a9cb03ea5f31fbff5b112",
           "path": "site/src/content/docs/handbook/privacy.md"
         },
         {
@@ -16412,6 +16515,49 @@
           "testFramework": "pytest"
         },
         {
+          "exports": [
+            "data",
+            "test_a_byte_order_mark_does_not_break_the_first_line",
+            "test_a_failed_write_leaves_no_temp_file",
+            "test_a_json_file_holds_a_list_or_one_example",
+            "test_a_layout_set_wrongly_keeps_each_row_readable",
+            "test_a_missing_file_says_so_without_the_path",
+            "test_a_plain_text_row_is_shown_the_way_the_trainer_reads_it",
+            "test_a_repeat_differs_only_in_fields_that_are_not_the_conversation",
+            "test_a_second_copy_replaces_the_first_and_leaves_no_temp_file",
+            "test_an_empty_file_is_an_empty_report",
+            "test_an_optional_empty_input_is_not_an_empty_example",
+            "test_each_layout_is_recognised",
+            "test_each_removed_example_is_counted_once",
+            "test_feedback_rows_are_kept_not_treated_as_empty",
+            "test_files_that_cannot_be_inspected_say_why",
+            "test_jsonl_lines_that_are_not_examples_are_counted_and_skipped",
+            "test_limits_that_make_no_sense_are_refused",
+            "test_no_upper_limit_keeps_long_examples",
+            "test_nothing_left_writes_nothing",
+            "test_one_read_answers_for_any_settings",
+            "test_preference_pairs_with_different_rejected_answers_are_not_repeats",
+            "test_short_to_long_orders_the_copy",
+            "test_text_outside_ascii_survives",
+            "test_the_average_matches_the_trainer_side_statistics",
+            "test_the_copy_holds_the_kept_examples_unchanged",
+            "test_the_copy_is_read_by_the_trainer_like_the_original",
+            "test_the_defaults_remove_repeats_and_empty_examples",
+            "test_the_layout_can_be_set_by_hand",
+            "test_the_preview_reads_like_a_conversation",
+            "test_the_report_describes_the_file",
+            "test_what_counts_as_empty"
+          ],
+          "hash": "1418252ebfc492e64b47bed844fb8224f754de15ecaad21adcbe8cfaca1903a3",
+          "importsFiles": [
+            "backpropagate/__init__.py",
+            "backpropagate/dataset_prep.py",
+            "backpropagate/datasets.py"
+          ],
+          "path": "tests/test_dataset_prep.py",
+          "testFramework": "pytest"
+        },
+        {
           "hash": "b6a59a30460064702bf5d3e21ced431e1ab2e76c50347c300a91ae46438dae73",
           "importOrder": [
             "backpropagate/dataset_report.py",
@@ -16726,7 +16872,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "91260c4bff210463de79bcd01f5bbc40d82be16af2ab573f3d8e34d24fb7bac5",
+          "hash": "b5b2b7673b6e61f34e9d2cb668b02c679c090a61dd4be265ca7ff4931d309279",
           "importOrder": [
             "backpropagate/export.py",
             "backpropagate/exceptions.py",
@@ -17913,7 +18059,7 @@
             "make",
             "tiny_dir"
           ],
-          "hash": "556039f2fc53bdb89cd02f437ef6b3dea7355df7c79ec5bcd3f006cc70e055e4",
+          "hash": "cb96fb52e7fc6c77360ef7a02b64e3eade246e2769ebacefaa0bf2a5aabc769e",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/trainer.py",
@@ -18120,7 +18266,7 @@
           "testFramework": "pytest"
         },
         {
-          "hash": "34332db144e4b92464e06b737176006d49ad16d89ba96024f112e0d6d46b5f0a",
+          "hash": "94be4a429c608198c8f67c4fb1e40c4facb3937ff395b9b44f552e548f0600b4",
           "importOrder": [
             "backpropagate/ui_app/components/sparkline.py",
             "backpropagate/ui_app/components/vram_bar.py",
@@ -18207,7 +18353,7 @@
           "exports": [
             "sandbox"
           ],
-          "hash": "9608b34f10d8c38fd1388aa0571c9f493465ea78810be6c5b1374e794a341a0d",
+          "hash": "0fdc54dde57796461156b96b2edc6f3d782c3a95983831c60203fbc598b2c329",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -18228,7 +18374,7 @@
             "push_recorder",
             "sandbox"
           ],
-          "hash": "63248b43286eecf4ac1995351fd703bb7f21f62798edaf6c4066a21496c1ea6f",
+          "hash": "0d1003237d00e29920c77548057575a967c706a3cac93276124ea632a550ca2f",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
@@ -18252,24 +18398,76 @@
           "exports": [
             "sandbox"
           ],
-          "hash": "f6c7ff2f078a0d3920701b20bec003fd692788de9034e79223e7c5c2c8644cdb",
+          "hash": "3f17b2de38b9383e801bec67a65c08f57fe5b011c1fce9fdda209551cd428e64",
           "importOrder": [
             "backpropagate/__init__.py",
             "backpropagate/ui_state.py",
             "backpropagate/checkpoints.py",
             "backpropagate/exceptions.py",
             "backpropagate/ui_security.py",
-            "backpropagate/datasets.py"
+            "backpropagate/dataset_prep.py"
           ],
           "importsFiles": [
             "backpropagate/__init__.py",
             "backpropagate/checkpoints.py",
-            "backpropagate/datasets.py",
+            "backpropagate/dataset_prep.py",
             "backpropagate/exceptions.py",
             "backpropagate/ui_security.py",
             "backpropagate/ui_state.py"
           ],
           "path": "tests/test_ui_cov_state_runs.py",
+          "testFramework": "pytest"
+        },
+        {
+          "exports": [
+            "forms",
+            "loaded",
+            "sandbox",
+            "test_a_changed_setting_stops_offering_a_copy_that_no_longer_matches",
+            "test_a_failed_save_is_reported_without_paths",
+            "test_a_file_that_went_away_leaves_empty_counts_not_an_error",
+            "test_a_file_the_page_cannot_look_inside_still_uploads",
+            "test_a_later_failure_clears_an_earlier_copy",
+            "test_a_layout_that_is_not_recognised_is_not_named",
+            "test_a_new_upload_replaces_everything_from_the_last_one",
+            "test_a_number_that_cannot_be_read_keeps_the_copy",
+            "test_an_upload_shows_what_the_file_contains",
+            "test_changing_a_setting_recounts_without_reading_the_file_again",
+            "test_counts_read_naturally",
+            "test_counts_survive_a_server_restart",
+            "test_each_layout_gets_its_everyday_name",
+            "test_limits_set_out_of_order_by_hand_do_not_raise",
+            "test_lines_that_are_not_examples_are_reported",
+            "test_no_public_value_carries_the_home_folder",
+            "test_reading_the_file_as_another_layout_reads_it_again",
+            "test_save_with_nothing_left_writes_nothing",
+            "test_save_without_an_upload_says_what_to_do",
+            "test_save_writes_what_the_settings_keep_and_leaves_the_upload_alone",
+            "test_settings_before_any_upload_change_nothing_and_never_raise",
+            "test_the_cleaned_copy_is_what_gets_used_once_it_exists",
+            "test_the_page_offers_each_action_once",
+            "test_the_page_starts_with_what_the_default_settings_would_do",
+            "test_the_same_name_uploaded_again_is_read_again",
+            "test_the_stats_are_shown_with_thousands_separated",
+            "test_the_summary_cache_stays_small",
+            "test_the_training_form_accepts_the_path_it_is_given",
+            "test_the_upload_handler_is_one_the_framework_accepts",
+            "test_use_in_multi_run_fills_the_other_form",
+            "test_use_in_single_run_fills_the_form_and_goes_there",
+            "test_use_without_an_upload_does_nothing"
+          ],
+          "hash": "0460b414869a4b19fdcbea519c3079d0632609b307fa1a835baa76b2198ac691",
+          "importOrder": [
+            "backpropagate/dataset_prep.py",
+            "backpropagate/ui_state.py",
+            "backpropagate/ui_app/pages/dataset.py"
+          ],
+          "importsFiles": [
+            "backpropagate/dataset_prep.py",
+            "backpropagate/ui_app/pages/dataset.py",
+            "backpropagate/ui_state.py"
+          ],
+          "path": "tests/test_ui_dataset_page.py",
           "testFramework": "pytest"
         },
         {
@@ -18298,6 +18496,7 @@
             "test_auto_batch_shown_is_the_batch_the_trainer_picks",
             "test_editing_the_numbers_by_hand_is_also_the_users_choice",
             "test_every_tip_a_page_uses_exists",
+            "test_every_tip_is_used_by_some_page",
             "test_full_fine_tune_offers_no_lora_fix",
             "test_multi_run_explains_its_own_settings",
             "test_no_fix_is_offered_when_it_fits_or_nothing_would_help",
@@ -18311,6 +18510,7 @@
             "test_the_detail_line_says_when_the_batch_was_lowered",
             "test_the_estimate_label_names_what_it_is_compared_with",
             "test_the_form_opens_on_the_shape_that_fits_and_says_why",
+            "test_the_other_pages_explain_their_areas",
             "test_the_starting_point_is_read_out_with_the_tip",
             "test_the_tip_button_is_named_and_described",
             "test_the_ui_offers_exactly_the_trainer_presets",
@@ -18319,7 +18519,7 @@
             "test_tip_links_point_at_handbook_pages_that_exist",
             "test_without_a_gpu_reading_the_form_keeps_quality"
           ],
-          "hash": "f476c56c1d95b7fb71854ae9697f97062c1bac66749bd6274c065bd6c07bc4dd",
+          "hash": "5a99a2211653e71f6ecfef5b64e648f3a14e67be4e9b3a0b0f1fcaaca2f9f73f",
           "importOrder": [
             "backpropagate/trainer.py",
             "backpropagate/__init__.py",
@@ -18659,7 +18859,7 @@
           "exports": [
             "test_merge_job_history_rows_merges_jobs_tree"
           ],
-          "hash": "ba485b75ec0dd4291e9d0bd03221c79906bc35865d1dba5baf34c1e1b35e1f4a",
+          "hash": "71aba5a7748efdeeaf373f687dd4269e843432a5bdaf9e070dc42b1254be5033",
           "importOrder": [
             "backpropagate/ui_state.py",
             "backpropagate/ui_jobs.py",
@@ -19822,7 +20022,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 66
+          "files": 67
         },
         {
           "boundary": "requirements",
@@ -19842,7 +20042,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 181
+          "files": 183
         },
         {
           "boundary": "fuzz",
@@ -20017,7 +20217,7 @@
       "tests": [
         {
           "config": "pyproject.toml",
-          "files": 181,
+          "files": 183,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests"
@@ -20025,7 +20225,7 @@
         {
           "config": "pyproject.toml",
           "coverage": true,
-          "files": 181,
+          "files": 183,
           "job": "test",
           "junit": true,
           "runner": "pytest",
@@ -20033,28 +20233,28 @@
         },
         {
           "config": "pyproject.toml",
-          "files": 181,
+          "files": 183,
           "job": "test",
           "runner": "pytest",
           "step": "Run tests (Windows/macOS smoke)"
         },
         {
           "config": "pyproject.toml",
-          "files": 181,
+          "files": 183,
           "job": "parallel-xdist",
           "runner": "pytest",
           "step": "Run tests under -n auto --dist worksteal"
         },
         {
           "config": "pyproject.toml",
-          "files": 181,
+          "files": 183,
           "job": "uv-sync-pilot",
           "runner": "pytest",
           "step": "Run pytest (non-gpu / non-slow / non-integration)"
         },
         {
           "config": "pyproject.toml",
-          "files": 181,
+          "files": 183,
           "job": "verify-smoke",
           "runner": "pytest",
           "step": "Run verify.sh --format=json",
@@ -21201,7 +21401,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 66
+          "files": 67
         },
         {
           "boundary": "requirements",
@@ -21829,8 +22029,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "1ca3e2605fd3e9a2cfdd1fbaa908318c5df4db19",
-    "tracked": 762
+    "commit": "c89c4f41e6e55d2388e01311713c7b4e0620064c",
+    "tracked": 765
   },
   "landings": [
     {
@@ -22667,7 +22867,7 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 184,
+  "testFiles": 186,
   "unassigned": [
     {
       "exports": [

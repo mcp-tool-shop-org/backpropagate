@@ -33,7 +33,7 @@ backpropagate reads your token from, in order: the `--token` flag, `HF_TOKEN`, `
 | What | Where |
 |---|---|
 | Training outputs, checkpoints and `run_history.json` | The output folder you choose (`./output` by default). |
-| Files the web UI saves (adapters, exports, converted datasets) | `~/.backpropagate/ui-outputs`, or `BACKPROPAGATE_UI__OUTPUT_DIR`. |
+| Files the web UI saves (adapters, exports, datasets you upload in `uploads/`, cleaned copies in `datasets/`) | `~/.backpropagate/ui-outputs`, or `BACKPROPAGATE_UI__OUTPUT_DIR`. |
 | The web UI's build and state files | `%LOCALAPPDATA%\backpropagate\ui\` on Windows, `~/.cache/backpropagate/ui/` on Linux and macOS (or under `$XDG_CACHE_HOME`), or `BACKPROPAGATE_UI_WORKDIR`. |
 | The JavaScript runtime the UI uses (bun) | `%LOCALAPPDATA%\reflex\` on Windows, `~/.local/share/reflex/` on Linux, `~/Library/Application Support/reflex/` on macOS. |
 | The UI's launch token, while the UI runs | `%LOCALAPPDATA%\backpropagate\session-<port>.lock` on Windows, `$XDG_RUNTIME_DIR/backpropagate/` on Linux, `~/Library/Application Support/backpropagate/` on macOS. Deleted when the UI stops. |

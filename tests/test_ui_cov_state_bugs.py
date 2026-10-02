@@ -81,6 +81,7 @@ class TestNonFiniteNumbersAreRejectedNotCrashed:
 
     def test_dataset_token_bounds_reject_non_finite(self):
         d = us.DatasetState()
+        d.set_max_tokens(2048)
         d.set_max_tokens("1e999")
         assert d.max_tokens == 2048 and d.max_tokens_error
 

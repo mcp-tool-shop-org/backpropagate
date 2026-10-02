@@ -1029,6 +1029,10 @@ class TestHandleUploadHappyPaths:
         _upload(s, [_Reader(b"a,b\n1,2\n", "t.csv")])
         assert s.upload_error == "" and s._uploaded_path.endswith("t.csv")
         assert s.upload_count == 1
+        # The page says why there is no preview, and that the file is still usable.
+        assert "Only .jsonl and .json" in s.inspect_note
+        assert "can still be used for training" in s.inspect_note
+        assert (s.record_count, s.preview_records, s.cleanup_summary) == (0, [], "")
 
     def test_missing_filename_falls_back_to_unnamed(self, sandbox):
         s = us.DatasetState()
@@ -1053,16 +1057,18 @@ class TestHandleUploadHappyPaths:
         assert s.upload_error == "" and (sandbox.out / "uploads" / "one.jsonl").exists()
 
     def test_stats_failure_never_blocks_the_upload(self, sandbox, monkeypatch):
-        """Mocked: ``datasets.get_dataset_stats`` raises."""
-        import backpropagate.datasets as ds
+        """Mocked: reading the file for the preview raises."""
+        import backpropagate.dataset_prep as prep
 
         def boom(*a, **k):
-            raise RuntimeError("stats exploded")
+            raise RuntimeError(f"stats exploded in {sandbox.home}")
 
-        monkeypatch.setattr(ds, "get_dataset_stats", boom)
+        monkeypatch.setattr(prep, "summarise_dataset", boom)
         s = us.DatasetState()
         _upload(s, [_Reader(b'{"text": "a"}\n', "ok.jsonl")])
         assert s.upload_error == "" and s.upload_count == 1 and s.record_count == 0
+        assert "could not be read for a preview" in s.inspect_note
+        assert str(sandbox.home) not in s.inspect_note and "exploded" not in s.inspect_note
 
     def test_temp_file_cleanup_failure_is_tolerated(self, sandbox, monkeypatch):
         """Mocked: ``Path.unlink`` raises ``OSError`` while cleaning the staging file."""

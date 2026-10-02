@@ -23,7 +23,7 @@ This file establishes the contract for the four state classes:
 3. **Start handlers** — since ui-v2 P1/P2 ``start_training``,
    ``start_multi_run`` and ``start_export`` start real jobs through the
    JobManager (a child process; never training in the server). The
-   multi-run and export pages hand their job to ``TrainState.start_job``. ``detect_format_stub`` remains a stub. These
+   multi-run and export pages hand their job to ``TrainState.start_job``. These
    pin the honesty contract; a regression that re-grew the fake loading
    spinner — or, worse, wired a real subprocess call here — fails loudly.
 
@@ -854,7 +854,8 @@ class TestDatasetStateDefaults:
         assert state.drop_empty is True
         assert state.apply_curriculum is False
         assert state.min_tokens == 0
-        assert state.max_tokens == 2048
+        # 0 = no upper limit: nothing is removed for length until asked.
+        assert state.max_tokens == 0
 
     def test_uploaded_basename_empty_when_no_upload(self):
         """``uploaded_basename`` computed var returns "" with no upload."""
@@ -932,10 +933,18 @@ class TestDatasetStateSetters:
         from backpropagate.ui_state import DatasetState
 
         state = DatasetState()
-        assert state.max_tokens == 2048
+        state.set_max_tokens(2048)
         state.set_min_tokens(5000)
         assert state.min_tokens == 5000
         assert state.max_tokens == 5000  # bumped to match
+
+    def test_set_min_tokens_leaves_no_limit_alone(self):
+        """A longest-length of 0 means "no limit" and is never bumped."""
+        from backpropagate.ui_state import DatasetState
+
+        state = DatasetState()
+        state.set_min_tokens(5000)
+        assert (state.min_tokens, state.max_tokens) == (5000, 0)
 
     def test_set_max_tokens_accepts_valid_int(self):
         """max_tokens setter accepts valid int."""
@@ -957,32 +966,19 @@ class TestDatasetStateSetters:
 
 
 class TestDatasetStateEventHandlers:
-    """Exercise the Dataset stub event handler."""
+    """The placeholder format handler is gone: the format comes from the file."""
 
-    def test_detect_format_stub_noop_without_upload(self):
-        """``detect_format_stub`` is a no-op when no file is uploaded."""
+    def test_no_placeholder_handler_remains(self):
+        from backpropagate.ui_state import DatasetState
+
+        assert not hasattr(DatasetState, "detect_format_stub")
+
+    def test_a_format_is_never_claimed_without_reading_a_file(self):
         from backpropagate.ui_state import DatasetState
 
         state = DatasetState()
-        assert state._uploaded_path == ""
-        state.detect_format_stub()
-        assert state.detected_format == ""  # unchanged
-
-    def test_detect_format_stub_sets_alpaca_when_upload_present(self):
-        """``detect_format_stub`` sets a placeholder detected_format when
-        an upload is present.
-
-        This is the stub contract — Phase 3 will replace with a real
-        per-line peek + format-detect routine. Until then, the stub must
-        keep firing the state transition so the UI's detect-result panel
-        renders.
-        """
-        from backpropagate.ui_state import DatasetState
-
-        state = DatasetState()
-        state._uploaded_path = "/tmp/some-uploaded-file.jsonl"
-        state.detect_format_stub()
-        assert state.detected_format == "alpaca"
+        state.set_format_hint("alpaca")
+        assert state.detected_format == ""  # the hint is a setting, not a finding
 
 
 # =============================================================================

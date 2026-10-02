@@ -71,69 +71,33 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 47,
-      "changed": 72,
+      "added": 3,
+      "changed": 2,
       "moved": 0,
-      "parts": 6,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
-        "kind": "landing",
-        "sentence": "LICENSE is now read by scripts/build_msix.py.",
-        "subjects": [
-          "LICENSE",
-          "scripts/build_msix.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "assets/icons is now read by backpropagate/ui_app/components/icon.py.",
-        "subjects": [
-          "assets/icons",
-          "backpropagate/ui_app/components/icon.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "backpropagate/rxconfig.py is now also read by scripts/build_ui_frontend.py.",
-        "subjects": [
-          "backpropagate/rxconfig.py",
-          "scripts/build_ui_frontend.py"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "And 4 more new writers and readers of places.",
-        "subjects": []
-      },
-      {
-        "kind": "sequence",
-        "sentence": "In backpropagate/cli.py, `main` gained a step, `add_argument`, before `configure_logging`.",
-        "subjects": [
-          "backpropagate/cli.py"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "47 files added and 72 changed content, across 6 parts.",
+        "sentence": "Nothing structural changed since 2026-10-02; 3 files added and 2 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "34b2e8ed0b9c0cbdfbdb526d29fda8d3e9a1c541",
-      "generatedAt": "2026-10-01T18:17:45.985Z"
+      "commit": "fb38a8d9bbb88d535a8f32df360760e0ba61b507",
+      "generatedAt": "2026-10-02T20:00:44.230Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [],
   "changesTogetherNote": [
-    "Window: 180 days; a pair counts from 10 shared commits, since 32 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
+    "Window: 180 days; a pair counts from 10 shared commits, since 34 source files reach 10 revisions; the floor falls to 3 when fewer than 20 do."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "1ca3e2605fd3e9a2cfdd1fbaa908318c5df4db19",
+  "commit": "c89c4f41e6e55d2388e01311713c7b4e0620064c",
   "defaultBranch": "main",
-  "derived": "13 parts, mostly Python (265 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
+  "derived": "13 parts, mostly Python (268 files), shell (11), Astro (2), CSS (2), JavaScript (2) and TypeScript (2). Work enters through 13 doors; the busiest is CI, which reaches 6 parts. It publishes to npm and PyPI, and a container image. It deploys a site to GitHub Pages. People run backprop and backpropagate.",
   "doors": [
     {
       "checks": [
@@ -159,7 +123,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 66
+          "files": 67
         },
         {
           "boundary": "requirements",
@@ -179,7 +143,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 181
+          "files": 183
         },
         {
           "boundary": "fuzz",
@@ -230,7 +194,7 @@
         {
           "boundary": "backpropagate",
           "depth": 0,
-          "files": 66
+          "files": 67
         },
         {
           "boundary": "requirements",
@@ -596,12 +560,12 @@
       ]
     }
   ],
-  "generatedAt": "2026-10-02T19:33:21.803Z",
+  "generatedAt": "2026-10-02T20:08:43.751Z",
   "limits": [
     "56 import sites name a declared dependency that shares its name with a local module (datasets); they are read as the dependency, which is not in this repository.",
     "15 imports could not be resolved: `backpropagate/trainer.py` imports a path built at run time; `tests/test_fp8_smoke.py` imports a path built at run time; `tests/test_full_ft_offload_smoke.py` imports a path built at run time; and 12 more.",
     "13 writes and 19 reads use paths built at run time and are not named here.",
-    "50 writes and 105 reads go to a path their caller passes, not to this repository.",
+    "51 writes and 106 reads go to a path their caller passes, not to this repository.",
     "5 writes and 4 reads go to the home directory (.backpropagate/, .cache/ and AppData/), not to this repository.",
     "4 writes go to a temporary directory, not to this repository.",
     "2 reads go to the directory the command is run in, not to this repository.",
@@ -655,9 +619,9 @@
   ],
   "summary": null,
   "summaryFrom": null,
-  "testFiles": 184,
+  "testFiles": 186,
   "testedBy": {
-    "backpropagate": 171,
+    "backpropagate": 173,
     "bin": 0,
     "scripts": 3
   },

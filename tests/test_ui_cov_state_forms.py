@@ -987,8 +987,17 @@ class TestDatasetStateSimpleHandlers:
 
     def test_min_tokens_below_max_leaves_max_alone(self):
         s = us.DatasetState()
+        s.set_max_tokens(2048)
         s.set_min_tokens(10)
         assert s.max_tokens == 2048
+
+    def test_max_tokens_below_min_is_raised_to_match_and_says_so(self):
+        s = us.DatasetState()
+        s.set_min_tokens(500)
+        s.set_max_tokens(100)
+        assert s.max_tokens == 500 and "raised to match" in s.max_tokens_error
+        s.set_max_tokens(0)  # no limit is always allowed
+        assert s.max_tokens == 0 and s.max_tokens_error == ""
 
     def test_token_bounds_clamped_and_garbage_keeps_previous(self):
         s = us.DatasetState()
@@ -1000,14 +1009,6 @@ class TestDatasetStateSimpleHandlers:
         assert s.max_tokens == 1_000_000 and "integer" in s.max_tokens_error
         s.set_min_tokens("junk")
         assert s.min_tokens == 0 and "integer" in s.min_tokens_error
-
-    def test_detect_format_stub_requires_an_upload(self):
-        s = us.DatasetState()
-        s.detect_format_stub()
-        assert s.detected_format == ""
-        s._uploaded_path = "/x/y.jsonl"
-        s.detect_format_stub()
-        assert s.detected_format == "alpaca"
 
     def test_basename_and_has_upload_never_expose_the_directory(self):
         s = us.DatasetState()

@@ -190,9 +190,22 @@ ExportState = [
 ]
 
 # DatasetState — upload_count incremented by the upload event handler;
-# read by templated text in the dataset page.
+# read by templated text in the dataset page. The statistics and the
+# clean-up counts reach the page through the computed vars stat_text /
+# skipped_note / cleanup_summary / can_save_copy / training_file_note,
+# which the heuristic does not follow.
 DatasetState = [
     "upload_count",
+    "avg_tokens",
+    "shortest_tokens",
+    "longest_tokens",
+    "skipped_lines",
+    "kept_count",
+    "removed_duplicate",
+    "removed_empty",
+    "removed_short",
+    "removed_long",
+    "prepared_count",
 ]
 
 # RunsState — output_dir_override populated by config-read on mount; read

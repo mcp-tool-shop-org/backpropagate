@@ -592,7 +592,10 @@ _PAGE_SPECS = {
         "backpropagate.ui_app.pages.dataset:dataset_page",
         {("on_change", f"DatasetState.set_{f}") for f in (
             "format_hint", "dedup_enabled", "drop_empty", "apply_curriculum",
-            "min_tokens", "max_tokens")},
+            "min_tokens", "max_tokens")}
+        | {("on_click", "DatasetState.save_cleaned_copy"),
+           ("on_click", "DatasetState.use_in_single_run"),
+           ("on_click", "DatasetState.use_in_multi_run")},
     ),
     "runs": (
         "backpropagate.ui_app.pages.runs:runs_page",
@@ -618,7 +621,8 @@ _PAGE_COPY = {
     "train": {"HuggingFace model id", "Start training"},
     "multi_run": {"Multi-run", "Rounds", "Merge mode", "Steps per run", "Start multi-run"},
     "export": {"Source", "GGUF quantization", "Register with Ollama", "Push to HF Hub"},
-    "dataset": {"Upload", "Detected format", "Enable dedup", "Min tokens", "Max tokens"},
+    "dataset": {"Upload", "Detected format", "Remove repeats", "Shortest",
+                "Longest (0 = no limit)", "Save a cleaned copy", "Use in Single run"},
     "runs": {"Run history", "Could not load run history", "No training runs recorded yet.",
              "Reset filter"},
     "run_detail": {"Run not found.", "Training loss", "Checkpoints", "Delete run", "Actions"},

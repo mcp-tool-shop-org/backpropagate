@@ -69,7 +69,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "backpropagate",
-      "qualifyingSourceCommits": 119,
+      "qualifyingSourceCommits": 120,
       "rebaseline": null
     },
     {
@@ -217,7 +217,7 @@
       "confidence": "full",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 103,
+      "qualifyingSourceCommits": 104,
       "rebaseline": null
     }
   ],
@@ -355,8 +355,8 @@
         "path": ".trivyignore"
       },
       {
-        "commits": 94,
-        "lines": 1852,
+        "commits": 95,
+        "lines": 1858,
         "path": "CHANGELOG.md"
       },
       {
@@ -476,7 +476,7 @@
       },
       {
         "commits": 15,
-        "lines": 548,
+        "lines": 550,
         "path": "atlas/README.md"
       },
       {
@@ -486,17 +486,17 @@
       },
       {
         "commits": 15,
-        "lines": 2138,
+        "lines": 2150,
         "path": "atlas/page.json"
       },
       {
         "commits": 15,
-        "lines": 11602,
+        "lines": 11667,
         "path": "atlas/statistics.json"
       },
       {
         "commits": 15,
-        "lines": 47844,
+        "lines": 48043,
         "path": "atlas/structure.json"
       },
       {
@@ -905,8 +905,8 @@
         "path": "backpropagate/ui_app/components/status_pill.py"
       },
       {
-        "commits": 4,
-        "lines": 873,
+        "commits": 5,
+        "lines": 893,
         "path": "backpropagate/ui_app/components/train_form.py"
       },
       {
@@ -975,8 +975,8 @@
         "path": "backpropagate/ui_app/pages/run_detail.py"
       },
       {
-        "commits": 23,
-        "lines": 1551,
+        "commits": 24,
+        "lines": 1554,
         "path": "backpropagate/ui_app/pages/runs.py"
       },
       {
@@ -1010,8 +1010,8 @@
         "path": "backpropagate/ui_security.py"
       },
       {
-        "commits": 45,
-        "lines": 9713,
+        "commits": 46,
+        "lines": 9789,
         "path": "backpropagate/ui_state.py"
       },
       {
@@ -4075,8 +4075,8 @@
         "path": "tests/test_ui_output_dir_setting.py"
       },
       {
-        "commits": 1,
-        "lines": 182,
+        "commits": 2,
+        "lines": 192,
         "path": "tests/test_ui_runs_p2.py"
       },
       {
@@ -4093,6 +4093,11 @@
         "commits": 6,
         "lines": 1353,
         "path": "tests/test_ui_security_legacy_aliases.py"
+      },
+      {
+        "commits": 1,
+        "lines": 164,
+        "path": "tests/test_ui_small_things.py"
       },
       {
         "commits": 22,
@@ -4200,9 +4205,9 @@
     "level": "full",
     "reason": "at least 30 qualifying commits, and at least 20 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-02T20:08:43.751Z",
+  "generatedAt": "2026-10-02T20:43:00.522Z",
   "generatedFrom": {
-    "commit": "c89c4f41e6e55d2388e01311713c7b4e0620064c"
+    "commit": "a39ee2cfba0831d2e62f48abafd29b4857c014c5"
   },
   "pairs": [
     {
@@ -4419,16 +4424,16 @@
     "floor": "strong",
     "floorHeld": false,
     "floorTrigger": null,
-    "headDate": "2026-10-02T16:07:13-04:00",
-    "inScopeFiles": 770,
+    "headDate": "2026-10-02T16:42:36-04:00",
+    "inScopeFiles": 771,
     "pinnedStart": null,
     "priorFloor": "strong",
-    "qualifyingCommits": 225,
+    "qualifyingCommits": 226,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 10,
-    "since": "2026-04-05T20:07:13.000Z",
+    "since": "2026-04-05T20:42:36.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

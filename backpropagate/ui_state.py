@@ -112,10 +112,19 @@ _WANDB_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
 
 def _ts_now() -> str:
-    """HH:MM:SS timestamp for event-log rows (ui-v2 event feed)."""
+    """HH:MM:SS for event-log rows, in local time like the Runs page.
+
+    It was UTC, so the Events panel read hours away from the clock on the
+    wall and from the "started" column next to it.
+    """
     import datetime as _dt
 
-    return _dt.datetime.now(tz=_dt.timezone.utc).strftime("%H:%M:%S")
+    return _dt.datetime.now().strftime("%H:%M:%S")
+
+
+def _file_name(path: str) -> str:
+    """The last part of a path, whichever slash it uses."""
+    return re.split(r"[\\/]", (path or "").strip().rstrip("\\/"))[-1]
 
 
 def _merge_job_history_rows(
@@ -242,9 +251,14 @@ def _fmt_started(value: object) -> str:
     if not text or text == "-":
         return "-"
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return text[:16].replace("T", " ")
+    if when.tzinfo is not None:
+        # A stamp that says which zone it is in ("...Z") is shown in local
+        # time; one that does not is already local.
+        when = when.astimezone()
+    return when.strftime("%Y-%m-%d %H:%M")
 
 
 def _dataset_label(value: object) -> str:
@@ -767,6 +781,43 @@ METHOD_DATA_HINTS: dict[str, str] = {
 }
 
 
+# What each model preset is good for, in plain words (the note under the
+# model field). ``config.MODEL_PRESETS[...].best_for`` is the engineering
+# note, with measurements and tuning values; a preset without an entry here
+# falls back to it. ``tests/test_ui_small_things.py`` requires an entry for
+# every preset.
+MODEL_NOTES: dict[str, str] = {
+    "qwen2.5-7b": (
+        "A capable all-rounder and a good first choice. It fits a 16 GB card."
+    ),
+    "qwen2.5-3b": (
+        "Small and quick. Good for trying an idea before a longer run on a larger model."
+    ),
+    "llama-3.2-3b": (
+        "A widely used small model from Meta, with plenty of guides and tools around it."
+    ),
+    "llama-3.2-1b": (
+        "The smallest and lightest model here. It trains in minutes, so it is good "
+        "for a first try; expect simpler answers than from a larger model."
+    ),
+    "mistral-7b": "A 7B model from Mistral: an alternative to Qwen of the same size.",
+    "phi-4-mini-3.8b": "A small model from Microsoft that reasons well for its size.",
+    "qwen3.5-4b": "A small model that can also take long inputs.",
+    "smollm3-3b": "A small model built for long inputs. Pick it when your examples are long.",
+    "llama-3.1-8b": (
+        "A larger model from Meta that still fits a 16 GB card, and can take long inputs."
+    ),
+    "qwen2.5-14b": (
+        "A stronger model for a 32 GB card. Slower to train than a 7B, with better answers."
+    ),
+    "mistral-small-24b": "A large model for a 32 GB card. Expect long training times.",
+    "qwen2.5-32b": (
+        "The largest model a 32 GB card can train, and only just: memory is tight "
+        "and training is slow."
+    ),
+}
+
+
 def model_preset_options() -> list[dict[str, str]]:
     """The model presets for the "Start from" picker (``config.MODEL_PRESETS``)."""
     try:
@@ -776,7 +827,7 @@ def model_preset_options() -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for key, p in MODEL_PRESETS.items():
         label = str(p.description).split(" — ")[0].strip() or p.model_id
-        note = f"{p.best_for} License: {p.license}."
+        note = f"{MODEL_NOTES.get(key) or p.best_for} License: {p.license}."
         restriction = getattr(p, "license_restriction", None)
         if restriction:
             note += " " + str(restriction).strip()
@@ -1094,6 +1145,12 @@ class TrainState(rx.State):
             if opt["key"] == self.preset:
                 return opt["note"]
         return "Any Hugging Face model id (org/name) or a local model folder."
+
+    @rx.var
+    def dataset_file_name(self) -> str:
+        """The selected dataset's file name: the path field is too narrow to
+        show the end of a long path."""
+        return _file_name(self.dataset_path)
 
     @rx.var
     def method_data_hint(self) -> str:
@@ -2346,6 +2403,12 @@ class MultiRunState(rx.State):
         return "Any Hugging Face model id (org/name) or a local model folder."
 
     @rx.var
+    def dataset_file_name(self) -> str:
+        """The selected dataset's file name: the path field is too narrow to
+        show the end of a long path."""
+        return _file_name(self.dataset_path)
+
+    @rx.var
     def method_data_hint(self) -> str:
         return METHOD_DATA_HINTS.get(self.method, METHOD_DATA_HINTS["sft"])
 
@@ -3490,6 +3553,11 @@ class RunsState(rx.State):
     storage_removable_label: str = ""
     storage_removable_count: int = 0
     storage_result: str = ""
+
+    @rx.var
+    def runs_count_label(self) -> str:
+        """"1 run" / "12 runs" for the line under the table."""
+        return _count(len(self.runs), "run")
 
     # Hard cap on rows rendered at once. The CLI defaults to 50; the table can
     # comfortably render this many without pagination. v1.3 will add a

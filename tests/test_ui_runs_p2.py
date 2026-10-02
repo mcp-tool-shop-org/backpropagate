@@ -131,7 +131,15 @@ def test_dataset_label(value, label):
     ("value", "shown"),
     [
         ("2026-10-02T04:45:42.269557", "2026-10-02 04:45"),
-        ("2026-10-02T08:45:42Z", "2026-10-02 08:45"),
+        # A stamp that names its zone is shown in local time (see
+        # tests/test_ui_small_things.py for the conversion itself).
+        (
+            "2026-10-02T08:45:42Z",
+            __import__("datetime")
+            .datetime(2026, 10, 2, 8, 45, 42, tzinfo=__import__("datetime").timezone.utc)
+            .astimezone()
+            .strftime("%Y-%m-%d %H:%M"),
+        ),
         ("not a date at all", "not a date at all"[:16]),
         (None, "-"),
     ],

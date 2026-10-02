@@ -74,7 +74,7 @@ With `mode="full"` and no offload, the trainer:
 
 1. Skips the adapter entirely. Every weight trains, in bf16; there is no 4-bit base.
 2. Turns on gradient checkpointing, trading recomputation for activation memory.
-3. Uses `paged_adamw_8bit`, so the optimizer state costs about 2 bytes per parameter.
+3. Uses an 8-bit AdamW, so the optimizer state costs about 2 bytes per parameter: `paged_adamw_8bit`, or on Windows `adamw_8bit` whenever the state fits in free GPU memory (see [the optimizer on Windows](#the-optimizer-on-windows)).
 4. Divides the learning rate by 10 (LoRA default `2e-4` → full fine-tuning default `2e-5`). Override with `learning_rate=`.
 
 Weights (2 B/param) + gradients (2 B/param) + 8-bit optimizer state (~2 B/param) come to about 6 bytes per parameter on the card, plus activations. Against detected VRAM that gives the ceiling:
@@ -87,6 +87,23 @@ Weights (2 B/param) + gradients (2 B/param) + 8-bit optimizer state (~2 B/param)
 | 48 GB+ | 10B | — |
 
 **Note on the measured figures.** `paged_adamw_8bit` keeps its state in CUDA managed memory, which bitsandbytes allocates outside PyTorch's allocator, so `torch.cuda.max_memory_allocated()` does not include it. Measured with system-wide NVIDIA counters at 3B, the peak was 22.0 GiB against 13.4 GiB reported by PyTorch. Managed memory can spill to host RAM when the card fills, so the run may still work on a smaller card, more slowly; that has not been tested, and the ceilings in the table have not been re-derived from this measurement.
+
+### The optimizer on Windows
+
+`paged_adamw_8bit` keeps its state in CUDA managed memory, which is what lets it spill into system RAM. On Windows the display driver pages that memory, and it can stall the whole desktop. Measured on an RTX 5090 (2026-10-02) with a Llama 3.2 1B full fine-tune, batch 1 x 512 tokens:
+
+| Optimizer | Device memory | Desktop |
+|---|---|---|
+| `paged_adamw_8bit` | 12.7 GB of 32 GB in use | froze; `nvidia-smi` stopped answering; the process took minutes to end |
+| `adamw_8bit` | 10.1 GiB | smooth; `nvidia-smi` answered in 0.12 s at worst |
+
+So since 1.8.2, on Windows:
+
+- When the gradients and optimizer state fit in the GPU memory that is free after the model loads (about 5.5 bytes per parameter, plus the batch), full fine-tuning uses `adamw_8bit`. PyTorch's counters then see all of it.
+- When they do not fit, it uses `paged_adamw_8bit` as before and logs a warning that the desktop can become slow or stop responding. A smaller model, LoRA or `--full-ft-offload` avoids that.
+- An optimizer you set yourself (`--optim`) is never changed.
+
+Linux and macOS are unchanged. The 3B figure in the table above was measured with the paged optimizer.
 
 The ceiling bounds the parameter **count**. It does not promise a fit at every sequence length. It is checked when the `Trainer` is created (from the preset table or model id) and again after loading (from the actual parameter count). A model over the ceiling exits `2` with `RUNTIME_FULL_FT_MODEL_TOO_LARGE`; the error names `--full-ft-offload` when offload would fit it, and LoRA / QLoRA when it would not.
 

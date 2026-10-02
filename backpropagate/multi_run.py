@@ -1894,6 +1894,7 @@ class MultiRunTrainer:
         from .trainer import (
             _apply_train_on_responses_only,
             _build_sft_config,
+            _full_ft_needs_paged_optimizer,
             _prefer_efficient_sdpa,
         )
 
@@ -2041,6 +2042,15 @@ class MultiRunTrainer:
                 # ui-v2 P3: --no-gradient-checkpointing (None otherwise).
                 gradient_checkpointing=getattr(
                     self._trainer, "_gradient_checkpointing_override", None
+                ),
+                full_ft_paged_optim=(
+                    _full_ft_needs_paged_optimizer(
+                        self._trainer._model,
+                        self._trainer.batch_size,
+                        self._trainer.max_seq_length,
+                    )
+                    if self._trainer.mode == "full"
+                    else None
                 ),
             )
             # No flash-attention / xFormers: PyTorch's memory-efficient SDPA

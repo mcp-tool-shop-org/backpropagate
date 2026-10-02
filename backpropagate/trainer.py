@@ -1726,6 +1726,68 @@ def _prefer_efficient_sdpa(*, unsloth_loaded: bool) -> bool:
     return changed
 
 
+#: Bytes per trainable parameter a full fine-tune holds beyond the weights:
+#: 16-bit gradients plus the 8-bit AdamW state and its transients (measured
+#: 5.45 on Llama 3.2 1B with ``adamw_8bit``, RTX 5090, 2026-10-02).
+_FULL_FT_TRAIN_BYTES_PER_PARAM = 5.5
+#: Share of the free GPU memory the non-paged optimizer may be planned into.
+_FULL_FT_UNPAGED_SHARE = 0.9
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _full_ft_needs_paged_optimizer(
+    model: Any, batch_size: int, max_seq_length: int
+) -> bool | None:
+    """On Windows: must a full fine-tune use the PAGED 8-bit optimizer?
+
+    ``paged_adamw_8bit`` keeps its state in CUDA managed memory, which lets
+    it spill into system RAM when the card is too small. On Windows that
+    memory is paged by the display driver, and a run using it stalled the
+    whole desktop twice on an RTX 5090 (2026-10-02): a Llama 3.2 1B full
+    fine-tune froze the screen at 12.7 GB of 32 GB used, ``nvidia-smi``
+    stopped answering, and the process took minutes to die. The same run
+    with the non-paged ``adamw_8bit`` used 10.1 GB and never slowed the
+    desktop (``nvidia-smi`` answered in 0.12 s at worst).
+
+    So on Windows the paged optimizer is kept for the one case that needs
+    it: the gradients and optimizer state do not fit in the GPU memory that
+    is free now (the weights are already loaded).
+
+    Returns None when this is not Windows, there is no CUDA device, or the
+    model cannot be sized: the caller keeps the long-standing default
+    (paged). Otherwise True (paged needed) or False (non-paged fits).
+    """
+    if not _is_windows():
+        return None
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free_bytes, _total = torch.cuda.mem_get_info()
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        cfg = getattr(model, "config", None)
+        vocab = int(getattr(cfg, "vocab_size", 0) or 0)
+        hidden = int(getattr(cfg, "hidden_size", 0) or 0)
+    except Exception as exc:  # noqa: BLE001 - sizing only; keep the default
+        logger.debug("full fine-tune optimizer sizing failed: %r", exc)
+        return None
+    if trainable <= 0:
+        return None
+    # Rows: the loss's fp32 logits plus activations (see estimate_vram), or
+    # the embedding-copy floor every run pays, whichever is larger.
+    rows = max(
+        4.0 * vocab * hidden,
+        float(batch_size) * float(max_seq_length) * (4.0 * vocab + 30.0 * hidden),
+        1024.0**3,
+    )
+    needed = trainable * _FULL_FT_TRAIN_BYTES_PER_PARAM + rows
+    return bool(needed > free_bytes * _FULL_FT_UNPAGED_SHARE)
+
+
 def _build_sft_config(
     output_dir: str,
     per_device_train_batch_size: int,
@@ -1751,6 +1813,10 @@ def _build_sft_config(
     # ``self.optim`` through so the per-invocation kwarg flows
     # end-to-end.
     optim: str | None = None,
+    # mode='full' only. None / True: force the paged 8-bit optimizer (the
+    # long-standing default). False: the caller sized the run and the
+    # non-paged ``adamw_8bit`` fits (see _full_ft_needs_paged_optimizer).
+    full_ft_paged_optim: bool | None = None,
     # v1.4 BACKEND-F-008 (Wave 6b features): training mode. ``"lora"`` (the
     # default) preserves pre-Wave-6b behavior byte-identically — operators
     # who don't pass mode='full' see no change. ``"full"`` enables full
@@ -1848,8 +1914,28 @@ def _build_sft_config(
         # paged_adamw_8bit on <24GB cards already; for mode='full' we
         # short-circuit that path so the upgrade fires even on 24GB cards
         # (which the LoRA detector would have left alone).
-        _configured_optim = "paged_adamw_8bit"
-    resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
+        if full_ft_paged_optim is False:
+            logger.info(
+                "Full fine-tune on Windows: the optimizer state fits in free "
+                "GPU memory, using adamw_8bit (the paged variant can stall "
+                "the desktop)."
+            )
+        else:
+            _configured_optim = "paged_adamw_8bit"
+            if full_ft_paged_optim is True:
+                logger.warning(
+                    "Full fine-tune on Windows: gradients and optimizer state "
+                    "do not fit in free GPU memory, so the paged 8-bit "
+                    "optimizer is used and pages through system memory. The "
+                    "desktop can become slow or stop responding while this "
+                    "runs. A smaller model, LoRA, or --full-ft-offload avoids it."
+                )
+    if mode == "full" and full_ft_paged_optim is False and _configured_optim == "adamw_8bit":
+        # Not through the detector: it upgrades adamw_8bit to the paged
+        # variant on cards under 24 GB. False is only passed with CUDA present.
+        resolved_optim = "adamw_8bit"
+    else:
+        resolved_optim = Trainer._detect_optim_for_card(_configured_optim)
     resolved_bf16, resolved_fp16 = Trainer._detect_optimal_dtype(
         settings.training.bf16, settings.training.fp16
     )
@@ -5632,6 +5718,11 @@ class Trainer:
             full_ft_offload=self.full_ft_offload,
             # ui-v2 P3: --no-gradient-checkpointing (None otherwise).
             gradient_checkpointing=getattr(self, "_gradient_checkpointing_override", None),
+            full_ft_paged_optim=(
+                _full_ft_needs_paged_optimizer(self._model, self.batch_size, self.max_seq_length)
+                if self.mode == "full" and not self.full_ft_offload
+                else None
+            ),
         )
         # v1.5 T2.1 (FP8): layer the FP8 shape requirement ON TOP of the built
         # SFTConfig rather than threading fp8 into _build_sft_config (which

@@ -133,6 +133,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss. Memory grows in a straight line with batch size and row length.
   Packing is unchanged: samples stay whole and cannot see each other.
   Setups with flash-attention or xFormers are unchanged.
+- **Full fine-tuning on Windows no longer freezes the desktop when the
+  model fits.** `mode="full"` forced the paged 8-bit optimizer, whose state
+  lives in memory the Windows display driver pages. A Llama 3.2 1B full
+  fine-tune froze the screen on an RTX 5090 at 12.7 GB of 32 GB in use, and
+  `nvidia-smi` stopped answering. On Windows the trainer now uses the
+  non-paged `adamw_8bit` whenever the gradients and optimizer state fit in
+  free GPU memory (the same run: 10.1 GiB, smooth). When they do not fit it
+  keeps the paged optimizer and warns that the desktop may stop responding.
+  An optimizer set with `--optim` is never changed; Linux and macOS are
+  unchanged.
 - **Training no longer deletes its own output folder** (#278, data loss).
   `backprop train --output X` saves the model into X, and the save replaced
   the whole folder, so every run deleted X's `run_history.json` (the Runs

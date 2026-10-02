@@ -805,8 +805,8 @@ def _run_as_ui_job(
     except BaseException as exc:
         _ui_error_note(job.writer, exc, job.run_dir)
         raise
-    if job.callback is not None and getattr(job.callback, "last_step", 0):
-        job.steps_done = int(job.callback.last_step)
+    if job.callback is not None:
+        job.steps_done = int(getattr(job.callback, "last_step", None) or 0)
     stopped = read_stop_request(job.run_dir)
     if rc in (EXIT_OK, EXIT_PARTIAL_SUCCESS, EXIT_INTERRUPTED):
         status = "stopped" if (stopped or rc == EXIT_INTERRUPTED) else "done"

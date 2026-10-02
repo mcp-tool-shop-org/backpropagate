@@ -176,7 +176,19 @@ All with full 2,048-token rows. Shorter data uses less.
 | SmolLM3 3B | full fine-tune, batch 2 | 24.9 GB | does not fit | does not fit |
 | Phi-4-mini 3.8B | full fine-tune, batch 1 | 30.6 GB | does not fit | does not fit |
 
-**On a 16 GB card, the default LoRA shape does not fit a 7B model.** The default is rank 256 on every linear layer; on Qwen2.5 7B that needs about 17 GB even at batch 1, and the out-of-memory recovery (which halves the batch) cannot fix it. Use a smaller adapter: `--lora-r 64` (about 11 GB at batch 1, 11.7 GB at batch 2) or `--lora-preset fast` (rank 16).
+**On a 16 GB card, rank 256 does not fit a 7B model**: on Qwen2.5 7B it needs about 17 GB even at batch 1, and halving the batch cannot fix that. So the default LoRA shape follows the GPU. With nothing set, the trainer uses the largest of three presets that fits within 85% of the memory that is free, and logs the choice when it is not `quality`:
+
+| Preset | Shape | Qwen2.5 7B at batch 1 | Chosen for a 7B model when free memory is |
+|---|---|---|---|
+| `quality` | rank 256, every linear layer | 17.0 GB | 20 GB or more (24 GB and 32 GB cards) |
+| `balanced` | rank 64, every linear layer | 11.0 GB | 13 to 20 GB (16 GB cards) |
+| `fast` | rank 16, `q_proj` and `v_proj` | 9.0 GB | 10.6 to 13 GB (12 GB cards) |
+
+Below about 10.6 GB free, no shape is estimated to fit a 7B model: the trainer uses `fast`, warns, and a smaller model or a shorter `--max-seq-length` is the fix.
+
+A 3B model fits `quality` on a 16 GB card, so it keeps it. `--lora-preset quality` (or any explicit `--lora-r`) is always used as given.
+
+**The automatic batch size is checked the same way.** It starts from the table by card size and is lowered to the largest batch whose estimate is within 90% of free memory. It is never raised above the table's value. With rank 64 on a 16 GB card a 7B model starts at batch 2 (11.7 GB).
 
 On a **32 GB** card (RTX 5090), **measured** peaks, batch 1 at each preset's full context window:
 
@@ -190,7 +202,7 @@ Qwen2.5 14B and Mistral-Small 24B (rank 32, batch 1 x 4,096 tokens) peaked at 25
 
 For the offload path, `estimate_vram(offload=True)` uses the same measured constants as the trainer's fit check and reports `host_ram_gb` (about 39 GB for 7.6B, which includes the save). See [full fine-tuning](/backpropagate/handbook/full-fine-tuning/#the-fit-check).
 
-The automatic batch size is 6 at 32 GB and 8 at 48 GB. It comes from a table by card size and does not look at the model, so it can be too high for 14B and larger models: set `--batch-size` yourself for those, guided by the estimate.
+The automatic batch size starts at 6 on a 32 GB card and 8 at 48 GB, and is lowered when the estimate for the model in hand does not fit (see above).
 
 ## Limitations
 

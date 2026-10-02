@@ -122,7 +122,7 @@ my-model/
 └── tokenizer.json            <- copied from the base model
 ```
 
-To know it worked: `adapter_model.safetensors` should be a few hundred MB to ~1.5 GB on a 7B base (v1.3 default is rank 256 + all-linear; pass `--lora-preset=fast` for the v1.2.x rank-16 ~50–200 MB footprint), and `backprop info` should show no errors. If the loss decreased over the run (you'll see logging lines every 10 steps), the model learned something.
+To know it worked: `adapter_model.safetensors` should be a few hundred MB to ~1.5 GB on a 7B base (rank 256 on every linear layer when it fits your GPU; rank 64 is about a quarter of that size, and `--lora-preset=fast`, rank 16, is ~50–200 MB), and `backprop info` should show no errors. If the loss decreased over the run (you'll see logging lines every 10 steps), the model learned something.
 
 If something went wrong, see the [troubleshooting page](/backpropagate/handbook/troubleshooting/) — it's keyed by what you actually saw in stderr.
 

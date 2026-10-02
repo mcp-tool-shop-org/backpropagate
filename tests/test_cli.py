@@ -58,17 +58,12 @@ class TestParser:
         assert args.samples is None
         assert args.batch_size == "auto"
         assert args.lr == 2e-4
-        # v1.3 BACKEND-1 contract: 'quality' preset default. Was 16 in
-        # v1.2.x; --lora-preset=fast reverts to rank 16. Pinning here so
-        # the CLI parser default cannot silently re-diverge from config.py
-        # (TESTS-A-006 v1.5 sweep tracks any UI/CLI lora_r divergence).
-        assert args.lora_r == 256, (
-            f"CLI parser default for --lora-r drifted from v1.3 BACKEND-1 "
-            f"'quality' contract: expected 256, got {args.lora_r}. If you "
-            f"are intentionally reverting the default, also update "
-            f"backpropagate/config.py ModelConfig + handbook/lora_presets.md "
-            f"and remove the LoraConfig 'quality' preset alias."
-        )
+        # The rank comes from the LoRA preset, and the default preset is
+        # "auto": the largest of quality / balanced / fast that fits the GPU
+        # (trainer.resolve_lora_shape). The parser therefore has no rank of
+        # its own; quality (rank 256) is still what a roomy card gets.
+        assert args.lora_r is None
+        assert args.lora_preset == "auto"
         assert args.output == "./output"
         assert args.no_unsloth is False
 

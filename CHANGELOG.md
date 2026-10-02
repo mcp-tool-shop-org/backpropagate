@@ -69,6 +69,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and measurement jobs (logs and progress files) after a confirmation. A
   folder that holds a saved model, adapter, checkpoint or GGUF is never
   removed there, nor is a running job. Nothing is deleted automatically.
+- **The default LoRA shape follows the GPU, and a `balanced` preset**
+  (rank 64, alpha 128, every linear layer). With no rank, alpha or target
+  modules set, the trainer uses the largest of `quality` (rank 256),
+  `balanced` and `fast` (rank 16, q and v) whose estimate at batch 1 fits
+  within 85% of the GPU memory that is free, and logs the choice when it
+  is not `quality`. Rank 256 on a 7B model needs about 17 GB even at batch
+  1, so a 16 GB card could not run the old default; it now gets rank 64
+  (about 11 GB). A 3B model still gets rank 256 there. `--lora-preset`
+  accepts `auto` (the new default), `quality`, `balanced` and `fast`;
+  `--lora-r` no longer has a default of its own. An explicit preset, rank,
+  alpha or target-module list is always used as given, and with no CUDA
+  device the default is rank 256 as before.
 - **Estimated VRAM next to Start training**: "Fits", "Tight" or "Won't fit"
   for the chosen model, mode, LoRA rank and batch, against your card. The
   number is exactly `backprop estimate-vram`'s.
@@ -147,6 +159,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the paged optimizer and warns that the desktop may stop responding.
   An optimizer set with `--optim` is never changed; Linux and macOS are
   unchanged.
+- **`--lora-preset fast` (and `Trainer(lora_preset="fast")`) now does what
+  it says.** The preset name was stored and never applied: the run still
+  trained rank 256 on every linear layer. It now sets rank 16, alpha 32 and
+  the q and v projections. The presets do not change the learning rate
+  (the documentation said `quality` used 10x; it never did).
+- **The automatic batch size is checked against the model.** It came from
+  a table by card size alone, so it was too high for a large model or a
+  large adapter (batch 2 on a 16 GB card for a 7B model at rank 256, which
+  needs 17.8 GB). It is now lowered to the largest batch whose estimate
+  fits within 90% of the GPU memory that is free, and never raised above
+  the table's value.
 - **Training no longer deletes its own output folder** (#278, data loss).
   `backprop train --output X` saves the model into X, and the save replaced
   the whole folder, so every run deleted X's `run_history.json` (the Runs

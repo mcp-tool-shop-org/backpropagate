@@ -279,8 +279,9 @@ def test_train_forwards_every_p3_flag_to_the_trainer(monkeypatch):
     assert init["load_in_4bit"] is False
     assert init["run_name"] == "exp-1"
     assert init["gradient_checkpointing"] is False
-    # --lora-r / --lr / --batch-size keep their existing path
-    assert init["lora_r"] == 256 and init["learning_rate"] == 2e-4 and init["batch_size"] == "auto"
+    # --lr / --batch-size keep their existing path; no --lora-r means the
+    # trainer resolves the rank (settings, or the preset that fits the GPU).
+    assert init["lora_r"] is None and init["learning_rate"] == 2e-4 and init["batch_size"] == "auto"
 
 
 def test_train_all_linear_is_forwarded_as_the_literal(monkeypatch):

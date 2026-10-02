@@ -161,6 +161,7 @@ __all__ = [
     # LoRA presets (v1.3 BACKEND-1)
     "LoRAPreset",
     "LORA_PRESETS",
+    "LORA_PRESET_ORDER",
     "get_lora_preset",
     # LR scaling helpers (Phase 1.3)
     "get_recommended_lr",
@@ -1737,6 +1738,19 @@ LORA_PRESETS: dict[str, LoRAPreset] = {
         target_modules=["q_proj", "v_proj"],
         lr_multiplier=1.0,
     ),
+    "balanced": LoRAPreset(
+        name="balanced",
+        description=(
+            "Rank 64 on every linear layer. The shape for a 7B model on a "
+            "16 GB card: about 11 GB at batch 1 with 2,048-token rows, where "
+            "the quality preset needs about 17 GB. The automatic default "
+            "picks it when quality does not fit."
+        ),
+        r=64,
+        lora_alpha=128,
+        target_modules="all-linear",
+        lr_multiplier=10.0,
+    ),
     "quality": LoRAPreset(
         name="quality",
         description=(
@@ -1754,11 +1768,16 @@ LORA_PRESETS: dict[str, LoRAPreset] = {
 }
 
 
+#: The presets from the largest adapter to the smallest: the order the
+#: automatic default tries them in.
+LORA_PRESET_ORDER: tuple[str, ...] = ("quality", "balanced", "fast")
+
+
 def get_lora_preset(name: str) -> LoRAPreset:
     """Get a LoRA shape preset by name.
 
     Args:
-        name: Preset name ("fast" or "quality").
+        name: Preset name ("quality", "balanced" or "fast").
 
     Returns:
         LoRAPreset.

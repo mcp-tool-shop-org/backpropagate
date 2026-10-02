@@ -1281,11 +1281,14 @@ def export_lora(
     """
     Export LoRA adapter only, atomically (B-006).
 
-    Writes flow into ``<output_dir>.partial`` first and ``shutil.move()``
-    promotes the directory to the final path on success. The partial
-    directory is removed on any failure so a disk-full crash mid-write
-    doesn't leave a half-populated adapter directory behind (which would
-    raise a cryptic 'state_dict missing keys' on the next resume).
+    Writes flow into ``<output_dir>.partial`` first and are promoted into
+    the final path on success (:func:`checkpoints.promote_partial_dir`):
+    only the adapter files are replaced, anything else already in
+    ``output_dir`` is left alone, and an interrupted promote rolls back to
+    the prior files. The partial directory is removed on any failure so a
+    disk-full crash mid-write doesn't leave a half-populated adapter
+    directory behind (which would raise a cryptic 'state_dict missing keys'
+    on the next resume).
 
     F-004: when ``emit_model_card=True`` (the default) a ``model_card.md``
     is written into ``output_dir`` after the atomic promote. Provenance is
@@ -1311,6 +1314,12 @@ def export_lora(
     Raises:
         ExportError: If export fails
     """
+    from .checkpoints import (
+        HF_SAVE_ARTIFACT_PATTERNS,
+        promote_partial_dir,
+        recover_interrupted_promote,
+    )
+
     start_time = time.time()
     output_path = Path(output_dir)
     partial_path = output_path.with_name(output_path.name + ".partial")
@@ -1327,6 +1336,7 @@ def export_lora(
 
     if partial_path.exists():
         shutil.rmtree(partial_path, ignore_errors=True)
+    recover_interrupted_promote(output_path)
 
     try:
         partial_path.mkdir(parents=True, exist_ok=False)
@@ -1372,10 +1382,12 @@ def export_lora(
                 suggestion="Expected PeftModel or path to saved adapter"
             )
 
-        # Atomic promote.
-        if output_path.exists():
-            shutil.rmtree(output_path)
-        shutil.move(str(partial_path), str(output_path))
+        # Crash-safe promote that replaces only the adapter files (and
+        # retires model files an earlier save left, which would otherwise
+        # shadow the adapter); the operator's other files survive.
+        promote_partial_dir(
+            partial_path, output_path, owned_names=HF_SAVE_ARTIFACT_PATTERNS
+        )
     except ExportError:
         raise
     except Exception as e:

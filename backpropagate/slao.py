@@ -1657,14 +1657,17 @@ class SLAOMerger:
         Save the merged LoRA and merge history atomically.
 
         B-006: writes flow into a sibling ``<path>.partial`` directory first,
-        then ``shutil.move()`` promotes it to the final path. If anything
+        then :func:`checkpoints.promote_partial_dir` promotes it into the
+        final path, replacing only ``merged_lora.pt`` / ``merge_history.json``
+        and rolling back if interrupted. If anything
         raises mid-write the ``.partial`` directory is removed via the
         ``finally`` clause so the operator never sees a half-written SLAO
         checkpoint (config.json present, weights missing).
 
         Args:
-            path: Final directory path. Existing contents at this path are
-                overwritten only on successful promotion.
+            path: Final directory path. The files this save writes are
+                replaced only on successful promotion; other files at this
+                path are left alone.
             run_id: Optional correlation token persisted into merge_history.json
                 under ``run_id`` so operators can grep one identifier across
                 logs + manifests + SLAO history (see B-001).
@@ -1676,6 +1679,8 @@ class SLAOMerger:
         import shutil
 
         import torch
+
+        from .checkpoints import promote_partial_dir, recover_interrupted_promote
 
         save_dir = Path(path)
         partial_dir = save_dir.with_name(save_dir.name + ".partial")
@@ -1699,6 +1704,7 @@ class SLAOMerger:
         # Wipe any leftover partial from a prior crash before we start.
         if partial_dir.exists():
             shutil.rmtree(partial_dir, ignore_errors=True)
+        recover_interrupted_promote(save_dir)
 
         try:
             partial_dir.mkdir(parents=True, exist_ok=False)
@@ -1794,14 +1800,9 @@ class SLAOMerger:
                     f"Failed to save history: {e}"
                 ) from e
 
-            # Atomic promote: if save_dir already exists (re-save), remove it
-            # first so shutil.move drops the partial into place cleanly. The
-            # window between rmtree(save_dir) and move(partial) is tiny but
-            # NOT atomic across processes — single-process MultiRunTrainer
-            # callers (the only callers in this repo) are unaffected.
-            if save_dir.exists():
-                shutil.rmtree(save_dir)
-            shutil.move(str(partial_dir), str(save_dir))
+            # Crash-safe promote: replaces only the files written above, so
+            # anything else in save_dir survives a re-save.
+            promote_partial_dir(partial_dir, save_dir)
         except SLAOCheckpointError:
             raise
         except Exception as e:

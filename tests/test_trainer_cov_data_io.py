@@ -565,8 +565,10 @@ class TestSave:
 
         with patch("shutil.move", side_effect=flaky_move), caplog.at_level(logging.WARNING, logger=LOGGER):
             saver.save(str(dest), register_in_manifest=False)
-        assert "Failed to recover stale backup checkpoint: cross-device link" in caplog.text
+        assert "Could not resolve the leftovers of an interrupted save" in caplog.text
+        assert "cross-device link" in caplog.text
         assert saved_ok(dest)
+        assert backup.exists()  # the unrecovered prior copy is not destroyed
 
     def test_stale_backup_next_to_a_live_checkpoint_is_discarded(self, saver, tmp_path):
         dest = tmp_path / "ckpt"
@@ -638,9 +640,12 @@ class TestSave:
         assert "Failed to write run_id file: disk quota" in caplog.text
         assert saved_ok(tmp_path / "ckpt")
 
-    def test_backup_appearing_mid_save_is_cleared_before_the_rename(self, saver, tmp_path):
+    def test_backup_appearing_mid_save_is_refused_not_deleted(self, saver, tmp_path):
+        """A .backup that appears after the startup recovery (another saver
+        on the same path) is not ours to delete: the promote refuses and the
+        prior checkpoint stays in place."""
         dest = tmp_path / "ckpt"
-        saver.save(str(dest), register_in_manifest=False)
+        saver.save(str(dest), run_id="prior", register_in_manifest=False)
         real_save = saver._model.save_pretrained
 
         def create_backup_then_save(path, **kw):
@@ -649,8 +654,11 @@ class TestSave:
             return real_save(path, **kw)
 
         saver._model.save_pretrained = create_backup_then_save
-        saver.save(str(dest), register_in_manifest=False)
-        assert saved_ok(dest) and not (tmp_path / "ckpt.backup").exists()
+        with pytest.raises(CheckpointError, match="earlier interrupted save"):
+            saver.save(str(dest), run_id="new", register_in_manifest=False)
+        assert saved_ok(dest) and (dest / "run_id").read_text() == "prior"
+        assert (tmp_path / "ckpt.backup" / "late.txt").exists()
+        assert not (tmp_path / "ckpt.partial").exists()
 
     def test_promote_failure_restores_the_prior_checkpoint(self, saver, tmp_path, caplog):
         dest = tmp_path / "ckpt"
@@ -658,16 +666,22 @@ class TestSave:
         real_move = shutil.move
 
         def fail_promote(src, dst, *a, **k):
-            if str(src).endswith(".partial"):
+            # Fail on run_id, after the entries sorted before it moved in.
+            if Path(src).parent.name.endswith(".partial") and Path(src).name == "run_id":
                 raise OSError("disk full during promote")
             return real_move(src, dst, *a, **k)
 
+        prior_config = (dest / "config.json").read_bytes()
         with patch("shutil.move", side_effect=fail_promote), caplog.at_level(logging.WARNING, logger=LOGGER):
             with pytest.raises(CheckpointError, match="disk full during promote"):
                 saver.save(str(dest), run_id="new", register_in_manifest=False)
         assert (dest / "run_id").read_text() == "prior"  # prior checkpoint restored intact
-        assert "Promote failed; restored the prior checkpoint" in caplog.text
+        assert (dest / "config.json").read_bytes() == prior_config
+        assert saved_ok(dest)
+        assert "failed; restored the prior files" in caplog.text
         assert not (tmp_path / "ckpt.partial").exists()
+        assert not (tmp_path / "ckpt.backup").exists()
+        assert not (tmp_path / "ckpt.backup.json").exists()
 
     def test_promote_failure_with_failed_restore_names_where_the_prior_lives(
         self, saver, tmp_path, caplog
@@ -677,12 +691,12 @@ class TestSave:
         real_move, real_rename = shutil.move, os.rename
 
         def fail_promote(src, dst, *a, **k):
-            if str(src).endswith(".partial"):
+            if Path(src).parent.name.endswith(".partial") and Path(src).name == "run_id":
                 raise OSError("promote failed")
             return real_move(src, dst, *a, **k)
 
         def fail_restore(src, dst, *a, **k):
-            if str(src).endswith(".backup"):
+            if Path(src).parent.name.endswith(".backup"):
                 raise OSError("restore failed")
             return real_rename(src, dst, *a, **k)
 
@@ -690,9 +704,16 @@ class TestSave:
                 patch("os.rename", side_effect=fail_restore), \
                 caplog.at_level(logging.ERROR, logger=LOGGER):
             with pytest.raises(CheckpointError):
-                saver.save(str(dest), register_in_manifest=False)
-        assert "Promote failed AND prior-checkpoint restore failed: restore failed" in caplog.text
+                saver.save(str(dest), run_id="new", register_in_manifest=False)
+        assert "restoring the prior files failed: restore failed" in caplog.text
         assert (tmp_path / "ckpt.backup" / "run_id").read_text() == "prior"  # still recoverable
+        assert (tmp_path / "ckpt.backup.json").exists()
+
+        # The next save rolls the interrupted promote back first, then saves.
+        saver.save(str(dest), run_id="third", register_in_manifest=False)
+        assert saved_ok(dest) and (dest / "run_id").read_text() == "third"
+        assert not (tmp_path / "ckpt.backup").exists()
+        assert not (tmp_path / "ckpt.backup.json").exists()
 
     def test_manifest_registration_failure_never_breaks_the_save(self, saver, tmp_path, caplog):
         with patch.object(CheckpointManager, "register", side_effect=OSError("manifest locked")), \

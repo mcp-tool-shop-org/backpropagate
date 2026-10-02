@@ -289,7 +289,7 @@ class TestSaveEdges:
         assert data["history"] == []
         assert data["run_index"] == 0
 
-    def test_resave_replaces_previous_directory(self, tmp_path):
+    def test_resave_replaces_its_files_and_keeps_others(self, tmp_path):
         target = tmp_path / "ck"
         merger = _merger_with_state()
         merger.save(str(target))
@@ -298,7 +298,8 @@ class TestSaveEdges:
         merger.merge({A_KEY: _t(9.0, 9.0), B_KEY: _t(9.0, 9.0)}, run_index=3)
         merger.save(str(target), run_id="second")
 
-        assert not (target / "stale.txt").exists()
+        # Only the files the save writes are replaced.
+        assert (target / "stale.txt").read_text() == "from the first save"
         data = json.loads((target / "merge_history.json").read_text())
         assert data["run_index"] == 3
         assert data["run_id"] == "second"

@@ -231,7 +231,6 @@ _MEASURED = [
     ("llama1b lora16bit b4", dict(**_L1, **_QV, batch_size=4, quantize_base=False), 10.87),
     ("qwen7b qlora b2", dict(**_Q7, **_QV, batch_size=2), 10.69),
     ("smol135m qlora b8", dict(**_SM, **_QV, batch_size=8), 4.92),
-    ("smol135m full b8", dict(**_SM, mode="full", batch_size=8), 3.72),
 ]
 
 
@@ -240,6 +239,18 @@ def test_estimate_tracks_measured_peaks(label, kwargs, measured):
     """The cost model stays within 12% of peaks measured on real training."""
     est = estimate_vram("org/x", overhead_fraction=0.0, varlen_attention=False, **kwargs)
     assert est.total_gb == pytest.approx(measured, rel=0.12), label
+
+
+def test_full_fine_tune_is_priced_system_wide():
+    """SmolLM3-3B full fine-tune, batch 4 x 512: 22.0 GiB on the device
+    (RTX 5090, 2026-09-30). PyTorch's own counters said 12.6: they miss the
+    paged 8-bit optimizer's managed memory."""
+    est = estimate_vram(
+        "org/x", mode="full", batch_size=4, max_seq_length=512, overhead_fraction=0.0,
+        param_count_billions=3.075, hidden_dim=2048, num_layers=36, num_heads=16,
+        vocab_size=128256,
+    )
+    assert est.total_gb == pytest.approx(22.0, rel=0.10)
 
 
 def test_batch_cost_is_linear_and_flash_drops_the_quadratic_term():

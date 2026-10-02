@@ -83,7 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence length when flash-attention and xFormers are absent (every
   Windows install), the 16-bit embeddings of a 4-bit base, the adapter's
   size for the chosen target modules, and a 16-bit base for full
-  fine-tuning. The model's own shape comes from its `config.json` when it
+  fine-tuning. Full fine-tuning is priced system-wide, about 5.3 bytes per
+  parameter on top of the weights: PyTorch's own counters miss the paged
+  8-bit optimizer's memory and read about 40% lower (SmolLM3 3B, batch 4 x
+  512: 22.0 GiB on the device, 12.6 GiB reported). On three large-model runs
+  measured before the formula was written (14B, 24B, 32B QLoRA) it lands at
+  -6%, +5% and 0%. The model's own shape comes from its `config.json` when it
   is in the Hugging Face cache or a local folder (never downloaded), and ids
   that name their size in millions (`SmolLM2-135M`) are no longer priced as
   7B. It also counts a floor every run pays: a temporary full-precision copy
